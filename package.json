@@ -1,0 +1,32 @@
+{
+  "name": "pi-coder",
+  "description": "Personal setup for coding with pi",
+  "version": "1.0.0",
+  "author": {
+    "name": "itterative"
+  },
+  "homepage": "https://github.com/itterative/pi-bash-sandbox",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "dependencies": {
+    "lookpath": "^1.2.3"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.84.1",
+    "@earendil-works/pi-coding-agent": "^0.84.1",
+    "@earendil-works/pi-tui": "^0.84.1",
+    "@types/node": "^25.3.3",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "scripts": {
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "audit:curation": "tsx tools/curation-audit.ts"
+  }
+}
