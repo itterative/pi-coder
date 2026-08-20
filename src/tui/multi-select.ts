@@ -2,19 +2,16 @@
  * Multi-Select Component
  *
  * A multi-select UI component with checkbox selection.
+ * Built on ListViewComponent — this file only defines the checkbox prefix,
+ * toggle keys (Space / a), the selection-count status line, and the
+ * confirm result (array of selected values).
  */
 
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
-import {
-    Box,
-    Container,
-    matchesKey,
-    Spacer,
-    Text,
-} from "@earendil-works/pi-tui";
-import { indentLines } from "../common/text";
+import type { Box, Container } from "@earendil-works/pi-tui";
+import { matchesKey, Spacer, Text } from "@earendil-works/pi-tui";
+import type { ItemPrefix, ListViewState } from "./list-view";
+import { ListViewComponent } from "./list-view";
 
 // An item in the multi-select list
 export interface MultiSelectItem<T> {
@@ -58,39 +55,9 @@ export interface MultiSelectRenderOptions<T> {
 }
 
 // Internal state for the multi-select
-export interface MultiSelectState<T> {
-    items: MultiSelectItem<T>[];
+export interface MultiSelectState<T> extends ListViewState<T> {
     cursor: number;
-    maxVisibleLines: number;
     selected: Set<number>;
-}
-
-// Default render for an item's content (just the label)
-function defaultRenderItem<T>(
-    item: MultiSelectItem<T>,
-    options: MultiSelectRenderOptions<T>,
-): string {
-    if (options.isCursor) {
-        return options.theme.fg("accent", item.label);
-    }
-    return item.label;
-}
-
-// Calculate scroll offset: ensure cursor item is visible
-function calculateScrollOffset(
-    itemStartLines: number[],
-    cursor: number,
-    totalLines: number,
-    maxVisibleLines: number,
-): number {
-    const cursorStartLine = itemStartLines[cursor] ?? 0;
-    const linesAfterCursor = totalLines - cursorStartLine;
-
-    if (linesAfterCursor <= maxVisibleLines) {
-        return Math.max(0, totalLines - maxVisibleLines);
-    } else {
-        return cursorStartLine;
-    }
 }
 
 /**
@@ -99,79 +66,36 @@ function calculateScrollOffset(
  * Renders a list of items with checkboxes that can be toggled.
  * Supports multi-line items with proper scrolling.
  */
-export class MultiSelectComponent<T> implements Component {
-    private container: Container;
-    private contentContainer: Box;
-    private theme: Theme | null = null;
-    private readonly renderItem: (item: MultiSelectItem<T>, options: MultiSelectRenderOptions<T>) => string;
-    private readonly helpText: string;
-    private readonly paddingX = 2;
-    private readonly paddingY = 0;
-    private done: ((value: T[]) => void) | null = null;
-    private scrollOffset = 0;
+export class MultiSelectComponent<T> extends ListViewComponent<T, T[], MultiSelectState<T>> {
     private confirmed = false;
-
-    // Cache built during render: lines per item and start line for each item
-    private cachedItemLines: string[][] = [];
-    private cachedItemStartLines: number[] = [];
-    private cachedTotalLines = 0;
-
-    readonly state: MultiSelectState<T>;
 
     constructor(
         public readonly options: MultiSelectOptions<T>,
     ) {
-        this.renderItem = options.renderItem ?? defaultRenderItem;
-        this.helpText = options.helpText ?? "↑/↓ navigate | Space toggle | a all | Enter confirm | Esc cancel";
-
-        this.state = {
-            items: options.items,
-            cursor: options.initialCursor ?? 0,
-            maxVisibleLines: options.maxVisible ?? 10,
-            selected: new Set(options.initialSelected ?? []),
-        };
-
-        this.container = new Container();
-        this.contentContainer = new Box(this.paddingX, this.paddingY);
-    }
-
-    /**
-     * Set the done callback - called when multi-select should close
-     */
-    setDoneCallback(done: (value: T[]) => void): void {
-        this.done = done;
-    }
-
-    /**
-     * Initialize the component with a theme. Must be called before render.
-     */
-    initialize(theme: Theme): void {
-        this.theme = theme;
-        const borderColor = (s: string) => theme.fg("border", s);
-
-        this.container.addChild(new DynamicBorder(borderColor));
-
-        // Header
-        this.container.addChild(
-            new Text(
-                theme.fg("accent", theme.bold(`  ${this.options.title}`)),
-                1,
-                0,
-            ),
+        super(
+            {
+                title: options.title,
+                renderItem: options.renderItem
+                    ? (item, renderOptions) => options.renderItem!(item, {
+                        index: renderOptions.index,
+                        isSelected: renderOptions.state.selected.has(renderOptions.index),
+                        isCursor: renderOptions.isCursor,
+                        theme: renderOptions.theme,
+                        state: renderOptions.state,
+                    })
+                    : undefined,
+                headerContent: options.headerContent,
+                footerContent: options.footerContent,
+                helpText: options.helpText ?? "↑/↓ navigate | Space toggle | a all | Enter confirm | Esc cancel",
+            },
+            {
+                items: options.items,
+                cursor: options.initialCursor ?? 0,
+                scrollOffset: 0,
+                maxVisibleLines: options.maxVisible ?? 10,
+                selected: new Set(options.initialSelected ?? []),
+            },
         );
-        this.container.addChild(new Spacer(1));
-
-        // Custom header content if provided
-        if (this.options.headerContent) {
-            this.options.headerContent(this.container, theme);
-            this.container.addChild(new Spacer(1));
-        }
-
-        // Content container for item list and status
-        this.container.addChild(this.contentContainer);
-
-        this.container.addChild(new Spacer(1));
-        this.container.addChild(new DynamicBorder(borderColor));
     }
 
     /**
@@ -186,24 +110,33 @@ export class MultiSelectComponent<T> implements Component {
      */
     getSelectedValues(): T[] {
         return Array.from(this.state.selected)
-            .map((i) => this.options.items[i]?.value)
+            .map((i) => this.state.items[i]?.value)
             .filter(Boolean) as T[];
     }
 
-    render(width: number): string[] {
-        if (!this.theme) {
-            throw new Error("MultiSelectComponent must be initialized with a theme before rendering");
-        }
-        this.buildCacheAndUpdateScroll();
-        this.updateContent();
-        return this.container.render(width);
+    protected override getItemPrefix(index: number, isCursor: boolean): ItemPrefix {
+        const checkbox = this.state.selected.has(index) ? "[x]" : "[ ]";
+        return {
+            first: isCursor && this.theme
+                ? this.theme.fg("accent", `→ ${checkbox} `)
+                : `  ${checkbox} `,
+            continuation: "     ", // Align with checkbox
+        };
     }
 
-    invalidate(): void {
-        this.container.invalidate();
+    protected override renderStatus(container: Box): void {
+        if (!this.theme || this.state.selected.size === 0) return;
+        container.addChild(new Spacer(1));
+        container.addChild(
+            new Text(
+                this.theme.fg("success", `  ${this.state.selected.size} item(s) selected`),
+                1,
+                0,
+            ),
+        );
     }
 
-    handleInput(key: string): void {
+    protected override handleAction(key: string): void {
         // Toggle selection with Space
         if (matchesKey(key, "space")) {
             if (this.state.selected.has(this.state.cursor)) {
@@ -228,163 +161,18 @@ export class MultiSelectComponent<T> implements Component {
             return;
         }
 
-        // Navigate up
-        if (matchesKey(key, "up") || key === "k") {
-            if (this.state.cursor > 0) {
-                this.state.cursor--;
-                this.scrollOffset = calculateScrollOffset(
-                    this.cachedItemStartLines,
-                    this.state.cursor,
-                    this.cachedTotalLines,
-                    this.state.maxVisibleLines,
-                );
-                this.invalidate();
-            }
-            return;
-        }
-
-        // Navigate down
-        if (matchesKey(key, "down") || key === "j") {
-            if (this.state.cursor < this.options.items.length - 1) {
-                this.state.cursor++;
-                this.scrollOffset = calculateScrollOffset(
-                    this.cachedItemStartLines,
-                    this.state.cursor,
-                    this.cachedTotalLines,
-                    this.state.maxVisibleLines,
-                );
-                this.invalidate();
-            }
-            return;
-        }
-
         // Confirm with Enter
         if (matchesKey(key, "enter")) {
             this.confirmed = true;
-            this.done?.(this.getSelectedValues());
+            this.finish(this.getSelectedValues());
             return;
         }
 
         // Cancel with Escape or 'q'
         if (matchesKey(key, "escape") || key === "q") {
-            this.done?.([]);
+            this.finish([]);
             return;
         }
-    }
-
-    /**
-     * Build cache of rendered lines per item. Called once per render.
-     */
-    private buildCacheAndUpdateScroll(): void {
-        if (!this.theme) return;
-
-        this.cachedItemLines = [];
-        this.cachedItemStartLines = [];
-        let totalLines = 0;
-
-        for (let i = 0; i < this.state.items.length; i++) {
-            const item = this.state.items[i];
-            if (!item) {
-                this.cachedItemLines.push([]);
-                this.cachedItemStartLines.push(totalLines);
-                continue;
-            }
-
-            const isCursor = i === this.state.cursor;
-            const isSelected = this.state.selected.has(i);
-
-            const multiSelectOptions: MultiSelectRenderOptions<T> = {
-                index: i,
-                isSelected,
-                isCursor,
-                theme: this.theme,
-                state: this.state,
-            };
-
-            const content = this.renderItem(item, multiSelectOptions);
-
-            // Add checkbox prefix
-            const checkbox = isSelected ? "[x]" : "[ ]";
-            const prefix = isCursor
-                ? this.theme.fg("accent", `→ ${checkbox} `)
-                : `  ${checkbox} `;
-
-            const indented = indentLines(content, {
-                firstLinePrefix: prefix,
-                continuationPrefix: "     ", // Align with checkbox
-            });
-            const lines = indented.split("\n");
-
-            this.cachedItemStartLines.push(totalLines);
-            this.cachedItemLines.push(lines);
-            totalLines += lines.length;
-        }
-
-        this.cachedTotalLines = totalLines;
-        this.scrollOffset = calculateScrollOffset(
-            this.cachedItemStartLines,
-            this.state.cursor,
-            totalLines,
-            this.state.maxVisibleLines,
-        );
-    }
-
-    private updateContent(): void {
-        if (!this.theme) return;
-
-        this.contentContainer.clear();
-
-        // Flatten cached lines
-        const allLines = this.cachedItemLines.flat();
-        const totalLines = this.cachedTotalLines;
-        const visibleLines = allLines.slice(
-            this.scrollOffset,
-            this.scrollOffset + this.state.maxVisibleLines,
-        );
-
-        // Render visible lines
-        for (const line of visibleLines) {
-            // Use Spacer for blank lines to ensure they take up space
-            if (line.trim() === "") {
-                this.contentContainer.addChild(new Spacer(1));
-            } else {
-                this.contentContainer.addChild(new Text(line, 1, 0));
-            }
-        }
-
-        // Scroll indicator
-        if (totalLines > this.state.maxVisibleLines) {
-            const endLine = this.scrollOffset + visibleLines.length;
-            const showing = `  Showing lines ${this.scrollOffset + 1}-${endLine} of ${totalLines}`;
-            this.contentContainer.addChild(new Spacer(1));
-            this.contentContainer.addChild(
-                new Text(this.theme.fg("dim", showing), 1, 0),
-            );
-        }
-
-        // Selection count
-        if (this.state.selected.size > 0) {
-            this.contentContainer.addChild(new Spacer(1));
-            this.contentContainer.addChild(
-                new Text(
-                    this.theme.fg("success", `  ${this.state.selected.size} item(s) selected`),
-                    1,
-                    0,
-                ),
-            );
-        }
-
-        // Custom footer content if provided
-        if (this.options.footerContent) {
-            this.options.footerContent(this.contentContainer, this.theme, this.state);
-        }
-
-        this.contentContainer.addChild(new Spacer(1));
-
-        // Help text
-        this.contentContainer.addChild(
-            new Text(this.theme.fg("muted", `  ${this.helpText}`), 1, 0),
-        );
     }
 }
 
