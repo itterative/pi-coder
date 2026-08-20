@@ -8,22 +8,7 @@
 import { CURSOR_MARKER } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { InlineEditor } from "../src/tui/inline-editor";
-
-// Raw key sequences matching pi-tui's matchesKey
-const KEY = {
-    enter: "\r",
-    escape: "\x1b",
-    backspace: "\x7f",
-    delete: "\x1b[3~",
-    left: "\x1b[D",
-    right: "\x1b[C",
-    up: "\x1b[A",
-    down: "\x1b[B",
-    ctrlW: "\x17",
-    altD: "\x1bd",
-    altB: "\x1bb",
-    altF: "\x1bf",
-};
+import { KEY } from "./helpers";
 
 function type(editor: InlineEditor, text: string): void {
     for (const ch of text) {

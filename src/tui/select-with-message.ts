@@ -133,7 +133,7 @@ interface FlatEntry {
 
 // ─── SelectWithMessageComponent ──────────────────────────────────────
 
-class SelectWithMessageComponent<T> implements Component, Focusable {
+export class SelectWithMessageComponent<T> implements Component, Focusable {
     // ── Theme & layout ──
     private theme: Theme | null = null;
     private readonly container: Container;

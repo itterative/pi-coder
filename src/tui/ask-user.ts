@@ -94,7 +94,7 @@ export interface AskUserResult {
 
 // ─── AskUserComponent ───────────────────────────────────────────────
 
-class AskUserComponent implements Component, Focusable {
+export class AskUserComponent implements Component, Focusable {
     // Theme & layout
     private theme: Theme | null = null;
     private readonly container: Container;
