@@ -1,0 +1,766 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import sandboxConfig, { type SandboxConfigCwdConfinement } from "../../common/config";
+import { type Permission } from "./permissions";
+import {
+    parseBash,
+    isHeredocOperator,
+    isSubshell,
+    isProcessSubstitution,
+    getSubshellContent,
+} from "./bash";
+import { KNOWN_COMMANDS } from "./commands";
+import type { CommandSpec, FlagSpec } from "./commands";
+
+// re-export the public surface so existing imports of "./heuristics" keep working
+export { KNOWN_COMMANDS };
+export type { CommandSpec, FlagSpec };
+
+
+// pseudo-files available inside the sandbox's devtmpfs
+const SPECIAL_ALLOWED_PATHS = new Set([
+    "/dev/null",
+    "/dev/zero",
+    "/dev/full",
+    "/dev/random",
+    "/dev/urandom",
+    "/dev/stdin",
+    "/dev/stdout",
+    "/dev/stderr",
+]);
+
+/**
+ * Sensitive path segments that always make the heuristic ineligible
+ * (glob-matched against every segment of the resolved path).
+ */
+const DEFAULT_SENSITIVE_PATTERNS = [
+    // environment files
+    ".env", ".env.*",
+    // VCS internals (e.g. .git/config may embed tokens in remote URLs)
+    ".git",
+    // credential directories
+    ".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".gcloud",
+    // credential files
+    ".netrc", ".npmrc", ".pypirc", ".pgpass", ".my.cnf", ".htpasswd",
+    // private keys
+    "id_rsa*", "id_ed25519*", "id_ecdsa*", "id_dsa*",
+    "*.pem", "*.key", "*.p12", "*.pfx", "*.keystore", "*.jks",
+    // infra secrets
+    "*.tfvars",
+    "credentials",
+];
+
+function segmentGlobToRegex(pattern: string): RegExp {
+    const escaped = pattern
+        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+        .replaceAll("*", ".*")
+        .replaceAll("?", ".");
+    return new RegExp("^" + escaped + "$");
+}
+
+const DEFAULT_SENSITIVE_REGEXES = DEFAULT_SENSITIVE_PATTERNS.map(segmentGlobToRegex);
+
+const REDIRECTION_OPERATORS = new Set([">", ">>", "<", "2>", "2>>"]);
+
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/**
+ * Environment variable names that can alter how the (trusted) command itself
+ * behaves — code injection, PATH shadowing, or relocating the command's state
+ * (repo, config, helper) — so any assignment to them makes the heuristic
+ * ineligible. NOTE: this only covers assignments on the command line; the
+ * INHERITED process environment is not checked (the sandbox passes it through
+ * unless inheritEnv is configured). E.g. a shell-exported GIT_DIR still
+ * relocates git — accepted risk, and the reason env-dominated commands
+ * (less/more with LESSOPEN) are excluded from the whitelist entirely.
+ */
+const DANGEROUS_ENV_NAMES = new Set([
+    "PATH", "IFS", "CDPATH",
+    "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PROMPT_COMMAND",
+    "GCONV_PATH",
+    // rg config file can inject flags, including --pre (program execution)
+    "RIPGREP_CONFIG_PATH",
+    // pagers pipe file contents through a user script
+    "LESSOPEN", "LESSCLOSE",
+    // relocate tool config/state to an attacker-chosen file (git reads the
+    // XDG config; a crafted config can select programs via core.fsmonitor)
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+]);
+
+function isDangerousEnvName(name: string): boolean {
+    // GIT_* (GIT_DIR, GIT_WORK_TREE, GIT_CONFIG, GIT_INDEX_FILE,
+    // GIT_EXEC_PATH, ...): same risk class as git's -C/--git-dir/--exec-path
+    // flags, which are unsafe for this reason
+    return name.startsWith("LD_") || name.startsWith("GIT_") || DANGEROUS_ENV_NAMES.has(name);
+}
+
+interface ConfinementOptions {
+    allowedCommands: Set<string> | null;
+    sensitivePatterns: RegExp[];
+    blockDotfiles: boolean;
+    /** canonical cwd for symlink resolution; null disables the realpath check */
+    realCwd: string | null;
+}
+
+function resolvePath(p: string, cwd: string, home: string): string {
+    let expanded = p;
+    if (p === "~" || p.startsWith("~/")) {
+        expanded = home + p.slice(1);
+    }
+    return path.resolve(cwd, expanded);
+}
+
+/**
+ * Check whether a resolved path touches a sensitive segment.
+ */
+function hasSensitiveSegment(resolved: string, options: ConfinementOptions): boolean {
+    const segments = resolved
+        .split(path.sep)
+        .filter((s) => s !== "" && s !== "." && s !== "..");
+
+    for (const segment of segments) {
+        if (options.blockDotfiles && segment.startsWith(".")) {
+            return true;
+        }
+
+        if (DEFAULT_SENSITIVE_REGEXES.some((r) => r.test(segment))) {
+            return true;
+        }
+
+        if (options.sensitivePatterns.some((r) => r.test(segment))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Check whether a path touches a sensitive segment. Checked against every
+ * segment of the resolved path, so e.g. "src/.env" and "keys/server.pem"
+ * are caught.
+ */
+function isSensitivePath(
+    p: string,
+    cwd: string,
+    home: string,
+    options: ConfinementOptions,
+): boolean {
+    return hasSensitiveSegment(resolvePath(p, cwd, home), options);
+}
+
+/**
+ * Check whether a path stays within the working directory, using lexical
+ * resolution only (symlinks are not followed).
+ */
+function isAllowedPath(p: string, cwd: string, home: string): boolean {
+    if (p === "") {
+        return true;
+    }
+
+    if (SPECIAL_ALLOWED_PATHS.has(p)) {
+        return true;
+    }
+
+    const resolved = resolvePath(p, cwd, home);
+    return resolved === cwd || resolved.startsWith(cwd + path.sep);
+}
+
+/**
+ * Check that a path stays within the canonical working directory after
+ * resolving symlinks. The kernel resolves full symlink chains (including
+ * intermediate directory components and loops), so a single realpath call
+ * catches e.g. `link1 -> link2 -> /etc/passwd`.
+ *
+ * Non-existent trailing components (e.g. write targets) are handled by
+ * canonicalizing the nearest existing ancestor — anything below it does not
+ * exist, so it cannot contain symlinks. Dangling symlinks (unresolvable
+ * target) are rejected: writing through them would create the file at the
+ * target location.
+ */
+function isRealPathConfined(
+    p: string,
+    cwd: string,
+    home: string,
+    options: ConfinementOptions,
+): boolean {
+    if (p === "" || SPECIAL_ALLOWED_PATHS.has(p)) {
+        return true;
+    }
+
+    const realCwd = options.realCwd;
+    if (realCwd === null) {
+        return true;
+    }
+
+    let current = resolvePath(p, cwd, home);
+
+    while (true) {
+        let stat: fs.Stats | undefined;
+        try {
+            stat = fs.lstatSync(current);
+        } catch {
+            stat = undefined;
+        }
+
+        if (stat) {
+            let real: string;
+            try {
+                real = fs.realpathSync(current);
+            } catch {
+                // dangling symlink or otherwise unresolvable path
+                return false;
+            }
+            if (real !== realCwd && !real.startsWith(realCwd + path.sep)) {
+                return false;
+            }
+            // a symlink can hide a sensitive target behind an innocent name
+            // (e.g. notes.txt -> .env), so check the canonical path too
+            return !hasSensitiveSegment(real, options);
+        }
+
+        const parent = path.dirname(current);
+        if (parent === current) {
+            return false;
+        }
+        current = parent;
+    }
+}
+
+/**
+ * Check if any argument provides the pattern for a "first-pattern" command
+ * (e.g. grep -e foo, grep -ffoo, grep --regexp=foo). When present, all
+ * positional arguments are paths.
+ *
+ * False positives are safe: they only turn pattern arguments into
+ * path-checked arguments.
+ */
+function hasPatternBypass(args: string[], spec: CommandSpec): boolean {
+    const bypass = spec.patternBypassFlags ?? [];
+    const shortBypass = bypass
+        .filter((f) => !f.startsWith("--"))
+        .map((f) => f[1]);
+    const longBypass = bypass.filter((f) => f.startsWith("--"));
+
+    for (let i = 1; i < args.length; i++) {
+        const arg = args[i];
+
+        if (arg === "--") {
+            break;
+        }
+
+        if (arg.startsWith("--")) {
+            const name = arg.split("=", 1)[0];
+            if (longBypass.includes(name)) {
+                return true;
+            }
+        } else if (arg.length > 1 && arg.startsWith("-")) {
+            const cluster = arg.slice(1);
+            if (shortBypass.some((c) => cluster.includes(c))) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Whether any argument provides one of the spec's safeModeFlags
+ * (e.g. unzip -l, unzip --list).
+ */
+function hasSafeModeFlag(args: string[], spec: CommandSpec): boolean {
+    const safe = spec.safeModeFlags ?? [];
+    const shortSafe = safe
+        .filter((f) => !f.startsWith("--"))
+        .map((f) => f[1]);
+    const longSafe = safe.filter((f) => f.startsWith("--"));
+
+    for (let i = 1; i < args.length; i++) {
+        const arg = args[i];
+
+        if (arg === "--") {
+            break;
+        }
+
+        if (arg.startsWith("--")) {
+            if (longSafe.includes(arg.split("=", 1)[0])) {
+                return true;
+            }
+        } else if (arg.length > 1 && arg.startsWith("-")) {
+            const cluster = arg.slice(1);
+            if (shortSafe.some((c) => cluster.includes(c))) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Handle a short-flag cluster (e.g. -la, -n5, -efoo).
+ * Returns the new argument index, or null if the command is ineligible.
+ */
+function handleShortCluster(
+    args: string[],
+    index: number,
+    spec: CommandSpec,
+    paths: string[],
+): number | null {
+    const cluster = args[index].slice(1);
+
+    for (let j = 0; j < cluster.length; j++) {
+        const flag = "-" + cluster[j];
+        const flagSpec = spec.flags?.[flag];
+
+        if (flagSpec?.unsafe) {
+            return null;
+        }
+
+        const values = flagSpec?.values ?? 0;
+        if (values > 0) {
+            if (values > 1) {
+                // multi-value short flag: cannot be classified safely
+                return null;
+            }
+            // inline value is the rest of the cluster, otherwise next arg
+            if (j === cluster.length - 1) {
+                const value = args[index + 1];
+                if (value === undefined) {
+                    return null;
+                }
+                if (hasPathSlot(flagSpec, 0)) {
+                    paths.push(value);
+                }
+                return index + 1;
+            }
+            if (hasPathSlot(flagSpec, 0)) {
+                paths.push(cluster.slice(j + 1));
+            }
+            return index;
+        }
+
+        // boolean (known or unknown): continue with the cluster
+    }
+
+    return index;
+}
+
+function hasPathSlot(flagSpec: FlagSpec | undefined, slot: number): boolean {
+    return flagSpec?.pathSlots?.includes(slot) ?? false;
+}
+
+/**
+ * Extract all filesystem paths accessed by a single known command.
+ * Returns null if the command usage cannot be classified safely.
+ * args[0] is the command name.
+ */
+function extractCommandPaths(
+    args: string[],
+    spec: CommandSpec,
+    cwd: string,
+    options: ConfinementOptions,
+): string[] | null {
+    const paths: string[] = [];
+    let afterDoubleDash = false;
+    let positionalSeen = false;
+
+    // Commands with subcommands (e.g. git) dispatch on the first positional:
+    // it must name a known subcommand, after which the subcommand's spec
+    // governs the remaining arguments. The parent's unsafe flags apply before
+    // dispatch only (after it they would collide with subcommand flags,
+    // e.g. `git log -C` means detect-copies, not change directory).
+    const subcommands = spec.subcommands;
+    let activeSpec = spec;
+    let dispatched = subcommands === undefined;
+    let positionals = activeSpec.positionals ?? "paths";
+    let patternProvided =
+        positionals !== "first-pattern" || hasPatternBypass(args, activeSpec);
+
+    const adoptSpec = (s: CommandSpec) => {
+        activeSpec = s;
+        positionals = s.positionals ?? "paths";
+        patternProvided =
+            positionals !== "first-pattern" || hasPatternBypass(args, s);
+    };
+
+    for (let i = 1; i < args.length; i++) {
+        const arg = args[i];
+
+        if (!afterDoubleDash) {
+            if (arg === "--") {
+                afterDoubleDash = true;
+                continue;
+            }
+
+            if (isHeredocOperator(arg)) {
+                // skip the delimiter
+                i++;
+                continue;
+            }
+
+            if (REDIRECTION_OPERATORS.has(arg)) {
+                const target = args[++i];
+                if (target === undefined) {
+                    return null;
+                }
+
+                if (isSubshell(target) || isProcessSubstitution(target)) {
+                    if (!isConfined(getSubshellContent(target), cwd, options)) {
+                        return null;
+                    }
+                } else {
+                    paths.push(target);
+                }
+                continue;
+            }
+
+            if (isSubshell(arg) || isProcessSubstitution(arg)) {
+                if (!isConfined(getSubshellContent(arg), cwd, options)) {
+                    return null;
+                }
+                continue;
+            }
+
+            if (arg.startsWith("--")) {
+                const eq = arg.indexOf("=");
+                const name = eq === -1 ? arg : arg.slice(0, eq);
+                const inline = eq === -1 ? undefined : arg.slice(eq + 1);
+                const flagSpec = activeSpec.flags?.[name];
+
+                if (flagSpec?.unsafe) {
+                    return null;
+                }
+
+                const values = flagSpec?.values ?? 0;
+                if (values > 0) {
+                    if (inline !== undefined) {
+                        // inline value fills slot 0; multi-value flags do
+                        // not have a usable inline form
+                        if (values > 1) {
+                            return null;
+                        }
+                        if (hasPathSlot(flagSpec, 0)) {
+                            paths.push(inline);
+                        }
+                        continue;
+                    }
+                    for (let slot = 0; slot < values; slot++) {
+                        const value = args[i + 1 + slot];
+                        if (value === undefined) {
+                            return null;
+                        }
+                        if (hasPathSlot(flagSpec, slot)) {
+                            paths.push(value);
+                        }
+                    }
+                    i += values;
+                    continue;
+                }
+
+                // unknown long flag with inline value: treat value as path
+                if (inline !== undefined) {
+                    paths.push(inline);
+                }
+                continue;
+            }
+
+            if (arg.length > 1 && arg.startsWith("-")) {
+                // whole-arg unsafe flags: find's expression actions are
+                // single-dash multi-character tokens, not short clusters
+                // (-delete, -exec, -fprint, ...)
+                if (activeSpec.flags?.[arg]?.unsafe) {
+                    return null;
+                }
+
+                const next = handleShortCluster(args, i, activeSpec, paths);
+                if (next === null) {
+                    return null;
+                }
+                i = next;
+                continue;
+            }
+        }
+
+        // positional argument
+        if (!dispatched) {
+            const sub = subcommands![arg];
+            if (sub === undefined) {
+                return null;
+            }
+            adoptSpec(sub);
+            dispatched = true;
+            continue;
+        }
+
+        switch (positionals) {
+            case "none":
+                return null;
+            case "ignore":
+                continue;
+            case "first-pattern":
+                if (!positionalSeen && !patternProvided) {
+                    positionalSeen = true;
+                    continue;
+                }
+                paths.push(arg);
+                continue;
+            case "first-path":
+                if (!positionalSeen) {
+                    positionalSeen = true;
+                    paths.push(arg);
+                }
+                continue;
+            case "assignments": {
+                // env-assignment positional (the export builtin): NAME=VALUE
+                // is checked like a leading env assignment (dangerous names
+                // ineligible, value path-checked); a bare NAME only marks an
+                // existing variable for export — nothing to check
+                const eq = arg.indexOf("=");
+                if (eq === -1) {
+                    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(arg)) {
+                        return null;
+                    }
+                    continue;
+                }
+                const name = arg.slice(0, eq);
+                if (eq === 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+                    return null;
+                }
+                if (isDangerousEnvName(name)) {
+                    return null;
+                }
+                paths.push(arg.slice(eq + 1));
+                continue;
+            }
+            default:
+                paths.push(arg);
+        }
+    }
+
+    // a subcommand-taking command with no subcommand (e.g. bare `git`)
+    if (!dispatched) {
+        return null;
+    }
+
+    // default mode is unsafe unless a read-only mode flag is present
+    if (activeSpec.safeModeFlags && !hasSafeModeFlag(args, activeSpec)) {
+        return null;
+    }
+
+    return paths;
+}
+
+const CHAIN_OPERATORS = new Set(["&&", "||", "|", ";", "&"]);
+
+/**
+ * Split a parsed command at chain operators. parseBash keeps operators like
+ * && and | as arguments of a single command, so each segment between them
+ * must be evaluated as its own command.
+ */
+export function splitAtChainOperators(args: string[]): string[][] {
+    const segments: string[][] = [];
+    let current: string[] = [];
+
+    for (const arg of args) {
+        if (CHAIN_OPERATORS.has(arg)) {
+            if (current.length > 0) {
+                segments.push(current);
+                current = [];
+            }
+        } else {
+            current.push(arg);
+        }
+    }
+
+    if (current.length > 0) {
+        segments.push(current);
+    }
+
+    return segments;
+}
+
+/**
+ * Check whether a single parsed command is a known command whose file
+ * accesses all stay within the working directory.
+ */
+function isCommandConfined(
+    args: string[],
+    cwd: string,
+    options: ConfinementOptions,
+): boolean {
+    // skip leading environment assignments (FOO=bar cmd ...), but reject
+    // assignments that can alter the command's behavior (LD_PRELOAD, PATH,
+    // ...) and path-check the values of the rest
+    let idx = 0;
+    const envValues: string[] = [];
+    while (idx < args.length && ENV_ASSIGNMENT.test(args[idx])) {
+        const eq = args[idx].indexOf("=");
+        const name = args[idx].slice(0, eq);
+        if (isDangerousEnvName(name)) {
+            return false;
+        }
+        envValues.push(args[idx].slice(eq + 1));
+        idx++;
+    }
+
+    if (idx >= args.length) {
+        return false;
+    }
+
+    const commandName = args[idx];
+
+    // commands invoked by path are not trusted to be the real binary
+    if (commandName.includes("/") || commandName.includes("\\")) {
+        return false;
+    }
+
+    const spec = KNOWN_COMMANDS[commandName];
+    if (!spec) {
+        return false;
+    }
+
+    if (options.allowedCommands !== null && !options.allowedCommands.has(commandName)) {
+        return false;
+    }
+
+    const paths = extractCommandPaths(args.slice(idx), spec, cwd, options);
+    if (paths === null) {
+        return false;
+    }
+
+    const home = os.homedir();
+    const allPaths = [...envValues, ...paths];
+    return allPaths.every((p) => {
+        if (!isAllowedPath(p, cwd, home)) {
+            return false;
+        }
+        if (isSensitivePath(p, cwd, home, options)) {
+            return false;
+        }
+        if (!isRealPathConfined(p, cwd, home, options)) {
+            return false;
+        }
+        return true;
+    });
+}
+
+/**
+ * Check whether every command in a (possibly multi-line or chained) command
+ * string is known and confined to the working directory.
+ */
+function isConfined(
+    command: string,
+    cwd: string,
+    options: ConfinementOptions,
+): boolean {
+    let parsed: string[][];
+    try {
+        parsed = parseBash(command);
+    } catch {
+        return false;
+    }
+
+    if (parsed.length === 0) {
+        return false;
+    }
+
+    return parsed.every((cmdArgs) => {
+        const segments = splitAtChainOperators(cmdArgs);
+        return (
+            segments.length > 0 &&
+            segments.every((segment) => isCommandConfined(segment, cwd, options))
+        );
+    });
+}
+
+function buildConfinementOptions(
+    confinement: SandboxConfigCwdConfinement | undefined,
+    cwd: string,
+): ConfinementOptions {
+    let realCwd: string | null = null;
+    if (confinement?.resolveSymlinks ?? true) {
+        try {
+            realCwd = fs.realpathSync(cwd);
+        } catch {
+            realCwd = null;
+        }
+    }
+
+    return {
+        allowedCommands: confinement?.commands ? new Set(confinement.commands) : null,
+        sensitivePatterns: (confinement?.denyPaths ?? []).map(segmentGlobToRegex),
+        blockDotfiles: confinement?.blockDotfiles ?? false,
+        realCwd,
+    };
+}
+
+function resolveConfinementConfig(
+    config?: SandboxConfigCwdConfinement | null,
+): SandboxConfigCwdConfinement | undefined {
+    return config === undefined
+        ? sandboxConfig.current?.heuristics?.cwdConfinement
+        : (config ?? undefined);
+}
+
+/**
+ * Cwd-confinement heuristic: known, safe commands whose file accesses all
+ * resolve inside the working directory are granted the configured permission
+ * (default "allow:sandbox").
+ *
+ * Returns undefined when the heuristic does not apply — unknown commands,
+ * paths outside the working directory, or unclassifiable usage — in which
+ * case the caller should fall back to the permission system.
+ */
+export function getCwdConfinementPermission(
+    command: string,
+    cwd: string,
+    config?: SandboxConfigCwdConfinement | null,
+): Permission | undefined {
+    const confinement = resolveConfinementConfig(config);
+
+    if (confinement?.enabled === false) {
+        return undefined;
+    }
+
+    if (command.trim() === "") {
+        return undefined;
+    }
+
+    const resolvedCwd = path.resolve(cwd);
+
+    if (!isConfined(command, resolvedCwd, buildConfinementOptions(confinement, resolvedCwd))) {
+        return undefined;
+    }
+
+    return confinement?.permission ?? "allow:sandbox";
+}
+
+/**
+ * Segment-level variant of the cwd-confinement heuristic: evaluates a single
+ * already-parsed command (list of arguments, no chain operators).
+ *
+ * Returns undefined when the heuristic does not apply.
+ */
+export function getArgsConfinementPermission(
+    args: string[],
+    cwd: string,
+    config?: SandboxConfigCwdConfinement | null,
+): Permission | undefined {
+    const confinement = resolveConfinementConfig(config);
+
+    if (confinement?.enabled === false || args.length === 0) {
+        return undefined;
+    }
+
+    const resolvedCwd = path.resolve(cwd);
+
+    if (!isCommandConfined(args, resolvedCwd, buildConfinementOptions(confinement, resolvedCwd))) {
+        return undefined;
+    }
+
+    return confinement?.permission ?? "allow:sandbox";
+}
