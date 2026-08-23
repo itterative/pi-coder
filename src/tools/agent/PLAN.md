@@ -255,9 +255,10 @@ Start with one tool and an explicit action discriminator:
 ```text
 Start:  action="start"  + agent + task
 Resume: action="resume" + runId + guidance
+Cancel: action="cancel" + runId
 ```
 
-Later actions may include `status`, `cancel`, and background message delivery. An explicit action is clearer and more extensible than inferring behavior solely from optional fields. The tool should reject unknown fields for an action, unknown agent names, stale run IDs, and guidance sent to a non-waiting run.
+`cancel` is included initially so abandoned waiting sessions can be released explicitly. Later actions may include `status` and background message delivery. An explicit action is clearer and more extensible than inferring behavior solely from optional fields. The tool should reject unknown fields for an action, unknown agent names, stale run IDs, and guidance sent to a non-waiting run.
 
 Possible later modes:
 
@@ -267,7 +268,70 @@ Possible later modes:
 - `cwd`: an explicitly validated working directory;
 - model and thinking overrides.
 
-Agent scope should probably be extension configuration/trust policy rather than an LLM-controlled tool parameter. Available agent names and descriptions should be appended dynamically in `before_agent_start`, so the parent model can discover custom agents without reloading the extension.
+Agent scope should be extension configuration/trust policy rather than an LLM-controlled tool parameter. Available agent names, descriptions, and waiting run IDs should be appended dynamically in `before_agent_start`, so the parent model can discover custom agents and recover waiting state after compaction without reloading the extension.
+
+### Run protocol and state machine
+
+The parent `agent` tool is sequential for the first release. This avoids races when a model emits multiple start/resume/cancel calls in one tool batch. A run has one of these states:
+
+```text
+starting -> running -> completed
+                    -> waiting_for_parent -> running (resume)
+                    -> failed
+                    -> aborted
+waiting_for_parent -> canceled
+```
+
+Terminal states are returned in the current tool result, then their child session is disposed and removed from the active registry. Only `starting`, `running`, and `waiting_for_parent` consume registry capacity.
+
+#### Start
+
+1. Validate the action-specific fields and resolve an agent definition.
+2. Reserve a short parent-session-local run ID such as `scout-1` before awaiting setup. IDs use a monotonic parent-runtime counter and are never reused within that runtime, even after terminal cleanup.
+3. Enforce the active-run bound: at most four starting/running/waiting sessions, with no automatic TTL.
+4. Create and bind the child session, then transition to `running`.
+5. Prompt with the delegated task.
+6. On settlement, classify the run as waiting, completed, failed, or aborted.
+
+A setup failure disposes any partially created resources and returns a failed result. The runtime must never silently fall back to another agent or model.
+
+#### Waiting for parent
+
+The child-only `ask_parent` tool accepts a question, relevant findings/context, optional choices, and an optional recommendation. It records one pending request and returns `terminate: true`. Its prompt guidelines require it to:
+
+- make reasonable progress before asking;
+- ask only when parent guidance can materially improve the result;
+- include evidence and its recommended next step;
+- invoke `ask_parent` alone in a tool batch.
+
+After `childSession.prompt()` settles, a recorded request takes precedence over ordinary completion and transitions the run to `waiting_for_parent`. The parent result includes the same run ID, question, bounded partial findings, choices/recommendation, and explicit resume syntax. Waiting is a successful tool outcome, not an error.
+
+The SDK only honors early termination when every tool result in a child batch has `terminate: true`. If the child violates the “call alone” guideline, it may perform additional work before settling; the recorded guidance request still wins and the run becomes waiting rather than being discarded.
+
+#### Resume
+
+1. Resolve the run ID and require `waiting_for_parent`.
+2. Transition synchronously to `running` before any await, preventing a second resume/cancel from racing it.
+3. Clear the old request and append bounded parent guidance as a new child user message with an explicit `Parent guidance:` prefix.
+4. Prompt the same child session; do not reconstruct its context.
+5. Allow repeated `waiting_for_parent -> running -> waiting_for_parent` cycles.
+6. Return only usage accrued since the previous parent tool result.
+
+A busy, stale, terminal, or unknown run ID returns a clear action-specific error. After extension reload or parent session replacement, all old IDs are stale by design.
+
+#### Cancel and shutdown
+
+`cancel` is valid for a waiting run, disposes it, and removes it from the registry. A parent abort signal during start/resume calls `childSession.abort()` and transitions that operation to `aborted` after settlement.
+
+An idempotent `session_shutdown` handler handles quit, reload, new-session, resume, and fork. It marks the registry closing, aborts running children, waits for their operations to settle, disposes every retained session, and clears the registry. `session_start` creates fresh parent-session-local state; child runs are not transferred across parent sessions.
+
+This parent-runtime-local lifetime is an explicit MVP choice. Pi's persistent `SessionManager` could support durable child sessions later, but the first release returns a clear stale-ID error after reload/replacement/restart rather than implementing a partial persistence format.
+
+#### Results and errors
+
+Each result carries a bounded snapshot in `details`: run ID, agent/source, task summary, status, latest question/final output, recent activity, cumulative display usage, and timestamps. LLM-facing content is separately bounded.
+
+Completed and waiting states are successful. Invalid actions, setup/provider failures, failed child turns, stale resumes, and aborts are marked as errors by a parent `tool_result` hook so structured details and usage are preserved instead of being lost through an exception.
 
 ### Child runtime defaults
 
@@ -294,18 +358,21 @@ Decided:
 
 1. The first runtime is an in-process SDK `AgentSession`; subprocesses remain a possible later isolation fallback.
 2. The first agent is read-only.
-3. The first interaction protocol is child-to-parent pause/resume by run ID.
+3. The first interaction protocol is child-to-parent pause/resume by run ID, with explicit start/resume/cancel actions.
 4. Background mailbox interaction should remain possible later, but is not part of the first implementation.
-5. The first tool exposes single start/resume operations; chains and explicit parallel batches are deferred. A bounded registry may still contain multiple waiting runs.
+5. The first tool exposes single-run operations; chains and explicit parallel batches are deferred. A bounded registry may still contain multiple waiting runs.
 6. A zero-configuration built-in `scout` will ship with the extension; custom markdown agents remain supported.
+7. Project definitions are enabled only when `ctx.isProjectTrusted()` is true, without another read-only confirmation prompt.
+8. Built-in names such as `scout` are reserved.
+9. Retain at most four active/waiting runs with no TTL and parent-runtime-local lifetime.
+10. Direct child-to-user `ask_user` is deferred; first-release questions route through the parent.
+11. Use throttled tool updates and custom result rendering first; defer a persistent live widget.
 
 Still to decide:
 
-1. Project-local definitions are enabled only when `ctx.isProjectTrusted()` is true. The read-only release does not add another confirmation prompt because the capability ceiling cannot be raised by frontmatter.
-2. Built-in names such as `scout` are reserved. Duplicate user/project definitions produce diagnostics rather than silently changing the built-in contract.
-3. What are the run count, waiting-session TTL, output cap, and update throttle limits?
-4. Direct child-to-user `ask_user` is deferred; all first-release questions route through the parent.
-5. The first release uses throttled tool updates and custom result rendering only. A persistent live widget is deferred until the run lifecycle is stable.
+1. Duplicate-name policy between user and trusted-project custom agents.
+2. Exact output caps and update-throttle constants.
+3. Exact custom-provider synchronization behavior.
 
 ### Phase 1: Read-only pause/resume vertical slice
 
@@ -333,7 +400,7 @@ Implement and test:
 - tool-list normalization against the capability ceiling;
 - duplicate-name precedence;
 - malformed-file diagnostics;
-- trust and project-agent confirmation behavior;
+- project trust gating behavior;
 - a bounded dynamic available-agent block in the parent system prompt.
 
 ### Phase 3: Parent TUI rendering
@@ -424,7 +491,7 @@ Use this section to record decisions as the design evolves.
 - [x] First interaction: pause/resume child-to-parent guidance by run ID.
 - [x] Future interaction: keep room for a background mailbox.
 - [x] Single start/resume flow before chain/parallel.
-- [x] Child sessions are in-memory; only bounded waiting runs survive between tool calls.
+- [x] Child sessions are in-memory and parent-runtime-local; waiting runs do not survive reload, parent session replacement/fork, or process restart.
 - [x] Ship a built-in read-only `scout` alongside custom definitions.
 - [x] Enable project definitions only in projects trusted by pi; no redundant confirmation for the read-only ceiling.
 - [x] Reserve built-in agent names; duplicate markdown definitions cannot override them.
@@ -432,7 +499,8 @@ Use this section to record decisions as the design evolves.
 - [x] Route first-release child questions through the parent; defer direct child-to-user UI.
 - [x] Use tool updates/results first; defer a persistent live widget.
 - [ ] Duplicate-name policy between user and trusted-project agents?
-- [ ] Run limits, TTL, output cap, and update throttle?
+- [x] Allow at most four active/waiting runs with no TTL; cleanup is explicit or tied to parent shutdown.
+- [ ] Output caps and update throttle constants?
 - [ ] Custom provider synchronization details?
 
 ## References
