@@ -16,8 +16,10 @@ The initial direction recorded in `src/tools/agent/README.md` is:
 ## Current Repository State
 
 - `src/index.ts` is the consolidated pi-coder extension entrypoint.
-- `src/tools/agent/index.ts` is currently empty and is not registered from `src/index.ts`.
-- Existing extension functionality includes:
+- `src/tools/agent/index.ts` registers the in-process `agent` tool from `src/index.ts`.
+- `child.ts`, `runtime.ts`, and `discovery.ts` implement the read-only child SDK session, run state machine, and custom definition loading.
+- The MVP supports built-in/user/trusted-project agents, start/resume/cancel, parent guidance, confinement, usage deltas, lifecycle cleanup, and compact/expanded rendering.
+- Existing extension functionality also includes:
   - memory injection and persistence;
   - the ask-user tool;
   - bash permission/sandbox hooks;
@@ -380,12 +382,11 @@ Decided:
 
 Still to decide:
 
-1. Exact output caps and update-throttle constants.
-2. Exact custom-provider synchronization behavior.
+1. Custom-provider synchronization edge cases beyond registered provider/native-provider configuration and resolved API-key copying.
 
-### Phase 1: Read-only pause/resume vertical slice
+### Phase 1: Read-only pause/resume vertical slice — implemented
 
-Implement the hardest path first with one built-in or test-only scout definition:
+The MVP implements:
 
 - register the parent `agent` tool;
 - create one in-memory child session;
@@ -399,9 +400,9 @@ Implement the hardest path first with one built-in or test-only scout definition
 
 Use injected child-runtime/session factories so orchestration tests do not require provider calls.
 
-### Phase 2: Agent discovery and parent discoverability
+### Phase 2: Agent discovery and parent discoverability — implemented
 
-Implement and test:
+Implemented and tested:
 
 - built-in/user/project definition sources;
 - directory resolution;
@@ -412,9 +413,9 @@ Implement and test:
 - project trust gating behavior;
 - a bounded dynamic available-agent block in the parent system prompt.
 
-### Phase 3: Parent TUI rendering
+### Phase 3: Parent TUI rendering — MVP implemented
 
-Add compact and expanded rendering for:
+Compact and expanded rendering includes:
 
 - agent name and source;
 - task text;
@@ -509,8 +510,8 @@ Use this section to record decisions as the design evolves.
 - [x] Use tool updates/results first; defer a persistent live widget.
 - [x] Within a scope, sorted first definition wins and later duplicates warn; trusted-project definitions override user definitions with an informational diagnostic.
 - [x] Allow at most four active/waiting runs with no TTL; cleanup is explicit or tied to parent shutdown.
-- [ ] Output caps and update throttle constants?
-- [ ] Custom provider synchronization details?
+- [x] Bound task/guidance to 16,000 characters, LLM-facing final output to 32,000 characters, and progress updates to at most once per 100 ms.
+- [ ] Custom-provider synchronization edge cases? The MVP mirrors registered provider/native-provider configuration and the resolved API key into each child runtime.
 
 ## References
 
