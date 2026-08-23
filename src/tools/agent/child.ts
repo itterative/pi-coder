@@ -21,7 +21,9 @@ import { Type } from "typebox";
 import type { SandboxConfigCwdConfinement } from "../../common/config";
 import { getPathConfinementPermission } from "../../modules/sandbox/heuristics";
 import { askUser } from "../../tui/ask-user";
+import { READ_ONLY_AGENT_TOOLS } from "./discovery";
 import type { AgentTraceData } from "./trace";
+import { registerWorkerMutationHooks } from "./worker";
 import {
     ZERO_USAGE,
     type ChildAgentFactoryContext,
@@ -39,17 +41,23 @@ const CHILD_CONFINEMENT: SandboxConfigCwdConfinement = {
     resolveSymlinks: true,
 };
 
-function childProtocolPrompt(background: boolean): string {
+function childProtocolPrompt(background: boolean, mutating: boolean): string {
     const interaction = background
         ? "Direct end-user dialogs are unavailable while you run in the background. Use ask_parent when guidance is materially necessary; make reasonable progress first, include evidence and a recommendation, and call it alone in its tool batch."
         : "Use ask_user when you need a preference, clarification, or decision directly from the end user, and call it alone in its tool batch so later work can incorporate the answer. The answer returns in the same turn, so continue your work afterward. Use ask_parent instead when the parent can answer, investigate, or decide; make reasonable progress first, include evidence and a recommendation, and call ask_parent alone in its tool batch. Do not ask questions only in prose when either interaction tool applies.";
-    return `You are a read-only subagent working for a parent coding agent. You cannot run commands or modify files.\n\n${interaction}\n\nWhen the task is complete, provide a self-contained final report to the parent.`;
+    const capability = mutating
+        ? "You are a mutation-capable worker operating in the parent's current checkout. Every edit, write, and bash call opens an explicit parent-visible permission gate. Call mutation tools one at a time, and remember that parent activity may concurrently affect the checkout."
+        : "You are a read-only subagent working for a parent coding agent. You cannot run commands or modify files.";
+    return `${capability}\n\n${interaction}\n\nWhen the task is complete, provide a self-contained final report to the parent. Mutation-capable workers must list changed files and validation performed.`;
+
 }
 
 interface ProgressTracker {
     progress: ChildProgress;
     pendingQuestion?: ParentQuestion;
     lastUpdateAt: number;
+    changedFiles: Set<string>;
+    bashApproved: boolean;
 }
 
 export function isChildPathAllowed(filePath: string | undefined, cwd: string): boolean {
@@ -131,6 +139,9 @@ function registerChildExtension(
     parentContext: ExtensionContext,
     agentName: string,
     background: boolean,
+    mutating: boolean,
+    runId: string,
+    onProgress: ChildAgentFactoryContext["onProgress"],
     onTrace?: ChildAgentFactoryContext["onTrace"],
 ) {
     return (pi: ExtensionAPI): void => {
@@ -231,6 +242,33 @@ function registerChildExtension(
                 };
             },
         });
+
+        if (mutating) {
+            registerWorkerMutationHooks(pi, {
+                parentContext,
+                runId,
+                agentName,
+                permissionPending(pending, activity) {
+                    tracker.progress.permissionPending = pending;
+                    tracker.progress.recentActivity.push(activity);
+                    tracker.progress.recentActivity = tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
+                    onTrace?.("mutation.permission", { pending, activity });
+                    onProgress({
+                        output: tracker.progress.output,
+                        recentActivity: [...tracker.progress.recentActivity],
+                        permissionPending: pending,
+                    });
+                },
+                fileChanged(filePath) {
+                    tracker.changedFiles.add(filePath);
+                    onTrace?.("mutation.file_changed", { path: filePath });
+                },
+                bashApproved() {
+                    tracker.bashApproved = true;
+                    onTrace?.("mutation.bash_approved");
+                },
+            });
+        }
 
         pi.on("tool_call", (event, ctx) => {
             let filePath: string | undefined;
@@ -353,6 +391,18 @@ function traceToolArgs(toolName: string, args: unknown): AgentTraceData {
         return { path: pathValue, patternPreview: tracePreview(pattern, 120) };
     }
     if (toolName === "ls") return { path: pathValue };
+    if (toolName === "edit") {
+        return {
+            path: pathValue,
+            replacementCount: Array.isArray(input.edits) ? input.edits.length : 0,
+        };
+    }
+    if (toolName === "write") {
+        return { path: pathValue, contentChars: typeof input.content === "string" ? input.content.length : 0 };
+    }
+    if (toolName === "bash") {
+        return { commandChars: typeof input.command === "string" ? input.command.length : 0 };
+    }
     if (toolName === "ask_user") {
         return {
             titlePreview: tracePreview(typeof input.title === "string" ? input.title : "", 120),
@@ -459,6 +509,9 @@ function toolActivity(toolName: string, args: unknown): string {
         return `Finding ${pattern ? JSON.stringify(pattern) : "entries"} in ${filePath}`;
     }
     if (toolName === "ls") return `Listing ${filePath}`;
+    if (toolName === "edit") return `Editing ${filePath}`;
+    if (toolName === "write") return `Writing ${filePath}`;
+    if (toolName === "bash") return "Running approved bash command";
     if (toolName === "ask_parent") return "Requesting parent guidance";
     if (toolName === "ask_user") return "Requesting user guidance";
     return `Using ${toolName}`;
@@ -497,6 +550,7 @@ function updateTracker(
         onProgress({
             output: tracker.progress.output,
             recentActivity: [...tracker.progress.recentActivity],
+            permissionPending: tracker.progress.permissionPending,
         });
     }
 }
@@ -594,6 +648,8 @@ export async function createAgentChild(
     const tracker: ProgressTracker = {
         progress: { output: "", recentActivity: [] },
         lastUpdateAt: 0,
+        changedFiles: new Set(),
+        bashApproved: false,
     };
     const cwd = context.cwd;
     const agentDir = getAgentDir();
@@ -608,27 +664,33 @@ export async function createAgentChild(
         noThemes: true,
         noContextFiles: true,
         extensionFactories: [{
-            name: "pi-coder-scout-child",
+            name: context.definition.mutating ? "pi-coder-worker-child" : "pi-coder-scout-child",
             hidden: true,
             factory: registerChildExtension(
                 tracker,
                 parentContext,
                 context.definition.name,
                 context.background === true,
+                context.definition.mutating === true,
+                context.runId ?? context.definition.name,
+                context.onProgress,
                 context.onTrace,
             ),
         }],
         appendSystemPrompt: [
             context.definition.systemPrompt,
-            childProtocolPrompt(context.background === true),
+            childProtocolPrompt(context.background === true, context.definition.mutating === true),
         ].filter(Boolean),
     });
     await resourceLoader.reload();
     const interactionToolCount = context.background ? 1 : 2;
     context.onTrace?.("resources.loaded", {
-        readOnlyToolCount: context.definition.tools.length,
+        readOnlyToolCount: context.definition.mutating ? READ_ONLY_AGENT_TOOLS.length : context.definition.tools.length,
         directUserUI: !context.background && parentContext.hasUI && parentContext.mode === "tui",
         background: context.background === true,
+        ...(context.definition.mutating
+            ? { configuredToolCount: context.definition.tools.length, mutating: true }
+            : {}),
     });
 
     const requestedModel = resolveChildModel(parentContext, context.definition.model);
@@ -693,6 +755,7 @@ export async function createAgentChild(
             return {
                 output: tracker.progress.output,
                 recentActivity: [...tracker.progress.recentActivity],
+                permissionPending: tracker.progress.permissionPending,
             };
         },
         getFinalOutput() {
@@ -703,5 +766,9 @@ export async function createAgentChild(
         },
         getError: () => childError(session),
         getUsage: () => aggregateUsage(session),
+        getMutationReport: () => ({
+            changedFiles: [...tracker.changedFiles].sort(),
+            bashApproved: tracker.bashApproved,
+        }),
     };
 }

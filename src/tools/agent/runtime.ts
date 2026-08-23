@@ -6,6 +6,7 @@ import type { AgentTraceData, AgentTraceStore } from "./trace";
 export type AgentRunStatus =
     | "starting"
     | "running"
+    | "waiting_for_permission"
     | "waiting_for_parent"
     | "completed"
     | "failed"
@@ -22,6 +23,12 @@ export interface ParentQuestion {
 export interface ChildProgress {
     output: string;
     recentActivity: string[];
+    permissionPending?: boolean;
+}
+
+export interface WorkerMutationReport {
+    changedFiles: string[];
+    bashApproved: boolean;
 }
 
 export interface ChildAgentHandle {
@@ -33,6 +40,7 @@ export interface ChildAgentHandle {
     getFinalOutput(): string;
     getError(): string | undefined;
     getUsage(): Usage;
+    getMutationReport?(): WorkerMutationReport;
 }
 
 export interface ChildAgentFactoryContext {
@@ -40,6 +48,7 @@ export interface ChildAgentFactoryContext {
     definition: AgentDefinition;
     parentContext: unknown;
     background?: boolean;
+    runId?: string;
     onProgress: (progress: ChildProgress) => void;
     onTrace?: (type: string, data?: AgentTraceData) => void;
 }
@@ -69,6 +78,8 @@ export interface AgentRunDetails {
     updatedAt: number;
     error?: string;
     discoveryDiagnostics?: string[];
+    mutating?: boolean;
+    mutationReport?: WorkerMutationReport;
 }
 
 export interface AgentRunOutcome {
@@ -90,6 +101,7 @@ export interface AgentRunSummary {
     activity?: string;
     responsePreview?: string;
     question?: string;
+    mutating?: boolean;
 }
 
 interface AgentRun {
@@ -110,6 +122,8 @@ interface AgentRun {
     disposed: boolean;
     shutdownRequested: boolean;
     cancelRequested: boolean;
+    mutating: boolean;
+    permissionPending: boolean;
     operation?: Promise<AgentRunOutcome>;
     backgroundTask?: Promise<AgentRunOutcome>;
     backgroundCallback?: AgentBackgroundCallback;
@@ -214,12 +228,13 @@ export class AgentRunManager {
             return {
                 runId: run.id,
                 agent: run.agent,
-                status: run.status,
+                status: run.permissionPending ? "waiting_for_permission" : run.status,
                 background: run.background,
                 task: truncate(run.task.replace(/\s+/g, " ").trim(), 120),
                 activity: activity ? truncate(activity, 120) : undefined,
                 responsePreview: response ? truncate(response, 120) : undefined,
                 question: run.question ? truncate(run.question.question, 500) : undefined,
+                mutating: run.mutating,
             };
         });
     }
@@ -451,6 +466,14 @@ export class AgentRunManager {
                 source: "builtin",
             }
             : definitionOrName;
+        if (
+            definition.mutating
+            && [...this.runs.values()].some((candidate) => (
+                candidate.mutating && !isTerminalStatus(candidate.status)
+            ))
+        ) {
+            throw new AgentActionError("A mutation-capable worker is already active.");
+        }
         const now = Date.now();
         const id = `${definition.name}-${this.nextRunNumber++}`;
         const run: AgentRun = {
@@ -468,6 +491,8 @@ export class AgentRunManager {
             disposed: false,
             shutdownRequested: false,
             cancelRequested: false,
+            mutating: definition.mutating === true,
+            permissionPending: false,
         };
         this.runs.set(id, run);
         this.trace?.start(id, definition.name, {
@@ -492,8 +517,10 @@ export class AgentRunManager {
                 ...context,
                 definition,
                 background: run.background,
+                runId: run.id,
                 onProgress: (progress) => {
                     run.updatedAt = Date.now();
+                    run.permissionPending = progress.permissionPending === true;
                     this.record(run, "child.progress", {
                         outputChars: progress.output.length,
                         activity: progress.recentActivity[progress.recentActivity.length - 1] ?? "",
@@ -763,7 +790,18 @@ export class AgentRunManager {
     ): AgentRunOutcome {
         if (isTerminalStatus(run.status) && run.terminalOutcome) return run.terminalOutcome;
         run.status = status;
+        run.permissionPending = false;
         run.updatedAt = Date.now();
+        const report = run.handle?.getMutationReport?.();
+        if (run.mutating) {
+            const files = report?.changedFiles.length
+                ? report.changedFiles.map((file) => `  - ${file}`).join("\n")
+                : "  - none tracked";
+            const bashCaveat = report?.bashApproved
+                ? "\n- One or more approved bash commands may have changed additional files; inspect the checkout before attributing the final diff."
+                : "";
+            content += `\n\nMutation report:\n- Files changed by successful edit/write calls:\n${files}${bashCaveat}`;
+        }
         const outcome = this.outcome(run, content, isError, progress, status === "failed" ? content : undefined);
         this.disposeRun(run);
         this.trace?.finish(run.id, status, {
@@ -820,7 +858,7 @@ export class AgentRunManager {
             agent: run.agent,
             agentSource: run.agentSource,
             agentFilePath: run.agentFilePath,
-            status: run.status,
+            status: run.permissionPending ? "waiting_for_permission" : run.status,
             background: run.background,
             task: truncate(run.task, 2_000),
             output: progress.output ? truncate(progress.output, MAX_OUTPUT_CHARS) : undefined,
@@ -830,6 +868,8 @@ export class AgentRunManager {
             startedAt: run.startedAt,
             updatedAt: run.updatedAt,
             error,
+            mutating: run.mutating,
+            mutationReport: run.handle?.getMutationReport?.(),
         };
     }
 

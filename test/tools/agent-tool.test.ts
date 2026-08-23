@@ -63,6 +63,7 @@ describe("agent extension registration", () => {
         expect(tool.name).toBe("agent");
         expect(tool.executionMode).toBe("sequential");
         expect(prompt.systemPrompt).toContain("scout (builtin)");
+        expect(prompt.systemPrompt).toContain("worker (builtin): [mutation-capable]");
         expect(result.details).toMatchObject({ status: "completed", agent: "scout" });
         expect(errorHook).toEqual({ isError: true });
         await handlers.session_shutdown[0]({}, ctx);

@@ -458,11 +458,11 @@ The read-only runtime now supports:
 
 Automatic full-result delivery and explicit batch syntax remain deferred.
 
-### Phase 6: Mutation-capable worker — next
+### Phase 6: Mutation-capable worker — MVP implemented
 
 Prerequisite implemented: bash session rules/mode and file-folder approvals now live in per-registration parent-runtime closures rather than module globals. `askUser` and `selectWithMessage` share one abort-aware FIFO dialog queue, so parent and future child permission gates cannot replace one another; queued aborts return promptly without allowing later dialogs to overtake the active one.
 
-Implement a deliberately narrow first worker:
+Implemented a deliberately narrow first worker:
 
 - built-in `worker` profile in the existing checkout; custom Markdown agents remain read-only;
 - read/search plus `edit`, `write`, and `bash` tools;
@@ -470,10 +470,10 @@ Implement a deliberately narrow first worker:
 - foreground and background worker runs are both supported;
 - every child `edit`, `write`, and `bash` call passes through an explicit parent-visible prompt identifying the run and requested action; configured denial remains authoritative and no child approval silently becomes a parent/session allow rule;
 - a shared abort-aware permission-dialog queue serializes parent and child gates so custom TUI dialogs cannot replace or race one another; while a background child waits in this queue/dialog, the parent may continue unrelated work and the agent widget reports that the child is waiting for permission;
-- move module-global bash/file permission state into per-parent-runtime state before binding child mutation gates;
-- retain cwd/sensitive-path confinement for child file tools, preserve sandbox/direct bash behavior, propagate user notes, and serialize `edit`/`write` through pi's shared file mutation queue;
+- module-global bash/file permission state was moved into per-parent-runtime state before binding child mutation gates;
+- retain cwd/sensitive-path confinement for child file tools, preserve sandbox/direct bash behavior, propagate user notes, and serialize all worker mutation calls through tool settlement (with pi's shared file mutation queue still providing a second layer for `edit`/`write`);
 - return clear changed-file reporting, with explicit caveats when concurrent parent/bash activity makes attribution uncertain;
-- test denial, cancellation/shutdown, queued parent/child prompts, background progress, concurrent/conflicting edits, and stale run cleanup.
+- automated coverage includes confinement denial, active-dialog cancellation, queued mutation prompts, permission-waiting progress, one-worker capacity, child SDK construction, changed-file reporting, and existing lifecycle/stale-run cleanup; real-provider background behavior remains in the manual checklist.
 
 An isolated git-worktree worker remains a future option for stronger attribution and conflict isolation; it requires repository-only setup, diff/merge handoff, and cleanup semantics.
 

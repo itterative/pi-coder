@@ -8,7 +8,7 @@ import {
 
 export const READ_ONLY_AGENT_TOOLS = ["read", "grep", "find", "ls"] as const;
 const READ_ONLY_TOOL_SET = new Set<string>(READ_ONLY_AGENT_TOOLS);
-const RESERVED_AGENT_NAMES = new Set(["scout"]);
+const RESERVED_AGENT_NAMES = new Set(["scout", "worker"]);
 const AGENT_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
 
 export type AgentSource = "builtin" | "user" | "project";
@@ -21,6 +21,8 @@ export interface AgentDefinition {
     systemPrompt: string;
     source: AgentSource;
     filePath?: string;
+    /** Built-ins only: grants mutation tools through the worker permission gate. */
+    mutating?: boolean;
 }
 
 export interface AgentDiagnostic {
@@ -49,6 +51,17 @@ export const BUILTIN_SCOUT: AgentDefinition = {
 
 Explore the codebase thoroughly and return concise, evidence-based findings. Cite relevant file paths and symbols. You may read, search, find, and list files, but you cannot run commands or modify files.`,
     source: "builtin",
+};
+
+export const BUILTIN_WORKER: AgentDefinition = {
+    name: "worker",
+    description: "Permission-gated implementation work in the current checkout",
+    tools: [...READ_ONLY_AGENT_TOOLS, "edit", "write", "bash"],
+    systemPrompt: `You are the built-in pi-coder worker, a mutation-capable subagent working in the parent's current checkout.
+
+Inspect relevant code before changing it. Every edit, write, and bash call requires explicit end-user approval; call mutation tools one at a time rather than batching them. Keep changes narrow, avoid destructive git operations, and account for concurrent parent activity in the same checkout. When complete, report what you changed, list affected files, state validation performed, and disclose any uncertainty.`,
+    source: "builtin",
+    mutating: true,
 };
 
 function sortedMarkdownFiles(dir: string): string[] {
@@ -197,6 +210,7 @@ export function discoverAgentsInDirectories(
 
     const merged = new Map<string, AgentDefinition>();
     merged.set(BUILTIN_SCOUT.name, BUILTIN_SCOUT);
+    merged.set(BUILTIN_WORKER.name, BUILTIN_WORKER);
     for (const agent of userAgents) merged.set(agent.name, agent);
     for (const agent of projectAgents) {
         const existing = merged.get(agent.name);

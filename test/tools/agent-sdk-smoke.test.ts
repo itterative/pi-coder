@@ -10,7 +10,7 @@ import {
     createChildModelRuntime,
     shouldCopyParentApiKey,
 } from "../../src/tools/agent/child";
-import { BUILTIN_SCOUT } from "../../src/tools/agent/discovery";
+import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/discovery";
 
 describe("in-process scout SDK session", () => {
     it("constructs and disposes without a provider call or discovered parent extensions", async () => {
@@ -68,6 +68,23 @@ describe("in-process scout SDK session", () => {
             },
         });
         backgroundChild.dispose();
+
+        const workerEvents: Array<{ type: string; data?: Record<string, unknown> }> = [];
+        const worker = await createAgentChild({
+            cwd: process.cwd(),
+            definition: BUILTIN_WORKER,
+            parentContext,
+            background: true,
+            runId: "worker-smoke",
+            onProgress: () => {},
+            onTrace: (type, data) => workerEvents.push({ type, data }),
+        });
+        expect(workerEvents).toContainEqual({
+            type: "session.created",
+            data: { toolCount: BUILTIN_WORKER.tools.length + 1 },
+        });
+        expect(worker.getMutationReport?.()).toEqual({ changedFiles: [], bashApproved: false });
+        worker.dispose();
     });
 
     it("preserves persisted OpenAI Codex OAuth when available", async () => {

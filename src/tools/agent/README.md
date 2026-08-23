@@ -1,6 +1,6 @@
 # Agent tool
 
-`pi-coder` provides an in-process, read-only `agent` tool for delegated codebase exploration.
+`pi-coder` provides an in-process `agent` tool for delegated exploration and permission-gated implementation.
 
 ## Actions
 
@@ -11,19 +11,28 @@ agent(action="status", runId="scout-1")
 agent(action="collect", runId="scout-1")
 agent(action="resume", runId="scout-1", guidance="...")
 agent(action="cancel", runId="scout-1")
+agent(action="spawn", agent="worker", task="Implement and validate the requested change")
 ```
 
 A child may call `ask_parent` to pause its current turn. The parent receives its question and partial findings, may investigate independently, and resumes the retained child session by run ID. A `waiting_for_parent` result is paused rather than finished; a later `agent resume <run-id>` result should reach either another waiting state or `completed`. Collapsed TUI results show the pending question or a final-result preview, while expanded results include full details and usage.
 
 In TUI mode, a foreground child may instead call its restricted `ask_user` tool when a preference, clarification, or decision genuinely requires direct end-user input. The existing pi-coder question component opens under a title such as `scout asks: ...`; the selected or custom answer returns to the same child turn, which then continues normally. Canceling the dialog gives the child a recoverable cancellation result. Aborting the parent operation or shutting down closes an active child dialog. Outside TUI mode, direct interaction returns an explicit unavailable result and tells the child to use `ask_parent` instead.
 
-`spawn` returns immediately and lets up to four read-only children execute concurrently. A bounded above-editor activity widget shows running (`●`), waiting (`?`), ready (`✓`), and failed (`!`) runs along with each live run's current sanitized tool action plus a short preview of its latest assistant response; it also retains up to three recent ready/failed rows. It updates asynchronously as child progress arrives. Waiting and terminal background changes are also coalesced in a bounded parent mailbox. After active parent work settles—or immediately when the parent is already idle—the mailbox sends one hidden custom message with `deliverAs: "followUp"` and `triggerTurn: true`. It automatically starts a parent mailbox turn without interrupting active work or injecting full child output. The marker contains only run IDs, statuses, and short question/result previews. Poll with `status`; once terminal, `collect` returns and consumes the retained result. A background child cannot open `ask_user`, because an unsolicited dialog could race the parent TUI; it pauses through `ask_parent` instead and can be resumed without becoming foreground. `status`, `resume`, `cancel`, and `collect` report only usage accrued since the previous parent tool result for that run.
+`spawn` returns immediately and lets up to four children execute concurrently. A bounded above-editor activity widget shows running (`●`), waiting (`?`), ready (`✓`), and failed (`!`) runs along with each live run's current sanitized tool action plus a short preview of its latest assistant response; it also retains up to three recent ready/failed rows. It updates asynchronously as child progress arrives. Waiting and terminal background changes are also coalesced in a bounded parent mailbox. After active parent work settles—or immediately when the parent is already idle—the mailbox sends one hidden custom message with `deliverAs: "followUp"` and `triggerTurn: true`. It automatically starts a parent mailbox turn without interrupting active work or injecting full child output. The marker contains only run IDs, statuses, and short question/result previews. Poll with `status`; once terminal, `collect` returns and consumes the retained result. A background child cannot open `ask_user`, because an unsolicited dialog could race the parent TUI; it pauses through `ask_parent` instead and can be resumed without becoming foreground. `status`, `resume`, `cancel`, and `collect` report only usage accrued since the previous parent tool result for that run.
 
 Up to four starting, running, or waiting runs consume active capacity. The latest 20 uncollected background terminal results are retained separately; older IDs become stale. Runs have no TTL, but are in-memory and parent-runtime-local: reload, session replacement/fork, process exit, collection, or explicit cancellation disposes them.
 
+## Built-in worker
+
+The built-in `worker` operates in the existing checkout with `read`, `grep`, `find`, `ls`, `edit`, `write`, and `bash`. Only one worker may be starting, running, or waiting at a time, while read-only scouts can continue concurrently. Foreground and background workers are supported.
+
+Every worker `edit`, `write`, and `bash` call enters the shared abort-aware permission queue and opens a parent-visible prompt labelled with its run ID. Approvals are one-shot and never become parent or child session rules. File paths remain cwd-confined with sensitive and symlink escapes blocked before prompting. Bash honors configured denial and sandbox/direct policy; unresolved commands default to sandbox when bubblewrap is available and the prompt permits toggling to direct mode. Mutation calls are serialized through completion, so concurrent child tool calls cannot overlap mutations.
+
+The activity widget shows `waiting_for_permission` while a gate is queued or open. Canceling the run closes or removes its prompt. Successful `edit`/`write` paths are tracked in a terminal mutation report. Because approved bash and concurrent parent activity can change arbitrary checkout files, the report explicitly warns when attribution may be incomplete; inspect the final diff before committing.
+
 ## Agent definitions
 
-The built-in `scout` requires no configuration. Custom definitions use Markdown with YAML frontmatter:
+The built-in `scout` and `worker` require no configuration. Custom definitions use Markdown with YAML frontmatter:
 
 ```markdown
 ---
@@ -41,7 +50,7 @@ Locations:
 - user: `~/.pi/agent/agents/*.md`
 - project: nearest `.pi/agents/*.md`, only when pi trusts the project
 
-Definitions are sorted by path. Within one scope, the first valid duplicate wins and later files warn. Trusted-project definitions override user definitions with an informational diagnostic. Built-in names such as `scout` are reserved.
+Definitions are sorted by path. Within one scope, the first valid duplicate wins and later files warn. Trusted-project definitions override user definitions with an informational diagnostic. Built-in names `scout` and `worker` are reserved.
 
 Custom definitions cannot raise the read-only capability ceiling. Unsupported tools are removed with a warning; every enabled `read`, `grep`, `find`, and `ls` path is confined to the working directory and sensitive paths remain blocked.
 
@@ -61,7 +70,10 @@ Run these checks after changing child sessions, providers, lifecycle handling, o
 10. Fill all four active run slots and verify a fifth start/spawn is rejected; verify uncollected terminal background results do not consume active capacity.
 11. Verify a user agent loads, a trusted-project agent overrides it, and an untrusted project definition does not load.
 12. Ask the scout to access an absolute outside path, `..` escape, sensitive file, and in-cwd symlink to an outside target; all must be blocked without prompting.
-13. Produce long findings and expand/collapse the result; verify the compact preview stays useful and expanded activity/usage remain readable.
+13. Start a background worker and request one edit, one write, and one bash call. Verify every prompt names the worker run, queued mutations do not overlap, the widget shows permission waiting, denial is recoverable, and cancel closes an active gate.
+14. Try a second worker while the first is active; verify it is rejected while a scout can still start. Confirm outside/sensitive file paths and configured-deny bash commands block without an approval bypass.
+15. Complete a worker after edit/write and approved bash calls. Verify its mutation report lists tracked paths, includes the bash attribution caveat, and the actual checkout diff matches expectations.
+16. Produce long findings and expand/collapse the result; verify the compact preview stays useful and expanded activity/usage remain readable.
 
 Provider calls stay manual so automated tests do not require credentials or incur usage.
 

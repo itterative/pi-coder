@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Usage } from "@earendil-works/pi-ai";
 
 import { isChildPathAllowed } from "../../src/tools/agent/child";
+import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/discovery";
 import {
     AgentActionError,
     AgentRunManager,
@@ -461,6 +462,60 @@ describe("AgentRunManager", () => {
 
         expect((await manager.start("scout", "First", context())).details.runId).toBe("scout-1");
         expect((await manager.start("scout", "Second", context())).details.runId).toBe("scout-2");
+    });
+
+    it("allows only one active mutation-capable worker while scouts continue", async () => {
+        const children = [
+            new FakeChild([{ waitForAbort: true }]),
+            new FakeChild([{ output: "Scout result" }]),
+        ];
+        let index = 0;
+        const manager = new AgentRunManager(async () => children[index++]!);
+
+        manager.spawn(BUILTIN_WORKER, "Implement", context());
+        expect(() => manager.spawn(BUILTIN_WORKER, "Also implement", context()))
+            .toThrow("mutation-capable worker is already active");
+        expect(() => manager.spawn(BUILTIN_SCOUT, "Inspect", context())).not.toThrow();
+
+        await flushBackground();
+        await manager.cancel("worker-1");
+        await manager.shutdown();
+    });
+
+    it("adds an authoritative changed-file report to worker outcomes", async () => {
+        const child = new FakeChild([{ output: "Implemented the change." }]);
+        (child as ChildAgentHandle).getMutationReport = () => ({
+            changedFiles: ["src/example.ts", "test/example.test.ts"],
+            bashApproved: true,
+        });
+        const manager = managerWith(child);
+
+        const result = await manager.start(BUILTIN_WORKER, "Implement", context());
+
+        expect(result.details).toMatchObject({ mutating: true, status: "completed" });
+        expect(result.content).toContain("src/example.ts");
+        expect(result.content).toContain("bash commands may have changed additional files");
+    });
+
+    it("exposes permission-waiting progress without consuming another run state", async () => {
+        const child = new FakeChild([{ waitForAbort: true }]);
+        const manager = new AgentRunManager(async (childContext) => {
+            queueMicrotask(() => childContext.onProgress({
+                output: "",
+                recentActivity: ["Waiting for permission to edit src/example.ts"],
+                permissionPending: true,
+            }));
+            return child;
+        });
+
+        manager.spawn(BUILTIN_WORKER, "Implement", context());
+        await flushBackground();
+
+        expect(manager.listRuns()[0]).toMatchObject({
+            status: "waiting_for_permission",
+            mutating: true,
+        });
+        await manager.cancel("worker-1");
     });
 
     it("rejects unknown and stale resume IDs", async () => {

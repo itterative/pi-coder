@@ -74,20 +74,24 @@ describe("agent discovery", () => {
         const untrusted = discoverAgentsInDirectories(userDir);
         const trusted = discoverAgentsInDirectories(userDir, projectDir);
 
-        expect(untrusted.agents.map((agent) => agent.name)).toEqual(["scout"]);
-        expect(trusted.agents.map((agent) => agent.name)).toEqual(["scout", "project-only"]);
+        expect(untrusted.agents.map((agent) => agent.name)).toEqual(["scout", "worker"]);
+        expect(trusted.agents.map((agent) => agent.name)).toEqual(["scout", "worker", "project-only"]);
     });
 
     it("protects reserved names and enforces the read-only tool ceiling", () => {
         const userDir = tempScope();
         writeAgent(userDir, "scout.md", "scout", "Override built-in");
+        writeAgent(userDir, "worker.md", "worker", "Override worker");
         writeAgent(userDir, "custom.md", "custom", "Custom", "tools: [read, bash, write, grep]\n");
 
         const result = discoverAgentsInDirectories(userDir);
         const scout = result.agents.find((agent) => agent.name === "scout");
+        const worker = result.agents.find((agent) => agent.name === "worker");
         const custom = result.agents.find((agent) => agent.name === "custom");
 
         expect(scout?.source).toBe("builtin");
+        expect(worker).toMatchObject({ source: "builtin", mutating: true });
+        expect(worker?.tools).toEqual(["read", "grep", "find", "ls", "edit", "write", "bash"]);
         expect(custom?.tools).toEqual(["read", "grep"]);
         expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "warning"))
             .toEqual(expect.arrayContaining([
@@ -103,7 +107,7 @@ describe("agent discovery", () => {
 
         const result = discoverAgentsInDirectories(userDir);
 
-        expect(result.agents.map((agent) => agent.name)).toEqual(["scout", "valid"]);
+        expect(result.agents.map((agent) => agent.name)).toEqual(["scout", "worker", "valid"]);
         expect(result.diagnostics).toContainEqual(expect.objectContaining({
             level: "warning",
             paths: [path.join(userDir, "bad.md")],
