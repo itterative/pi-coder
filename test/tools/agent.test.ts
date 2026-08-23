@@ -122,6 +122,10 @@ function context() {
     return { cwd: process.cwd(), parentContext: {} };
 }
 
+async function flushBackground(): Promise<void> {
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+}
+
 const tempDirs: string[] = [];
 afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
@@ -186,12 +190,12 @@ describe("AgentRunManager", () => {
         const manager = managerWith(child);
         await manager.start("scout", "Investigate", context());
 
-        const result = manager.cancel("scout-1");
+        const result = await manager.cancel("scout-1");
 
         expect(result.details.status).toBe("canceled");
         expect(manager.activeCount).toBe(0);
         expect(child.disposed).toBe(true);
-        expect(() => manager.cancel("scout-1")).toThrow(AgentActionError);
+        await expect(manager.cancel("scout-1")).rejects.toThrow(AgentActionError);
     });
 
     it("bounds retained runs", async () => {
@@ -295,6 +299,146 @@ describe("AgentRunManager", () => {
         expect(result.details.status).toBe("aborted");
         expect(child.prompts).toEqual([]);
         expect(child.disposed).toBe(true);
+        expect(manager.activeCount).toBe(0);
+    });
+
+    it("spawns and collects concurrent background results", async () => {
+        const children = [
+            new FakeChild([{ output: "First result", usage: usage(10, 2) }]),
+            new FakeChild([{ output: "Second result", usage: usage(20, 4) }]),
+        ];
+        const contexts: boolean[] = [];
+        let index = 0;
+        const manager = new AgentRunManager(async (childContext) => {
+            contexts.push(childContext.background === true);
+            return children[index++]!;
+        });
+
+        const first = manager.spawn("scout", "First task", context());
+        const second = manager.spawn("scout", "Second task", context());
+
+        expect(first.details).toMatchObject({ runId: "scout-1", status: "starting", background: true });
+        expect(second.details).toMatchObject({ runId: "scout-2", status: "starting", background: true });
+        expect(manager.activeCount).toBe(2);
+        await flushBackground();
+        expect(manager.listRuns().map((run) => run.status)).toEqual(["completed", "completed"]);
+        expect(manager.activeCount).toBe(0);
+        expect(contexts).toEqual([true, true]);
+
+        const collected = manager.collect("scout-1");
+        expect(collected.content).toBe("First result");
+        expect(collected.usage).toMatchObject({ input: 10, output: 2 });
+        expect(() => manager.collect("scout-1")).toThrow("Unknown or stale");
+
+        const status = manager.status("scout-2");
+        expect(status.usage).toMatchObject({ input: 20, output: 4 });
+        const secondCollected = manager.collect("scout-2");
+        expect(secondCollected.content).toBe("Second result");
+        expect(secondCollected.usage).toMatchObject({ input: 0, output: 0 });
+        await manager.shutdown();
+    });
+
+    it("resumes a waiting background run without blocking and preserves usage deltas", async () => {
+        const child = new FakeChild([
+            {
+                output: "Partial",
+                question: { question: "Which implementation?" },
+                usage: usage(12, 3),
+            },
+            { output: "Final answer", usage: usage(5, 2) },
+        ]);
+        const manager = managerWith(child);
+
+        manager.spawn("scout", "Investigate", context());
+        await flushBackground();
+        expect(manager.listRuns()[0]?.status).toBe("waiting_for_parent");
+
+        const resumed = await manager.resume("scout-1", "Inspect A");
+        expect(resumed.details.status).toBe("running");
+        expect(resumed.usage).toMatchObject({ input: 12, output: 3 });
+        await flushBackground();
+
+        const collected = manager.collect("scout-1");
+        expect(collected.details.status).toBe("completed");
+        expect(collected.content).toBe("Final answer");
+        expect(collected.usage).toMatchObject({ input: 5, output: 2 });
+    });
+
+    it("cancels a running background child", async () => {
+        const child = new FakeChild([{ waitForAbort: true }]);
+        const manager = managerWith(child);
+
+        manager.spawn("scout", "Keep investigating", context());
+        await flushBackground();
+        expect(manager.listRuns()[0]?.status).toBe("running");
+
+        const canceled = await manager.cancel("scout-1");
+
+        expect(canceled.details.status).toBe("canceled");
+        expect(child.abortCount).toBeGreaterThan(0);
+        expect(child.disposed).toBe(true);
+        expect(manager.activeCount).toBe(0);
+        expect(() => manager.status("scout-1")).toThrow("Unknown or stale");
+    });
+
+    it("retains background setup failures for collection", async () => {
+        const manager = new AgentRunManager(async () => {
+            throw new Error("provider unavailable");
+        });
+
+        manager.spawn("scout", "Investigate", context());
+        await flushBackground();
+
+        expect(manager.listRuns()[0]?.status).toBe("failed");
+        const collected = manager.collect("scout-1");
+        expect(collected.isError).toBe(true);
+        expect(collected.content).toContain("provider unavailable");
+        expect(manager.listRuns()).toEqual([]);
+    });
+
+    it("shuts down waiting and running background children", async () => {
+        const children = [
+            new FakeChild([{ question: { question: "Need guidance?" } }]),
+            new FakeChild([{ waitForAbort: true }]),
+        ];
+        let index = 0;
+        const manager = new AgentRunManager(async () => children[index++]!);
+
+        manager.spawn("scout", "Wait", context());
+        manager.spawn("scout", "Run", context());
+        await flushBackground();
+        expect(manager.listRuns().map((run) => run.status)).toEqual([
+            "waiting_for_parent",
+            "running",
+        ]);
+
+        await manager.shutdown();
+
+        expect(children.every((child) => child.disposed)).toBe(true);
+        expect(children[1]!.abortCount).toBeGreaterThan(0);
+        expect(manager.listRuns()).toEqual([]);
+    });
+
+    it("bounds retained background results independently of active runs", async () => {
+        const children = Array.from(
+            { length: 3 },
+            (_, index) => new FakeChild([{ output: `Result ${index + 1}` }]),
+        );
+        let index = 0;
+        const manager = new AgentRunManager(
+            async () => children[index++]!,
+            4,
+            undefined,
+            2,
+        );
+
+        manager.spawn("scout", "One", context());
+        manager.spawn("scout", "Two", context());
+        manager.spawn("scout", "Three", context());
+        await flushBackground();
+
+        expect(manager.listRuns().map((run) => run.runId)).toEqual(["scout-2", "scout-3"]);
+        expect(() => manager.collect("scout-1")).toThrow("Unknown or stale");
         expect(manager.activeCount).toBe(0);
     });
 

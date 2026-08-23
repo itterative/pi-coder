@@ -39,11 +39,12 @@ const CHILD_CONFINEMENT: SandboxConfigCwdConfinement = {
     resolveSymlinks: true,
 };
 
-const CHILD_PROTOCOL_PROMPT = `You are a read-only subagent working for a parent coding agent. You cannot run commands or modify files.
-
-Use ask_user when you need a preference, clarification, or decision directly from the end user, and call it alone in its tool batch so later work can incorporate the answer. The answer returns in the same turn, so continue your work afterward. Use ask_parent instead when the parent can answer, investigate, or decide; make reasonable progress first, include evidence and a recommendation, and call ask_parent alone in its tool batch. Do not ask questions only in prose when either interaction tool applies.
-
-When the task is complete, provide a self-contained final report to the parent.`;
+function childProtocolPrompt(background: boolean): string {
+    const interaction = background
+        ? "Direct end-user dialogs are unavailable while you run in the background. Use ask_parent when guidance is materially necessary; make reasonable progress first, include evidence and a recommendation, and call it alone in its tool batch."
+        : "Use ask_user when you need a preference, clarification, or decision directly from the end user, and call it alone in its tool batch so later work can incorporate the answer. The answer returns in the same turn, so continue your work afterward. Use ask_parent instead when the parent can answer, investigate, or decide; make reasonable progress first, include evidence and a recommendation, and call ask_parent alone in its tool batch. Do not ask questions only in prose when either interaction tool applies.";
+    return `You are a read-only subagent working for a parent coding agent. You cannot run commands or modify files.\n\n${interaction}\n\nWhen the task is complete, provide a self-contained final report to the parent.`;
+}
 
 interface ProgressTracker {
     progress: ChildProgress;
@@ -129,10 +130,11 @@ function registerChildExtension(
     tracker: ProgressTracker,
     parentContext: ExtensionContext,
     agentName: string,
+    background: boolean,
     onTrace?: ChildAgentFactoryContext["onTrace"],
 ) {
     return (pi: ExtensionAPI): void => {
-        pi.registerTool({
+        if (!background) pi.registerTool({
             name: "ask_user",
             label: "Ask User",
             description:
@@ -192,7 +194,9 @@ function registerChildExtension(
             promptGuidelines: [
                 "Call ask_parent alone in a tool batch and only when parent guidance materially improves the result",
                 "Include relevant evidence, partial findings, and your recommended next step",
-                "Use ask_user instead when a decision genuinely requires direct end-user input",
+                background
+                    ? "Direct end-user dialogs are unavailable in background runs"
+                    : "Use ask_user instead when a decision genuinely requires direct end-user input",
             ],
             executionMode: "sequential",
             parameters: Type.Object({
@@ -587,15 +591,21 @@ export async function createAgentChild(
                 tracker,
                 parentContext,
                 context.definition.name,
+                context.background === true,
                 context.onTrace,
             ),
         }],
-        appendSystemPrompt: [context.definition.systemPrompt, CHILD_PROTOCOL_PROMPT].filter(Boolean),
+        appendSystemPrompt: [
+            context.definition.systemPrompt,
+            childProtocolPrompt(context.background === true),
+        ].filter(Boolean),
     });
     await resourceLoader.reload();
+    const interactionToolCount = context.background ? 1 : 2;
     context.onTrace?.("resources.loaded", {
         readOnlyToolCount: context.definition.tools.length,
-        directUserUI: parentContext.hasUI && parentContext.mode === "tui",
+        directUserUI: !context.background && parentContext.hasUI && parentContext.mode === "tui",
+        background: context.background === true,
     });
 
     const requestedModel = resolveChildModel(parentContext, context.definition.model);
@@ -616,10 +626,16 @@ export async function createAgentChild(
         resourceLoader,
         settingsManager,
         sessionManager: SessionManager.inMemory(cwd),
-        tools: [...context.definition.tools, "ask_user", "ask_parent"],
+        tools: [
+            ...context.definition.tools,
+            ...(context.background ? [] : ["ask_user"]),
+            "ask_parent",
+        ],
     });
 
-    context.onTrace?.("session.created", { toolCount: context.definition.tools.length + 2 });
+    context.onTrace?.("session.created", {
+        toolCount: context.definition.tools.length + interactionToolCount,
+    });
     const unsubscribe = session.subscribe((event) => {
         const traceEvent = traceSessionEvent(event);
         if (traceEvent) context.onTrace?.(traceEvent.type, traceEvent.data);

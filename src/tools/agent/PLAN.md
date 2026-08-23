@@ -18,9 +18,9 @@ The initial direction recorded in `src/tools/agent/README.md` is:
 - `src/index.ts` is the consolidated pi-coder extension entrypoint.
 - `src/tools/agent/index.ts` registers the in-process `agent` tool from `src/index.ts`.
 - `child.ts`, `runtime.ts`, and `discovery.ts` implement the read-only child SDK session, run state machine, and custom definition loading.
-- The MVP supports built-in/user/trusted-project agents, start/resume/cancel, parent guidance, confinement, usage deltas, lifecycle cleanup, and compact/expanded rendering.
+- The MVP supports built-in/user/trusted-project agents, foreground start, concurrent background spawn/status/collect, resume/cancel, parent guidance, confinement, usage deltas, lifecycle cleanup, and compact/expanded rendering.
 - The stabilization pass makes waiting state explicitly paused in parent guidance, shows compact question/result previews, tests tool-level pause/resume rendering and additional lifecycle/confinement edges, and records a repeatable manual provider/lifecycle checklist in `README.md`.
-- Opt-in diagnostics (`PI_CODER_AGENT_TRACE=1`) retain bounded sanitized timelines for recent runs and expose the otherwise-hidden `/agent-trace` inspect/save/clear command.
+- Diagnostics retain bounded sanitized timelines for recent runs and expose `/agent-trace`; the intended `PI_CODER_AGENT_TRACE=1` gate is temporarily hardcoded on during development.
 - Existing extension functionality also includes:
   - memory injection and persistence;
   - the ask-user tool;
@@ -267,17 +267,20 @@ Discovery should happen at invocation time so edits to agent files take effect w
 Start with one tool and an explicit action discriminator:
 
 ```text
-Start:  action="start"  + agent + task
-Resume: action="resume" + runId + guidance
-Cancel: action="cancel" + runId
+Start:   action="start"   + agent + task
+Spawn:   action="spawn"   + agent + task
+Status:  action="status"  + runId
+Collect: action="collect" + runId
+Resume:  action="resume"  + runId + guidance
+Cancel:  action="cancel"  + runId
 ```
 
-`cancel` is included initially so abandoned waiting sessions can be released explicitly. Later actions may include `status` and background message delivery. An explicit action is clearer and more extensible than inferring behavior solely from optional fields. The tool should reject unknown fields for an action, unknown agent names, stale run IDs, and guidance sent to a non-waiting run.
+`cancel` releases waiting foreground runs and active background runs. `spawn` returns a run handle immediately; `status` reports bounded progress, and `collect` consumes a retained terminal result. Automatic background message delivery remains deferred. An explicit action is clearer and more extensible than inferring behavior solely from optional fields. The tool should reject unknown fields for an action, unknown agent names, stale run IDs, and guidance sent to a non-waiting run.
 
 Possible later modes:
 
-- background message delivery and polling;
-- `tasks`: bounded parallel delegation;
+- automatic background result/mailbox delivery;
+- `tasks`: an explicit bounded parallel batch in one call;
 - `chain`: sequential delegation with a bounded `{previous}` result;
 - `cwd`: an explicitly validated working directory;
 - model and thinking overrides.
@@ -296,7 +299,7 @@ starting -> running -> completed
 waiting_for_parent -> canceled
 ```
 
-Terminal states are returned in the current tool result, then their child session is disposed and removed from the active registry. Only `starting`, `running`, and `waiting_for_parent` consume registry capacity.
+Foreground terminal states are returned in the current tool result, then their child session is disposed and removed. Background child sessions are also disposed immediately on terminal settlement, but the latest 20 bounded terminal results remain collectable. Only `starting`, `running`, and `waiting_for_parent` consume the four-run active capacity.
 
 #### Start
 
@@ -333,9 +336,15 @@ The SDK only honors early termination when every tool result in a child batch ha
 
 A busy, stale, terminal, or unknown run ID returns a clear action-specific error. After extension reload or parent session replacement, all old IDs are stale by design.
 
+#### Background execution
+
+`spawn` reserves a run and starts child setup asynchronously, returning before setup or prompting completes. Multiple sequential `spawn` tool calls can therefore launch up to four read-only children concurrently. `status` snapshots bounded progress or reports that a terminal result is ready; `collect` returns that result once and makes the ID stale. Background `resume` returns immediately and keeps the run asynchronous. Usage checkpoints advance on each parent-visible spawn/status/resume/cancel/collect result, so nested usage is never duplicated.
+
+Background children omit `ask_user` to prevent unsolicited dialogs from racing parent rendering or another tool call. They retain `ask_parent`, transition to `waiting_for_parent`, and appear in the dynamic parent prompt. Direct result/mailbox injection is deferred; the parent polls explicitly.
+
 #### Cancel and shutdown
 
-`cancel` is valid for a waiting run, disposes it, and removes it from the registry. A parent abort signal during start/resume calls `childSession.abort()` and transitions that operation to `aborted` after settlement.
+`cancel` is valid for a waiting foreground run or any nonterminal background run. Active background cancellation aborts and settles the child before disposing it and making the ID stale. A parent abort signal during foreground start/resume calls `childSession.abort()` and transitions that operation to `aborted` after settlement.
 
 An idempotent `session_shutdown` handler handles quit, reload, new-session, resume, and fork. It marks the registry closing, aborts running children, waits for their operations to settle, disposes every retained session, and clears the registry. `session_start` creates fresh parent-session-local state; child runs are not transferred across parent sessions.
 
@@ -355,12 +364,12 @@ For the first in-process implementation:
 - do not persist child sessions by default;
 - use the current model unless the definition specifies one;
 - bridge parent cancellation to `childSession.abort()`;
-- restrict tools to the extension-controlled `read`, `grep`, `find`, `ls`, and `ask_parent` ceiling;
+- restrict tools to the extension-controlled `read`, `grep`, `find`, `ls`, `ask_parent`, and foreground-only `ask_user` ceiling;
 - confine every path-bearing tool to `cwd`;
 - use `noExtensions: true` with only the dedicated child extension;
 - preserve pi's normal coding prompt and append the agent definition;
 - stream throttled child events into `onUpdate`;
-- retain only bounded waiting sessions and dispose all terminal runs.
+- retain only bounded active/waiting sessions, dispose every terminal child immediately, and bound retained background result metadata.
 
 A read-only interactive scout is the selected first profile. It supports both parent guidance through pause/resume and restricted direct end-user questions in TUI mode; direct interaction does not grant broader child ownership of the TUI.
 
@@ -426,13 +435,28 @@ Compact and expanded rendering includes:
 - final markdown output;
 - token and cost usage.
 
-Keep the collapsed output bounded and make expanded output useful for debugging. An opt-in trace store now captures up to 400 sanitized lifecycle/session events for each of the latest 20 runs. `/agent-trace` can inspect those timelines after terminal child disposal or explicitly save mode-`0600` JSON; both collection and command registration require `PI_CODER_AGENT_TRACE=1`.
+Keep the collapsed output bounded and make expanded output useful for debugging. A trace store captures up to 400 sanitized lifecycle/session events for each of the latest 20 runs. `/agent-trace` can inspect those timelines after terminal child disposal or explicitly save mode-`0600` JSON. The intended release gate is `PI_CODER_AGENT_TRACE=1`, but tracing is temporarily hardcoded on during development.
 
 ### Phase 4: Direct user interaction — implemented
 
 The child-only `ask_user` forwards through a restricted parent TUI binding and reuses pi-coder's existing question component. Answers continue the same child turn; user cancellation is recoverable; parent abort and shutdown close active dialogs; non-TUI modes explicitly fall back to `ask_parent`. The default parent-guidance path remains available so the parent can answer or investigate. Tests cover answers, repeated questions, cancellation, non-interactive behavior, abort cleanup, and the unchanged path-confinement boundary.
 
-### Phase 5: Mutation-capable worker
+### Phase 5: Concurrent background runs — implemented
+
+The read-only runtime now supports:
+
+- immediate `spawn` acknowledgements and up to four concurrent child operations;
+- explicit bounded `status` polling and one-shot `collect`;
+- background pause/resume through `ask_parent`;
+- active background cancellation and shutdown settlement;
+- immediate terminal child disposal with the latest 20 results retained;
+- exact usage checkpoints across asynchronous parent calls;
+- no direct-user dialogs from background children;
+- dynamic parent-prompt recovery of tracked background IDs after compaction.
+
+Automatic completion/mailbox delivery and explicit batch syntax remain deferred.
+
+### Phase 6: Mutation-capable worker
 
 Add a worker profile only after safety is established:
 
@@ -442,7 +466,7 @@ Add a worker profile only after safety is established:
 - optional git worktree isolation;
 - tests for concurrent/conflicting edits.
 
-### Phase 6: Chains and parallel work
+### Phase 7: Chains and explicit batch work
 
 Add workflow modes only after single-agent execution is stable:
 
@@ -450,10 +474,10 @@ Add workflow modes only after single-agent execution is stable:
 - bounded `{previous}` size;
 - failure stops the chain;
 - aggregate usage;
-- bounded parallel concurrency;
+- reuse the implemented four-run concurrency bound;
 - no unsafe parallel writes by default.
 
-### Phase 7: Persistence and advanced workflows
+### Phase 8: Persistence and advanced workflows
 
 Consider later:
 
@@ -485,7 +509,7 @@ At minimum:
 - recursive extension loading prevention;
 - confinement of `read`, `grep`, `find`, and `ls`;
 - project-agent trust/confirmation;
-- later parallel concurrency and mutation safety.
+- background concurrency, retention, polling, collection, cancellation, shutdown, and mutation safety.
 
 Run the existing checks after implementation:
 
@@ -503,6 +527,7 @@ Use this section to record decisions as the design evolves.
 - [x] First interaction: pause/resume child-to-parent guidance by run ID.
 - [x] Future interaction: keep room for a background mailbox.
 - [x] Single start/resume flow before chain/parallel.
+- [x] Add explicit spawn/status/collect background execution before automatic mailbox delivery or batch syntax.
 - [x] Child sessions are in-memory and parent-runtime-local; waiting runs do not survive reload, parent session replacement/fork, or process restart.
 - [x] Ship a built-in read-only `scout` alongside custom definitions.
 - [x] Enable project definitions only in projects trusted by pi; no redundant confirmation for the read-only ceiling.

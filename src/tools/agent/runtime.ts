@@ -39,6 +39,7 @@ export interface ChildAgentFactoryContext {
     cwd: string;
     definition: AgentDefinition;
     parentContext: unknown;
+    background?: boolean;
     onProgress: (progress: ChildProgress) => void;
     onTrace?: (type: string, data?: AgentTraceData) => void;
 }
@@ -47,12 +48,18 @@ export type ChildAgentFactory = (
     context: ChildAgentFactoryContext,
 ) => Promise<ChildAgentHandle>;
 
+type AgentStartContext = Omit<
+    ChildAgentFactoryContext,
+    "definition" | "background" | "onProgress" | "onTrace"
+>;
+
 export interface AgentRunDetails {
     runId: string;
     agent: string;
     agentSource?: string;
     agentFilePath?: string;
     status: AgentRunStatus;
+    background?: boolean;
     task: string;
     output?: string;
     question?: ParentQuestion;
@@ -73,6 +80,14 @@ export interface AgentRunOutcome {
 
 export type AgentProgressCallback = (details: AgentRunDetails) => void;
 
+export interface AgentRunSummary {
+    runId: string;
+    agent: string;
+    status: AgentRunStatus;
+    background: boolean;
+    question?: string;
+}
+
 interface AgentRun {
     id: string;
     agent: string;
@@ -80,15 +95,20 @@ interface AgentRun {
     agentFilePath?: string;
     task: string;
     status: AgentRunStatus;
+    background: boolean;
     handle?: ChildAgentHandle;
     setup?: Promise<ChildAgentHandle>;
     question?: ParentQuestion;
     usageCheckpoint: Usage;
+    usageSnapshot: Usage;
     startedAt: number;
     updatedAt: number;
     disposed: boolean;
     shutdownRequested: boolean;
+    cancelRequested: boolean;
     operation?: Promise<AgentRunOutcome>;
+    backgroundTask?: Promise<AgentRunOutcome>;
+    terminalOutcome?: AgentRunOutcome;
     abortPromise?: Promise<void>;
 }
 
@@ -156,8 +176,16 @@ const MAX_TASK_CHARS = 16_000;
 const MAX_GUIDANCE_CHARS = 16_000;
 const MAX_OUTPUT_CHARS = 32_000;
 
+function isTerminalStatus(status: AgentRunStatus): boolean {
+    return status === "completed"
+        || status === "failed"
+        || status === "aborted"
+        || status === "canceled";
+}
+
 export class AgentRunManager {
     private readonly runs = new Map<string, AgentRun>();
+    private readonly terminalOrder: string[] = [];
     private nextRunNumber = 1;
     private closing = false;
     private shutdownPromise?: Promise<void>;
@@ -166,104 +194,74 @@ export class AgentRunManager {
         private readonly factory: ChildAgentFactory,
         private readonly maxActiveRuns = 4,
         private readonly trace?: AgentTraceStore,
+        private readonly maxRetainedResults = 20,
     ) {}
 
     get activeCount(): number {
-        return this.runs.size;
+        return [...this.runs.values()].filter((run) => !isTerminalStatus(run.status)).length;
+    }
+
+    listRuns(): AgentRunSummary[] {
+        return [...this.runs.values()].map((run) => ({
+            runId: run.id,
+            agent: run.agent,
+            status: run.status,
+            background: run.background,
+            question: run.question ? truncate(run.question.question, 500) : undefined,
+        }));
     }
 
     listWaiting(): Array<{ runId: string; agent: string; question: string }> {
-        return [...this.runs.values()]
+        return this.listRuns()
             .filter((run) => run.status === "waiting_for_parent" && run.question !== undefined)
             .map((run) => ({
-                runId: run.id,
+                runId: run.runId,
                 agent: run.agent,
-                question: truncate(run.question!.question, 500),
+                question: run.question!,
             }));
     }
 
     async start(
         definitionOrName: AgentDefinition | string,
         task: string,
-        context: Omit<ChildAgentFactoryContext, "definition" | "onProgress">,
+        context: AgentStartContext,
         signal?: AbortSignal,
         onProgress?: AgentProgressCallback,
     ): Promise<AgentRunOutcome> {
-        if (this.closing) {
-            throw new AgentActionError("Agent runtime is shutting down.");
-        }
-        if (!task.trim()) {
-            throw new AgentActionError("Agent task must not be empty.");
-        }
-        if (task.length > MAX_TASK_CHARS) {
-            throw new AgentActionError(`Agent task exceeds ${MAX_TASK_CHARS} characters.`);
-        }
-        if (this.runs.size >= this.maxActiveRuns) {
-            throw new AgentActionError(
-                `Agent run limit reached (${this.maxActiveRuns}). Resume or cancel a waiting run first.`,
-            );
-        }
-
-        const definition: AgentDefinition = typeof definitionOrName === "string"
-            ? {
-                name: definitionOrName,
-                description: "Test or built-in agent",
-                tools: ["read", "grep", "find", "ls"],
-                systemPrompt: "",
-                source: "builtin",
-            }
-            : definitionOrName;
-        const now = Date.now();
-        const id = `${definition.name}-${this.nextRunNumber++}`;
-        const run: AgentRun = {
-            id,
-            agent: definition.name,
-            agentSource: definition.source,
-            agentFilePath: definition.filePath,
-            task,
-            status: "starting",
-            usageCheckpoint: cloneUsage(ZERO_USAGE),
-            startedAt: now,
-            updatedAt: now,
-            disposed: false,
-            shutdownRequested: false,
-        };
-        this.runs.set(id, run);
-        this.trace?.start(id, definition.name, {
-            source: definition.source,
-            taskChars: task.length,
-            model: definition.model ?? "parent",
-        });
-
-        try {
-            this.record(run, "setup.started");
-            run.setup = this.factory({
-                ...context,
-                definition,
-                onProgress: (progress) => {
-                    run.updatedAt = Date.now();
-                    this.record(run, "child.progress", {
-                        outputChars: progress.output.length,
-                        activity: progress.recentActivity[progress.recentActivity.length - 1] ?? "",
-                    });
-                    onProgress?.(this.details(run, progress));
-                },
-                onTrace: (type, data) => this.record(run, `child.${type}`, data),
-            });
-            run.handle = await run.setup;
-            this.record(run, "setup.completed");
-        } catch (error) {
-            const message = errorMessage(error);
-            this.record(run, "setup.failed", { error: truncate(message, 500) });
-            return this.finishFailure(run, `Failed to create child session: ${message}`);
-        }
-
-        if (this.closing || run.shutdownRequested || signal?.aborted) {
-            this.record(run, "setup.aborted_after_completion");
-            return this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
-        }
-
+        const { definition, run } = this.createRun(definitionOrName, task, false);
+        const setupOutcome = await this.setupRun(
+            run,
+            definition,
+            context,
+            signal,
+            onProgress,
+        );
+        if (setupOutcome) return setupOutcome;
         return this.beginOperation(run, task, signal, onProgress);
+    }
+
+    spawn(
+        definitionOrName: AgentDefinition | string,
+        task: string,
+        context: AgentStartContext,
+        signal?: AbortSignal,
+    ): AgentRunOutcome {
+        if (signal?.aborted) throw new AgentActionError("Agent spawn was aborted before launch.");
+        const { definition, run } = this.createRun(definitionOrName, task, true);
+        const taskPromise = this.launchBackground(run, definition, context).catch((error) => {
+            if (isTerminalStatus(run.status)) return run.terminalOutcome!;
+            return this.finishFailure(
+                run,
+                `Background agent failed unexpectedly: ${errorMessage(error)}`,
+            );
+        });
+        this.trackBackgroundTask(run, taskPromise);
+        return this.checkpointOutcome(
+            run,
+            `Agent ${run.id} started in the background. Check it with agent(action="status", runId="${run.id}") and retrieve its final result with agent(action="collect", runId="${run.id}").`,
+            false,
+            { output: "", recentActivity: [] },
+        );
     }
 
     async resume(
@@ -291,30 +289,241 @@ export class AgentRunManager {
             throw new AgentActionError("Agent runtime is shutting down.");
         }
 
+        if (signal?.aborted) throw new AgentActionError("Agent resume was aborted before launch.");
         this.record(run, "resume.requested", { guidanceChars: guidance.length });
         run.status = "running";
         run.question = undefined;
         run.updatedAt = Date.now();
-        return this.beginOperation(
+        const prompt = `Parent guidance:\n${guidance}`;
+        if (!run.background) {
+            return this.beginOperation(run, prompt, signal, onProgress);
+        }
+
+        const taskPromise = Promise.resolve()
+            .then(() => this.beginOperation(run, prompt))
+            .catch((error) => {
+                if (isTerminalStatus(run.status)) return run.terminalOutcome!;
+                return this.finishFailure(
+                    run,
+                    `Background agent failed unexpectedly: ${errorMessage(error)}`,
+                );
+            });
+        this.trackBackgroundTask(run, taskPromise);
+        return this.checkpointOutcome(
             run,
-            `Parent guidance:\n${guidance}`,
-            signal,
-            onProgress,
+            `Agent ${run.id} resumed in the background. Check it with agent(action="status", runId="${run.id}").`,
+            false,
+            run.handle?.getProgress() ?? { output: "", recentActivity: [] },
         );
     }
 
-    cancel(runId: string): AgentRunOutcome {
-        const run = this.runs.get(runId);
-        if (!run) {
-            throw new AgentActionError(`Unknown or stale agent run ID: ${runId}`);
-        }
-        if (run.status !== "waiting_for_parent") {
+    async cancel(runId: string): Promise<AgentRunOutcome> {
+        const run = this.requireRun(runId);
+        if (isTerminalStatus(run.status)) {
             throw new AgentActionError(
-                `Agent run ${runId} is ${run.status}; only waiting runs can be canceled.`,
+                `Agent run ${runId} is already ${run.status}; collect its result instead.`,
             );
         }
-        this.record(run, "cancel.requested");
-        return this.finishTerminal(run, "canceled", `Agent run ${runId} canceled.`, false);
+        if (!run.background && run.status !== "waiting_for_parent") {
+            throw new AgentActionError(
+                `Agent run ${runId} is ${run.status}; only waiting foreground runs can be canceled.`,
+            );
+        }
+
+        this.record(run, "cancel.requested", { status: run.status });
+        run.cancelRequested = true;
+        if (run.status === "starting" || run.status === "running") {
+            void this.abortRun(run)?.catch(() => {});
+            await run.backgroundTask?.catch(() => {});
+        }
+        let terminalOutcome = run.terminalOutcome;
+        if (!isTerminalStatus(run.status)) {
+            terminalOutcome = this.finishTerminal(
+                run,
+                "canceled",
+                `Agent run ${runId} canceled.`,
+                false,
+            );
+        }
+        if (!run.background) return terminalOutcome!;
+
+        const outcome = this.checkpointOutcome(
+            run,
+            terminalOutcome?.content ?? `Agent run ${runId} canceled.`,
+            terminalOutcome?.isError ?? false,
+            this.progressSnapshot(run),
+            terminalOutcome?.details.error,
+        );
+        this.removeRun(run);
+        return outcome;
+    }
+
+    status(runId: string): AgentRunOutcome {
+        const run = this.requireRun(runId);
+        const progress = this.progressSnapshot(run);
+        let content: string;
+        if (run.status === "waiting_for_parent" && run.question) {
+            content = this.waitingContent(run, run.question, progress);
+        } else if (isTerminalStatus(run.status)) {
+            content = run.status === "completed"
+                ? `Agent ${run.id} completed. Retrieve its result with agent(action="collect", runId="${run.id}").`
+                : `Agent ${run.id} ${run.status}: ${truncate(run.terminalOutcome?.content ?? "", 2_000)}\n\nRetrieve the retained result with agent(action="collect", runId="${run.id}").`;
+        } else {
+            const sections = [`Agent ${run.id} is ${run.status} in the background.`];
+            if (progress.output.trim()) {
+                sections.push(`Partial output:\n${truncate(progress.output.trim(), 4_000)}`);
+            }
+            if (progress.recentActivity.length) {
+                sections.push(`Recent activity:\n- ${progress.recentActivity.slice(-8).join("\n- ")}`);
+            }
+            sections.push(`Check again with agent(action="status", runId="${run.id}").`);
+            content = sections.join("\n\n");
+        }
+        return this.checkpointOutcome(
+            run,
+            content,
+            run.status === "failed" || run.status === "aborted",
+            progress,
+            run.terminalOutcome?.details.error,
+        );
+    }
+
+    collect(runId: string): AgentRunOutcome {
+        const run = this.requireRun(runId);
+        if (!run.background) {
+            throw new AgentActionError(`Agent run ${runId} is not a background run.`);
+        }
+        if (!isTerminalStatus(run.status) || !run.terminalOutcome) {
+            throw new AgentActionError(
+                `Agent run ${runId} is ${run.status}; use status until it reaches a terminal state.`,
+            );
+        }
+        const progress = this.progressSnapshot(run);
+        const outcome = this.checkpointOutcome(
+            run,
+            run.terminalOutcome.content,
+            run.terminalOutcome.isError,
+            progress,
+            run.terminalOutcome.details.error,
+        );
+        this.record(run, "result.collected");
+        this.removeRun(run);
+        return outcome;
+    }
+
+    private createRun(
+        definitionOrName: AgentDefinition | string,
+        task: string,
+        background: boolean,
+    ): { definition: AgentDefinition; run: AgentRun } {
+        if (this.closing) throw new AgentActionError("Agent runtime is shutting down.");
+        if (!task.trim()) throw new AgentActionError("Agent task must not be empty.");
+        if (task.length > MAX_TASK_CHARS) {
+            throw new AgentActionError(`Agent task exceeds ${MAX_TASK_CHARS} characters.`);
+        }
+        if (this.activeCount >= this.maxActiveRuns) {
+            throw new AgentActionError(
+                `Agent run limit reached (${this.maxActiveRuns}). Resume, collect, or cancel an existing run first.`,
+            );
+        }
+
+        const definition: AgentDefinition = typeof definitionOrName === "string"
+            ? {
+                name: definitionOrName,
+                description: "Test or built-in agent",
+                tools: ["read", "grep", "find", "ls"],
+                systemPrompt: "",
+                source: "builtin",
+            }
+            : definitionOrName;
+        const now = Date.now();
+        const id = `${definition.name}-${this.nextRunNumber++}`;
+        const run: AgentRun = {
+            id,
+            agent: definition.name,
+            agentSource: definition.source,
+            agentFilePath: definition.filePath,
+            task,
+            status: "starting",
+            background,
+            usageCheckpoint: cloneUsage(ZERO_USAGE),
+            usageSnapshot: cloneUsage(ZERO_USAGE),
+            startedAt: now,
+            updatedAt: now,
+            disposed: false,
+            shutdownRequested: false,
+            cancelRequested: false,
+        };
+        this.runs.set(id, run);
+        this.trace?.start(id, definition.name, {
+            source: definition.source,
+            taskChars: task.length,
+            model: definition.model ?? "parent",
+            background,
+        });
+        return { definition, run };
+    }
+
+    private async setupRun(
+        run: AgentRun,
+        definition: AgentDefinition,
+        context: AgentStartContext,
+        signal?: AbortSignal,
+        onProgress?: AgentProgressCallback,
+    ): Promise<AgentRunOutcome | undefined> {
+        try {
+            this.record(run, "setup.started");
+            const setup = this.factory({
+                ...context,
+                definition,
+                background: run.background,
+                onProgress: (progress) => {
+                    run.updatedAt = Date.now();
+                    this.record(run, "child.progress", {
+                        outputChars: progress.output.length,
+                        activity: progress.recentActivity[progress.recentActivity.length - 1] ?? "",
+                    });
+                    onProgress?.(this.details(run, progress));
+                },
+                onTrace: (type, data) => this.record(run, `child.${type}`, data),
+            });
+            run.setup = setup;
+            run.handle = await setup;
+            run.setup = undefined;
+            this.record(run, "setup.completed");
+        } catch (error) {
+            run.setup = undefined;
+            const message = errorMessage(error);
+            this.record(run, "setup.failed", { error: truncate(message, 500) });
+            return this.finishFailure(run, `Failed to create child session: ${message}`);
+        }
+
+        if (run.cancelRequested) {
+            this.record(run, "setup.canceled_after_completion");
+            return this.finishTerminal(run, "canceled", `Agent run ${run.id} canceled.`, false);
+        }
+        if (this.closing || run.shutdownRequested || signal?.aborted) {
+            this.record(run, "setup.aborted_after_completion");
+            if (signal?.aborted) await this.abortRun(run)?.catch(() => {});
+            return this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
+        }
+        return undefined;
+    }
+
+    private async launchBackground(
+        run: AgentRun,
+        definition: AgentDefinition,
+        context: AgentStartContext,
+    ): Promise<AgentRunOutcome> {
+        const setupOutcome = await this.setupRun(run, definition, context);
+        if (setupOutcome) return setupOutcome;
+        return this.beginOperation(run, run.task);
+    }
+
+    private requireRun(runId: string): AgentRun {
+        const run = this.runs.get(runId);
+        if (!run) throw new AgentActionError(`Unknown or stale agent run ID: ${runId}`);
+        return run;
     }
 
     shutdown(): Promise<void> {
@@ -354,12 +563,16 @@ export class AgentRunManager {
 
         for (const run of runs) {
             if (!this.runs.has(run.id)) continue;
-            this.disposeRun(run);
-            this.trace?.finish(run.id, "aborted", {
-                isError: true,
-                reason: "session_shutdown",
-            });
-            this.runs.delete(run.id);
+            if (!isTerminalStatus(run.status)) {
+                run.status = "aborted";
+                run.updatedAt = Date.now();
+                this.disposeRun(run);
+                this.trace?.finish(run.id, "aborted", {
+                    isError: true,
+                    reason: "session_shutdown",
+                });
+            }
+            this.removeRun(run);
         }
     }
 
@@ -369,6 +582,13 @@ export class AgentRunManager {
         signal?: AbortSignal,
         onProgress?: AgentProgressCallback,
     ): Promise<AgentRunOutcome> {
+        if (run.cancelRequested) {
+            return this.finishTerminal(run, "canceled", `Agent run ${run.id} canceled.`, false);
+        }
+        if (this.closing || run.shutdownRequested || signal?.aborted) {
+            if (signal?.aborted) await this.abortRun(run)?.catch(() => {});
+            return this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
+        }
         run.status = "running";
         run.updatedAt = Date.now();
         this.record(run, "operation.started", {
@@ -400,7 +620,9 @@ export class AgentRunManager {
         signal?.addEventListener("abort", abort, { once: true });
 
         try {
-            if (aborted) {
+            if (run.cancelRequested) {
+                this.record(run, "operation.canceled_before_prompt");
+            } else if (aborted) {
                 abort();
             } else {
                 await handle.prompt(prompt);
@@ -411,13 +633,16 @@ export class AgentRunManager {
             const message = errorMessage(error);
             this.record(run, "operation.prompt_failed", { error: truncate(message, 500) });
             await run.abortPromise?.catch(() => {});
-            if (!aborted && !run.shutdownRequested) {
+            if (!aborted && !run.shutdownRequested && !run.cancelRequested) {
                 return this.finishFailure(run, message);
             }
         } finally {
             signal?.removeEventListener("abort", abort);
         }
 
+        if (run.cancelRequested) {
+            return this.finishTerminal(run, "canceled", `Agent run ${run.id} canceled.`, false);
+        }
         if (aborted || run.shutdownRequested || this.closing) {
             return this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
         }
@@ -440,7 +665,9 @@ export class AgentRunManager {
                 false,
                 progress,
             );
-            run.usageCheckpoint = cloneUsage(run.handle!.getUsage());
+            if (!run.background) {
+                run.usageCheckpoint = cloneUsage(run.handle!.getUsage());
+            }
             onProgress?.(outcome.details);
             return outcome;
         }
@@ -511,6 +738,7 @@ export class AgentRunManager {
         isError: boolean,
         progress: ChildProgress = run.handle?.getProgress() ?? { output: "", recentActivity: [] },
     ): AgentRunOutcome {
+        if (isTerminalStatus(run.status) && run.terminalOutcome) return run.terminalOutcome;
         run.status = status;
         run.updatedAt = Date.now();
         const outcome = this.outcome(run, content, isError, progress, status === "failed" ? content : undefined);
@@ -520,8 +748,15 @@ export class AgentRunManager {
             inputTokens: outcome.details.usage.input,
             outputTokens: outcome.details.usage.output,
             contentChars: content.length,
+            background: run.background,
         });
-        this.runs.delete(run.id);
+        if (run.background) {
+            run.terminalOutcome = outcome;
+            this.terminalOrder.push(run.id);
+            this.pruneRetainedResults();
+        } else {
+            this.runs.delete(run.id);
+        }
         return outcome;
     }
 
@@ -532,33 +767,85 @@ export class AgentRunManager {
         progress: ChildProgress,
         error?: string,
     ): AgentRunOutcome {
-        const cumulative = run.handle?.getUsage() ?? cloneUsage(ZERO_USAGE);
+        const cumulative = this.readUsage(run);
         const usage = subtractUsage(cumulative, run.usageCheckpoint);
         const details = this.details(run, progress, error, cumulative);
         return { content, details, usage, isError };
+    }
+
+    private checkpointOutcome(
+        run: AgentRun,
+        content: string,
+        isError: boolean,
+        progress: ChildProgress,
+        error?: string,
+    ): AgentRunOutcome {
+        const outcome = this.outcome(run, content, isError, progress, error);
+        run.usageCheckpoint = cloneUsage(outcome.details.usage);
+        return outcome;
     }
 
     private details(
         run: AgentRun,
         progress: ChildProgress,
         error?: string,
-        usage: Usage = run.handle?.getUsage() ?? cloneUsage(ZERO_USAGE),
+        usage?: Usage,
     ): AgentRunDetails {
+        const cumulative = usage ?? this.readUsage(run);
         return {
             runId: run.id,
             agent: run.agent,
             agentSource: run.agentSource,
             agentFilePath: run.agentFilePath,
             status: run.status,
+            background: run.background,
             task: truncate(run.task, 2_000),
             output: progress.output ? truncate(progress.output, MAX_OUTPUT_CHARS) : undefined,
             question: run.question,
             recentActivity: progress.recentActivity.slice(-8),
-            usage: cloneUsage(usage),
+            usage: cloneUsage(cumulative),
             startedAt: run.startedAt,
             updatedAt: run.updatedAt,
             error,
         };
+    }
+
+    private readUsage(run: AgentRun): Usage {
+        if (run.handle) run.usageSnapshot = cloneUsage(run.handle.getUsage());
+        return cloneUsage(run.usageSnapshot);
+    }
+
+    private trackBackgroundTask(run: AgentRun, task: Promise<AgentRunOutcome>): void {
+        run.backgroundTask = task;
+        void task.then(
+            () => {
+                if (run.backgroundTask === task) run.backgroundTask = undefined;
+            },
+            () => {
+                if (run.backgroundTask === task) run.backgroundTask = undefined;
+            },
+        );
+    }
+
+    private progressSnapshot(run: AgentRun): ChildProgress {
+        if (run.handle) return run.handle.getProgress();
+        return {
+            output: run.terminalOutcome?.details.output ?? "",
+            recentActivity: run.terminalOutcome?.details.recentActivity ?? [],
+        };
+    }
+
+    private pruneRetainedResults(): void {
+        while (this.terminalOrder.length > this.maxRetainedResults) {
+            const runId = this.terminalOrder.shift();
+            if (runId) this.runs.delete(runId);
+        }
+    }
+
+    private removeRun(run: AgentRun): void {
+        this.runs.delete(run.id);
+        const terminalIndex = this.terminalOrder.indexOf(run.id);
+        if (terminalIndex >= 0) this.terminalOrder.splice(terminalIndex, 1);
     }
 
     private abortRun(run: AgentRun): Promise<void> | undefined {
@@ -577,7 +864,11 @@ export class AgentRunManager {
         if (run.disposed) return;
         run.disposed = true;
         this.record(run, "child.disposed");
-        run.handle?.dispose();
+        const handle = run.handle;
+        run.handle = undefined;
+        run.setup = undefined;
+        run.abortPromise = undefined;
+        handle?.dispose();
     }
 
     private record(run: AgentRun, type: string, data?: AgentTraceData): void {

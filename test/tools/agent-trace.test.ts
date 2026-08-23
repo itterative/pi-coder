@@ -95,11 +95,9 @@ describe("delegated-agent traces", () => {
         expect(notifications.join("\n")).toContain("run.terminal");
     });
 
-    it("accepts explicit truthy environment values only", () => {
+    it("is temporarily enabled regardless of the environment flag", () => {
         expect(isAgentTraceEnabled("1")).toBe(true);
-        expect(isAgentTraceEnabled("TRUE")).toBe(true);
-        expect(isAgentTraceEnabled("on")).toBe(true);
-        expect(isAgentTraceEnabled("0")).toBe(false);
-        expect(isAgentTraceEnabled(undefined)).toBe(false);
+        expect(isAgentTraceEnabled("0")).toBe(true);
+        expect(isAgentTraceEnabled(undefined)).toBe(true);
     });
 });

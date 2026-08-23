@@ -147,6 +147,76 @@ describe("agent extension registration", () => {
         await handlers.session_shutdown[0]({}, ctx);
     });
 
+    it("executes a spawn, status, and collect flow", async () => {
+        const handlers: Record<string, Handler[]> = {};
+        let tool: any;
+        const pi = {
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            registerTool(definition: any) {
+                tool = definition;
+            },
+            registerCommand() {},
+        } as any;
+        let background = false;
+        const child: ChildAgentHandle = {
+            prompt: async () => {},
+            abort: async () => {},
+            dispose: () => {},
+            takeParentQuestion: () => undefined,
+            getProgress: () => ({ output: "Background result", recentActivity: [] }),
+            getFinalOutput: () => "Background result",
+            getError: () => undefined,
+            getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
+        };
+        registerAgentTool(pi, async (context) => {
+            background = context.background === true;
+            return child;
+        });
+        const ctx = {
+            cwd: process.cwd(),
+            isProjectTrusted: () => false,
+            ui: { notify: () => {} },
+        };
+
+        const spawned = await tool.execute(
+            "call-1",
+            { action: "spawn", agent: "scout", task: "Inspect concurrently" },
+            undefined,
+            undefined,
+            ctx,
+        );
+        for (let index = 0; index < 12; index++) await Promise.resolve();
+        const status = await tool.execute(
+            "call-2",
+            { action: "status", runId: "scout-1" },
+            undefined,
+            undefined,
+            ctx,
+        );
+        const prompt = await handlers.before_agent_start[0](
+            { systemPrompt: "Parent prompt" },
+            ctx,
+        ) as any;
+        const collected = await tool.execute(
+            "call-3",
+            { action: "collect", runId: "scout-1" },
+            undefined,
+            undefined,
+            ctx,
+        );
+
+        expect(spawned.details).toMatchObject({ status: "starting", background: true });
+        expect(status.details.status).toBe("completed");
+        expect(status.content[0].text).toContain("action=\"collect\"");
+        expect(prompt.systemPrompt).toContain("scout-1 (scout): completed");
+        expect(collected.details.status).toBe("completed");
+        expect(collected.content[0].text).toBe("Background result");
+        expect(background).toBe(true);
+        await handlers.session_shutdown[0]({}, ctx);
+    });
+
     it("deduplicates discovery warning notifications", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-coder-agent-tool-"));
         tempDirs.push(cwd);
@@ -183,7 +253,7 @@ describe("agent extension registration", () => {
         await handlers.session_shutdown[0]({}, ctx);
     });
 
-    it("registers the trace command only when its environment flag is enabled", () => {
+    it("registers the temporarily always-enabled trace command", () => {
         const previous = process.env[AGENT_TRACE_ENV];
         const commands: string[] = [];
         const pi = {
@@ -197,11 +267,11 @@ describe("agent extension registration", () => {
         try {
             delete process.env[AGENT_TRACE_ENV];
             registerAgentTool(pi, async () => { throw new Error("not used"); });
-            expect(commands).toEqual([]);
-
-            process.env[AGENT_TRACE_ENV] = "1";
-            registerAgentTool(pi, async () => { throw new Error("not used"); });
             expect(commands).toEqual(["agent-trace"]);
+
+            process.env[AGENT_TRACE_ENV] = "0";
+            registerAgentTool(pi, async () => { throw new Error("not used"); });
+            expect(commands).toEqual(["agent-trace", "agent-trace"]);
         } finally {
             if (previous === undefined) delete process.env[AGENT_TRACE_ENV];
             else process.env[AGENT_TRACE_ENV] = previous;

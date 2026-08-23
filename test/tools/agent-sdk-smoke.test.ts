@@ -45,6 +45,29 @@ describe("in-process scout SDK session", () => {
         expect(child.getError()).toBeUndefined();
         expect(child.getUsage().totalTokens).toBe(0);
         child.dispose();
+
+        const backgroundEvents: Array<{ type: string; data?: Record<string, unknown> }> = [];
+        const backgroundChild = await createAgentChild({
+            cwd: process.cwd(),
+            definition: BUILTIN_SCOUT,
+            parentContext,
+            background: true,
+            onProgress: () => {},
+            onTrace: (type, data) => backgroundEvents.push({ type, data }),
+        });
+        expect(backgroundEvents).toContainEqual({
+            type: "session.created",
+            data: { toolCount: BUILTIN_SCOUT.tools.length + 1 },
+        });
+        expect(backgroundEvents).toContainEqual({
+            type: "resources.loaded",
+            data: {
+                readOnlyToolCount: BUILTIN_SCOUT.tools.length,
+                directUserUI: false,
+                background: true,
+            },
+        });
+        backgroundChild.dispose();
     });
 
     it("preserves persisted OpenAI Codex OAuth when available", async () => {
