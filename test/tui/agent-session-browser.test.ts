@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     AgentSessionBrowserComponent,
 } from "../../src/tui/agent-session-browser";
+import type { AgentWorkspace } from "../../src/tools/agent/workspaces";
 import { KEY, interact, mockTheme, press, renderText } from "../helpers";
 
 const current = {
@@ -24,6 +25,20 @@ const current = {
         totalTokens: 2_001_200,
         cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
     },
+};
+
+const workspace: AgentWorkspace = {
+    version: 1,
+    id: "quiet-lantern-7k3",
+    cwd: "/repo/project",
+    repositoryRoot: "/repo/project",
+    worktreePath: "/state/workspaces/quiet-lantern-7k3",
+    slug: "quiet-lantern-7k3",
+    baseRevision: "abc123def456",
+    setupState: "ready",
+    status: "available",
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_001_000,
 };
 
 const past = {
@@ -241,6 +256,23 @@ describe("AgentSessionBrowserComponent", () => {
         expect(ui.render()).toContain("○ Current    ● Past");
         ui.press(KEY.left);
         expect(ui.render()).toContain("● Current    ○ Past");
+    });
+
+    it("merges workspaces into the agents browser", () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [current],
+            past: [past],
+            workspaces: [workspace],
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab, KEY.tab);
+        expect(ui.render()).toContain("○ Current    ○ Past    ● Workspaces");
+        expect(ui.render()).toContain("quiet-lantern-7k3 · available");
+
+        ui.press(KEY.enter);
+        expect(ui.render()).toContain("Workspace: quiet-lantern-7k3");
     });
 
     it("renders empty current and past tabs", () => {

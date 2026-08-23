@@ -37,7 +37,6 @@ import {
     type AgentSessionBrowserItem,
 } from "./sessions";
 import { showAgentSessionBrowser } from "../../tui/agent-session-browser";
-import { showAgentWorkspaceBrowser } from "../../tui/agent-workspace-browser";
 import {
     AgentActionError,
     AgentRunManager,
@@ -438,64 +437,57 @@ export default function registerAgentTool(
         });
     };
     if (traceStore) registerAgentTraceCommand(pi, traceStore);
-    const showWorkspaces = async (_args: string, ctx: ExtensionCommandContext) => {
+    const showAgentBrowser = async (_args: string, ctx: ExtensionCommandContext) => {
+        const current = await loadAgentSessionTranscripts(currentAgentSessionItems(manager.listRuns()));
+        let past: AgentSessionBrowserItem[];
         try {
-            const workspaces = await listAgentWorkspaces(ctx.cwd);
-            await showAgentWorkspaceBrowser({ cwd: ctx.cwd, workspaces }, ctx);
+            past = removeCurrentAgentTranscripts(
+                await listPastAgentSessions(ctx.cwd),
+                current,
+            );
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            ctx.ui.notify(`Could not browse persisted delegated-agent sessions: ${message}`, "warning");
+            past = [];
+        }
+        let workspaces: AgentWorkspace[];
+        try {
+            workspaces = await listAgentWorkspaces(ctx.cwd);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             ctx.ui.notify(`Could not browse agent workspaces: ${message}`, "warning");
+            workspaces = [];
         }
+        await showAgentSessionBrowser({
+            current,
+            past,
+            workspaces,
+            onResume: async (item) => {
+                try {
+                    const outcome = await manager.resume(item.id, undefined, undefined, backgroundUpdate(ctx));
+                    await releaseWorkspaceForRun(ctx, outcome.details);
+                    updateAgentUi(ctx, manager);
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    ctx.ui.notify(`Could not resume ${item.id}: ${message}`, "warning");
+                }
+            },
+            onCancel: async (item) => {
+                try {
+                    const outcome = await manager.cancel(item.id);
+                    await releaseWorkspaceForRun(ctx, outcome.details);
+                    mailbox.notifyUserCanceled(outcome.details);
+                    updateAgentUi(ctx, manager);
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    ctx.ui.notify(`Could not cancel ${item.id}: ${message}`, "warning");
+                }
+            },
+        }, ctx);
     };
     pi.registerCommand("agents", {
-        description: "Browse isolated agent workspaces",
-        handler: showWorkspaces,
-    });
-    pi.registerCommand("agent-workspaces", {
-        description: "Browse isolated agent workspaces",
-        handler: showWorkspaces,
-    });
-    pi.registerCommand("agent-sessions", {
-        description: "Browse current and persisted delegated-agent sessions",
-        handler: async (_args, ctx) => {
-            const current = await loadAgentSessionTranscripts(currentAgentSessionItems(manager.listRuns()));
-            let past: AgentSessionBrowserItem[];
-            try {
-                past = removeCurrentAgentTranscripts(
-                    await listPastAgentSessions(ctx.cwd),
-                    current,
-                );
-            } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                ctx.ui.notify(`Could not browse persisted delegated-agent sessions: ${message}`, "warning");
-                past = [];
-            }
-            await showAgentSessionBrowser({
-                current,
-                past,
-                onResume: async (item) => {
-                    try {
-                        const outcome = await manager.resume(item.id, undefined, undefined, backgroundUpdate(ctx));
-                        await releaseWorkspaceForRun(ctx, outcome.details);
-                        updateAgentUi(ctx, manager);
-                    } catch (error) {
-                        const message = error instanceof Error ? error.message : String(error);
-                        ctx.ui.notify(`Could not resume ${item.id}: ${message}`, "warning");
-                    }
-                },
-                onCancel: async (item) => {
-                    try {
-                        const outcome = await manager.cancel(item.id);
-                        await releaseWorkspaceForRun(ctx, outcome.details);
-                        mailbox.notifyUserCanceled(outcome.details);
-                        updateAgentUi(ctx, manager);
-                    } catch (error) {
-                        const message = error instanceof Error ? error.message : String(error);
-                        ctx.ui.notify(`Could not cancel ${item.id}: ${message}`, "warning");
-                    }
-                },
-            }, ctx);
-        },
+        description: "Browse delegated agents and isolated workspaces",
+        handler: showAgentBrowser,
     });
     const notifiedWarnings = new Set<string>();
 

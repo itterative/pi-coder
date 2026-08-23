@@ -33,7 +33,7 @@ Use `/agent-sessions` to open an overlay for delegated-agent sessions. The **Cur
 
 ## Browse isolated workspaces
 
-Use `/agents` (or `/agent-workspaces`) to open the isolated-workspace browser. It lists workspaces for the current cwd, including setup state, lease state, worktree path, and whether the workspace is available or requires review. Enter opens read-only workspace metadata. Workspaces marked `review_required` are deliberately excluded from automatic reuse until explicit review/reset/discard actions are added.
+Use `/agents` to open the unified agent browser. Its Current and Past tabs show delegated sessions, while Workspaces lists isolated workspaces for the current cwd, including setup state, lease state, worktree path, and whether the workspace is available or requires review. Enter opens read-only session or workspace metadata. Workspaces marked `review_required` are deliberately excluded from automatic reuse until explicit review/reset/discard actions are added.
 
 ## Durable child sessions
 

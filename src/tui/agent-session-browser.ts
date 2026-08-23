@@ -8,16 +8,25 @@ import {
 import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
 import type { AgentSessionBrowserItem } from "../tools/agent/sessions";
+import type { AgentWorkspace } from "../tools/agent/workspaces";
 import { BORDER_STYLES } from "./border-box";
 import { AgentSessionDetailComponent } from "./agent-session-detail";
+import {
+    AgentWorkspaceDetailComponent,
+    agentWorkspaceItemText,
+} from "./agent-workspace-browser";
 
-interface AgentSessionBrowserState extends ListViewState<AgentSessionBrowserItem> {
-    tab: "current" | "past";
+type AgentBrowserItem = AgentSessionBrowserItem | AgentWorkspace;
+type AgentBrowserTab = "current" | "past" | "workspaces";
+
+interface AgentSessionBrowserState extends ListViewState<AgentBrowserItem> {
+    tab: AgentBrowserTab;
 }
 
 export interface AgentSessionBrowserOptions {
     current: AgentSessionBrowserItem[];
     past: AgentSessionBrowserItem[];
+    workspaces?: AgentWorkspace[];
     fixedHeight?: () => number;
     onResume?: (item: AgentSessionBrowserItem) => void | Promise<void>;
     onCancel?: (item: AgentSessionBrowserItem) => void | Promise<void>;
@@ -43,12 +52,38 @@ const EMPTY_PAST: AgentSessionBrowserItem = {
     updatedAt: 0,
 };
 
-function asListItems(items: AgentSessionBrowserItem[], empty: AgentSessionBrowserItem): ListItem<AgentSessionBrowserItem>[] {
+const EMPTY_WORKSPACES: AgentBrowserItem = {
+    kind: "empty",
+    id: "empty-workspaces",
+    title: "",
+    agent: "",
+    status: "",
+    task: "No isolated workspaces have been created for this cwd.",
+    updatedAt: 0,
+};
+
+function asSessionListItems(items: AgentSessionBrowserItem[], empty: AgentSessionBrowserItem): ListItem<AgentBrowserItem>[] {
     return (items.length ? items : [empty]).map((value) => ({
         value,
         label: value.kind === "empty" ? value.task : `${value.title} · ${value.agent}`,
         disabled: value.kind === "empty",
     }));
+}
+
+function asWorkspaceListItems(workspaces: AgentWorkspace[]): ListItem<AgentBrowserItem>[] {
+    return (workspaces.length ? workspaces : [EMPTY_WORKSPACES]).map((value) => ({
+        value,
+        label: isWorkspace(value) ? value.slug : value.task,
+        disabled: !isWorkspace(value),
+    }));
+}
+
+function isWorkspace(item: AgentBrowserItem): item is AgentWorkspace {
+    return !("kind" in item);
+}
+
+function isSession(item: AgentBrowserItem): item is AgentSessionBrowserItem {
+    return !isWorkspace(item);
 }
 
 function dateText(timestamp: number | undefined): string {
@@ -84,16 +119,25 @@ function returnedText(item: AgentSessionBrowserItem): string | undefined {
     return undefined;
 }
 
-function tabText(tab: "current" | "past", theme: Theme): string {
-    return tab === "current"
-        ? `${theme.fg("accent", theme.bold("● Current"))}    ${theme.fg("dim", "○ Past")}`
-        : `${theme.fg("dim", "○ Current")}    ${theme.fg("accent", theme.bold("● Past"))}`;
+function tabText(tab: AgentBrowserTab, theme: Theme, includeWorkspaces: boolean): string {
+    const current = tab === "current"
+        ? theme.fg("accent", theme.bold("● Current"))
+        : theme.fg("dim", "○ Current");
+    const past = tab === "past"
+        ? theme.fg("accent", theme.bold("● Past"))
+        : theme.fg("dim", "○ Past");
+    if (!includeWorkspaces) return `${current}    ${past}`;
+    const workspaces = tab === "workspaces"
+        ? theme.fg("accent", theme.bold("● Workspaces"))
+        : theme.fg("dim", "○ Workspaces");
+    return `${current}    ${past}    ${workspaces}`;
 }
 
 function itemText(
-    item: AgentSessionBrowserItem,
+    item: AgentBrowserItem,
     theme: Theme,
 ): string {
+    if (isWorkspace(item)) return agentWorkspaceItemText(item, theme);
     if (item.kind === "empty") return theme.fg("muted", item.task);
 
     const mode = item.mutating ? "worker" : item.agent;
@@ -109,26 +153,40 @@ function itemText(
 }
 
 export class AgentSessionBrowserComponent extends ListViewComponent<
-    AgentSessionBrowserItem,
+    AgentBrowserItem,
     void,
     AgentSessionBrowserState
 > {
     private readonly current: AgentSessionBrowserItem[];
-    private detail: AgentSessionDetailComponent | null = null;
+    private sessionDetail: AgentSessionDetailComponent | null = null;
+    private workspaceDetail: AgentWorkspaceDetailComponent | null = null;
     private readonly past: AgentSessionBrowserItem[];
+    private readonly workspaces: AgentWorkspace[];
 
     constructor(options: AgentSessionBrowserOptions) {
         const current = options.current;
         const past = options.past;
+        const workspaces = options.workspaces ?? [];
+        const includeWorkspaces = options.workspaces !== undefined;
+        const tabs: AgentBrowserTab[] = includeWorkspaces
+            ? ["current", "past", "workspaces"]
+            : ["current", "past"];
         let activeTab: AgentSessionBrowserState["tab"] = "current";
         let tabHeader: Text | undefined;
         let tabTheme: Theme | undefined;
+        const itemsForTab = (tab: AgentBrowserTab): ListItem<AgentBrowserItem>[] => (
+            tab === "current"
+                ? asSessionListItems(current, EMPTY_CURRENT)
+                : tab === "past"
+                    ? asSessionListItems(past, EMPTY_PAST)
+                    : asWorkspaceListItems(workspaces)
+        );
         const refreshTabHeader = () => {
-            if (tabHeader && tabTheme) tabHeader.setText(tabText(activeTab, tabTheme));
+            if (tabHeader && tabTheme) tabHeader.setText(tabText(activeTab, tabTheme, includeWorkspaces));
         };
         super(
             {
-                title: "Delegated agent sessions",
+                title: includeWorkspaces ? "Agents" : "Delegated agent sessions",
                 borderColor: "borderMuted",
                 borderCharacters: BORDER_STYLES.rounded,
                 fixedHeight: options.fixedHeight,
@@ -137,26 +195,28 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                 helpText: `↑/↓ navigate · Tab/←/→ switch tab · Enter open${options.onResume || options.onCancel ? " · r resume · c cancel" : ""} · Esc close`,
                 headerContent: (container, theme) => {
                     tabTheme = theme;
-                    tabHeader = new Text(tabText(activeTab, theme), 5, 0);
+                    tabHeader = new Text(tabText(activeTab, theme, includeWorkspaces), 5, 0);
                     container.addChild(tabHeader);
                     container.addChild(new Text(
-                        theme.fg("muted", "Current shows this parent session; Past shows durable child results for this cwd."),
+                        theme.fg("muted", includeWorkspaces
+                            ? "Current and Past show delegated sessions; Workspaces shows isolated worker checkouts."
+                            : "Current shows this parent session; Past shows durable child results for this cwd."),
                         5,
                         0,
                     ));
                 },
-                renderItem: (item: ListItem<AgentSessionBrowserItem>, options: ListViewRenderItemOptions<AgentSessionBrowserItem, AgentSessionBrowserState>) => {
+                renderItem: (item: ListItem<AgentBrowserItem>, options: ListViewRenderItemOptions<AgentBrowserItem, AgentSessionBrowserState>) => {
                     const content = itemText(item.value, options.theme);
                     return options.isCursor ? content : options.theme.fg("text", content);
                 },
                 onKey: (key, state) => {
                     const selected = state.items[state.cursor ?? 0]?.value;
-                    if (key === "r" && selected?.kind === "current" && selected.status === "interrupted") {
+                    if (key === "r" && selected && isSession(selected) && selected.kind === "current" && selected.status === "interrupted") {
                         this.finish(undefined);
                         queueMicrotask(() => void options.onResume?.(selected));
                         return true;
                     }
-                    if (key === "c" && selected?.kind === "current" && (
+                    if (key === "c" && selected && isSession(selected) && selected.kind === "current" && (
                         selected.status === "interrupted" || selected.status === "waiting_for_parent"
                     )) {
                         this.finish(undefined);
@@ -164,51 +224,67 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                         return true;
                     }
                     if (matchesKey(key, "tab") || matchesKey(key, "left") || matchesKey(key, "right")) {
-                        const nextTab = matchesKey(key, "left")
-                            ? "current"
+                        const currentIndex = tabs.indexOf(state.tab);
+                        const nextIndex = matchesKey(key, "left")
+                            ? Math.max(0, currentIndex - 1)
                             : matchesKey(key, "right")
-                                ? "past"
-                                : state.tab === "current" ? "past" : "current";
+                                ? Math.min(tabs.length - 1, currentIndex + 1)
+                                : (currentIndex + 1) % tabs.length;
+                        const nextTab = tabs[nextIndex];
                         activeTab = nextTab;
                         refreshTabHeader();
                         state.tab = nextTab;
-                        state.items = asListItems(
-                            state.tab === "current" ? current : past,
-                            state.tab === "current" ? EMPTY_CURRENT : EMPTY_PAST,
-                        );
+                        state.items = itemsForTab(nextTab);
                         state.cursor = 0;
                         state.scrollOffset = 0;
                         return true;
                     }
                     if (matchesKey(key, "enter")) {
                         const selected = state.items[state.cursor ?? 0]?.value;
-                        if (selected?.kind !== "empty" && this.theme) {
-                            this.detail = new AgentSessionDetailComponent({
-                                item: selected,
-                                fixedHeight: this.listOptions.fixedHeight,
-                            });
-                            this.detail.initialize(this.theme);
-                            this.detail.setDoneCallback(() => {
-                                this.detail = null;
-                                this.invalidate();
-                            });
+                        if (selected && this.theme) {
+                            if (isWorkspace(selected)) {
+                                this.workspaceDetail = new AgentWorkspaceDetailComponent(
+                                    selected,
+                                    this.listOptions.fixedHeight,
+                                );
+                                this.workspaceDetail.initialize(this.theme);
+                                this.workspaceDetail.setDoneCallback(() => {
+                                    this.workspaceDetail = null;
+                                    this.invalidate();
+                                });
+                            } else if (selected.kind !== "empty") {
+                                this.sessionDetail = new AgentSessionDetailComponent({
+                                    item: selected,
+                                    fixedHeight: this.listOptions.fixedHeight,
+                                });
+                                this.sessionDetail.initialize(this.theme);
+                                this.sessionDetail.setDoneCallback(() => {
+                                    this.sessionDetail = null;
+                                    this.invalidate();
+                                });
+                            }
                         }
                         return true;
                     }
                     return false;
                 },
                 footerContent: (container, theme, state) => {
-                    const count = state.tab === "current" ? current.length : past.length;
+                    const count = state.tab === "current"
+                        ? current.length
+                        : state.tab === "past"
+                            ? past.length
+                            : workspaces.length;
+                    const label = state.tab === "workspaces" ? "workspace" : "session";
                     container.addChild(new Spacer(1));
                     container.addChild(new Text(
-                        theme.fg("dim", `${count} session${count === 1 ? "" : "s"}`),
+                        theme.fg("dim", `${count} ${label}${count === 1 ? "" : "s"}`),
                         1,
                         0,
                     ));
                 },
             },
             {
-                items: asListItems(current, EMPTY_CURRENT),
+                items: itemsForTab("current"),
                 cursor: 0,
                 scrollOffset: 0,
                 maxVisibleLines: 12,
@@ -217,18 +293,24 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
         );
         this.current = current;
         this.past = past;
+        this.workspaces = workspaces;
     }
 
     override render(width: number): string[] {
-        if (this.detail) return this.detail.render(width);
+        if (this.sessionDetail) return this.sessionDetail.render(width);
+        if (this.workspaceDetail) return this.workspaceDetail.render(width);
         const height = this.listOptions.fixedHeight?.();
         if (height !== undefined) this.state.maxVisibleLines = Math.max(1, height - 11);
         return super.render(width).map((line) => truncateToWidth(line, width, ""));
     }
 
     override handleInput(key: string): void {
-        if (this.detail) {
-            this.detail.handleInput(key);
+        if (this.sessionDetail) {
+            this.sessionDetail.handleInput(key);
+            return;
+        }
+        if (this.workspaceDetail) {
+            this.workspaceDetail.handleInput(key);
             return;
         }
         super.handleInput(key);

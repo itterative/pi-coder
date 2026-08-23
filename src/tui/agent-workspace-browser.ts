@@ -66,9 +66,7 @@ function setupText(workspace: AgentWorkspace): string {
     return workspace.setupState.replaceAll("_", " ");
 }
 
-function itemText(workspace: WorkspaceBrowserItem, theme: Theme): string {
-    if (!isWorkspace(workspace)) return theme.fg("muted", workspace.message);
-
+export function agentWorkspaceItemText(workspace: AgentWorkspace, theme: Theme): string {
     const statusColor = workspace.status === "review_required" ? "warning" : "success";
     const leaseColor = workspace.leaseRunId ? "warning" : "muted";
     return theme.fg("accent", workspace.slug)
@@ -77,7 +75,13 @@ function itemText(workspace: WorkspaceBrowserItem, theme: Theme): string {
         + `\nPath: ${workspace.worktreePath}`;
 }
 
-function detailText(workspace: AgentWorkspace, theme: Theme, width: number): string {
+function itemText(workspace: WorkspaceBrowserItem, theme: Theme): string {
+    return isWorkspace(workspace)
+        ? agentWorkspaceItemText(workspace, theme)
+        : theme.fg("muted", workspace.message);
+}
+
+export function agentWorkspaceDetailText(workspace: AgentWorkspace, theme: Theme, width: number): string {
     const lines = [
         `Workspace: ${workspace.slug}`,
         `Status: ${statusText(workspace)}`,
@@ -107,7 +111,7 @@ function detailText(workspace: AgentWorkspace, theme: Theme, width: number): str
     return lines.join("\n");
 }
 
-class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace> {
+export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace> {
     private contentWidth = 80;
 
     constructor(workspace: AgentWorkspace, fixedHeight?: () => number) {
@@ -119,7 +123,7 @@ class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace> {
             helpText: "↑/↓ scroll · Esc back",
             fixedHeight,
             compactFooter: true,
-            renderItem: (item, renderOptions) => detailText(item.value, renderOptions.theme, this.contentWidth),
+            renderItem: (item, renderOptions) => agentWorkspaceDetailText(item.value, renderOptions.theme, this.contentWidth),
         });
     }
 
