@@ -225,6 +225,26 @@ describe("AgentRunManager", () => {
         expect(child.disposed).toBe(true);
     });
 
+    it("disposes a child that finishes setup after parent cancellation", async () => {
+        const child = new FakeChild([{ output: "Should not run" }]);
+        let resolveFactory!: (handle: ChildAgentHandle) => void;
+        const factory = new Promise<ChildAgentHandle>((resolve) => {
+            resolveFactory = resolve;
+        });
+        const manager = new AgentRunManager(async () => factory);
+        const controller = new AbortController();
+
+        const pending = manager.start("scout", "Investigate", context(), controller.signal);
+        controller.abort();
+        resolveFactory(child);
+        const result = await pending;
+
+        expect(result.details.status).toBe("aborted");
+        expect(child.prompts).toEqual([]);
+        expect(child.disposed).toBe(true);
+        expect(manager.activeCount).toBe(0);
+    });
+
     it("disposes all waiting children on shutdown", async () => {
         const children = [
             new FakeChild([{ question: { question: "One?" } }]),
@@ -274,6 +294,14 @@ describe("AgentRunManager", () => {
         expect((await manager.start("scout", "First", context())).details.runId).toBe("scout-1");
         expect((await manager.start("scout", "Second", context())).details.runId).toBe("scout-2");
     });
+
+    it("rejects unknown and stale resume IDs", async () => {
+        const manager = managerWith(new FakeChild([{ output: "Done" }]));
+
+        await expect(manager.resume("scout-999", "Continue")).rejects.toThrow("Unknown or stale");
+        const completed = await manager.start("scout", "Investigate", context());
+        await expect(manager.resume(completed.details.runId, "Continue")).rejects.toThrow("Unknown or stale");
+    });
 });
 
 describe("scout path confinement", () => {
@@ -285,7 +313,9 @@ describe("scout path confinement", () => {
 
         expect(isChildPathAllowed(undefined, cwd)).toBe(true);
         expect(isChildPathAllowed("safe.txt", cwd)).toBe(true);
+        expect(isChildPathAllowed(path.join(cwd, "safe.txt"), cwd)).toBe(true);
         expect(isChildPathAllowed(path.join(cwd, ".env"), cwd)).toBe(false);
+        expect(isChildPathAllowed(path.join("..", "outside.txt"), cwd)).toBe(false);
         expect(isChildPathAllowed(path.dirname(cwd), cwd)).toBe(false);
     });
 
@@ -293,7 +323,13 @@ describe("scout path confinement", () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-coder-agent-"));
         tempDirs.push(cwd);
         fs.symlinkSync(os.tmpdir(), path.join(cwd, "outside"));
+        fs.symlinkSync(
+            path.join(path.dirname(cwd), `missing-${path.basename(cwd)}`),
+            path.join(cwd, "broken-outside"),
+        );
 
         expect(isChildPathAllowed(path.join(cwd, "outside"), cwd)).toBe(false);
+        expect(isChildPathAllowed(path.join(cwd, "outside", "nested.txt"), cwd)).toBe(false);
+        expect(isChildPathAllowed(path.join(cwd, "broken-outside"), cwd)).toBe(false);
     });
 });

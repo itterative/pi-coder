@@ -19,6 +19,7 @@ The initial direction recorded in `src/tools/agent/README.md` is:
 - `src/tools/agent/index.ts` registers the in-process `agent` tool from `src/index.ts`.
 - `child.ts`, `runtime.ts`, and `discovery.ts` implement the read-only child SDK session, run state machine, and custom definition loading.
 - The MVP supports built-in/user/trusted-project agents, start/resume/cancel, parent guidance, confinement, usage deltas, lifecycle cleanup, and compact/expanded rendering.
+- The stabilization pass makes waiting state explicitly paused in parent guidance, shows compact question/result previews, tests tool-level pause/resume rendering and additional lifecycle/confinement edges, and records a repeatable manual provider/lifecycle checklist in `README.md`.
 - Existing extension functionality also includes:
   - memory injection and persistence;
   - the ask-user tool;
