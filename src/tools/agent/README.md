@@ -12,6 +12,8 @@ agent(action="cancel", runId="scout-1")
 
 A child may call `ask_parent` to pause its current turn. The parent receives its question and partial findings, may investigate independently, and resumes the retained child session by run ID. A `waiting_for_parent` result is paused rather than finished; a later `agent resume <run-id>` result should reach either another waiting state or `completed`. Collapsed TUI results show the pending question or a final-result preview, while expanded results include full details and usage.
 
+In TUI mode, a child may instead call its restricted `ask_user` tool when a preference, clarification, or decision genuinely requires direct end-user input. The existing pi-coder question component opens under a title such as `scout asks: ...`; the selected or custom answer returns to the same child turn, which then continues normally. Canceling the dialog gives the child a recoverable cancellation result. Aborting the parent operation or shutting down closes an active child dialog. Outside TUI mode, direct interaction returns an explicit unavailable result and tells the child to use `ask_parent` instead.
+
 Up to four active or waiting runs are retained. They have no TTL, but are in-memory and parent-runtime-local: reload, session replacement/fork, process exit, or explicit cancellation disposes them.
 
 ## Agent definitions
@@ -44,12 +46,13 @@ Run these checks after changing child sessions, providers, lifecycle handling, o
 
 1. Start `scout` with OpenAI Codex OAuth and, separately, one API-key provider.
 2. Have the child call `ask_parent`; verify the compact result shows its question and run ID, then resume it to completion.
-3. Exercise two consecutive `ask_parent` cycles and verify prior usage is not counted again in each resume result.
-4. Cancel a waiting run, then verify its run ID is stale. Start another run and verify IDs are not reused.
-5. Reload while a child is waiting and while one is running; verify cleanup and stale IDs without an orphaned request.
-6. Fill all four run slots and verify a fifth start is rejected until a waiting run is resumed or canceled.
-7. Verify a user agent loads, a trusted-project agent overrides it, and an untrusted project definition does not load.
-8. Ask the scout to access an absolute outside path, `..` escape, sensitive file, and in-cwd symlink to an outside target; all must be blocked without prompting.
-9. Produce long findings and expand/collapse the result; verify the compact preview stays useful and expanded activity/usage remain readable.
+3. Have the child call `ask_user`; select an option and verify the child continues to completion in the same turn. Repeat with a custom reply, Escape cancellation, and parent abort while the dialog is open.
+4. Exercise two consecutive `ask_parent` cycles and verify prior usage is not counted again in each resume result.
+5. Cancel a waiting run, then verify its run ID is stale. Start another run and verify IDs are not reused.
+6. Reload while a child is waiting and while one is running; verify cleanup and stale IDs without an orphaned request or dialog.
+7. Fill all four run slots and verify a fifth start is rejected until a waiting run is resumed or canceled.
+8. Verify a user agent loads, a trusted-project agent overrides it, and an untrusted project definition does not load.
+9. Ask the scout to access an absolute outside path, `..` escape, sensitive file, and in-cwd symlink to an outside target; all must be blocked without prompting.
+10. Produce long findings and expand/collapse the result; verify the compact preview stays useful and expanded activity/usage remain readable.
 
 Provider calls stay manual so automated tests do not require credentials or incur usage.

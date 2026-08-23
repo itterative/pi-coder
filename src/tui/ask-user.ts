@@ -406,8 +406,9 @@ let askUserQueue: Promise<void> = Promise.resolve();
 export async function askUser(
     options: AskUserOptions,
     ctx: { hasUI: boolean; ui: ExtensionContext["ui"] },
+    signal?: AbortSignal,
 ): Promise<AskUserResult | undefined> {
-    if (!ctx.hasUI) return undefined;
+    if (!ctx.hasUI || signal?.aborted) return undefined;
     if (options.options.length === 0) return undefined;
 
     // Enqueue: wait for any in-flight askUser to finish before showing ours.
@@ -416,20 +417,36 @@ export async function askUser(
     const previousQueue = askUserQueue;
     askUserQueue = waitForTurn;
     await previousQueue;
+    if (signal?.aborted) {
+        release();
+        return undefined;
+    }
 
     // Hide the working indicator spinner to prevent flickering while the
     // custom component is displayed (the spinner's animation frames cause
     // constant re-renders that fight with the component on short terminals).
     ctx.ui.setWorkingVisible(false);
 
+    let finish: ((result: AskUserResult | undefined) => void) | undefined;
+    const abort = () => finish?.(undefined);
+    signal?.addEventListener("abort", abort, { once: true });
     try {
         return await ctx.ui.custom<AskUserResult | undefined>((_tui, theme, _kb, done) => {
+            let settled = false;
+            finish = (result) => {
+                if (settled) return;
+                settled = true;
+                done(result);
+            };
             const component = new AskUserComponent(options);
-            component.setDoneCallback(done);
+            component.setDoneCallback(finish);
             component.initialize(theme);
+            if (signal?.aborted) queueMicrotask(abort);
             return component;
         });
     } finally {
+        signal?.removeEventListener("abort", abort);
+        finish = undefined;
         ctx.ui.setWorkingVisible(true);
         release();
     }

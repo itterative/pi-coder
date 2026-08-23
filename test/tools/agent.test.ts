@@ -245,6 +245,21 @@ describe("AgentRunManager", () => {
         expect(manager.activeCount).toBe(0);
     });
 
+    it("aborts an in-progress child on shutdown", async () => {
+        const child = new FakeChild([{ waitForAbort: true }]);
+        const manager = managerWith(child);
+
+        const pending = manager.start("scout", "Investigate", context());
+        await Promise.resolve();
+        await manager.shutdown();
+        const result = await pending;
+
+        expect(result.details.status).toBe("aborted");
+        expect(child.abortCount).toBeGreaterThan(0);
+        expect(child.disposed).toBe(true);
+        expect(manager.activeCount).toBe(0);
+    });
+
     it("disposes all waiting children on shutdown", async () => {
         const children = [
             new FakeChild([{ question: { question: "One?" } }]),

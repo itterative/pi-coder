@@ -167,7 +167,7 @@ The tool result itself puts the request in the parent transcript, so a second in
 
 A future background-mailbox mode may allow non-blocking child messages while the child continues. Pi's `pi.sendMessage(..., { deliverAs: "steer" })` can insert a custom child message into the parent context after the current parent tool batch. For that to be timely, the initial `agent` call must return a run handle while the child continues in the background; later parent guidance can use `childSession.steer()`. This also introduces delivery ordering, race handling, shutdown, and nested-usage accounting problems, so it is explicitly deferred.
 
-Direct child-to-user interaction remains possible: a minimal child extension can forward the parent `ctx.ui` and register `ask_user`. It is explicitly deferred. Initially the child always asks the parent; the parent can answer, investigate, or invoke its own `ask_user`. This keeps ownership of the conversation clear and avoids nested UI binding.
+Direct child-to-user interaction is implemented after MVP stabilization: the controlled child extension forwards a restricted question through the parent TUI using pi-coder's existing `askUser` component. The answer returns to the same child turn. `ask_parent` remains available when the parent can investigate or decide. Direct dialogs are TUI-only; other modes receive an explicit unavailable result and guidance to use `ask_parent`. Parent abort/session shutdown closes an active dialog through the child tool's abort signal.
 
 #### Parallel mutation
 
@@ -361,7 +361,7 @@ For the first in-process implementation:
 - stream throttled child events into `onUpdate`;
 - retain only bounded waiting sessions and dispose all terminal runs.
 
-A read-only interactive scout is the selected first profile. “Interactive” initially means guidance exchange with the parent agent through pause/resume, not direct child ownership of the TUI.
+A read-only interactive scout is the selected first profile. It supports both parent guidance through pause/resume and restricted direct end-user questions in TUI mode; direct interaction does not grant broader child ownership of the TUI.
 
 ## Incremental Implementation Plan
 
@@ -427,9 +427,9 @@ Compact and expanded rendering includes:
 
 Keep the collapsed output bounded and make expanded output useful for debugging.
 
-### Phase 4: Direct user interaction
+### Phase 4: Direct user interaction — implemented
 
-After pause/resume is stable, decide whether a child may call `ask_user` directly through a restricted parent UI binding. The default parent-guidance path remains available so the parent can answer, investigate, or escalate to the user. Add tests for non-interactive mode, cancellation, nested dialog behavior, and denied file access.
+The child-only `ask_user` forwards through a restricted parent TUI binding and reuses pi-coder's existing question component. Answers continue the same child turn; user cancellation is recoverable; parent abort and shutdown close active dialogs; non-TUI modes explicitly fall back to `ask_parent`. The default parent-guidance path remains available so the parent can answer or investigate. Tests cover answers, repeated questions, cancellation, non-interactive behavior, abort cleanup, and the unchanged path-confinement boundary.
 
 ### Phase 5: Mutation-capable worker
 
@@ -507,7 +507,8 @@ Use this section to record decisions as the design evolves.
 - [x] Enable project definitions only in projects trusted by pi; no redundant confirmation for the read-only ceiling.
 - [x] Reserve built-in agent names; duplicate markdown definitions cannot override them.
 - [x] Use a stateless child-only path hook for `read`, `grep`, `find`, and `ls`; block out-of-cwd access without prompting.
-- [x] Route first-release child questions through the parent; defer direct child-to-user UI.
+- [x] Route first-release child questions through the parent.
+- [x] After MVP stabilization, add restricted TUI-only child-to-user questions while retaining `ask_parent`.
 - [x] Use tool updates/results first; defer a persistent live widget.
 - [x] Within a scope, sorted first definition wins and later duplicates warn; trusted-project definitions override user definitions with an informational diagnostic.
 - [x] Allow at most four active/waiting runs with no TTL; cleanup is explicit or tied to parent shutdown.

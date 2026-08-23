@@ -20,6 +20,7 @@ import { Type } from "typebox";
 
 import type { SandboxConfigCwdConfinement } from "../../common/config";
 import { getPathConfinementPermission } from "../../modules/sandbox/heuristics";
+import { askUser } from "../../tui/ask-user";
 import {
     ZERO_USAGE,
     type ChildAgentFactoryContext,
@@ -39,7 +40,7 @@ const CHILD_CONFINEMENT: SandboxConfigCwdConfinement = {
 
 const CHILD_PROTOCOL_PROMPT = `You are a read-only subagent working for a parent coding agent. You cannot run commands or modify files.
 
-Use ask_parent only when parent guidance can materially improve the result. Make reasonable progress first, explain the evidence and your recommended next step, and call ask_parent alone in its tool batch. Do not address questions directly to the end user; the parent decides whether to answer, investigate, or ask the user.
+Use ask_user when you need a preference, clarification, or decision directly from the end user, and call it alone in its tool batch so later work can incorporate the answer. The answer returns in the same turn, so continue your work afterward. Use ask_parent instead when the parent can answer, investigate, or decide; make reasonable progress first, include evidence and a recommendation, and call ask_parent alone in its tool batch. Do not ask questions only in prose when either interaction tool applies.
 
 When the task is complete, provide a self-contained final report to the parent.`;
 
@@ -54,8 +55,107 @@ export function isChildPathAllowed(filePath: string | undefined, cwd: string): b
     return getPathConfinementPermission(effectivePath, cwd, CHILD_CONFINEMENT) !== undefined;
 }
 
-function registerChildExtension(tracker: ProgressTracker) {
+export interface ChildUserQuestion {
+    title: string;
+    description?: string;
+    options: Array<{ label: string; description?: string }>;
+}
+
+export interface ChildUserAnswerDetails {
+    unavailable?: boolean;
+    canceled?: boolean;
+    answer?: string;
+    isCustom?: boolean;
+    optionIndex?: number;
+}
+
+export interface ChildUserAnswerResult {
+    content: Array<{ type: "text"; text: string }>;
+    details: ChildUserAnswerDetails;
+}
+
+export async function askChildUser(
+    question: ChildUserQuestion,
+    parentContext: ExtensionContext,
+    agentName: string,
+    signal?: AbortSignal,
+): Promise<ChildUserAnswerResult> {
+    if (!parentContext.hasUI || parentContext.mode !== "tui") {
+        return {
+            content: [{
+                type: "text" as const,
+                text: "Direct user interaction is unavailable in this mode. Use ask_parent for guidance instead.",
+            }],
+            details: { unavailable: true },
+        };
+    }
+
+    const result = await askUser({
+        title: `${agentName} asks: ${question.title}`,
+        description: question.description,
+        options: question.options,
+    }, parentContext, signal);
+
+    if (signal?.aborted) {
+        throw signal.reason instanceof Error
+            ? signal.reason
+            : new Error("Child user question was aborted.");
+    }
+    if (!result) {
+        return {
+            content: [{
+                type: "text" as const,
+                text: "The user cancelled the question. Continue with a reasonable default or use ask_parent if guidance is required.",
+            }],
+            details: { canceled: true },
+        };
+    }
+
+    const responseText = result.isCustom
+        ? `User replied with custom message: ${result.answer}`
+        : `User selected: ${result.answer}`;
+    return {
+        content: [{ type: "text" as const, text: responseText }],
+        details: {
+            answer: result.answer,
+            isCustom: result.isCustom,
+            optionIndex: result.optionIndex,
+        },
+    };
+}
+
+function registerChildExtension(
+    tracker: ProgressTracker,
+    parentContext: ExtensionContext,
+    agentName: string,
+) {
     return (pi: ExtensionAPI): void => {
+        pi.registerTool({
+            name: "ask_user",
+            label: "Ask User",
+            description:
+                "Ask the end user for a preference, clarification, or decision, then continue this child turn. "
+                + "Use ask_parent instead when the parent agent can investigate or decide.",
+            promptSnippet: "Use ask_user for decisions that require direct end-user input.",
+            promptGuidelines: [
+                "Use ask_user only when the end user's input materially affects the work, and call it alone in its tool batch",
+                "Include a recommendation and an Unsure or You decide option when appropriate",
+                "Continue the task after receiving the user's answer",
+            ],
+            executionMode: "sequential",
+            parameters: Type.Object({
+                title: Type.String({ minLength: 1, maxLength: 200 }),
+                description: Type.Optional(Type.String({ maxLength: 4_000 })),
+                options: Type.Array(Type.Object({
+                    label: Type.String({ minLength: 1, maxLength: 500 }),
+                    description: Type.Optional(Type.String({ maxLength: 2_000 })),
+                }, { additionalProperties: false }), { minItems: 2, maxItems: 8 }),
+            }, { additionalProperties: false }),
+            execute: (_toolCallId, params, signal) => (
+                askChildUser(params, parentContext, agentName, signal)
+            ),
+        });
+
         pi.registerTool({
             name: "ask_parent",
             label: "Ask Parent",
@@ -66,7 +166,7 @@ function registerChildExtension(tracker: ProgressTracker) {
             promptGuidelines: [
                 "Call ask_parent alone in a tool batch and only when parent guidance materially improves the result",
                 "Include relevant evidence, partial findings, and your recommended next step",
-                "Do not ask the end user directly; all questions route through the parent agent",
+                "Use ask_user instead when a decision genuinely requires direct end-user input",
             ],
             executionMode: "sequential",
             parameters: Type.Object({
@@ -337,7 +437,7 @@ export async function createAgentChild(
         extensionFactories: [{
             name: "pi-coder-scout-child",
             hidden: true,
-            factory: registerChildExtension(tracker),
+            factory: registerChildExtension(tracker, parentContext, context.definition.name),
         }],
         appendSystemPrompt: [context.definition.systemPrompt, CHILD_PROTOCOL_PROMPT].filter(Boolean),
     });
@@ -356,7 +456,7 @@ export async function createAgentChild(
         resourceLoader,
         settingsManager,
         sessionManager: SessionManager.inMemory(cwd),
-        tools: [...context.definition.tools, "ask_parent"],
+        tools: [...context.definition.tools, "ask_user", "ask_parent"],
     });
 
     const unsubscribe = session.subscribe((event) => {

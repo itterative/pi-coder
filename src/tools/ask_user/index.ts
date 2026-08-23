@@ -85,7 +85,7 @@ export default function registerAskUserTool(pi: ExtensionAPI) {
             return new Text(text, 0, 0);
         },
 
-        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        async execute(_toolCallId, params, signal, _onUpdate, ctx) {
             const result = await askUser(
                 {
                     title: params.title,
@@ -93,6 +93,7 @@ export default function registerAskUserTool(pi: ExtensionAPI) {
                     options: params.options,
                 },
                 ctx,
+                signal,
             );
 
             if (result === undefined) {
