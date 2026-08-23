@@ -17,6 +17,7 @@ interface AgentSessionBrowserState extends ListViewState<AgentSessionBrowserItem
 export interface AgentSessionBrowserOptions {
     current: AgentSessionBrowserItem[];
     past: AgentSessionBrowserItem[];
+    fixedHeight?: () => number;
 }
 
 const EMPTY_CURRENT: AgentSessionBrowserItem = {
@@ -125,6 +126,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                 title: "Delegated agent sessions",
                 borderColor: "borderMuted",
                 borderCharacters: BORDER_STYLES.rounded,
+                fixedHeight: options.fixedHeight,
                 helpText: "↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close",
                 headerContent: (container, theme) => {
                     tabTheme = theme;
@@ -161,7 +163,10 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     if (matchesKey(key, "enter")) {
                         const selected = state.items[state.cursor ?? 0]?.value;
                         if (selected?.kind !== "empty" && this.theme) {
-                            this.detail = new AgentSessionDetailComponent({ item: selected });
+                            this.detail = new AgentSessionDetailComponent({
+                                item: selected,
+                                fixedHeight: this.listOptions.fixedHeight,
+                            });
                             this.detail.initialize(this.theme);
                             this.detail.setDoneCallback(() => {
                                 this.detail = null;
@@ -195,6 +200,8 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
 
     override render(width: number): string[] {
         if (this.detail) return this.detail.render(width);
+        const height = this.listOptions.fixedHeight?.();
+        if (height !== undefined) this.state.maxVisibleLines = Math.max(1, height - 13);
         return super.render(width).map((line) => truncateToWidth(line, width, ""));
     }
 
@@ -222,8 +229,15 @@ export async function showAgentSessionBrowser(
 ): Promise<void> {
     if (!ctx.hasUI || ctx.mode !== "tui") return;
 
-    await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => {
-        const component = new AgentSessionBrowserComponent(options);
+    await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+        const fixedHeight = () => Math.max(
+            2,
+            Math.min(
+                Math.floor(tui.terminal.rows * 0.82),
+                Math.max(2, tui.terminal.rows - 2),
+            ),
+        );
+        const component = new AgentSessionBrowserComponent({ ...options, fixedHeight });
         component.setDoneCallback(done);
         component.initialize(theme);
         return component;

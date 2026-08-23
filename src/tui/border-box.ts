@@ -81,12 +81,15 @@ export const BORDER_STYLES = {
 export interface BorderBoxOptions {
     borderColor?: (text: string) => string;
     characters?: BorderCharacters;
+    /** Fixed total height, including the top and bottom borders. */
+    height?: number;
 }
 
 /** Wrap a component in a width-aware Unicode box border. */
 export class BorderBox implements Component {
     private readonly borderColor: (text: string) => string;
     private readonly characters: BorderCharacters;
+    private height: number | undefined;
 
     constructor(
         private readonly child: Component,
@@ -94,6 +97,11 @@ export class BorderBox implements Component {
     ) {
         this.borderColor = options.borderColor ?? ((text) => text);
         this.characters = options.characters ?? ROUNDED_BORDER;
+        this.height = options.height;
+    }
+
+    setHeight(height: number | undefined): void {
+        this.height = height;
     }
 
     render(width: number): string[] {
@@ -104,7 +112,11 @@ export class BorderBox implements Component {
         const bottomHorizontal = (this.characters.bottomHorizontal ?? this.characters.horizontal).repeat(innerWidth);
         const leftVertical = this.characters.vertical;
         const rightVertical = this.characters.rightVertical ?? this.characters.vertical;
-        const lines = this.child.render(innerWidth).map((line) =>
+        const childLines = this.child.render(innerWidth);
+        const innerHeight = this.height === undefined ? childLines.length : Math.max(0, this.height - 2);
+        const contentLines = childLines.slice(0, innerHeight);
+        while (contentLines.length < innerHeight) contentLines.push("");
+        const lines = contentLines.map((line) =>
             this.borderColor(leftVertical)
             + truncateToWidth(line, innerWidth, "", true)
             + this.borderColor(rightVertical),

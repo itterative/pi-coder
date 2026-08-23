@@ -81,6 +81,24 @@ describe("AgentSessionBrowserComponent", () => {
         `);
     });
 
+    it("keeps the frame height stable when scrolling wrapped list lines", () => {
+        const value = new AgentSessionBrowserComponent({
+            current: Array.from({ length: 4 }, (_, index) => ({
+                ...current,
+                id: `scout-${index}`,
+                task: "Inspect this deliberately long delegated-agent task so the list must wrap it across multiple visual lines",
+            })),
+            past: [],
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 60);
+        const initialHeight = ui.render().length;
+
+        ui.press(KEY.down);
+
+        expect(ui.render()).toHaveLength(initialHeight);
+    });
+
     it("opens a separate detail view with metadata and transcript", () => {
         const value = component();
         const ui = interact(value, 100);

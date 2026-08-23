@@ -44,6 +44,8 @@ export interface PagerOptions<T> {
     footerContent?: (container: Container, theme: Theme, state: PagerState<T>) => void;
     // Custom help text
     helpText?: string;
+    // Optional fixed total frame height, evaluated on each render
+    fixedHeight?: () => number;
     // Hook to intercept keys. Return true to indicate key was handled, or { done: true } to close the pager.
     onKey?: (key: string, state: PagerState<T>) => boolean | { done: boolean };
 }
@@ -81,6 +83,7 @@ export class PagerComponent<T> extends ListViewComponent<T, void, PagerState<T>>
                 onKey: options.onKey,
                 paddingX: options.paddingX,
                 paddingY: options.paddingY,
+                fixedHeight: options.fixedHeight,
             },
             {
                 items: options.items,

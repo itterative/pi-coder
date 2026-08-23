@@ -31,6 +31,7 @@ import {
     matchesKey,
     Spacer,
     Text,
+    wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { indentLines } from "../common/text";
 import { BorderBox, type BorderCharacters } from "./border-box";
@@ -77,6 +78,8 @@ export interface ListViewOptions<T, S extends ListViewState<T> = ListViewState<T
     borderColor?: ThemeColor;
     // Border glyphs for the frame (defaults to rounded box-drawing glyphs)
     borderCharacters?: BorderCharacters;
+    // Optional fixed total frame height, evaluated on each render
+    fixedHeight?: () => number;
     // Custom render function for item content (prefix is added automatically)
     renderItem?: (item: ListItem<T>, options: ListViewRenderItemOptions<T, S>) => string;
     // Optional header content rendered after title
@@ -129,6 +132,7 @@ export class ListViewComponent<
     private cachedItemLines: string[][] = [];
     private cachedItemStartLines: number[] = [];
     private cachedTotalLines = 0;
+    private itemContentWidth = Number.POSITIVE_INFINITY;
 
     constructor(
         protected readonly listOptions: ListViewOptions<T, S>,
@@ -178,6 +182,7 @@ export class ListViewComponent<
         this.borderedContainer = new BorderBox(this.container, {
             borderColor,
             characters: this.listOptions.borderCharacters,
+            height: this.listOptions.fixedHeight?.(),
         });
     }
 
@@ -185,6 +190,9 @@ export class ListViewComponent<
         if (!this.theme || !this.borderedContainer) {
             throw new Error("ListViewComponent must be initialized with a theme before rendering");
         }
+        this.borderedContainer.setHeight(this.listOptions.fixedHeight?.());
+        const paddingX = this.listOptions.paddingX ?? 2;
+        this.itemContentWidth = Math.max(1, width - 2 - (paddingX * 2) - 2);
         this.buildCacheAndUpdateScroll();
         this.updateContent();
         return this.borderedContainer.render(width);
@@ -324,7 +332,10 @@ export class ListViewComponent<
                 firstLinePrefix: prefix.first,
                 continuationPrefix: prefix.continuation,
             });
-            const lines = indented.split("\n");
+            const lines = indented.split("\n").flatMap((line) => {
+                if (line === "") return [""];
+                return wrapTextWithAnsi(line, this.itemContentWidth);
+            });
 
             this.cachedItemStartLines.push(totalLines);
             this.cachedItemLines.push(lines);

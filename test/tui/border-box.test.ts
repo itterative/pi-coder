@@ -15,6 +15,14 @@ describe("BorderBox", () => {
         `);
     });
 
+    it("supports a fixed total height and keeps the bottom border visible", () => {
+        const component = new BorderBox(new Text("Hello", 0, 0), { height: 6 });
+        const lines = component.render(12);
+
+        expect(lines).toHaveLength(6);
+        expect(lines.at(-1)).toBe("╰──────────╯");
+    });
+
     it("provides the standard border style presets", () => {
         const expectedTop = {
             rounded: "╭",

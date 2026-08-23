@@ -7,6 +7,7 @@ import { wrapPreservingSpaces } from "../common/text";
 
 export interface AgentSessionDetailOptions {
     item: AgentSessionBrowserItem;
+    fixedHeight?: () => number;
 }
 
 function dateText(timestamp: number | undefined): string {
@@ -63,6 +64,7 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
             scrollOffset: 0,
             maxVisibleLines: 16,
             helpText: "↑/↓ scroll · Esc back",
+            fixedHeight: options.fixedHeight,
             onKey: (key, state) => {
                 const page = state.maxVisibleLines;
                 const delta = matchesKey(key, "pageUp") ? -page
@@ -86,7 +88,9 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
     }
 
     override render(width: number): string[] {
-        this.contentWidth = Math.max(1, width - 6);
+        this.contentWidth = Math.max(1, width - 8);
+        const height = this.options.fixedHeight?.();
+        if (height !== undefined) this.state.maxVisibleLines = Math.max(1, height - 9);
         return super.render(width);
     }
 }
