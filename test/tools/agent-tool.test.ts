@@ -263,6 +263,66 @@ describe("agent extension registration", () => {
         await handlers.session_shutdown[0]({}, ctx);
     });
 
+    it("automatically delivers a background completion once the parent is idle", async () => {
+        const handlers: Record<string, Handler[]> = {};
+        let tool: any;
+        const sentMessages: Array<{ message: any; options: any }> = [];
+        const pi = {
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            registerTool(definition: any) {
+                tool = definition;
+            },
+            registerCommand() {},
+            sendMessage(message: any, options: any) {
+                sentMessages.push({ message, options });
+            },
+        } as any;
+        let releasePrompt: (() => void) | undefined;
+        const child: ChildAgentHandle = {
+            prompt: () => new Promise<void>((resolve) => {
+                releasePrompt = resolve;
+            }),
+            abort: async () => {},
+            dispose: () => {},
+            takeParentQuestion: () => undefined,
+            getProgress: () => ({ output: "Idle result", recentActivity: [] }),
+            getFinalOutput: () => "Idle result",
+            getError: () => undefined,
+            getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
+        };
+        registerAgentTool(pi, async () => child);
+        let idle = false;
+        const ctx = {
+            cwd: process.cwd(),
+            isProjectTrusted: () => false,
+            isIdle: () => idle,
+            ui: { notify: () => {}, setWidget: () => {} },
+        };
+
+        await tool.execute(
+            "call-1",
+            { action: "spawn", agent: "scout", task: "Finish while idle" },
+            undefined,
+            undefined,
+            ctx,
+        );
+        for (let index = 0; index < 12 && !releasePrompt; index++) await Promise.resolve();
+        expect(sentMessages).toEqual([]);
+        idle = true;
+        releasePrompt!();
+        for (let index = 0; index < 12; index++) await Promise.resolve();
+
+        expect(sentMessages).toHaveLength(1);
+        expect(sentMessages[0]?.options).toEqual({
+            deliverAs: "followUp",
+            triggerTurn: true,
+        });
+        expect(sentMessages[0]?.message.content).toContain("Status: completed");
+        await handlers.session_shutdown[0]({}, ctx);
+    });
+
     it("deduplicates discovery warning notifications", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-coder-agent-tool-"));
         tempDirs.push(cwd);
