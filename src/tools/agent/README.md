@@ -56,3 +56,22 @@ Run these checks after changing child sessions, providers, lifecycle handling, o
 10. Produce long findings and expand/collapse the result; verify the compact preview stays useful and expanded activity/usage remain readable.
 
 Provider calls stay manual so automated tests do not require credentials or incur usage.
+
+## Diagnostic traces
+
+Delegated-agent tracing is disabled by default. Enable it before starting pi:
+
+```bash
+PI_CODER_AGENT_TRACE=1 pi
+```
+
+When enabled, tracing registers an otherwise-hidden `/agent-trace` command and keeps bounded, sanitized in-memory timelines for the latest 20 runs, with at most 400 events per run. It records lifecycle transitions, assistant message boundaries and short previews, tool names and sanitized arguments, result lengths/status, interaction outcomes, settlement, errors, and usage. It does not record file/tool result contents or credentials.
+
+```text
+/agent-trace                    # list recent traces
+/agent-trace scout-1            # inspect one timeline
+/agent-trace scout-1 save       # save sanitized JSON explicitly
+/agent-trace clear              # discard retained traces
+```
+
+Saved traces use mode `0600` under `~/.pi/agent/traces/`. Trace IDs are parent-runtime-local. Reloading or restarting loses in-memory traces, so inspect or save a problematic run before reload. Short task/question/assistant previews can still contain project context; review saved JSON before sharing it.

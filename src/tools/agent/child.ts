@@ -21,6 +21,7 @@ import { Type } from "typebox";
 import type { SandboxConfigCwdConfinement } from "../../common/config";
 import { getPathConfinementPermission } from "../../modules/sandbox/heuristics";
 import { askUser } from "../../tui/ask-user";
+import type { AgentTraceData } from "./trace";
 import {
     ZERO_USAGE,
     type ChildAgentFactoryContext,
@@ -128,6 +129,7 @@ function registerChildExtension(
     tracker: ProgressTracker,
     parentContext: ExtensionContext,
     agentName: string,
+    onTrace?: ChildAgentFactoryContext["onTrace"],
 ) {
     return (pi: ExtensionAPI): void => {
         pi.registerTool({
@@ -151,9 +153,33 @@ function registerChildExtension(
                     description: Type.Optional(Type.String({ maxLength: 2_000 })),
                 }, { additionalProperties: false }), { minItems: 2, maxItems: 8 }),
             }, { additionalProperties: false }),
-            execute: (_toolCallId, params, signal) => (
-                askChildUser(params, parentContext, agentName, signal)
-            ),
+            async execute(_toolCallId, params, signal) {
+                onTrace?.("interaction.user.opened", {
+                    titleChars: params.title.length,
+                    optionCount: params.options.length,
+                });
+                try {
+                    const result = await askChildUser(params, parentContext, agentName, signal);
+                    const outcome = result.details.unavailable
+                        ? "unavailable"
+                        : result.details.canceled
+                            ? "canceled"
+                            : result.details.isCustom
+                                ? "custom_answer"
+                                : "option_selected";
+                    onTrace?.("interaction.user.closed", {
+                        outcome,
+                        optionIndex: result.details.optionIndex ?? -1,
+                        answerChars: result.details.answer?.length ?? 0,
+                    });
+                    return result;
+                } catch (error) {
+                    onTrace?.("interaction.user.aborted", {
+                        error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+                    });
+                    throw error;
+                }
+            },
         });
 
         pi.registerTool({
@@ -190,6 +216,10 @@ function registerChildExtension(
                     options: params.options,
                     recommendation: params.recommendation,
                 };
+                onTrace?.("interaction.parent.requested", {
+                    questionChars: params.question.length,
+                    optionCount: params.options?.length ?? 0,
+                });
                 return {
                     content: [{ type: "text", text: "Paused for parent guidance." }],
                     details: tracker.pendingQuestion,
@@ -292,6 +322,122 @@ function childError(session: AgentSession): string | undefined {
     if (assistant.stopReason === "aborted") return "Child model request was aborted.";
     if (assistant.stopReason === "deferred" || assistant.stopReason === "pending") {
         return `Unsupported child response state: ${assistant.stopReason}.`;
+    }
+    return undefined;
+}
+
+function tracePreview(text: string, maxChars = 240): string {
+    const normalized = text.replace(/\s+/g, " ").trim();
+    return normalized.length <= maxChars
+        ? normalized
+        : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function traceToolArgs(toolName: string, args: unknown): AgentTraceData {
+    if (!args || typeof args !== "object") return {};
+    const input = args as Record<string, unknown>;
+    const pathValue = typeof input.path === "string" ? input.path : "";
+    if (toolName === "read") {
+        return {
+            path: pathValue,
+            offset: typeof input.offset === "number" ? input.offset : 0,
+            limit: typeof input.limit === "number" ? input.limit : 0,
+        };
+    }
+    if (toolName === "grep" || toolName === "find") {
+        const pattern = typeof input.pattern === "string" ? input.pattern : "";
+        return { path: pathValue, patternPreview: tracePreview(pattern, 120) };
+    }
+    if (toolName === "ls") return { path: pathValue };
+    if (toolName === "ask_user") {
+        return {
+            titlePreview: tracePreview(typeof input.title === "string" ? input.title : "", 120),
+            optionCount: Array.isArray(input.options) ? input.options.length : 0,
+        };
+    }
+    if (toolName === "ask_parent") {
+        return {
+            questionPreview: tracePreview(
+                typeof input.question === "string" ? input.question : "",
+                120,
+            ),
+            optionCount: Array.isArray(input.options) ? input.options.length : 0,
+        };
+    }
+    return { argumentKeys: Object.keys(input).sort().join(",") };
+}
+
+function traceResultChars(result: unknown): number {
+    if (!result || typeof result !== "object") return 0;
+    const content = (result as { content?: unknown }).content;
+    if (!Array.isArray(content)) return 0;
+    return content.reduce((total, part) => {
+        if (!part || typeof part !== "object") return total;
+        const text = (part as { text?: unknown }).text;
+        return total + (typeof text === "string" ? text.length : 0);
+    }, 0);
+}
+
+function traceSessionEvent(
+    event: AgentSessionEvent,
+): { type: string; data?: AgentTraceData } | undefined {
+    if (event.type === "agent_start" || event.type === "turn_start" || event.type === "agent_settled") {
+        return { type: `session.${event.type}` };
+    }
+    if (event.type === "agent_end") {
+        return {
+            type: "session.agent_end",
+            data: { messageCount: event.messages.length, willRetry: event.willRetry },
+        };
+    }
+    if (event.type === "turn_end") {
+        return {
+            type: "session.turn_end",
+            data: {
+                role: event.message.role,
+                toolResultCount: event.toolResults.length,
+            },
+        };
+    }
+    if (event.type === "message_start" || event.type === "message_end") {
+        const role = event.message.role;
+        const text = textFromAssistantMessage(event.message);
+        return {
+            type: `session.${event.type}`,
+            data: {
+                role,
+                textChars: text.length,
+                ...(role === "assistant" && event.type === "message_end"
+                    ? { textPreview: tracePreview(text) }
+                    : {}),
+            },
+        };
+    }
+    if (event.type === "tool_execution_start") {
+        return {
+            type: "session.tool_start",
+            data: { tool: event.toolName, ...traceToolArgs(event.toolName, event.args) },
+        };
+    }
+    if (event.type === "tool_execution_end") {
+        const result = event.result as { terminate?: unknown; details?: unknown } | undefined;
+        const details = result?.details && typeof result.details === "object"
+            ? result.details as Record<string, unknown>
+            : undefined;
+        return {
+            type: "session.tool_end",
+            data: {
+                tool: event.toolName,
+                isError: event.isError,
+                terminate: result?.terminate === true,
+                resultChars: traceResultChars(event.result),
+                canceled: details?.canceled === true,
+                unavailable: details?.unavailable === true,
+            },
+        };
+    }
+    if (event.type === "compaction_start" || event.type === "compaction_end") {
+        return { type: `session.${event.type}`, data: { reason: event.reason } };
     }
     return undefined;
 }
@@ -437,13 +583,27 @@ export async function createAgentChild(
         extensionFactories: [{
             name: "pi-coder-scout-child",
             hidden: true,
-            factory: registerChildExtension(tracker, parentContext, context.definition.name),
+            factory: registerChildExtension(
+                tracker,
+                parentContext,
+                context.definition.name,
+                context.onTrace,
+            ),
         }],
         appendSystemPrompt: [context.definition.systemPrompt, CHILD_PROTOCOL_PROMPT].filter(Boolean),
     });
     await resourceLoader.reload();
+    context.onTrace?.("resources.loaded", {
+        readOnlyToolCount: context.definition.tools.length,
+        directUserUI: parentContext.hasUI && parentContext.mode === "tui",
+    });
 
     const requestedModel = resolveChildModel(parentContext, context.definition.model);
+    context.onTrace?.("model.resolved", {
+        provider: requestedModel.provider,
+        model: requestedModel.id,
+        thinkingLevel: parentContext.thinkingLevel ?? "default",
+    });
     const modelRuntime = await createChildModelRuntime(parentContext, requestedModel);
     const model = modelRuntime.getModel(requestedModel.provider, requestedModel.id)
         ?? requestedModel;
@@ -459,11 +619,15 @@ export async function createAgentChild(
         tools: [...context.definition.tools, "ask_user", "ask_parent"],
     });
 
+    context.onTrace?.("session.created", { toolCount: context.definition.tools.length + 2 });
     const unsubscribe = session.subscribe((event) => {
+        const traceEvent = traceSessionEvent(event);
+        if (traceEvent) context.onTrace?.(traceEvent.type, traceEvent.data);
         updateTracker(event, tracker, context.onProgress);
     });
     try {
         await session.bindExtensions({ mode: "print" });
+        context.onTrace?.("session.extensions_bound");
     } catch (error) {
         unsubscribe();
         session.dispose();
@@ -477,6 +641,7 @@ export async function createAgentChild(
         dispose() {
             if (disposed) return;
             disposed = true;
+            context.onTrace?.("session.dispose_called");
             unsubscribe();
             session.dispose();
         },

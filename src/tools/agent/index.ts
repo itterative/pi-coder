@@ -20,6 +20,11 @@ import {
     type AgentRunOutcome,
     type ChildAgentFactory,
 } from "./runtime";
+import {
+    AgentTraceStore,
+    isAgentTraceEnabled,
+    registerAgentTraceCommand,
+} from "./trace";
 
 const parameters = Type.Union([
     Type.Object({
@@ -118,7 +123,9 @@ export default function registerAgentTool(
     pi: ExtensionAPI,
     factory: ChildAgentFactory = createAgentChild,
 ): void {
-    const manager = new AgentRunManager(factory, 4);
+    const traceStore = isAgentTraceEnabled() ? new AgentTraceStore() : undefined;
+    const manager = new AgentRunManager(factory, 4, traceStore);
+    if (traceStore) registerAgentTraceCommand(pi, traceStore);
     const notifiedWarnings = new Set<string>();
 
     const discover = (ctx: ExtensionContext) => {

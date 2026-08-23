@@ -20,6 +20,7 @@ The initial direction recorded in `src/tools/agent/README.md` is:
 - `child.ts`, `runtime.ts`, and `discovery.ts` implement the read-only child SDK session, run state machine, and custom definition loading.
 - The MVP supports built-in/user/trusted-project agents, start/resume/cancel, parent guidance, confinement, usage deltas, lifecycle cleanup, and compact/expanded rendering.
 - The stabilization pass makes waiting state explicitly paused in parent guidance, shows compact question/result previews, tests tool-level pause/resume rendering and additional lifecycle/confinement edges, and records a repeatable manual provider/lifecycle checklist in `README.md`.
+- Opt-in diagnostics (`PI_CODER_AGENT_TRACE=1`) retain bounded sanitized timelines for recent runs and expose the otherwise-hidden `/agent-trace` inspect/save/clear command.
 - Existing extension functionality also includes:
   - memory injection and persistence;
   - the ask-user tool;
@@ -425,7 +426,7 @@ Compact and expanded rendering includes:
 - final markdown output;
 - token and cost usage.
 
-Keep the collapsed output bounded and make expanded output useful for debugging.
+Keep the collapsed output bounded and make expanded output useful for debugging. An opt-in trace store now captures up to 400 sanitized lifecycle/session events for each of the latest 20 runs. `/agent-trace` can inspect those timelines after terminal child disposal or explicitly save mode-`0600` JSON; both collection and command registration require `PI_CODER_AGENT_TRACE=1`.
 
 ### Phase 4: Direct user interaction — implemented
 

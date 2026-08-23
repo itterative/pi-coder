@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import registerAgentTool from "../../src/tools/agent";
 import { ZERO_USAGE, type ChildAgentHandle } from "../../src/tools/agent/runtime";
+import { AGENT_TRACE_ENV } from "../../src/tools/agent/trace";
 import { mockTheme, renderText } from "../helpers";
 
 interface Handler {
@@ -27,6 +28,7 @@ describe("agent extension registration", () => {
             registerTool(definition: any) {
                 tool = definition;
             },
+            registerCommand() {},
         } as any;
         const child: ChildAgentHandle = {
             prompt: async () => {},
@@ -76,6 +78,7 @@ describe("agent extension registration", () => {
             registerTool(definition: any) {
                 tool = definition;
             },
+            registerCommand() {},
         } as any;
         let promptCount = 0;
         let output = "";
@@ -163,6 +166,7 @@ describe("agent extension registration", () => {
                 (handlers[event] ??= []).push(handler);
             },
             registerTool() {},
+            registerCommand() {},
         } as any;
         registerAgentTool(pi, async () => { throw new Error("not used"); });
         const notifications: string[] = [];
@@ -177,5 +181,30 @@ describe("agent extension registration", () => {
 
         expect(notifications.filter((message) => message.includes("reserved"))).toHaveLength(1);
         await handlers.session_shutdown[0]({}, ctx);
+    });
+
+    it("registers the trace command only when its environment flag is enabled", () => {
+        const previous = process.env[AGENT_TRACE_ENV];
+        const commands: string[] = [];
+        const pi = {
+            on() {},
+            registerTool() {},
+            registerCommand(name: string) {
+                commands.push(name);
+            },
+        } as any;
+
+        try {
+            delete process.env[AGENT_TRACE_ENV];
+            registerAgentTool(pi, async () => { throw new Error("not used"); });
+            expect(commands).toEqual([]);
+
+            process.env[AGENT_TRACE_ENV] = "1";
+            registerAgentTool(pi, async () => { throw new Error("not used"); });
+            expect(commands).toEqual(["agent-trace"]);
+        } finally {
+            if (previous === undefined) delete process.env[AGENT_TRACE_ENV];
+            else process.env[AGENT_TRACE_ENV] = previous;
+        }
     });
 });

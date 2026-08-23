@@ -1,6 +1,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
 import type { AgentDefinition } from "./discovery";
+import type { AgentTraceData, AgentTraceStore } from "./trace";
 
 export type AgentRunStatus =
     | "starting"
@@ -39,6 +40,7 @@ export interface ChildAgentFactoryContext {
     definition: AgentDefinition;
     parentContext: unknown;
     onProgress: (progress: ChildProgress) => void;
+    onTrace?: (type: string, data?: AgentTraceData) => void;
 }
 
 export type ChildAgentFactory = (
@@ -163,6 +165,7 @@ export class AgentRunManager {
     constructor(
         private readonly factory: ChildAgentFactory,
         private readonly maxActiveRuns = 4,
+        private readonly trace?: AgentTraceStore,
     ) {}
 
     get activeCount(): number {
@@ -226,22 +229,37 @@ export class AgentRunManager {
             shutdownRequested: false,
         };
         this.runs.set(id, run);
+        this.trace?.start(id, definition.name, {
+            source: definition.source,
+            taskChars: task.length,
+            model: definition.model ?? "parent",
+        });
 
         try {
+            this.record(run, "setup.started");
             run.setup = this.factory({
                 ...context,
                 definition,
                 onProgress: (progress) => {
                     run.updatedAt = Date.now();
+                    this.record(run, "child.progress", {
+                        outputChars: progress.output.length,
+                        activity: progress.recentActivity[progress.recentActivity.length - 1] ?? "",
+                    });
                     onProgress?.(this.details(run, progress));
                 },
+                onTrace: (type, data) => this.record(run, `child.${type}`, data),
             });
             run.handle = await run.setup;
+            this.record(run, "setup.completed");
         } catch (error) {
-            return this.finishFailure(run, `Failed to create child session: ${errorMessage(error)}`);
+            const message = errorMessage(error);
+            this.record(run, "setup.failed", { error: truncate(message, 500) });
+            return this.finishFailure(run, `Failed to create child session: ${message}`);
         }
 
         if (this.closing || run.shutdownRequested || signal?.aborted) {
+            this.record(run, "setup.aborted_after_completion");
             return this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
         }
 
@@ -273,6 +291,7 @@ export class AgentRunManager {
             throw new AgentActionError("Agent runtime is shutting down.");
         }
 
+        this.record(run, "resume.requested", { guidanceChars: guidance.length });
         run.status = "running";
         run.question = undefined;
         run.updatedAt = Date.now();
@@ -294,6 +313,7 @@ export class AgentRunManager {
                 `Agent run ${runId} is ${run.status}; only waiting runs can be canceled.`,
             );
         }
+        this.record(run, "cancel.requested");
         return this.finishTerminal(run, "canceled", `Agent run ${runId} canceled.`, false);
     }
 
@@ -307,6 +327,7 @@ export class AgentRunManager {
 
         const runs = [...this.runs.values()];
         for (const run of runs) {
+            this.record(run, "shutdown.requested", { status: run.status });
             run.shutdownRequested = true;
             if (run.status === "running" || run.status === "starting") {
                 void this.abortRun(run)?.catch(() => {});
@@ -332,7 +353,12 @@ export class AgentRunManager {
         );
 
         for (const run of runs) {
+            if (!this.runs.has(run.id)) continue;
             this.disposeRun(run);
+            this.trace?.finish(run.id, "aborted", {
+                isError: true,
+                reason: "session_shutdown",
+            });
             this.runs.delete(run.id);
         }
     }
@@ -345,6 +371,10 @@ export class AgentRunManager {
     ): Promise<AgentRunOutcome> {
         run.status = "running";
         run.updatedAt = Date.now();
+        this.record(run, "operation.started", {
+            kind: prompt.startsWith("Parent guidance:\n") ? "resume" : "start",
+            promptChars: prompt.length,
+        });
         const operation = this.drive(run, prompt, signal, onProgress);
         run.operation = operation;
         try {
@@ -364,6 +394,7 @@ export class AgentRunManager {
         let aborted = signal?.aborted ?? false;
         const abort = () => {
             aborted = true;
+            this.record(run, "operation.abort_requested");
             this.abortRun(run);
         };
         signal?.addEventListener("abort", abort, { once: true });
@@ -373,12 +404,15 @@ export class AgentRunManager {
                 abort();
             } else {
                 await handle.prompt(prompt);
+                this.record(run, "operation.prompt_settled");
             }
             await run.abortPromise?.catch(() => {});
         } catch (error) {
+            const message = errorMessage(error);
+            this.record(run, "operation.prompt_failed", { error: truncate(message, 500) });
             await run.abortPromise?.catch(() => {});
             if (!aborted && !run.shutdownRequested) {
-                return this.finishFailure(run, errorMessage(error));
+                return this.finishFailure(run, message);
             }
         } finally {
             signal?.removeEventListener("abort", abort);
@@ -392,6 +426,11 @@ export class AgentRunManager {
         const progress = handle.getProgress();
         const childError = handle.getError();
         if (question) {
+            this.record(run, "guidance.requested", {
+                questionChars: question.question.length,
+                questionPreview: truncate(question.question.replace(/\s+/g, " "), 240),
+                optionCount: question.options?.length ?? 0,
+            });
             run.status = "waiting_for_parent";
             run.question = question;
             run.updatedAt = Date.now();
@@ -407,13 +446,30 @@ export class AgentRunManager {
         }
 
         if (childError) {
+            this.record(run, "child.error_selected", { error: truncate(childError, 500) });
             return this.finishFailure(run, childError, progress);
         }
 
-        const output = truncate(handle.getFinalOutput().trim(), MAX_OUTPUT_CHARS);
+        const rawOutput = handle.getFinalOutput().trim();
+        const output = truncate(rawOutput, MAX_OUTPUT_CHARS);
         if (!output) {
-            return this.finishFailure(run, "Child agent completed without a final response.", progress);
+            this.record(run, "final_output.empty", {
+                progressChars: progress.output.length,
+                activityCount: progress.recentActivity.length,
+            });
+            const traceHint = this.trace
+                ? ` Inspect trace ${run.id} with /agent-trace ${run.id}.`
+                : "";
+            return this.finishFailure(
+                run,
+                `Child agent completed without a final response.${traceHint}`,
+                progress,
+            );
         }
+        this.record(run, "final_output.selected", {
+            outputChars: rawOutput.length,
+            outputPreview: truncate(rawOutput.replace(/\s+/g, " "), 240),
+        });
         return this.finishTerminal(run, "completed", output, false, progress);
     }
 
@@ -459,6 +515,12 @@ export class AgentRunManager {
         run.updatedAt = Date.now();
         const outcome = this.outcome(run, content, isError, progress, status === "failed" ? content : undefined);
         this.disposeRun(run);
+        this.trace?.finish(run.id, status, {
+            isError,
+            inputTokens: outcome.details.usage.input,
+            outputTokens: outcome.details.usage.output,
+            contentChars: content.length,
+        });
         this.runs.delete(run.id);
         return outcome;
     }
@@ -500,15 +562,26 @@ export class AgentRunManager {
     }
 
     private abortRun(run: AgentRun): Promise<void> | undefined {
-        if (!run.handle) return undefined;
-        run.abortPromise ??= run.handle.abort();
+        if (!run.handle) {
+            this.record(run, "child.abort_deferred_until_setup");
+            return undefined;
+        }
+        if (!run.abortPromise) {
+            this.record(run, "child.abort_called");
+            run.abortPromise = run.handle.abort();
+        }
         return run.abortPromise;
     }
 
     private disposeRun(run: AgentRun): void {
         if (run.disposed) return;
         run.disposed = true;
+        this.record(run, "child.disposed");
         run.handle?.dispose();
+    }
+
+    private record(run: AgentRun, type: string, data?: AgentTraceData): void {
+        this.trace?.record(run.id, type, data);
     }
 }
 
