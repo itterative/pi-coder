@@ -7,4 +7,7 @@ export const PATH_COMMANDS: Record<string, CommandSpec> = {
     basename: { flags: { "-s": VALUE, "--suffix": VALUE } },
     dirname: {},
     cd: {},
+    // Bash builtins handled by the cwd-confinement state machine.
+    pushd: {},
+    popd: { positionals: "none" },
 };

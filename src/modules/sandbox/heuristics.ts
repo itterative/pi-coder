@@ -104,6 +104,38 @@ interface ConfinementOptions {
     realCwd: string | null;
 }
 
+/** Shell directory state while evaluating one command line. */
+export interface CwdConfinementState {
+    currentCwd: string;
+    previousCwd: string | null;
+    directoryStack: string[];
+    /** Set when an unsupported state-changing builtin makes cwd uncertain. */
+    blocked: boolean;
+}
+
+export function createCwdConfinementState(cwd: string): CwdConfinementState {
+    return {
+        currentCwd: path.resolve(cwd),
+        previousCwd: null,
+        directoryStack: [],
+        blocked: false,
+    };
+}
+
+export function cloneCwdConfinementState(state: CwdConfinementState): CwdConfinementState {
+    return { ...state, directoryStack: [...state.directoryStack] };
+}
+
+export function restoreCwdConfinementState(
+    target: CwdConfinementState,
+    source: CwdConfinementState,
+): void {
+    target.currentCwd = source.currentCwd;
+    target.previousCwd = source.previousCwd;
+    target.directoryStack = [...source.directoryStack];
+    target.blocked = source.blocked;
+}
+
 function resolvePath(p: string, cwd: string, home: string): string {
     let expanded = p;
     if (p === "~" || p.startsWith("~/")) {
@@ -166,7 +198,12 @@ function isLexicallyWithin(
     return resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep);
 }
 
-function isAllowedPath(p: string, cwd: string, home: string): boolean {
+function isAllowedPath(
+    p: string,
+    cwd: string,
+    home: string,
+    root = cwd,
+): boolean {
     if (p === "") {
         return true;
     }
@@ -175,7 +212,7 @@ function isAllowedPath(p: string, cwd: string, home: string): boolean {
         return true;
     }
 
-    return isLexicallyWithin(p, cwd, cwd, home);
+    return isLexicallyWithin(p, root, cwd, home);
 }
 
 /**
@@ -648,14 +685,19 @@ const CHAIN_OPERATORS = new Set(["&&", "||", "|", ";", "&"]);
  * && and | as arguments of a single command, so each segment between them
  * must be evaluated as its own command.
  */
-export function splitAtChainOperators(args: string[]): string[][] {
-    const segments: string[][] = [];
+export interface ChainSegment {
+    args: string[];
+    operatorAfter: string | null;
+}
+
+export function splitAtChainOperatorsWithOperators(args: string[]): ChainSegment[] {
+    const segments: ChainSegment[] = [];
     let current: string[] = [];
 
     for (const arg of args) {
         if (CHAIN_OPERATORS.has(arg)) {
             if (current.length > 0) {
-                segments.push(current);
+                segments.push({ args: current, operatorAfter: arg });
                 current = [];
             }
         } else {
@@ -664,10 +706,152 @@ export function splitAtChainOperators(args: string[]): string[][] {
     }
 
     if (current.length > 0) {
-        segments.push(current);
+        segments.push({ args: current, operatorAfter: null });
     }
 
     return segments;
+}
+
+export function splitAtChainOperators(args: string[]): string[][] {
+    return splitAtChainOperatorsWithOperators(args).map((segment) => segment.args);
+}
+
+export function isNonPersistentChainOperator(operator: string | null): boolean {
+    return operator === "|" || operator === "&";
+}
+
+function isDynamicDirectoryPath(value: string): boolean {
+    // Expansion and globbing can select a directory outside the lexical cwd;
+    // do not guess what a state-changing builtin will receive.
+    return /[$`*?\[\]~]/.test(value);
+}
+
+function isConfinedDirectoryPath(
+    value: string,
+    cwd: string,
+    rootCwd: string,
+    home: string,
+    options: ConfinementOptions,
+): boolean {
+    if (isDynamicDirectoryPath(value)) {
+        return false;
+    }
+    if (!isLexicallyWithin(value, rootCwd, cwd, home)) {
+        return false;
+    }
+    if (isSensitivePath(value, cwd, home, options)) {
+        return false;
+    }
+    return isRealPathConfined(value, cwd, home, options);
+}
+
+/**
+ * Apply the cwd-changing Bash builtins we can model precisely. A false result
+ * means the builtin itself is not eligible for the heuristic; state is still
+ * updated when its destination is known, so a later `cd` can recover.
+ */
+function applyDirectoryCommand(
+    args: string[],
+    state: CwdConfinementState,
+    rootCwd: string,
+    options: ConfinementOptions,
+): boolean | undefined {
+    const command = args[0];
+    if (command !== "cd" && command !== "pushd" && command !== "popd") {
+        return undefined;
+    }
+
+    const operands: string[] = [];
+    let afterDoubleDash = false;
+    for (let i = 1; i < args.length; i++) {
+        const arg = args[i];
+        if (!afterDoubleDash && arg === "--") {
+            afterDoubleDash = true;
+            continue;
+        }
+        if (!afterDoubleDash && command === "cd" && (arg === "-L" || arg === "-P")) {
+            continue;
+        }
+        if (!afterDoubleDash && command === "cd" && arg === "-") {
+            operands.push(arg);
+            continue;
+        }
+        if (!afterDoubleDash && arg.startsWith("-")) {
+            state.blocked = true;
+            return false;
+        }
+        operands.push(arg);
+    }
+
+    const home = os.homedir();
+    if (command === "popd") {
+        if (operands.length > 0) {
+            state.blocked = true;
+            return false;
+        }
+        if (state.directoryStack.length === 0) {
+            // Bash reports an error and leaves cwd unchanged.
+            return true;
+        }
+        const oldCwd = state.currentCwd;
+        state.currentCwd = state.directoryStack.pop()!;
+        state.previousCwd = oldCwd;
+        return isConfinedDirectoryPath(state.currentCwd, state.currentCwd, rootCwd, home, options);
+    }
+
+    if (command === "pushd" && operands.length === 0) {
+        // The no-argument form rotates the existing stack, which we do not
+        // model because its result depends on stack indices.
+        state.blocked = true;
+        return false;
+    }
+    if (command === "pushd" && /^[+-]\d+$/.test(operands[0] ?? "")) {
+        // +N/-N also rotates/selects an existing stack entry.
+        state.blocked = true;
+        return false;
+    }
+    if (operands.length > 1) {
+        state.blocked = true;
+        return false;
+    }
+
+    const oldCwd = state.currentCwd;
+    let target = operands[0];
+    if (command === "cd" && target === undefined) {
+        target = home;
+    } else if (command === "cd" && target === "-") {
+        if (state.previousCwd === null) return false;
+        target = state.previousCwd;
+    }
+
+    if (target === undefined) {
+        state.blocked = true;
+        return false;
+    }
+    if (isDynamicDirectoryPath(target)) {
+        state.blocked = true;
+        return false;
+    }
+
+    const lexicalTarget = resolvePath(target, oldCwd, home);
+    state.currentCwd = lexicalTarget;
+    if (options.realCwd !== null) {
+        try {
+            // Track the kernel's actual cwd, not merely Bash's logical PWD;
+            // otherwise `cd symlink && cat ../file` could resolve `..` from
+            // the wrong directory.
+            state.currentCwd = fs.realpathSync(lexicalTarget);
+        } catch {
+            // A missing target makes cd fail, so the shell remains in oldCwd.
+            state.currentCwd = oldCwd;
+        }
+    }
+    state.previousCwd = oldCwd;
+    if (command === "pushd") {
+        state.directoryStack.push(oldCwd);
+    }
+
+    return isConfinedDirectoryPath(target, oldCwd, rootCwd, home, options);
 }
 
 /**
@@ -677,8 +861,13 @@ export function splitAtChainOperators(args: string[]): string[][] {
 function isCommandConfined(
     args: string[],
     cwd: string,
+    rootCwd: string,
     options: ConfinementOptions,
+    state: CwdConfinementState,
 ): boolean {
+    if (state.blocked) {
+        return false;
+    }
     // skip leading environment assignments (FOO=bar cmd ...), but reject
     // assignments that can alter the command's behavior (LD_PRELOAD, PATH,
     // ...) and path-check the values of the rest
@@ -710,11 +899,24 @@ function isCommandConfined(
         return false;
     }
 
+    const commandArgs = args.slice(idx);
+    const directoryResult = applyDirectoryCommand(commandArgs, state, rootCwd, options);
+    if (directoryResult !== undefined) {
+        const home = os.homedir();
+        const envConfined = envValues.every((p) =>
+            isAllowedPath(p, cwd, home, rootCwd) &&
+            !isSensitivePath(p, cwd, home, options) &&
+            isRealPathConfined(p, cwd, home, options),
+        );
+        const commandAllowed =
+            options.allowedCommands === null || options.allowedCommands.has(commandName);
+        return directoryResult && envConfined && commandAllowed;
+    }
+
     if (options.allowedCommands !== null && !options.allowedCommands.has(commandName)) {
         return false;
     }
 
-    const commandArgs = args.slice(idx);
     if (spec.validate && !spec.validate(commandArgs)) {
         return false;
     }
@@ -727,7 +929,7 @@ function isCommandConfined(
     const home = os.homedir();
     const allPaths = [...envValues, ...paths];
     return allPaths.every((p) => {
-        if (!isAllowedPath(p, cwd, home)) {
+        if (!isAllowedPath(p, cwd, home, rootCwd)) {
             return false;
         }
         if (isSensitivePath(p, cwd, home, options)) {
@@ -760,11 +962,37 @@ function isConfined(
         return false;
     }
 
+    const state = createCwdConfinementState(cwd);
     return parsed.every((cmdArgs) => {
-        const segments = splitAtChainOperators(cmdArgs);
+        const segments = splitAtChainOperatorsWithOperators(cmdArgs);
+        let nonPersistentBase: CwdConfinementState | null = null;
+
         return (
             segments.length > 0 &&
-            segments.every((segment) => isCommandConfined(segment, cwd, options))
+            segments.every(({ args, operatorAfter }) => {
+                const beforeSegment = cloneCwdConfinementState(state);
+                if (nonPersistentBase === null && isNonPersistentChainOperator(operatorAfter)) {
+                    nonPersistentBase = beforeSegment;
+                }
+                const segmentState = nonPersistentBase
+                    ? cloneCwdConfinementState(nonPersistentBase)
+                    : state;
+                const result = isCommandConfined(
+                    args,
+                    segmentState.currentCwd,
+                    cwd,
+                    options,
+                    segmentState,
+                );
+
+                if (nonPersistentBase !== null) {
+                    restoreCwdConfinementState(state, nonPersistentBase);
+                    if (!isNonPersistentChainOperator(operatorAfter)) {
+                        nonPersistentBase = null;
+                    }
+                }
+                return result;
+            })
         );
     });
 }
@@ -877,6 +1105,7 @@ export function getArgsConfinementPermission(
     args: string[],
     cwd: string,
     config?: SandboxConfigCwdConfinement | null,
+    state?: CwdConfinementState,
 ): Permission | undefined {
     const confinement = resolveConfinementConfig(config);
 
@@ -885,8 +1114,15 @@ export function getArgsConfinementPermission(
     }
 
     const resolvedCwd = path.resolve(cwd);
+    const confinementState = state ?? createCwdConfinementState(resolvedCwd);
 
-    if (!isCommandConfined(args, resolvedCwd, buildConfinementOptions(confinement, resolvedCwd))) {
+    if (!isCommandConfined(
+        args,
+        confinementState.currentCwd,
+        resolvedCwd,
+        buildConfinementOptions(confinement, resolvedCwd),
+        confinementState,
+    )) {
         return undefined;
     }
 

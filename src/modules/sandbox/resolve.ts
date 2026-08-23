@@ -6,7 +6,14 @@ import {
     type Permission,
 } from "./permissions";
 import { parseBash } from "./bash";
-import { getArgsConfinementPermission, splitAtChainOperators } from "./heuristics";
+import {
+    cloneCwdConfinementState,
+    createCwdConfinementState,
+    getArgsConfinementPermission,
+    isNonPersistentChainOperator,
+    restoreCwdConfinementState,
+    splitAtChainOperatorsWithOperators,
+} from "./heuristics";
 
 export interface ResolvePermissionOptions {
     permissions?: SandboxConfigPermissions;
@@ -130,7 +137,7 @@ function resolveLine(
     }
 
     // 2. per-segment resolution
-    const segments = splitAtChainOperators(lineArgs);
+    const segments = splitAtChainOperatorsWithOperators(lineArgs);
 
     if (segments.length === 0) {
         return { permission: whole.permission, source: "policy", unresolved: [] };
@@ -140,8 +147,27 @@ function resolveLine(
     let heuristic: Permission | null = null;
     let hasUnresolved = false;
     const unresolved: string[][] = [];
+    const confinementState = createCwdConfinementState(cwd);
+    let nonPersistentBase: ReturnType<typeof cloneCwdConfinementState> | null = null;
 
-    for (const segment of segments) {
+    for (const { args: segment, operatorAfter } of segments) {
+        const beforeSegment = cloneCwdConfinementState(confinementState);
+        if (nonPersistentBase === null && isNonPersistentChainOperator(operatorAfter)) {
+            nonPersistentBase = beforeSegment;
+        }
+        const segmentState = nonPersistentBase
+            ? cloneCwdConfinementState(nonPersistentBase)
+            : confinementState;
+
+        // Advance modeled shell-directory state even when an explicit policy
+        // handles this segment; later heuristic segments still need the
+        // correct current directory.
+        const grant = getArgsConfinementPermission(
+            segment,
+            cwd,
+            options?.cwdConfinement,
+            segmentState,
+        );
         const match = getArgsPermissionMatch(segment, options?.permissions);
 
         if (match.matched) {
@@ -157,12 +183,18 @@ function resolveLine(
             }
         } else {
             // would prompt: heuristics may rescue the segment
-            const grant = getArgsConfinementPermission(segment, cwd, options?.cwdConfinement);
             if (grant) {
                 heuristic = heuristic === null ? grant : moreRestrictive(heuristic, grant);
             } else {
                 hasUnresolved = true;
                 unresolved.push(segment);
+            }
+        }
+
+        if (nonPersistentBase !== null) {
+            restoreCwdConfinementState(confinementState, nonPersistentBase);
+            if (!isNonPersistentChainOperator(operatorAfter)) {
+                nonPersistentBase = null;
             }
         }
     }

@@ -184,6 +184,18 @@ describe("resolvePermission: patterns vs heuristics", () => {
                 expected: "allow:sandbox",
             },
             {
+                desc: "heuristic segments use cwd after cd",
+                command: "cd src && cat ../README.md",
+                permissions: { "cd *": "allow" },
+                expected: "allow",
+            },
+            {
+                desc: "pipeline directory changes do not leak to heuristics",
+                command: "cd src | cat ../README.md",
+                permissions: { "cd *": "allow" },
+                expected: "ask",
+            },
+            {
                 desc: "unknown segment without a rule keeps the chain at ask",
                 command: "cat file.txt && nc host 80",
                 permissions: { "npx *": "allow" },

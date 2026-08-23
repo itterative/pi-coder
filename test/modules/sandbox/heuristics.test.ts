@@ -43,6 +43,86 @@ describe("getCwdConfinementPermission", () => {
             { desc: "ignore positionals command", command: "echo hello world", expected: "allow:sandbox" },
             { desc: "env assignment prefix", command: "FOO=bar cat file.txt", expected: "allow:sandbox" },
             { desc: "quoted path", command: 'cat "my file.txt"', expected: "allow:sandbox" },
+            { desc: "cd changes cwd for following command", command: "cd src && cat index.ts", expected: "allow:sandbox" },
+            { desc: "cd keeps confinement rooted at the original cwd", command: "cd src && cat ../README.md", expected: "allow:sandbox" },
+            { desc: "cd parent escape is rejected", command: "cd src && cat ../../outside.txt", expected: undefined },
+            { desc: "cd - returns to the previous cwd", command: "cd src && cd - && cat README.md", expected: "allow:sandbox" },
+            { desc: "cd home is rejected", command: "cd && cat README.md", expected: undefined },
+            { desc: "pushd and popd restore cwd", command: "pushd src && cat index.ts && popd && cat README.md", expected: "allow:sandbox" },
+            { desc: "nested pushd/popd uses a stack", command: "pushd src && pushd lib && cat file.ts && popd && cat ../README.md && popd", expected: "allow:sandbox" },
+            { desc: "pushd outside cwd falls back", command: "pushd /tmp && cat file.txt", expected: undefined },
+            { desc: "unsupported pushd rotation falls back", command: "pushd", expected: undefined },
+            { desc: "indexed pushd rotation falls back", command: "pushd +1", expected: undefined },
+        ]);
+    });
+
+    describe("complex directory state", () => {
+        runTests([
+            {
+                desc: "directory state persists across lines",
+                command: "cd src\npushd lib\ncat file.ts\npopd\ncat ../README.md",
+                expected: "allow:sandbox",
+            },
+            {
+                desc: "cd and stack operations compose",
+                command: "cd src && pushd ../tests && cd .. && popd && cat ../README.md",
+                expected: "allow:sandbox",
+            },
+            {
+                desc: "multiple pushd/popd pairs return to root",
+                command: "pushd src && pushd lib && popd && pushd tests && popd && popd && cat README.md",
+                expected: "allow:sandbox",
+            },
+            {
+                desc: "stacked directory traversal cannot escape after restore",
+                command: "pushd src && pushd lib && popd && popd && cat ../../outside.txt",
+                expected: undefined,
+            },
+            {
+                desc: "pipeline cd does not change the following command cwd",
+                command: "cd src | cat ../README.md",
+                expected: undefined,
+            },
+            {
+                desc: "background cd does not change the following command cwd",
+                command: "cd src & cat ../README.md",
+                expected: undefined,
+            },
+            {
+                desc: "directory expansion is not guessed",
+                command: "pushd \"$(echo src)\" && cat file.ts",
+                expected: undefined,
+            },
+            {
+                desc: "sensitive directory is rejected",
+                command: "pushd .git && cat config",
+                expected: undefined,
+            },
+        ]);
+    });
+
+    describe("directory edge cases", () => {
+        runTests([
+            { desc: "cd with --", command: "cd -- src && cat file.ts", expected: "allow:sandbox" },
+            { desc: "cd logical mode", command: "cd -L src && cat file.ts", expected: "allow:sandbox" },
+            { desc: "cd physical mode", command: "cd -P src && cat file.ts", expected: "allow:sandbox" },
+            { desc: "cd relative dot path", command: "cd ./src/../src && cat file.ts", expected: "allow:sandbox" },
+            { desc: "cd to project root from a child", command: "cd src && cd .. && cat README.md", expected: "allow:sandbox" },
+            { desc: "cd above project root falls back", command: "cd src && cd ../.. && cat file.txt", expected: undefined },
+            { desc: "cd - before a previous directory falls back", command: "cd - && cat file.txt", expected: undefined },
+            { desc: "repeated cd - toggles directories", command: "cd src && cd - && cd - && cat file.txt", expected: "allow:sandbox" },
+            { desc: "pushd with --", command: "pushd -- src && popd -- && cat README.md", expected: "allow:sandbox" },
+            { desc: "pushd parent traversal staying inside", command: "pushd src && pushd .. && popd && cat file.txt", expected: "allow:sandbox" },
+            { desc: "pushd parent traversal escaping", command: "pushd src && pushd ../.. && cat file.txt", expected: undefined },
+            { desc: "popd after cd restores stack top", command: "pushd src && cd .. && popd && cat file.txt", expected: "allow:sandbox" },
+            { desc: "empty popd leaves cwd unchanged", command: "popd && cat README.md", expected: "allow:sandbox" },
+            { desc: "directory variable expansion falls back", command: "cd \"$PWD/src\" && cat file.ts", expected: undefined },
+            { desc: "directory glob expansion falls back", command: "pushd src/* && cat file.ts", expected: undefined },
+            { desc: "directory redirection is conservatively classified", command: "cd src > cd.log && cat file.ts", expected: undefined },
+            { desc: "relative output path uses tracked cwd", command: "cd src && sort -o ../sorted.txt input.txt", expected: "allow:sandbox" },
+            { desc: "tracked cwd still checks sensitive paths", command: "cd src && cat ../.env", expected: undefined },
+            { desc: "benign assignment before cd", command: "FOO=bar cd src && cat file.ts", expected: "allow:sandbox" },
+            { desc: "dangerous assignment before cd", command: "PATH=/tmp cd src && cat file.ts", expected: undefined },
         ]);
     });
 
@@ -565,8 +645,11 @@ describe("getCwdConfinementPermission", () => {
             { desc: "symlink escaping cwd", command: "cat link-outside.txt", expected: undefined },
             { desc: "symlink chain escaping cwd", command: "cat link-chain-src.txt", expected: undefined },
             { desc: "directory symlink within cwd", command: "ls dirlink-inside", expected: "allow:sandbox" },
+            { desc: "cd through inside directory symlink", command: "cd dirlink-inside && cat inside.txt", expected: "allow:sandbox" },
+            { desc: "pushd through inside directory symlink", command: "pushd dirlink-inside && popd && cat plain.txt", expected: "allow:sandbox" },
             { desc: "file through inside directory symlink", command: "cat dirlink-inside/inside.txt", expected: "allow:sandbox" },
             { desc: "directory symlink escaping cwd", command: "ls dirlink-outside", expected: undefined },
+            { desc: "cd through outside directory symlink", command: "cd dirlink-outside && cat hostname", expected: undefined },
             { desc: "file through outside directory symlink", command: "cat dirlink-outside/hostname", expected: undefined },
             { desc: "dangling symlink read is rejected", command: "cat dangling.txt", expected: undefined },
             { desc: "dangling symlink write is rejected", command: "echo x > dangling.txt", expected: undefined },
