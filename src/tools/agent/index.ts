@@ -140,13 +140,46 @@ function oneLinePreview(text: string, maxChars = 180): string {
 }
 
 const AGENT_STATUS_ID = "pi-coder-agents";
+const AGENT_WIDGET_ID = "pi-coder-agent-activity";
 
-function updateAgentStatus(ctx: ExtensionContext, manager: AgentRunManager): void {
+function updateAgentUi(ctx: ExtensionContext, manager: AgentRunManager): void {
     const runs = manager.listRuns();
     if (!runs.length) {
         ctx.ui.setStatus(AGENT_STATUS_ID, undefined);
+        ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         return;
     }
+
+    const activeRuns = runs.filter((run) => (
+        run.status === "starting" || run.status === "running" || run.status === "waiting_for_parent"
+    ));
+    const terminalRuns = runs.filter((run) => !activeRuns.includes(run)).slice(-3);
+    const visibleRuns = [...activeRuns, ...terminalRuns];
+    const activityLines = visibleRuns.map((run) => {
+        const response = run.responsePreview
+            ? ` · “${oneLinePreview(run.responsePreview, 72)}”`
+            : "";
+        if (run.status === "starting") {
+            return `● ${run.runId} — Starting: ${oneLinePreview(run.task, 90)}`;
+        }
+        if (run.status === "running") {
+            return `● ${run.runId} — ${run.activity ?? "Working"}${response}`;
+        }
+        if (run.status === "waiting_for_parent") {
+            return `? ${run.runId} — Waiting: ${oneLinePreview(run.question ?? "parent guidance", 100)}${response}`;
+        }
+        if (run.status === "completed") {
+            return `✓ ${run.runId} — Ready to collect${response}`;
+        }
+        if (run.status === "failed") {
+            return `! ${run.runId} — Failed; result ready to collect${response}`;
+        }
+        return `× ${run.runId} — ${run.status}`;
+    });
+    if (runs.length > visibleRuns.length) {
+        activityLines.push(`… ${runs.length - visibleRuns.length} older result(s) hidden`);
+    }
+    ctx.ui.setWidget(AGENT_WIDGET_ID, activityLines, { placement: "belowEditor" });
 
     const label = (run: (typeof runs)[number]): string => {
         if (run.status === "starting" || run.status === "running") return `● ${run.runId}`;
@@ -203,6 +236,7 @@ export default function registerAgentTool(
 
     pi.on("session_shutdown", async (_event, ctx) => {
         ctx.ui.setStatus(AGENT_STATUS_ID, undefined);
+        ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         await manager.shutdown();
     });
 
@@ -314,7 +348,7 @@ export default function registerAgentTool(
                             params.task,
                             { cwd: ctx.cwd, parentContext: ctx },
                             signal,
-                            () => updateAgentStatus(ctx, manager),
+                            () => updateAgentUi(ctx, manager),
                         );
                     outcome.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
                 } else if (params.action === "resume") {
@@ -330,7 +364,7 @@ export default function registerAgentTool(
                 outcome = failedOutcome(params, error);
             }
 
-            updateAgentStatus(ctx, manager);
+            updateAgentUi(ctx, manager);
             return {
                 content: [{ type: "text", text: outcome.content }],
                 details: outcome.details,

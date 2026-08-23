@@ -45,7 +45,7 @@ describe("agent extension registration", () => {
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
-            ui: { notify: () => {}, setStatus: () => {} },
+            ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
         };
         const prompt = await handlers.before_agent_start[0]({ systemPrompt: "Parent prompt" }, ctx) as any;
         const result = await tool.execute(
@@ -112,7 +112,7 @@ describe("agent extension registration", () => {
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
-            ui: { notify: () => {}, setStatus: () => {} },
+            ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
         };
 
         const waiting = await tool.execute(
@@ -160,27 +160,38 @@ describe("agent extension registration", () => {
             registerCommand() {},
         } as any;
         let background = false;
+        let reportProgress: ((progress: { output: string; recentActivity: string[] }) => void) | undefined;
+        let childProgress = { output: "", recentActivity: [] as string[] };
         const child: ChildAgentHandle = {
-            prompt: async () => {},
+            async prompt() {
+                childProgress = {
+                    output: "Inspecting the run manager lifecycle.",
+                    recentActivity: ["Reading src/tools/agent/runtime.ts"],
+                };
+                reportProgress?.(childProgress);
+            },
             abort: async () => {},
             dispose: () => {},
             takeParentQuestion: () => undefined,
-            getProgress: () => ({ output: "Background result", recentActivity: [] }),
+            getProgress: () => childProgress,
             getFinalOutput: () => "Background result",
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
         };
         registerAgentTool(pi, async (context) => {
             background = context.background === true;
+            reportProgress = context.onProgress;
             return child;
         });
         const statuses: Array<string | undefined> = [];
+        const widgets: Array<string[] | undefined> = [];
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
             ui: {
                 notify: () => {},
                 setStatus: (_id: string, value: string | undefined) => statuses.push(value),
+                setWidget: (_id: string, value: string[] | undefined) => widgets.push(value),
             },
         };
 
@@ -220,6 +231,14 @@ describe("agent extension registration", () => {
         expect(statuses).toContain("● scout-1");
         expect(statuses).toContain("✓ scout-1 ready");
         expect(statuses[statuses.length - 1]).toBeUndefined();
+        const widgetLines = widgets.flatMap((lines) => lines ?? []);
+        expect(widgetLines).toContain(
+            "● scout-1 — Reading src/tools/agent/runtime.ts · “Inspecting the run manager lifecycle.”",
+        );
+        expect(widgetLines).toContain(
+            "✓ scout-1 — Ready to collect · “Inspecting the run manager lifecycle.”",
+        );
+        expect(widgets[widgets.length - 1]).toBeUndefined();
         expect(background).toBe(true);
         await handlers.session_shutdown[0]({}, ctx);
     });
@@ -253,6 +272,7 @@ describe("agent extension registration", () => {
             ui: {
                 notify: (message: string) => notifications.push(message),
                 setStatus: () => {},
+                setWidget: () => {},
             },
         };
 

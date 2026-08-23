@@ -446,13 +446,35 @@ function traceSessionEvent(
     return undefined;
 }
 
+function toolActivity(toolName: string, args: unknown): string {
+    const input = args && typeof args === "object" ? args as Record<string, unknown> : {};
+    const filePath = tracePreview(typeof input.path === "string" ? input.path : ".", 80);
+    if (toolName === "read") return `Reading ${filePath}`;
+    if (toolName === "grep") {
+        const pattern = tracePreview(typeof input.pattern === "string" ? input.pattern : "", 60);
+        return `Searching ${pattern ? JSON.stringify(pattern) : "files"} in ${filePath}`;
+    }
+    if (toolName === "find") {
+        const pattern = tracePreview(typeof input.pattern === "string" ? input.pattern : "", 60);
+        return `Finding ${pattern ? JSON.stringify(pattern) : "entries"} in ${filePath}`;
+    }
+    if (toolName === "ls") return `Listing ${filePath}`;
+    if (toolName === "ask_parent") return "Requesting parent guidance";
+    if (toolName === "ask_user") return "Requesting user guidance";
+    return `Using ${toolName}`;
+}
+
 function updateTracker(
     event: AgentSessionEvent,
     tracker: ProgressTracker,
     onProgress: (progress: ChildProgress) => void,
 ): void {
+    let forceUpdate = false;
     if (event.type === "message_start" && event.message.role === "assistant") {
+        forceUpdate = true;
         tracker.progress.output = textFromAssistantMessage(event.message);
+        tracker.progress.recentActivity.push("Thinking");
+        tracker.progress.recentActivity = tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
     } else if (
         event.type === "message_update"
         && event.message.role === "assistant"
@@ -462,14 +484,15 @@ function updateTracker(
     } else if (event.type === "message_end" && event.message.role === "assistant") {
         tracker.progress.output = textFromAssistantMessage(event.message);
     } else if (event.type === "tool_execution_start") {
-        tracker.progress.recentActivity.push(`Using ${event.toolName}`);
+        forceUpdate = true;
+        tracker.progress.recentActivity.push(toolActivity(event.toolName, event.args));
         tracker.progress.recentActivity = tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
     } else {
         return;
     }
 
     const now = Date.now();
-    if (now - tracker.lastUpdateAt >= UPDATE_THROTTLE_MS) {
+    if (forceUpdate || now - tracker.lastUpdateAt >= UPDATE_THROTTLE_MS) {
         tracker.lastUpdateAt = now;
         onProgress({
             output: tracker.progress.output,

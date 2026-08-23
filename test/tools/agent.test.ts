@@ -355,17 +355,17 @@ describe("AgentRunManager", () => {
             "Investigate",
             context(),
             undefined,
-            (outcome) => notifications.push(outcome.details.status),
+            (details) => notifications.push(details.status),
         );
         await flushBackground();
         expect(manager.listRuns()[0]?.status).toBe("waiting_for_parent");
-        expect(notifications).toEqual(["waiting_for_parent"]);
+        expect(notifications).toContain("waiting_for_parent");
 
         const resumed = await manager.resume("scout-1", "Inspect A");
         expect(resumed.details.status).toBe("running");
         expect(resumed.usage).toMatchObject({ input: 12, output: 3 });
         await flushBackground();
-        expect(notifications).toEqual(["waiting_for_parent", "completed"]);
+        expect(notifications[notifications.length - 1]).toBe("completed");
 
         const collected = manager.collect("scout-1");
         expect(collected.details.status).toBe("completed");

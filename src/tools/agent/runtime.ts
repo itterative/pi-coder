@@ -79,13 +79,16 @@ export interface AgentRunOutcome {
 }
 
 export type AgentProgressCallback = (details: AgentRunDetails) => void;
-export type AgentBackgroundCallback = (outcome: AgentRunOutcome) => void;
+export type AgentBackgroundCallback = (details: AgentRunDetails) => void;
 
 export interface AgentRunSummary {
     runId: string;
     agent: string;
     status: AgentRunStatus;
     background: boolean;
+    task: string;
+    activity?: string;
+    responsePreview?: string;
     question?: string;
 }
 
@@ -204,13 +207,21 @@ export class AgentRunManager {
     }
 
     listRuns(): AgentRunSummary[] {
-        return [...this.runs.values()].map((run) => ({
-            runId: run.id,
-            agent: run.agent,
-            status: run.status,
-            background: run.background,
-            question: run.question ? truncate(run.question.question, 500) : undefined,
-        }));
+        return [...this.runs.values()].map((run) => {
+            const progress = this.progressSnapshot(run);
+            const activity = progress.recentActivity[progress.recentActivity.length - 1];
+            const response = progress.output.replace(/\s+/g, " ").trim();
+            return {
+                runId: run.id,
+                agent: run.agent,
+                status: run.status,
+                background: run.background,
+                task: truncate(run.task.replace(/\s+/g, " ").trim(), 120),
+                activity: activity ? truncate(activity, 120) : undefined,
+                responsePreview: response ? truncate(response, 120) : undefined,
+                question: run.question ? truncate(run.question.question, 500) : undefined,
+            };
+        });
     }
 
     listWaiting(): Array<{ runId: string; agent: string; question: string }> {
@@ -487,7 +498,9 @@ export class AgentRunManager {
                         outputChars: progress.output.length,
                         activity: progress.recentActivity[progress.recentActivity.length - 1] ?? "",
                     });
-                    onProgress?.(this.details(run, progress));
+                    const details = this.details(run, progress);
+                    onProgress?.(details);
+                    if (run.background) this.emitBackgroundUpdate(run, details);
                 },
                 onTrace: (type, data) => this.record(run, `child.${type}`, data),
             });
@@ -595,6 +608,12 @@ export class AgentRunManager {
         }
         run.status = "running";
         run.updatedAt = Date.now();
+        if (run.background) {
+            this.emitBackgroundUpdate(
+                run,
+                this.details(run, run.handle?.getProgress() ?? { output: "", recentActivity: [] }),
+            );
+        }
         this.record(run, "operation.started", {
             kind: prompt.startsWith("Parent guidance:\n") ? "resume" : "start",
             promptChars: prompt.length,
@@ -814,6 +833,15 @@ export class AgentRunManager {
         };
     }
 
+    private emitBackgroundUpdate(run: AgentRun, details: AgentRunDetails): void {
+        if (this.closing || run.cancelRequested) return;
+        try {
+            run.backgroundCallback?.(details);
+        } catch {
+            // UI callbacks must not disrupt child lifecycle settlement.
+        }
+    }
+
     private readUsage(run: AgentRun): Usage {
         if (run.handle) run.usageSnapshot = cloneUsage(run.handle.getUsage());
         return cloneUsage(run.usageSnapshot);
@@ -823,10 +851,8 @@ export class AgentRunManager {
         run.backgroundTask = task;
         void task.then(
             (outcome) => {
-                if (!this.closing && !run.cancelRequested) {
-                    if (outcome.details.status === "waiting_for_parent" || isTerminalStatus(outcome.details.status)) {
-                        run.backgroundCallback?.(outcome);
-                    }
+                if (outcome.details.status === "waiting_for_parent" || isTerminalStatus(outcome.details.status)) {
+                    this.emitBackgroundUpdate(run, outcome.details);
                 }
                 if (isTerminalStatus(outcome.details.status)) run.backgroundCallback = undefined;
                 if (run.backgroundTask === task) run.backgroundTask = undefined;
