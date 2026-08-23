@@ -441,10 +441,14 @@ function updateAgentUi(
             return `! ${label} — Interrupted; resume with explicit guidance${response}`;
         }
         if (run.status === "completed") {
-            return `✓ ${label} — Ready to collect${response}`;
+            return run.agent === "workspace-setup"
+                ? `✓ ${label} — Setup complete${response}`
+                : `✓ ${label} — Ready to collect${response}`;
         }
         if (run.status === "failed") {
-            return `! ${label} — Failed; result ready to collect${response}`;
+            return run.agent === "workspace-setup"
+                ? `! ${label} — Setup failed${response}`
+                : `! ${label} — Failed; result ready to collect${response}`;
         }
         return `× ${label} — ${run.status}`;
     });
@@ -505,6 +509,14 @@ export default function registerAgentTool(
                 `Could not release workspace lease for ${details.runId}: ${error instanceof Error ? error.message : String(error)}`,
                 "warning",
             );
+        }
+        if (details.status === "completed" && details.agent !== "workspace-setup") {
+            for (const [setupRunId, setupRun] of setupRuns) {
+                if (setupRun.workspaceId === details.workspaceId && setupRun.status === "completed") {
+                    setupRuns.delete(setupRunId);
+                }
+            }
+            refreshAgentUi(ctx);
         }
     };
     let mailboxFlushScheduled = false;
