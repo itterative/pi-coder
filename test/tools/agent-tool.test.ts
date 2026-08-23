@@ -381,11 +381,11 @@ describe("agent extension registration", () => {
         try {
             delete process.env[AGENT_TRACE_ENV];
             registerAgentTool(pi, async () => { throw new Error("not used"); });
-            expect(commands).toEqual(["agent-trace"]);
+            expect(commands).toEqual(["agent-trace", "agent-sessions"]);
 
             process.env[AGENT_TRACE_ENV] = "0";
             registerAgentTool(pi, async () => { throw new Error("not used"); });
-            expect(commands).toEqual(["agent-trace", "agent-trace"]);
+            expect(commands).toEqual(["agent-trace", "agent-sessions", "agent-trace", "agent-sessions"]);
         } finally {
             if (previous === undefined) delete process.env[AGENT_TRACE_ENV];
             else process.env[AGENT_TRACE_ENV] = previous;

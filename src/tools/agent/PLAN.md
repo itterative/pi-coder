@@ -18,7 +18,7 @@ The initial direction recorded in `src/tools/agent/README.md` is:
 - `src/index.ts` is the consolidated pi-coder extension entrypoint.
 - `src/tools/agent/index.ts` registers the in-process `agent` tool from `src/index.ts`.
 - `child.ts`, `runtime.ts`, `discovery.ts`, and `persistence.ts` implement controlled child SDK sessions, the run state machine, custom definition loading, and durable exact-parent restoration.
-- The MVP supports built-in/user/trusted-project agents, foreground start, concurrent background spawn/status/collect, resume/cancel, read-only scouts, a permission-gated worker, parent guidance, non-interrupting automatic follow-up mailbox markers, confinement, usage deltas, durable paused/interrupted restoration, lifecycle cleanup, and compact/expanded rendering.
+- The MVP supports built-in/user/trusted-project agents, foreground start, concurrent background spawn/status/collect, resume/cancel, read-only scouts, a permission-gated worker, parent guidance, non-interrupting automatic follow-up mailbox markers, confinement, usage deltas, durable paused/interrupted restoration, lifecycle cleanup, compact/expanded rendering, and the read-only `/agent-sessions` current/past browser overlay.
 - The stabilization pass makes waiting state explicitly paused in parent guidance, shows compact question/result previews, tests tool-level pause/resume rendering and additional lifecycle/confinement edges, and records a repeatable manual provider/lifecycle checklist in `README.md`.
 - Diagnostics retain bounded sanitized timelines for recent runs and expose `/agent-trace`; the intended `PI_CODER_AGENT_TRACE=1` gate is temporarily hardcoded on during development.
 - Existing extension functionality also includes:

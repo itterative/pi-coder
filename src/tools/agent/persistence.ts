@@ -41,7 +41,9 @@ export function getAgentCwdSessionDir(
         path.resolve(agentSessionsDir),
         normalizeCwdForSessionDirectory(cwd),
     );
-    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(path.resolve(agentSessionsDir), 0o700);
+    fs.chmodSync(sessionDir, 0o700);
     return sessionDir;
 }
 

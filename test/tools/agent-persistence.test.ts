@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { fingerprintAgentDefinition, BUILTIN_SCOUT } from "../../src/tools/agent/discovery";
 import {
@@ -11,6 +12,7 @@ import {
     normalizeCwdForSessionDirectory,
 } from "../../src/tools/agent/persistence";
 import { ZERO_USAGE, type PersistedAgentRun } from "../../src/tools/agent/runtime";
+import { listPastAgentSessions } from "../../src/tools/agent/sessions";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -51,6 +53,41 @@ function context(entries: any[], sessionFile: string | undefined, ownerSessionId
 }
 
 describe("durable agent run persistence", () => {
+    it("lists persisted child transcripts across parent-session directories", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
+        tempDirs.push(stateDir);
+        const sessionsDir = path.join(stateDir, "agent-sessions");
+        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), sessionsDir), "parent-1");
+        fs.mkdirSync(parentDir, { recursive: true });
+        const child = SessionManager.create(process.cwd(), parentDir);
+        child.appendMessage({
+            role: "user",
+            content: [{ type: "text", text: "Review the persisted child session" }],
+            timestamp: Date.now(),
+        });
+        child.appendMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "I will review it." }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
+            stopReason: "stop",
+            timestamp: Date.now(),
+        });
+        expect(child.getSessionFile()).toBeDefined();
+        expect(fs.readdirSync(parentDir)).not.toHaveLength(0);
+
+        const sessions = await listPastAgentSessions(process.cwd(), sessionsDir);
+        expect(sessions).toHaveLength(1);
+        expect(sessions[0]).toMatchObject({
+            kind: "past",
+            parentSessionId: "parent-1",
+            firstMessage: "Review the persisted child session",
+            messageCount: 2,
+        });
+    });
+
     it("normalizes cwd paths with the pi session-directory format", () => {
         expect(normalizeCwdForSessionDirectory("/home/example/project")).toBe("--home-example-project--");
     });

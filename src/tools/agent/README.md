@@ -22,6 +22,10 @@ In TUI mode, a foreground child may instead call its restricted `ask_user` tool 
 
 Up to four starting, running, waiting, or interrupted runs consume active capacity. The latest 20 uncollected background terminal results are retained separately; older IDs become stale. Runs have no TTL. Ephemeral parent sessions retain runtime-local behavior, but persisted parent sessions durably restore paused/interrupted runs and uncollected terminal results.
 
+## Browse delegated sessions
+
+Use `/agent-sessions` to open a read-only overlay for delegated-agent sessions. The **Current** tab shows runs tracked by the active parent session, while **Past** lists durable child transcripts stored for the current cwd. Use Tab or Left/Right to switch tabs, Enter to expand metadata, and Escape to close. The browser does not switch to or replay a child transcript.
+
 ## Durable child sessions
 
 When the parent has a persisted pi session, child transcripts are stored relative to this installed extension at `<pi-coder-install>/.state/agent-sessions/--<encoded-cwd>--/<parent-session-id>/`; the parent-session directory uses mode `0700`. The cwd layer mirrors pi's `--<encoded-cwd>--` session-directory format, while the extension-local root isolates multiple installed copies and avoids collisions with pi or other extensions. The install and storage locations are exported from `src/common/constants.ts`, cwd encoding is centralized in `normalizeCwdForSessionDirectory()`, and `.state/` is gitignored. The extension directory must be writable, and uninstalling or replacing that directory may remove its durable child transcripts. Versioned run-state entries are journaled in the parent session without entering LLM context. Reload, restart/continue, and switching away from and back to the exact parent session restore its active runs. New, forked, and cloned parent sessions have different IDs and do not inherit those children. In-place `/tree` navigation rebuilds runs from the newly selected branch; navigation is blocked while a child is actively streaming or waiting for mutation permission, so first let it pause/finish or cancel it.

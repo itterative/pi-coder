@@ -15,6 +15,13 @@ import {
 import { AgentMailbox } from "./mailbox";
 import { loadAgentRunPersistence } from "./persistence";
 import {
+    currentAgentSessionItems,
+    listPastAgentSessions,
+    removeCurrentAgentTranscripts,
+    type AgentSessionBrowserItem,
+} from "./sessions";
+import { showAgentSessionBrowser } from "../../tui/agent-session-browser";
+import {
     AgentActionError,
     AgentRunManager,
     ZERO_USAGE,
@@ -219,6 +226,24 @@ export default function registerAgentTool(
         });
     };
     if (traceStore) registerAgentTraceCommand(pi, traceStore);
+    pi.registerCommand("agent-sessions", {
+        description: "Browse current and persisted delegated-agent sessions",
+        handler: async (_args, ctx) => {
+            const current = currentAgentSessionItems(manager.listRuns());
+            let past: AgentSessionBrowserItem[];
+            try {
+                past = removeCurrentAgentTranscripts(
+                    await listPastAgentSessions(ctx.cwd),
+                    current,
+                );
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                ctx.ui.notify(`Could not browse persisted delegated-agent sessions: ${message}`, "warning");
+                past = [];
+            }
+            await showAgentSessionBrowser({ current, past }, ctx);
+        },
+    });
     const notifiedWarnings = new Set<string>();
 
     const discover = (ctx: ExtensionContext) => {

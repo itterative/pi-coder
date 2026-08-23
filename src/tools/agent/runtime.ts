@@ -139,6 +139,9 @@ export interface AgentRunSummary {
     status: AgentRunStatus;
     background: boolean;
     task: string;
+    startedAt: number;
+    updatedAt: number;
+    sessionFile?: string;
     activity?: string;
     responsePreview?: string;
     question?: string;
@@ -282,6 +285,9 @@ export class AgentRunManager {
                 status: run.permissionPending ? "waiting_for_permission" : run.status,
                 background: run.background,
                 task: truncate(run.task.replace(/\s+/g, " ").trim(), 120),
+                startedAt: run.startedAt,
+                updatedAt: run.updatedAt,
+                sessionFile: run.childSessionFile,
                 activity: activity ? truncate(activity, 120) : undefined,
                 responsePreview: response ? truncate(response, 120) : undefined,
                 question: run.question ? truncate(run.question.question, 500) : undefined,
