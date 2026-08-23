@@ -15,6 +15,7 @@ type MailboxStatus = Extract<
 
 interface MailboxUpdate {
     runId: string;
+    title: string;
     agent: string;
     status: MailboxStatus;
     preview?: string;
@@ -32,6 +33,7 @@ function toUpdate(details: AgentRunDetails): MailboxUpdate | undefined {
     if (details.status === "waiting_for_parent") {
         return {
             runId: details.runId,
+            title: details.title,
             agent: details.agent,
             status: details.status,
             preview: oneLine(details.question?.question),
@@ -46,6 +48,7 @@ function toUpdate(details: AgentRunDetails): MailboxUpdate | undefined {
     }
     return {
         runId: details.runId,
+        title: details.title,
         agent: details.agent,
         status: details.status,
         preview: oneLine(details.status === "completed" ? details.output : details.error ?? details.output),
@@ -55,6 +58,7 @@ function toUpdate(details: AgentRunDetails): MailboxUpdate | undefined {
 function formatUpdate(update: MailboxUpdate): string[] {
     const lines = [
         `- Run ID: ${JSON.stringify(update.runId)}`,
+        `  Title: ${JSON.stringify(update.title)}`,
         `  Agent: ${JSON.stringify(update.agent)}`,
         `  Status: ${update.status}`,
     ];

@@ -5,14 +5,16 @@
 ## Actions
 
 ```text
-agent(action="start", agent="scout", task="Investigate in the foreground ...")
-agent(action="spawn", agent="scout", task="Investigate concurrently ...")
+agent(action="start", agent="scout", title="Persistence audit", task="Investigate in the foreground ...")
+agent(action="spawn", agent="scout", title="Concurrent reconnaissance", task="Investigate concurrently ...")
 agent(action="status", runId="scout-1")
 agent(action="collect", runId="scout-1")
 agent(action="resume", runId="scout-1", guidance="...")
 agent(action="cancel", runId="scout-1")
 agent(action="spawn", agent="worker", task="Implement and validate the requested change")
 ```
+
+Each run has a short human-readable title. Supply `title` on `start` or `spawn`; when omitted, pi-coder derives one from the first task line. The stable run ID remains the authoritative identifier and is displayed alongside the title.
 
 A child may call `ask_parent` to pause its current turn. The parent receives its question and partial findings, may investigate independently, and resumes the retained child session by run ID. A `waiting_for_parent` result is paused rather than finished; a later `agent resume <run-id>` result should reach either another waiting state or `completed`. Collapsed TUI results show the pending question or a final-result preview, while expanded results include full details and usage.
 
@@ -24,7 +26,7 @@ Up to four starting, running, waiting, or interrupted runs consume active capaci
 
 ## Browse delegated sessions
 
-Use `/agent-sessions` to open a read-only overlay for delegated-agent sessions. The **Current** tab shows runs tracked by the active parent session, while **Past** lists durable child transcripts stored for the current cwd. Use Tab or Left/Right to switch tabs, Enter to expand metadata, and Escape to close. The browser does not switch to or replay a child transcript.
+Use `/agent-sessions` to open a read-only overlay for delegated-agent sessions. The **Current** tab shows runs tracked by the active parent session, while **Past** lists durable child transcripts stored for the current cwd. Titles, status, usage, and worker changed-file summaries are persisted in private metadata sidecars alongside child transcripts. Use Tab or Left/Right to switch tabs, Enter to expand metadata, and Escape to close. The browser does not switch to or replay a child transcript.
 
 ## Durable child sessions
 
@@ -38,7 +40,7 @@ Uncollected background terminal outcomes restore from bounded parent metadata wi
 
 The built-in `worker` operates in the existing checkout with `read`, `grep`, `find`, `ls`, `edit`, `write`, and `bash`. Only one worker may be starting, running, or waiting at a time, while read-only scouts can continue concurrently. Foreground and background workers are supported.
 
-Every worker `edit`, `write`, and `bash` call enters the shared abort-aware permission queue and opens a parent-visible prompt labelled with its run ID. Approvals are one-shot and never become parent or child session rules. File paths remain cwd-confined with sensitive and symlink escapes blocked before prompting. Bash honors configured denial and sandbox/direct policy; unresolved commands default to sandbox when bubblewrap is available and the prompt permits toggling to direct mode. Mutation calls are serialized through completion, so concurrent child tool calls cannot overlap mutations.
+Every worker `edit`, `write`, and `bash` call enters the shared abort-aware permission queue and opens a parent-visible prompt labelled with its title and run ID. Approvals are one-shot and never become parent or child session rules. File paths remain cwd-confined with sensitive and symlink escapes blocked before prompting. Bash honors configured denial and sandbox/direct policy; unresolved commands default to sandbox when bubblewrap is available and the prompt permits toggling to direct mode. Mutation calls are serialized through completion, so concurrent child tool calls cannot overlap mutations.
 
 The activity widget shows `waiting_for_permission` while a gate is queued or open. Canceling the run closes or removes its prompt. Successful `edit`/`write` paths are tracked in a terminal mutation report. Because approved bash and concurrent parent activity can change arbitrary checkout files, the report explicitly warns when attribution may be incomplete; inspect the final diff before committing.
 

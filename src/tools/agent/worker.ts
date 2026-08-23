@@ -30,10 +30,15 @@ interface WorkerMutationCallbacks {
 interface WorkerMutationOptions extends WorkerMutationCallbacks {
     parentContext: ExtensionContext;
     runId: string;
+    runTitle?: string;
     agentName: string;
 }
 
 type PromptChoice = { kind: "yes" } | { kind: "no" };
+
+function runLabel(options: WorkerMutationOptions): string {
+    return options.runTitle ? `${options.runTitle} · ${options.runId}` : options.runId;
+}
 
 const WORKER_CONFINEMENT = {
     enabled: true,
@@ -194,7 +199,7 @@ export function registerWorkerMutationHooks(
                 result = await prompt(
                     options,
                     ctx,
-                    `[${options.runId}] ${options.agentName}: allow ${action}?`,
+                    `[${runLabel(options)}] ${options.agentName}: allow ${action}?`,
                     contentLines,
                     `Waiting for permission to ${action} ${relativePath(input.path, ctx.cwd)}`,
                 );
@@ -246,7 +251,7 @@ export function registerWorkerMutationHooks(
             result = await prompt(
                 options,
                 ctx,
-                () => `[${options.runId}] ${options.agentName}: allow bash? — mode: ${sandboxed ? "sandbox" : "direct"}${canToggle ? " (s)" : ""}`,
+                () => `[${runLabel(options)}] ${options.agentName}: allow bash? — mode: ${sandboxed ? "sandbox" : "direct"}${canToggle ? " (s)" : ""}`,
                 input.command.split("\n"),
                 "Waiting for permission to run bash",
                 {

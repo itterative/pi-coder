@@ -162,6 +162,24 @@ afterEach(() => {
 });
 
 describe("AgentRunManager", () => {
+    it("assigns a durable human-readable title to each run", async () => {
+        const child = new FakeChild([{ output: "Found it." }]);
+        const manager = managerWith(child);
+
+        const result = await manager.start("scout", "Inspect the persistence layer\nand report risks", context(), undefined, undefined, "Persistence audit");
+
+        expect(result.details.title).toBe("Persistence audit");
+    });
+
+    it("derives a title when none is supplied", async () => {
+        const child = new FakeChild([{ output: "Found it." }]);
+        const manager = managerWith(child);
+
+        const result = await manager.start("scout", "Inspect the persistence layer\nand report risks", context());
+
+        expect(result.details.title).toBe("Inspect the persistence layer");
+    });
+
     it("completes a run and disposes its child", async () => {
         const child = new FakeChild([{ output: "Found the answer.", usage: usage(10, 4) }]);
         const manager = managerWith(child);

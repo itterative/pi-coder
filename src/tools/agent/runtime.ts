@@ -52,6 +52,7 @@ export interface ChildAgentFactoryContext {
     parentContext: unknown;
     background?: boolean;
     runId?: string;
+    runTitle?: string;
     onProgress: (progress: ChildProgress) => void;
     onTrace?: (type: string, data?: AgentTraceData) => void;
     childSessionDir?: string;
@@ -73,6 +74,7 @@ type AgentStartContext = Omit<
 
 export interface AgentRunDetails {
     runId: string;
+    title: string;
     agent: string;
     agentSource?: string;
     agentFilePath?: string;
@@ -105,6 +107,8 @@ export interface PersistedAgentRun {
     version: 1;
     ownerSessionId: string;
     runId: string;
+    /** Optional for backward compatibility with pre-title journals. */
+    title?: string;
     agent: string;
     agentSource: string;
     agentFilePath?: string;
@@ -135,6 +139,7 @@ export interface AgentRunPersistence {
 
 export interface AgentRunSummary {
     runId: string;
+    title: string;
     agent: string;
     status: AgentRunStatus;
     background: boolean;
@@ -145,11 +150,14 @@ export interface AgentRunSummary {
     activity?: string;
     responsePreview?: string;
     question?: string;
+    usage: Usage;
+    mutationReport?: WorkerMutationReport;
     mutating?: boolean;
 }
 
 interface AgentRun {
     id: string;
+    title: string;
     agent: string;
     agentSource: string;
     agentFilePath?: string;
@@ -240,8 +248,16 @@ function truncate(text: string, maxChars: number): string {
 }
 
 const MAX_TASK_CHARS = 16_000;
+const MAX_TITLE_CHARS = 80;
 const MAX_GUIDANCE_CHARS = 16_000;
 const MAX_OUTPUT_CHARS = 32_000;
+
+export function deriveAgentTitle(task: string, requestedTitle?: string): string {
+    const requested = requestedTitle?.replace(/\s+/g, " ").trim();
+    if (requested) return truncate(requested, MAX_TITLE_CHARS);
+    const firstLine = task.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "Delegated task";
+    return truncate(firstLine.replace(/^(?:[-*#>]\s*)+/, ""), MAX_TITLE_CHARS);
+}
 
 function isTerminalStatus(status: AgentRunStatus): boolean {
     return status === "completed"
@@ -281,6 +297,7 @@ export class AgentRunManager {
             const response = progress.output.replace(/\s+/g, " ").trim();
             return {
                 runId: run.id,
+                title: run.title,
                 agent: run.agent,
                 status: run.permissionPending ? "waiting_for_permission" : run.status,
                 background: run.background,
@@ -291,6 +308,8 @@ export class AgentRunManager {
                 activity: activity ? truncate(activity, 120) : undefined,
                 responsePreview: response ? truncate(response, 120) : undefined,
                 question: run.question ? truncate(run.question.question, 500) : undefined,
+                usage: this.readUsage(run),
+                mutationReport: this.mutationReport(run),
                 mutating: run.mutating,
             };
         });
@@ -352,6 +371,7 @@ export class AgentRunManager {
                 : record.status;
             const run: AgentRun = {
                 id: record.runId,
+                title: deriveAgentTitle(record.task, record.title),
                 agent: record.agent,
                 agentSource: persistedTerminal ? record.agentSource : definition!.source,
                 agentFilePath: persistedTerminal ? record.agentFilePath : definition!.filePath,
@@ -433,8 +453,9 @@ export class AgentRunManager {
         context: AgentStartContext,
         signal?: AbortSignal,
         onProgress?: AgentProgressCallback,
+        title?: string,
     ): Promise<AgentRunOutcome> {
-        const { definition, run } = this.createRun(definitionOrName, task, false);
+        const { definition, run } = this.createRun(definitionOrName, task, false, title);
         const setupOutcome = await this.setupRun(
             run,
             definition,
@@ -452,9 +473,10 @@ export class AgentRunManager {
         context: AgentStartContext,
         signal?: AbortSignal,
         onBackgroundUpdate?: AgentBackgroundCallback,
+        title?: string,
     ): AgentRunOutcome {
         if (signal?.aborted) throw new AgentActionError("Agent spawn was aborted before launch.");
-        const { definition, run } = this.createRun(definitionOrName, task, true);
+        const { definition, run } = this.createRun(definitionOrName, task, true, title);
         run.backgroundCallback = onBackgroundUpdate;
         const taskPromise = this.launchBackground(run, definition, context).catch((error) => {
             if (isTerminalStatus(run.status)) return run.terminalOutcome!;
@@ -626,6 +648,7 @@ export class AgentRunManager {
         definitionOrName: AgentDefinition | string,
         task: string,
         background: boolean,
+        requestedTitle?: string,
     ): { definition: AgentDefinition; run: AgentRun } {
         if (this.closing) throw new AgentActionError("Agent runtime is shutting down.");
         if (!task.trim()) throw new AgentActionError("Agent task must not be empty.");
@@ -659,6 +682,7 @@ export class AgentRunManager {
         const id = `${definition.name}-${this.nextRunNumber++}`;
         const run: AgentRun = {
             id,
+            title: deriveAgentTitle(task, requestedTitle),
             agent: definition.name,
             agentSource: definition.source,
             agentFilePath: definition.filePath,
@@ -702,6 +726,7 @@ export class AgentRunManager {
                 definition,
                 background: run.background,
                 runId: run.id,
+                runTitle: run.title,
                 childSessionDir: this.persistence?.childSessionDir,
                 childSessionFile: run.childSessionFile ?? context.childSessionFile,
                 repairInterrupted: context.repairInterrupted,
@@ -1101,6 +1126,7 @@ export class AgentRunManager {
         const cumulative = usage ?? this.readUsage(run);
         return {
             runId: run.id,
+            title: run.title,
             agent: run.agent,
             agentSource: run.agentSource,
             agentFilePath: run.agentFilePath,
@@ -1206,6 +1232,7 @@ export class AgentRunManager {
             version: 1,
             ownerSessionId: this.persistence.ownerSessionId,
             runId: run.id,
+            title: run.title,
             agent: run.agent,
             agentSource: run.agentSource,
             agentFilePath: run.agentFilePath,

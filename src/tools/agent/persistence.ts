@@ -10,9 +10,11 @@ import {
     type AgentRunPersistence,
     type PersistedAgentRun,
     ZERO_USAGE,
+    deriveAgentTitle,
 } from "./runtime";
 
 export const AGENT_RUN_STATE_ENTRY = "pi-coder:agent-run-state-v1";
+const SESSION_METADATA_SUFFIX = ".meta.json";
 const RUN_ID = /^[a-z][a-z0-9_-]{0,63}-\d+$/;
 const RESTORABLE_STATUSES = new Set<PersistedAgentRun["status"]>([
     "starting",
@@ -83,6 +85,80 @@ function inside(directory: string, candidate: string): boolean {
     return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
 }
 
+function sessionMetadataPath(childSessionDir: string, sessionFile: string): string | undefined {
+    const resolved = path.resolve(sessionFile);
+    if (!inside(path.resolve(childSessionDir), resolved)) return undefined;
+    return `${resolved}${SESSION_METADATA_SUFFIX}`;
+}
+
+export interface AgentSessionMetadata {
+    version: 1;
+    ownerSessionId: string;
+    runId: string;
+    title: string;
+    agent: string;
+    agentSource: string;
+    task: string;
+    status: PersistedAgentRun["status"];
+    background: boolean;
+    mutating: boolean;
+    startedAt: number;
+    updatedAt: number;
+    usageSnapshot: PersistedAgentRun["usageSnapshot"];
+    mutationReport?: PersistedAgentRun["mutationReport"];
+}
+
+function metadataFromRecord(record: PersistedAgentRun): AgentSessionMetadata {
+    return {
+        version: 1,
+        ownerSessionId: record.ownerSessionId,
+        runId: record.runId,
+        title: deriveAgentTitle(record.task, record.title),
+        agent: record.agent,
+        agentSource: record.agentSource,
+        task: record.task,
+        status: record.status,
+        background: record.background,
+        mutating: record.mutating,
+        startedAt: record.startedAt,
+        updatedAt: record.updatedAt,
+        usageSnapshot: record.usageSnapshot,
+        mutationReport: record.mutationReport,
+    };
+}
+
+function writeSessionMetadata(childSessionDir: string, record: PersistedAgentRun): void {
+    if (!record.childSessionFile) return;
+    const metadataFile = sessionMetadataPath(childSessionDir, record.childSessionFile);
+    if (!metadataFile) return;
+    fs.writeFileSync(metadataFile, `${JSON.stringify(metadataFromRecord(record))}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+    });
+    fs.chmodSync(metadataFile, 0o600);
+}
+
+export function readAgentSessionMetadata(sessionFile: string): AgentSessionMetadata | undefined {
+    try {
+        const metadataFile = `${path.resolve(sessionFile)}${SESSION_METADATA_SUFFIX}`;
+        const value = JSON.parse(fs.readFileSync(metadataFile, "utf8")) as Partial<AgentSessionMetadata>;
+        if (
+            value.version !== 1
+            || typeof value.ownerSessionId !== "string"
+            || typeof value.runId !== "string"
+            || typeof value.title !== "string"
+            || typeof value.agent !== "string"
+            || typeof value.task !== "string"
+            || typeof value.status !== "string"
+            || typeof value.startedAt !== "number"
+            || typeof value.updatedAt !== "number"
+        ) return undefined;
+        return value as AgentSessionMetadata;
+    } catch {
+        return undefined;
+    }
+}
+
 function safeExistingChildFile(childSessionDir: string, candidate: string): string | undefined {
     try {
         const resolved = path.resolve(candidate);
@@ -131,6 +207,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         version: 1,
         ownerSessionId,
         runId: record.runId,
+        title: boundedString(record.title, 80),
         agent: record.agent.slice(0, 64),
         agentSource: record.agentSource.slice(0, 32),
         agentFilePath: boundedString(record.agentFilePath, 4_096),
@@ -200,6 +277,7 @@ export function loadAgentRunPersistence(
         save(record) {
             try {
                 pi.appendEntry(AGENT_RUN_STATE_ENTRY, record);
+                if (record.status !== "removed") writeSessionMetadata(childSessionDir, record);
                 return true;
             } catch (error) {
                 if (!persistenceWarningShown) {
@@ -215,6 +293,7 @@ export function loadAgentRunPersistence(
             if (!inside(childSessionDir, resolved)) return;
             try {
                 fs.rmSync(resolved, { force: true });
+                fs.rmSync(`${resolved}${SESSION_METADATA_SUFFIX}`, { force: true });
             } catch {
                 // Cleanup is best effort; state tombstones remain authoritative.
             }

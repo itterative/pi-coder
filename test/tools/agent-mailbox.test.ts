@@ -17,6 +17,7 @@ function details(
 ): AgentRunDetails {
     return {
         runId,
+        title: "Implementation review",
         agent: "scout",
         status,
         background: true,

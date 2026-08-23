@@ -513,7 +513,7 @@ Implemented invariants:
 Later persistence/workflow options:
 
 - continuing an already-completed child conversation as a new task;
-- named agent runs and durable session-management UI;
+- named agent runs and durable session-management UI — titles and persisted browser metadata are implemented; rename and production browser actions remain later UI work;
 - workflow prompt templates;
 - project-agent configuration;
 - subprocess fallback for stronger isolation;
@@ -572,6 +572,7 @@ Use this section to record decisions as the design evolves.
 - [x] Allow at most four active/waiting runs with no TTL; cleanup is explicit or tied to parent shutdown.
 - [x] Bound task/guidance to 16,000 characters, LLM-facing final output to 32,000 characters, and progress updates to at most once per 100 ms.
 - [x] Preserve child-resolved OAuth; mirror registered provider/native-provider configuration and resolved base URL/headers; copy runtime API keys only for non-OAuth providers lacking child auth. Runtime-only unpersisted OAuth remains an explicit limitation.
+- [x] Add optional human-readable run titles, deterministic task-derived fallback titles, private persisted browser metadata, usage/changed-file summaries, and title-aware worker/mailbox/browser labels. Defer renaming until the session browser is productionized.
 
 ## References
 

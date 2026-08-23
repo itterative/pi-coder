@@ -145,6 +145,7 @@ function registerChildExtension(
     background: boolean,
     mutating: boolean,
     runId: string,
+    runTitle: string,
     onProgress: ChildAgentFactoryContext["onProgress"],
     onTrace?: ChildAgentFactoryContext["onTrace"],
 ) {
@@ -251,6 +252,7 @@ function registerChildExtension(
             registerWorkerMutationHooks(pi, {
                 parentContext,
                 runId,
+                runTitle,
                 agentName,
                 permissionPending(pending, activity) {
                     tracker.progress.permissionPending = pending;
@@ -742,6 +744,7 @@ export async function createAgentChild(
                 context.background === true,
                 context.definition.mutating === true,
                 context.runId ?? context.definition.name,
+                context.runTitle ?? context.runId ?? context.definition.name,
                 context.onProgress,
                 context.onTrace,
             ),

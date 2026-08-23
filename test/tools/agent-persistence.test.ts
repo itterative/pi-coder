@@ -8,6 +8,7 @@ import { fingerprintAgentDefinition, BUILTIN_SCOUT } from "../../src/tools/agent
 import {
     AGENT_RUN_STATE_ENTRY,
     getAgentCwdSessionDir,
+    readAgentSessionMetadata,
     loadAgentRunPersistence,
     normalizeCwdForSessionDirectory,
 } from "../../src/tools/agent/persistence";
@@ -24,6 +25,7 @@ function record(ownerSessionId: string, childSessionFile?: string): PersistedAge
         version: 1,
         ownerSessionId,
         runId: "scout-1",
+        title: "Persistence scan",
         agent: "scout",
         agentSource: "builtin",
         definitionFingerprint: fingerprintAgentDefinition(BUILTIN_SCOUT),
@@ -127,6 +129,12 @@ describe("durable agent run persistence", () => {
         expect(fs.statSync(childDir).mode & 0o777).toBe(0o700);
         loaded?.persistence.save(newer);
         expect(appended).toEqual([newer]);
+        expect(readAgentSessionMetadata(childFile)).toMatchObject({
+            ownerSessionId: "parent-1",
+            runId: "scout-1",
+            title: "Persistence scan",
+            status: "interrupted",
+        });
     });
 
     it("rejects transcript paths outside the private child directory", () => {

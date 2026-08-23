@@ -5,12 +5,13 @@ import {
     type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
 
-import { getAgentCwdSessionDir } from "./persistence";
-import type { AgentRunSummary } from "./runtime";
+import { getAgentCwdSessionDir, readAgentSessionMetadata } from "./persistence";
+import { deriveAgentTitle, type AgentRunSummary } from "./runtime";
 
 export interface AgentSessionBrowserItem {
     kind: "current" | "past" | "empty";
     id: string;
+    title: string;
     agent: string;
     status: string;
     task: string;
@@ -24,12 +25,15 @@ export interface AgentSessionBrowserItem {
     activity?: string;
     responsePreview?: string;
     mutating?: boolean;
+    usage?: AgentRunSummary["usage"];
+    changedFiles?: string[];
 }
 
 function currentItem(run: AgentRunSummary): AgentSessionBrowserItem {
     return {
         kind: "current",
         id: run.runId,
+        title: run.title,
         agent: run.agent,
         status: run.status,
         task: run.task,
@@ -39,22 +43,31 @@ function currentItem(run: AgentRunSummary): AgentSessionBrowserItem {
         activity: run.activity,
         responsePreview: run.responsePreview,
         mutating: run.mutating,
+        usage: run.usage,
+        changedFiles: run.mutationReport?.changedFiles,
     };
 }
 
 function pastItem(info: SessionInfo, parentSessionId: string): AgentSessionBrowserItem {
+    const candidate = readAgentSessionMetadata(info.path);
+    const metadata = candidate?.ownerSessionId === parentSessionId ? candidate : undefined;
     return {
         kind: "past",
         id: info.id,
-        agent: "delegated agent",
-        status: "persisted transcript",
-        task: info.firstMessage,
-        updatedAt: info.modified.getTime(),
+        title: metadata?.title ?? deriveAgentTitle(info.firstMessage),
+        agent: metadata?.agent ?? "delegated agent",
+        status: metadata?.status ?? "persisted transcript",
+        task: metadata?.task ?? info.firstMessage,
+        startedAt: metadata?.startedAt,
+        updatedAt: metadata?.updatedAt ?? info.modified.getTime(),
         sessionFile: info.path,
         parentSessionId,
         messageCount: info.messageCount,
         firstMessage: info.firstMessage,
         allMessagesText: info.allMessagesText.slice(-4_000),
+        mutating: metadata?.mutating,
+        usage: metadata?.usageSnapshot,
+        changedFiles: metadata?.mutationReport?.changedFiles,
     };
 }
 

@@ -21,6 +21,7 @@ export interface AgentSessionBrowserOptions {
 const EMPTY_CURRENT: AgentSessionBrowserItem = {
     kind: "empty",
     id: "empty-current",
+    title: "",
     agent: "",
     status: "",
     task: "No delegated agents are active in this parent session.",
@@ -30,6 +31,7 @@ const EMPTY_CURRENT: AgentSessionBrowserItem = {
 const EMPTY_PAST: AgentSessionBrowserItem = {
     kind: "empty",
     id: "empty-past",
+    title: "",
     agent: "",
     status: "",
     task: "No persisted child transcripts were found for this cwd.",
@@ -39,7 +41,7 @@ const EMPTY_PAST: AgentSessionBrowserItem = {
 function asListItems(items: AgentSessionBrowserItem[], empty: AgentSessionBrowserItem): ListItem<AgentSessionBrowserItem>[] {
     return (items.length ? items : [empty]).map((value) => ({
         value,
-        label: value.task,
+        label: value.kind === "empty" ? value.task : `${value.title} · ${value.agent}`,
         disabled: value.kind === "empty",
     }));
 }
@@ -63,7 +65,7 @@ function itemText(
 
     const mode = item.mutating ? "worker" : item.agent;
     const status = item.status.replaceAll("_", " ");
-    const headline = `${mode} · ${status} · ${dateText(item.updatedAt)}`;
+    const headline = `${item.title} · ${mode} · ${status} · ${dateText(item.updatedAt)}`;
     const task = `Task: ${item.task.replace(/\s+/g, " ").trim()}`;
     if (!detail) {
         const activity = item.activity ? ` · ${item.activity}` : "";
@@ -72,6 +74,7 @@ function itemText(
 
     const lines = [
         theme.fg("accent", headline),
+        `Run ID: ${item.id}`,
         task,
         `Started: ${dateText(item.startedAt)}`,
         `Updated: ${dateText(item.updatedAt)}`,
@@ -79,6 +82,10 @@ function itemText(
     ];
     if (item.parentSessionId) lines.push(`Parent session: ${item.parentSessionId}`);
     if (item.messageCount !== undefined) lines.push(`Messages: ${item.messageCount}`);
+    if (item.usage) {
+        lines.push(`Usage: ${item.usage.input} input, ${item.usage.output} output, $${item.usage.cost.total.toFixed(4)}`);
+    }
+    if (item.changedFiles?.length) lines.push(`Changed files: ${item.changedFiles.join(", ")}`);
     if (item.firstMessage && item.firstMessage !== item.task) {
         lines.push(`First message: ${item.firstMessage.replace(/\s+/g, " ").trim()}`);
     }
