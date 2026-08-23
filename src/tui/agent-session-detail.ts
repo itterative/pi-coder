@@ -26,11 +26,8 @@ function usageText(usage: NonNullable<AgentSessionBrowserItem["usage"]>): string
 function detailText(item: AgentSessionBrowserItem, theme: Theme, width: number): string {
     if (item.kind === "empty") return item.task;
 
-    const mode = item.mutating ? "worker" : item.agent;
-    const status = item.status.replaceAll("_", " ");
     const transcript = item.transcript ?? item.allMessagesText ?? item.responsePreview;
     const lines = [
-        theme.fg("accent", `${item.title || "Untitled run"} · ${mode} · ${status}`),
         `Run ID: ${item.id}`,
         `Task: ${oneLine(item.task)}`,
         `Started: ${dateText(item.startedAt)}`,
@@ -58,13 +55,16 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
     private totalLines = 0;
 
     constructor(options: AgentSessionDetailOptions) {
+        const mode = options.item.mutating ? "worker" : options.item.agent;
+        const status = options.item.status.replaceAll("_", " ");
         super({
-            title: "Delegated agent session",
+            title: `[${mode}] ${options.item.title || "Untitled run"} · ${status}`,
             items: [{ value: options.item, label: "" }],
             scrollOffset: 0,
             maxVisibleLines: 16,
             helpText: "↑/↓ scroll · Esc back",
             fixedHeight: options.fixedHeight,
+            compactFooter: true,
             onKey: (key, state) => {
                 const page = state.maxVisibleLines;
                 const delta = matchesKey(key, "pageUp") ? -page
@@ -90,7 +90,7 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
     override render(width: number): string[] {
         this.contentWidth = Math.max(1, width - 8);
         const height = this.options.fixedHeight?.();
-        if (height !== undefined) this.state.maxVisibleLines = Math.max(1, height - 9);
+        if (height !== undefined) this.state.maxVisibleLines = Math.max(1, height - 7);
         return super.render(width);
     }
 }

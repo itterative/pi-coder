@@ -2,6 +2,7 @@ import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-a
 import {
     matchesKey,
     truncateToWidth,
+    Spacer,
     Text,
 } from "@earendil-works/pi-tui";
 import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
@@ -99,7 +100,9 @@ function itemText(
     const task = `Task: ${oneLine(item.task)}`;
     const returned = returnedText(item);
     const activity = item.activity ? ` · ${oneLine(item.activity, 120)}` : "";
-    const preview = returned ? `\n${theme.fg("muted", `Result: ${returned}`)}` : "";
+    const preview = item.kind === "current" && returned
+        ? `\n${theme.fg("muted", `Result: ${returned}`)}`
+        : "";
     return theme.fg("accent", headline) + `\n${task}${activity}${preview}`;
 }
 
@@ -127,14 +130,16 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                 borderColor: "borderMuted",
                 borderCharacters: BORDER_STYLES.rounded,
                 fixedHeight: options.fixedHeight,
+                trailingSpacer: false,
+                itemSpacing: 1,
                 helpText: "↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close",
                 headerContent: (container, theme) => {
                     tabTheme = theme;
-                    tabHeader = new Text(tabText(activeTab, theme), 1, 0);
+                    tabHeader = new Text(tabText(activeTab, theme), 5, 0);
                     container.addChild(tabHeader);
                     container.addChild(new Text(
                         theme.fg("muted", "Current shows this parent session; Past shows durable child results for this cwd."),
-                        1,
+                        5,
                         0,
                     ));
                 },
@@ -179,6 +184,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                 },
                 footerContent: (container, theme, state) => {
                     const count = state.tab === "current" ? current.length : past.length;
+                    container.addChild(new Spacer(1));
                     container.addChild(new Text(
                         theme.fg("dim", `${count} session${count === 1 ? "" : "s"}`),
                         1,
@@ -201,7 +207,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
     override render(width: number): string[] {
         if (this.detail) return this.detail.render(width);
         const height = this.listOptions.fixedHeight?.();
-        if (height !== undefined) this.state.maxVisibleLines = Math.max(1, height - 13);
+        if (height !== undefined) this.state.maxVisibleLines = Math.max(1, height - 11);
         return super.render(width).map((line) => truncateToWidth(line, width, ""));
     }
 

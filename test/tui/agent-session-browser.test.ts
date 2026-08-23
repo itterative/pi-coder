@@ -67,18 +67,42 @@ describe("AgentSessionBrowserComponent", () => {
           "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
           │   Delegated agent sessions                                                                       │
           │                                                                                                  │
-          │ ● Current    ○ Past                                                                              │
-          │ Current shows this parent session; Past shows durable child results for this cwd.                │
+          │     ● Current    ○ Past                                                                          │
+          │     Current shows this parent session; Past shows durable child results for this cwd.            │
           │                                                                                                  │
           │   → Project structure audit · scout · running · Nov 14 2023 22:13                                │
           │     Task: Inspect the project structure · Reading files                                          │
           │     Result: I found the main entry points and summarized the current architecture.               │
+          │                                                                                                  │
           │   1 session                                                                                      │
           │                                                                                                  │
           │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
-          │                                                                                                  │
           ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
         `);
+    });
+
+    it("separates multiple session entries with a blank row", () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [
+                current,
+                {
+                    ...current,
+                    id: "scout-2",
+                    title: "Dependency audit",
+                    task: "Check dependencies",
+                    responsePreview: "The dependencies are up to date.",
+                },
+            ],
+            past: [],
+        });
+        value.initialize(mockTheme);
+        const lines = renderText(value, 100).split("\n");
+        const first = lines.findIndex((line) => line.includes("Project structure audit"));
+        const second = lines.findIndex((line) => line.includes("Dependency audit"));
+
+        expect(first).toBeGreaterThan(-1);
+        expect(second).toBeGreaterThan(first);
+        expect(lines.slice(first, second).some((line) => /^│\s+│$/.test(line))).toBe(true);
     });
 
     it("keeps the frame height stable when scrolling wrapped list lines", () => {
@@ -107,9 +131,8 @@ describe("AgentSessionBrowserComponent", () => {
 
         expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
           "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   Delegated agent session                                                                        │
+          │   [scout] Project structure audit · running                                                      │
           │                                                                                                  │
-          │   Project structure audit · scout · running                                                      │
           │   Run ID: scout-1                                                                                │
           │   Task: Inspect the project structure                                                            │
           │   Started: Nov 14 2023 22:13                                                                     │
@@ -118,9 +141,7 @@ describe("AgentSessionBrowserComponent", () => {
           │                                                                                                  │
           │   Transcript:                                                                                    │
           │   I found the main entry points and summarized the current architecture.                         │
-          │                                                                                                  │
           │     ↑/↓ scroll · Esc back                                                                        │
-          │                                                                                                  │
           ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
         `);
     });
@@ -151,16 +172,15 @@ describe("AgentSessionBrowserComponent", () => {
           "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
           │   Delegated agent sessions                                                                       │
           │                                                                                                  │
-          │ ○ Current    ● Past                                                                              │
-          │ Current shows this parent session; Past shows durable child results for this cwd.                │
+          │     ○ Current    ● Past                                                                          │
+          │     Current shows this parent session; Past shows durable child results for this cwd.            │
           │                                                                                                  │
           │   → Previous implementation review · delegated agent · completed · Nov 14 2023 22:13             │
           │     Task: Review the previous implementation                                                     │
-          │     Result: The previous implementation is persisted and can be browsed read-only.               │
+          │                                                                                                  │
           │   1 session                                                                                      │
           │                                                                                                  │
           │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
-          │                                                                                                  │
           ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
         `);
     });
@@ -184,14 +204,14 @@ describe("AgentSessionBrowserComponent", () => {
           "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
           │   Delegated agent sessions                                                                       │
           │                                                                                                  │
-          │ ● Current    ○ Past                                                                              │
-          │ Current shows this parent session; Past shows durable child results for this cwd.                │
+          │     ● Current    ○ Past                                                                          │
+          │     Current shows this parent session; Past shows durable child results for this cwd.            │
           │                                                                                                  │
           │     No delegated agents are active in this parent session.                                       │
+          │                                                                                                  │
           │   0 sessions                                                                                     │
           │                                                                                                  │
           │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
-          │                                                                                                  │
           ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
         `);
         ui.press(KEY.tab);
@@ -199,14 +219,14 @@ describe("AgentSessionBrowserComponent", () => {
           "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
           │   Delegated agent sessions                                                                       │
           │                                                                                                  │
-          │ ○ Current    ● Past                                                                              │
-          │ Current shows this parent session; Past shows durable child results for this cwd.                │
+          │     ○ Current    ● Past                                                                          │
+          │     Current shows this parent session; Past shows durable child results for this cwd.            │
           │                                                                                                  │
           │     No persisted child sessions were found for this cwd.                                         │
+          │                                                                                                  │
           │   0 sessions                                                                                     │
           │                                                                                                  │
           │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
-          │                                                                                                  │
           ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
         `);
     });

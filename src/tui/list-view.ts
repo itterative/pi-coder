@@ -80,6 +80,12 @@ export interface ListViewOptions<T, S extends ListViewState<T> = ListViewState<T
     borderCharacters?: BorderCharacters;
     // Optional fixed total frame height, evaluated on each render
     fixedHeight?: () => number;
+    // Remove the blank rows around the help footer
+    compactFooter?: boolean;
+    // Whether to leave a blank row after the help footer (default: true)
+    trailingSpacer?: boolean;
+    // Blank rows inserted between list items (default: 0)
+    itemSpacing?: number;
     // Custom render function for item content (prefix is added automatically)
     renderItem?: (item: ListItem<T>, options: ListViewRenderItemOptions<T, S>) => string;
     // Optional header content rendered after title
@@ -178,7 +184,9 @@ export class ListViewComponent<
         // Content container for item list and status
         this.container.addChild(this.contentContainer);
 
-        this.container.addChild(new Spacer(1));
+        if (!this.listOptions.compactFooter && this.listOptions.trailingSpacer !== false) {
+            this.container.addChild(new Spacer(1));
+        }
         this.borderedContainer = new BorderBox(this.container, {
             borderColor,
             characters: this.listOptions.borderCharacters,
@@ -336,6 +344,11 @@ export class ListViewComponent<
                 if (line === "") return [""];
                 return wrapTextWithAnsi(line, this.itemContentWidth);
             });
+            if (i < this.state.items.length - 1) {
+                lines.push(...Array.from({
+                    length: Math.max(0, Math.floor(this.listOptions.itemSpacing ?? 0)),
+                }, () => ""));
+            }
 
             this.cachedItemStartLines.push(totalLines);
             this.cachedItemLines.push(lines);
@@ -387,7 +400,7 @@ export class ListViewComponent<
             this.listOptions.footerContent(this.contentContainer, this.theme, this.state);
         }
 
-        this.contentContainer.addChild(new Spacer(1));
+        if (!this.listOptions.compactFooter) this.contentContainer.addChild(new Spacer(1));
 
         // Help text
         this.contentContainer.addChild(
