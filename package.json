@@ -29,7 +29,6 @@
   "scripts": {
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "audit:curation": "tsx tools/curation-audit.ts"
+    "test:coverage": "vitest run --coverage"
   }
 }
