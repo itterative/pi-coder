@@ -41,16 +41,16 @@ describe("PagerComponent", () => {
     it("renders items from the initial scroll offset", () => {
         const { component } = setup({ title: "Log", items: items(3), scrollOffset: 0 });
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Log                                            
-
-             Line 0                                         
-             Line 1                                         
-             Line 2                                         
-                                                            
-               Esc close                                    
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Log                                          │
+          │                                                │
+          │   Line 0                                       │
+          │   Line 1                                       │
+          │   Line 2                                       │
+          │                                                │
+          │     Esc close                                  │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
     });
 
@@ -62,51 +62,51 @@ describe("PagerComponent", () => {
             maxVisibleLines: 4,
         }));
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Log                                            
-
-             Line 0                                         
-             Line 1                                         
-             Line 2                                         
-             Line 3                                         
-                                                            
-               Showing lines 1-4 of 8                       
-                                                            
-               Esc close                                    
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Log                                          │
+          │                                                │
+          │   Line 0                                       │
+          │   Line 1                                       │
+          │   Line 2                                       │
+          │   Line 3                                       │
+          │                                                │
+          │     Showing lines 1-4 of 8                     │
+          │                                                │
+          │     Esc close                                  │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
         press(component, KEY.down, KEY.down, KEY.down);
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Log                                            
-
-             Line 3                                         
-             Line 4                                         
-             Line 5                                         
-             Line 6                                         
-                                                            
-               Showing lines 4-7 of 8                       
-                                                            
-               Esc close                                    
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Log                                          │
+          │                                                │
+          │   Line 3                                       │
+          │   Line 4                                       │
+          │   Line 5                                       │
+          │   Line 6                                       │
+          │                                                │
+          │     Showing lines 4-7 of 8                     │
+          │                                                │
+          │     Esc close                                  │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
         press(component, KEY.up);
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Log                                            
-
-             Line 2                                         
-             Line 3                                         
-             Line 4                                         
-             Line 5                                         
-                                                            
-               Showing lines 3-6 of 8                       
-                                                            
-               Esc close                                    
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Log                                          │
+          │                                                │
+          │   Line 2                                       │
+          │   Line 3                                       │
+          │   Line 4                                       │
+          │   Line 5                                       │
+          │                                                │
+          │     Showing lines 3-6 of 8                     │
+          │                                                │
+          │     Esc close                                  │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
     });
 
@@ -131,17 +131,17 @@ describe("PagerComponent", () => {
             renderItem: (item) => `${item.label}\n  detail for ${item.value}`,
         });
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Details                                        
-
-             First                                          
-               detail for a                                 
-             Second                                         
-               detail for b                                 
-                                                            
-               Esc close                                    
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Details                                      │
+          │                                                │
+          │   First                                        │
+          │     detail for a                               │
+          │   Second                                       │
+          │     detail for b                               │
+          │                                                │
+          │     Esc close                                  │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
     });
 });

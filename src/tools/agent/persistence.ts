@@ -105,7 +105,14 @@ export interface AgentSessionMetadata {
     startedAt: number;
     updatedAt: number;
     usageSnapshot: PersistedAgentRun["usageSnapshot"];
+    responsePreview?: string;
     mutationReport?: PersistedAgentRun["mutationReport"];
+}
+
+function responsePreview(record: PersistedAgentRun): string | undefined {
+    const text = record.progress.output.replace(/\s+/g, " ").trim();
+    if (!text) return undefined;
+    return text.length <= 240 ? text : `${text.slice(0, 239)}…`;
 }
 
 function metadataFromRecord(record: PersistedAgentRun): AgentSessionMetadata {
@@ -123,6 +130,7 @@ function metadataFromRecord(record: PersistedAgentRun): AgentSessionMetadata {
         startedAt: record.startedAt,
         updatedAt: record.updatedAt,
         usageSnapshot: record.usageSnapshot,
+        responsePreview: responsePreview(record),
         mutationReport: record.mutationReport,
     };
 }

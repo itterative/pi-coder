@@ -56,7 +56,7 @@ function pastItem(info: SessionInfo, parentSessionId: string): AgentSessionBrows
         id: info.id,
         title: metadata?.title ?? deriveAgentTitle(info.firstMessage),
         agent: metadata?.agent ?? "delegated agent",
-        status: metadata?.status ?? "persisted transcript",
+        status: metadata?.status ?? "historical",
         task: metadata?.task ?? info.firstMessage,
         startedAt: metadata?.startedAt,
         updatedAt: metadata?.updatedAt ?? info.modified.getTime(),
@@ -67,6 +67,7 @@ function pastItem(info: SessionInfo, parentSessionId: string): AgentSessionBrows
         allMessagesText: info.allMessagesText.slice(-4_000),
         mutating: metadata?.mutating,
         usage: metadata?.usageSnapshot,
+        responsePreview: metadata?.responsePreview,
         changedFiles: metadata?.mutationReport?.changedFiles,
     };
 }

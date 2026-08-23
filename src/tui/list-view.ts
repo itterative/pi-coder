@@ -23,8 +23,7 @@
  *      (e.g. MultiSelectState adds `selected`)
  */
 
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
     Box,
@@ -34,6 +33,7 @@ import {
     Text,
 } from "@earendil-works/pi-tui";
 import { indentLines } from "../common/text";
+import { BorderBox, type BorderCharacters } from "./border-box";
 
 // An item in the list
 export interface ListItem<T> {
@@ -73,6 +73,10 @@ export interface ItemPrefix {
 export interface ListViewOptions<T, S extends ListViewState<T> = ListViewState<T>> {
     // Title shown at the top
     title: string;
+    // Border color for the frame (defaults to the normal border color)
+    borderColor?: ThemeColor;
+    // Border glyphs for the frame (defaults to rounded box-drawing glyphs)
+    borderCharacters?: BorderCharacters;
     // Custom render function for item content (prefix is added automatically)
     renderItem?: (item: ListItem<T>, options: ListViewRenderItemOptions<T, S>) => string;
     // Optional header content rendered after title
@@ -118,6 +122,7 @@ export class ListViewComponent<
     protected theme: Theme | null = null;
     private readonly container: Container;
     private readonly contentContainer: Box;
+    private borderedContainer: BorderBox | null = null;
     private done: ((result: R) => void) | null = null;
 
     // Cache built during render: lines per item and start line for each item
@@ -148,9 +153,7 @@ export class ListViewComponent<
      */
     initialize(theme: Theme): void {
         this.theme = theme;
-        const borderColor = (s: string) => theme.fg("border", s);
-
-        this.container.addChild(new DynamicBorder(borderColor));
+        const borderColor = (s: string) => theme.fg(this.listOptions.borderColor ?? "border", s);
 
         // Header
         this.container.addChild(
@@ -172,16 +175,19 @@ export class ListViewComponent<
         this.container.addChild(this.contentContainer);
 
         this.container.addChild(new Spacer(1));
-        this.container.addChild(new DynamicBorder(borderColor));
+        this.borderedContainer = new BorderBox(this.container, {
+            borderColor,
+            characters: this.listOptions.borderCharacters,
+        });
     }
 
     render(width: number): string[] {
-        if (!this.theme) {
+        if (!this.theme || !this.borderedContainer) {
             throw new Error("ListViewComponent must be initialized with a theme before rendering");
         }
         this.buildCacheAndUpdateScroll();
         this.updateContent();
-        return this.container.render(width);
+        return this.borderedContainer.render(width);
     }
 
     invalidate(): void {

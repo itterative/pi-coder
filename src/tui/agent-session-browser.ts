@@ -7,6 +7,7 @@ import {
 import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
 import type { AgentSessionBrowserItem } from "../tools/agent/sessions";
+import { BORDER_STYLES } from "./border-box";
 
 interface AgentSessionBrowserState extends ListViewState<AgentSessionBrowserItem> {
     tab: "current" | "past";
@@ -34,7 +35,7 @@ const EMPTY_PAST: AgentSessionBrowserItem = {
     title: "",
     agent: "",
     status: "",
-    task: "No persisted child transcripts were found for this cwd.",
+    task: "No persisted child sessions were found for this cwd.",
     updatedAt: 0,
 };
 
@@ -50,10 +51,39 @@ function dateText(timestamp: number | undefined): string {
     return timestamp === undefined ? "unknown time" : new Date(timestamp).toLocaleString();
 }
 
-function shortPath(file: string | undefined): string {
-    if (!file) return "no durable transcript";
-    const parts = file.split(/[\\/]/);
-    return parts.slice(-2).join("/");
+function oneLine(text: string, maxChars = 240): string {
+    const normalized = text.replace(/\\s+/g, " ").trim();
+    return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars - 1)}…`;
+}
+
+function compactNumber(value: number): string {
+    const absolute = Math.abs(value);
+    const units = [
+        { value: 1_000_000_000, suffix: "b" },
+        { value: 1_000_000, suffix: "m" },
+        { value: 1_000, suffix: "k" },
+    ];
+    const unit = units.find((candidate) => absolute >= candidate.value);
+    if (!unit) return String(value);
+    const scaled = value / unit.value;
+    const precision = Math.abs(scaled) < 10 ? 1 : 0;
+    return `${Number(scaled.toFixed(precision))}${unit.suffix}`;
+}
+
+function usageText(usage: NonNullable<AgentSessionBrowserItem["usage"]>): string {
+    return `${compactNumber(usage.input)} input, ${compactNumber(usage.output)} output, $${usage.cost.total.toFixed(4)}`;
+}
+
+function returnedText(item: AgentSessionBrowserItem): string | undefined {
+    if (item.responsePreview) return oneLine(item.responsePreview);
+    if (item.allMessagesText) return oneLine(item.allMessagesText.slice(-1_000));
+    return undefined;
+}
+
+function tabText(tab: "current" | "past", theme: Theme): string {
+    return tab === "current"
+        ? `${theme.fg("accent", theme.bold("● Current"))}    ${theme.fg("dim", "○ Past")}`
+        : `${theme.fg("dim", "○ Current")}    ${theme.fg("accent", theme.bold("● Past"))}`;
 }
 
 function itemText(
@@ -65,11 +95,13 @@ function itemText(
 
     const mode = item.mutating ? "worker" : item.agent;
     const status = item.status.replaceAll("_", " ");
-    const headline = `${item.title} · ${mode} · ${status} · ${dateText(item.updatedAt)}`;
-    const task = `Task: ${item.task.replace(/\s+/g, " ").trim()}`;
+    const headline = `${item.title || "Untitled run"} · ${mode} · ${status} · ${dateText(item.updatedAt)}`;
+    const task = `Task: ${oneLine(item.task)}`;
+    const returned = returnedText(item);
     if (!detail) {
-        const activity = item.activity ? ` · ${item.activity}` : "";
-        return theme.fg("accent", headline) + `\n${task}${activity}`;
+        const activity = item.activity ? ` · ${oneLine(item.activity, 120)}` : "";
+        const preview = returned ? `\n${theme.fg("muted", `Result: ${returned}`)}` : "";
+        return theme.fg("accent", headline) + `\n${task}${activity}${preview}`;
     }
 
     const lines = [
@@ -78,21 +110,14 @@ function itemText(
         task,
         `Started: ${dateText(item.startedAt)}`,
         `Updated: ${dateText(item.updatedAt)}`,
-        `Transcript: ${shortPath(item.sessionFile)}`,
     ];
-    if (item.parentSessionId) lines.push(`Parent session: ${item.parentSessionId}`);
     if (item.messageCount !== undefined) lines.push(`Messages: ${item.messageCount}`);
-    if (item.usage) {
-        lines.push(`Usage: ${item.usage.input} input, ${item.usage.output} output, $${item.usage.cost.total.toFixed(4)}`);
-    }
+    if (item.usage) lines.push(`Usage: ${usageText(item.usage)}`);
     if (item.changedFiles?.length) lines.push(`Changed files: ${item.changedFiles.join(", ")}`);
     if (item.firstMessage && item.firstMessage !== item.task) {
-        lines.push(`First message: ${item.firstMessage.replace(/\s+/g, " ").trim()}`);
+        lines.push(`First message: ${oneLine(item.firstMessage)}`);
     }
-    if (item.responsePreview) lines.push(`Latest response: ${item.responsePreview}`);
-    if (item.allMessagesText) {
-        lines.push("", theme.fg("muted", `Transcript preview:\n${item.allMessagesText}`));
-    }
+    if (returned) lines.push(`Result: ${returned}`);
     lines.push("", theme.fg("muted", "This browser is read-only; it does not switch or replay child sessions."));
     return lines.join("\n");
 }
@@ -108,13 +133,24 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
     constructor(options: AgentSessionBrowserOptions) {
         const current = options.current;
         const past = options.past;
+        let activeTab: AgentSessionBrowserState["tab"] = "current";
+        let tabHeader: Text | undefined;
+        let tabTheme: Theme | undefined;
+        const refreshTabHeader = () => {
+            if (tabHeader && tabTheme) tabHeader.setText(tabText(activeTab, tabTheme));
+        };
         super(
             {
                 title: "Delegated agent sessions",
+                borderColor: "borderMuted",
+                borderCharacters: BORDER_STYLES.rounded,
                 helpText: "↑/↓ navigate · Tab/←/→ switch tab · Enter details · Esc close",
                 headerContent: (container, theme) => {
+                    tabTheme = theme;
+                    tabHeader = new Text(tabText(activeTab, theme), 1, 0);
+                    container.addChild(tabHeader);
                     container.addChild(new Text(
-                        theme.fg("muted", "Current shows this parent session; Past shows durable child transcripts for this cwd."),
+                        theme.fg("muted", "Current shows this parent session; Past shows durable child results for this cwd."),
                         1,
                         0,
                     ));
@@ -125,7 +161,14 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                 },
                 onKey: (key, state) => {
                     if (matchesKey(key, "tab") || matchesKey(key, "left") || matchesKey(key, "right")) {
-                        state.tab = state.tab === "current" ? "past" : "current";
+                        const nextTab = matchesKey(key, "left")
+                            ? "current"
+                            : matchesKey(key, "right")
+                                ? "past"
+                                : state.tab === "current" ? "past" : "current";
+                        activeTab = nextTab;
+                        refreshTabHeader();
+                        state.tab = nextTab;
                         state.items = asListItems(
                             state.tab === "current" ? current : past,
                             state.tab === "current" ? EMPTY_CURRENT : EMPTY_PAST,
@@ -147,10 +190,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     return false;
                 },
                 footerContent: (container, theme, state) => {
-                    const isCurrent = state.tab === "current";
-                    const tabText = `${isCurrent ? "[Current]" : " Current "}    ${isCurrent ? " Past " : "[Past]"}`;
-                    const count = isCurrent ? current.length : past.length;
-                    container.addChild(new Text(theme.fg("accent", tabText), 1, 0));
+                    const count = state.tab === "current" ? current.length : past.length;
                     container.addChild(new Text(
                         theme.fg("dim", `${count} session${count === 1 ? "" : "s"}`),
                         1,
@@ -173,6 +213,11 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
 
     override render(width: number): string[] {
         return super.render(width).map((line) => truncateToWidth(line, width, ""));
+    }
+
+    protected override getItemPrefix(index: number, isCursor: boolean) {
+        if (this.state.items[index]?.disabled) return { first: "  ", continuation: "  " };
+        return super.getItemPrefix(index, isCursor);
     }
 
     protected override handleAction(key: string): void {

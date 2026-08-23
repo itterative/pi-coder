@@ -23,16 +23,17 @@ describe("SelectComponent", () => {
     it("renders initial state with cursor on first item", () => {
         const { component } = setup({ title: "Pick one", items: items(3) });
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Pick one                                       
-
-             → Item 0                                       
-               Item 1                                       
-               Item 2                                       
-                                                            
-               ↑/↓ navigate | Enter confirm | Esc cancel    
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Pick one                                     │
+          │                                                │
+          │   → Item 0                                     │
+          │     Item 1                                     │
+          │     Item 2                                     │
+          │                                                │
+          │     ↑/↓ navigate | Enter confirm | Esc         │
+          │   cancel                                       │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
     });
 
@@ -40,64 +41,68 @@ describe("SelectComponent", () => {
         const { component } = setup({ title: "Pick one", items: items(3) });
         press(component, KEY.down);
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Pick one                                       
-
-               Item 0                                       
-             → Item 1                                       
-               Item 2                                       
-                                                            
-               ↑/↓ navigate | Enter confirm | Esc cancel    
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Pick one                                     │
+          │                                                │
+          │     Item 0                                     │
+          │   → Item 1                                     │
+          │     Item 2                                     │
+          │                                                │
+          │     ↑/↓ navigate | Enter confirm | Esc         │
+          │   cancel                                       │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
         press(component, "k");
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Pick one                                       
-
-             → Item 0                                       
-               Item 1                                       
-               Item 2                                       
-                                                            
-               ↑/↓ navigate | Enter confirm | Esc cancel    
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Pick one                                     │
+          │                                                │
+          │   → Item 0                                     │
+          │     Item 1                                     │
+          │     Item 2                                     │
+          │                                                │
+          │     ↑/↓ navigate | Enter confirm | Esc         │
+          │   cancel                                       │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
     });
 
     it("shows a scroll indicator when items exceed maxVisible", () => {
         const { component } = setup({ title: "Many", items: items(8), maxVisible: 4 });
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Many                                           
-
-             → Item 0                                       
-               Item 1                                       
-               Item 2                                       
-               Item 3                                       
-                                                            
-               Showing lines 1-4 of 8                       
-                                                            
-               ↑/↓ navigate | Enter confirm | Esc cancel    
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Many                                         │
+          │                                                │
+          │   → Item 0                                     │
+          │     Item 1                                     │
+          │     Item 2                                     │
+          │     Item 3                                     │
+          │                                                │
+          │     Showing lines 1-4 of 8                     │
+          │                                                │
+          │     ↑/↓ navigate | Enter confirm | Esc         │
+          │   cancel                                       │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
         press(component, KEY.down, KEY.down, KEY.down, KEY.down, KEY.down);
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Many                                           
-
-               Item 4                                       
-             → Item 5                                       
-               Item 6                                       
-               Item 7                                       
-                                                            
-               Showing lines 5-8 of 8                       
-                                                            
-               ↑/↓ navigate | Enter confirm | Esc cancel    
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Many                                         │
+          │                                                │
+          │     Item 4                                     │
+          │   → Item 5                                     │
+          │     Item 6                                     │
+          │     Item 7                                     │
+          │                                                │
+          │     Showing lines 5-8 of 8                     │
+          │                                                │
+          │     ↑/↓ navigate | Enter confirm | Esc         │
+          │   cancel                                       │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
     });
 
@@ -127,16 +132,17 @@ describe("SelectComponent", () => {
             },
         });
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Custom                                         
-
-             → Item 0 <                                     
-               Item 1                                       
-               cursor at 0                                  
-                                                            
-               ↑/↓ navigate | Enter confirm | Esc cancel    
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Custom                                       │
+          │                                                │
+          │   → Item 0 <                                   │
+          │     Item 1                                     │
+          │     cursor at 0                                │
+          │                                                │
+          │     ↑/↓ navigate | Enter confirm | Esc         │
+          │   cancel                                       │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
     });
 });

@@ -22,17 +22,17 @@ describe("MultiSelectComponent", () => {
     it("renders initial state with unchecked boxes", () => {
         const { component } = setup({ title: "Pick many", items: items(3) });
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Pick many                                      
-
-             → [ ] Item 0                                   
-               [ ] Item 1                                   
-               [ ] Item 2                                   
-                                                            
-               ↑/↓ navigate | Space toggle | a all |        
-             Enter confirm | Esc cancel                     
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Pick many                                    │
+          │                                                │
+          │   → [ ] Item 0                                 │
+          │     [ ] Item 1                                 │
+          │     [ ] Item 2                                 │
+          │                                                │
+          │     ↑/↓ navigate | Space toggle | a all |      │
+          │   Enter confirm | Esc cancel                   │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
     });
 
@@ -40,35 +40,35 @@ describe("MultiSelectComponent", () => {
         const { component } = setup({ title: "Pick many", items: items(3) });
         press(component, KEY.space);
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Pick many                                      
-
-             → [x] Item 0                                   
-               [ ] Item 1                                   
-               [ ] Item 2                                   
-                                                            
-               1 item(s) selected                           
-                                                            
-               ↑/↓ navigate | Space toggle | a all |        
-             Enter confirm | Esc cancel                     
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Pick many                                    │
+          │                                                │
+          │   → [x] Item 0                                 │
+          │     [ ] Item 1                                 │
+          │     [ ] Item 2                                 │
+          │                                                │
+          │     1 item(s) selected                         │
+          │                                                │
+          │     ↑/↓ navigate | Space toggle | a all |      │
+          │   Enter confirm | Esc cancel                   │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
         press(component, KEY.down, KEY.space);
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Pick many                                      
-
-               [x] Item 0                                   
-             → [x] Item 1                                   
-               [ ] Item 2                                   
-                                                            
-               2 item(s) selected                           
-                                                            
-               ↑/↓ navigate | Space toggle | a all |        
-             Enter confirm | Esc cancel                     
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Pick many                                    │
+          │                                                │
+          │     [x] Item 0                                 │
+          │   → [x] Item 1                                 │
+          │     [ ] Item 2                                 │
+          │                                                │
+          │     2 item(s) selected                         │
+          │                                                │
+          │     ↑/↓ navigate | Space toggle | a all |      │
+          │   Enter confirm | Esc cancel                   │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
     });
 
@@ -76,33 +76,33 @@ describe("MultiSelectComponent", () => {
         const { component } = setup({ title: "Pick many", items: items(3) });
         press(component, "a");
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Pick many                                      
-
-             → [x] Item 0                                   
-               [x] Item 1                                   
-               [x] Item 2                                   
-                                                            
-               3 item(s) selected                           
-                                                            
-               ↑/↓ navigate | Space toggle | a all |        
-             Enter confirm | Esc cancel                     
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Pick many                                    │
+          │                                                │
+          │   → [x] Item 0                                 │
+          │     [x] Item 1                                 │
+          │     [x] Item 2                                 │
+          │                                                │
+          │     3 item(s) selected                         │
+          │                                                │
+          │     ↑/↓ navigate | Space toggle | a all |      │
+          │   Enter confirm | Esc cancel                   │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
         press(component, "a");
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Pick many                                      
-
-             → [ ] Item 0                                   
-               [ ] Item 1                                   
-               [ ] Item 2                                   
-                                                            
-               ↑/↓ navigate | Space toggle | a all |        
-             Enter confirm | Esc cancel                     
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Pick many                                    │
+          │                                                │
+          │   → [ ] Item 0                                 │
+          │     [ ] Item 1                                 │
+          │     [ ] Item 2                                 │
+          │                                                │
+          │     ↑/↓ navigate | Space toggle | a all |      │
+          │   Enter confirm | Esc cancel                   │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
     });
 
@@ -121,19 +121,19 @@ describe("MultiSelectComponent", () => {
     it("respects initialSelected", () => {
         const { component } = setup({ title: "Pick many", items: items(3), initialSelected: new Set([0, 2]) });
         expect(renderText(component)).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Pick many                                      
-
-             → [x] Item 0                                   
-               [ ] Item 1                                   
-               [x] Item 2                                   
-                                                            
-               2 item(s) selected                           
-                                                            
-               ↑/↓ navigate | Space toggle | a all |        
-             Enter confirm | Esc cancel                     
-
-          ──────────────────────────────────────────────────"
+          "╭────────────────────────────────────────────────╮
+          │   Pick many                                    │
+          │                                                │
+          │   → [x] Item 0                                 │
+          │     [ ] Item 1                                 │
+          │     [x] Item 2                                 │
+          │                                                │
+          │     2 item(s) selected                         │
+          │                                                │
+          │     ↑/↓ navigate | Space toggle | a all |      │
+          │   Enter confirm | Esc cancel                   │
+          │                                                │
+          ╰────────────────────────────────────────────────╯"
         `);
     });
 });

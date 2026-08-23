@@ -134,6 +134,7 @@ describe("durable agent run persistence", () => {
             runId: "scout-1",
             title: "Persistence scan",
             status: "interrupted",
+            responsePreview: "Partial",
         });
     });
 
