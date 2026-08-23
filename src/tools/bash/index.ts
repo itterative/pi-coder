@@ -15,16 +15,6 @@ import { resolvePermissionDetails } from "../../modules/sandbox/resolve";
 import { suggestRule } from "../../modules/sandbox/suggestions";
 import { selectWithMessage, type SelectMessageItem } from "../../tui/select-with-message";
 
-// Session-scoped permission rules (pattern → action), saved when the user
-// picks a "remember" option in the prompt. Never written to the config
-// file; cleared when a new session starts.
-let sessionRules: Record<string, Permission> = {};
-
-// Session prompt mode: the action the prompt's "Yes" performs
-// (allow:sandbox or allow). Shown and toggled in the dialog footer;
-// reset to sandboxed when a new session starts.
-let defaultSandboxed = true;
-
 // A prompt choice. The yes-actions are resolved at confirm time (the mode
 // can change while the dialog is open); "remember" additionally saves a
 // session rule whose value is the action chosen.
@@ -40,6 +30,10 @@ interface ToolCallEventResult {
 }
 
 export default function registerBashToolHook(pi: ExtensionAPI) {
+    // Runtime-local state must not leak into another parent or child extension
+    // instance. Remembered rules are still cleared on each session start.
+    let sessionRules: Record<string, Permission> = {};
+    let defaultSandboxed = true;
     let hasSupport =
         process.platform === "linux" || process.platform === "freebsd";
 
@@ -229,6 +223,7 @@ Pay attention to these notes as they provide context about the user's preference
                     },
                 },
                 ctx,
+                ctx.signal,
             );
 
             if (result) {

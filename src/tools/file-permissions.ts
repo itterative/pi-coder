@@ -35,13 +35,6 @@ type PromptChoice =
     | { kind: "yes" }
     | { kind: "no" };
 
-// Explicit approvals are intentionally separate for read and write. Approving
-// a directory for reading must not silently grant permission to overwrite it.
-const sessionFolders: Record<FileOperation, Set<string>> = {
-    read: new Set(),
-    write: new Set(),
-};
-
 function operationLabel(operation: FileOperation): string {
     return operation === "read" ? "read from" : "write to";
 }
@@ -60,25 +53,33 @@ function isAllowedFileEntry(data: unknown): data is AllowedFileEntry {
     );
 }
 
-function restoreSessionFolders(ctx: ExtensionContext): void {
-    sessionFolders.read.clear();
-    sessionFolders.write.clear();
+function restoreSessionFolders(
+    ctx: ExtensionContext,
+    operation: FileOperation,
+    sessionFolders: Set<string>,
+): void {
+    sessionFolders.clear();
 
     for (const entry of ctx.sessionManager.getBranch()) {
         if (entry.type !== "custom" || entry.customType !== ALLOWED_FILE_ENTRY_TYPE) {
             continue;
         }
 
-        if (isAllowedFileEntry(entry.data)) {
-            sessionFolders[entry.data.operation].add(entry.data.folder);
+        if (isAllowedFileEntry(entry.data) && entry.data.operation === operation) {
+            sessionFolders.add(entry.data.folder);
         }
     }
 }
 
-function getApprovedFolder(filePath: string, cwd: string, operation: FileOperation): string | undefined {
+function getApprovedFolder(
+    filePath: string,
+    cwd: string,
+    operation: FileOperation,
+    sessionFolders: Set<string>,
+): string | undefined {
     const confinement = sandboxConfig.current?.heuristics?.cwdConfinement;
 
-    for (const folder of sessionFolders[operation]) {
+    for (const folder of sessionFolders) {
         if (isPathWithinDirectory(filePath, folder, cwd, confinement)) {
             return folder;
         }
@@ -142,6 +143,7 @@ async function promptForFileAccess(
             items,
         },
         ctx,
+        ctx.signal,
     );
 
     return result;
@@ -156,8 +158,12 @@ export default function registerFileToolHook(
     pi: ExtensionAPI,
     operation: FileOperation,
 ): void {
+    // Each registration belongs to one parent runtime and one operation. Keep
+    // remembered read/write approvals isolated from reloads and child runtimes.
+    const sessionFolders = new Set<string>();
+
     pi.on("session_start", (_event, ctx) => {
-        restoreSessionFolders(ctx);
+        restoreSessionFolders(ctx, operation, sessionFolders);
     });
 
     pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult> => {
@@ -178,7 +184,7 @@ export default function registerFileToolHook(
             return { block: false };
         }
 
-        const approvedFolder = getApprovedFolder(filePath, cwd, operation);
+        const approvedFolder = getApprovedFolder(filePath, cwd, operation, sessionFolders);
         if (approvedFolder !== undefined) {
             return { block: false };
         }
@@ -192,7 +198,7 @@ export default function registerFileToolHook(
         }
 
         if (choice?.kind === "remember") {
-            sessionFolders[operation].add(choice.folder);
+            sessionFolders.add(choice.folder);
             pi.appendEntry<AllowedFileEntry>(ALLOWED_FILE_ENTRY_TYPE, {
                 operation,
                 folder: choice.folder,

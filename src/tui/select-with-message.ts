@@ -52,6 +52,7 @@ import {
     visibleWidth,
     wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { withDialogQueue } from "./dialog-queue";
 import { InlineEditor } from "./inline-editor";
 
 // ─── Layout & behavior constants ─────────────────────────────────────
@@ -510,28 +511,38 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
 export async function selectWithMessage<T>(
     options: SelectWithMessageOptions<T>,
     ctx: { hasUI: boolean; ui: ExtensionContext["ui"] },
+    signal?: AbortSignal,
 ): Promise<SelectWithMessageResult<T> | undefined> {
-    if (!ctx.hasUI) {
-        return undefined;
-    }
+    if (!ctx.hasUI || signal?.aborted) return undefined;
+    if (options.items.length === 0) return undefined;
 
-    if (options.items.length === 0) {
-        return undefined;
-    }
+    return withDialogQueue(signal, async () => {
+        // Hide the working indicator spinner to prevent flickering while the
+        // custom component is displayed (the spinner's animation frames cause
+        // constant re-renders that fight with the component on short terminals).
+        ctx.ui.setWorkingVisible(false);
 
-    // Hide the working indicator spinner to prevent flickering while the
-    // custom component is displayed (the spinner's animation frames cause
-    // constant re-renders that fight with the component on short terminals).
-    ctx.ui.setWorkingVisible(false);
-
-    try {
-        return await ctx.ui.custom<SelectWithMessageResult<T> | undefined>((_tui, theme, _kb, done) => {
-            const component = new SelectWithMessageComponent(options);
-            component.setDoneCallback(done);
-            component.initialize(theme);
-            return component;
-        });
-    } finally {
-        ctx.ui.setWorkingVisible(true);
-    }
+        let finish: ((result: SelectWithMessageResult<T> | undefined) => void) | undefined;
+        const abort = () => finish?.(undefined);
+        signal?.addEventListener("abort", abort, { once: true });
+        try {
+            return await ctx.ui.custom<SelectWithMessageResult<T> | undefined>((_tui, theme, _kb, done) => {
+                let settled = false;
+                finish = (result) => {
+                    if (settled) return;
+                    settled = true;
+                    done(result);
+                };
+                const component = new SelectWithMessageComponent(options);
+                component.setDoneCallback(finish);
+                component.initialize(theme);
+                if (signal?.aborted) queueMicrotask(abort);
+                return component;
+            });
+        } finally {
+            signal?.removeEventListener("abort", abort);
+            finish = undefined;
+            ctx.ui.setWorkingVisible(true);
+        }
+    });
 }

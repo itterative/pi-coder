@@ -41,6 +41,7 @@ import {
     Text,
     visibleWidth,
 } from "@earendil-works/pi-tui";
+import { withDialogQueue } from "./dialog-queue";
 import { InlineEditor } from "./inline-editor";
 
 // ─── Layout constants ───────────────────────────────────────────────
@@ -390,17 +391,6 @@ export class AskUserComponent implements Component, Focusable {
     }
 }
 
-// ─── Queue for concurrent askUser calls ────────────────────────────
-//
-// When pi executes multiple tool calls in parallel, several ask_user calls
-// may arrive at the same time. ctx.ui.custom() can only display one custom
-// component at a time — a second concurrent call would never resolve because
-// its done callback is never wired up. We solve this by serialising all
-// askUser calls through a simple promise-chain queue so that each one waits
-// for the previous to finish before showing its component.
-
-let askUserQueue: Promise<void> = Promise.resolve();
-
 // ─── Public API ──────────────────────────────────────────────────────
 
 export async function askUser(
@@ -411,43 +401,33 @@ export async function askUser(
     if (!ctx.hasUI || signal?.aborted) return undefined;
     if (options.options.length === 0) return undefined;
 
-    // Enqueue: wait for any in-flight askUser to finish before showing ours.
-    let release!: () => void;
-    const waitForTurn = new Promise<void>((resolve) => { release = resolve; });
-    const previousQueue = askUserQueue;
-    askUserQueue = waitForTurn;
-    await previousQueue;
-    if (signal?.aborted) {
-        release();
-        return undefined;
-    }
+    return withDialogQueue(signal, async () => {
+        // Hide the working indicator spinner to prevent flickering while the
+        // custom component is displayed (the spinner's animation frames cause
+        // constant re-renders that fight with the component on short terminals).
+        ctx.ui.setWorkingVisible(false);
 
-    // Hide the working indicator spinner to prevent flickering while the
-    // custom component is displayed (the spinner's animation frames cause
-    // constant re-renders that fight with the component on short terminals).
-    ctx.ui.setWorkingVisible(false);
-
-    let finish: ((result: AskUserResult | undefined) => void) | undefined;
-    const abort = () => finish?.(undefined);
-    signal?.addEventListener("abort", abort, { once: true });
-    try {
-        return await ctx.ui.custom<AskUserResult | undefined>((_tui, theme, _kb, done) => {
-            let settled = false;
-            finish = (result) => {
-                if (settled) return;
-                settled = true;
-                done(result);
-            };
-            const component = new AskUserComponent(options);
-            component.setDoneCallback(finish);
-            component.initialize(theme);
-            if (signal?.aborted) queueMicrotask(abort);
-            return component;
-        });
-    } finally {
-        signal?.removeEventListener("abort", abort);
-        finish = undefined;
-        ctx.ui.setWorkingVisible(true);
-        release();
-    }
+        let finish: ((result: AskUserResult | undefined) => void) | undefined;
+        const abort = () => finish?.(undefined);
+        signal?.addEventListener("abort", abort, { once: true });
+        try {
+            return await ctx.ui.custom<AskUserResult | undefined>((_tui, theme, _kb, done) => {
+                let settled = false;
+                finish = (result) => {
+                    if (settled) return;
+                    settled = true;
+                    done(result);
+                };
+                const component = new AskUserComponent(options);
+                component.setDoneCallback(finish);
+                component.initialize(theme);
+                if (signal?.aborted) queueMicrotask(abort);
+                return component;
+            });
+        } finally {
+            signal?.removeEventListener("abort", abort);
+            finish = undefined;
+            ctx.ui.setWorkingVisible(true);
+        }
+    });
 }

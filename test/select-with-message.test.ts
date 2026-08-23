@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
     SelectWithMessageComponent,
+    selectWithMessage,
     type SelectWithMessageOptions,
     type SelectWithMessageResult,
 } from "../src/tui/select-with-message";
@@ -206,5 +207,31 @@ describe("SelectWithMessageComponent", () => {
         mode = "review";
         component.invalidate();
         expect(ui.render()).toContain("Mode: review");
+    });
+});
+
+describe("selectWithMessage", () => {
+    it("closes an active dialog when its operation is aborted", async () => {
+        const controller = new AbortController();
+        const workingVisibility: boolean[] = [];
+        const ctx = {
+            hasUI: true,
+            ui: {
+                setWorkingVisible(visible: boolean) {
+                    workingVisibility.push(visible);
+                },
+                custom(factory: any) {
+                    return new Promise<SelectWithMessageResult<string> | undefined>((resolve, reject) => {
+                        void Promise.resolve(factory(undefined, mockTheme, undefined, resolve))
+                            .then(() => controller.abort(), reject);
+                    });
+                },
+            },
+        } as any;
+
+        const result = await selectWithMessage(baseOptions, ctx, controller.signal);
+
+        expect(result).toBeUndefined();
+        expect(workingVisibility).toEqual([false, true]);
     });
 });

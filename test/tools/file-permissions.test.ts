@@ -20,6 +20,47 @@ describe("file permission session entries", () => {
         temporaryDirectories = [];
     });
 
+    it("keeps remembered folders isolated between extension runtimes", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-session-"));
+        const folder = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-approved-"));
+        temporaryDirectories.push(cwd, folder);
+
+        const createRuntime = () => {
+            const handlers: Record<string, Handler[]> = {};
+            const pi = {
+                on(event: string, handler: Handler) {
+                    (handlers[event] ??= []).push(handler);
+                },
+                appendEntry() {},
+            } as any;
+            registerFileToolHook(pi, "read");
+            return handlers;
+        };
+        const first = createRuntime();
+        const second = createRuntime();
+        const context = (entries: unknown[]) => ({
+            cwd,
+            hasUI: false,
+            sessionManager: { getBranch: () => entries },
+        });
+        const allowedEntry = {
+            type: "custom",
+            customType: ALLOWED_FILE_ENTRY_TYPE,
+            data: { operation: "read", folder },
+        };
+        const firstCtx = context([allowedEntry]);
+        const secondCtx = context([]);
+
+        await first.session_start[0]({}, firstCtx);
+        await second.session_start[0]({}, secondCtx);
+        const result = await first.tool_call[0]({
+            toolName: "read",
+            input: { path: path.join(folder, "notes.txt") },
+        }, firstCtx);
+
+        expect(result).toEqual({ block: false });
+    });
+
     it("restores remembered folders when resuming a session", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-session-"));
         const folder = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-approved-"));
