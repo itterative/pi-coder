@@ -174,6 +174,26 @@ describe("AgentSessionBrowserComponent", () => {
         `);
     });
 
+    it("shows read and changed files in session details", () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [{
+                ...current,
+                readFiles: ["src/index.ts", "src/tools/agent/runtime.ts"],
+                changedFiles: ["src/tools/agent/index.ts"],
+            }],
+            past: [],
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.enter);
+
+        expect(ui.render()).toContain("Read files (2):");
+        expect(ui.render()).toContain("  - src/index.ts");
+        expect(ui.render()).toContain("Changed files (1):");
+        expect(ui.render()).toContain("  - src/tools/agent/index.ts");
+    });
+
     it("scrolls a long transcript in the detail view", () => {
         const value = new AgentSessionBrowserComponent({
             current: [],

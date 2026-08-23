@@ -248,6 +248,14 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
             changedFiles: Array.isArray(mutationValue.changedFiles)
                 ? mutationValue.changedFiles.filter((item): item is string => typeof item === "string").slice(0, 1_000).map((item) => item.slice(0, 4_096))
                 : [],
+            ...(Array.isArray(mutationValue.readFiles) && mutationValue.readFiles.length
+                ? {
+                    readFiles: mutationValue.readFiles
+                        .filter((item): item is string => typeof item === "string")
+                        .slice(0, 1_000)
+                        .map((item) => item.slice(0, 4_096)),
+                }
+                : {}),
             bashApproved: mutationValue.bashApproved === true,
             interrupted: mutationValue.interrupted === true,
         } : undefined,

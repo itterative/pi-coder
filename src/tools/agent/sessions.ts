@@ -28,6 +28,7 @@ export interface AgentSessionBrowserItem {
     mutating?: boolean;
     usage?: AgentRunSummary["usage"];
     changedFiles?: string[];
+    readFiles?: string[];
 }
 
 function currentItem(run: AgentRunSummary): AgentSessionBrowserItem {
@@ -46,6 +47,7 @@ function currentItem(run: AgentRunSummary): AgentSessionBrowserItem {
         mutating: run.mutating,
         usage: run.usage,
         changedFiles: run.mutationReport?.changedFiles,
+        readFiles: run.mutationReport?.readFiles,
     };
 }
 
@@ -71,6 +73,7 @@ function pastItem(info: SessionInfo, parentSessionId: string): AgentSessionBrows
         usage: metadata?.usageSnapshot,
         responsePreview: metadata?.responsePreview,
         changedFiles: metadata?.mutationReport?.changedFiles,
+        readFiles: metadata?.mutationReport?.readFiles,
     };
 }
 

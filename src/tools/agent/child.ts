@@ -60,6 +60,7 @@ interface ProgressTracker {
     pendingQuestion?: ParentQuestion;
     lastUpdateAt: number;
     changedFiles: Set<string>;
+    readFiles: Set<string>;
     bashApproved: boolean;
     interrupted: boolean;
 }
@@ -290,13 +291,21 @@ function registerChildExtension(
                 return;
             }
 
-            if (isChildPathAllowed(filePath, ctx.cwd)) return;
+            if (isChildPathAllowed(filePath, ctx.cwd)) {
+                tracker.readFiles.add(relativeReadPath(filePath, ctx.cwd));
+                return;
+            }
             return {
                 block: true,
                 reason: "Read-only scout access blocked: path is outside the allowed working directory or is sensitive.",
             };
         });
     };
+}
+
+function relativeReadPath(filePath: string | undefined, cwd: string): string {
+    const resolved = path.resolve(cwd, filePath?.trim() || ".");
+    return path.relative(cwd, resolved) || ".";
 }
 
 function textFromAssistantMessage(message: unknown): string {
@@ -705,6 +714,7 @@ export async function createAgentChild(
             : { output: "", recentActivity: [] },
         lastUpdateAt: 0,
         changedFiles: new Set(initialMutation.changedFiles),
+        readFiles: new Set(initialMutation.readFiles ?? []),
         bashApproved: initialMutation.bashApproved,
         interrupted: initialMutation.interrupted === true || context.repairInterrupted === true,
     };
@@ -850,6 +860,7 @@ export async function createAgentChild(
         getUsage: () => aggregateUsage(session),
         getMutationReport: () => ({
             changedFiles: [...tracker.changedFiles].sort(),
+            ...(tracker.readFiles.size ? { readFiles: [...tracker.readFiles].sort() } : {}),
             bashApproved: tracker.bashApproved,
             ...(tracker.interrupted ? { interrupted: true } : {}),
         }),

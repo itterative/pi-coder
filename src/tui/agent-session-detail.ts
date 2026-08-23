@@ -35,7 +35,14 @@ function detailText(item: AgentSessionBrowserItem, theme: Theme, width: number):
     ];
     if (item.messageCount !== undefined) lines.push(`Messages: ${item.messageCount}`);
     if (item.usage) lines.push(`Usage: ${usageText(item.usage)}`);
-    if (item.changedFiles?.length) lines.push(`Changed files: ${item.changedFiles.join(", ")}`);
+    if (item.readFiles?.length) {
+        lines.push(`Read files (${item.readFiles.length}):`);
+        lines.push(...item.readFiles.map((file) => `  - ${file}`));
+    }
+    if (item.changedFiles?.length) {
+        lines.push(`Changed files (${item.changedFiles.length}):`);
+        lines.push(...item.changedFiles.map((file) => `  - ${file}`));
+    }
     lines.push("", theme.fg("accent", "Transcript:"));
 
     if (transcript) {

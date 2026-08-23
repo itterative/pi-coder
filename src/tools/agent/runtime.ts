@@ -29,6 +29,7 @@ export interface ChildProgress {
 
 export interface WorkerMutationReport {
     changedFiles: string[];
+    readFiles?: string[];
     bashApproved: boolean;
     interrupted?: boolean;
 }
@@ -1215,9 +1216,14 @@ export class AgentRunManager {
             ...(run.restoredMutationReport?.changedFiles ?? []),
             ...(current?.changedFiles ?? []),
         ]);
+        const readFiles = new Set([
+            ...(run.restoredMutationReport?.readFiles ?? []),
+            ...(current?.readFiles ?? []),
+        ]);
         const interrupted = run.restoredMutationReport?.interrupted === true || current?.interrupted === true;
         return {
             changedFiles: [...changedFiles].sort(),
+            ...(readFiles.size ? { readFiles: [...readFiles].sort() } : {}),
             bashApproved: run.restoredMutationReport?.bashApproved === true || current?.bashApproved === true,
             ...(interrupted ? { interrupted: true } : {}),
         };
