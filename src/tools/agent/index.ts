@@ -191,8 +191,15 @@ async function runWorkspaceSetup(
     await updateAgentWorkspace(workspace, { setupState: "running" });
     ctx.ui.notify(`Preparing isolated workspace ${workspace.slug}…`, "info");
     const setupDefinition: AgentDefinition = {
-        ...definition,
-        systemPrompt: `${definition.systemPrompt}\n\nYou are preparing a development workspace for a later worker. Inspect the project and set up its development environment as needed. Do not implement the parent task or make feature changes. Report the commands you ran, environment assumptions, and how the next worker should validate its work.`,
+        name: "workspace-setup",
+        description: "Prepare an isolated development workspace without implementing the task",
+        tools: [...definition.tools],
+        model: definition.model,
+        source: "builtin",
+        mutating: definition.mutating,
+        systemPrompt: `You are the isolated workspace setup specialist for a later implementation worker.
+
+Your only job is to inspect the project and prepare its development environment: install or configure dependencies when needed, verify the available build and test commands, and make only setup-related changes required for those activities. Do not implement features or make unrelated source changes. Stop after setup and report the commands you ran, environment assumptions, setup-related files changed, and how the later worker should validate its work.`,
     };
     let handle: Awaited<ReturnType<ChildAgentFactory>> | undefined;
     try {
@@ -209,7 +216,7 @@ async function runWorkspaceSetup(
         signal?.addEventListener("abort", abortSetup, { once: true });
         try {
             await handle.prompt(
-                "Prepare this isolated workspace for the requested development task. Inspect the project first, install or configure dependencies only when needed, and verify the available development/test commands. Do not implement the requested feature yet.",
+                "Prepare this isolated workspace for a later implementation worker. Inspect the project first, install or configure dependencies only when needed, and verify the available development/test commands. Do not implement features or make unrelated source changes; stop after setup with a concise setup report.",
             );
         } finally {
             signal?.removeEventListener("abort", abortSetup);
