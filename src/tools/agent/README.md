@@ -32,7 +32,7 @@ When the parent has a persisted pi session, child transcripts are stored relativ
 
 A child paused at `ask_parent` restores as `waiting_for_parent`. A child that was starting or running when shutdown/crash occurred restores as `interrupted`; it never restarts or replays a tool automatically and requires explicit grounded `resume` guidance. Any unmatched crash-time tool calls receive synthetic error results saying their outcome is uncertain, so a worker must inspect checkout state before retrying. Current agent definitions are fingerprinted and revalidated, and persisted metadata cannot grant or remove worker mutation capability.
 
-Uncollected background terminal outcomes restore from bounded parent metadata without reopening their child transcript. Collection, cancellation, and terminal-result eviction append a removal tombstone and delete the corresponding child file when present. Child transcripts contain raw conversation and tool-result content rather than sanitized trace previews; keep the private storage directory confidential. Parent sessions deleted outside pi may leave orphan directories until an explicit cleanup policy is added.
+Uncollected background terminal outcomes restore from bounded parent metadata without reopening their child transcript. Collection, cancellation, and terminal-result eviction append a removal tombstone but retain the child transcript so `/agent-sessions` can browse past work. Child transcripts contain raw conversation and tool-result content rather than sanitized trace previews; keep the private storage directory confidential. A later explicit prune policy can remove old transcripts, and parent sessions deleted outside pi may leave orphan directories until that policy is added.
 
 ## Built-in worker
 

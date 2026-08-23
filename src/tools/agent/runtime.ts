@@ -1056,8 +1056,9 @@ export class AgentRunManager {
         if (run.background) {
             run.terminalOutcome = outcome;
             this.terminalOrder.push(run.id);
-            const persisted = this.persistRun(run);
-            if (persisted) this.deleteChildSession(run);
+            this.persistRun(run);
+            // Completed transcripts remain browseable from /agent-sessions even after
+            // the bounded in-memory result is collected or evicted.
             this.pruneRetainedResults();
         } else {
             this.removeRun(run);
@@ -1174,10 +1175,7 @@ export class AgentRunManager {
         this.runs.delete(run.id);
         const terminalIndex = this.terminalOrder.indexOf(run.id);
         if (terminalIndex >= 0) this.terminalOrder.splice(terminalIndex, 1);
-        if (persistRemoval) {
-            const persisted = this.persistRun(run, "removed");
-            if (persisted) this.deleteChildSession(run);
-        }
+        if (persistRemoval) this.persistRun(run, "removed");
     }
 
     private mutationReport(run: AgentRun): WorkerMutationReport {

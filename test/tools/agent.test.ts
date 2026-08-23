@@ -130,6 +130,7 @@ function context() {
 
 function durableStore(directory: string) {
     const records: PersistedAgentRun[] = [];
+    const deletedChildSessions: string[] = [];
     const persistence: AgentRunPersistence = {
         ownerSessionId: "parent-session",
         childSessionDir: directory,
@@ -137,9 +138,9 @@ function durableStore(directory: string) {
             records.push(structuredClone(record));
             return true;
         },
-        deleteChildSession: () => {},
+        deleteChildSession: (file) => deletedChildSessions.push(file),
     };
-    return { persistence, records };
+    return { persistence, records, deletedChildSessions };
 }
 
 function latestRecords(records: PersistedAgentRun[]): PersistedAgentRun[] {
@@ -545,6 +546,21 @@ describe("AgentRunManager", () => {
             mutating: true,
         });
         await manager.cancel("worker-1");
+    });
+
+    it("retains completed child transcripts after collection for past-session browsing", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-sessions-"));
+        tempDirs.push(dir);
+        const store = durableStore(dir);
+        const child = new FakeChild([{ output: "Persisted result" }], path.join(dir, "child.jsonl"));
+        const manager = new AgentRunManager(async () => child);
+        manager.setPersistence(store.persistence);
+
+        manager.spawn(BUILTIN_SCOUT, "Inspect", context());
+        await flushBackground();
+        manager.collect("scout-1");
+
+        expect(store.deletedChildSessions).toEqual([]);
     });
 
     it("restores a durable waiting run and resumes the same child transcript", async () => {

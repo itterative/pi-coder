@@ -1,10 +1,32 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { repairInterruptedToolCalls } from "../../src/tools/agent/child";
+import { materializePersistentSession, repairInterruptedToolCalls } from "../../src/tools/agent/child";
 import { ZERO_USAGE } from "../../src/tools/agent/runtime";
 
+const tempDirs: string[] = [];
+afterEach(() => {
+    for (const directory of tempDirs.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+});
+
 describe("persistent child transcript repair", () => {
+    it("materializes a durable child session header immediately", () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-child-session-"));
+        tempDirs.push(directory);
+        const session = materializePersistentSession(
+            SessionManager.create(process.cwd(), directory),
+            directory,
+            process.cwd(),
+        );
+        const file = session.getSessionFile();
+        expect(file).toBeDefined();
+        expect(fs.statSync(file!).isFile()).toBe(true);
+        expect(fs.statSync(file!).mode & 0o777).toBe(0o600);
+        expect(session.getHeader()?.cwd).toBe(process.cwd());
+    });
     it("adds uncertain error results only for unmatched tool calls", () => {
         const sessionManager = SessionManager.inMemory(process.cwd());
         sessionManager.appendMessage({

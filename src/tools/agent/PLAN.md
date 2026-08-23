@@ -508,7 +508,7 @@ Implemented invariants:
 - resuming an interrupted run requires explicit parent guidance. Before reopening a crash-interrupted transcript, detect unmatched tool calls and append synthetic error results stating that execution outcome is uncertain; never replay a worker mutation automatically;
 - preserve exact usage checkpoints, the one-worker/four-run bounds, changed-file data, mailbox reconciliation, and the latest-20 terminal-result retention across restoration;
 - reconcile state on in-place `/tree` navigation by allowing navigation only when runs are paused/interrupted/terminal, detaching old-branch persistence before shutdown at the new leaf, and rebuilding the manager from the newly active branch afterward; active streaming or permission-waiting runs must first pause, finish, or be canceled;
-- delete child files when a run is canceled or its terminal result no longer needs a transcript. Orphan cleanup for parent sessions deleted outside pi needs a later explicit prune/retention policy.
+- retain child transcript files after cancellation, collection, and terminal-result eviction so `/agent-sessions` can browse past work; a later explicit prune/retention policy should remove old transcripts and orphan directories for deleted parent sessions.
 
 Later persistence/workflow options:
 

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import {
     DefaultResourceLoader,
@@ -641,6 +643,24 @@ function resolveChildModel(
     throw new Error(`Agent model is unavailable or ambiguous: ${modelSpec}`);
 }
 
+export function materializePersistentSession(
+    sessionManager: SessionManager,
+    sessionDir: string,
+    cwd: string,
+): SessionManager {
+    const sessionFile = sessionManager.getSessionFile();
+    const header = sessionManager.getHeader();
+    if (!sessionFile || !header || fs.existsSync(sessionFile)) return sessionManager;
+
+    fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+    });
+    return SessionManager.open(path.resolve(sessionFile), sessionDir, cwd);
+}
+
 export function repairInterruptedToolCalls(sessionManager: SessionManager): number {
     const pending = new Map<string, string>();
     for (const message of sessionManager.buildSessionContext().messages) {
@@ -688,10 +708,14 @@ export async function createAgentChild(
     };
     const cwd = context.cwd;
     const agentDir = getAgentDir();
-    const sessionManager = context.childSessionFile
+    let sessionManager = context.childSessionFile
         ? SessionManager.open(context.childSessionFile, context.childSessionDir, cwd)
         : context.childSessionDir
-            ? SessionManager.create(cwd, context.childSessionDir)
+            ? materializePersistentSession(
+                SessionManager.create(cwd, context.childSessionDir),
+                context.childSessionDir,
+                cwd,
+            )
             : SessionManager.inMemory(cwd);
     if (context.repairInterrupted) {
         const repaired = repairInterruptedToolCalls(sessionManager);
