@@ -7,19 +7,19 @@ describe("suggestRule: curated table", () => {
     describe("scoped rows (rule remembers the command identity)", () => {
         it.each([
             [[...t("npx vitest run")], "npx vitest *"],
-            [[...t("npx eslint")], "npx eslint *"],
-            [[...t("npm run build")], "npm run build *"],
+            [[...t("npx eslint")], "npx eslint"],
+            [[...t("npm run build")], "npm run build"],
             [[...t("npm run test -- --watch")], "npm run test *"],
-            [[...t("yarn test")], "yarn test *"],
-            [[...t("yarn install")], "yarn install *"],
-            [[...t("pnpm install")], "pnpm install *"],
-            [[...t("bun test")], "bun test *"],
-            [[...t("uv run pytest")], "uv run pytest *"],
-            [[...t("uvx ruff")], "uvx ruff *"],
+            [[...t("yarn test")], "yarn test"],
+            [[...t("yarn install")], "yarn install"],
+            [[...t("pnpm install")], "pnpm install"],
+            [[...t("bun test")], "bun test"],
+            [[...t("uv run pytest")], "uv run pytest"],
+            [[...t("uvx ruff")], "uvx ruff"],
             [[...t("docker ps -a")], "docker ps *"],
             [[...t("docker build .")], "docker build *"],
             [[...t("cargo test --release")], "cargo test *"],
-            [[...t("poetry run pytest")], "poetry run pytest *"],
+            [[...t("poetry run pytest")], "poetry run pytest"],
         ])("suggests %s", (tokens, expected) => {
             expect(suggestRule(tokens)).toBe(expected);
         });
@@ -41,7 +41,7 @@ describe("suggestRule: curated table", () => {
 
     describe("fixed rows (no scoping — first token is data or flags)", () => {
         it.each([
-            [[...t("make")], "make *"],
+            [[...t("make")], "make"],
             [[...t("make build")], "make *"],
             [[...t("make -j8 all")], "make *"],
             [[...t("tox -e py312")], "tox *"],
@@ -74,11 +74,12 @@ describe("suggestRule: curated table", () => {
         });
 
         it("hyphens and colons are safe (script names)", () => {
-            expect(suggestRule(t("npm run test:unit"))).toBe("npm run test:unit *");
+            expect(suggestRule(t("npm run test:unit"))).toBe("npm run test:unit");
+            expect(suggestRule(t("npm run test:unit -- --watch"))).toBe("npm run test:unit *");
         });
 
         it("scoped packages are safe (@scope/pkg)", () => {
-            expect(suggestRule(t("npx @typescript-eslint/eslint"))).toBe("npx @typescript-eslint/eslint *");
+            expect(suggestRule(t("npx @typescript-eslint/eslint"))).toBe("npx @typescript-eslint/eslint");
         });
     });
 

@@ -33,4 +33,6 @@ Important exclusions include `git diff`/`show`/`cat-file` (output-channel risk),
 
 Configuration is `heuristics.cwdConfinement` in `src/common/config.ts`: `enabled`, `permission`, `commands`, `denyPaths`, `blockDotfiles`, and `resolveSymlinks`. Cwd-confinement tests pass config explicitly and use real temporary directories for symlink cases.
 
+Permission suggestion rules in `src/modules/sandbox/suggestions.ts` preserve wildcard semantics: a trailing `*` consumes one or more arguments, so suggestions for argument-less invocations save an exact rule and only append `*` when extra arguments are present.
+
 Tests: `test/modules/sandbox/heuristics.test.ts`, `resolve.test.ts`, and seeded `fuzz.test.ts`. The curation audit command from the standalone sandbox repository is intentionally not part of pi-coder.

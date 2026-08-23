@@ -40,13 +40,21 @@ const scoped =
     (prefix: string, idx: number) =>
     (tokens: string[]): string | null => {
         const name = tokens[idx];
-        return name !== undefined && SAFE_TOKEN.test(name) ? `${prefix} ${name} *` : null;
+        if (name === undefined || !SAFE_TOKEN.test(name)) return null;
+
+        // Keep an exact rule for the command that prompted. Add a wildcard
+        // only when the invocation already has arguments beyond the scoped
+        // command identity; wildcard arguments are one-or-more, not optional.
+        return `${prefix} ${name}${tokens.length > idx + 1 ? " *" : ""}`;
     };
 
 const fixed =
     (pattern: string) =>
-    (): string =>
-        pattern;
+    (tokens: string[]): string => {
+        // As with scoped rules, don't append an argument wildcard when the
+        // prompting invocation has no arguments.
+        return tokens.length > 1 ? pattern : pattern.replace(/ \*$/, "");
+    };
 
 // Most-specific prefixes first: a row whose scoped token is unsafe falls
 // through to the broader row for the same runner (e.g. docker compose →

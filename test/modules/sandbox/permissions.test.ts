@@ -56,6 +56,7 @@ describe("getPermission", () => {
                 { desc: "matches command with wildcard at end", command: "grep pattern", permissions: { "grep *": "allow" }, expected: "allow" },
                 { desc: "matches multi-argument command", command: "npm install --save-dev", permissions: { "npm *": "allow" }, expected: "allow" },
                 { desc: "matches specific subcommand pattern", command: "npm run dev", permissions: { "npm run *": "allow" }, expected: "allow" },
+                { desc: "trailing wildcard requires an argument", command: "npm run test:run", permissions: { "npm run test:run *": "allow" }, expected: "ask" },
                 { desc: "doesn't match when command lacks prefix", command: "ls -la", permissions: { "grep *": "allow" }, expected: "ask" },
             ]);
         });
