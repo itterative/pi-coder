@@ -446,6 +446,7 @@ The child-only `ask_user` forwards through a restricted parent TUI binding and r
 The read-only runtime now supports:
 
 - immediate `spawn` acknowledgements and up to four concurrent child operations;
+- a persistent footer status that updates on running, waiting, ready, failed, collection, and cancellation transitions;
 - explicit bounded `status` polling and one-shot `collect`;
 - background pause/resume through `ask_parent`;
 - active background cancellation and shutdown settlement;

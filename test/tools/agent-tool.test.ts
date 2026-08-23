@@ -45,7 +45,7 @@ describe("agent extension registration", () => {
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
-            ui: { notify: () => {} },
+            ui: { notify: () => {}, setStatus: () => {} },
         };
         const prompt = await handlers.before_agent_start[0]({ systemPrompt: "Parent prompt" }, ctx) as any;
         const result = await tool.execute(
@@ -112,7 +112,7 @@ describe("agent extension registration", () => {
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
-            ui: { notify: () => {} },
+            ui: { notify: () => {}, setStatus: () => {} },
         };
 
         const waiting = await tool.execute(
@@ -174,10 +174,14 @@ describe("agent extension registration", () => {
             background = context.background === true;
             return child;
         });
+        const statuses: Array<string | undefined> = [];
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
-            ui: { notify: () => {} },
+            ui: {
+                notify: () => {},
+                setStatus: (_id: string, value: string | undefined) => statuses.push(value),
+            },
         };
 
         const spawned = await tool.execute(
@@ -213,6 +217,9 @@ describe("agent extension registration", () => {
         expect(prompt.systemPrompt).toContain("scout-1 (scout): completed");
         expect(collected.details.status).toBe("completed");
         expect(collected.content[0].text).toBe("Background result");
+        expect(statuses).toContain("● scout-1");
+        expect(statuses).toContain("✓ scout-1 ready");
+        expect(statuses[statuses.length - 1]).toBeUndefined();
         expect(background).toBe(true);
         await handlers.session_shutdown[0]({}, ctx);
     });
@@ -243,7 +250,10 @@ describe("agent extension registration", () => {
         const ctx = {
             cwd,
             isProjectTrusted: () => true,
-            ui: { notify: (message: string) => notifications.push(message) },
+            ui: {
+                notify: (message: string) => notifications.push(message),
+                setStatus: () => {},
+            },
         };
 
         await handlers.before_agent_start[0]({ systemPrompt: "Parent" }, ctx);

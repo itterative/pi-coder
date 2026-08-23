@@ -139,6 +139,40 @@ function oneLinePreview(text: string, maxChars = 180): string {
         : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
+const AGENT_STATUS_ID = "pi-coder-agents";
+
+function updateAgentStatus(ctx: ExtensionContext, manager: AgentRunManager): void {
+    const runs = manager.listRuns();
+    if (!runs.length) {
+        ctx.ui.setStatus(AGENT_STATUS_ID, undefined);
+        return;
+    }
+
+    const label = (run: (typeof runs)[number]): string => {
+        if (run.status === "starting" || run.status === "running") return `● ${run.runId}`;
+        if (run.status === "waiting_for_parent") return `? ${run.runId}`;
+        if (run.status === "completed") return `✓ ${run.runId} ready`;
+        if (run.status === "failed") return `! ${run.runId} failed`;
+        return `× ${run.runId} ${run.status}`;
+    };
+    if (runs.length <= 4) {
+        ctx.ui.setStatus(AGENT_STATUS_ID, runs.map(label).join(" · "));
+        return;
+    }
+
+    const active = runs.filter((run) => run.status === "starting" || run.status === "running").length;
+    const waiting = runs.filter((run) => run.status === "waiting_for_parent").length;
+    const ready = runs.filter((run) => run.status === "completed").length;
+    const failed = runs.filter((run) => run.status === "failed" || run.status === "aborted").length;
+    const sections = [
+        active ? `● ${active} active` : "",
+        waiting ? `? ${waiting} waiting` : "",
+        ready ? `✓ ${ready} ready` : "",
+        failed ? `! ${failed} failed` : "",
+    ].filter(Boolean);
+    ctx.ui.setStatus(AGENT_STATUS_ID, `agents: ${sections.join(" · ")}`);
+}
+
 export default function registerAgentTool(
     pi: ExtensionAPI,
     factory: ChildAgentFactory = createAgentChild,
@@ -167,7 +201,8 @@ export default function registerAgentTool(
         };
     });
 
-    pi.on("session_shutdown", async () => {
+    pi.on("session_shutdown", async (_event, ctx) => {
+        ctx.ui.setStatus(AGENT_STATUS_ID, undefined);
         await manager.shutdown();
     });
 
@@ -279,6 +314,7 @@ export default function registerAgentTool(
                             params.task,
                             { cwd: ctx.cwd, parentContext: ctx },
                             signal,
+                            () => updateAgentStatus(ctx, manager),
                         );
                     outcome.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
                 } else if (params.action === "resume") {
@@ -294,6 +330,7 @@ export default function registerAgentTool(
                 outcome = failedOutcome(params, error);
             }
 
+            updateAgentStatus(ctx, manager);
             return {
                 content: [{ type: "text", text: outcome.content }],
                 details: outcome.details,

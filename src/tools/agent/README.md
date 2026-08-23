@@ -17,7 +17,7 @@ A child may call `ask_parent` to pause its current turn. The parent receives its
 
 In TUI mode, a foreground child may instead call its restricted `ask_user` tool when a preference, clarification, or decision genuinely requires direct end-user input. The existing pi-coder question component opens under a title such as `scout asks: ...`; the selected or custom answer returns to the same child turn, which then continues normally. Canceling the dialog gives the child a recoverable cancellation result. Aborting the parent operation or shutting down closes an active child dialog. Outside TUI mode, direct interaction returns an explicit unavailable result and tells the child to use `ask_parent` instead.
 
-`spawn` returns immediately and lets up to four read-only children execute concurrently. Poll with `status`; once terminal, `collect` returns and consumes the retained result. A background child cannot open `ask_user`, because an unsolicited dialog could race the parent TUI; it pauses through `ask_parent` instead and can be resumed without becoming foreground. `status`, `resume`, `cancel`, and `collect` report only usage accrued since the previous parent tool result for that run.
+`spawn` returns immediately and lets up to four read-only children execute concurrently. A persistent footer status shows running (`●`), waiting (`?`), ready (`✓`), and failed (`!`) runs; it updates asynchronously when a child settles. Poll with `status`; once terminal, `collect` returns and consumes the retained result. A background child cannot open `ask_user`, because an unsolicited dialog could race the parent TUI; it pauses through `ask_parent` instead and can be resumed without becoming foreground. `status`, `resume`, `cancel`, and `collect` report only usage accrued since the previous parent tool result for that run.
 
 Up to four starting, running, or waiting runs consume active capacity. The latest 20 uncollected background terminal results are retained separately; older IDs become stale. Runs have no TTL, but are in-memory and parent-runtime-local: reload, session replacement/fork, process exit, collection, or explicit cancellation disposes them.
 
@@ -53,7 +53,7 @@ Run these checks after changing child sessions, providers, lifecycle handling, o
 2. Have the child call `ask_parent`; verify the compact result shows its question and run ID, then resume it to completion.
 3. Have the child call `ask_user`; select an option and verify the child continues to completion in the same turn. Repeat with a custom reply, Escape cancellation, and parent abort while the dialog is open.
 4. Exercise two consecutive `ask_parent` cycles and verify prior usage is not counted again in each resume result.
-5. Spawn two independent scouts in one parent tool batch; verify both calls return immediately, both run concurrently, and `status` then `collect` returns each result exactly once.
+5. Spawn two independent scouts in one parent tool batch; verify both calls return immediately, both run concurrently, the footer changes from `●` to `✓`, and `status` then `collect` returns each result exactly once.
 6. Have a background child call `ask_parent`; verify it waits without opening a direct-user dialog, then resumes in the background and can be collected.
 7. Cancel a waiting foreground run and a running background run, then verify both run IDs are stale. Start another run and verify IDs are not reused.
 8. Reload while a child is waiting and while one is running; verify cleanup and stale IDs without an orphaned request or dialog.

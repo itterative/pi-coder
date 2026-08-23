@@ -79,6 +79,7 @@ export interface AgentRunOutcome {
 }
 
 export type AgentProgressCallback = (details: AgentRunDetails) => void;
+export type AgentBackgroundCallback = (outcome: AgentRunOutcome) => void;
 
 export interface AgentRunSummary {
     runId: string;
@@ -108,6 +109,7 @@ interface AgentRun {
     cancelRequested: boolean;
     operation?: Promise<AgentRunOutcome>;
     backgroundTask?: Promise<AgentRunOutcome>;
+    backgroundCallback?: AgentBackgroundCallback;
     terminalOutcome?: AgentRunOutcome;
     abortPromise?: Promise<void>;
 }
@@ -245,9 +247,11 @@ export class AgentRunManager {
         task: string,
         context: AgentStartContext,
         signal?: AbortSignal,
+        onBackgroundUpdate?: AgentBackgroundCallback,
     ): AgentRunOutcome {
         if (signal?.aborted) throw new AgentActionError("Agent spawn was aborted before launch.");
         const { definition, run } = this.createRun(definitionOrName, task, true);
+        run.backgroundCallback = onBackgroundUpdate;
         const taskPromise = this.launchBackground(run, definition, context).catch((error) => {
             if (isTerminalStatus(run.status)) return run.terminalOutcome!;
             return this.finishFailure(
@@ -818,10 +822,17 @@ export class AgentRunManager {
     private trackBackgroundTask(run: AgentRun, task: Promise<AgentRunOutcome>): void {
         run.backgroundTask = task;
         void task.then(
-            () => {
+            (outcome) => {
+                if (!this.closing && !run.cancelRequested) {
+                    if (outcome.details.status === "waiting_for_parent" || isTerminalStatus(outcome.details.status)) {
+                        run.backgroundCallback?.(outcome);
+                    }
+                }
+                if (isTerminalStatus(outcome.details.status)) run.backgroundCallback = undefined;
                 if (run.backgroundTask === task) run.backgroundTask = undefined;
             },
             () => {
+                run.backgroundCallback = undefined;
                 if (run.backgroundTask === task) run.backgroundTask = undefined;
             },
         );
@@ -843,6 +854,7 @@ export class AgentRunManager {
     }
 
     private removeRun(run: AgentRun): void {
+        run.backgroundCallback = undefined;
         this.runs.delete(run.id);
         const terminalIndex = this.terminalOrder.indexOf(run.id);
         if (terminalIndex >= 0) this.terminalOrder.splice(terminalIndex, 1);
