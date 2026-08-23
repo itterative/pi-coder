@@ -118,14 +118,14 @@ async function promptForFileAccess(
     const boldFolder = ctx.ui.theme.bold(folder);
     const items: SelectMessageItem<PromptChoice>[] = [
         {
-            value: { kind: "remember", folder },
-            label: `Yes, and always allow ${boldFolder}`,
-            description: "for this session",
-        },
-        {
             value: { kind: "yes" },
             label: "Yes",
             description: "allow once",
+        },
+        {
+            value: { kind: "remember", folder },
+            label: `Yes, and always allow ${boldFolder}`,
+            description: "for this session",
         },
         {
             value: { kind: "no" },

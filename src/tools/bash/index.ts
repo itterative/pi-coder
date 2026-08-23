@@ -176,7 +176,13 @@ Pay attention to these notes as they provide context about the user's preference
                 ? suggestRule(unresolved[0])
                 : null;
 
-            const items: SelectMessageItem<PromptChoice>[] = [];
+            const items: SelectMessageItem<PromptChoice>[] = [
+                {
+                    value: { kind: "yes" },
+                    label: "Yes",
+                    description: "run once",
+                },
+            ];
             if (suggestion) {
                 // theme.bold (not fg/accent): accent marks the selected
                 // item. Pre-baked here — the dialog component is rebuilt
@@ -188,11 +194,6 @@ Pay attention to these notes as they provide context about the user's preference
                     description: "remember for this session",
                 });
             }
-            items.push({
-                value: { kind: "yes" },
-                label: "Yes",
-                description: "run once",
-            });
             items.push({
                 value: { kind: "no" },
                 label: "No",
