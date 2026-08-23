@@ -6,7 +6,7 @@ category: architecture
 
 # Cwd-confinement heuristic
 
-The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`.
+The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`. Direct read/write path checks are also implemented in `src/modules/sandbox/heuristics.ts` and used by `src/tools/file-permissions.ts`.
 
 ## Resolution order
 
@@ -27,7 +27,7 @@ Important exclusions include `git diff`/`show`/`cat-file` (output-channel risk),
 - Path arguments are checked lexically and, when enabled, through canonical realpaths.
 - Nonexistent write targets use their nearest existing ancestor; dangling symlinks are rejected.
 - Symlink-following traversal flags are unsafe; symlinks inside a directory argument are not recursively walked.
-- Sensitive path segments include `.env*`, `.git`, credential directories/files, private-key extensions, `*.tfvars`, and `credentials`; `denyPaths` extends the list and `blockDotfiles` enables paranoid mode.
+- Sensitive path segments include `.env*`, `.git`, credential directories/files, private-key extensions, `*.tfvars`, and `credentials`; `denyPaths` extends the list and `blockDotfiles` enables paranoid mode. Direct read/write paths use the same sensitive and symlink checks; explicit session folder approvals remain scoped to the selected operation.
 - Subshells, process substitutions, and redirection targets recurse through confinement checks.
 - Dangerous leading assignments (`LD_*`, `GIT_*`, `PATH`, `IFS`, `BASH_ENV`, `RIPGREP_CONFIG_PATH`, `LESSOPEN`, etc.) are rejected. Inherited environment remains an accepted risk unless `sandbox.inheritEnv` enables the clearenv allowlist.
 

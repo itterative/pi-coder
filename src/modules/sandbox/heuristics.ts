@@ -155,6 +155,17 @@ function isSensitivePath(
  * Check whether a path stays within the working directory, using lexical
  * resolution only (symlinks are not followed).
  */
+function isLexicallyWithin(
+    p: string,
+    root: string,
+    cwd: string,
+    home: string,
+): boolean {
+    const resolved = resolvePath(p, cwd, home);
+    const resolvedRoot = resolvePath(root, cwd, home);
+    return resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep);
+}
+
 function isAllowedPath(p: string, cwd: string, home: string): boolean {
     if (p === "") {
         return true;
@@ -164,8 +175,84 @@ function isAllowedPath(p: string, cwd: string, home: string): boolean {
         return true;
     }
 
-    const resolved = resolvePath(p, cwd, home);
-    return resolved === cwd || resolved.startsWith(cwd + path.sep);
+    return isLexicallyWithin(p, cwd, cwd, home);
+}
+
+/**
+ * Canonicalize a path while allowing nonexistent trailing components. This is
+ * used for write targets as well as existing read targets. An existing
+ * dangling symlink is deliberately rejected instead of being treated as a
+ * nonexistent path.
+ */
+function canonicalizePath(p: string): string | null {
+    let current = path.resolve(p);
+    const trailing: string[] = [];
+
+    while (true) {
+        let stat: fs.Stats | undefined;
+        try {
+            stat = fs.lstatSync(current);
+        } catch {
+            stat = undefined;
+        }
+
+        if (stat) {
+            let real: string;
+            try {
+                real = fs.realpathSync(current);
+            } catch {
+                return null;
+            }
+            return trailing.reduce((value, segment) => path.join(value, segment), real);
+        }
+
+        const parent = path.dirname(current);
+        if (parent === current) {
+            return null;
+        }
+        trailing.unshift(path.basename(current));
+        current = parent;
+    }
+}
+
+/**
+ * Check a path against an explicitly approved directory. Unlike the cwd
+ * heuristic, this intentionally does not apply sensitive-path filtering: the
+ * directory is an explicit, session-scoped user approval. Symlinks are still
+ * resolved when configured so an approved path cannot escape that directory.
+ */
+export function isPathWithinDirectory(
+    filePath: string,
+    directory: string,
+    cwd: string,
+    config?: SandboxConfigCwdConfinement | null,
+): boolean {
+    if (filePath === "" || directory === "") {
+        return false;
+    }
+
+    const confinement = resolveConfinementConfig(config);
+    const resolvedCwd = path.resolve(cwd);
+    const home = os.homedir();
+
+    if (!isLexicallyWithin(filePath, directory, resolvedCwd, home)) {
+        return false;
+    }
+
+    if (confinement?.resolveSymlinks ?? true) {
+        const resolvedFile = resolvePath(filePath, resolvedCwd, home);
+        const resolvedDirectory = resolvePath(directory, resolvedCwd, home);
+        const realFile = canonicalizePath(resolvedFile);
+        const realDirectory = canonicalizePath(resolvedDirectory);
+
+        if (realFile === null || realDirectory === null) {
+            return false;
+        }
+
+        return isLexicallyWithin(realFile, realDirectory, realDirectory, home);
+    }
+
+    return true;
 }
 
 /**
@@ -704,6 +791,42 @@ function resolveConfinementConfig(
     return config === undefined
         ? sandboxConfig.current?.heuristics?.cwdConfinement
         : (config ?? undefined);
+}
+
+/**
+ * Cwd-confinement heuristic for a direct file-tool access. A path is granted
+ * only when it is inside cwd and does not touch a sensitive segment. The
+ * symlink check also handles nonexistent write targets.
+ */
+export function getPathConfinementPermission(
+    filePath: string,
+    cwd: string,
+    config?: SandboxConfigCwdConfinement | null,
+): Permission | undefined {
+    const confinement = resolveConfinementConfig(config);
+
+    if (confinement?.enabled === false || filePath.trim() === "") {
+        return undefined;
+    }
+
+    const resolvedCwd = path.resolve(cwd);
+    const home = os.homedir();
+    const options = buildConfinementOptions(confinement, resolvedCwd);
+
+    if (!isLexicallyWithin(filePath, resolvedCwd, resolvedCwd, home)) {
+        return undefined;
+    }
+
+    if (isSensitivePath(filePath, resolvedCwd, home, options)) {
+        return undefined;
+    }
+
+    if ((confinement?.resolveSymlinks ?? true) &&
+        !isRealPathConfined(filePath, resolvedCwd, home, options)) {
+        return undefined;
+    }
+
+    return confinement?.permission ?? "allow:sandbox";
 }
 
 /**

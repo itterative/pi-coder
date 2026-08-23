@@ -4,10 +4,14 @@ import registerConfigCommand from "./commands/config";
 import registerMemoryExtension from "./modules/memory";
 import registerAskUserTool from "./tools/ask_user";
 import registerBashToolHook from "./tools/bash";
+import registerReadToolHook from "./tools/read";
+import registerWriteToolHook from "./tools/write";
 
 export default function (pi: ExtensionAPI) {
     registerMemoryExtension(pi);
     registerConfigCommand(pi);
     registerAskUserTool(pi);
     registerBashToolHook(pi);
+    registerReadToolHook(pi);
+    registerWriteToolHook(pi);
 }
