@@ -447,7 +447,7 @@ The read-only runtime now supports:
 
 - immediate `spawn` acknowledgements and up to four concurrent child operations;
 - a bounded above-editor activity widget that shows sanitized tool activity and a short latest-response preview and updates from throttled child progress;
-- explicit bounded `status` polling and one-shot `collect`;
+- optional bounded `status` snapshots and one-shot `collect`; spawn/resume outputs tell the parent not to poll because automatic mailbox notifications arrive at waiting/terminal transitions;
 - background pause/resume through `ask_parent`;
 - active background cancellation and shutdown settlement;
 - immediate terminal child disposal with the latest 20 results retained;

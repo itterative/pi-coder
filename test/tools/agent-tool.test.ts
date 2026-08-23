@@ -246,6 +246,8 @@ describe("agent extension registration", () => {
         );
 
         expect(spawned.details).toMatchObject({ status: "starting", background: true });
+        expect(spawned.content[0].text).toContain("Do not poll its status");
+        expect(spawned.content[0].text).toContain("automatic notification");
         expect(status.details.status).toBe("completed");
         expect(status.content[0].text).toContain("action=\"collect\"");
         expect(prompt.systemPrompt).toContain("scout-1 (scout): completed");

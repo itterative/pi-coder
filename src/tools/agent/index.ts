@@ -109,8 +109,8 @@ function availableAgentsPrompt(
     if (agents.length > 20) lines.push(`- …and ${agents.length - 20} more agents`);
     lines.push(
         "Use action=\"start\" for foreground delegation or action=\"spawn\" to launch concurrent background work.",
-        "Check background work with action=\"status\" and retrieve a terminal result with action=\"collect\".",
-        "Mailbox markers report waiting/terminal background changes after active parent work settles; full results are never injected automatically.",
+        "Do not poll background runs with action=\"status\". Automatic mailbox notifications arrive when a run finishes or needs parent guidance.",
+        "After a terminal notification, retrieve the full result with action=\"collect\"; mailbox markers never inject full child output automatically.",
         "A waiting result is paused, not completed. Investigate or obtain guidance, then resume it; cancel it if no longer needed. Do not fabricate guidance.",
         "The built-in worker mutates the shared checkout. Every edit/write/bash action requires an explicit user permission prompt, and only one worker can be active at once.",
     );
@@ -265,8 +265,8 @@ export default function registerAgentTool(
             "Use agent for substantial delegated work: scout/custom agents explore read-only, while worker performs permission-gated implementation.",
         promptGuidelines: [
             "Use start when the result is needed immediately; use spawn for independent work that can run concurrently",
-            "Check spawned runs with status and retrieve terminal results with collect",
-            "Background waiting and terminal updates arrive as automatic follow-up mailbox context after active parent work settles; they never interrupt current work and full results still require collect",
+            "Do not poll spawned runs with status; automatic follow-up mailbox context notifies you when they finish or need parent guidance",
+            "After a terminal notification, retrieve the full result with collect; mailbox updates never interrupt current work and never include the full result",
             "A waiting agent is paused, not completed; investigate or obtain guidance, then resume it, or cancel it if no longer needed",
             "Background agents cannot open direct user dialogs; they request parent guidance instead",
             "Use the returned run ID exactly; runs are cwd-confined and parent-runtime-local",

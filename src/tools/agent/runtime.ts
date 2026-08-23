@@ -288,7 +288,7 @@ export class AgentRunManager {
         this.trackBackgroundTask(run, taskPromise);
         return this.checkpointOutcome(
             run,
-            `Agent ${run.id} started in the background. Check it with agent(action="status", runId="${run.id}") and retrieve its final result with agent(action="collect", runId="${run.id}").`,
+            `Agent ${run.id} started in the background. Do not poll its status; you will receive an automatic notification when it finishes or needs parent guidance. After a terminal notification, retrieve the full result with agent(action="collect", runId="${run.id}").`,
             false,
             { output: "", recentActivity: [] },
         );
@@ -341,7 +341,7 @@ export class AgentRunManager {
         this.trackBackgroundTask(run, taskPromise);
         return this.checkpointOutcome(
             run,
-            `Agent ${run.id} resumed in the background. Check it with agent(action="status", runId="${run.id}").`,
+            `Agent ${run.id} resumed in the background. Do not poll its status; you will receive an automatic notification when it finishes or needs parent guidance.`,
             false,
             run.handle?.getProgress() ?? { output: "", recentActivity: [] },
         );
@@ -406,7 +406,7 @@ export class AgentRunManager {
             if (progress.recentActivity.length) {
                 sections.push(`Recent activity:\n- ${progress.recentActivity.slice(-8).join("\n- ")}`);
             }
-            sections.push(`Check again with agent(action="status", runId="${run.id}").`);
+            sections.push("Do not poll again; an automatic notification will arrive when the run finishes or needs parent guidance.");
             content = sections.join("\n\n");
         }
         return this.checkpointOutcome(
@@ -425,7 +425,7 @@ export class AgentRunManager {
         }
         if (!isTerminalStatus(run.status) || !run.terminalOutcome) {
             throw new AgentActionError(
-                `Agent run ${runId} is ${run.status}; use status until it reaches a terminal state.`,
+                `Agent run ${runId} is ${run.status}; wait for its automatic terminal notification before collecting.`,
             );
         }
         const progress = this.progressSnapshot(run);
