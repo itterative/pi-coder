@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { PI_CODER_WORKSPACES_DIR } from "../../common/constants";
+import { migrateSqliteDatabase } from "../../common/sqlite";
 import { randomSlug } from "../../common/slug";
 
 const execFileAsync = promisify(execFile);
@@ -33,6 +34,29 @@ function workspacesRoot(workspacesDir = PI_CODER_WORKSPACES_DIR): string {
     return path.resolve(workspacesDir);
 }
 
+const WORKSPACE_MIGRATIONS = [{
+    version: 1,
+    apply(database: WorkspaceDatabase): void {
+        database.exec(`
+            CREATE TABLE IF NOT EXISTS workspaces (
+                version INTEGER NOT NULL,
+                id TEXT PRIMARY KEY,
+                cwd TEXT NOT NULL,
+                repository_root TEXT NOT NULL,
+                worktree_path TEXT NOT NULL UNIQUE,
+                slug TEXT NOT NULL UNIQUE,
+                base_revision TEXT NOT NULL,
+                setup_state TEXT NOT NULL,
+                setup_summary TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS workspaces_cwd_state_created
+                ON workspaces (cwd, setup_state, created_at);
+        `);
+    },
+}] as const;
+
 async function openDatabase(workspacesDir = PI_CODER_WORKSPACES_DIR): Promise<WorkspaceDatabase> {
     // Load lazily so users who do not use worktree isolation do not receive the
     // node:sqlite experimental warning during normal extension startup.
@@ -42,24 +66,8 @@ async function openDatabase(workspacesDir = PI_CODER_WORKSPACES_DIR): Promise<Wo
     fs.chmodSync(directory, 0o700);
     const databasePath = path.join(directory, DATABASE_NAME);
     const database = new DatabaseSync(databasePath);
-    database.exec(`
-        PRAGMA busy_timeout = 5000;
-        CREATE TABLE IF NOT EXISTS workspaces (
-            version INTEGER NOT NULL,
-            id TEXT PRIMARY KEY,
-            cwd TEXT NOT NULL,
-            repository_root TEXT NOT NULL,
-            worktree_path TEXT NOT NULL UNIQUE,
-            slug TEXT NOT NULL UNIQUE,
-            base_revision TEXT NOT NULL,
-            setup_state TEXT NOT NULL,
-            setup_summary TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS workspaces_cwd_state_created
-            ON workspaces (cwd, setup_state, created_at);
-    `);
+    database.exec("PRAGMA busy_timeout = 5000");
+    migrateSqliteDatabase(database, WORKSPACE_MIGRATIONS);
     fs.chmodSync(databasePath, 0o600);
     return database;
 }
