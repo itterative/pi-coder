@@ -107,9 +107,19 @@ Likely locations:
 - user-level: `~/.pi/agent/agents/*.md`;
 - project-level: `.pi/agents/*.md`.
 
-Project-local definitions are repository-controlled instructions and should require trust and/or explicit confirmation before execution.
+Project-local definitions are repository-controlled instructions and are discovered only when pi marks the project trusted.
 
 Pi already exports a full YAML `parseFrontmatter()` helper, which is a better fit for agent definitions than the memory module's intentionally limited flat-frontmatter parser. Agent parsing should still have its own validation and discovery tests.
+
+Discovery and duplicate precedence are deterministic:
+
+1. Built-in names are reserved; conflicting markdown definitions are ignored with a warning.
+2. Files within each scope are sorted by path before parsing.
+3. Within one scope, the first valid definition for a name wins; later definitions are ignored with a warning that identifies the selected and ignored paths.
+4. After per-scope deduplication, trusted-project definitions override user definitions with the same name.
+5. Expected project-over-user shadowing emits an informational diagnostic identifying both definitions, not a warning.
+
+Discovery diagnostics should be returned structurally and deduplicated by fingerprint for the parent runtime. New warnings are surfaced once through `ctx.ui.notify`; informational shadowing remains available in expanded tool details/debug output without producing a warning notification.
 
 ### Safety and runtime concerns
 
@@ -370,9 +380,8 @@ Decided:
 
 Still to decide:
 
-1. Duplicate-name policy between user and trusted-project custom agents.
-2. Exact output caps and update-throttle constants.
-3. Exact custom-provider synchronization behavior.
+1. Exact output caps and update-throttle constants.
+2. Exact custom-provider synchronization behavior.
 
 ### Phase 1: Read-only pause/resume vertical slice
 
@@ -398,7 +407,7 @@ Implement and test:
 - directory resolution;
 - full YAML frontmatter parsing and validation;
 - tool-list normalization against the capability ceiling;
-- duplicate-name precedence;
+- deterministic same-scope first-wins warnings and project-over-user informational diagnostics;
 - malformed-file diagnostics;
 - project trust gating behavior;
 - a bounded dynamic available-agent block in the parent system prompt.
@@ -498,7 +507,7 @@ Use this section to record decisions as the design evolves.
 - [x] Use a stateless child-only path hook for `read`, `grep`, `find`, and `ls`; block out-of-cwd access without prompting.
 - [x] Route first-release child questions through the parent; defer direct child-to-user UI.
 - [x] Use tool updates/results first; defer a persistent live widget.
-- [ ] Duplicate-name policy between user and trusted-project agents?
+- [x] Within a scope, sorted first definition wins and later duplicates warn; trusted-project definitions override user definitions with an informational diagnostic.
 - [x] Allow at most four active/waiting runs with no TTL; cleanup is explicit or tied to parent shutdown.
 - [ ] Output caps and update throttle constants?
 - [ ] Custom provider synchronization details?
