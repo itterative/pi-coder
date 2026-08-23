@@ -17,6 +17,7 @@ import { loadAgentRunPersistence } from "./persistence";
 import {
     currentAgentSessionItems,
     listPastAgentSessions,
+    loadAgentSessionTranscripts,
     removeCurrentAgentTranscripts,
     type AgentSessionBrowserItem,
 } from "./sessions";
@@ -251,7 +252,7 @@ export default function registerAgentTool(
     pi.registerCommand("agent-sessions", {
         description: "Browse current and persisted delegated-agent sessions",
         handler: async (_args, ctx) => {
-            const current = currentAgentSessionItems(manager.listRuns());
+            const current = await loadAgentSessionTranscripts(currentAgentSessionItems(manager.listRuns()));
             let past: AgentSessionBrowserItem[];
             try {
                 past = removeCurrentAgentTranscripts(

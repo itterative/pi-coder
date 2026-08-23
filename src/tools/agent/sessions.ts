@@ -22,6 +22,7 @@ export interface AgentSessionBrowserItem {
     messageCount?: number;
     firstMessage?: string;
     allMessagesText?: string;
+    transcript?: string;
     activity?: string;
     responsePreview?: string;
     mutating?: boolean;
@@ -65,6 +66,7 @@ function pastItem(info: SessionInfo, parentSessionId: string): AgentSessionBrows
         messageCount: info.messageCount,
         firstMessage: info.firstMessage,
         allMessagesText: info.allMessagesText.slice(-4_000),
+        transcript: info.allMessagesText,
         mutating: metadata?.mutating,
         usage: metadata?.usageSnapshot,
         responsePreview: metadata?.responsePreview,
@@ -74,6 +76,30 @@ function pastItem(info: SessionInfo, parentSessionId: string): AgentSessionBrows
 
 export function currentAgentSessionItems(runs: AgentRunSummary[]): AgentSessionBrowserItem[] {
     return runs.map(currentItem);
+}
+
+/** Load complete human-readable transcripts for current runs whose files exist. */
+export async function loadAgentSessionTranscripts(
+    items: AgentSessionBrowserItem[],
+): Promise<AgentSessionBrowserItem[]> {
+    const directoryInfos = new Map<string, Promise<SessionInfo[]>>();
+    const infosFor = (directory: string): Promise<SessionInfo[]> => {
+        let promise = directoryInfos.get(directory);
+        if (!promise) {
+            promise = SessionManager.listAll(directory).catch(() => []);
+            directoryInfos.set(directory, promise);
+        }
+        return promise;
+    };
+
+    return Promise.all(items.map(async (item) => {
+        if (!item.sessionFile || item.transcript !== undefined) return item;
+        const directory = path.dirname(item.sessionFile);
+        const info = (await infosFor(directory)).find(
+            (candidate) => path.resolve(candidate.path) === path.resolve(item.sessionFile!),
+        );
+        return info ? { ...item, transcript: info.allMessagesText } : item;
+    }));
 }
 
 export async function listPastAgentSessions(

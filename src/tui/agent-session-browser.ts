@@ -8,10 +8,10 @@ import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-
 import { ListViewComponent } from "./list-view";
 import type { AgentSessionBrowserItem } from "../tools/agent/sessions";
 import { BORDER_STYLES } from "./border-box";
+import { AgentSessionDetailComponent } from "./agent-session-detail";
 
 interface AgentSessionBrowserState extends ListViewState<AgentSessionBrowserItem> {
     tab: "current" | "past";
-    detail: boolean;
 }
 
 export interface AgentSessionBrowserOptions {
@@ -89,7 +89,6 @@ function tabText(tab: "current" | "past", theme: Theme): string {
 function itemText(
     item: AgentSessionBrowserItem,
     theme: Theme,
-    detail: boolean,
 ): string {
     if (item.kind === "empty") return theme.fg("muted", item.task);
 
@@ -98,28 +97,9 @@ function itemText(
     const headline = `${item.title || "Untitled run"} · ${mode} · ${status} · ${dateText(item.updatedAt)}`;
     const task = `Task: ${oneLine(item.task)}`;
     const returned = returnedText(item);
-    if (!detail) {
-        const activity = item.activity ? ` · ${oneLine(item.activity, 120)}` : "";
-        const preview = returned ? `\n${theme.fg("muted", `Result: ${returned}`)}` : "";
-        return theme.fg("accent", headline) + `\n${task}${activity}${preview}`;
-    }
-
-    const lines = [
-        theme.fg("accent", headline),
-        `Run ID: ${item.id}`,
-        task,
-        `Started: ${dateText(item.startedAt)}`,
-        `Updated: ${dateText(item.updatedAt)}`,
-    ];
-    if (item.messageCount !== undefined) lines.push(`Messages: ${item.messageCount}`);
-    if (item.usage) lines.push(`Usage: ${usageText(item.usage)}`);
-    if (item.changedFiles?.length) lines.push(`Changed files: ${item.changedFiles.join(", ")}`);
-    if (item.firstMessage && item.firstMessage !== item.task) {
-        lines.push(`First message: ${oneLine(item.firstMessage)}`);
-    }
-    if (returned) lines.push(`Result: ${returned}`);
-    lines.push("", theme.fg("muted", "This browser is read-only; it does not switch or replay child sessions."));
-    return lines.join("\n");
+    const activity = item.activity ? ` · ${oneLine(item.activity, 120)}` : "";
+    const preview = returned ? `\n${theme.fg("muted", `Result: ${returned}`)}` : "";
+    return theme.fg("accent", headline) + `\n${task}${activity}${preview}`;
 }
 
 export class AgentSessionBrowserComponent extends ListViewComponent<
@@ -128,6 +108,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
     AgentSessionBrowserState
 > {
     private readonly current: AgentSessionBrowserItem[];
+    private detail: AgentSessionDetailComponent | null = null;
     private readonly past: AgentSessionBrowserItem[];
 
     constructor(options: AgentSessionBrowserOptions) {
@@ -144,7 +125,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                 title: "Delegated agent sessions",
                 borderColor: "borderMuted",
                 borderCharacters: BORDER_STYLES.rounded,
-                helpText: "↑/↓ navigate · Tab/←/→ switch tab · Enter details · Esc close",
+                helpText: "↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close",
                 headerContent: (container, theme) => {
                     tabTheme = theme;
                     tabHeader = new Text(tabText(activeTab, theme), 1, 0);
@@ -156,7 +137,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     ));
                 },
                 renderItem: (item: ListItem<AgentSessionBrowserItem>, options: ListViewRenderItemOptions<AgentSessionBrowserItem, AgentSessionBrowserState>) => {
-                    const content = itemText(item.value, options.theme, options.isCursor && options.state.detail);
+                    const content = itemText(item.value, options.theme);
                     return options.isCursor ? content : options.theme.fg("text", content);
                 },
                 onKey: (key, state) => {
@@ -175,16 +156,18 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                         );
                         state.cursor = 0;
                         state.scrollOffset = 0;
-                        state.detail = false;
                         return true;
                     }
                     if (matchesKey(key, "enter")) {
                         const selected = state.items[state.cursor ?? 0]?.value;
-                        if (selected?.kind !== "empty") state.detail = !state.detail;
-                        return true;
-                    }
-                    if (matchesKey(key, "escape") && state.detail) {
-                        state.detail = false;
+                        if (selected?.kind !== "empty" && this.theme) {
+                            this.detail = new AgentSessionDetailComponent({ item: selected });
+                            this.detail.initialize(this.theme);
+                            this.detail.setDoneCallback(() => {
+                                this.detail = null;
+                                this.invalidate();
+                            });
+                        }
                         return true;
                     }
                     return false;
@@ -204,7 +187,6 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                 scrollOffset: 0,
                 maxVisibleLines: 12,
                 tab: "current",
-                detail: false,
             },
         );
         this.current = current;
@@ -212,7 +194,16 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
     }
 
     override render(width: number): string[] {
+        if (this.detail) return this.detail.render(width);
         return super.render(width).map((line) => truncateToWidth(line, width, ""));
+    }
+
+    override handleInput(key: string): void {
+        if (this.detail) {
+            this.detail.handleInput(key);
+            return;
+        }
+        super.handleInput(key);
     }
 
     protected override getItemPrefix(index: number, isCursor: boolean) {

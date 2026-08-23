@@ -75,13 +75,13 @@ describe("AgentSessionBrowserComponent", () => {
           │     Result: I found the main entry points and summarized the current architecture.               │
           │   1 session                                                                                      │
           │                                                                                                  │
-          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter details · Esc close                                │
+          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
           │                                                                                                  │
           ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
         `);
     });
 
-    it("expands the selected run with metadata and result guidance", () => {
+    it("opens a separate detail view with metadata and transcript", () => {
         const value = component();
         const ui = interact(value, 100);
 
@@ -89,26 +89,38 @@ describe("AgentSessionBrowserComponent", () => {
 
         expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
           "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   Delegated agent sessions                                                                       │
+          │   Delegated agent session                                                                        │
           │                                                                                                  │
-          │ ● Current    ○ Past                                                                              │
-          │ Current shows this parent session; Past shows durable child results for this cwd.                │
+          │   Project structure audit · scout · running                                                      │
+          │   Run ID: scout-1                                                                                │
+          │   Task: Inspect the project structure                                                            │
+          │   Started: Nov 14 2023 22:13                                                                     │
+          │   Updated: Nov 14 2023 22:13                                                                     │
+          │   Usage: 1.2k input, 2m output, $0.0300                                                          │
           │                                                                                                  │
-          │   → Project structure audit · scout · running · Nov 14 2023 22:13                                │
-          │     Run ID: scout-1                                                                              │
-          │     Task: Inspect the project structure                                                          │
-          │     Started: Nov 14 2023 22:13                                                                   │
-          │     Updated: Nov 14 2023 22:13                                                                   │
-          │     Usage: 1.2k input, 2m output, $0.0300                                                        │
-          │     Result: I found the main entry points and summarized the current architecture.               │
+          │   Transcript:                                                                                    │
+          │   I found the main entry points and summarized the current architecture.                         │
           │                                                                                                  │
-          │     This browser is read-only; it does not switch or replay child sessions.                      │
-          │   1 session                                                                                      │
-          │                                                                                                  │
-          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter details · Esc close                                │
+          │     ↑/↓ scroll · Esc back                                                                        │
           │                                                                                                  │
           ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
         `);
+    });
+
+    it("scrolls a long transcript in the detail view", () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [{ ...past, transcript: Array.from({ length: 30 }, (_, index) => `Transcript line ${index}`).join("\n") }],
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab);
+        ui.press(KEY.enter);
+        expect(ui.render()).toContain("Transcript line 0");
+        ui.press(KEY.pageDown);
+        expect(ui.render()).toContain("Transcript line 16");
+        expect(ui.render()).not.toContain("Transcript line 0");
     });
 
     it("switches tabs and renders the past result entry", () => {
@@ -129,7 +141,7 @@ describe("AgentSessionBrowserComponent", () => {
           │     Result: The previous implementation is persisted and can be browsed read-only.               │
           │   1 session                                                                                      │
           │                                                                                                  │
-          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter details · Esc close                                │
+          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
           │                                                                                                  │
           ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
         `);
@@ -160,7 +172,7 @@ describe("AgentSessionBrowserComponent", () => {
           │     No delegated agents are active in this parent session.                                       │
           │   0 sessions                                                                                     │
           │                                                                                                  │
-          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter details · Esc close                                │
+          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
           │                                                                                                  │
           ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
         `);
@@ -175,7 +187,7 @@ describe("AgentSessionBrowserComponent", () => {
           │     No persisted child sessions were found for this cwd.                                         │
           │   0 sessions                                                                                     │
           │                                                                                                  │
-          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter details · Esc close                                │
+          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
           │                                                                                                  │
           ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
         `);

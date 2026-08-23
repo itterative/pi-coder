@@ -29,7 +29,7 @@ Up to four starting, running, waiting, or interrupted runs consume active capaci
 
 ## Browse delegated sessions
 
-Use `/agent-sessions` to open a read-only overlay for delegated-agent sessions. The **Current** tab shows runs tracked by the active parent session, while **Past** lists durable child sessions stored for the current cwd. Titles, status, usage, and worker changed-file summaries are persisted in private metadata sidecars alongside child transcripts. Use Tab or Left/Right to switch tabs, Enter to expand metadata, and Escape to close. The browser does not switch to or replay a child transcript.
+Use `/agent-sessions` to open a read-only overlay for delegated-agent sessions. The **Current** tab shows runs tracked by the active parent session, while **Past** lists durable child sessions stored for the current cwd. Titles, status, usage, and worker changed-file summaries are persisted in private metadata sidecars alongside child transcripts. Use Tab or Left/Right to switch tabs, Enter to open a read-only session detail view, and Escape to go back or close. The detail view shows session metadata and the available transcript; it does not switch to or replay a child session.
 
 ## Durable child sessions
 
