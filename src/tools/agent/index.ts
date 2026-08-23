@@ -18,6 +18,7 @@ import { AgentMailbox } from "./mailbox";
 import { loadAgentRunPersistence } from "./persistence";
 import {
     claimAgentWorkspace,
+    completeAgentWorkspaceLease,
     createAgentWorkspace,
     findAvailableAgentWorkspace,
     findUnpreparedAgentWorkspace,
@@ -401,7 +402,7 @@ export default function registerAgentTool(
     const releaseWorkspaceForRun = async (ctx: ExtensionContext, details: AgentRunDetails): Promise<void> => {
         if (!details.workspaceId || !isTerminalAgentStatus(details.status)) return;
         try {
-            await releaseAgentWorkspaceLease(
+            await completeAgentWorkspaceLease(
                 details.workspaceId,
                 ctx.sessionManager.getSessionId(),
                 details.runId,

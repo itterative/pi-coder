@@ -531,7 +531,7 @@ Design:
 - The requested task worker starts only after setup succeeds. It receives the prepared worktree as its cwd and may reuse persistent dependencies, virtual environments, generated artifacts, and other project-local setup state.
 - Setup and task workers share the existing one-active-worker mutation limit. A setup worker occupies that capacity until it settles; the task worker does not start concurrently with it.
 - Workspace metadata persists alongside agent state: workspace ID, repository/cwd, worktree path, base revision, setup status/report, current assignment, dirty/review status, and last-use information. Interrupted setup and task runs retain the same workspace for explicit user recovery.
-- Workspaces are never automatically merged, reset, or deleted. After a task, the worktree remains available for review; reuse requires an explicit clean/reset/discard decision so one task cannot accidentally inherit another task's source changes.
+- Workspaces are never automatically merged, reset, or deleted. After a task, the worktree enters `review_required` and its lease is released, but it is excluded from automatic selection until an explicit clean/reset/discard decision makes it available again.
 - No generic dependency setup code is required. The setup worker inspects the project and decides what it needs; every mutating or shell operation remains subject to the existing parent-visible permission prompts.
 
 User interface:

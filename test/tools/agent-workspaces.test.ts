@@ -7,10 +7,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
     claimAgentWorkspace,
+    completeAgentWorkspaceLease,
     createAgentWorkspace,
     findAvailableAgentWorkspace,
     listAgentWorkspaces,
-    releaseAgentWorkspaceLease,
     transferAgentWorkspaceLease,
     updateAgentWorkspace,
 } from "../../src/tools/agent/workspaces";
@@ -49,7 +49,10 @@ describe("agent workspaces", () => {
         const provisional = await claimAgentWorkspace(prepared.id, "session-1", "setup-1", "setup", state);
         expect(await findAvailableAgentWorkspace(repository, state)).toBeUndefined();
         await transferAgentWorkspaceLease(workspace.id, "session-1", provisional.leaseRunId!, "worker-1", "task", state);
-        await releaseAgentWorkspaceLease(workspace.id, "session-1", "worker-1", state);
-        expect(await findAvailableAgentWorkspace(repository, state)).toMatchObject({ id: workspace.id });
+        await completeAgentWorkspaceLease(workspace.id, "session-1", "worker-1", state);
+        expect(await findAvailableAgentWorkspace(repository, state)).toBeUndefined();
+        expect(await listAgentWorkspaces(repository, state)).toMatchObject([
+            { id: workspace.id, status: "review_required" },
+        ]);
     });
 });

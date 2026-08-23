@@ -12,6 +12,7 @@ const WORKSPACE_VERSION = 1 as const;
 const DATABASE_NAME = "meta.sqlite";
 
 export type WorkspaceSetupState = "not_started" | "running" | "ready" | "skipped" | "failed";
+export type WorkspaceStatus = "available" | "review_required";
 export type WorkspaceLeaseKind = "setup" | "task";
 
 export interface AgentWorkspace {
@@ -24,6 +25,7 @@ export interface AgentWorkspace {
     baseRevision: string;
     setupState: WorkspaceSetupState;
     setupSummary?: string;
+    status: WorkspaceStatus;
     leaseOwnerSessionId?: string;
     leaseRunId?: string;
     leaseKind?: WorkspaceLeaseKind;
@@ -72,6 +74,15 @@ const WORKSPACE_MIGRATIONS = [{
                 ON workspaces (lease_run_id);
         `);
     },
+}, {
+    version: 3,
+    apply(database: WorkspaceDatabase): void {
+        database.exec(`
+            ALTER TABLE workspaces ADD COLUMN workspace_status TEXT NOT NULL DEFAULT 'available';
+            CREATE INDEX IF NOT EXISTS workspaces_status
+                ON workspaces (workspace_status, setup_state, created_at);
+        `);
+    },
 }] as const;
 
 async function openDatabase(workspacesDir = PI_CODER_WORKSPACES_DIR): Promise<WorkspaceDatabase> {
@@ -100,6 +111,7 @@ function rowToWorkspace(row: WorkspaceRow): AgentWorkspace | undefined {
         || typeof row.slug !== "string"
         || typeof row.base_revision !== "string"
         || !["not_started", "running", "ready", "skipped", "failed"].includes(setupState as string)
+        || !["available", "review_required"].includes(row.workspace_status as string)
         || typeof row.created_at !== "number"
         || typeof row.updated_at !== "number"
     ) return undefined;
@@ -113,6 +125,7 @@ function rowToWorkspace(row: WorkspaceRow): AgentWorkspace | undefined {
         baseRevision: row.base_revision,
         setupState: setupState as WorkspaceSetupState,
         setupSummary: typeof row.setup_summary === "string" ? row.setup_summary.slice(0, 8_000) : undefined,
+        status: row.workspace_status as WorkspaceStatus,
         ...(typeof row.lease_owner_session_id === "string" ? { leaseOwnerSessionId: row.lease_owner_session_id } : {}),
         ...(typeof row.lease_run_id === "string" ? { leaseRunId: row.lease_run_id } : {}),
         ...(["setup", "task"].includes(row.lease_kind as string)
@@ -140,7 +153,7 @@ export async function listAgentWorkspaces(
     try {
         const rows = database.prepare(`
             SELECT version, id, cwd, repository_root, worktree_path, slug,
-                   base_revision, setup_state, setup_summary,
+                   base_revision, setup_state, setup_summary, workspace_status,
                    lease_owner_session_id, lease_run_id, lease_kind, lease_acquired_at,
                    created_at, updated_at
             FROM workspaces
@@ -162,7 +175,8 @@ export async function findAvailableAgentWorkspace(
 ): Promise<AgentWorkspace | undefined> {
     return (await listAgentWorkspaces(cwd, workspacesDir))
         .find((workspace) => (
-            !workspace.leaseRunId
+            workspace.status === "available"
+            && !workspace.leaseRunId
             && (workspace.setupState === "ready" || workspace.setupState === "skipped")
         ));
 }
@@ -181,7 +195,7 @@ export async function findUnpreparedAgentWorkspace(
 function workspaceById(database: WorkspaceDatabase, id: string): AgentWorkspace | undefined {
     const row = database.prepare(`
         SELECT version, id, cwd, repository_root, worktree_path, slug,
-               base_revision, setup_state, setup_summary,
+               base_revision, setup_state, setup_summary, workspace_status,
                lease_owner_session_id, lease_run_id, lease_kind, lease_acquired_at,
                created_at, updated_at
         FROM workspaces
@@ -211,7 +225,7 @@ export async function claimAgentWorkspace(
         const result = database.prepare(`
             UPDATE workspaces
             SET lease_owner_session_id = ?, lease_run_id = ?, lease_kind = ?, lease_acquired_at = ?
-            WHERE id = ? AND lease_run_id IS NULL
+            WHERE id = ? AND workspace_status = 'available' AND lease_run_id IS NULL
         `).run(ownerSessionId, leaseRunId, leaseKind, Date.now(), workspaceId);
         if (Number(result.changes) !== 1) {
             rollback(database);
@@ -256,6 +270,26 @@ export async function transferAgentWorkspaceLease(
     } catch (error) {
         rollback(database);
         throw error;
+    } finally {
+        database.close();
+    }
+}
+
+export async function completeAgentWorkspaceLease(
+    workspaceId: string,
+    ownerSessionId: string,
+    leaseRunId: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<void> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        database.prepare(`
+            UPDATE workspaces
+            SET workspace_status = 'review_required',
+                lease_owner_session_id = NULL, lease_run_id = NULL,
+                lease_kind = NULL, lease_acquired_at = NULL
+            WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
+        `).run(workspaceId, ownerSessionId, leaseRunId);
     } finally {
         database.close();
     }
@@ -329,16 +363,17 @@ export async function createAgentWorkspace(
             slug,
             baseRevision,
             setupState: "not_started",
+            status: "available",
             createdAt: now,
             updatedAt: now,
         };
         database.prepare(`
             INSERT INTO workspaces (
                 version, id, cwd, repository_root, worktree_path, slug,
-                base_revision, setup_state, setup_summary,
+                base_revision, setup_state, setup_summary, workspace_status,
                 lease_owner_session_id, lease_run_id, lease_kind, lease_acquired_at,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             workspace.version,
             workspace.id,
@@ -349,6 +384,7 @@ export async function createAgentWorkspace(
             workspace.baseRevision,
             workspace.setupState,
             null,
+            workspace.status,
             null,
             null,
             null,
