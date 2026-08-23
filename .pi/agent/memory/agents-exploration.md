@@ -3,8 +3,12 @@ name: agents-exploration
 description: Agent implementation options for pi-coder; no agent runtime is implemented yet.
 category: architecture
 priority: 4
+keep_updated: true
+status: Active design
 ---
 
-`src/tools/agent/index.ts` is empty and its README records the intended direction: subagents should run in-process and need richer interaction. Pi provides `ctx.modelRegistry.complete()` for one-shot same-process calls and the SDK `createAgentSession()` for full tool-using child sessions. The official `examples/extensions/subagent` uses separate `pi --mode json --no-session` processes with markdown agent discovery, streaming, parallel, and chain modes, but this is not yet copied into pi-coder.
+`src/tools/agent/index.ts` is empty. The evolving design is recorded in `src/tools/agent/PLAN.md`. A no-provider-call spike validated an in-process `createAgentSession()` using `SessionManager.inMemory()`, the current model, a four-tool read-only allowlist, an appended scout prompt, and a `DefaultResourceLoader` with no discovered extensions.
 
-Important design constraints: use a controlled ResourceLoader to avoid recursively loading pi-coder; decide how child sessions inherit the bash/file permission hooks and parent UI; use `SessionManager.inMemory()` by default; propagate abort and nested usage; guard project-local agent prompts; and serialize or isolate parallel file mutations because `withFileMutationQueue()` does not coordinate separate sessions/processes. A read-only in-process scout is the safest first prototype.
+Decisions: ship a built-in read-only `scout`; allow custom user agents and project agents only in pi-trusted projects; reserve built-in names; use one parent `agent` tool with explicit `start`/`resume` actions; and implement child-to-parent interaction first as cooperative pause/resume. A child-only `ask_parent` tool records a question and terminates the child turn, the parent receives a short run ID and may investigate, then resumes the same in-memory child with guidance. Keep the run state machine extensible for a later background mailbox using `pi.sendMessage(..., { deliverAs: "steer" })` and `childSession.steer()`. Direct child-to-user UI is deferred.
+
+Implementation constraints: use `noExtensions: true` plus only explicit inline child hooks; confine `read`, `grep`, `find`, and `ls` to cwd; bridge parent abort by listening to its signal and calling `childSession.abort()`; append agent instructions rather than replace pi's base prompt; aggregate exact nested usage and report per-parent-call deltas; bound waiting sessions and clean them on parent session lifecycle. Existing permission state is module-global and should not be reused in children without refactoring. `withFileMutationQueue()` coordinates individual same-file operations across in-process sessions, but not multi-step transactions or subprocesses.

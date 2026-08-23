@@ -1,6 +1,6 @@
 # Agent Support for pi-coder
 
-Status: exploration complete; implementation has not started.
+Status: active design investigation; implementation has not started.
 
 This document records the current findings and a plan that can be refined across sessions.
 
@@ -109,7 +109,7 @@ Likely locations:
 
 Project-local definitions are repository-controlled instructions and should require trust and/or explicit confirmation before execution.
 
-The existing memory module already contains frontmatter parsing code that may be reusable or generalized, although agent parsing should have its own validation and discovery tests.
+Pi already exports a full YAML `parseFrontmatter()` helper, which is a better fit for agent definitions than the memory module's intentionally limited flat-frontmatter parser. Agent parsing should still have its own validation and discovery tests.
 
 ### Safety and runtime concerns
 
@@ -117,11 +117,7 @@ The existing memory module already contains frontmatter parsing code that may be
 
 A child session using the default resource loader may rediscover pi-coder and register the agent tool again. This can cause recursive delegation or duplicate hooks.
 
-The child runtime should use a controlled resource loader. Possible approaches:
-
-- no extensions, with explicitly supplied tools and hooks;
-- a minimal inline extension set;
-- a dedicated child resource loader that includes only safe, intentionally selected pi-coder functionality.
+The child runtime should use a controlled resource loader. The validated approach is a `DefaultResourceLoader` configured with `noExtensions: true` and an explicit minimal `extensionFactories` list. This prevents discovery of pi-coder's parent extension while still allowing purpose-built child hooks/tools such as path confinement and `ask_parent`.
 
 #### Preserve bash and file protections
 
@@ -136,22 +132,33 @@ Potential approaches:
 3. Start with read-only agents and explicitly exclude mutation tools.
 4. Run mutation-capable agents in isolated worktrees or subprocesses.
 
-The first prototype should use the safest option that keeps the implementation understandable.
+The first prototype will be read-only. Its confinement hook must cover `read`, `grep`, `find`, and `ls`; guarding only `read` would still allow the search/list tools to inspect paths outside `cwd`.
 
-#### Parent UI and child interaction
+The selected first implementation is a stateless child-only `tool_call` hook. It treats omitted search/list paths as `cwd` and uses the existing canonical cwd-confinement heuristic for every explicit path. Any unconfined path is blocked without a UI escalation path.
 
-A child agent does not get a second independent terminal UI. For richer interaction, the parent must either:
+The existing bash and file-permission modules keep some session state in module-level variables. Re-registering those modules in multiple in-process sessions could share or reset parent state, so they will not be loaded into the read-only child. Their state should still become registration-scoped before mutation-capable agents reuse them.
 
-- forward child UI requests to the parent `ctx.ui`;
-- provide a restricted UI adapter;
-- prohibit child tools that require interaction;
-- use a subprocess/RPC protocol with explicit UI forwarding.
+#### Child-to-parent guidance and parent UI
 
-Nested `ctx.ui.custom()` components are especially risky because the parent TUI has one active editor/focus model. Basic `select`, `confirm`, `input`, and `notify` forwarding may be feasible; arbitrary custom components should initially be disallowed.
+The primary interaction requirement is child-to-parent guidance, not necessarily child-to-user UI. A normal parent tool call is synchronous: while it is waiting for the child, the parent model cannot generate a new answer for that child. Blocking child-to-parent questions would therefore deadlock.
+
+The first protocol will use cooperative pause/resume:
+
+1. The child calls a child-only `ask_parent` tool with a question and context.
+2. `ask_parent` records the request and returns `terminate: true`, ending the current child run.
+3. The parent `agent` tool returns a `waiting_for_parent` result with a run ID, partial findings, and the question.
+4. The parent may investigate or use other tools before responding.
+5. A later `agent` invocation resumes the same in-memory child session by run ID with guidance.
+
+The tool result itself puts the request in the parent transcript, so a second injected message is unnecessary. The child prompt should require `ask_parent` to be called alone in a tool batch because SDK early termination occurs only when every result in that batch has `terminate: true`.
+
+A future background-mailbox mode may allow non-blocking child messages while the child continues. Pi's `pi.sendMessage(..., { deliverAs: "steer" })` can insert a custom child message into the parent context after the current parent tool batch. For that to be timely, the initial `agent` call must return a run handle while the child continues in the background; later parent guidance can use `childSession.steer()`. This also introduces delivery ordering, race handling, shutdown, and nested-usage accounting problems, so it is explicitly deferred.
+
+Direct child-to-user interaction remains possible: a minimal child extension can forward the parent `ctx.ui` and register `ask_user`. It is explicitly deferred. Initially the child always asks the parent; the parent can answer, investigate, or invoke its own `ask_user`. This keeps ownership of the conversation clear and avoids nested UI binding.
 
 #### Parallel mutation
 
-Parallel agents that edit the same working tree can overwrite each other. `withFileMutationQueue()` coordinates mutations within one process, but it is not a cross-process or cross-session transaction mechanism.
+Parallel agents that edit the same working tree can overwrite each other. `withFileMutationQueue()` uses a module-global per-file queue, so it does coordinate individual built-in write/edit operations across in-process sessions that share the same module instance. It does not make a multi-step read/modify/write workflow transactional, prevent stale decisions, or coordinate subprocesses.
 
 Parallel execution should initially be:
 
@@ -164,29 +171,42 @@ Parallel execution should initially be:
 
 The parent extension context exposes `modelRegistry` and the active model, but not the parent `ModelRuntime` directly.
 
-A full child `AgentSession` needs a model runtime. We need to decide whether to:
+A full child `AgentSession` needs a `ModelRuntime`. Creating one from the normal pi auth/model files works for built-in providers and was validated with the current `openai-codex/gpt-5.6-sol` model.
 
-- create/reuse a `ModelRuntime` using the normal pi auth/model files;
-- register the active provider into a child runtime;
-- add a small internal provider/runtime adapter;
-- use direct `modelRegistry.complete()` for helper agents until full runtime support is needed.
+Dynamic extension providers need explicit synchronization. The parent `modelRegistry` publicly exposes registered provider IDs, configs/native providers, and resolved auth. A child runtime can mirror the active provider registration and copy a resolved runtime API key when necessary. This is preferable to relying on private access to the parent's runtime. The first implementation should validate this path and return an explicit unsupported-provider error rather than silently selecting a different model.
 
-Custom providers registered dynamically by extensions must not silently stop working for child agents.
+For a single-child MVP, a runtime per active run is simplest and isolates credentials/provider mutation. A shared runtime or pool can be considered when parallel execution is introduced.
 
 #### Cancellation and cleanup
 
-The parent tool's `signal` must be passed to all child model/tool work. Every child session/process must be disposed after completion, failure, or cancellation.
+`AgentSession.prompt()` does not accept an external abort signal. The parent tool must check its signal during setup, attach an abort listener that calls `childSession.abort()`, remove that listener during cleanup, and wait for abort settlement before disposal. Runtime creation accepts a signal, but resource loading does not, so setup needs explicit cancellation checkpoints.
 
-The parent tool should return a clear error when a child is aborted rather than treating cancellation as successful output.
+Completed and failed child sessions must be disposed promptly. A session in `waiting_for_parent` state is deliberately retained in a bounded run registry until resumed, canceled, expired, or the parent session shuts down.
 
 #### Context and output limits
 
 Delegated output can be large. Child results should:
 
 - be truncated before being returned to the parent model;
-- retain enough final output for downstream chain steps;
-- expose detailed state through tool `details` for the TUI;
+- retain bounded partial findings for a waiting guidance request;
+- expose bounded structured state through tool `details` for the TUI;
 - report nested model usage using the tool result's `usage` field.
+
+`getSessionStats()` is useful for display but loses the per-category cost breakdown required by the `Usage` type. Exact nested usage should be accumulated from assistant and nested tool-result messages, including cache and reasoning fields where present.
+
+Usage attached to each parent `agent` result must be the delta since the previous start/resume result, not the run's cumulative usage; otherwise resuming a waiting child would double-count earlier calls in the parent session. Cumulative usage can remain in bounded TUI details.
+
+## Validated SDK Spike
+
+A no-provider-call smoke test successfully constructed and disposed an in-process child with:
+
+- `SessionManager.inMemory(cwd)` and no session file;
+- the current `openai-codex/gpt-5.6-sol` model;
+- exactly `read`, `grep`, `find`, and `ls` active;
+- zero discovered extensions and zero extension errors;
+- an agent-specific prompt appended to the normal system prompt.
+
+The tested loader used `noExtensions`, `noSkills`, `noPromptTemplates`, `noThemes`, and `noContextFiles`. The production scout will make a deliberate choice about loading project context files rather than inheriting that smoke-test setting blindly.
 
 ## Proposed Architecture
 
@@ -196,12 +216,15 @@ Register an agent tool from `src/index.ts`:
 
 ```text
 src/tools/agent/
-├── index.ts             # registration and tool orchestration
+├── index.ts             # registration and tool contract
 ├── definitions.ts       # frontmatter parsing and AgentDefinition type
-├── discovery.ts         # user/project discovery and trust handling
-├── runtime.ts           # child AgentSession lifecycle
+├── discovery.ts         # built-in/user/project discovery and trust handling
+├── runtime.ts           # child AgentSession creation and execution
+├── runs.ts              # bounded pause/resume run registry
+├── child-extension.ts   # ask_parent and read-only confinement hooks
+├── usage.ts             # exact nested usage aggregation
 ├── rendering.ts         # tool call/result rendering
-├── workflows.ts         # optional chain/parallel orchestration
+├── workflows.ts         # optional later chain/parallel orchestration
 └── PLAN.md              # this document
 ```
 
@@ -218,8 +241,8 @@ interface AgentDefinition {
     systemPrompt: string;
     tools?: string[];
     model?: string;
-    source: "user" | "project";
-    filePath: string;
+    source: "builtin" | "user" | "project";
+    filePath?: string;
 }
 ```
 
@@ -227,22 +250,24 @@ Discovery should happen at invocation time so edits to agent files take effect w
 
 ### Initial tool contract
 
-Start with one explicit mode rather than the full official surface:
+Start with one tool and an explicit action discriminator:
 
 ```text
-agent: string
- task: string
+Start:  action="start"  + agent + task
+Resume: action="resume" + runId + guidance
 ```
+
+Later actions may include `status`, `cancel`, and background message delivery. An explicit action is clearer and more extensible than inferring behavior solely from optional fields. The tool should reject unknown fields for an action, unknown agent names, stale run IDs, and guidance sent to a non-waiting run.
 
 Possible later modes:
 
+- background message delivery and polling;
 - `tasks`: bounded parallel delegation;
 - `chain`: sequential delegation with a bounded `{previous}` result;
 - `cwd`: an explicitly validated working directory;
-- `agentScope`: user/project/both;
 - model and thinking overrides.
 
-The tool should reject ambiguous combinations and unknown agent names with an available-agent list.
+Agent scope should probably be extension configuration/trust policy rather than an LLM-controlled tool parameter. Available agent names and descriptions should be appended dynamically in `before_agent_start`, so the parent model can discover custom agents without reloading the extension.
 
 ### Child runtime defaults
 
@@ -251,55 +276,65 @@ For the first in-process implementation:
 - use `SessionManager.inMemory(ctx.cwd)`;
 - do not persist child sessions by default;
 - use the current model unless the definition specifies one;
-- pass the parent abort signal;
-- restrict tools to a safe explicit allowlist;
-- avoid recursive loading of the agent extension;
-- stream child events into `onUpdate`;
-- dispose the child session in `finally`.
+- bridge parent cancellation to `childSession.abort()`;
+- restrict tools to the extension-controlled `read`, `grep`, `find`, `ls`, and `ask_parent` ceiling;
+- confine every path-bearing tool to `cwd`;
+- use `noExtensions: true` with only the dedicated child extension;
+- preserve pi's normal coding prompt and append the agent definition;
+- stream throttled child events into `onUpdate`;
+- retain only bounded waiting sessions and dispose all terminal runs.
 
-A read-only scout agent is the recommended first supported profile.
+A read-only interactive scout is the selected first profile. “Interactive” initially means guidance exchange with the parent agent through pause/resume, not direct child ownership of the TUI.
 
 ## Incremental Implementation Plan
 
 ### Phase 0: Design decisions
 
-Before coding, decide:
+Decided:
 
-1. Is the first release strictly in-process, or should subprocess execution remain an available fallback?
-2. Should child agents be allowed to edit files immediately, or only inspect and plan?
-3. Should child UI requests be forwarded to the parent, or should child agents be non-interactive initially?
-4. Are project-local agent definitions enabled by default, only after confirmation, or disabled initially?
-5. Should the first tool support only single-agent execution, or include chains/parallelism?
-6. How should custom providers registered by extensions be made available to child sessions?
-7. Is child output shown only as a tool result, or should it also appear as a live parent status/widget?
+1. The first runtime is an in-process SDK `AgentSession`; subprocesses remain a possible later isolation fallback.
+2. The first agent is read-only.
+3. The first interaction protocol is child-to-parent pause/resume by run ID.
+4. Background mailbox interaction should remain possible later, but is not part of the first implementation.
+5. The first tool exposes single start/resume operations; chains and explicit parallel batches are deferred. A bounded registry may still contain multiple waiting runs.
+6. A zero-configuration built-in `scout` will ship with the extension; custom markdown agents remain supported.
 
-### Phase 1: Agent discovery
+Still to decide:
+
+1. Project-local definitions are enabled only when `ctx.isProjectTrusted()` is true. The read-only release does not add another confirmation prompt because the capability ceiling cannot be raised by frontmatter.
+2. Built-in names such as `scout` are reserved. Duplicate user/project definitions produce diagnostics rather than silently changing the built-in contract.
+3. What are the run count, waiting-session TTL, output cap, and update throttle limits?
+4. Direct child-to-user `ask_user` is deferred; all first-release questions route through the parent.
+5. The first release uses throttled tool updates and custom result rendering only. A persistent live widget is deferred until the run lifecycle is stable.
+
+### Phase 1: Read-only pause/resume vertical slice
+
+Implement the hardest path first with one built-in or test-only scout definition:
+
+- register the parent `agent` tool;
+- create one in-memory child session;
+- load only the child confinement and `ask_parent` extension;
+- allow only confined read-only tools;
+- start, pause with a guidance request, resume by run ID, and complete;
+- stream throttled progress through `onUpdate`;
+- return exact nested usage;
+- bridge cancellation and dispose reliably;
+- bound and clean up waiting sessions.
+
+Use injected child-runtime/session factories so orchestration tests do not require provider calls.
+
+### Phase 2: Agent discovery and parent discoverability
 
 Implement and test:
 
-- user/project directory resolution;
-- frontmatter parsing and validation;
-- tool-list normalization;
+- built-in/user/project definition sources;
+- directory resolution;
+- full YAML frontmatter parsing and validation;
+- tool-list normalization against the capability ceiling;
 - duplicate-name precedence;
 - malformed-file diagnostics;
-- trust and project-agent confirmation behavior.
-
-No child execution yet.
-
-### Phase 2: Read-only in-process agent
-
-Implement the smallest useful vertical slice:
-
-- register the agent tool;
-- discover user-level definitions;
-- create one in-memory child session;
-- allow only read-only tools;
-- stream progress through `onUpdate`;
-- return final text and usage;
-- propagate cancellation;
-- dispose reliably.
-
-Add tests for orchestration with mocked child runtime/model behavior where possible.
+- trust and project-agent confirmation behavior;
+- a bounded dynamic available-agent block in the parent system prompt.
 
 ### Phase 3: Parent TUI rendering
 
@@ -314,14 +349,9 @@ Add compact and expanded rendering for:
 
 Keep the collapsed output bounded and make expanded output useful for debugging.
 
-### Phase 4: Controlled permissions and interaction
+### Phase 4: Direct user interaction
 
-Choose and implement the child safety model:
-
-- inherit/rebind sandbox and file hooks; or
-- provide explicitly guarded child tools/operations.
-
-Then decide which basic UI methods can safely be forwarded to the parent. Add tests for non-interactive mode and denied access.
+After pause/resume is stable, decide whether a child may call `ask_user` directly through a restricted parent UI binding. The default parent-guidance path remains available so the parent can answer, investigate, or escalate to the user. Add tests for non-interactive mode, cancellation, nested dialog behavior, and denied file access.
 
 ### Phase 5: Mutation-capable worker
 
@@ -359,19 +389,24 @@ Consider later:
 
 At minimum:
 
+- built-in scout availability;
 - agent frontmatter parsing;
 - discovery scope and precedence;
 - malformed definitions;
 - unknown-agent errors;
-- exact tool parameter validation;
+- exact start/resume parameter validation;
+- `ask_parent` waiting-state capture;
+- same-session resume by run ID;
+- stale, busy, canceled, and expired run handling;
+- waiting-run bounds and parent-session cleanup;
 - child session disposal on success/failure/abort;
-- output truncation;
-- nested usage aggregation;
-- non-interactive behavior;
+- parent-signal-to-child-abort bridging;
+- output and partial-finding truncation;
+- exact nested usage aggregation;
 - recursive extension loading prevention;
-- project-agent confirmation;
-- permission enforcement;
-- parallel concurrency and mutation safety.
+- confinement of `read`, `grep`, `find`, and `ls`;
+- project-agent trust/confirmation;
+- later parallel concurrency and mutation safety.
 
 Run the existing checks after implementation:
 
@@ -384,14 +419,21 @@ npx tsc --noEmit
 
 Use this section to record decisions as the design evolves.
 
-- [ ] First runtime: in-process SDK session, subprocess, or hybrid?
-- [ ] First capability: read-only scout or mutation-capable worker?
-- [ ] Child extension set and permission model?
-- [ ] Parent UI forwarding policy?
-- [ ] User/project agent discovery policy?
-- [ ] Single mode before chain/parallel?
-- [ ] Persistence policy?
-- [ ] Custom provider/model runtime strategy?
+- [x] First runtime: in-process SDK session; subprocess isolation may be added later.
+- [x] First capability: interactive read-only agent/scout.
+- [x] First interaction: pause/resume child-to-parent guidance by run ID.
+- [x] Future interaction: keep room for a background mailbox.
+- [x] Single start/resume flow before chain/parallel.
+- [x] Child sessions are in-memory; only bounded waiting runs survive between tool calls.
+- [x] Ship a built-in read-only `scout` alongside custom definitions.
+- [x] Enable project definitions only in projects trusted by pi; no redundant confirmation for the read-only ceiling.
+- [x] Reserve built-in agent names; duplicate markdown definitions cannot override them.
+- [x] Use a stateless child-only path hook for `read`, `grep`, `find`, and `ls`; block out-of-cwd access without prompting.
+- [x] Route first-release child questions through the parent; defer direct child-to-user UI.
+- [x] Use tool updates/results first; defer a persistent live widget.
+- [ ] Duplicate-name policy between user and trusted-project agents?
+- [ ] Run limits, TTL, output cap, and update throttle?
+- [ ] Custom provider synchronization details?
 
 ## References
 
