@@ -4,9 +4,9 @@
 * agent tool tui output needs refinement
   * list action shows usage
   * clean up both compact view and detailed view
-* /agent-sessions needs a lot of refinemnt
-  * borders are meh, needs cleaning
-  * want a preview of what has returned
-  * drop transcript, parent session
-  * humanize usage (1k input, 1m input, etc)
-  * tabs should be at the top
+* /agent-sessions needs refinemnt (TBC)
+* scout agents could use the bash tool instead of grep and ls tool
+  * either we make more specific tools for it
+  * or, we make use of heuristics to give it restrained access to bash tool
+  * if we do the second, we might want to extend the heuristics a bit to
+    give more details on why certain bash commands are not allowed
