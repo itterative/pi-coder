@@ -1,10 +1,10 @@
-import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
-import { migrateSqliteDatabase } from "../../src/common/sqlite";
+import { loadSqlite, migrateSqliteDatabase } from "../../src/common/sqlite";
 
 describe("migrateSqliteDatabase", () => {
-    it("applies each migration once and records the schema version", () => {
+    it("applies each migration once and records the schema version", async () => {
+        const { DatabaseSync } = await loadSqlite();
         const database = new DatabaseSync(":memory:");
         let applied = 0;
         const migrations = [
@@ -20,7 +20,8 @@ describe("migrateSqliteDatabase", () => {
         database.close();
     });
 
-    it("rolls back a failed migration", () => {
+    it("rolls back a failed migration", async () => {
+        const { DatabaseSync } = await loadSqlite();
         const database = new DatabaseSync(":memory:");
         expect(() => migrateSqliteDatabase(database, [{
             version: 1,

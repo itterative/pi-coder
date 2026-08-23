@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { PI_CODER_WORKSPACES_DIR } from "../../common/constants";
-import { migrateSqliteDatabase } from "../../common/sqlite";
+import { loadSqlite, migrateSqliteDatabase } from "../../common/sqlite";
 import { randomSlug } from "../../common/slug";
 
 const execFileAsync = promisify(execFile);
@@ -60,7 +60,7 @@ const WORKSPACE_MIGRATIONS = [{
 async function openDatabase(workspacesDir = PI_CODER_WORKSPACES_DIR): Promise<WorkspaceDatabase> {
     // Load lazily so users who do not use worktree isolation do not receive the
     // node:sqlite experimental warning during normal extension startup.
-    const { DatabaseSync } = await import("node:sqlite");
+    const { DatabaseSync } = await loadSqlite();
     const directory = workspacesRoot(workspacesDir);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     fs.chmodSync(directory, 0o700);
