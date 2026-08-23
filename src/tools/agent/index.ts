@@ -56,7 +56,7 @@ const parameters = Type.Union([
     Type.Object({
         action: Type.Literal("resume"),
         runId: Type.String({ minLength: 1, maxLength: 100 }),
-        guidance: Type.String({ minLength: 1, maxLength: 16_000 }),
+        guidance: Type.Optional(Type.String({ minLength: 1, maxLength: 16_000 })),
     }, { additionalProperties: false }),
     Type.Object({
         action: Type.Literal("cancel"),
@@ -154,7 +154,7 @@ function availableAgentsPrompt(agents: AgentDefinition[]): string {
         "Use action=\"list\" to recover delegated run IDs, titles, statuses, and next actions; this is preferable to polling each run.",
         "Do not poll background runs with action=\"status\". Automatic mailbox notifications arrive when a run finishes or needs parent guidance.",
         "After a terminal notification, retrieve the full result with action=\"collect\"; mailbox markers never inject full child output automatically.",
-        "A waiting result is paused, not completed. Investigate or obtain guidance, then resume it; cancel it if no longer needed. An interrupted durable run also requires explicit grounded guidance before resume. Do not fabricate guidance.",
+        "A waiting result is paused, not completed. Investigate or obtain guidance, then resume it; cancel it if no longer needed. An interrupted durable run never resumes automatically; wait for explicit user direction before resuming or canceling it.",
         "The built-in worker mutates the shared checkout. Every edit/write/bash action requires an explicit user permission prompt, and only one worker can be active at once.",
     );
     return `<delegated_agents>\n${lines.join("\n")}\n</delegated_agents>`;
@@ -264,7 +264,29 @@ export default function registerAgentTool(
                 ctx.ui.notify(`Could not browse persisted delegated-agent sessions: ${message}`, "warning");
                 past = [];
             }
-            await showAgentSessionBrowser({ current, past }, ctx);
+            await showAgentSessionBrowser({
+                current,
+                past,
+                onResume: async (item) => {
+                    try {
+                        await manager.resume(item.id, undefined, undefined, backgroundUpdate(ctx));
+                        updateAgentUi(ctx, manager);
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        ctx.ui.notify(`Could not resume ${item.id}: ${message}`, "warning");
+                    }
+                },
+                onCancel: async (item) => {
+                    try {
+                        const outcome = await manager.cancel(item.id);
+                        mailbox.notifyUserCanceled(outcome.details);
+                        updateAgentUi(ctx, manager);
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        ctx.ui.notify(`Could not cancel ${item.id}: ${message}`, "warning");
+                    }
+                },
+            }, ctx);
         },
     });
     const notifiedWarnings = new Set<string>();
@@ -396,7 +418,7 @@ export default function registerAgentTool(
             "Do not poll spawned runs with status; automatic follow-up mailbox context notifies you when they finish or need parent guidance",
             "After a terminal notification, retrieve the full result with collect; mailbox updates never interrupt current work and never include the full result",
             "A waiting agent is paused, not completed; investigate or obtain guidance, then resume it, or cancel it if no longer needed",
-            "Durable interrupted runs never replay automatically; resume them only with explicit grounded guidance after accounting for uncertain tool outcomes",
+            "Durable interrupted runs never replay or resume automatically; wait for explicit user direction before resuming or canceling them, and account for uncertain tool outcomes",
             "Background agents cannot open direct user dialogs; they request parent guidance instead",
             "Use the returned run ID exactly; runs are cwd-confined and durable only within the exact persisted parent session",
             "Only the built-in worker may mutate; each edit, write, or bash call requires an explicit user prompt, and only one worker may be active at once",

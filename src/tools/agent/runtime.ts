@@ -252,6 +252,9 @@ const MAX_TITLE_CHARS = 80;
 const MAX_GUIDANCE_CHARS = 16_000;
 const MAX_OUTPUT_CHARS = 32_000;
 
+export const INTERRUPTED_RESUME_GUIDANCE =
+    "Continue from the persisted session. Inspect the current state before proceeding; do not assume interrupted tool calls completed.";
+
 export function deriveAgentTitle(task: string, requestedTitle?: string): string {
     const requested = requestedTitle?.replace(/\s+/g, " ").trim();
     if (requested) return truncate(requested, MAX_TITLE_CHARS);
@@ -496,7 +499,7 @@ export class AgentRunManager {
 
     async resume(
         runId: string,
-        guidance: string,
+        guidance?: string,
         signal?: AbortSignal,
         onProgress?: AgentProgressCallback,
     ): Promise<AgentRunOutcome> {
@@ -509,10 +512,11 @@ export class AgentRunManager {
                 `Agent run ${runId} is ${run.status}; only waiting or interrupted runs can be resumed.`,
             );
         }
-        if (!guidance.trim()) {
-            throw new AgentActionError("Parent guidance must not be empty.");
+        const normalizedGuidance = guidance?.trim();
+        if (run.status === "waiting_for_parent" && !normalizedGuidance) {
+            throw new AgentActionError("Waiting agent runs require parent guidance.");
         }
-        if (guidance.length > MAX_GUIDANCE_CHARS) {
+        if (normalizedGuidance && normalizedGuidance.length > MAX_GUIDANCE_CHARS) {
             throw new AgentActionError(`Parent guidance exceeds ${MAX_GUIDANCE_CHARS} characters.`);
         }
         if (this.closing) {
@@ -520,12 +524,13 @@ export class AgentRunManager {
         }
 
         if (signal?.aborted) throw new AgentActionError("Agent resume was aborted before launch.");
-        this.record(run, "resume.requested", { guidanceChars: guidance.length });
+        const resumeGuidance = normalizedGuidance ?? INTERRUPTED_RESUME_GUIDANCE;
+        this.record(run, "resume.requested", { guidanceChars: resumeGuidance.length, userDriven: !normalizedGuidance });
         run.status = "running";
         run.question = undefined;
         run.updatedAt = Date.now();
         this.persistRun(run);
-        const prompt = `Parent guidance:\n${guidance}`;
+        const prompt = `Parent guidance:\n${resumeGuidance}`;
         if (!run.background) {
             return this.beginOperation(run, prompt, signal, onProgress);
         }

@@ -129,6 +129,31 @@ export class AgentMailbox {
         }
     }
 
+    notifyUserCanceled(details: Pick<AgentRunDetails, "runId" | "title" | "agent">): void {
+        if (this.closed) return;
+        const content = [
+            "<delegated-agent-mailbox>",
+            "The user explicitly canceled a delegated agent from the /agent-sessions browser.",
+            `- Run ID: ${JSON.stringify(details.runId)}`,
+            `  Title: ${JSON.stringify(details.title)}`,
+            `  Agent: ${JSON.stringify(details.agent)}`,
+            "  Status: canceled_by_user",
+            "  Instruction: Do not respawn or resume this run unless the user explicitly asks.",
+            "</delegated-agent-mailbox>",
+        ].join("\n");
+        this.pi.sendMessage(
+            {
+                customType: AGENT_MAILBOX_MESSAGE_TYPE,
+                content,
+                display: false,
+                details: {
+                    updates: [{ runId: details.runId, agent: details.agent, status: "canceled_by_user" }],
+                },
+            },
+            { deliverAs: "followUp", triggerTurn: true },
+        );
+    }
+
     flush(): number {
         if (this.closed || !this.pending.size) return 0;
         const updates = [...this.pending.values()];

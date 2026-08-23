@@ -490,7 +490,7 @@ The existing runtime already supports the practical read-only concurrency baseli
 
 #### Resumable child sessions — MVP implemented
 
-Implemented scope: restore paused and interrupted runs, but do not yet retain completed child conversations for arbitrary later continuation.
+Implemented scope: restore paused and interrupted runs, but do not yet retain completed child conversations for arbitrary later continuation. User-driven browser controls can continue interrupted runs or cancel them without asking the parent model to decide.
 
 Durable children now replace `SessionManager.inMemory(cwd)` with a persistent manager and reopen it with `SessionManager.open(...)`. The parent extension separately journals validated run metadata through `pi.appendEntry()`, because a child transcript does not contain the parent run ID, task/status, pending `ask_parent` question, usage checkpoint, or retention state.
 
@@ -503,7 +503,7 @@ Implemented invariants:
 - recreate tools, confinement, permission gates, and the system prompt from a currently validated agent definition and matching fingerprint. Persisted metadata must never grant mutation capability: only the current reserved built-in `worker` may restore as mutating;
 - restore `waiting_for_parent` children as paused sessions and restore uncollected terminal outcomes from bounded parent metadata without reopening their child transcript;
 - abort and settle running children during clean shutdown, then persist them as `interrupted`. A stale `starting`/`running` record after a crash is also treated as interrupted, never automatically restarted;
-- resuming an interrupted run requires explicit parent guidance. Before reopening a crash-interrupted transcript, detect unmatched tool calls and append synthetic error results stating that execution outcome is uncertain; never replay a worker mutation automatically;
+- resuming an interrupted run is always user-driven: it never happens automatically, while `/agent-sessions` offers `r` to continue the persisted transcript with a safety instruction and `c` to cancel; the `agent resume` action remains available, and waiting-for-parent runs still require explicit guidance. Before reopening a crash-interrupted transcript, detect unmatched tool calls and append synthetic error results stating that execution outcome is uncertain; never replay a worker mutation automatically;
 - preserve exact usage checkpoints, the one-worker/four-run bounds, changed-file data, mailbox reconciliation, and the latest-20 terminal-result retention across restoration;
 - reconcile state on in-place `/tree` navigation by allowing navigation only when runs are paused/interrupted/terminal, detaching old-branch persistence before shutdown at the new leaf, and rebuilding the manager from the newly active branch afterward; active streaming or permission-waiting runs must first pause, finish, or be canceled;
 - retain child transcript files after cancellation, collection, and terminal-result eviction so `/agent-sessions` can browse past work; a later explicit prune/retention policy should remove old transcripts and orphan directories for deleted parent sessions.

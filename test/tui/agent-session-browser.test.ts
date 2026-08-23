@@ -123,6 +123,34 @@ describe("AgentSessionBrowserComponent", () => {
         expect(ui.render()).toHaveLength(initialHeight);
     });
 
+    it("lets the user resume or cancel an interrupted run", async () => {
+        const interrupted = { ...current, status: "interrupted" };
+        let resumed = false;
+        const value = new AgentSessionBrowserComponent({
+            current: [interrupted],
+            past: [],
+            onResume: () => { resumed = true; },
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press("r");
+        await Promise.resolve();
+        expect(resumed).toBe(true);
+
+        let canceled = false;
+        const cancelValue = new AgentSessionBrowserComponent({
+            current: [{ ...current, status: "waiting_for_parent" }],
+            past: [],
+            onCancel: () => { canceled = true; },
+        });
+        cancelValue.initialize(mockTheme);
+        const cancelUi = interact(cancelValue, 100);
+        cancelUi.press("c");
+        await Promise.resolve();
+        expect(canceled).toBe(true);
+    });
+
     it("opens a separate detail view with metadata and transcript", () => {
         const value = component();
         const ui = interact(value, 100);

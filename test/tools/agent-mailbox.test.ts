@@ -63,6 +63,25 @@ describe("agent parent mailbox", () => {
         expect(mailbox.flush()).toBe(0);
     });
 
+    it("notifies the parent when the user cancels a run", () => {
+        const sendMessage = vi.fn();
+        const mailbox = new AgentMailbox({ sendMessage });
+
+        mailbox.notifyUserCanceled({ runId: "worker-1", title: "Implement change", agent: "worker" });
+
+        expect(sendMessage).toHaveBeenCalledWith(
+            expect.objectContaining({
+                customType: AGENT_MAILBOX_MESSAGE_TYPE,
+                content: expect.stringContaining("The user explicitly canceled"),
+                details: {
+                    updates: [{ runId: "worker-1", agent: "worker", status: "canceled_by_user" }],
+                },
+            }),
+            { deliverAs: "followUp", triggerTurn: true },
+        );
+        expect(sendMessage.mock.calls[0]?.[0].content).toContain("Do not respawn or resume");
+    });
+
     it("drops stale updates after collection, resume, or cancellation", () => {
         const sendMessage = vi.fn();
         const mailbox = new AgentMailbox({ sendMessage });

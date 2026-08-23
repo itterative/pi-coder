@@ -408,6 +408,7 @@ describe("AgentRunManager", () => {
         await flushBackground();
         expect(manager.listRuns()[0]?.status).toBe("waiting_for_parent");
         expect(notifications).toContain("waiting_for_parent");
+        await expect(manager.resume("scout-1")).rejects.toThrow("require parent guidance");
 
         const resumed = await manager.resume("scout-1", "Inspect A");
         expect(resumed.details.status).toBe("running");
@@ -723,7 +724,7 @@ describe("AgentRunManager", () => {
         expect(secondManager.listRuns()[0]).toMatchObject({ status: "interrupted", mutating: true });
         expect(restoredChild.prompts).toEqual([]);
         expect(restoredContext.repairInterrupted).toBe(true);
-        const resumed = await secondManager.resume("worker-1", "Inspect the checkout before continuing");
+        const resumed = await secondManager.resume("worker-1");
         expect(resumed.details.status).toBe("running");
         await flushBackground();
         expect(secondManager.listRuns()[0]?.status).toBe("completed");

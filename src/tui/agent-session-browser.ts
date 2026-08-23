@@ -19,6 +19,8 @@ export interface AgentSessionBrowserOptions {
     current: AgentSessionBrowserItem[];
     past: AgentSessionBrowserItem[];
     fixedHeight?: () => number;
+    onResume?: (item: AgentSessionBrowserItem) => void | Promise<void>;
+    onCancel?: (item: AgentSessionBrowserItem) => void | Promise<void>;
 }
 
 const EMPTY_CURRENT: AgentSessionBrowserItem = {
@@ -132,7 +134,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                 fixedHeight: options.fixedHeight,
                 trailingSpacer: false,
                 itemSpacing: 1,
-                helpText: "↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close",
+                helpText: `↑/↓ navigate · Tab/←/→ switch tab · Enter open${options.onResume || options.onCancel ? " · r resume · c cancel" : ""} · Esc close`,
                 headerContent: (container, theme) => {
                     tabTheme = theme;
                     tabHeader = new Text(tabText(activeTab, theme), 5, 0);
@@ -148,6 +150,19 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     return options.isCursor ? content : options.theme.fg("text", content);
                 },
                 onKey: (key, state) => {
+                    const selected = state.items[state.cursor ?? 0]?.value;
+                    if (key === "r" && selected?.kind === "current" && selected.status === "interrupted") {
+                        this.finish(undefined);
+                        queueMicrotask(() => void options.onResume?.(selected));
+                        return true;
+                    }
+                    if (key === "c" && selected?.kind === "current" && (
+                        selected.status === "interrupted" || selected.status === "waiting_for_parent"
+                    )) {
+                        this.finish(undefined);
+                        queueMicrotask(() => void options.onCancel?.(selected));
+                        return true;
+                    }
                     if (matchesKey(key, "tab") || matchesKey(key, "left") || matchesKey(key, "right")) {
                         const nextTab = matchesKey(key, "left")
                             ? "current"
