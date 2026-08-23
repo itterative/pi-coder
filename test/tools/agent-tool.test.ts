@@ -45,7 +45,7 @@ describe("agent extension registration", () => {
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
-            ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+            ui: { notify: () => {}, setWidget: () => {} },
         };
         const prompt = await handlers.before_agent_start[0]({ systemPrompt: "Parent prompt" }, ctx) as any;
         const result = await tool.execute(
@@ -112,7 +112,7 @@ describe("agent extension registration", () => {
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
-            ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+            ui: { notify: () => {}, setWidget: () => {} },
         };
 
         const waiting = await tool.execute(
@@ -183,15 +183,21 @@ describe("agent extension registration", () => {
             reportProgress = context.onProgress;
             return child;
         });
-        const statuses: Array<string | undefined> = [];
         const widgets: Array<string[] | undefined> = [];
+        const widgetPlacements: Array<string | undefined> = [];
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
             ui: {
                 notify: () => {},
-                setStatus: (_id: string, value: string | undefined) => statuses.push(value),
-                setWidget: (_id: string, value: string[] | undefined) => widgets.push(value),
+                setWidget: (
+                    _id: string,
+                    value: string[] | undefined,
+                    options?: { placement?: string },
+                ) => {
+                    widgets.push(value);
+                    if (value) widgetPlacements.push(options?.placement);
+                },
             },
         };
 
@@ -228,9 +234,6 @@ describe("agent extension registration", () => {
         expect(prompt.systemPrompt).toContain("scout-1 (scout): completed");
         expect(collected.details.status).toBe("completed");
         expect(collected.content[0].text).toBe("Background result");
-        expect(statuses).toContain("● scout-1");
-        expect(statuses).toContain("✓ scout-1 ready");
-        expect(statuses[statuses.length - 1]).toBeUndefined();
         const widgetLines = widgets.flatMap((lines) => lines ?? []);
         expect(widgetLines).toContain(
             "● scout-1 — Reading src/tools/agent/runtime.ts · “Inspecting the run manager lifecycle.”",
@@ -239,6 +242,7 @@ describe("agent extension registration", () => {
             "✓ scout-1 — Ready to collect · “Inspecting the run manager lifecycle.”",
         );
         expect(widgets[widgets.length - 1]).toBeUndefined();
+        expect(widgetPlacements).toContain("aboveEditor");
         expect(background).toBe(true);
         await handlers.session_shutdown[0]({}, ctx);
     });
@@ -271,7 +275,6 @@ describe("agent extension registration", () => {
             isProjectTrusted: () => true,
             ui: {
                 notify: (message: string) => notifications.push(message),
-                setStatus: () => {},
                 setWidget: () => {},
             },
         };

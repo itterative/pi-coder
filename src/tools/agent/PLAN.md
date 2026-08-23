@@ -389,7 +389,7 @@ Decided:
 8. Built-in names such as `scout` are reserved.
 9. Retain at most four active/waiting runs with no TTL and parent-runtime-local lifetime.
 10. Direct child-to-user `ask_user` is deferred; first-release questions route through the parent.
-11. Use throttled tool updates and custom result rendering first; defer a persistent live widget.
+11. Use throttled tool updates and custom result rendering first; add a persistent live widget with background execution.
 
 Known limitation:
 
@@ -446,7 +446,7 @@ The child-only `ask_user` forwards through a restricted parent TUI binding and r
 The read-only runtime now supports:
 
 - immediate `spawn` acknowledgements and up to four concurrent child operations;
-- a persistent footer status plus bounded below-editor activity widget; the widget shows sanitized tool activity and a short latest-response preview and updates from throttled child progress;
+- a bounded above-editor activity widget that shows sanitized tool activity and a short latest-response preview and updates from throttled child progress;
 - explicit bounded `status` polling and one-shot `collect`;
 - background pause/resume through `ask_parent`;
 - active background cancellation and shutdown settlement;
@@ -536,7 +536,7 @@ Use this section to record decisions as the design evolves.
 - [x] Use a stateless child-only path hook for `read`, `grep`, `find`, and `ls`; block out-of-cwd access without prompting.
 - [x] Route first-release child questions through the parent.
 - [x] After MVP stabilization, add restricted TUI-only child-to-user questions while retaining `ask_parent`.
-- [x] Use tool updates/results first; defer a persistent live widget.
+- [x] Use tool updates/results first; add a bounded above-editor live widget with background execution.
 - [x] Within a scope, sorted first definition wins and later duplicates warn; trusted-project definitions override user definitions with an informational diagnostic.
 - [x] Allow at most four active/waiting runs with no TTL; cleanup is explicit or tied to parent shutdown.
 - [x] Bound task/guidance to 16,000 characters, LLM-facing final output to 32,000 characters, and progress updates to at most once per 100 ms.

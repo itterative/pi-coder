@@ -139,13 +139,11 @@ function oneLinePreview(text: string, maxChars = 180): string {
         : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-const AGENT_STATUS_ID = "pi-coder-agents";
 const AGENT_WIDGET_ID = "pi-coder-agent-activity";
 
 function updateAgentUi(ctx: ExtensionContext, manager: AgentRunManager): void {
     const runs = manager.listRuns();
     if (!runs.length) {
-        ctx.ui.setStatus(AGENT_STATUS_ID, undefined);
         ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         return;
     }
@@ -179,31 +177,7 @@ function updateAgentUi(ctx: ExtensionContext, manager: AgentRunManager): void {
     if (runs.length > visibleRuns.length) {
         activityLines.push(`… ${runs.length - visibleRuns.length} older result(s) hidden`);
     }
-    ctx.ui.setWidget(AGENT_WIDGET_ID, activityLines, { placement: "belowEditor" });
-
-    const label = (run: (typeof runs)[number]): string => {
-        if (run.status === "starting" || run.status === "running") return `● ${run.runId}`;
-        if (run.status === "waiting_for_parent") return `? ${run.runId}`;
-        if (run.status === "completed") return `✓ ${run.runId} ready`;
-        if (run.status === "failed") return `! ${run.runId} failed`;
-        return `× ${run.runId} ${run.status}`;
-    };
-    if (runs.length <= 4) {
-        ctx.ui.setStatus(AGENT_STATUS_ID, runs.map(label).join(" · "));
-        return;
-    }
-
-    const active = runs.filter((run) => run.status === "starting" || run.status === "running").length;
-    const waiting = runs.filter((run) => run.status === "waiting_for_parent").length;
-    const ready = runs.filter((run) => run.status === "completed").length;
-    const failed = runs.filter((run) => run.status === "failed" || run.status === "aborted").length;
-    const sections = [
-        active ? `● ${active} active` : "",
-        waiting ? `? ${waiting} waiting` : "",
-        ready ? `✓ ${ready} ready` : "",
-        failed ? `! ${failed} failed` : "",
-    ].filter(Boolean);
-    ctx.ui.setStatus(AGENT_STATUS_ID, `agents: ${sections.join(" · ")}`);
+    ctx.ui.setWidget(AGENT_WIDGET_ID, activityLines, { placement: "aboveEditor" });
 }
 
 export default function registerAgentTool(
@@ -235,7 +209,6 @@ export default function registerAgentTool(
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
-        ctx.ui.setStatus(AGENT_STATUS_ID, undefined);
         ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         await manager.shutdown();
     });
