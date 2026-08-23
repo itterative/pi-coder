@@ -45,6 +45,7 @@ import {
     deriveAgentTitle,
     type AgentRunDetails,
     type AgentRunOutcome,
+    type AgentRunSummary,
     type ChildAgentFactory,
 } from "./runtime";
 import {
@@ -181,13 +182,29 @@ function availableAgentsPrompt(agents: AgentDefinition[]): string {
 
 type WorkspacePromptChoice = "setup" | "skip" | "cancel";
 
+type WorkspaceSetupUiUpdate = Pick<AgentRunSummary, "status"> & Partial<Pick<
+    AgentRunSummary,
+    "activity" | "responsePreview" | "usage"
+>>;
+type WorkspaceSetupUiCallback = (
+    runId: string,
+    workspace: AgentWorkspace,
+    update: WorkspaceSetupUiUpdate,
+) => void;
+
 async function runWorkspaceSetup(
     workspace: AgentWorkspace,
     definition: AgentDefinition,
     factory: ChildAgentFactory,
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
+    setupRunId: string,
+    onUiUpdate?: WorkspaceSetupUiCallback,
 ): Promise<AgentWorkspace> {
+    onUiUpdate?.(setupRunId, workspace, {
+        status: "starting",
+        activity: "Starting workspace setup",
+    });
     await updateAgentWorkspace(workspace, { setupState: "running" });
     ctx.ui.notify(`Preparing isolated workspace ${workspace.slug}…`, "info");
     const setupDefinition: AgentDefinition = {
@@ -210,7 +227,17 @@ Your only job is to inspect the project and prepare its development environment:
             background: false,
             runId: `workspace-setup-${workspace.slug}`,
             runTitle: `Setup ${workspace.slug}`,
-            onProgress: () => {},
+            onProgress: (progress) => {
+                onUiUpdate?.(setupRunId, workspace, {
+                    status: "running",
+                    activity: progress.recentActivity[progress.recentActivity.length - 1] ?? "Preparing workspace",
+                    responsePreview: progress.output,
+                });
+            },
+        });
+        onUiUpdate?.(setupRunId, workspace, {
+            status: "running",
+            activity: "Preparing workspace",
         });
         const abortSetup = () => { void handle?.abort(); };
         signal?.addEventListener("abort", abortSetup, { once: true });
@@ -227,12 +254,23 @@ Your only job is to inspect the project and prepare its development environment:
         if (error) throw new AgentActionError(`Workspace setup failed: ${error}`);
         const summary = handle.getFinalOutput().trim();
         if (!summary) throw new AgentActionError("Workspace setup completed without a setup report.");
+        onUiUpdate?.(setupRunId, workspace, {
+            status: "completed",
+            activity: "Setup complete",
+            responsePreview: summary,
+            usage: handle.getUsage(),
+        });
         return updateAgentWorkspace(workspace, {
             setupState: "ready",
             setupSummary: summary,
         });
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        onUiUpdate?.(setupRunId, workspace, {
+            status: "failed",
+            activity: "Setup failed",
+            responsePreview: message,
+        });
         await updateAgentWorkspace(workspace, { setupState: "failed", setupSummary: message });
         throw error;
     } finally {
@@ -253,6 +291,7 @@ async function prepareIsolatedWorkspace(
     manager: AgentRunManager,
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
+    onUiUpdate?: WorkspaceSetupUiCallback,
 ): Promise<WorkspaceReservation> {
     if (!definition.mutating) {
         throw new AgentActionError("Worktree isolation is currently available only for the mutation-capable worker.");
@@ -321,7 +360,17 @@ async function prepareIsolatedWorkspace(
             provisionalLeaseRunId,
             leaseKind,
         );
-        if (choice === "setup") await runWorkspaceSetup(claimed, definition, factory, ctx, signal);
+        if (choice === "setup") {
+            await runWorkspaceSetup(
+                claimed,
+                definition,
+                factory,
+                ctx,
+                signal,
+                provisionalLeaseRunId,
+                onUiUpdate,
+            );
+        }
         else await updateAgentWorkspace(claimed, { setupState: "skipped" });
         return {
             workspace: claimed,
@@ -355,8 +404,12 @@ function isTerminalAgentStatus(status: AgentRunDetails["status"]): boolean {
 
 const AGENT_WIDGET_ID = "pi-coder-agent-activity";
 
-function updateAgentUi(ctx: ExtensionContext, manager: AgentRunManager): void {
-    const runs = manager.listRuns();
+function updateAgentUi(
+    ctx: ExtensionContext,
+    manager: AgentRunManager,
+    extraRuns: AgentRunSummary[] = [],
+): void {
+    const runs = [...manager.listRuns(), ...extraRuns];
     if (!runs.length) {
         ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         return;
@@ -371,28 +424,29 @@ function updateAgentUi(ctx: ExtensionContext, manager: AgentRunManager): void {
         const response = run.responsePreview
             ? ` · “${oneLinePreview(run.responsePreview, 72)}”`
             : "";
+        const label = run.agent === "workspace-setup" ? run.title : run.runId;
         if (run.status === "starting") {
-            return `● ${run.runId} — Starting: ${oneLinePreview(run.task, 90)}`;
+            return `● ${label} — Starting: ${oneLinePreview(run.task, 90)}`;
         }
         if (run.status === "running") {
-            return `● ${run.runId} — ${run.activity ?? "Working"}${response}`;
+            return `● ${label} — ${run.activity ?? "Working"}${response}`;
         }
         if (run.status === "waiting_for_permission") {
-            return `? ${run.runId} — ${run.activity ?? "Waiting for mutation permission"}${response}`;
+            return `? ${label} — ${run.activity ?? "Waiting for mutation permission"}${response}`;
         }
         if (run.status === "waiting_for_parent") {
-            return `? ${run.runId} — Waiting: ${oneLinePreview(run.question ?? "parent guidance", 100)}${response}`;
+            return `? ${label} — Waiting: ${oneLinePreview(run.question ?? "parent guidance", 100)}${response}`;
         }
         if (run.status === "interrupted") {
-            return `! ${run.runId} — Interrupted; resume with explicit guidance${response}`;
+            return `! ${label} — Interrupted; resume with explicit guidance${response}`;
         }
         if (run.status === "completed") {
-            return `✓ ${run.runId} — Ready to collect${response}`;
+            return `✓ ${label} — Ready to collect${response}`;
         }
         if (run.status === "failed") {
-            return `! ${run.runId} — Failed; result ready to collect${response}`;
+            return `! ${label} — Failed; result ready to collect${response}`;
         }
-        return `× ${run.runId} — ${run.status}`;
+        return `× ${label} — ${run.status}`;
     });
     if (runs.length > visibleRuns.length) {
         activityLines.push(`… ${runs.length - visibleRuns.length} older result(s) hidden`);
@@ -408,6 +462,35 @@ export default function registerAgentTool(
     const createManager = () => new AgentRunManager(factory, 4, traceStore);
     let manager = createManager();
     let cachedAgentPrompt = "";
+    const setupRuns = new Map<string, AgentRunSummary>();
+    const refreshAgentUi = (ctx: ExtensionContext): void => {
+        updateAgentUi(ctx, manager, [...setupRuns.values()]);
+    };
+    const updateSetupRun = (
+        ctx: ExtensionContext,
+        runId: string,
+        workspace: AgentWorkspace,
+        update: WorkspaceSetupUiUpdate,
+    ): void => {
+        const previous = setupRuns.get(runId);
+        const now = Date.now();
+        setupRuns.set(runId, {
+            runId,
+            title: `Setup ${workspace.slug}`,
+            agent: "workspace-setup",
+            status: update.status,
+            background: false,
+            task: "Prepare the isolated workspace for the implementation worker",
+            startedAt: previous?.startedAt ?? now,
+            updatedAt: now,
+            activity: update.activity ?? previous?.activity,
+            responsePreview: update.responsePreview ?? previous?.responsePreview,
+            usage: update.usage ?? previous?.usage ?? ZERO_USAGE,
+            mutating: true,
+            workspaceId: workspace.id,
+        });
+        refreshAgentUi(ctx);
+    };
     const mailbox = new AgentMailbox(pi);
     const releaseWorkspaceForRun = async (ctx: ExtensionContext, details: AgentRunDetails): Promise<void> => {
         if (!details.workspaceId || !isTerminalAgentStatus(details.status)) return;
@@ -446,7 +529,9 @@ export default function registerAgentTool(
     };
     if (traceStore) registerAgentTraceCommand(pi, traceStore);
     const showAgentBrowser = async (_args: string, ctx: ExtensionCommandContext) => {
-        const current = await loadAgentSessionTranscripts(currentAgentSessionItems(manager.listRuns()));
+        const current = await loadAgentSessionTranscripts(
+            currentAgentSessionItems([...manager.listRuns(), ...setupRuns.values()]),
+        );
         let past: AgentSessionBrowserItem[];
         try {
             past = removeCurrentAgentTranscripts(
@@ -481,7 +566,7 @@ export default function registerAgentTool(
                 try {
                     const outcome = await manager.resume(item.id, undefined, undefined, backgroundUpdate(ctx));
                     await releaseWorkspaceForRun(ctx, outcome.details);
-                    updateAgentUi(ctx, manager);
+                    refreshAgentUi(ctx);
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
                     ctx.ui.notify(`Could not resume ${item.id}: ${message}`, "warning");
@@ -492,7 +577,7 @@ export default function registerAgentTool(
                     const outcome = await manager.cancel(item.id);
                     await releaseWorkspaceForRun(ctx, outcome.details);
                     mailbox.notifyUserCanceled(outcome.details);
-                    updateAgentUi(ctx, manager);
+                    refreshAgentUi(ctx);
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
                     ctx.ui.notify(`Could not cancel ${item.id}: ${message}`, "warning");
@@ -519,7 +604,7 @@ export default function registerAgentTool(
     };
 
     const backgroundUpdate = (ctx: ExtensionContext) => (details: AgentRunDetails) => {
-        updateAgentUi(ctx, manager);
+        refreshAgentUi(ctx);
         mailbox.queue(details);
         mailbox.reconcile(manager.listRuns());
         flushMailboxWhenIdle(ctx);
@@ -548,7 +633,7 @@ export default function registerAgentTool(
         if (result.restored > 0) {
             ctx.ui.notify(`Restored ${result.restored} delegated agent run${result.restored === 1 ? "" : "s"}.`, "info");
         }
-        updateAgentUi(ctx, manager);
+        refreshAgentUi(ctx);
         mailbox.reconcile(manager.listRuns());
     };
 
@@ -585,6 +670,8 @@ export default function registerAgentTool(
     pi.on("session_before_tree", (_event, ctx) => {
         const unsafe = manager.listRuns().some((run) => (
             run.status === "starting" || run.status === "running" || run.status === "waiting_for_permission"
+        )) || [...setupRuns.values()].some((run) => (
+            run.status === "starting" || run.status === "running"
         ));
         if (!unsafe) return;
         ctx.ui.notify("Pause, finish, or cancel running delegated agents before navigating the session tree.", "warning");
@@ -596,6 +683,7 @@ export default function registerAgentTool(
         // Prevent old-branch shutdown records from being appended at the new leaf.
         manager.setPersistence(undefined);
         await manager.shutdown();
+        setupRuns.clear();
         ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         manager = createManager();
         const discovered = discover(ctx);
@@ -605,6 +693,7 @@ export default function registerAgentTool(
 
     pi.on("session_shutdown", async (_event, ctx) => {
         mailbox.close();
+        setupRuns.clear();
         ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         await manager.shutdown();
     });
@@ -727,6 +816,7 @@ export default function registerAgentTool(
                             manager,
                             ctx,
                             signal,
+                            (runId, workspace, update) => updateSetupRun(ctx, runId, workspace, update),
                         )
                         : undefined;
                     const runContext = {
@@ -789,7 +879,7 @@ export default function registerAgentTool(
                 outcome = failedOutcome(params, error);
             }
 
-            updateAgentUi(ctx, manager);
+            refreshAgentUi(ctx);
             mailbox.reconcile(manager.listRuns());
             return {
                 content: [{ type: "text", text: outcome.content }],

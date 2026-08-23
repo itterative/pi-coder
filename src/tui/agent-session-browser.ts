@@ -145,7 +145,9 @@ function itemText(
     if (isWorkspace(item)) return agentWorkspaceItemText(item, theme, workspaceGitStates?.get(item.id));
     if (item.kind === "empty") return theme.fg("muted", item.task);
 
-    const mode = item.mutating ? "worker" : item.agent;
+    const mode = item.agent === "workspace-setup"
+        ? "workspace setup"
+        : item.mutating ? "worker" : item.agent;
     const status = item.status.replaceAll("_", " ");
     const headline = `${item.title || "Untitled run"} · ${mode} · ${status} · ${dateText(item.updatedAt)}`;
     const task = `Task: ${oneLine(item.task)}`;

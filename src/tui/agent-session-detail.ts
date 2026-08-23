@@ -62,7 +62,9 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
     private totalLines = 0;
 
     constructor(options: AgentSessionDetailOptions) {
-        const mode = options.item.mutating ? "worker" : options.item.agent;
+        const mode = options.item.agent === "workspace-setup"
+            ? "workspace setup"
+            : options.item.mutating ? "worker" : options.item.agent;
         const status = options.item.status.replaceAll("_", " ");
         super({
             title: `[${mode}] ${options.item.title || "Untitled run"} · ${status}`,
