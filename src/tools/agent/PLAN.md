@@ -340,7 +340,7 @@ A busy, stale, terminal, or unknown run ID returns a clear action-specific error
 
 `spawn` reserves a run and starts child setup asynchronously, returning before setup or prompting completes. Multiple sequential `spawn` tool calls can therefore launch up to four read-only children concurrently. `status` snapshots bounded progress or reports that a terminal result is ready; `collect` returns that result once and makes the ID stale. Background `resume` returns immediately and keeps the run asynchronous. Usage checkpoints advance on each parent-visible spawn/status/resume/cancel/collect result, so nested usage is never duplicated.
 
-Background children omit `ask_user` to prevent unsolicited dialogs from racing parent rendering or another tool call. They retain `ask_parent`, transition to `waiting_for_parent`, and appear in the dynamic parent prompt. Waiting and terminal transitions enter a bounded local mailbox. If parent work is active, the mailbox waits for `agent_settled`; if the parent is idle, it flushes on a microtask. Hidden `followUp` delivery with `triggerTurn: true` cannot interrupt active work but automatically starts a mailbox turn afterward; the parent still uses explicit `status`, `resume`, and `collect` actions.
+Background children omit `ask_user` to prevent unsolicited dialogs from racing parent rendering or another tool call. They retain `ask_parent`, transition to `waiting_for_parent`, and are discoverable through the stable `agent(action="list")` action. Waiting and terminal transitions enter a bounded local mailbox. If parent work is active, the mailbox waits for `agent_settled`; if the parent is idle, it flushes on a microtask. Hidden `followUp` delivery with `triggerTurn: true` cannot interrupt active work but automatically starts a mailbox turn afterward; the parent still uses explicit `status`, `resume`, and `collect` actions.
 
 #### Cancel and shutdown
 
@@ -422,7 +422,7 @@ Implemented and tested:
 - deterministic same-scope first-wins warnings and project-over-user informational diagnostics;
 - malformed-file diagnostics;
 - project trust gating behavior;
-- a bounded dynamic available-agent block in the parent system prompt.
+- a bounded session-cached `<delegated_agents>` block in the parent system prompt, inserted idempotently alongside other extension prompt blocks.
 
 ### Phase 3: Parent TUI rendering — MVP implemented
 
@@ -453,7 +453,7 @@ The read-only runtime now supports:
 - immediate terminal child disposal with the latest 20 results retained;
 - exact usage checkpoints across asynchronous parent calls;
 - no direct-user dialogs from background children;
-- dynamic parent-prompt recovery of tracked background IDs after compaction;
+- stable `agent(action="list")` recovery of tracked run IDs and statuses after compaction or session restoration, without injecting live run state into the parent system prompt;
 - coalesced waiting/terminal mailbox markers delivered through a single hidden `deliverAs: "followUp"` message with `triggerTurn: true` after parent settlement (or immediately when already idle), with stale-marker reconciliation and shutdown clearing.
 
 Automatic full-result delivery and explicit batch syntax remain deferred.
@@ -477,16 +477,14 @@ Implemented a deliberately narrow first worker:
 
 An isolated git-worktree worker remains a future option for stronger attribution and conflict isolation; it requires repository-only setup, diff/merge handoff, and cleanup semantics.
 
-### Phase 7: Chains and explicit batch work
+### Phase 7: Chains and explicit batch work — deferred
 
-Add workflow modes only after single-agent execution is stable:
+These remain future workflow ideas rather than an immediate implementation target:
 
-- bounded chain length;
-- bounded `{previous}` size;
-- failure stops the chain;
-- aggregate usage;
-- reuse the implemented four-run concurrency bound;
-- no unsafe parallel writes by default.
+- bounded sequential chains;
+- explicit batch syntax for launching multiple runs at once.
+
+The existing runtime already supports the practical read-only concurrency baseline through repeated `spawn` calls: up to four runs, per-run terminal results, automatic in-process mailbox notifications, and explicit collection. Mailbox markers are ephemeral runtime state and are not durably journaled or replayed after a process restart; durable run state and terminal results remain recoverable independently. Mutation concurrency is restricted to one active built-in worker, and mutation calls within that worker are serialized. Parent and worker activity may still mutate the shared checkout concurrently; attribution caveats remain explicit, so global mutation serialization is not implemented.
 
 ### Phase 8: Persistence and advanced workflows
 

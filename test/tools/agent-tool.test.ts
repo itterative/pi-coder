@@ -64,8 +64,11 @@ describe("agent extension registration", () => {
 
         expect(tool.name).toBe("agent");
         expect(tool.executionMode).toBe("sequential");
+        expect(prompt.systemPrompt).toContain("<delegated_agents>");
         expect(prompt.systemPrompt).toContain("scout (builtin)");
         expect(prompt.systemPrompt).toContain("worker (builtin): [mutation-capable]");
+        const repeatedPrompt = await handlers.before_agent_start[0](prompt, ctx) as any;
+        expect(repeatedPrompt.systemPrompt.match(/<delegated_agents>/g)).toHaveLength(1);
         expect(result.details).toMatchObject({ status: "completed", agent: "scout" });
         expect(errorHook).toEqual({ isError: true });
         await handlers.session_shutdown[0]({}, ctx);
@@ -239,6 +242,13 @@ describe("agent extension registration", () => {
         expect(sentMessages[0]?.message.content).toContain('Run ID: "scout-1"');
         expect(sentMessages[0]?.message.content).toContain("Status: completed");
         expect(sentMessages[0]?.message.content).toContain("This is not a new user request");
+        const listed = await tool.execute(
+            "call-list",
+            { action: "list" },
+            undefined,
+            undefined,
+            ctx,
+        );
         const collected = await tool.execute(
             "call-3",
             { action: "collect", runId: "scout-1" },
@@ -252,7 +262,11 @@ describe("agent extension registration", () => {
         expect(spawned.content[0].text).toContain("automatic notification");
         expect(status.details.status).toBe("completed");
         expect(status.content[0].text).toContain("action=\"collect\"");
-        expect(prompt.systemPrompt).toContain("scout-1 (scout): completed");
+        const promptAfterSpawn = await handlers.before_agent_start[0]({ systemPrompt: "Parent prompt" }, ctx) as any;
+        expect(promptAfterSpawn.systemPrompt).not.toContain("scout-1");
+        expect(promptAfterSpawn.systemPrompt).not.toContain("Tracked background runs");
+        expect(listed.content[0].text).toContain('"scout-1"');
+        expect(listed.content[0].text).toContain('"Inspect concurrently"');
         expect(collected.details.status).toBe("completed");
         expect(collected.content[0].text).toBe("Background result");
         const widgetLines = widgets.flatMap((lines) => lines ?? []);

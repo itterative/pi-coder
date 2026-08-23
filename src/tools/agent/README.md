@@ -5,6 +5,7 @@
 ## Actions
 
 ```text
+agent(action="list")
 agent(action="start", agent="scout", title="Persistence audit", task="Investigate in the foreground ...")
 agent(action="spawn", agent="scout", title="Concurrent reconnaissance", task="Investigate concurrently ...")
 agent(action="status", runId="scout-1")
@@ -15,6 +16,8 @@ agent(action="spawn", agent="worker", task="Implement and validate the requested
 ```
 
 Each run has a short human-readable title. Supply `title` on `start` or `spawn`; when omitted, pi-coder derives one from the first task line. The stable run ID remains the authoritative identifier and is displayed alongside the title.
+
+`list` returns the currently tracked run IDs, titles, statuses, tasks, and next actions. Use it after compaction or session restoration instead of relying on dynamic parent prompt state.
 
 A child may call `ask_parent` to pause its current turn. The parent receives its question and partial findings, may investigate independently, and resumes the retained child session by run ID. A `waiting_for_parent` result is paused rather than finished; a later `agent resume <run-id>` result should reach either another waiting state or `completed`. Collapsed TUI results show the pending question or a final-result preview, while expanded results include full details and usage.
 
