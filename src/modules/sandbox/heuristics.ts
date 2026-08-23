@@ -714,7 +714,12 @@ function isCommandConfined(
         return false;
     }
 
-    const paths = extractCommandPaths(args.slice(idx), spec, cwd, options);
+    const commandArgs = args.slice(idx);
+    if (spec.validate && !spec.validate(commandArgs)) {
+        return false;
+    }
+
+    const paths = extractCommandPaths(commandArgs, spec, cwd, options);
     if (paths === null) {
         return false;
     }

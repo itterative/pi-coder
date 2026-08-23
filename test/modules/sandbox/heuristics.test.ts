@@ -110,6 +110,28 @@ describe("getCwdConfinementPermission", () => {
         ]);
     });
 
+    describe("sed and stream text filters", () => {
+        runTests([
+            { desc: "sed prints a line range", command: "sed -n '1,120p' file.txt", expected: "allow:sandbox" },
+            { desc: "sed prints a regex range", command: "sed -n '/start/,/end/p' file.txt", expected: "allow:sandbox" },
+            { desc: "sed with -e expression", command: "sed -e '1p' -e '5p' file.txt", expected: "allow:sandbox" },
+            { desc: "sed substitution", command: "sed 's/foo/bar/g' file.txt", expected: "allow:sandbox" },
+            { desc: "sed input outside cwd", command: "sed -n '1,10p' /etc/passwd", expected: undefined },
+            { desc: "sed execute command script falls back", command: "sed -n '1e id' file.txt", expected: undefined },
+            { desc: "sed script with embedded command substitution falls back", command: "sed -n \"$(grep -n start file.txt),+10p\" file.txt", expected: undefined },
+            { desc: "sed write-file script falls back", command: "sed -n '1w /tmp/out' file.txt", expected: undefined },
+            { desc: "sed in-place falls back", command: "sed -i 's/a/b/' file.txt", expected: undefined },
+            { desc: "sed script file is not inspected", command: "sed -f transform.sed file.txt", expected: undefined },
+            { desc: "fold", command: "fold -w 80 README.md", expected: "allow:sandbox" },
+            { desc: "fmt", command: "fmt -w 80 README.md", expected: "allow:sandbox" },
+            { desc: "expand", command: "expand -t 8 Makefile", expected: "allow:sandbox" },
+            { desc: "unexpand", command: "unexpand -a Makefile", expected: "allow:sandbox" },
+            { desc: "nl", command: "nl -ba src/index.ts", expected: "allow:sandbox" },
+            { desc: "tac", command: "tac -s '\\n' file.txt", expected: "allow:sandbox" },
+            { desc: "rev", command: "rev file.txt", expected: "allow:sandbox" },
+        ]);
+    });
+
     describe("find safety", () => {
         runTests([
             { desc: "simple find within cwd", command: "find . -name foo", expected: "allow:sandbox" },

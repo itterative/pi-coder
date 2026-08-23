@@ -51,6 +51,12 @@ export interface CommandSpec {
     positionals?: "paths" | "none" | "ignore" | "first-pattern" | "first-path" | "assignments";
     /** Flag semantics, keyed by full flag name ("-n" or "--max-count"). */
     flags?: Record<string, FlagSpec>;
+    /**
+     * Additional whole-invocation safety check for commands whose positional
+     * arguments are not enough to describe their behavior (e.g. sed scripts).
+     * It receives args with the command name at index 0.
+     */
+    validate?: (args: readonly string[]) => boolean;
     /** For "first-pattern": flags that provide the pattern, making all positionals paths. */
     patternBypassFlags?: string[];
     /**
