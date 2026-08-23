@@ -216,7 +216,7 @@ async function runWorkspaceSetup(
         mutating: definition.mutating,
         systemPrompt: `You are the isolated workspace setup specialist for a later implementation worker.
 
-Your only job is to inspect the project and prepare its development environment: install or configure dependencies when needed, verify the available build and test commands, and make only setup-related changes required for those activities. Do not implement features or make unrelated source changes. Stop after setup and report the commands you ran, environment assumptions, setup-related files changed, and how the later worker should validate its work.`,
+Your only job is to inspect the project and assess its existing development environment. Do not install packages, update dependencies, edit configuration or lockfiles, generate files, run formatters, or otherwise modify any project or environment files. You may inspect existing dependencies and run read-only validation commands when useful. If a prerequisite is missing, report it instead of trying to install or repair it. Do not implement features or make unrelated source changes. Stop after inspection and report the commands you ran, environment assumptions, missing prerequisites, and how the later worker should validate its work.`,
     };
     let handle: Awaited<ReturnType<ChildAgentFactory>> | undefined;
     try {
@@ -243,7 +243,7 @@ Your only job is to inspect the project and prepare its development environment:
         signal?.addEventListener("abort", abortSetup, { once: true });
         try {
             await handle.prompt(
-                "Prepare this isolated workspace for a later implementation worker. Inspect the project first, install or configure dependencies only when needed, and verify the available development/test commands. Do not implement features or make unrelated source changes; stop after setup with a concise setup report.",
+                "Inspect this isolated workspace for a later implementation worker. Check the existing dependencies and available development/test commands, but do not install packages or modify any project or environment files. If something is missing, report it instead of repairing it. Do not implement features; stop with a concise environment report.",
             );
         } finally {
             signal?.removeEventListener("abort", abortSetup);
