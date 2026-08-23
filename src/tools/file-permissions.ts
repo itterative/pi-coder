@@ -15,6 +15,10 @@ import {
 
 import sandboxConfig from "../common/config";
 import {
+    ALLOWED_FILE_ENTRY_TYPE,
+    type AllowedFileEntry,
+} from "../common/audit";
+import {
     getPathConfinementPermission,
     isPathWithinDirectory,
 } from "../modules/sandbox/heuristics";
@@ -39,6 +43,35 @@ const sessionFolders: Record<FileOperation, Set<string>> = {
 
 function operationLabel(operation: FileOperation): string {
     return operation === "read" ? "read from" : "write to";
+}
+
+function isAllowedFileEntry(data: unknown): data is AllowedFileEntry {
+    if (!data || typeof data !== "object") {
+        return false;
+    }
+
+    const entry = data as Partial<AllowedFileEntry>;
+    return (
+        (entry.operation === "read" || entry.operation === "write") &&
+        typeof entry.folder === "string" &&
+        entry.folder.length > 0 &&
+        path.isAbsolute(entry.folder)
+    );
+}
+
+function restoreSessionFolders(ctx: ExtensionContext): void {
+    sessionFolders.read.clear();
+    sessionFolders.write.clear();
+
+    for (const entry of ctx.sessionManager.getBranch()) {
+        if (entry.type !== "custom" || entry.customType !== ALLOWED_FILE_ENTRY_TYPE) {
+            continue;
+        }
+
+        if (isAllowedFileEntry(entry.data)) {
+            sessionFolders[entry.data.operation].add(entry.data.folder);
+        }
+    }
 }
 
 function getApprovedFolder(filePath: string, cwd: string, operation: FileOperation): string | undefined {
@@ -122,9 +155,8 @@ export default function registerFileToolHook(
     pi: ExtensionAPI,
     operation: FileOperation,
 ): void {
-    pi.on("session_start", () => {
-        sessionFolders.read.clear();
-        sessionFolders.write.clear();
+    pi.on("session_start", (_event, ctx) => {
+        restoreSessionFolders(ctx);
     });
 
     pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult> => {
@@ -160,6 +192,10 @@ export default function registerFileToolHook(
 
         if (choice?.kind === "remember") {
             sessionFolders[operation].add(choice.folder);
+            pi.appendEntry<AllowedFileEntry>(ALLOWED_FILE_ENTRY_TYPE, {
+                operation,
+                folder: choice.folder,
+            });
             ctx.ui.notify(
                 `pi-${operation}-sandbox: session folder allowed: "${choice.folder}" (this session only)`,
                 "info",
