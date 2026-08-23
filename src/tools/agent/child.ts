@@ -228,22 +228,66 @@ function updateTracker(
     }
 }
 
-async function synchronizedModelRuntime(
+function mergeProviderHeaders(
+    configured: Record<string, string> | undefined,
+    resolved: Record<string, string | null> | undefined,
+): Record<string, string> | undefined {
+    const merged = { ...configured };
+    for (const [name, value] of Object.entries(resolved ?? {})) {
+        if (value === null) delete merged[name];
+        else merged[name] = value;
+    }
+    return Object.keys(merged).length ? merged : undefined;
+}
+
+export function shouldCopyParentApiKey(options: {
+    childHasAuth: boolean;
+    parentHasApiKey: boolean;
+    parentUsesOAuth: boolean;
+}): boolean {
+    return !options.childHasAuth && options.parentHasApiKey && !options.parentUsesOAuth;
+}
+
+export async function createChildModelRuntime(
     ctx: ExtensionContext,
     model: NonNullable<ExtensionContext["model"]>,
 ): Promise<ModelRuntime> {
-    const runtime = await ModelRuntime.create();
+    const parentAuth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!parentAuth.ok) throw new Error(parentAuth.error);
 
+    const runtime = await ModelRuntime.create();
     const nativeProvider = ctx.modelRegistry.getRegisteredNativeProvider(model.provider);
     if (nativeProvider) runtime.registerNativeProvider(nativeProvider);
 
     const providerConfig = ctx.modelRegistry.getRegisteredProviderConfig(model.provider);
-    if (providerConfig) runtime.registerProvider(model.provider, providerConfig);
+    if (providerConfig) {
+        runtime.registerProvider(model.provider, {
+            ...providerConfig,
+            baseUrl: parentAuth.baseUrl ?? providerConfig.baseUrl,
+            headers: mergeProviderHeaders(providerConfig.headers, parentAuth.headers),
+        });
+    }
 
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok) throw new Error(auth.error);
-    if (auth.apiKey) {
-        await runtime.setRuntimeApiKey(model.provider, auth.apiKey);
+    let runtimeModel = runtime.getModel(model.provider, model.id) ?? model;
+    let childAuth = await runtime.getAuth(runtimeModel);
+    const childHasAuth = Boolean(childAuth?.auth.apiKey || childAuth?.auth.headers);
+    const parentUsesOAuth = ctx.modelRegistry.isUsingOAuth(model);
+
+    if (shouldCopyParentApiKey({
+        childHasAuth,
+        parentHasApiKey: Boolean(parentAuth.apiKey),
+        parentUsesOAuth,
+    })) {
+        await runtime.setRuntimeApiKey(model.provider, parentAuth.apiKey!);
+        runtimeModel = runtime.getModel(model.provider, model.id) ?? model;
+        childAuth = await runtime.getAuth(runtimeModel);
+    }
+
+    if (!childAuth?.auth.apiKey && !childAuth?.auth.headers) {
+        const authKind = parentUsesOAuth ? "OAuth credentials" : "provider credentials";
+        throw new Error(
+            `Could not synchronize ${authKind} for child model ${model.provider}/${model.id}.`,
+        );
     }
     return runtime;
 }
@@ -300,7 +344,7 @@ export async function createAgentChild(
     await resourceLoader.reload();
 
     const requestedModel = resolveChildModel(parentContext, context.definition.model);
-    const modelRuntime = await synchronizedModelRuntime(parentContext, requestedModel);
+    const modelRuntime = await createChildModelRuntime(parentContext, requestedModel);
     const model = modelRuntime.getModel(requestedModel.provider, requestedModel.id)
         ?? requestedModel;
     const { session } = await createAgentSession({

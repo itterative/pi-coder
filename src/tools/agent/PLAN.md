@@ -185,7 +185,7 @@ The parent extension context exposes `modelRegistry` and the active model, but n
 
 A full child `AgentSession` needs a `ModelRuntime`. Creating one from the normal pi auth/model files works for built-in providers and was validated with the current `openai-codex/gpt-5.6-sol` model.
 
-Dynamic extension providers need explicit synchronization. The parent `modelRegistry` publicly exposes registered provider IDs, configs/native providers, and resolved auth. A child runtime can mirror the active provider registration and copy a resolved runtime API key when necessary. This is preferable to relying on private access to the parent's runtime. The first implementation should validate this path and return an explicit unsupported-provider error rather than silently selecting a different model.
+Dynamic extension providers need explicit synchronization. The parent `modelRegistry` publicly exposes registered provider IDs, configs/native providers, and resolved auth. The MVP mirrors active provider registration, resolved base URL/headers, and non-OAuth runtime API keys when the child cannot resolve auth itself. It deliberately preserves child-resolved OAuth credentials: OAuth access tokens are exposed through an `apiKey` compatibility field but must not be installed as API-key credentials. Runtime-only OAuth credentials that are not persisted remain unavailable through the public extension API and produce an explicit synchronization error rather than silently selecting another model.
 
 For a single-child MVP, a runtime per active run is simplest and isolates credentials/provider mutation. A shared runtime or pool can be considered when parallel execution is introduced.
 
@@ -380,9 +380,9 @@ Decided:
 10. Direct child-to-user `ask_user` is deferred; first-release questions route through the parent.
 11. Use throttled tool updates and custom result rendering first; defer a persistent live widget.
 
-Still to decide:
+Known limitation:
 
-1. Custom-provider synchronization edge cases beyond registered provider/native-provider configuration and resolved API-key copying.
+1. The public extension context cannot transfer a complete runtime-only OAuth credential into a child. Persisted `/login` OAuth, registered providers/native providers, resolved base URL/headers, and ordinary runtime API keys are supported.
 
 ### Phase 1: Read-only pause/resume vertical slice — implemented
 
@@ -511,7 +511,7 @@ Use this section to record decisions as the design evolves.
 - [x] Within a scope, sorted first definition wins and later duplicates warn; trusted-project definitions override user definitions with an informational diagnostic.
 - [x] Allow at most four active/waiting runs with no TTL; cleanup is explicit or tied to parent shutdown.
 - [x] Bound task/guidance to 16,000 characters, LLM-facing final output to 32,000 characters, and progress updates to at most once per 100 ms.
-- [ ] Custom-provider synchronization edge cases? The MVP mirrors registered provider/native-provider configuration and the resolved API key into each child runtime.
+- [x] Preserve child-resolved OAuth; mirror registered provider/native-provider configuration and resolved base URL/headers; copy runtime API keys only for non-OAuth providers lacking child auth. Runtime-only unpersisted OAuth remains an explicit limitation.
 
 ## References
 

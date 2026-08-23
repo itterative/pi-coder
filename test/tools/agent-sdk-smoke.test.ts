@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+    ModelRegistry,
+    ModelRuntime,
+    type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
-import { createAgentChild } from "../../src/tools/agent/child";
+import {
+    createAgentChild,
+    createChildModelRuntime,
+    shouldCopyParentApiKey,
+} from "../../src/tools/agent/child";
 import { BUILTIN_SCOUT } from "../../src/tools/agent/discovery";
 
 describe("in-process scout SDK session", () => {
@@ -21,6 +29,7 @@ describe("in-process scout SDK session", () => {
                 getRegisteredNativeProvider: () => undefined,
                 getRegisteredProviderConfig: () => undefined,
                 getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "smoke-test" }),
+                isUsingOAuth: () => false,
                 find: (provider: string, id: string) => source.getModel(provider, id),
                 getAll: () => [...source.getModels()],
             },
@@ -36,5 +45,39 @@ describe("in-process scout SDK session", () => {
         expect(child.getError()).toBeUndefined();
         expect(child.getUsage().totalTokens).toBe(0);
         child.dispose();
+    });
+
+    it("preserves persisted OpenAI Codex OAuth when available", async () => {
+        const parentRuntime = await ModelRuntime.create({ refreshOnCreate: false });
+        const model = parentRuntime.getModels("openai-codex")[0];
+        if (!model || !(await parentRuntime.getAuth(model))) return;
+
+        const parentContext = {
+            modelRegistry: new ModelRegistry(parentRuntime),
+        } as ExtensionContext;
+        const childRuntime = await createChildModelRuntime(parentContext, model);
+        const childModel = childRuntime.getModel(model.provider, model.id);
+        const childAuth = childModel ? await childRuntime.getAuth(childModel) : undefined;
+
+        expect(childAuth?.auth.apiKey || childAuth?.auth.headers).toBeTruthy();
+        expect(childRuntime.isUsingOAuth("openai-codex")).toBe(true);
+    });
+
+    it("does not replace child OAuth auth with an API-key credential", () => {
+        expect(shouldCopyParentApiKey({
+            childHasAuth: true,
+            parentHasApiKey: true,
+            parentUsesOAuth: true,
+        })).toBe(false);
+        expect(shouldCopyParentApiKey({
+            childHasAuth: false,
+            parentHasApiKey: true,
+            parentUsesOAuth: true,
+        })).toBe(false);
+        expect(shouldCopyParentApiKey({
+            childHasAuth: false,
+            parentHasApiKey: true,
+            parentUsesOAuth: false,
+        })).toBe(true);
     });
 });
