@@ -18,7 +18,7 @@ The initial direction recorded in `src/tools/agent/README.md` is:
 - `src/index.ts` is the consolidated pi-coder extension entrypoint.
 - `src/tools/agent/index.ts` registers the in-process `agent` tool from `src/index.ts`.
 - `child.ts`, `runtime.ts`, `discovery.ts`, and `persistence.ts` implement controlled child SDK sessions, the run state machine, custom definition loading, and durable exact-parent restoration.
-- The MVP supports built-in/user/trusted-project agents, foreground start, concurrent background spawn/status/collect, resume/cancel, read-only scouts, a permission-gated worker, parent guidance, non-interrupting automatic follow-up mailbox markers, confinement, usage deltas, durable paused/interrupted restoration, lifecycle cleanup, compact/expanded rendering, and the `/agent-sessions` current/past browser with user-driven interrupted-run controls.
+- The MVP supports built-in/user/trusted-project agents, foreground start, concurrent background spawn/status/collect, resume/cancel, read-only scouts, a permission-gated worker, parent guidance, non-interrupting automatic follow-up mailbox markers, confinement, usage deltas, durable paused/interrupted restoration, lifecycle cleanup, compact/expanded rendering, and the unified `/agents` Current/Past/Workspaces browser with user-driven interrupted-run controls.
 - The stabilization pass makes waiting state explicitly paused in parent guidance, shows compact question/result previews, tests tool-level pause/resume rendering and additional lifecycle/confinement edges, and records a repeatable manual provider/lifecycle checklist in `README.md`.
 - Diagnostics retain bounded sanitized timelines for recent runs and expose `/agent-trace`; the intended `PI_CODER_AGENT_TRACE=1` gate is temporarily hardcoded on during development.
 - Existing extension functionality also includes:
@@ -475,7 +475,7 @@ Implemented a deliberately narrow first worker:
 - return clear changed-file reporting, with explicit caveats when concurrent parent/bash activity makes attribution uncertain;
 - automated coverage includes confinement denial, active-dialog cancellation, queued mutation prompts, permission-waiting progress, one-worker capacity, child SDK construction, changed-file reporting, and existing lifecycle/stale-run cleanup; real-provider background behavior remains in the manual checklist.
 
-An isolated git-worktree worker is now planned as Phase 9, with persistent user-managed workspaces, internal setup workers, explicit review/reset/discard semantics, and no automatic merge.
+An isolated git-worktree worker is Phase 9 and is now partially implemented. The persistent workspace registry, leases, setup phase, unified `/agents` browser, Git-state inspection, and passive `review_required` completion state are implemented. The remaining work is the parent-driven result/application lifecycle and explicit workspace disposition actions.
 
 ### Phase 7: Chains and explicit batch work — deferred
 
@@ -517,7 +517,7 @@ Later persistence/workflow options:
 - subprocess fallback for stronger isolation;
 - richer live widgets or a dedicated child-run view.
 
-### Phase 9: Worker workspaces and isolated execution — planned
+### Phase 9: Worker workspaces and isolated execution — in progress
 
 The next worker-focused design is a persistent pool of user-manageable Git worktree workspaces. Workspaces are infrastructure owned by pi-coder rather than ordinary parent-visible delegated runs.
 
@@ -525,21 +525,29 @@ Design:
 
 - A worker `start`/`spawn` request may explicitly opt into worktree isolation. Shared-checkout execution remains available separately.
 - Workspace worktrees live at `.state/workspaces/<random-word-slug>/`; the slug is intentionally independent of the source path and task text. Workspace metadata is stored in `.state/workspaces/meta.sqlite` using the shared versioned migration helper in `src/common/sqlite.ts`; the normalized cwd helper remains useful for agent-session storage and workspace matching, but is not part of the workspace path.
-- An isolated worker selects the first compatible workspace in stable order that is `ready` and not in use. SQLite schema migration v2 adds owner/session/run lease fields; claims are atomic, leases transfer from setup provisioning to the task run, and terminal workers release them. Compatibility includes the exact cwd/repository and owning persisted parent-session scope. Leases do not expire automatically.
-- If no ready workspace exists, pi-coder creates one and launches a limited internal setup worker before launching the requested task worker. The setup worker prepares the project environment using the existing permission-gated tools; pi-coder does not contain package-manager or project-specific setup heuristics.
-- The setup worker is setup-only: it receives no implementation task and reports setup commands/environment notes. Once it succeeds, the workspace orchestrator may launch the originally requested task as the second internal phase of the same user-approved isolated request. Its lifecycle is visible to the user through workspace management and permission prompts, but it is not exposed as an ordinary parent-model run or mailbox result.
+- An isolated worker selects the first compatible workspace in stable order that is `ready`, `available`, and not leased. SQLite schema migration v2 adds owner/session/run lease fields; claims are atomic, leases transfer from setup provisioning to the task run, and terminal workers release them. Migration v3 adds `workspace_status`; leases do not expire automatically.
+- If no ready workspace exists, pi-coder creates one and launches a limited internal setup worker before launching the requested task worker. The setup worker uses a dedicated setup definition, inspects the existing environment, does not install packages or modify project/environment files, and reports missing prerequisites rather than repairing them.
+- The setup worker is setup-only and receives no implementation task. Its lifecycle is visible in the unified `/agents` Current tab and bottom activity widget as an internal workspace-setup run; it is not a normal collectable parent-model run or mailbox result. Completed setup status remains visible while the task runs and clears when the task completes; failed setup status remains for future manual recovery UI.
 - The requested task worker starts only after setup succeeds. It receives the prepared worktree as its cwd and may reuse persistent dependencies, virtual environments, generated artifacts, and other project-local setup state.
 - Setup and task workers share the existing one-active-worker mutation limit. A setup worker occupies that capacity until it settles; the task worker does not start concurrently with it.
-- Workspace metadata persists alongside agent state: workspace ID, repository/cwd, worktree path, base revision, setup status/report, current assignment, dirty/review status, and last-use information. Interrupted setup and task runs retain the same workspace for explicit user recovery.
-- Workspaces are never automatically merged, reset, or deleted. After a task, the worktree enters `review_required` and its lease is released, but it is excluded from automatic selection until an explicit clean/reset/discard decision makes it available again.
-- No generic dependency setup code is required. The setup worker inspects the project and decides what it needs; every mutating or shell operation remains subject to the existing parent-visible permission prompts.
+- Workspace metadata persists alongside agent state: workspace ID, repository/cwd, worktree path, base revision, setup status/report, current assignment, dirty/review status, Git state, and last-use information. Interrupted setup and task runs retain the same workspace for explicit user recovery.
+- Workspaces are never automatically merged, reset, or deleted. After a task, the worktree enters passive `review_required`; the parent may inspect it without a separate user approval step. Its lease is released, but it remains excluded from automatic selection.
+- The parent receives explicit isolated-result guidance after collection: inspect the worker status/diff, then choose whether to apply, retain, reset, or discard. No generic dependency setup code is required.
 
 User interface:
 
-- Rename `/agent-sessions` to `/agents` as the broader run/workspace browser, with a compatibility alias during migration if useful.
-- Keep run browsing and transcript details, and add a Workspaces view showing readiness, setup progress/report, assigned run, worktree/base revision, and dirty/changed-file summaries.
-- Provide explicit user actions to inspect, resume setup, review, reset, retain, or discard a workspace. Workspace actions must not be delegated to the parent model implicitly.
-- The parent model should see the task worker's normal result and actionable setup failure, not the internal setup-worker transcript or an automatic setup mailbox conversation.
+- `/agents` is the unified Current/Past/Workspaces browser; the separate `/agent-sessions` and `/agent-workspaces` commands are not registered.
+- The Workspaces view shows readiness, setup progress/report, assignment, worktree/base revision, Git clean/dirty state, changed-file counts, and read-only metadata details.
+- Add parent-driven result actions: inspect the isolated diff, apply the result, retain the workspace, reset it for reuse, or discard it. Do not add a mandatory “mark reviewed” action; `review_required` is a passive state.
+- The parent model should receive the task worker's normal result plus explicit isolated-workspace instructions. The internal setup worker should not create a normal collectable result or automatic mailbox conversation.
+
+Result application design:
+
+- On explicit apply, first commit any remaining tracked/untracked worker changes in the isolated worktree as a final pi-coder result commit. If the worker already committed its changes, do not create an empty commit; use its existing final `HEAD`.
+- Save the worker result revision, base revision, commit range, and application metadata in SQLite. The final worker revision is the durable reference for later inspection or explicit resumption.
+- Apply the complete tree diff from `baseRevision..workerHead` to the parent checkout, including all worker commits and the final result commit, but do not commit the parent changes.
+- Require safe preflight: verify the parent revision/base relationship, detect parent dirtiness and conflicts, and leave both workspaces untouched when application fails. The worker lease is released only after successful application; retain it for retry after failure.
+- After successful application, keep the workspace out of automatic reuse and record that the result was applied. A later explicit action may retain, reset, discard, or resume it.
 
 Open design questions for this phase:
 
@@ -547,6 +555,7 @@ Open design questions for this phase:
 - How to handle parent uncommitted changes when creating a worktree; the safe first default may require a clean checkout.
 - Whether setup reports should be injected into the task worker prompt, stored as a workspace note, or both.
 - Whether workspace reset preserves ignored dependency artifacts while removing tracked task changes.
+- Whether the apply operation should be exposed as an `agent` action, a dedicated parent tool, or only a `/agents` action.
 
 ## Testing Plan
 
