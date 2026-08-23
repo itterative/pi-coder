@@ -15,6 +15,17 @@ export type WorkspaceSetupState = "not_started" | "running" | "ready" | "skipped
 export type WorkspaceStatus = "available" | "review_required";
 export type WorkspaceLeaseKind = "setup" | "task";
 
+export interface AgentWorkspaceGitState {
+    kind: "available" | "unavailable";
+    dirty?: boolean;
+    changedFiles?: number;
+    stagedFiles?: number;
+    unstagedFiles?: number;
+    untrackedFiles?: number;
+    headRevision?: string;
+    error?: string;
+}
+
 export interface AgentWorkspace {
     version: typeof WORKSPACE_VERSION;
     id: string;
@@ -143,6 +154,43 @@ async function git(cwd: string, args: string[]): Promise<string> {
         maxBuffer: 2 * 1024 * 1024,
     });
     return result.stdout.trim();
+}
+
+export async function inspectAgentWorkspaceGitState(workspace: AgentWorkspace): Promise<AgentWorkspaceGitState> {
+    try {
+        const [statusOutput, headRevision] = await Promise.all([
+            git(workspace.worktreePath, ["status", "--porcelain=v1", "--untracked-files=all"]),
+            git(workspace.worktreePath, ["rev-parse", "HEAD"]),
+        ]);
+        const lines = statusOutput ? statusOutput.split("\\n").filter(Boolean) : [];
+        let stagedFiles = 0;
+        let unstagedFiles = 0;
+        let untrackedFiles = 0;
+        for (const line of lines) {
+            const indexStatus = line[0];
+            const worktreeStatus = line[1];
+            if (indexStatus === "?" && worktreeStatus === "?") {
+                untrackedFiles++;
+                continue;
+            }
+            if (indexStatus !== " ") stagedFiles++;
+            if (worktreeStatus !== " ") unstagedFiles++;
+        }
+        return {
+            kind: "available",
+            dirty: lines.length > 0,
+            changedFiles: lines.length,
+            stagedFiles,
+            unstagedFiles,
+            untrackedFiles,
+            headRevision,
+        };
+    } catch (error) {
+        return {
+            kind: "unavailable",
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
 }
 
 export async function listAgentWorkspaces(

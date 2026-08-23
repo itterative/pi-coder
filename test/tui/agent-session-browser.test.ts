@@ -263,6 +263,15 @@ describe("AgentSessionBrowserComponent", () => {
             current: [current],
             past: [past],
             workspaces: [workspace],
+            workspaceGitStates: new Map([[workspace.id, {
+                kind: "available" as const,
+                dirty: true,
+                changedFiles: 2,
+                stagedFiles: 1,
+                unstagedFiles: 1,
+                untrackedFiles: 0,
+                headRevision: "abc123def456",
+            }]]),
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -270,6 +279,7 @@ describe("AgentSessionBrowserComponent", () => {
         ui.press(KEY.tab, KEY.tab);
         expect(ui.render()).toContain("○ Current    ○ Past    ● Workspaces");
         expect(ui.render()).toContain("quiet-lantern-7k3 · available");
+        expect(ui.render()).toContain("Git: dirty · 2 changed files");
 
         ui.press(KEY.enter);
         expect(ui.render()).toContain("Workspace: quiet-lantern-7k3");

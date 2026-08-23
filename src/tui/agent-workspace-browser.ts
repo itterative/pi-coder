@@ -5,7 +5,10 @@ import {
     Text,
     truncateToWidth,
 } from "@earendil-works/pi-tui";
-import type { AgentWorkspace } from "../tools/agent/workspaces";
+import type {
+    AgentWorkspace,
+    AgentWorkspaceGitState,
+} from "../tools/agent/workspaces";
 import { PagerComponent } from "./pager";
 import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
@@ -24,6 +27,7 @@ interface AgentWorkspaceBrowserState extends ListViewState<WorkspaceBrowserItem>
 export interface AgentWorkspaceBrowserOptions {
     cwd: string;
     workspaces: AgentWorkspace[];
+    gitStates?: ReadonlyMap<string, AgentWorkspaceGitState>;
     fixedHeight?: () => number;
 }
 
@@ -66,12 +70,26 @@ function setupText(workspace: AgentWorkspace): string {
     return workspace.setupState.replaceAll("_", " ");
 }
 
-export function agentWorkspaceItemText(workspace: AgentWorkspace, theme: Theme): string {
+function gitStateText(gitState: AgentWorkspaceGitState | undefined): string {
+    if (!gitState) return "unknown";
+    if (gitState.kind === "unavailable") return `unavailable · ${gitState.error ?? "not a Git worktree"}`;
+    if (!gitState.dirty) return "clean";
+    const files = gitState.changedFiles ?? 0;
+    return `dirty · ${files} changed file${files === 1 ? "" : "s"}`;
+}
+
+export function agentWorkspaceItemText(
+    workspace: AgentWorkspace,
+    theme: Theme,
+    gitState?: AgentWorkspaceGitState,
+): string {
     const statusColor = workspace.status === "review_required" ? "warning" : "success";
     const leaseColor = workspace.leaseRunId ? "warning" : "muted";
+    const gitColor = gitState?.kind === "available" && gitState.dirty ? "warning" : "muted";
     return theme.fg("accent", workspace.slug)
         + ` · ${theme.fg(statusColor, statusText(workspace))}`
         + `\nSetup: ${setupText(workspace)} · Lease: ${theme.fg(leaseColor, leaseText(workspace))}`
+        + ` · Git: ${theme.fg(gitColor, gitStateText(gitState))}`
         + `\nPath: ${workspace.worktreePath}`;
 }
 
@@ -81,9 +99,19 @@ function itemText(workspace: WorkspaceBrowserItem, theme: Theme): string {
         : theme.fg("muted", workspace.message);
 }
 
-export function agentWorkspaceDetailText(workspace: AgentWorkspace, theme: Theme, width: number): string {
+export function agentWorkspaceDetailText(
+    workspace: AgentWorkspace,
+    theme: Theme,
+    width: number,
+    gitState?: AgentWorkspaceGitState,
+): string {
     const lines = [
         `Workspace: ${workspace.slug}`,
+        `Git: ${gitStateText(gitState)}`,
+        ...(gitState?.kind === "available" ? [
+            `Git files: ${gitState.changedFiles ?? 0} changed, ${gitState.stagedFiles ?? 0} staged, ${gitState.unstagedFiles ?? 0} unstaged, ${gitState.untrackedFiles ?? 0} untracked`,
+            `HEAD: ${gitState.headRevision ?? "unknown"}`,
+        ] : []),
         `Status: ${statusText(workspace)}`,
         `Setup: ${setupText(workspace)}`,
         `Lease: ${leaseText(workspace)}`,
@@ -114,7 +142,11 @@ export function agentWorkspaceDetailText(workspace: AgentWorkspace, theme: Theme
 export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace> {
     private contentWidth = 80;
 
-    constructor(workspace: AgentWorkspace, fixedHeight?: () => number) {
+    constructor(
+        workspace: AgentWorkspace,
+        fixedHeight?: () => number,
+        private readonly gitState?: AgentWorkspaceGitState,
+    ) {
         super({
             title: `Workspace · ${workspace.slug}`,
             items: [{ value: workspace, label: "" }],
@@ -123,7 +155,12 @@ export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace
             helpText: "↑/↓ scroll · Esc back",
             fixedHeight,
             compactFooter: true,
-            renderItem: (item, renderOptions) => agentWorkspaceDetailText(item.value, renderOptions.theme, this.contentWidth),
+            renderItem: (item, renderOptions) => agentWorkspaceDetailText(
+                item.value,
+                renderOptions.theme,
+                this.contentWidth,
+                this.gitState,
+            ),
         });
     }
 
@@ -144,6 +181,7 @@ export class AgentWorkspaceBrowserComponent extends ListViewComponent<
 
     constructor(options: AgentWorkspaceBrowserOptions) {
         const workspaces = options.workspaces;
+        const gitStates = options.gitStates ?? new Map<string, AgentWorkspaceGitState>();
         const available = workspaces.filter((workspace) => workspace.status === "available").length;
         const reviewRequired = workspaces.filter((workspace) => workspace.status === "review_required").length;
         const leased = workspaces.filter((workspace) => workspace.leaseRunId).length;
@@ -169,14 +207,20 @@ export class AgentWorkspaceBrowserComponent extends ListViewComponent<
                     item: ListItem<WorkspaceBrowserItem>,
                     renderOptions: ListViewRenderItemOptions<WorkspaceBrowserItem, AgentWorkspaceBrowserState>,
                 ) => {
-                    const content = itemText(item.value, renderOptions.theme);
+                    const content = isWorkspace(item.value)
+                        ? agentWorkspaceItemText(item.value, renderOptions.theme, gitStates.get(item.value.id))
+                        : itemText(item.value, renderOptions.theme);
                     return renderOptions.isCursor ? content : renderOptions.theme.fg("text", content);
                 },
                 onKey: (key, state) => {
                     if (!matchesKey(key, "enter")) return false;
                     const selected = state.items[state.cursor ?? 0]?.value;
                     if (!selected || !isWorkspace(selected) || !this.theme) return true;
-                    this.detail = new AgentWorkspaceDetailComponent(selected, this.listOptions.fixedHeight);
+                    this.detail = new AgentWorkspaceDetailComponent(
+                        selected,
+                        this.listOptions.fixedHeight,
+                        gitStates.get(selected.id),
+                    );
                     this.detail.initialize(this.theme);
                     this.detail.setDoneCallback(() => {
                         this.detail = null;

@@ -8,7 +8,10 @@ import {
 import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
 import type { AgentSessionBrowserItem } from "../tools/agent/sessions";
-import type { AgentWorkspace } from "../tools/agent/workspaces";
+import type {
+    AgentWorkspace,
+    AgentWorkspaceGitState,
+} from "../tools/agent/workspaces";
 import { BORDER_STYLES } from "./border-box";
 import { AgentSessionDetailComponent } from "./agent-session-detail";
 import {
@@ -27,6 +30,7 @@ export interface AgentSessionBrowserOptions {
     current: AgentSessionBrowserItem[];
     past: AgentSessionBrowserItem[];
     workspaces?: AgentWorkspace[];
+    workspaceGitStates?: ReadonlyMap<string, AgentWorkspaceGitState>;
     fixedHeight?: () => number;
     onResume?: (item: AgentSessionBrowserItem) => void | Promise<void>;
     onCancel?: (item: AgentSessionBrowserItem) => void | Promise<void>;
@@ -136,8 +140,9 @@ function tabText(tab: AgentBrowserTab, theme: Theme, includeWorkspaces: boolean)
 function itemText(
     item: AgentBrowserItem,
     theme: Theme,
+    workspaceGitStates?: ReadonlyMap<string, AgentWorkspaceGitState>,
 ): string {
-    if (isWorkspace(item)) return agentWorkspaceItemText(item, theme);
+    if (isWorkspace(item)) return agentWorkspaceItemText(item, theme, workspaceGitStates?.get(item.id));
     if (item.kind === "empty") return theme.fg("muted", item.task);
 
     const mode = item.mutating ? "worker" : item.agent;
@@ -167,6 +172,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
         const current = options.current;
         const past = options.past;
         const workspaces = options.workspaces ?? [];
+        const workspaceGitStates = options.workspaceGitStates;
         const includeWorkspaces = options.workspaces !== undefined;
         const tabs: AgentBrowserTab[] = includeWorkspaces
             ? ["current", "past", "workspaces"]
@@ -206,7 +212,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     ));
                 },
                 renderItem: (item: ListItem<AgentBrowserItem>, options: ListViewRenderItemOptions<AgentBrowserItem, AgentSessionBrowserState>) => {
-                    const content = itemText(item.value, options.theme);
+                    const content = itemText(item.value, options.theme, workspaceGitStates);
                     return options.isCursor ? content : options.theme.fg("text", content);
                 },
                 onKey: (key, state) => {
@@ -246,6 +252,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                                 this.workspaceDetail = new AgentWorkspaceDetailComponent(
                                     selected,
                                     this.listOptions.fixedHeight,
+                                    workspaceGitStates?.get(selected.id),
                                 );
                                 this.workspaceDetail.initialize(this.theme);
                                 this.workspaceDetail.setDoneCallback(() => {

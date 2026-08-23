@@ -10,6 +10,7 @@ import {
     completeAgentWorkspaceLease,
     createAgentWorkspace,
     findAvailableAgentWorkspace,
+    inspectAgentWorkspaceGitState,
     listAgentWorkspaces,
     transferAgentWorkspaceLease,
     updateAgentWorkspace,
@@ -44,6 +45,18 @@ describe("agent workspaces", () => {
         expect(path.dirname(workspace.worktreePath)).toBe(path.resolve(state));
         expect(workspace.slug).toMatch(/^[a-z]+-[a-z]+-[a-z0-9]{3}$/);
         expect((await listAgentWorkspaces(repository, state))).toHaveLength(1);
+        await expect(inspectAgentWorkspaceGitState(workspace)).resolves.toMatchObject({
+            kind: "available",
+            dirty: false,
+            changedFiles: 0,
+        });
+        await fs.writeFile(path.join(workspace.worktreePath, "untracked.txt"), "dirty\n");
+        await expect(inspectAgentWorkspaceGitState(workspace)).resolves.toMatchObject({
+            kind: "available",
+            dirty: true,
+            changedFiles: 1,
+            untrackedFiles: 1,
+        });
 
         const prepared = await updateAgentWorkspace(workspace, { setupState: "skipped" }, state);
         const provisional = await claimAgentWorkspace(prepared.id, "session-1", "setup-1", "setup", state);

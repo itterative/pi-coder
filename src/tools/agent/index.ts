@@ -23,6 +23,7 @@ import {
     createAgentWorkspace,
     findAvailableAgentWorkspace,
     findUnpreparedAgentWorkspace,
+    inspectAgentWorkspaceGitState,
     listAgentWorkspaces,
     releaseAgentWorkspaceLease,
     transferAgentWorkspaceLease,
@@ -458,10 +459,17 @@ export default function registerAgentTool(
             ctx.ui.notify(`Could not browse agent workspaces: ${message}`, "warning");
             workspaces = [];
         }
+        const workspaceGitStates = new Map(
+            await Promise.all(workspaces.map(async (workspace) => [
+                workspace.id,
+                await inspectAgentWorkspaceGitState(workspace),
+            ] as const)),
+        );
         await showAgentSessionBrowser({
             current,
             past,
             workspaces,
+            workspaceGitStates,
             onResume: async (item) => {
                 try {
                     const outcome = await manager.resume(item.id, undefined, undefined, backgroundUpdate(ctx));
