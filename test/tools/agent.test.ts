@@ -9,6 +9,7 @@ import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/discovery";
 import {
     AgentActionError,
     AgentRunManager,
+    type AgentRunStatus,
     type AgentRunPersistence,
     type ChildAgentHandle,
     type ParentQuestion,
