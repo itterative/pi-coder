@@ -13,6 +13,7 @@ import {
     type AgentDiagnostic,
 } from "./discovery";
 import { AgentMailbox } from "./mailbox";
+import { loadAgentRunPersistence } from "./persistence";
 import {
     AgentActionError,
     AgentRunManager,
@@ -111,7 +112,7 @@ function availableAgentsPrompt(
         "Use action=\"start\" for foreground delegation or action=\"spawn\" to launch concurrent background work.",
         "Do not poll background runs with action=\"status\". Automatic mailbox notifications arrive when a run finishes or needs parent guidance.",
         "After a terminal notification, retrieve the full result with action=\"collect\"; mailbox markers never inject full child output automatically.",
-        "A waiting result is paused, not completed. Investigate or obtain guidance, then resume it; cancel it if no longer needed. Do not fabricate guidance.",
+        "A waiting result is paused, not completed. Investigate or obtain guidance, then resume it; cancel it if no longer needed. An interrupted durable run also requires explicit grounded guidance before resume. Do not fabricate guidance.",
         "The built-in worker mutates the shared checkout. Every edit/write/bash action requires an explicit user permission prompt, and only one worker can be active at once.",
     );
     if (waiting.length) {
@@ -152,7 +153,7 @@ function updateAgentUi(ctx: ExtensionContext, manager: AgentRunManager): void {
     }
 
     const activeRuns = runs.filter((run) => (
-        run.status === "starting" || run.status === "running" || run.status === "waiting_for_permission" || run.status === "waiting_for_parent"
+        run.status === "starting" || run.status === "running" || run.status === "waiting_for_permission" || run.status === "waiting_for_parent" || run.status === "interrupted"
     ));
     const terminalRuns = runs.filter((run) => !activeRuns.includes(run)).slice(-3);
     const visibleRuns = [...activeRuns, ...terminalRuns];
@@ -171,6 +172,9 @@ function updateAgentUi(ctx: ExtensionContext, manager: AgentRunManager): void {
         }
         if (run.status === "waiting_for_parent") {
             return `? ${run.runId} — Waiting: ${oneLinePreview(run.question ?? "parent guidance", 100)}${response}`;
+        }
+        if (run.status === "interrupted") {
+            return `! ${run.runId} — Interrupted; resume with explicit guidance${response}`;
         }
         if (run.status === "completed") {
             return `✓ ${run.runId} — Ready to collect${response}`;
@@ -191,7 +195,8 @@ export default function registerAgentTool(
     factory: ChildAgentFactory = createAgentChild,
 ): void {
     const traceStore = isAgentTraceEnabled() ? new AgentTraceStore() : undefined;
-    const manager = new AgentRunManager(factory, 4, traceStore);
+    const createManager = () => new AgentRunManager(factory, 4, traceStore);
+    let manager = createManager();
     const mailbox = new AgentMailbox(pi);
     let mailboxFlushScheduled = false;
     const flushMailbox = () => {
@@ -228,6 +233,44 @@ export default function registerAgentTool(
         return result;
     };
 
+    const backgroundUpdate = (ctx: ExtensionContext) => (details: AgentRunDetails) => {
+        updateAgentUi(ctx, manager);
+        mailbox.queue(details);
+        mailbox.reconcile(manager.listRuns());
+        flushMailboxWhenIdle(ctx);
+    };
+
+    const restoreManager = async (ctx: ExtensionContext) => {
+        let loaded: ReturnType<typeof loadAgentRunPersistence>;
+        try {
+            loaded = loadAgentRunPersistence(pi, ctx);
+        } catch (error) {
+            manager.setPersistence(undefined);
+            const message = error instanceof Error ? error.message : String(error);
+            ctx.ui.notify(`pi-coder agents: durable child storage is unavailable: ${message}`, "warning");
+            return;
+        }
+        manager.setPersistence(loaded?.persistence);
+        if (!loaded) return;
+        const discovered = discover(ctx);
+        const result = await manager.restore(
+            loaded.records,
+            discovered.agents,
+            { cwd: ctx.cwd, parentContext: ctx },
+            backgroundUpdate(ctx),
+        );
+        for (const diagnostic of result.diagnostics) ctx.ui.notify(`pi-coder agents: ${diagnostic}`, "warning");
+        if (result.restored > 0) {
+            ctx.ui.notify(`Restored ${result.restored} delegated agent run${result.restored === 1 ? "" : "s"}.`, "info");
+        }
+        updateAgentUi(ctx, manager);
+        mailbox.reconcile(manager.listRuns());
+    };
+
+    pi.on("session_start", async (_event, ctx) => {
+        await restoreManager(ctx);
+    });
+
     pi.on("agent_settled", () => {
         flushMailbox();
     });
@@ -237,6 +280,25 @@ export default function registerAgentTool(
         return {
             systemPrompt: `${event.systemPrompt}\n\n${availableAgentsPrompt(manager, result.agents)}`,
         };
+    });
+
+    pi.on("session_before_tree", (_event, ctx) => {
+        const unsafe = manager.listRuns().some((run) => (
+            run.status === "starting" || run.status === "running" || run.status === "waiting_for_permission"
+        ));
+        if (!unsafe) return;
+        ctx.ui.notify("Pause, finish, or cancel running delegated agents before navigating the session tree.", "warning");
+        return { cancel: true };
+    });
+
+    pi.on("session_tree", async (_event, ctx) => {
+        mailbox.clear();
+        // Prevent old-branch shutdown records from being appended at the new leaf.
+        manager.setPersistence(undefined);
+        await manager.shutdown();
+        ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
+        manager = createManager();
+        await restoreManager(ctx);
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
@@ -259,8 +321,8 @@ export default function registerAgentTool(
         description:
             "Delegate codebase work to a built-in or custom agent. Scout and custom agents are read-only; the built-in "
             + "worker can edit the current checkout and run bash only through explicit per-action user permission prompts. "
-            + "Run work in the foreground or background; inspect, collect, resume, or cancel retained runs. Runs are "
-            + "in-memory and do not survive reload or session replacement.",
+            + "Run work in the foreground or background; inspect, collect, resume, or cancel retained runs. In persisted "
+            + "parent sessions, paused and interrupted child context survives reload, restart, and switching away and back.",
         promptSnippet:
             "Use agent for substantial delegated work: scout/custom agents explore read-only, while worker performs permission-gated implementation.",
         promptGuidelines: [
@@ -268,8 +330,9 @@ export default function registerAgentTool(
             "Do not poll spawned runs with status; automatic follow-up mailbox context notifies you when they finish or need parent guidance",
             "After a terminal notification, retrieve the full result with collect; mailbox updates never interrupt current work and never include the full result",
             "A waiting agent is paused, not completed; investigate or obtain guidance, then resume it, or cancel it if no longer needed",
+            "Durable interrupted runs never replay automatically; resume them only with explicit grounded guidance after accounting for uncertain tool outcomes",
             "Background agents cannot open direct user dialogs; they request parent guidance instead",
-            "Use the returned run ID exactly; runs are cwd-confined and parent-runtime-local",
+            "Use the returned run ID exactly; runs are cwd-confined and durable only within the exact persisted parent session",
             "Only the built-in worker may mutate; each edit, write, or bash call requires an explicit user prompt, and only one worker may be active at once",
         ],
         parameters,
@@ -295,7 +358,7 @@ export default function registerAgentTool(
             const details = result.details as AgentRunDetails;
             const color = details.status === "completed"
                 ? "success"
-                : details.status === "waiting_for_parent" || details.status === "waiting_for_permission"
+                : details.status === "waiting_for_parent" || details.status === "waiting_for_permission" || details.status === "interrupted"
                     ? "warning"
                     : details.status === "starting" || details.status === "running"
                         ? "accent"
@@ -307,6 +370,8 @@ export default function registerAgentTool(
             let text = theme.fg(color, `${details.runId}${source}: ${details.status}`);
             if (!expanded && details.status === "waiting_for_permission") {
                 text += theme.fg("warning", `\n${oneLinePreview(details.recentActivity[details.recentActivity.length - 1] ?? "Waiting for mutation permission")}`);
+            } else if (!expanded && details.status === "interrupted") {
+                text += theme.fg("warning", `\nResume with explicit guidance: ${details.runId}`);
             } else if (!expanded && details.status === "waiting_for_parent") {
                 const question = oneLinePreview(details.question?.question ?? "");
                 if (question) text += `\n${theme.fg("warning", `Question: ${question}`)}`;
@@ -358,12 +423,7 @@ export default function registerAgentTool(
                             params.task,
                             { cwd: ctx.cwd, parentContext: ctx },
                             signal,
-                            (details) => {
-                                updateAgentUi(ctx, manager);
-                                mailbox.queue(details);
-                                mailbox.reconcile(manager.listRuns());
-                                flushMailboxWhenIdle(ctx);
-                            },
+                            backgroundUpdate(ctx),
                         );
                     outcome.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
                 } else if (params.action === "resume") {

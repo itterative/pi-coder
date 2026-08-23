@@ -1,7 +1,11 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
     ModelRegistry,
     ModelRuntime,
+    SessionManager,
     type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
@@ -11,6 +15,7 @@ import {
     shouldCopyParentApiKey,
 } from "../../src/tools/agent/child";
 import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/discovery";
+import { ZERO_USAGE } from "../../src/tools/agent/runtime";
 
 describe("in-process scout SDK session", () => {
     it("constructs and disposes without a provider call or discovered parent extensions", async () => {
@@ -85,6 +90,55 @@ describe("in-process scout SDK session", () => {
         });
         expect(worker.getMutationReport?.()).toEqual({ changedFiles: [], bashApproved: false });
         worker.dispose();
+    });
+
+    it("reopens a persisted child transcript without a provider call", async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-child-session-"));
+        try {
+            const source = await ModelRuntime.create({ refreshOnCreate: false, modelsPath: null });
+            const model = source.getModels()[0];
+            expect(model).toBeDefined();
+            if (!model) return;
+            const sessionManager = SessionManager.create(process.cwd(), directory);
+            sessionManager.appendMessage({
+                role: "assistant",
+                content: [{ type: "text", text: "Persisted child context" }],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                usage: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
+                stopReason: "stop",
+                timestamp: Date.now(),
+            });
+            const sessionFile = sessionManager.getSessionFile();
+            expect(sessionFile).toBeDefined();
+
+            const child = await createAgentChild({
+                cwd: process.cwd(),
+                definition: BUILTIN_SCOUT,
+                parentContext: {
+                    model,
+                    thinkingLevel: "off",
+                    modelRegistry: {
+                        getRegisteredNativeProvider: () => undefined,
+                        getRegisteredProviderConfig: () => undefined,
+                        getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "smoke-test" }),
+                        isUsingOAuth: () => false,
+                        find: (provider: string, id: string) => source.getModel(provider, id),
+                        getAll: () => [...source.getModels()],
+                    },
+                },
+                childSessionDir: directory,
+                childSessionFile: sessionFile,
+                onProgress: () => {},
+            });
+
+            expect(child.sessionFile).toBe(sessionFile);
+            expect(child.getFinalOutput()).toBe("Persisted child context");
+            child.dispose();
+        } finally {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
     });
 
     it("preserves persisted OpenAI Codex OAuth when available", async () => {

@@ -1,6 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
-import type { AgentDefinition } from "./discovery";
+import { fingerprintAgentDefinition, type AgentDefinition } from "./discovery";
 import type { AgentTraceData, AgentTraceStore } from "./trace";
 
 export type AgentRunStatus =
@@ -8,6 +8,7 @@ export type AgentRunStatus =
     | "running"
     | "waiting_for_permission"
     | "waiting_for_parent"
+    | "interrupted"
     | "completed"
     | "failed"
     | "aborted"
@@ -29,6 +30,7 @@ export interface ChildProgress {
 export interface WorkerMutationReport {
     changedFiles: string[];
     bashApproved: boolean;
+    interrupted?: boolean;
 }
 
 export interface ChildAgentHandle {
@@ -41,6 +43,7 @@ export interface ChildAgentHandle {
     getError(): string | undefined;
     getUsage(): Usage;
     getMutationReport?(): WorkerMutationReport;
+    sessionFile?: string;
 }
 
 export interface ChildAgentFactoryContext {
@@ -51,6 +54,12 @@ export interface ChildAgentFactoryContext {
     runId?: string;
     onProgress: (progress: ChildProgress) => void;
     onTrace?: (type: string, data?: AgentTraceData) => void;
+    childSessionDir?: string;
+    childSessionFile?: string;
+    repairInterrupted?: boolean;
+    initialProgress?: ChildProgress;
+    initialMutationReport?: WorkerMutationReport;
+    onSessionCreated?: (sessionFile: string | undefined) => void;
 }
 
 export type ChildAgentFactory = (
@@ -92,6 +101,38 @@ export interface AgentRunOutcome {
 export type AgentProgressCallback = (details: AgentRunDetails) => void;
 export type AgentBackgroundCallback = (details: AgentRunDetails) => void;
 
+export interface PersistedAgentRun {
+    version: 1;
+    ownerSessionId: string;
+    runId: string;
+    agent: string;
+    agentSource: string;
+    agentFilePath?: string;
+    definitionFingerprint: string;
+    task: string;
+    status: Exclude<AgentRunStatus, "waiting_for_permission"> | "removed";
+    background: boolean;
+    mutating: boolean;
+    question?: ParentQuestion;
+    progress: ChildProgress;
+    usageCheckpoint: Usage;
+    usageSnapshot: Usage;
+    startedAt: number;
+    updatedAt: number;
+    childSessionFile?: string;
+    terminalContent?: string;
+    terminalError?: string;
+    terminalIsError?: boolean;
+    mutationReport?: WorkerMutationReport;
+}
+
+export interface AgentRunPersistence {
+    ownerSessionId: string;
+    childSessionDir: string;
+    save(record: PersistedAgentRun): boolean;
+    deleteChildSession(sessionFile: string): void;
+}
+
 export interface AgentRunSummary {
     runId: string;
     agent: string;
@@ -123,7 +164,11 @@ interface AgentRun {
     shutdownRequested: boolean;
     cancelRequested: boolean;
     mutating: boolean;
+    definitionFingerprint: string;
     permissionPending: boolean;
+    childSessionFile?: string;
+    restoredProgress?: ChildProgress;
+    restoredMutationReport?: WorkerMutationReport;
     operation?: Promise<AgentRunOutcome>;
     backgroundTask?: Promise<AgentRunOutcome>;
     backgroundCallback?: AgentBackgroundCallback;
@@ -207,7 +252,9 @@ export class AgentRunManager {
     private readonly terminalOrder: string[] = [];
     private nextRunNumber = 1;
     private closing = false;
+    private preservingShutdown = false;
     private shutdownPromise?: Promise<void>;
+    private persistence?: AgentRunPersistence;
 
     constructor(
         private readonly factory: ChildAgentFactory,
@@ -215,6 +262,10 @@ export class AgentRunManager {
         private readonly trace?: AgentTraceStore,
         private readonly maxRetainedResults = 20,
     ) {}
+
+    setPersistence(persistence: AgentRunPersistence | undefined): void {
+        this.persistence = persistence;
+    }
 
     get activeCount(): number {
         return [...this.runs.values()].filter((run) => !isTerminalStatus(run.status)).length;
@@ -247,6 +298,127 @@ export class AgentRunManager {
                 agent: run.agent,
                 question: run.question!,
             }));
+    }
+
+    async restore(
+        records: PersistedAgentRun[],
+        definitions: AgentDefinition[],
+        context: AgentStartContext,
+        onBackgroundUpdate?: AgentBackgroundCallback,
+    ): Promise<{ restored: number; diagnostics: string[] }> {
+        const diagnostics: string[] = [];
+        const definitionByName = new Map(definitions.map((definition) => [definition.name, definition]));
+        for (const record of records) {
+            const suffix = /-(\d+)$/.exec(record.runId)?.[1];
+            if (suffix) this.nextRunNumber = Math.max(this.nextRunNumber, Number(suffix) + 1);
+        }
+
+        for (const record of records.sort((a, b) => a.startedAt - b.startedAt)) {
+            if (record.status === "removed" || record.ownerSessionId !== this.persistence?.ownerSessionId) continue;
+            const persistedTerminal = record.status === "completed"
+                || record.status === "failed"
+                || record.status === "aborted"
+                || record.status === "canceled";
+            const definition = definitionByName.get(record.agent);
+            if (!persistedTerminal && (!definition || fingerprintAgentDefinition(definition) !== record.definitionFingerprint)) {
+                diagnostics.push(`Could not restore ${record.runId}: its agent definition is missing or changed.`);
+                continue;
+            }
+            const currentMutating = definition?.mutating === true;
+            if (!persistedTerminal && (
+                record.mutating !== currentMutating
+                || (currentMutating && !(definition?.name === "worker" && definition.source === "builtin"))
+            )) {
+                diagnostics.push(`Could not restore ${record.runId}: persisted metadata cannot alter mutation capability.`);
+                continue;
+            }
+            if (!persistedTerminal && this.activeCount >= this.maxActiveRuns) {
+                diagnostics.push(`Could not restore ${record.runId}: the active-run limit is ${this.maxActiveRuns}.`);
+                continue;
+            }
+            if (!persistedTerminal && record.mutating && [...this.runs.values()].some((run) => run.mutating && !isTerminalStatus(run.status))) {
+                diagnostics.push(`Could not restore ${record.runId}: another mutation-capable worker was restored first.`);
+                continue;
+            }
+
+            const restoredStatus: AgentRunStatus = record.status === "starting" || record.status === "running"
+                ? "interrupted"
+                : record.status;
+            const run: AgentRun = {
+                id: record.runId,
+                agent: record.agent,
+                agentSource: persistedTerminal ? record.agentSource : definition!.source,
+                agentFilePath: persistedTerminal ? record.agentFilePath : definition!.filePath,
+                definitionFingerprint: record.definitionFingerprint,
+                task: record.task,
+                status: restoredStatus,
+                background: record.background,
+                question: restoredStatus === "waiting_for_parent" ? record.question : undefined,
+                usageCheckpoint: cloneUsage(record.usageCheckpoint),
+                usageSnapshot: cloneUsage(record.usageSnapshot),
+                startedAt: record.startedAt,
+                updatedAt: record.updatedAt,
+                disposed: persistedTerminal,
+                shutdownRequested: false,
+                cancelRequested: false,
+                mutating: persistedTerminal ? record.mutating : currentMutating,
+                permissionPending: false,
+                childSessionFile: record.childSessionFile,
+                restoredProgress: record.progress,
+                restoredMutationReport: record.mutationReport,
+            };
+            this.runs.set(run.id, run);
+
+            if (persistedTerminal) {
+                const content = record.terminalContent ?? `Agent ${run.id} ${record.status}.`;
+                run.terminalOutcome = this.outcome(
+                    run,
+                    content,
+                    record.terminalIsError ?? record.status !== "completed",
+                    record.progress,
+                    record.terminalError,
+                );
+                if (run.background) {
+                    this.terminalOrder.push(run.id);
+                    this.pruneRetainedResults();
+                } else {
+                    this.runs.delete(run.id);
+                }
+                continue;
+            }
+
+            if (!record.childSessionFile) {
+                diagnostics.push(`Could not restore ${record.runId}: its child transcript is unavailable.`);
+                this.runs.delete(run.id);
+                continue;
+            }
+            this.trace?.start(run.id, run.agent, {
+                source: run.agentSource,
+                background: run.background,
+                restored: true,
+                restoredStatus,
+            });
+            run.backgroundCallback = record.background ? onBackgroundUpdate : undefined;
+            try {
+                await this.setupRun(run, definition!, {
+                    ...context,
+                    childSessionFile: record.childSessionFile,
+                    repairInterrupted: restoredStatus === "interrupted",
+                    initialProgress: record.progress,
+                    initialMutationReport: record.mutationReport,
+                }, undefined, undefined, true);
+                if (restoredStatus === "interrupted") {
+                    run.restoredMutationReport = {
+                        ...(run.restoredMutationReport ?? { changedFiles: [], bashApproved: false }),
+                        interrupted: true,
+                    };
+                    this.persistRun(run);
+                }
+            } catch (error) {
+                diagnostics.push(`Could not restore ${record.runId}: ${errorMessage(error)}`);
+            }
+        }
+        return { restored: this.runs.size, diagnostics };
     }
 
     async start(
@@ -304,9 +476,9 @@ export class AgentRunManager {
         if (!run) {
             throw new AgentActionError(`Unknown or stale agent run ID: ${runId}`);
         }
-        if (run.status !== "waiting_for_parent") {
+        if (run.status !== "waiting_for_parent" && run.status !== "interrupted") {
             throw new AgentActionError(
-                `Agent run ${runId} is ${run.status}; only waiting runs can be resumed.`,
+                `Agent run ${runId} is ${run.status}; only waiting or interrupted runs can be resumed.`,
             );
         }
         if (!guidance.trim()) {
@@ -324,6 +496,7 @@ export class AgentRunManager {
         run.status = "running";
         run.question = undefined;
         run.updatedAt = Date.now();
+        this.persistRun(run);
         const prompt = `Parent guidance:\n${guidance}`;
         if (!run.background) {
             return this.beginOperation(run, prompt, signal, onProgress);
@@ -354,9 +527,9 @@ export class AgentRunManager {
                 `Agent run ${runId} is already ${run.status}; collect its result instead.`,
             );
         }
-        if (!run.background && run.status !== "waiting_for_parent") {
+        if (!run.background && run.status !== "waiting_for_parent" && run.status !== "interrupted") {
             throw new AgentActionError(
-                `Agent run ${runId} is ${run.status}; only waiting foreground runs can be canceled.`,
+                `Agent run ${runId} is ${run.status}; only waiting or interrupted foreground runs can be canceled.`,
             );
         }
 
@@ -398,6 +571,8 @@ export class AgentRunManager {
             content = run.status === "completed"
                 ? `Agent ${run.id} completed. Retrieve its result with agent(action="collect", runId="${run.id}").`
                 : `Agent ${run.id} ${run.status}: ${truncate(run.terminalOutcome?.content ?? "", 2_000)}\n\nRetrieve the retained result with agent(action="collect", runId="${run.id}").`;
+        } else if (run.status === "interrupted") {
+            content = `Agent ${run.id} was interrupted before it reached a safe terminal state. Resume it only with explicit, grounded guidance; interrupted tool outcomes may be uncertain.`;
         } else {
             const sections = [`Agent ${run.id} is ${run.status} in the background.`];
             if (progress.output.trim()) {
@@ -492,9 +667,11 @@ export class AgentRunManager {
             shutdownRequested: false,
             cancelRequested: false,
             mutating: definition.mutating === true,
+            definitionFingerprint: fingerprintAgentDefinition(definition),
             permissionPending: false,
         };
         this.runs.set(id, run);
+        this.persistRun(run);
         this.trace?.start(id, definition.name, {
             source: definition.source,
             taskChars: task.length,
@@ -510,6 +687,7 @@ export class AgentRunManager {
         context: AgentStartContext,
         signal?: AbortSignal,
         onProgress?: AgentProgressCallback,
+        preserveOnSetupFailure = false,
     ): Promise<AgentRunOutcome | undefined> {
         try {
             this.record(run, "setup.started");
@@ -518,6 +696,16 @@ export class AgentRunManager {
                 definition,
                 background: run.background,
                 runId: run.id,
+                childSessionDir: this.persistence?.childSessionDir,
+                childSessionFile: run.childSessionFile ?? context.childSessionFile,
+                repairInterrupted: context.repairInterrupted,
+                initialProgress: context.initialProgress ?? run.restoredProgress,
+                initialMutationReport: context.initialMutationReport ?? run.restoredMutationReport,
+                onSessionCreated: (sessionFile) => {
+                    run.childSessionFile = sessionFile;
+                    this.persistRun(run);
+                    context.onSessionCreated?.(sessionFile);
+                },
                 onProgress: (progress) => {
                     run.updatedAt = Date.now();
                     run.permissionPending = progress.permissionPending === true;
@@ -533,12 +721,18 @@ export class AgentRunManager {
             });
             run.setup = setup;
             run.handle = await setup;
+            run.childSessionFile = run.handle.sessionFile ?? run.childSessionFile;
             run.setup = undefined;
+            this.persistRun(run);
             this.record(run, "setup.completed");
         } catch (error) {
             run.setup = undefined;
             const message = errorMessage(error);
             this.record(run, "setup.failed", { error: truncate(message, 500) });
+            if (preserveOnSetupFailure) {
+                this.runs.delete(run.id);
+                throw new Error(`Failed to reopen child session: ${message}`);
+            }
             return this.finishFailure(run, `Failed to create child session: ${message}`);
         }
 
@@ -549,7 +743,9 @@ export class AgentRunManager {
         if (this.closing || run.shutdownRequested || signal?.aborted) {
             this.record(run, "setup.aborted_after_completion");
             if (signal?.aborted) await this.abortRun(run)?.catch(() => {});
-            return this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
+            return this.preservingShutdown && run.childSessionFile
+                ? this.finishInterrupted(run, "Agent run was interrupted during session shutdown.")
+                : this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
         }
         return undefined;
     }
@@ -577,6 +773,7 @@ export class AgentRunManager {
 
     private async performShutdown(): Promise<void> {
         this.closing = true;
+        this.preservingShutdown = this.persistence !== undefined;
 
         const runs = [...this.runs.values()];
         for (const run of runs) {
@@ -607,6 +804,16 @@ export class AgentRunManager {
 
         for (const run of runs) {
             if (!this.runs.has(run.id)) continue;
+            if (this.preservingShutdown) {
+                if (run.status === "waiting_for_parent" || run.status === "interrupted") {
+                    this.persistRun(run);
+                    this.disposeRun(run);
+                } else if (!isTerminalStatus(run.status)) {
+                    this.finishInterrupted(run, "Agent run was interrupted during session shutdown.");
+                }
+                this.removeRun(run, false);
+                continue;
+            }
             if (!isTerminalStatus(run.status)) {
                 run.status = "aborted";
                 run.updatedAt = Date.now();
@@ -616,7 +823,7 @@ export class AgentRunManager {
                     reason: "session_shutdown",
                 });
             }
-            this.removeRun(run);
+            this.removeRun(run, false);
         }
     }
 
@@ -631,10 +838,13 @@ export class AgentRunManager {
         }
         if (this.closing || run.shutdownRequested || signal?.aborted) {
             if (signal?.aborted) await this.abortRun(run)?.catch(() => {});
-            return this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
+            return this.preservingShutdown && run.childSessionFile
+                ? this.finishInterrupted(run, "Agent run was interrupted during session shutdown.")
+                : this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
         }
         run.status = "running";
         run.updatedAt = Date.now();
+        this.persistRun(run);
         if (run.background) {
             this.emitBackgroundUpdate(
                 run,
@@ -694,7 +904,9 @@ export class AgentRunManager {
             return this.finishTerminal(run, "canceled", `Agent run ${run.id} canceled.`, false);
         }
         if (aborted || run.shutdownRequested || this.closing) {
-            return this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
+            return this.preservingShutdown && run.childSessionFile
+                ? this.finishInterrupted(run, "Agent run was interrupted during session shutdown.")
+                : this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
         }
 
         const question = handle.takeParentQuestion();
@@ -718,6 +930,9 @@ export class AgentRunManager {
             if (!run.background) {
                 run.usageCheckpoint = cloneUsage(run.handle!.getUsage());
             }
+            run.restoredProgress = progress;
+            run.restoredMutationReport = this.mutationReport(run);
+            this.persistRun(run);
             onProgress?.(outcome.details);
             return outcome;
         }
@@ -781,6 +996,22 @@ export class AgentRunManager {
         return this.finishTerminal(run, "failed", error, true, progress);
     }
 
+    private finishInterrupted(run: AgentRun, content: string): AgentRunOutcome {
+        const progress = run.handle?.getProgress() ?? run.restoredProgress ?? { output: "", recentActivity: [] };
+        run.status = "interrupted";
+        run.permissionPending = false;
+        run.updatedAt = Date.now();
+        run.restoredProgress = progress;
+        run.restoredMutationReport = {
+            ...this.mutationReport(run),
+            interrupted: true,
+        };
+        const outcome = this.outcome(run, content, true, progress, content);
+        this.persistRun(run);
+        this.disposeRun(run);
+        return outcome;
+    }
+
     private finishTerminal(
         run: AgentRun,
         status: "completed" | "failed" | "aborted" | "canceled",
@@ -792,15 +1023,20 @@ export class AgentRunManager {
         run.status = status;
         run.permissionPending = false;
         run.updatedAt = Date.now();
-        const report = run.handle?.getMutationReport?.();
+        const report = this.mutationReport(run);
+        run.restoredProgress = progress;
+        run.restoredMutationReport = report;
         if (run.mutating) {
             const files = report?.changedFiles.length
                 ? report.changedFiles.map((file) => `  - ${file}`).join("\n")
                 : "  - none tracked";
-            const bashCaveat = report?.bashApproved
+            const bashCaveat = report.bashApproved
                 ? "\n- One or more approved bash commands may have changed additional files; inspect the checkout before attributing the final diff."
                 : "";
-            content += `\n\nMutation report:\n- Files changed by successful edit/write calls:\n${files}${bashCaveat}`;
+            const interruptedCaveat = report.interrupted
+                ? "\n- This run was interrupted previously; a tool may have mutated files before its result was durably recorded."
+                : "";
+            content += `\n\nMutation report:\n- Files changed by successful edit/write calls:\n${files}${bashCaveat}${interruptedCaveat}`;
         }
         const outcome = this.outcome(run, content, isError, progress, status === "failed" ? content : undefined);
         this.disposeRun(run);
@@ -814,9 +1050,11 @@ export class AgentRunManager {
         if (run.background) {
             run.terminalOutcome = outcome;
             this.terminalOrder.push(run.id);
+            const persisted = this.persistRun(run);
+            if (persisted) this.deleteChildSession(run);
             this.pruneRetainedResults();
         } else {
-            this.runs.delete(run.id);
+            this.removeRun(run);
         }
         return outcome;
     }
@@ -843,6 +1081,7 @@ export class AgentRunManager {
     ): AgentRunOutcome {
         const outcome = this.outcome(run, content, isError, progress, error);
         run.usageCheckpoint = cloneUsage(outcome.details.usage);
+        this.persistRun(run);
         return outcome;
     }
 
@@ -869,7 +1108,7 @@ export class AgentRunManager {
             updatedAt: run.updatedAt,
             error,
             mutating: run.mutating,
-            mutationReport: run.handle?.getMutationReport?.(),
+            mutationReport: this.mutationReport(run),
         };
     }
 
@@ -906,6 +1145,10 @@ export class AgentRunManager {
 
     private progressSnapshot(run: AgentRun): ChildProgress {
         if (run.handle) return run.handle.getProgress();
+        if (run.restoredProgress) return {
+            output: run.restoredProgress.output,
+            recentActivity: [...run.restoredProgress.recentActivity],
+        };
         return {
             output: run.terminalOutcome?.details.output ?? "",
             recentActivity: run.terminalOutcome?.details.recentActivity ?? [],
@@ -915,15 +1158,76 @@ export class AgentRunManager {
     private pruneRetainedResults(): void {
         while (this.terminalOrder.length > this.maxRetainedResults) {
             const runId = this.terminalOrder.shift();
-            if (runId) this.runs.delete(runId);
+            const run = runId ? this.runs.get(runId) : undefined;
+            if (run) this.removeRun(run);
         }
     }
 
-    private removeRun(run: AgentRun): void {
+    private removeRun(run: AgentRun, persistRemoval = true): void {
         run.backgroundCallback = undefined;
         this.runs.delete(run.id);
         const terminalIndex = this.terminalOrder.indexOf(run.id);
         if (terminalIndex >= 0) this.terminalOrder.splice(terminalIndex, 1);
+        if (persistRemoval) {
+            const persisted = this.persistRun(run, "removed");
+            if (persisted) this.deleteChildSession(run);
+        }
+    }
+
+    private mutationReport(run: AgentRun): WorkerMutationReport {
+        const current = run.handle?.getMutationReport?.();
+        const changedFiles = new Set([
+            ...(run.restoredMutationReport?.changedFiles ?? []),
+            ...(current?.changedFiles ?? []),
+        ]);
+        const interrupted = run.restoredMutationReport?.interrupted === true || current?.interrupted === true;
+        return {
+            changedFiles: [...changedFiles].sort(),
+            bashApproved: run.restoredMutationReport?.bashApproved === true || current?.bashApproved === true,
+            ...(interrupted ? { interrupted: true } : {}),
+        };
+    }
+
+    private persistRun(
+        run: AgentRun,
+        status?: PersistedAgentRun["status"],
+    ): boolean {
+        if (!this.persistence) return false;
+        const durableStatus: PersistedAgentRun["status"] = status
+            ?? (run.status === "waiting_for_permission" ? "running" : run.status);
+        const progress = this.progressSnapshot(run);
+        const usageSnapshot = this.readUsage(run);
+        const terminal = run.terminalOutcome;
+        return this.persistence.save({
+            version: 1,
+            ownerSessionId: this.persistence.ownerSessionId,
+            runId: run.id,
+            agent: run.agent,
+            agentSource: run.agentSource,
+            agentFilePath: run.agentFilePath,
+            definitionFingerprint: run.definitionFingerprint,
+            task: truncate(run.task, MAX_TASK_CHARS),
+            status: durableStatus,
+            background: run.background,
+            mutating: run.mutating,
+            question: run.question,
+            progress,
+            usageCheckpoint: cloneUsage(run.usageCheckpoint),
+            usageSnapshot,
+            startedAt: run.startedAt,
+            updatedAt: run.updatedAt,
+            childSessionFile: run.childSessionFile,
+            terminalContent: terminal?.content,
+            terminalError: terminal?.details.error,
+            terminalIsError: terminal?.isError,
+            mutationReport: this.mutationReport(run),
+        });
+    }
+
+    private deleteChildSession(run: AgentRun): void {
+        if (!run.childSessionFile || !this.persistence) return;
+        this.persistence.deleteChildSession(run.childSessionFile);
+        run.childSessionFile = undefined;
     }
 
     private abortRun(run: AgentRun): Promise<void> | undefined {

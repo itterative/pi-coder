@@ -45,8 +45,10 @@ describe("agent extension registration", () => {
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
+            sessionManager: { getSessionFile: () => undefined },
             ui: { notify: () => {}, setWidget: () => {} },
         };
+        await handlers.session_start[0]({ reason: "startup" }, ctx);
         const prompt = await handlers.before_agent_start[0]({ systemPrompt: "Parent prompt" }, ctx) as any;
         const result = await tool.execute(
             "call-1",

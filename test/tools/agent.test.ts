@@ -9,8 +9,10 @@ import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/discovery";
 import {
     AgentActionError,
     AgentRunManager,
+    type AgentRunPersistence,
     type ChildAgentHandle,
     type ParentQuestion,
+    type PersistedAgentRun,
 } from "../../src/tools/agent/runtime";
 
 interface Step {
@@ -23,6 +25,7 @@ interface Step {
 
 class FakeChild implements ChildAgentHandle {
     readonly prompts: string[] = [];
+    readonly sessionFile?: string;
     disposed = false;
     abortCount = 0;
     private output = "";
@@ -31,7 +34,9 @@ class FakeChild implements ChildAgentHandle {
     private usage = usage();
     private releaseAbort?: () => void;
 
-    constructor(private readonly steps: Step[]) {}
+    constructor(private readonly steps: Step[], sessionFile?: string) {
+        this.sessionFile = sessionFile;
+    }
 
     async prompt(text: string): Promise<void> {
         this.prompts.push(text);
@@ -121,6 +126,26 @@ function managerWith(child: FakeChild, limit = 4): AgentRunManager {
 
 function context() {
     return { cwd: process.cwd(), parentContext: {} };
+}
+
+function durableStore(directory: string) {
+    const records: PersistedAgentRun[] = [];
+    const persistence: AgentRunPersistence = {
+        ownerSessionId: "parent-session",
+        childSessionDir: directory,
+        save: (record) => {
+            records.push(structuredClone(record));
+            return true;
+        },
+        deleteChildSession: () => {},
+    };
+    return { persistence, records };
+}
+
+function latestRecords(records: PersistedAgentRun[]): PersistedAgentRun[] {
+    const latest = new Map<string, PersistedAgentRun>();
+    for (const record of records) latest.set(record.runId, record);
+    return [...latest.values()];
 }
 
 async function flushBackground(): Promise<void> {
@@ -520,6 +545,153 @@ describe("AgentRunManager", () => {
             mutating: true,
         });
         await manager.cancel("worker-1");
+    });
+
+    it("restores a durable waiting run and resumes the same child transcript", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-sessions-"));
+        tempDirs.push(dir);
+        const store = durableStore(dir);
+        const childFile = path.join(dir, "child.jsonl");
+        const firstChild = new FakeChild([{
+            question: { question: "Which approach?" },
+            output: "Investigated",
+            usage: usage(8, 2),
+        }], childFile);
+        const firstManager = new AgentRunManager(async () => firstChild);
+        firstManager.setPersistence(store.persistence);
+
+        const waiting = await firstManager.start(BUILTIN_SCOUT, "Investigate", context());
+        expect(waiting.details.status).toBe("waiting_for_parent");
+        await firstManager.shutdown();
+        expect(store.records.at(-1)).toMatchObject({
+            runId: "scout-1",
+            status: "waiting_for_parent",
+            childSessionFile: childFile,
+        });
+
+        const restoredChild = new FakeChild([{ output: "Finished", usage: usage(3, 1) }], childFile);
+        let restoredContext: any;
+        const secondManager = new AgentRunManager(async (factoryContext) => {
+            restoredContext = factoryContext;
+            return restoredChild;
+        });
+        secondManager.setPersistence(store.persistence);
+        const restoration = await secondManager.restore(
+            latestRecords(store.records),
+            [BUILTIN_SCOUT, BUILTIN_WORKER],
+            context(),
+        );
+
+        expect(restoration).toEqual({ restored: 1, diagnostics: [] });
+        expect(secondManager.listRuns()[0]).toMatchObject({ runId: "scout-1", status: "waiting_for_parent" });
+        expect(restoredContext).toMatchObject({ childSessionFile: childFile, repairInterrupted: false });
+        const completed = await secondManager.resume("scout-1", "Use the simpler approach");
+        expect(completed.details.status).toBe("completed");
+        expect(restoredChild.prompts[0]).toContain("Use the simpler approach");
+    });
+
+    it("restores an uncollected terminal result without requiring the old definition", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-sessions-"));
+        tempDirs.push(dir);
+        const store = durableStore(dir);
+        const child = new FakeChild([{ output: "Persisted result", usage: usage(6, 2) }], path.join(dir, "child.jsonl"));
+        const firstManager = new AgentRunManager(async () => child);
+        firstManager.setPersistence(store.persistence);
+        firstManager.spawn(BUILTIN_SCOUT, "Inspect", context());
+        await flushBackground();
+        expect(firstManager.listRuns()[0]?.status).toBe("completed");
+
+        const secondManager = new AgentRunManager(async () => {
+            throw new Error("terminal restoration must not create a child");
+        });
+        secondManager.setPersistence(store.persistence);
+        const restoration = await secondManager.restore(latestRecords(store.records), [], context());
+        expect(restoration).toEqual({ restored: 1, diagnostics: [] });
+        const collected = secondManager.collect("scout-1");
+        expect(collected.content).toBe("Persisted result");
+        expect(collected.usage).toMatchObject({ input: 6, output: 2 });
+    });
+
+    it("keeps durable state recoverable when reopening the child fails", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-sessions-"));
+        tempDirs.push(dir);
+        const store = durableStore(dir);
+        const childFile = path.join(dir, "child.jsonl");
+        const child = new FakeChild([{ question: { question: "Continue?" } }], childFile);
+        const firstManager = new AgentRunManager(async () => child);
+        firstManager.setPersistence(store.persistence);
+        await firstManager.start(BUILTIN_SCOUT, "Inspect", context());
+        await firstManager.shutdown();
+        const saved = latestRecords(store.records);
+
+        const secondManager = new AgentRunManager(async () => {
+            throw new Error("provider auth is temporarily unavailable");
+        });
+        secondManager.setPersistence(store.persistence);
+        const restoration = await secondManager.restore(saved, [BUILTIN_SCOUT], context());
+
+        expect(restoration.restored).toBe(0);
+        expect(restoration.diagnostics[0]).toContain("temporarily unavailable");
+        expect(secondManager.listRuns()).toEqual([]);
+        expect(latestRecords(store.records)[0]).toMatchObject({
+            status: "waiting_for_parent",
+            childSessionFile: childFile,
+        });
+    });
+
+    it("does not let persisted metadata remove the worker mutation capability", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-sessions-"));
+        tempDirs.push(dir);
+        const store = durableStore(dir);
+        const childFile = path.join(dir, "child.jsonl");
+        const child = new FakeChild([{ question: { question: "Continue?" } }], childFile);
+        const firstManager = new AgentRunManager(async () => child);
+        firstManager.setPersistence(store.persistence);
+        await firstManager.start(BUILTIN_WORKER, "Implement", context());
+        await firstManager.shutdown();
+        const forged = { ...latestRecords(store.records)[0]!, mutating: false };
+
+        let created = false;
+        const secondManager = new AgentRunManager(async () => {
+            created = true;
+            return new FakeChild([]);
+        });
+        secondManager.setPersistence(store.persistence);
+        const restoration = await secondManager.restore([forged], [BUILTIN_WORKER], context());
+        expect(restoration.restored).toBe(0);
+        expect(restoration.diagnostics[0]).toContain("cannot alter mutation capability");
+        expect(created).toBe(false);
+    });
+
+    it("restores a running durable child as interrupted without replaying it", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-sessions-"));
+        tempDirs.push(dir);
+        const store = durableStore(dir);
+        const childFile = path.join(dir, "child.jsonl");
+        const runningChild = new FakeChild([{ waitForAbort: true }], childFile);
+        const firstManager = new AgentRunManager(async () => runningChild);
+        firstManager.setPersistence(store.persistence);
+        firstManager.spawn(BUILTIN_WORKER, "Implement", context());
+        await flushBackground();
+        await firstManager.shutdown();
+        expect(store.records.at(-1)).toMatchObject({ status: "interrupted" });
+
+        const restoredChild = new FakeChild([{ output: "Safely continued" }], childFile);
+        let restoredContext: any;
+        const secondManager = new AgentRunManager(async (factoryContext) => {
+            restoredContext = factoryContext;
+            return restoredChild;
+        });
+        secondManager.setPersistence(store.persistence);
+        await secondManager.restore(latestRecords(store.records), [BUILTIN_SCOUT, BUILTIN_WORKER], context());
+
+        expect(secondManager.listRuns()[0]).toMatchObject({ status: "interrupted", mutating: true });
+        expect(restoredChild.prompts).toEqual([]);
+        expect(restoredContext.repairInterrupted).toBe(true);
+        const resumed = await secondManager.resume("worker-1", "Inspect the checkout before continuing");
+        expect(resumed.details.status).toBe("running");
+        await flushBackground();
+        expect(secondManager.listRuns()[0]?.status).toBe("completed");
     });
 
     it("rejects unknown and stale resume IDs", async () => {

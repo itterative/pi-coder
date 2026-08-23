@@ -17,8 +17,8 @@ The initial direction recorded in `src/tools/agent/README.md` is:
 
 - `src/index.ts` is the consolidated pi-coder extension entrypoint.
 - `src/tools/agent/index.ts` registers the in-process `agent` tool from `src/index.ts`.
-- `child.ts`, `runtime.ts`, and `discovery.ts` implement the read-only child SDK session, run state machine, and custom definition loading.
-- The MVP supports built-in/user/trusted-project agents, foreground start, concurrent background spawn/status/collect, resume/cancel, parent guidance, non-interrupting automatic follow-up mailbox markers, confinement, usage deltas, lifecycle cleanup, and compact/expanded rendering.
+- `child.ts`, `runtime.ts`, `discovery.ts`, and `persistence.ts` implement controlled child SDK sessions, the run state machine, custom definition loading, and durable exact-parent restoration.
+- The MVP supports built-in/user/trusted-project agents, foreground start, concurrent background spawn/status/collect, resume/cancel, read-only scouts, a permission-gated worker, parent guidance, non-interrupting automatic follow-up mailbox markers, confinement, usage deltas, durable paused/interrupted restoration, lifecycle cleanup, and compact/expanded rendering.
 - The stabilization pass makes waiting state explicitly paused in parent guidance, shows compact question/result previews, tests tool-level pause/resume rendering and additional lifecycle/confinement edges, and records a repeatable manual provider/lifecycle checklist in `README.md`.
 - Diagnostics retain bounded sanitized timelines for recent runs and expose `/agent-trace`; the intended `PI_CODER_AGENT_TRACE=1` gate is temporarily hardcoded on during development.
 - Existing extension functionality also includes:
@@ -346,9 +346,9 @@ Background children omit `ask_user` to prevent unsolicited dialogs from racing p
 
 `cancel` is valid for a waiting foreground run or any nonterminal background run. Active background cancellation aborts and settles the child before disposing it and making the ID stale. A parent abort signal during foreground start/resume calls `childSession.abort()` and transitions that operation to `aborted` after settlement.
 
-An idempotent `session_shutdown` handler handles quit, reload, new-session, resume, and fork. It marks the registry closing, aborts running children, waits for their operations to settle, disposes every retained session, and clears the registry. `session_start` creates fresh parent-session-local state; child runs are not transferred across parent sessions.
+An idempotent `session_shutdown` handler handles quit, reload, new-session, resume, and fork. It marks the registry closing, aborts running children, waits for their operations to settle, persists safe paused/interrupted/terminal state when the parent session is durable, disposes every in-process handle, and clears the runtime registry. `session_start` restores only records owned by the exact parent session UUID and active branch; child runs are never transferred to new/forked/cloned parent sessions.
 
-This parent-runtime-local lifetime is an explicit MVP choice. Pi's persistent `SessionManager` could support durable child sessions later, but the first release returns a clear stale-ID error after reload/replacement/restart rather than implementing a partial persistence format.
+The original parent-runtime-local MVP has been superseded by Phase 8 persistence. Ephemeral parent sessions still return stale-ID errors after reload/replacement/restart.
 
 #### Results and errors
 
@@ -387,7 +387,7 @@ Decided:
 6. A zero-configuration built-in `scout` will ship with the extension; custom markdown agents remain supported.
 7. Project definitions are enabled only when `ctx.isProjectTrusted()` is true, without another read-only confirmation prompt.
 8. Built-in names such as `scout` are reserved.
-9. Retain at most four active/waiting runs with no TTL and parent-runtime-local lifetime.
+9. Retain at most four active/waiting/interrupted runs with no TTL. Durable lifetime is scoped to the exact persisted parent session; ephemeral parents remain runtime-local.
 10. Direct child-to-user `ask_user` is deferred; first-release questions route through the parent.
 11. Use throttled tool updates and custom result rendering first; add a persistent live widget with background execution.
 
@@ -490,10 +490,30 @@ Add workflow modes only after single-agent execution is stable:
 
 ### Phase 8: Persistence and advanced workflows
 
-Consider later:
+#### Resumable child sessions — MVP implemented
 
-- persisted child sessions and resume support;
-- named agent runs;
+Implemented scope: restore paused and interrupted runs, but do not yet retain completed child conversations for arbitrary later continuation.
+
+Durable children now replace `SessionManager.inMemory(cwd)` with a persistent manager and reopen it with `SessionManager.open(...)`. The parent extension separately journals validated run metadata through `pi.appendEntry()`, because a child transcript does not contain the parent run ID, task/status, pending `ask_parent` question, usage checkpoint, or retention state.
+
+Implemented invariants:
+
+- persistence is available only when the parent session itself is persisted; `--no-session` children retain current runtime-local behavior;
+- store child JSONL under `<pi-coder-install>/.state/agent-sessions/--<encoded-cwd>--/<parent-session-id>/`; derive the install root from `import.meta.url`, centralize pi-style `--<encoded-cwd>--` normalization in one shared helper, keep the parent-session directory private, and avoid polluting pi's normal `/resume` session list or colliding with other extension copies;
+- parent custom entries form an append-only versioned state journal; restore only the latest valid record for each run on the active parent branch;
+- bind every record to the originating parent session UUID, so `/reload`, process restart, and switching away from/back to that exact session restore runs, while `/new`, `/fork`, and `/clone` do not inherit live children accidentally;
+- recreate tools, confinement, permission gates, and the system prompt from a currently validated agent definition and matching fingerprint. Persisted metadata must never grant mutation capability: only the current reserved built-in `worker` may restore as mutating;
+- restore `waiting_for_parent` children as paused sessions and restore uncollected terminal outcomes from bounded parent metadata without reopening their child transcript;
+- abort and settle running children during clean shutdown, then persist them as `interrupted`. A stale `starting`/`running` record after a crash is also treated as interrupted, never automatically restarted;
+- resuming an interrupted run requires explicit parent guidance. Before reopening a crash-interrupted transcript, detect unmatched tool calls and append synthetic error results stating that execution outcome is uncertain; never replay a worker mutation automatically;
+- preserve exact usage checkpoints, the one-worker/four-run bounds, changed-file data, mailbox reconciliation, and the latest-20 terminal-result retention across restoration;
+- reconcile state on in-place `/tree` navigation by allowing navigation only when runs are paused/interrupted/terminal, detaching old-branch persistence before shutdown at the new leaf, and rebuilding the manager from the newly active branch afterward; active streaming or permission-waiting runs must first pause, finish, or be canceled;
+- delete child files when a run is canceled or its terminal result no longer needs a transcript. Orphan cleanup for parent sessions deleted outside pi needs a later explicit prune/retention policy.
+
+Later persistence/workflow options:
+
+- continuing an already-completed child conversation as a new task;
+- named agent runs and durable session-management UI;
 - workflow prompt templates;
 - project-agent configuration;
 - subprocess fallback for stronger isolation;
@@ -520,7 +540,8 @@ At minimum:
 - recursive extension loading prevention;
 - confinement of `read`, `grep`, `find`, and `ls`;
 - project-agent trust/confirmation;
-- background concurrency, retention, polling, collection, cancellation, shutdown, and mutation safety.
+- background concurrency, retention, optional status snapshots, collection, cancellation, shutdown, and mutation safety;
+- durable exact-parent/active-branch restoration, definition/capability validation, interrupted transcript repair, terminal collection, tombstones, and private-path confinement.
 
 Run the existing checks after implementation:
 
@@ -539,7 +560,7 @@ Use this section to record decisions as the design evolves.
 - [x] Add a bounded automatic post-settlement mailbox that never interrupts active work; keep full result collection explicit.
 - [x] Single start/resume flow before chain/parallel.
 - [x] Add explicit spawn/status/collect background execution before bounded mailbox delivery or batch syntax.
-- [x] Child sessions are in-memory and parent-runtime-local; waiting runs do not survive reload, parent session replacement/fork, or process restart.
+- [x] Initial MVP used in-memory parent-runtime-local children; Phase 8 superseded this for persisted parents with exact-session paused/interrupted restoration. Ephemeral parents and new/forked/cloned sessions still do not inherit runs.
 - [x] Ship a built-in read-only `scout` alongside custom definitions.
 - [x] Enable project definitions only in projects trusted by pi; no redundant confirmation for the read-only ceiling.
 - [x] Reserve built-in agent names; duplicate markdown definitions cannot override them.

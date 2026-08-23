@@ -113,6 +113,10 @@ export class AgentMailbox {
         }
     }
 
+    clear(): void {
+        this.pending.clear();
+    }
+
     reconcile(runs: readonly Pick<AgentRunSummary, "runId" | "status">[]): void {
         if (this.closed) return;
         const statuses = new Map(runs.map((run) => [run.runId, run.status]));

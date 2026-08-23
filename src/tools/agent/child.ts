@@ -1,4 +1,4 @@
-import type { Usage } from "@earendil-works/pi-ai";
+import type { ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import {
     DefaultResourceLoader,
     ModelRuntime,
@@ -30,6 +30,7 @@ import {
     type ChildAgentHandle,
     type ChildProgress,
     type ParentQuestion,
+    type WorkerMutationReport,
 } from "./runtime";
 
 const MAX_RECENT_ACTIVITY = 8;
@@ -58,6 +59,7 @@ interface ProgressTracker {
     lastUpdateAt: number;
     changedFiles: Set<string>;
     bashApproved: boolean;
+    interrupted: boolean;
 }
 
 export function isChildPathAllowed(filePath: string | undefined, cwd: string): boolean {
@@ -639,20 +641,63 @@ function resolveChildModel(
     throw new Error(`Agent model is unavailable or ambiguous: ${modelSpec}`);
 }
 
+export function repairInterruptedToolCalls(sessionManager: SessionManager): number {
+    const pending = new Map<string, string>();
+    for (const message of sessionManager.buildSessionContext().messages) {
+        if (message.role === "assistant") {
+            for (const block of message.content) {
+                if (block.type === "toolCall") pending.set(block.id, block.name);
+            }
+        } else if (message.role === "toolResult") {
+            pending.delete(message.toolCallId);
+        }
+    }
+    for (const [toolCallId, toolName] of pending) {
+        const result: ToolResultMessage = {
+            role: "toolResult",
+            toolCallId,
+            toolName,
+            content: [{
+                type: "text",
+                text: "This tool execution was interrupted before its result was durably recorded. Its outcome is uncertain; inspect current state before deciding whether to retry.",
+            }],
+            isError: true,
+            timestamp: Date.now(),
+        };
+        sessionManager.appendMessage(result);
+    }
+    return pending.size;
+}
+
 export async function createAgentChild(
     context: ChildAgentFactoryContext,
 ): Promise<ChildAgentHandle> {
     const parentContext = context.parentContext as ExtensionContext;
     if (!parentContext.model) throw new Error("No parent model is selected.");
 
+    const initialMutation: WorkerMutationReport = context.initialMutationReport
+        ?? { changedFiles: [], bashApproved: false };
     const tracker: ProgressTracker = {
-        progress: { output: "", recentActivity: [] },
+        progress: context.initialProgress
+            ? { ...context.initialProgress, recentActivity: [...context.initialProgress.recentActivity] }
+            : { output: "", recentActivity: [] },
         lastUpdateAt: 0,
-        changedFiles: new Set(),
-        bashApproved: false,
+        changedFiles: new Set(initialMutation.changedFiles),
+        bashApproved: initialMutation.bashApproved,
+        interrupted: initialMutation.interrupted === true || context.repairInterrupted === true,
     };
     const cwd = context.cwd;
     const agentDir = getAgentDir();
+    const sessionManager = context.childSessionFile
+        ? SessionManager.open(context.childSessionFile, context.childSessionDir, cwd)
+        : context.childSessionDir
+            ? SessionManager.create(cwd, context.childSessionDir)
+            : SessionManager.inMemory(cwd);
+    if (context.repairInterrupted) {
+        const repaired = repairInterruptedToolCalls(sessionManager);
+        context.onTrace?.("session.repaired", { unmatchedToolCalls: repaired });
+    }
+    context.onSessionCreated?.(sessionManager.getSessionFile());
     const settingsManager = SettingsManager.create(cwd, agentDir);
     const resourceLoader = new DefaultResourceLoader({
         cwd,
@@ -693,11 +738,21 @@ export async function createAgentChild(
             : {}),
     });
 
-    const requestedModel = resolveChildModel(parentContext, context.definition.model);
+    const restoredContext = context.childSessionFile
+        ? sessionManager.buildSessionContext()
+        : undefined;
+    const restoredModelSpec = restoredContext?.model
+        ? `${restoredContext.model.provider}/${restoredContext.model.modelId}`
+        : undefined;
+    const requestedModel = resolveChildModel(
+        parentContext,
+        context.definition.model ?? restoredModelSpec,
+    );
     context.onTrace?.("model.resolved", {
         provider: requestedModel.provider,
         model: requestedModel.id,
-        thinkingLevel: parentContext.thinkingLevel ?? "default",
+        thinkingLevel: restoredContext?.thinkingLevel ?? parentContext.thinkingLevel ?? "default",
+        restored: context.childSessionFile !== undefined,
     });
     const modelRuntime = await createChildModelRuntime(parentContext, requestedModel);
     const model = modelRuntime.getModel(requestedModel.provider, requestedModel.id)
@@ -706,11 +761,11 @@ export async function createAgentChild(
         cwd,
         agentDir,
         model,
-        thinkingLevel: parentContext.thinkingLevel,
+        thinkingLevel: context.childSessionFile ? undefined : parentContext.thinkingLevel,
         modelRuntime,
         resourceLoader,
         settingsManager,
-        sessionManager: SessionManager.inMemory(cwd),
+        sessionManager,
         tools: [
             ...context.definition.tools,
             ...(context.background ? [] : ["ask_user"]),
@@ -769,6 +824,8 @@ export async function createAgentChild(
         getMutationReport: () => ({
             changedFiles: [...tracker.changedFiles].sort(),
             bashApproved: tracker.bashApproved,
+            ...(tracker.interrupted ? { interrupted: true } : {}),
         }),
+        sessionFile: sessionManager.getSessionFile(),
     };
 }
