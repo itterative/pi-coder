@@ -12,6 +12,7 @@ import {
     type AgentDefinition,
     type AgentDiagnostic,
 } from "./discovery";
+import { AgentMailbox } from "./mailbox";
 import {
     AgentActionError,
     AgentRunManager,
@@ -109,6 +110,7 @@ function availableAgentsPrompt(
     lines.push(
         "Use action=\"start\" for foreground delegation or action=\"spawn\" to launch concurrent background work.",
         "Check background work with action=\"status\" and retrieve a terminal result with action=\"collect\".",
+        "Mailbox markers report waiting/terminal background changes after active parent work settles; full results are never injected automatically.",
         "A waiting result is paused, not completed. Investigate or obtain guidance, then resume it; cancel it if no longer needed. Do not fabricate guidance.",
     );
     if (waiting.length) {
@@ -186,6 +188,27 @@ export default function registerAgentTool(
 ): void {
     const traceStore = isAgentTraceEnabled() ? new AgentTraceStore() : undefined;
     const manager = new AgentRunManager(factory, 4, traceStore);
+    const mailbox = new AgentMailbox(pi);
+    let mailboxFlushScheduled = false;
+    const flushMailbox = () => {
+        mailbox.reconcile(manager.listRuns());
+        mailbox.flush();
+    };
+    const isParentIdle = (ctx: ExtensionContext): boolean => {
+        try {
+            return ctx.isIdle();
+        } catch {
+            return false;
+        }
+    };
+    const flushMailboxWhenIdle = (ctx: ExtensionContext) => {
+        if (mailboxFlushScheduled || !isParentIdle(ctx)) return;
+        mailboxFlushScheduled = true;
+        queueMicrotask(() => {
+            mailboxFlushScheduled = false;
+            if (isParentIdle(ctx)) flushMailbox();
+        });
+    };
     if (traceStore) registerAgentTraceCommand(pi, traceStore);
     const notifiedWarnings = new Set<string>();
 
@@ -201,6 +224,10 @@ export default function registerAgentTool(
         return result;
     };
 
+    pi.on("agent_settled", () => {
+        flushMailbox();
+    });
+
     pi.on("before_agent_start", (event, ctx) => {
         const result = discover(ctx);
         return {
@@ -209,6 +236,7 @@ export default function registerAgentTool(
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
+        mailbox.close();
         ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         await manager.shutdown();
     });
@@ -233,6 +261,7 @@ export default function registerAgentTool(
         promptGuidelines: [
             "Use start when the result is needed immediately; use spawn for independent work that can run concurrently",
             "Check spawned runs with status and retrieve terminal results with collect",
+            "Background waiting and terminal updates arrive as automatic follow-up mailbox context after active parent work settles; they never interrupt current work and full results still require collect",
             "A waiting agent is paused, not completed; investigate or obtain guidance, then resume it, or cancel it if no longer needed",
             "Background agents cannot open direct user dialogs; they request parent guidance instead",
             "Use the returned run ID exactly; runs are read-only, cwd-confined, and parent-runtime-local",
@@ -321,7 +350,12 @@ export default function registerAgentTool(
                             params.task,
                             { cwd: ctx.cwd, parentContext: ctx },
                             signal,
-                            () => updateAgentUi(ctx, manager),
+                            (details) => {
+                                updateAgentUi(ctx, manager);
+                                mailbox.queue(details);
+                                mailbox.reconcile(manager.listRuns());
+                                flushMailboxWhenIdle(ctx);
+                            },
                         );
                     outcome.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
                 } else if (params.action === "resume") {
@@ -338,6 +372,7 @@ export default function registerAgentTool(
             }
 
             updateAgentUi(ctx, manager);
+            mailbox.reconcile(manager.listRuns());
             return {
                 content: [{ type: "text", text: outcome.content }],
                 details: outcome.details,

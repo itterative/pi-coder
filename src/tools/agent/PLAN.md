@@ -18,7 +18,7 @@ The initial direction recorded in `src/tools/agent/README.md` is:
 - `src/index.ts` is the consolidated pi-coder extension entrypoint.
 - `src/tools/agent/index.ts` registers the in-process `agent` tool from `src/index.ts`.
 - `child.ts`, `runtime.ts`, and `discovery.ts` implement the read-only child SDK session, run state machine, and custom definition loading.
-- The MVP supports built-in/user/trusted-project agents, foreground start, concurrent background spawn/status/collect, resume/cancel, parent guidance, confinement, usage deltas, lifecycle cleanup, and compact/expanded rendering.
+- The MVP supports built-in/user/trusted-project agents, foreground start, concurrent background spawn/status/collect, resume/cancel, parent guidance, non-triggering next-turn mailbox markers, confinement, usage deltas, lifecycle cleanup, and compact/expanded rendering.
 - The stabilization pass makes waiting state explicitly paused in parent guidance, shows compact question/result previews, tests tool-level pause/resume rendering and additional lifecycle/confinement edges, and records a repeatable manual provider/lifecycle checklist in `README.md`.
 - Diagnostics retain bounded sanitized timelines for recent runs and expose `/agent-trace`; the intended `PI_CODER_AGENT_TRACE=1` gate is temporarily hardcoded on during development.
 - Existing extension functionality also includes:
@@ -166,7 +166,7 @@ The first protocol will use cooperative pause/resume:
 
 The tool result itself puts the request in the parent transcript, so a second injected message is unnecessary. The child prompt should require `ask_parent` to be called alone in a tool batch because SDK early termination occurs only when every result in that batch has `terminate: true`.
 
-A future background-mailbox mode may allow non-blocking child messages while the child continues. Pi's `pi.sendMessage(..., { deliverAs: "steer" })` can insert a custom child message into the parent context after the current parent tool batch. For that to be timely, the initial `agent` call must return a run handle while the child continues in the background; later parent guidance can use `childSession.steer()`. This also introduces delivery ordering, race handling, shutdown, and nested-usage accounting problems, so it is explicitly deferred.
+Background runs now use a non-interrupting parent mailbox for waiting and terminal transitions. Child updates are coalesced locally by run ID; on the next real parent input, pi-coder injects one bounded hidden custom message through `pi.sendMessage(..., { deliverAs: "nextTurn" })`. It does not steer the active parent, create a follow-up, or wake an idle parent. Full output remains behind explicit `collect`; mailbox content includes only run IDs, statuses, and short quoted question/result previews. Reconciliation against retained runs suppresses pending markers made stale by resume, collection, cancellation, or result eviction.
 
 Direct child-to-user interaction is implemented after MVP stabilization: the controlled child extension forwards a restricted question through the parent TUI using pi-coder's existing `askUser` component. The answer returns to the same child turn. `ask_parent` remains available when the parent can investigate or decide. Direct dialogs are TUI-only; other modes receive an explicit unavailable result and guidance to use `ask_parent`. Parent abort/session shutdown closes an active dialog through the child tool's abort signal.
 
@@ -275,11 +275,11 @@ Resume:  action="resume"  + runId + guidance
 Cancel:  action="cancel"  + runId
 ```
 
-`cancel` releases waiting foreground runs and active background runs. `spawn` returns a run handle immediately; `status` reports bounded progress, and `collect` consumes a retained terminal result. Automatic background message delivery remains deferred. An explicit action is clearer and more extensible than inferring behavior solely from optional fields. The tool should reject unknown fields for an action, unknown agent names, stale run IDs, and guidance sent to a non-waiting run.
+`cancel` releases waiting foreground runs and active background runs. `spawn` returns a run handle immediately; `status` reports bounded progress, and `collect` consumes a retained terminal result. Bounded waiting/terminal mailbox markers are delivered as non-triggering next-turn context. An explicit action is clearer and more extensible than inferring behavior solely from optional fields. The tool should reject unknown fields for an action, unknown agent names, stale run IDs, and guidance sent to a non-waiting run.
 
 Possible later modes:
 
-- automatic background result/mailbox delivery;
+- optional automatic full-result delivery or parent wake-up (bounded markers are implemented, but full output stays explicit);
 - `tasks`: an explicit bounded parallel batch in one call;
 - `chain`: sequential delegation with a bounded `{previous}` result;
 - `cwd`: an explicitly validated working directory;
@@ -340,7 +340,7 @@ A busy, stale, terminal, or unknown run ID returns a clear action-specific error
 
 `spawn` reserves a run and starts child setup asynchronously, returning before setup or prompting completes. Multiple sequential `spawn` tool calls can therefore launch up to four read-only children concurrently. `status` snapshots bounded progress or reports that a terminal result is ready; `collect` returns that result once and makes the ID stale. Background `resume` returns immediately and keeps the run asynchronous. Usage checkpoints advance on each parent-visible spawn/status/resume/cancel/collect result, so nested usage is never duplicated.
 
-Background children omit `ask_user` to prevent unsolicited dialogs from racing parent rendering or another tool call. They retain `ask_parent`, transition to `waiting_for_parent`, and appear in the dynamic parent prompt. Direct result/mailbox injection is deferred; the parent polls explicitly.
+Background children omit `ask_user` to prevent unsolicited dialogs from racing parent rendering or another tool call. They retain `ask_parent`, transition to `waiting_for_parent`, and appear in the dynamic parent prompt. Waiting and terminal transitions enter a bounded local mailbox. The mailbox flushes as hidden `nextTurn` context only when the next parent input begins, so it cannot interrupt active work or trigger a turn; the parent still uses explicit `status`, `resume`, and `collect` actions.
 
 #### Cancel and shutdown
 
@@ -453,9 +453,10 @@ The read-only runtime now supports:
 - immediate terminal child disposal with the latest 20 results retained;
 - exact usage checkpoints across asynchronous parent calls;
 - no direct-user dialogs from background children;
-- dynamic parent-prompt recovery of tracked background IDs after compaction.
+- dynamic parent-prompt recovery of tracked background IDs after compaction;
+- coalesced waiting/terminal mailbox markers delivered through a single hidden `deliverAs: "nextTurn"` message on the next real parent prompt, with stale-marker reconciliation and shutdown clearing.
 
-Automatic completion/mailbox delivery and explicit batch syntax remain deferred.
+Automatic full-result delivery, parent wake-up, and explicit batch syntax remain deferred.
 
 ### Phase 6: Mutation-capable worker
 
@@ -526,9 +527,9 @@ Use this section to record decisions as the design evolves.
 - [x] First runtime: in-process SDK session; subprocess isolation may be added later.
 - [x] First capability: interactive read-only agent/scout.
 - [x] First interaction: pause/resume child-to-parent guidance by run ID.
-- [x] Future interaction: keep room for a background mailbox.
+- [x] Add a bounded non-triggering background mailbox; keep full result collection explicit.
 - [x] Single start/resume flow before chain/parallel.
-- [x] Add explicit spawn/status/collect background execution before automatic mailbox delivery or batch syntax.
+- [x] Add explicit spawn/status/collect background execution before bounded mailbox delivery or batch syntax.
 - [x] Child sessions are in-memory and parent-runtime-local; waiting runs do not survive reload, parent session replacement/fork, or process restart.
 - [x] Ship a built-in read-only `scout` alongside custom definitions.
 - [x] Enable project definitions only in projects trusted by pi; no redundant confirmation for the read-only ceiling.

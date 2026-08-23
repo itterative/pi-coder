@@ -150,6 +150,7 @@ describe("agent extension registration", () => {
     it("executes a spawn, status, and collect flow", async () => {
         const handlers: Record<string, Handler[]> = {};
         let tool: any;
+        const sentMessages: Array<{ message: any; options: any }> = [];
         const pi = {
             on(event: string, handler: Handler) {
                 (handlers[event] ??= []).push(handler);
@@ -158,6 +159,9 @@ describe("agent extension registration", () => {
                 tool = definition;
             },
             registerCommand() {},
+            sendMessage(message: any, options: any) {
+                sentMessages.push({ message, options });
+            },
         } as any;
         let background = false;
         let reportProgress: ((progress: { output: string; recentActivity: string[] }) => void) | undefined;
@@ -188,6 +192,7 @@ describe("agent extension registration", () => {
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
+            isIdle: () => false,
             ui: {
                 notify: () => {},
                 setWidget: (
@@ -220,6 +225,17 @@ describe("agent extension registration", () => {
             { systemPrompt: "Parent prompt" },
             ctx,
         ) as any;
+        expect(sentMessages).toEqual([]);
+        await handlers.agent_settled[0]({}, { ...ctx, isIdle: () => true });
+        expect(sentMessages).toHaveLength(1);
+        expect(sentMessages[0]?.options).toEqual({ deliverAs: "followUp", triggerTurn: true });
+        expect(sentMessages[0]?.message).toMatchObject({
+            customType: "pi-coder-agent-mailbox",
+            display: false,
+        });
+        expect(sentMessages[0]?.message.content).toContain('Run ID: "scout-1"');
+        expect(sentMessages[0]?.message.content).toContain("Status: completed");
+        expect(sentMessages[0]?.message.content).toContain("This is not a new user request");
         const collected = await tool.execute(
             "call-3",
             { action: "collect", runId: "scout-1" },
