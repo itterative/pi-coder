@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Usage } from "@earendil-works/pi-ai";
 import {
     type ExtensionAPI,
@@ -16,9 +17,12 @@ import {
 import { AgentMailbox } from "./mailbox";
 import { loadAgentRunPersistence } from "./persistence";
 import {
+    claimAgentWorkspace,
     createAgentWorkspace,
     findAvailableAgentWorkspace,
     findUnpreparedAgentWorkspace,
+    releaseAgentWorkspaceLease,
+    transferAgentWorkspaceLease,
     updateAgentWorkspace,
     type AgentWorkspace,
 } from "./workspaces";
@@ -225,6 +229,12 @@ async function runWorkspaceSetup(
     }
 }
 
+interface WorkspaceReservation {
+    workspace: AgentWorkspace;
+    ownerSessionId: string;
+    provisionalLeaseRunId: string;
+}
+
 async function prepareIsolatedWorkspace(
     cwd: string,
     definition: AgentDefinition,
@@ -232,7 +242,7 @@ async function prepareIsolatedWorkspace(
     manager: AgentRunManager,
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
-): Promise<AgentWorkspace> {
+): Promise<WorkspaceReservation> {
     if (!definition.mutating) {
         throw new AgentActionError("Worktree isolation is currently available only for the mutation-capable worker.");
     }
@@ -240,8 +250,18 @@ async function prepareIsolatedWorkspace(
         throw new AgentActionError("A mutation-capable worker is already active.");
     }
 
+    const ownerSessionId = ctx.sessionManager.getSessionId();
+    const provisionalLeaseRunId = `workspace-provision-${randomUUID()}`;
     const available = await findAvailableAgentWorkspace(cwd);
-    if (available) return available;
+    if (available) {
+        const workspace = await claimAgentWorkspace(
+            available.id,
+            ownerSessionId,
+            provisionalLeaseRunId,
+            "task",
+        );
+        return { workspace, ownerSessionId, provisionalLeaseRunId };
+    }
 
     const existing = await findUnpreparedAgentWorkspace(cwd);
     const prompt = await selectWithMessage<WorkspacePromptChoice>({
@@ -260,13 +280,13 @@ async function prepareIsolatedWorkspace(
         items: [
             {
                 value: "setup",
-                label: "Create and run setup worker",
+                label: existing ? "Run setup worker" : "Create and run setup worker",
                 description: "Prepare dependencies and project tooling before the task worker starts.",
             },
             {
                 value: "skip",
-                label: "Create and skip setup",
-                description: "Start the task worker in the new worktree without a setup pass.",
+                label: existing ? "Skip setup" : "Create and skip setup",
+                description: "Start the task worker in the worktree without a setup pass.",
             },
             {
                 value: "cancel",
@@ -282,8 +302,25 @@ async function prepareIsolatedWorkspace(
     }
 
     const workspace = existing ?? await createAgentWorkspace(cwd);
-    if (choice === "setup") return runWorkspaceSetup(workspace, definition, factory, ctx, signal);
-    return updateAgentWorkspace(workspace, { setupState: "skipped" });
+    const leaseKind = choice === "setup" ? "setup" : "task";
+    try {
+        const claimed = await claimAgentWorkspace(
+            workspace.id,
+            ownerSessionId,
+            provisionalLeaseRunId,
+            leaseKind,
+        );
+        if (choice === "setup") await runWorkspaceSetup(claimed, definition, factory, ctx, signal);
+        else await updateAgentWorkspace(claimed, { setupState: "skipped" });
+        return {
+            workspace: claimed,
+            ownerSessionId,
+            provisionalLeaseRunId,
+        };
+    } catch (error) {
+        await releaseAgentWorkspaceLease(workspace.id, ownerSessionId, provisionalLeaseRunId).catch(() => {});
+        throw error;
+    }
 }
 
 function diagnosticText(diagnostic: AgentDiagnostic): string {
@@ -296,6 +333,13 @@ function oneLinePreview(text: string, maxChars = 180): string {
     return normalized.length <= maxChars
         ? normalized
         : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function isTerminalAgentStatus(status: AgentRunDetails["status"]): boolean {
+    return status === "completed"
+        || status === "failed"
+        || status === "aborted"
+        || status === "canceled";
 }
 
 const AGENT_WIDGET_ID = "pi-coder-agent-activity";
@@ -354,6 +398,21 @@ export default function registerAgentTool(
     let manager = createManager();
     let cachedAgentPrompt = "";
     const mailbox = new AgentMailbox(pi);
+    const releaseWorkspaceForRun = async (ctx: ExtensionContext, details: AgentRunDetails): Promise<void> => {
+        if (!details.workspaceId || !isTerminalAgentStatus(details.status)) return;
+        try {
+            await releaseAgentWorkspaceLease(
+                details.workspaceId,
+                ctx.sessionManager.getSessionId(),
+                details.runId,
+            );
+        } catch (error) {
+            ctx.ui.notify(
+                `Could not release workspace lease for ${details.runId}: ${error instanceof Error ? error.message : String(error)}`,
+                "warning",
+            );
+        }
+    };
     let mailboxFlushScheduled = false;
     const flushMailbox = () => {
         mailbox.reconcile(manager.listRuns());
@@ -395,7 +454,8 @@ export default function registerAgentTool(
                 past,
                 onResume: async (item) => {
                     try {
-                        await manager.resume(item.id, undefined, undefined, backgroundUpdate(ctx));
+                        const outcome = await manager.resume(item.id, undefined, undefined, backgroundUpdate(ctx));
+                        await releaseWorkspaceForRun(ctx, outcome.details);
                         updateAgentUi(ctx, manager);
                     } catch (error) {
                         const message = error instanceof Error ? error.message : String(error);
@@ -405,6 +465,7 @@ export default function registerAgentTool(
                 onCancel: async (item) => {
                     try {
                         const outcome = await manager.cancel(item.id);
+                        await releaseWorkspaceForRun(ctx, outcome.details);
                         mailbox.notifyUserCanceled(outcome.details);
                         updateAgentUi(ctx, manager);
                     } catch (error) {
@@ -619,6 +680,7 @@ export default function registerAgentTool(
         },
         async execute(_toolCallId, params, signal, onUpdate, ctx: ExtensionContext) {
             let outcome: AgentRunOutcome;
+            let reservation: WorkspaceReservation | undefined;
             const progress = (details: AgentRunDetails) => onUpdate?.(updateResult(details));
             try {
                 if (params.action === "list") {
@@ -629,7 +691,7 @@ export default function registerAgentTool(
                     if (!definition) {
                         throw new AgentActionError(`Unknown agent: ${params.agent}`);
                     }
-                    const workspace = params.isolation === "worktree"
+                    reservation = params.isolation === "worktree"
                         ? await prepareIsolatedWorkspace(
                             ctx.cwd,
                             definition,
@@ -640,8 +702,14 @@ export default function registerAgentTool(
                         )
                         : undefined;
                     const runContext = {
-                        cwd: workspace?.worktreePath ?? ctx.cwd,
+                        cwd: reservation?.workspace.worktreePath ?? ctx.cwd,
+                        workspaceId: reservation?.workspace.id,
                         parentContext: ctx,
+                    };
+                    const background = backgroundUpdate(ctx);
+                    const workspaceBackground = (details: AgentRunDetails) => {
+                        background(details);
+                        void releaseWorkspaceForRun(ctx, details);
                     };
                     outcome = params.action === "start"
                         ? await manager.start(
@@ -657,20 +725,39 @@ export default function registerAgentTool(
                             params.task,
                             runContext,
                             signal,
-                            backgroundUpdate(ctx),
+                            workspaceBackground,
                             params.title,
                         );
+                    if (reservation) {
+                        await transferAgentWorkspaceLease(
+                            reservation.workspace.id,
+                            reservation.ownerSessionId,
+                            reservation.provisionalLeaseRunId,
+                            outcome.details.runId,
+                        );
+                        await releaseWorkspaceForRun(ctx, outcome.details);
+                    }
                     outcome.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
                 } else if (params.action === "resume") {
                     outcome = await manager.resume(params.runId, params.guidance, signal, progress);
+                    await releaseWorkspaceForRun(ctx, outcome.details);
                 } else if (params.action === "cancel") {
                     outcome = await manager.cancel(params.runId);
+                    await releaseWorkspaceForRun(ctx, outcome.details);
                 } else if (params.action === "status") {
                     outcome = manager.status(params.runId);
                 } else {
                     outcome = manager.collect(params.runId);
+                    await releaseWorkspaceForRun(ctx, outcome.details);
                 }
             } catch (error) {
+                if (reservation) {
+                    await releaseAgentWorkspaceLease(
+                        reservation.workspace.id,
+                        reservation.ownerSessionId,
+                        reservation.provisionalLeaseRunId,
+                    ).catch(() => {});
+                }
                 outcome = failedOutcome(params, error);
             }
 

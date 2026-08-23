@@ -221,6 +221,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         status: record.status as PersistedAgentRun["status"],
         background: record.background,
         mutating: record.mutating,
+        workspaceId: boundedString(record.workspaceId, 200),
         question: typeof questionValue?.question === "string" ? {
             question: questionValue.question.slice(0, 4_000),
             context: boundedString(questionValue.context, 12_000),

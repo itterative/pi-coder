@@ -12,6 +12,7 @@ const WORKSPACE_VERSION = 1 as const;
 const DATABASE_NAME = "meta.sqlite";
 
 export type WorkspaceSetupState = "not_started" | "running" | "ready" | "skipped" | "failed";
+export type WorkspaceLeaseKind = "setup" | "task";
 
 export interface AgentWorkspace {
     version: typeof WORKSPACE_VERSION;
@@ -23,6 +24,10 @@ export interface AgentWorkspace {
     baseRevision: string;
     setupState: WorkspaceSetupState;
     setupSummary?: string;
+    leaseOwnerSessionId?: string;
+    leaseRunId?: string;
+    leaseKind?: WorkspaceLeaseKind;
+    leaseAcquiredAt?: number;
     createdAt: number;
     updatedAt: number;
 }
@@ -53,6 +58,18 @@ const WORKSPACE_MIGRATIONS = [{
             );
             CREATE INDEX IF NOT EXISTS workspaces_cwd_state_created
                 ON workspaces (cwd, setup_state, created_at);
+        `);
+    },
+}, {
+    version: 2,
+    apply(database: WorkspaceDatabase): void {
+        database.exec(`
+            ALTER TABLE workspaces ADD COLUMN lease_owner_session_id TEXT;
+            ALTER TABLE workspaces ADD COLUMN lease_run_id TEXT;
+            ALTER TABLE workspaces ADD COLUMN lease_kind TEXT;
+            ALTER TABLE workspaces ADD COLUMN lease_acquired_at INTEGER;
+            CREATE INDEX IF NOT EXISTS workspaces_lease_run
+                ON workspaces (lease_run_id);
         `);
     },
 }] as const;
@@ -96,6 +113,12 @@ function rowToWorkspace(row: WorkspaceRow): AgentWorkspace | undefined {
         baseRevision: row.base_revision,
         setupState: setupState as WorkspaceSetupState,
         setupSummary: typeof row.setup_summary === "string" ? row.setup_summary.slice(0, 8_000) : undefined,
+        ...(typeof row.lease_owner_session_id === "string" ? { leaseOwnerSessionId: row.lease_owner_session_id } : {}),
+        ...(typeof row.lease_run_id === "string" ? { leaseRunId: row.lease_run_id } : {}),
+        ...(["setup", "task"].includes(row.lease_kind as string)
+            ? { leaseKind: row.lease_kind as WorkspaceLeaseKind }
+            : {}),
+        ...(typeof row.lease_acquired_at === "number" ? { leaseAcquiredAt: row.lease_acquired_at } : {}),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
     };
@@ -117,7 +140,9 @@ export async function listAgentWorkspaces(
     try {
         const rows = database.prepare(`
             SELECT version, id, cwd, repository_root, worktree_path, slug,
-                   base_revision, setup_state, setup_summary, created_at, updated_at
+                   base_revision, setup_state, setup_summary,
+                   lease_owner_session_id, lease_run_id, lease_kind, lease_acquired_at,
+                   created_at, updated_at
             FROM workspaces
             WHERE cwd = ?
             ORDER BY created_at ASC, slug ASC
@@ -136,7 +161,10 @@ export async function findAvailableAgentWorkspace(
     workspacesDir = PI_CODER_WORKSPACES_DIR,
 ): Promise<AgentWorkspace | undefined> {
     return (await listAgentWorkspaces(cwd, workspacesDir))
-        .find((workspace) => workspace.setupState === "ready" || workspace.setupState === "skipped");
+        .find((workspace) => (
+            !workspace.leaseRunId
+            && (workspace.setupState === "ready" || workspace.setupState === "skipped")
+        ));
 }
 
 export async function findUnpreparedAgentWorkspace(
@@ -144,7 +172,130 @@ export async function findUnpreparedAgentWorkspace(
     workspacesDir = PI_CODER_WORKSPACES_DIR,
 ): Promise<AgentWorkspace | undefined> {
     return (await listAgentWorkspaces(cwd, workspacesDir))
-        .find((workspace) => workspace.setupState === "not_started" || workspace.setupState === "failed");
+        .find((workspace) => (
+            !workspace.leaseRunId
+            && (workspace.setupState === "not_started" || workspace.setupState === "failed")
+        ));
+}
+
+function workspaceById(database: WorkspaceDatabase, id: string): AgentWorkspace | undefined {
+    const row = database.prepare(`
+        SELECT version, id, cwd, repository_root, worktree_path, slug,
+               base_revision, setup_state, setup_summary,
+               lease_owner_session_id, lease_run_id, lease_kind, lease_acquired_at,
+               created_at, updated_at
+        FROM workspaces
+        WHERE id = ?
+    `).get(id) as WorkspaceRow | undefined;
+    return row ? rowToWorkspace(row) : undefined;
+}
+
+function rollback(database: WorkspaceDatabase): void {
+    try {
+        database.exec("ROLLBACK");
+    } catch {
+        // Preserve the original operation error.
+    }
+}
+
+export async function claimAgentWorkspace(
+    workspaceId: string,
+    ownerSessionId: string,
+    leaseRunId: string,
+    leaseKind: WorkspaceLeaseKind,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<AgentWorkspace> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        database.exec("BEGIN IMMEDIATE");
+        const result = database.prepare(`
+            UPDATE workspaces
+            SET lease_owner_session_id = ?, lease_run_id = ?, lease_kind = ?, lease_acquired_at = ?
+            WHERE id = ? AND lease_run_id IS NULL
+        `).run(ownerSessionId, leaseRunId, leaseKind, Date.now(), workspaceId);
+        if (Number(result.changes) !== 1) {
+            rollback(database);
+            throw new Error(`Workspace ${workspaceId} is no longer available.`);
+        }
+        const workspace = workspaceById(database, workspaceId);
+        if (!workspace) {
+            rollback(database);
+            throw new Error(`Workspace ${workspaceId} disappeared while being claimed.`);
+        }
+        database.exec("COMMIT");
+        return workspace;
+    } catch (error) {
+        rollback(database);
+        throw error;
+    } finally {
+        database.close();
+    }
+}
+
+export async function transferAgentWorkspaceLease(
+    workspaceId: string,
+    ownerSessionId: string,
+    fromLeaseRunId: string,
+    toLeaseRunId: string,
+    leaseKind: WorkspaceLeaseKind = "task",
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<void> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        database.exec("BEGIN IMMEDIATE");
+        const result = database.prepare(`
+            UPDATE workspaces
+            SET lease_run_id = ?, lease_kind = ?, lease_acquired_at = ?
+            WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
+        `).run(toLeaseRunId, leaseKind, Date.now(), workspaceId, ownerSessionId, fromLeaseRunId);
+        if (Number(result.changes) !== 1) {
+            rollback(database);
+            throw new Error(`Workspace ${workspaceId} lease could not be transferred.`);
+        }
+        database.exec("COMMIT");
+    } catch (error) {
+        rollback(database);
+        throw error;
+    } finally {
+        database.close();
+    }
+}
+
+export async function releaseAgentWorkspaceLease(
+    workspaceId: string,
+    ownerSessionId: string,
+    leaseRunId: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<void> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        database.prepare(`
+            UPDATE workspaces
+            SET lease_owner_session_id = NULL, lease_run_id = NULL,
+                lease_kind = NULL, lease_acquired_at = NULL
+            WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
+        `).run(workspaceId, ownerSessionId, leaseRunId);
+    } finally {
+        database.close();
+    }
+}
+
+export async function releaseAgentWorkspaceLeaseForRun(
+    ownerSessionId: string,
+    leaseRunId: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<void> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        database.prepare(`
+            UPDATE workspaces
+            SET lease_owner_session_id = NULL, lease_run_id = NULL,
+                lease_kind = NULL, lease_acquired_at = NULL
+            WHERE lease_owner_session_id = ? AND lease_run_id = ?
+        `).run(ownerSessionId, leaseRunId);
+    } finally {
+        database.close();
+    }
 }
 
 export async function createAgentWorkspace(
@@ -184,8 +335,10 @@ export async function createAgentWorkspace(
         database.prepare(`
             INSERT INTO workspaces (
                 version, id, cwd, repository_root, worktree_path, slug,
-                base_revision, setup_state, setup_summary, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                base_revision, setup_state, setup_summary,
+                lease_owner_session_id, lease_run_id, lease_kind, lease_acquired_at,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             workspace.version,
             workspace.id,
@@ -195,6 +348,10 @@ export async function createAgentWorkspace(
             workspace.slug,
             workspace.baseRevision,
             workspace.setupState,
+            null,
+            null,
+            null,
+            null,
             null,
             workspace.createdAt,
             workspace.updatedAt,

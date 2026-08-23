@@ -58,6 +58,7 @@ export interface ChildAgentFactoryContext {
     onTrace?: (type: string, data?: AgentTraceData) => void;
     childSessionDir?: string;
     childSessionFile?: string;
+    workspaceId?: string;
     repairInterrupted?: boolean;
     initialProgress?: ChildProgress;
     initialMutationReport?: WorkerMutationReport;
@@ -90,6 +91,7 @@ export interface AgentRunDetails {
     updatedAt: number;
     error?: string;
     discoveryDiagnostics?: string[];
+    workspaceId?: string;
     mutating?: boolean;
     mutationReport?: WorkerMutationReport;
 }
@@ -118,6 +120,7 @@ export interface PersistedAgentRun {
     status: Exclude<AgentRunStatus, "waiting_for_permission"> | "removed";
     background: boolean;
     mutating: boolean;
+    workspaceId?: string;
     question?: ParentQuestion;
     progress: ChildProgress;
     usageCheckpoint: Usage;
@@ -156,6 +159,7 @@ export interface AgentRunSummary {
     usage: Usage;
     mutationReport?: WorkerMutationReport;
     mutating?: boolean;
+    workspaceId?: string;
 }
 
 interface AgentRun {
@@ -179,6 +183,7 @@ interface AgentRun {
     shutdownRequested: boolean;
     cancelRequested: boolean;
     mutating: boolean;
+    workspaceId?: string;
     definitionFingerprint: string;
     permissionPending: boolean;
     childSessionFile?: string;
@@ -322,6 +327,7 @@ export class AgentRunManager {
                 usage: this.readUsage(run),
                 mutationReport: this.mutationReport(run),
                 mutating: run.mutating,
+                workspaceId: run.workspaceId,
             };
         });
     }
@@ -400,6 +406,7 @@ export class AgentRunManager {
                 shutdownRequested: false,
                 cancelRequested: false,
                 mutating: persistedTerminal ? record.mutating : currentMutating,
+                workspaceId: record.workspaceId,
                 permissionPending: false,
                 childSessionFile: record.childSessionFile,
                 restoredProgress: record.progress,
@@ -441,6 +448,7 @@ export class AgentRunManager {
                 await this.setupRun(run, definition!, {
                     ...context,
                     cwd: run.cwd,
+                    workspaceId: run.workspaceId,
                     childSessionFile: record.childSessionFile,
                     repairInterrupted: restoredStatus === "interrupted",
                     initialProgress: record.progress,
@@ -710,6 +718,7 @@ export class AgentRunManager {
             startedAt: now,
             updatedAt: now,
             cwd: context.cwd,
+            workspaceId: context.workspaceId,
             disposed: false,
             shutdownRequested: false,
             cancelRequested: false,
@@ -1150,6 +1159,7 @@ export class AgentRunManager {
             status: run.permissionPending ? "waiting_for_permission" : run.status,
             background: run.background,
             task: truncate(run.task, 2_000),
+            workspaceId: run.workspaceId,
             output: progress.output ? truncate(progress.output, MAX_OUTPUT_CHARS) : undefined,
             question: run.question,
             recentActivity: progress.recentActivity.slice(-8),
@@ -1263,6 +1273,7 @@ export class AgentRunManager {
             status: durableStatus,
             background: run.background,
             mutating: run.mutating,
+            workspaceId: run.workspaceId,
             question: run.question,
             progress,
             usageCheckpoint: cloneUsage(run.usageCheckpoint),
