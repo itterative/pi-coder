@@ -4,6 +4,7 @@ import {
     type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { selectWithMessage } from "../../tui/select-with-message";
 import { type Static, Type } from "typebox";
 
 import { createAgentChild } from "./child";
@@ -14,6 +15,13 @@ import {
 } from "./discovery";
 import { AgentMailbox } from "./mailbox";
 import { loadAgentRunPersistence } from "./persistence";
+import {
+    createAgentWorkspace,
+    findAvailableAgentWorkspace,
+    findUnpreparedAgentWorkspace,
+    updateAgentWorkspace,
+    type AgentWorkspace,
+} from "./workspaces";
 import {
     currentAgentSessionItems,
     listPastAgentSessions,
@@ -46,12 +54,14 @@ const parameters = Type.Union([
         agent: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,63}$", maxLength: 64 }),
         task: Type.String({ minLength: 1, maxLength: 16_000 }),
         title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        isolation: Type.Optional(Type.Literal("worktree")),
     }, { additionalProperties: false }),
     Type.Object({
         action: Type.Literal("spawn"),
         agent: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,63}$", maxLength: 64 }),
         task: Type.String({ minLength: 1, maxLength: 16_000 }),
         title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        isolation: Type.Optional(Type.Literal("worktree")),
     }, { additionalProperties: false }),
     Type.Object({
         action: Type.Literal("resume"),
@@ -155,9 +165,125 @@ function availableAgentsPrompt(agents: AgentDefinition[]): string {
         "Do not poll background runs with action=\"status\". Automatic mailbox notifications arrive when a run finishes or needs parent guidance.",
         "After a terminal notification, retrieve the full result with action=\"collect\"; mailbox markers never inject full child output automatically.",
         "A waiting result is paused, not completed. Investigate or obtain guidance, then resume it; cancel it if no longer needed. An interrupted durable run never resumes automatically; wait for explicit user direction before resuming or canceling it.",
-        "The built-in worker mutates the shared checkout. Every edit/write/bash action requires an explicit user permission prompt, and only one worker can be active at once.",
+        "The built-in worker mutates the selected checkout or explicitly requested worktree. Every edit/write/bash action requires an explicit user permission prompt, and only one worker can be active at once.",
+        "Use isolation=\"worktree\" when the worker should run in a persistent isolated Git worktree; a new worktree may prompt for an optional setup worker.",
     );
     return `<delegated_agents>\n${lines.join("\n")}\n</delegated_agents>`;
+}
+
+type WorkspacePromptChoice = "setup" | "skip" | "cancel";
+
+async function runWorkspaceSetup(
+    workspace: AgentWorkspace,
+    definition: AgentDefinition,
+    factory: ChildAgentFactory,
+    ctx: ExtensionContext,
+    signal: AbortSignal | undefined,
+): Promise<AgentWorkspace> {
+    await updateAgentWorkspace(workspace, { setupState: "running" });
+    ctx.ui.notify(`Preparing isolated workspace ${workspace.slug}…`, "info");
+    const setupDefinition: AgentDefinition = {
+        ...definition,
+        systemPrompt: `${definition.systemPrompt}\n\nYou are preparing a development workspace for a later worker. Inspect the project and set up its development environment as needed. Do not implement the parent task or make feature changes. Report the commands you ran, environment assumptions, and how the next worker should validate its work.`,
+    };
+    let handle: Awaited<ReturnType<ChildAgentFactory>> | undefined;
+    try {
+        handle = await factory({
+            cwd: workspace.worktreePath,
+            definition: setupDefinition,
+            parentContext: ctx,
+            background: false,
+            runId: `workspace-setup-${workspace.slug}`,
+            runTitle: `Setup ${workspace.slug}`,
+            onProgress: () => {},
+        });
+        const abortSetup = () => { void handle?.abort(); };
+        signal?.addEventListener("abort", abortSetup, { once: true });
+        try {
+            await handle.prompt(
+                "Prepare this isolated workspace for the requested development task. Inspect the project first, install or configure dependencies only when needed, and verify the available development/test commands. Do not implement the requested feature yet.",
+            );
+        } finally {
+            signal?.removeEventListener("abort", abortSetup);
+        }
+        const question = handle.takeParentQuestion();
+        if (question) throw new AgentActionError(`Workspace setup requested guidance: ${question.question}`);
+        const error = handle.getError();
+        if (error) throw new AgentActionError(`Workspace setup failed: ${error}`);
+        const summary = handle.getFinalOutput().trim();
+        if (!summary) throw new AgentActionError("Workspace setup completed without a setup report.");
+        return updateAgentWorkspace(workspace, {
+            setupState: "ready",
+            setupSummary: summary,
+        });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await updateAgentWorkspace(workspace, { setupState: "failed", setupSummary: message });
+        throw error;
+    } finally {
+        handle?.dispose();
+    }
+}
+
+async function prepareIsolatedWorkspace(
+    cwd: string,
+    definition: AgentDefinition,
+    factory: ChildAgentFactory,
+    manager: AgentRunManager,
+    ctx: ExtensionContext,
+    signal: AbortSignal | undefined,
+): Promise<AgentWorkspace> {
+    if (!definition.mutating) {
+        throw new AgentActionError("Worktree isolation is currently available only for the mutation-capable worker.");
+    }
+    if (manager.hasActiveMutatingRun) {
+        throw new AgentActionError("A mutation-capable worker is already active.");
+    }
+
+    const available = await findAvailableAgentWorkspace(cwd);
+    if (available) return available;
+
+    const existing = await findUnpreparedAgentWorkspace(cwd);
+    const prompt = await selectWithMessage<WorkspacePromptChoice>({
+        title: existing ? "Prepare isolated workspace?" : "Create isolated workspace?",
+        contentLines: existing
+            ? [
+                `Workspace ${existing.slug} exists but has not been prepared.`,
+                `Path: ${existing.worktreePath}`,
+                "Choose whether a limited setup worker should prepare it before the task.",
+            ]
+            : [
+                "No ready isolated workspace exists for this project.",
+                "A detached Git worktree will be created under pi-coder's .state/workspaces directory.",
+                "Choose whether a limited setup worker should prepare it before the task.",
+            ],
+        items: [
+            {
+                value: "setup",
+                label: "Create and run setup worker",
+                description: "Prepare dependencies and project tooling before the task worker starts.",
+            },
+            {
+                value: "skip",
+                label: "Create and skip setup",
+                description: "Start the task worker in the new worktree without a setup pass.",
+            },
+            {
+                value: "cancel",
+                label: "Cancel",
+                description: "Do not start the isolated worker.",
+            },
+        ],
+        selectHelpText: "↑/↓ choose · Enter confirm · Esc cancel",
+    }, ctx, signal);
+    const choice = prompt?.value;
+    if (!choice || choice === "cancel") {
+        throw new AgentActionError("Isolated worker canceled before workspace setup.");
+    }
+
+    const workspace = existing ?? await createAgentWorkspace(cwd);
+    if (choice === "setup") return runWorkspaceSetup(workspace, definition, factory, ctx, signal);
+    return updateAgentWorkspace(workspace, { setupState: "skipped" });
 }
 
 function diagnosticText(diagnostic: AgentDiagnostic): string {
@@ -407,7 +533,7 @@ export default function registerAgentTool(
         label: "Agent",
         description:
             "Delegate codebase work to a built-in or custom agent. Scout and custom agents are read-only; the built-in "
-            + "worker can edit the current checkout and run bash only through explicit per-action user permission prompts. "
+            + "worker can edit the selected checkout or isolated worktree and run bash only through explicit per-action user permission prompts. "
             + "Run work in the foreground or background; optionally provide a short human-readable title; list, status, collect, resume, or cancel retained runs. In persisted "
             + "parent sessions, paused and interrupted child context survives reload, restart, and switching away and back.",
         promptSnippet:
@@ -503,11 +629,25 @@ export default function registerAgentTool(
                     if (!definition) {
                         throw new AgentActionError(`Unknown agent: ${params.agent}`);
                     }
+                    const workspace = params.isolation === "worktree"
+                        ? await prepareIsolatedWorkspace(
+                            ctx.cwd,
+                            definition,
+                            factory,
+                            manager,
+                            ctx,
+                            signal,
+                        )
+                        : undefined;
+                    const runContext = {
+                        cwd: workspace?.worktreePath ?? ctx.cwd,
+                        parentContext: ctx,
+                    };
                     outcome = params.action === "start"
                         ? await manager.start(
                             definition,
                             params.task,
-                            { cwd: ctx.cwd, parentContext: ctx },
+                            runContext,
                             signal,
                             progress,
                             params.title,
@@ -515,7 +655,7 @@ export default function registerAgentTool(
                         : manager.spawn(
                             definition,
                             params.task,
-                            { cwd: ctx.cwd, parentContext: ctx },
+                            runContext,
                             signal,
                             backgroundUpdate(ctx),
                             params.title,

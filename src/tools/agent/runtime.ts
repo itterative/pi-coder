@@ -124,6 +124,8 @@ export interface PersistedAgentRun {
     usageSnapshot: Usage;
     startedAt: number;
     updatedAt: number;
+    /** Execution cwd, which may be an isolated worktree. */
+    cwd?: string;
     childSessionFile?: string;
     terminalContent?: string;
     terminalError?: string;
@@ -172,6 +174,7 @@ interface AgentRun {
     usageSnapshot: Usage;
     startedAt: number;
     updatedAt: number;
+    cwd: string;
     disposed: boolean;
     shutdownRequested: boolean;
     cancelRequested: boolean;
@@ -294,6 +297,10 @@ export class AgentRunManager {
         return [...this.runs.values()].filter((run) => !isTerminalStatus(run.status)).length;
     }
 
+    get hasActiveMutatingRun(): boolean {
+        return [...this.runs.values()].some((run) => run.mutating && !isTerminalStatus(run.status));
+    }
+
     listRuns(): AgentRunSummary[] {
         return [...this.runs.values()].map((run) => {
             const progress = this.progressSnapshot(run);
@@ -388,6 +395,7 @@ export class AgentRunManager {
                 usageSnapshot: cloneUsage(record.usageSnapshot),
                 startedAt: record.startedAt,
                 updatedAt: record.updatedAt,
+                cwd: record.cwd ?? context.cwd,
                 disposed: persistedTerminal,
                 shutdownRequested: false,
                 cancelRequested: false,
@@ -432,6 +440,7 @@ export class AgentRunManager {
             try {
                 await this.setupRun(run, definition!, {
                     ...context,
+                    cwd: run.cwd,
                     childSessionFile: record.childSessionFile,
                     repairInterrupted: restoredStatus === "interrupted",
                     initialProgress: record.progress,
@@ -459,7 +468,7 @@ export class AgentRunManager {
         onProgress?: AgentProgressCallback,
         title?: string,
     ): Promise<AgentRunOutcome> {
-        const { definition, run } = this.createRun(definitionOrName, task, false, title);
+        const { definition, run } = this.createRun(definitionOrName, task, context, false, title);
         const setupOutcome = await this.setupRun(
             run,
             definition,
@@ -480,7 +489,7 @@ export class AgentRunManager {
         title?: string,
     ): AgentRunOutcome {
         if (signal?.aborted) throw new AgentActionError("Agent spawn was aborted before launch.");
-        const { definition, run } = this.createRun(definitionOrName, task, true, title);
+        const { definition, run } = this.createRun(definitionOrName, task, context, true, title);
         run.backgroundCallback = onBackgroundUpdate;
         const taskPromise = this.launchBackground(run, definition, context).catch((error) => {
             if (isTerminalStatus(run.status)) return run.terminalOutcome!;
@@ -653,6 +662,7 @@ export class AgentRunManager {
     private createRun(
         definitionOrName: AgentDefinition | string,
         task: string,
+        context: AgentStartContext,
         background: boolean,
         requestedTitle?: string,
     ): { definition: AgentDefinition; run: AgentRun } {
@@ -699,6 +709,7 @@ export class AgentRunManager {
             usageSnapshot: cloneUsage(ZERO_USAGE),
             startedAt: now,
             updatedAt: now,
+            cwd: context.cwd,
             disposed: false,
             shutdownRequested: false,
             cancelRequested: false,
@@ -1258,6 +1269,7 @@ export class AgentRunManager {
             usageSnapshot,
             startedAt: run.startedAt,
             updatedAt: run.updatedAt,
+            cwd: run.cwd,
             childSessionFile: run.childSessionFile,
             terminalContent: terminal?.content,
             terminalError: terminal?.details.error,

@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { PI_CODER_AGENT_SESSIONS_DIR } from "../../common/constants";
+import { normalizeCwdForSessionDirectory } from "../../common/paths";
 import {
     type AgentRunPersistence,
     type PersistedAgentRun,
@@ -28,11 +29,7 @@ const RESTORABLE_STATUSES = new Set<PersistedAgentRun["status"]>([
     "removed",
 ]);
 
-/** Mirrors pi's cwd encoding for its own per-project session directories. */
-export function normalizeCwdForSessionDirectory(cwd: string): string {
-    const resolvedCwd = path.resolve(cwd);
-    return `--${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-}
+export { normalizeCwdForSessionDirectory } from "../../common/paths";
 
 /** Returns the extension-local session directory for one cwd. */
 export function getAgentCwdSessionDir(
@@ -240,6 +237,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         usageSnapshot: cloneUsage(record.usageSnapshot),
         startedAt: record.startedAt,
         updatedAt: record.updatedAt,
+        cwd: boundedString(record.cwd, 4_096),
         childSessionFile: resolvedChildFile,
         terminalContent: boundedString(record.terminalContent, 48_000),
         terminalError: boundedString(record.terminalError, 4_000),
