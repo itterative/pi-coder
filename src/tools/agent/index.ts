@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Usage } from "@earendil-works/pi-ai";
 import {
     type ExtensionAPI,
+    type ExtensionCommandContext,
     type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -22,6 +23,7 @@ import {
     createAgentWorkspace,
     findAvailableAgentWorkspace,
     findUnpreparedAgentWorkspace,
+    listAgentWorkspaces,
     releaseAgentWorkspaceLease,
     transferAgentWorkspaceLease,
     updateAgentWorkspace,
@@ -35,6 +37,7 @@ import {
     type AgentSessionBrowserItem,
 } from "./sessions";
 import { showAgentSessionBrowser } from "../../tui/agent-session-browser";
+import { showAgentWorkspaceBrowser } from "../../tui/agent-workspace-browser";
 import {
     AgentActionError,
     AgentRunManager,
@@ -435,6 +438,23 @@ export default function registerAgentTool(
         });
     };
     if (traceStore) registerAgentTraceCommand(pi, traceStore);
+    const showWorkspaces = async (_args: string, ctx: ExtensionCommandContext) => {
+        try {
+            const workspaces = await listAgentWorkspaces(ctx.cwd);
+            await showAgentWorkspaceBrowser({ cwd: ctx.cwd, workspaces }, ctx);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            ctx.ui.notify(`Could not browse agent workspaces: ${message}`, "warning");
+        }
+    };
+    pi.registerCommand("agents", {
+        description: "Browse isolated agent workspaces",
+        handler: showWorkspaces,
+    });
+    pi.registerCommand("agent-workspaces", {
+        description: "Browse isolated agent workspaces",
+        handler: showWorkspaces,
+    });
     pi.registerCommand("agent-sessions", {
         description: "Browse current and persisted delegated-agent sessions",
         handler: async (_args, ctx) => {
