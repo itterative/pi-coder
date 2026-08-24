@@ -11,11 +11,13 @@ import {
     type AgentRunPersistence,
     type PersistedAgentRun,
     ZERO_USAGE,
-    deriveAgentTitle,
 } from "./runtime";
+import {
+    type AgentRunCatalogRecord,
+    upsertAgentRunCatalogRecord,
+} from "./workspaces";
 
 export const AGENT_RUN_STATE_ENTRY = "pi-coder:agent-run-state-v1";
-const SESSION_METADATA_SUFFIX = ".meta.json";
 const RUN_ID = /^[a-z][a-z0-9_-]{0,63}-\d+$/;
 const RESTORABLE_STATUSES = new Set<PersistedAgentRun["status"]>([
     "starting",
@@ -82,48 +84,33 @@ function inside(directory: string, candidate: string): boolean {
     return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
 }
 
-function sessionMetadataPath(childSessionDir: string, sessionFile: string): string | undefined {
-    const resolved = path.resolve(sessionFile);
-    if (!inside(path.resolve(childSessionDir), resolved)) return undefined;
-    return `${resolved}${SESSION_METADATA_SUFFIX}`;
-}
-
-export interface AgentSessionMetadata {
-    version: 1;
-    ownerSessionId: string;
-    runId: string;
-    title: string;
-    agent: string;
-    agentSource: string;
-    task: string;
-    status: PersistedAgentRun["status"];
-    background: boolean;
-    mutating: boolean;
-    startedAt: number;
-    updatedAt: number;
-    usageSnapshot: PersistedAgentRun["usageSnapshot"];
-    responsePreview?: string;
-    mutationReport?: PersistedAgentRun["mutationReport"];
-}
-
 function responsePreview(record: PersistedAgentRun): string | undefined {
     const text = record.progress.output.replace(/\s+/g, " ").trim();
     if (!text) return undefined;
     return text.length <= 240 ? text : `${text.slice(0, 239)}…`;
 }
 
-function metadataFromRecord(record: PersistedAgentRun): AgentSessionMetadata {
+
+export interface AgentRunCatalogWriter {
+    enqueue(record: PersistedAgentRun): void;
+    flush(): Promise<void>;
+}
+
+function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCatalogRecord {
     return {
-        version: 1,
         ownerSessionId: record.ownerSessionId,
         runId: record.runId,
-        title: deriveAgentTitle(record.task, record.title),
+        parentCwd: record.parentCwd ?? parentCwd,
+        executionCwd: record.cwd,
+        title: record.title ?? "Delegated task",
         agent: record.agent,
         agentSource: record.agentSource,
         task: record.task,
         status: record.status,
         background: record.background,
         mutating: record.mutating,
+        workspaceId: record.workspaceId,
+        childSessionFile: record.childSessionFile,
         startedAt: record.startedAt,
         updatedAt: record.updatedAt,
         usageSnapshot: record.usageSnapshot,
@@ -132,36 +119,27 @@ function metadataFromRecord(record: PersistedAgentRun): AgentSessionMetadata {
     };
 }
 
-function writeSessionMetadata(childSessionDir: string, record: PersistedAgentRun): void {
-    if (!record.childSessionFile) return;
-    const metadataFile = sessionMetadataPath(childSessionDir, record.childSessionFile);
-    if (!metadataFile) return;
-    fs.writeFileSync(metadataFile, `${JSON.stringify(metadataFromRecord(record))}\n`, {
-        encoding: "utf8",
-        mode: 0o600,
-    });
-    fs.chmodSync(metadataFile, 0o600);
-}
-
-export function readAgentSessionMetadata(sessionFile: string): AgentSessionMetadata | undefined {
-    try {
-        const metadataFile = `${path.resolve(sessionFile)}${SESSION_METADATA_SUFFIX}`;
-        const value = JSON.parse(fs.readFileSync(metadataFile, "utf8")) as Partial<AgentSessionMetadata>;
-        if (
-            value.version !== 1
-            || typeof value.ownerSessionId !== "string"
-            || typeof value.runId !== "string"
-            || typeof value.title !== "string"
-            || typeof value.agent !== "string"
-            || typeof value.task !== "string"
-            || typeof value.status !== "string"
-            || typeof value.startedAt !== "number"
-            || typeof value.updatedAt !== "number"
-        ) return undefined;
-        return value as AgentSessionMetadata;
-    } catch {
-        return undefined;
-    }
+export function createAgentRunCatalogWriter(
+    parentCwd: string,
+    workspacesDir = path.join(path.dirname(path.resolve(PI_CODER_AGENT_SESSIONS_DIR)), "workspaces"),
+): AgentRunCatalogWriter {
+    let pending = Promise.resolve();
+    let failure: unknown;
+    return {
+        enqueue(record) {
+            pending = pending.then(async () => {
+                try {
+                    await upsertAgentRunCatalogRecord(catalogRecord(record, parentCwd), workspacesDir);
+                } catch (error) {
+                    failure ??= error;
+                }
+            });
+        },
+        async flush() {
+            await pending;
+            if (failure) throw failure;
+        },
+    };
 }
 
 function safeExistingChildFile(childSessionDir: string, candidate: string): string | undefined {
@@ -238,6 +216,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         usageSnapshot: cloneUsage(record.usageSnapshot),
         startedAt: record.startedAt,
         updatedAt: record.updatedAt,
+        parentCwd: boundedString(record.parentCwd, 4_096),
         cwd: boundedString(record.cwd, 4_096),
         childSessionFile: resolvedChildFile,
         terminalContent: boundedString(record.terminalContent, 48_000),
@@ -264,6 +243,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
 export interface LoadedAgentRunPersistence {
     persistence: AgentRunPersistence;
     records: PersistedAgentRun[];
+    catalog: AgentRunCatalogWriter;
 }
 
 export function loadAgentRunPersistence(
@@ -285,6 +265,12 @@ export function loadAgentRunPersistence(
         if (parsed) latest.set(parsed.runId, parsed);
     }
 
+    const catalog = createAgentRunCatalogWriter(
+        ctx.cwd,
+        path.join(path.dirname(path.resolve(agentSessionsDir)), "workspaces"),
+    );
+    for (const record of latest.values()) catalog.enqueue(record);
+
     let persistenceWarningShown = false;
     const persistence: AgentRunPersistence = {
         ownerSessionId,
@@ -292,7 +278,7 @@ export function loadAgentRunPersistence(
         save(record) {
             try {
                 pi.appendEntry(AGENT_RUN_STATE_ENTRY, record);
-                if (record.status !== "removed") writeSessionMetadata(childSessionDir, record);
+                catalog.enqueue(record);
                 return true;
             } catch (error) {
                 if (!persistenceWarningShown) {
@@ -303,16 +289,16 @@ export function loadAgentRunPersistence(
                 return false;
             }
         },
+        flush: () => catalog.flush(),
         deleteChildSession(sessionFile) {
             const resolved = path.resolve(sessionFile);
             if (!inside(childSessionDir, resolved)) return;
             try {
                 fs.rmSync(resolved, { force: true });
-                fs.rmSync(`${resolved}${SESSION_METADATA_SUFFIX}`, { force: true });
             } catch {
                 // Cleanup is best effort; state tombstones remain authoritative.
             }
         },
     };
-    return { persistence, records: [...latest.values()] };
+    return { persistence, records: [...latest.values()], catalog };
 }

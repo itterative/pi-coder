@@ -5,8 +5,13 @@ import {
     type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
 
-import { getAgentCwdSessionDir, readAgentSessionMetadata } from "./persistence";
+import { PI_CODER_AGENT_SESSIONS_DIR } from "../../common/constants";
+import { getAgentCwdSessionDir } from "./persistence";
 import { deriveAgentTitle, type AgentRunSummary } from "./runtime";
+import {
+    type AgentRunCatalogRecord,
+    listAgentRunCatalog,
+} from "./workspaces";
 
 export interface AgentSessionBrowserItem {
     kind: "current" | "past" | "empty";
@@ -60,9 +65,11 @@ function historicalStatus(status: string | undefined): string | undefined {
         : status;
 }
 
-function pastItem(info: SessionInfo, parentSessionId: string): AgentSessionBrowserItem {
-    const candidate = readAgentSessionMetadata(info.path);
-    const metadata = candidate?.ownerSessionId === parentSessionId ? candidate : undefined;
+function pastItem(
+    info: SessionInfo,
+    parentSessionId: string,
+    metadata: AgentRunCatalogRecord | undefined,
+): AgentSessionBrowserItem {
     return {
         kind: "past",
         id: info.id,
@@ -119,6 +126,10 @@ export async function listPastAgentSessions(
     agentSessionsDir?: string,
 ): Promise<AgentSessionBrowserItem[]> {
     const cwdSessionDir = getAgentCwdSessionDir(cwd, agentSessionsDir);
+    const workspacesDir = path.join(
+        path.dirname(path.resolve(agentSessionsDir ?? PI_CODER_AGENT_SESSIONS_DIR)),
+        "workspaces",
+    );
     let entries;
     try {
         entries = await fs.readdir(cwdSessionDir, { withFileTypes: true });
@@ -139,7 +150,15 @@ export async function listPastAgentSessions(
         } catch {
             continue;
         }
-        sessions.push(...infos.map((info) => pastItem(info, parentSessionId)));
+        const catalog = await listAgentRunCatalog(cwd, workspacesDir);
+        sessions.push(...infos.map((info) => {
+            const metadata = catalog.find((record) => (
+                record.ownerSessionId === parentSessionId
+                && record.childSessionFile !== undefined
+                && path.resolve(record.childSessionFile) === path.resolve(info.path)
+            ));
+            return pastItem(info, parentSessionId, metadata);
+        }));
     }
 
     sessions.sort((a, b) => b.updatedAt - a.updatedAt);

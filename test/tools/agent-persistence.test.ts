@@ -8,11 +8,11 @@ import { fingerprintAgentDefinition, BUILTIN_SCOUT } from "../../src/tools/agent
 import {
     AGENT_RUN_STATE_ENTRY,
     getAgentCwdSessionDir,
-    readAgentSessionMetadata,
     loadAgentRunPersistence,
     normalizeCwdForSessionDirectory,
 } from "../../src/tools/agent/persistence";
 import { ZERO_USAGE, type PersistedAgentRun } from "../../src/tools/agent/runtime";
+import { listAgentRunCatalog, upsertAgentRunCatalogRecord } from "../../src/tools/agent/workspaces";
 import { listPastAgentSessions } from "../../src/tools/agent/sessions";
 
 const tempDirs: string[] = [];
@@ -78,17 +78,22 @@ describe("durable agent run persistence", () => {
             timestamp: Date.now(),
         });
         expect(child.getSessionFile()).toBeDefined();
-        fs.writeFileSync(`${child.getSessionFile()}.meta.json`, JSON.stringify({
-            version: 1,
+        await upsertAgentRunCatalogRecord({
             ownerSessionId: "parent-1",
             runId: "scout-1",
+            parentCwd: process.cwd(),
             title: "Persisted child",
             agent: "scout",
+            agentSource: "builtin",
             task: "Review the persisted child session",
             status: "running",
+            background: false,
+            mutating: false,
+            childSessionFile: child.getSessionFile()!,
             startedAt: 1,
             updatedAt: 2,
-        }));
+            usageSnapshot: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
+        }, path.join(stateDir, "workspaces"));
         expect(fs.readdirSync(parentDir)).not.toHaveLength(0);
 
         const sessions = await listPastAgentSessions(process.cwd(), sessionsDir);
@@ -111,7 +116,7 @@ describe("durable agent run persistence", () => {
         expect(loadAgentRunPersistence(pi, context([], undefined))).toBeUndefined();
     });
 
-    it("restores only the latest valid state owned by the exact parent session", () => {
+    it("restores only the latest valid state owned by the exact parent session", async () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
@@ -140,14 +145,15 @@ describe("durable agent run persistence", () => {
         expect(loaded?.records[0]).toMatchObject({ status: "interrupted", childSessionFile: childFile });
         expect(fs.statSync(childDir).mode & 0o777).toBe(0o700);
         loaded?.persistence.save(newer);
+        await loaded?.persistence.flush?.();
         expect(appended).toEqual([newer]);
-        expect(readAgentSessionMetadata(childFile)).toMatchObject({
+        expect(await listAgentRunCatalog(process.cwd(), path.join(stateDir, "workspaces"))).toMatchObject([{
             ownerSessionId: "parent-1",
             runId: "scout-1",
             title: "Persistence scan",
             status: "interrupted",
             responsePreview: "Partial",
-        });
+        }]);
     });
 
     it("rejects transcript paths outside the private child directory", () => {

@@ -19,6 +19,7 @@ import {
     prepareAgentWorkspaceApplication,
     releaseAgentWorkspaceAfterApplication,
     releaseAgentWorkspaceAfterNoChanges,
+    recoverAgentWorkspaceLease,
     releaseAgentWorkspaceLeaseForRecovery,
     reconcileNoChangeAgentWorkspaceLeases,
     resetAgentWorkspaceForReuse,
@@ -92,6 +93,32 @@ describe("agent workspaces", () => {
         expect(await listAgentWorkspaces(repository, state)).toMatchObject([
             { id: workspace.id, status: "review_required" },
         ]);
+    });
+
+    it("identifies and explicitly recovers an orphaned task lease", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "README.md"), "orphan recovery test\n");
+        await git(repository, "add", "README.md");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        expect((await listAgentWorkspaces(repository, state))[0]).toMatchObject({
+            leaseRunId: "worker-1",
+            leaseState: "orphaned",
+        });
+        const recovered = await recoverAgentWorkspaceLease(workspace.id, "session-2", state);
+        expect(recovered).toMatchObject({
+            leaseOwnerSessionId: "session-2",
+            leaseRunId: "worker-1",
+            leaseState: "orphaned",
+        });
     });
 
     it("releases an explicit stale clean task lease without resetting the worktree", async () => {

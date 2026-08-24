@@ -43,6 +43,7 @@ export interface AgentSessionBrowserData {
 
 export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
     cwd?: string;
+    currentSessionId?: string;
     eventBus?: EventBus;
     onRefresh?: () => Promise<AgentSessionBrowserData>;
     fixedHeight?: () => number;
@@ -363,6 +364,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                                         },
                                         onInvalidate: options.onInvalidate,
                                     },
+                                    options.currentSessionId,
                                 );
                                 this.workspaceDetail.initialize(this.theme);
                                 this.workspaceDetail.setDoneCallback(() => {

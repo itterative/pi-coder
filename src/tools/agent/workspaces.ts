@@ -8,6 +8,8 @@ import { promisify } from "node:util";
 import { PI_CODER_WORKSPACES_DIR } from "../../common/constants";
 import { loadSqlite, migrateSqliteDatabase } from "../../common/sqlite";
 import { randomSlug } from "../../common/slug";
+import type { Usage } from "@earendil-works/pi-ai";
+import type { WorkerMutationReport } from "./runtime";
 
 const execFileAsync = promisify(execFile);
 const WORKSPACE_VERSION = 1 as const;
@@ -17,6 +19,7 @@ export const MAX_AGENT_WORKSPACES = 3;
 export type WorkspaceSetupState = "not_started" | "running" | "ready" | "skipped" | "failed";
 export type WorkspaceStatus = "available" | "review_required";
 export type WorkspaceLeaseKind = "setup" | "task";
+export type WorkspaceLeaseState = "none" | "setup" | "known" | "orphaned" | "unknown";
 export type WorkspaceResultStatus = "prepared" | "applied" | "discarded";
 
 export interface AgentWorkspaceResult {
@@ -63,9 +66,31 @@ export interface AgentWorkspace {
     leaseRunId?: string;
     leaseKind?: WorkspaceLeaseKind;
     leaseAcquiredAt?: number;
+    leaseState?: WorkspaceLeaseState;
     latestResult?: AgentWorkspaceResult;
     createdAt: number;
     updatedAt: number;
+}
+
+export interface AgentRunCatalogRecord {
+    ownerSessionId: string;
+    runId: string;
+    parentCwd: string;
+    executionCwd?: string;
+    title: string;
+    agent: string;
+    agentSource: string;
+    task: string;
+    status: string;
+    background: boolean;
+    mutating: boolean;
+    workspaceId?: string;
+    childSessionFile?: string;
+    startedAt: number;
+    updatedAt: number;
+    usageSnapshot: Usage;
+    responsePreview?: string;
+    mutationReport?: WorkerMutationReport;
 }
 
 type WorkspaceRow = Record<string, unknown>;
@@ -136,8 +161,39 @@ const WORKSPACE_MIGRATIONS = [{
                 applied_at INTEGER,
                 FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
             );
-            CREATE INDEX workspace_results_workspace_prepared
+            CREATE INDEX IF NOT EXISTS workspace_results_workspace_prepared
                 ON workspace_results (workspace_id, prepared_at DESC);
+        `);
+    },
+}, {
+    version: 5,
+    apply(database: WorkspaceDatabase): void {
+        database.exec(`
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                owner_session_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                parent_cwd TEXT NOT NULL,
+                execution_cwd TEXT,
+                title TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                agent_source TEXT NOT NULL,
+                task TEXT NOT NULL,
+                status TEXT NOT NULL,
+                background INTEGER NOT NULL,
+                mutating INTEGER NOT NULL,
+                workspace_id TEXT,
+                child_session_file TEXT,
+                started_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                usage_json TEXT NOT NULL,
+                response_preview TEXT,
+                mutation_report_json TEXT,
+                PRIMARY KEY (owner_session_id, run_id)
+            );
+            CREATE INDEX IF NOT EXISTS agent_runs_cwd_updated
+                ON agent_runs (parent_cwd, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS agent_runs_child_session
+                ON agent_runs (child_session_file);
         `);
     },
 }] as const;
@@ -149,7 +205,9 @@ async function openDatabase(workspacesDir = PI_CODER_WORKSPACES_DIR): Promise<Wo
     const directory = workspacesRoot(workspacesDir);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     fs.chmodSync(directory, 0o700);
-    const databasePath = path.join(directory, DATABASE_NAME);
+    const databasePath = path.join(path.dirname(directory), DATABASE_NAME);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
+    fs.chmodSync(path.dirname(databasePath), 0o700);
     const database = new DatabaseSync(databasePath);
     database.exec("PRAGMA busy_timeout = 5000");
     migrateSqliteDatabase(database, WORKSPACE_MIGRATIONS);
@@ -189,6 +247,9 @@ function rowToWorkspace(row: WorkspaceRow): AgentWorkspace | undefined {
             ? { leaseKind: row.lease_kind as WorkspaceLeaseKind }
             : {}),
         ...(typeof row.lease_acquired_at === "number" ? { leaseAcquiredAt: row.lease_acquired_at } : {}),
+        leaseState: typeof row.lease_run_id === "string"
+            ? (row.lease_kind === "setup" ? "setup" : "unknown")
+            : "none",
         createdAt: row.created_at,
         updatedAt: row.updated_at,
     };
@@ -276,13 +337,31 @@ function latestWorkspaceResult(database: WorkspaceDatabase, workspaceId: string)
     return row ? rowToWorkspaceResult(row) : undefined;
 }
 
+function workspaceLeaseState(database: WorkspaceDatabase, workspace: AgentWorkspace): WorkspaceLeaseState {
+    if (!workspace.leaseRunId) return "none";
+    if (workspace.leaseKind === "setup") return "setup";
+    if (!workspace.leaseOwnerSessionId) return "unknown";
+    const row = database.prepare(`
+        SELECT status FROM agent_runs
+        WHERE owner_session_id = ? AND run_id = ?
+    `).get(workspace.leaseOwnerSessionId, workspace.leaseRunId) as WorkspaceRow | undefined;
+    if (!row || typeof row.status !== "string") return "orphaned";
+    return ["completed", "failed", "aborted", "canceled", "removed", "collected", "interrupted"].includes(row.status)
+        ? "orphaned"
+        : "known";
+}
+
 function attachLatestWorkspaceResult(
     database: WorkspaceDatabase,
     workspace: AgentWorkspace | undefined,
 ): AgentWorkspace | undefined {
     if (!workspace) return undefined;
     const latestResult = latestWorkspaceResult(database, workspace.id);
-    return latestResult ? { ...workspace, latestResult } : workspace;
+    return {
+        ...workspace,
+        leaseState: workspaceLeaseState(database, workspace),
+        ...(latestResult ? { latestResult } : {}),
+    };
 }
 
 async function workspaceForLease(
@@ -413,6 +492,135 @@ export async function listAgentWorkspaceResults(
         return rows
             .map(rowToWorkspaceResult)
             .filter((result): result is AgentWorkspaceResult => result !== undefined);
+    } finally {
+        database.close();
+    }
+}
+
+function parseJson(value: unknown): unknown {
+    if (typeof value !== "string") return undefined;
+    try {
+        return JSON.parse(value);
+    } catch {
+        return undefined;
+    }
+}
+
+function rowToAgentRunCatalogRecord(row: WorkspaceRow): AgentRunCatalogRecord | undefined {
+    if (
+        typeof row.owner_session_id !== "string"
+        || typeof row.run_id !== "string"
+        || typeof row.parent_cwd !== "string"
+        || typeof row.title !== "string"
+        || typeof row.agent !== "string"
+        || typeof row.agent_source !== "string"
+        || typeof row.task !== "string"
+        || typeof row.status !== "string"
+        || (row.background !== 0 && row.background !== 1)
+        || (row.mutating !== 0 && row.mutating !== 1)
+        || typeof row.started_at !== "number"
+        || typeof row.updated_at !== "number"
+    ) return undefined;
+    const usageSnapshot = parseJson(row.usage_json);
+    if (!usageSnapshot || typeof usageSnapshot !== "object") return undefined;
+    const mutationReport = parseJson(row.mutation_report_json);
+    return {
+        ownerSessionId: row.owner_session_id,
+        runId: row.run_id,
+        parentCwd: row.parent_cwd,
+        ...(typeof row.execution_cwd === "string" ? { executionCwd: row.execution_cwd } : {}),
+        title: row.title,
+        agent: row.agent,
+        agentSource: row.agent_source,
+        task: row.task,
+        status: row.status,
+        background: row.background === 1,
+        mutating: row.mutating === 1,
+        ...(typeof row.workspace_id === "string" ? { workspaceId: row.workspace_id } : {}),
+        ...(typeof row.child_session_file === "string" ? { childSessionFile: row.child_session_file } : {}),
+        startedAt: row.started_at,
+        updatedAt: row.updated_at,
+        usageSnapshot: usageSnapshot as Usage,
+        ...(typeof row.response_preview === "string" ? { responsePreview: row.response_preview } : {}),
+        ...(mutationReport && typeof mutationReport === "object"
+            ? { mutationReport: mutationReport as WorkerMutationReport }
+            : {}),
+    };
+}
+
+export async function upsertAgentRunCatalogRecord(
+    record: AgentRunCatalogRecord,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<void> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        database.prepare(`
+            INSERT INTO agent_runs (
+                owner_session_id, run_id, parent_cwd, execution_cwd, title, agent,
+                agent_source, task, status, background, mutating, workspace_id,
+                child_session_file, started_at, updated_at, usage_json,
+                response_preview, mutation_report_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (owner_session_id, run_id) DO UPDATE SET
+                parent_cwd = excluded.parent_cwd,
+                execution_cwd = excluded.execution_cwd,
+                title = excluded.title,
+                agent = excluded.agent,
+                agent_source = excluded.agent_source,
+                task = excluded.task,
+                status = excluded.status,
+                background = excluded.background,
+                mutating = excluded.mutating,
+                workspace_id = excluded.workspace_id,
+                child_session_file = excluded.child_session_file,
+                started_at = excluded.started_at,
+                updated_at = excluded.updated_at,
+                usage_json = excluded.usage_json,
+                response_preview = excluded.response_preview,
+                mutation_report_json = excluded.mutation_report_json
+        `).run(
+            record.ownerSessionId,
+            record.runId,
+            path.resolve(record.parentCwd),
+            record.executionCwd ?? null,
+            record.title,
+            record.agent,
+            record.agentSource,
+            record.task,
+            record.status,
+            record.background ? 1 : 0,
+            record.mutating ? 1 : 0,
+            record.workspaceId ?? null,
+            record.childSessionFile ?? null,
+            record.startedAt,
+            record.updatedAt,
+            JSON.stringify(record.usageSnapshot),
+            record.responsePreview ?? null,
+            record.mutationReport ? JSON.stringify(record.mutationReport) : null,
+        );
+    } finally {
+        database.close();
+    }
+}
+
+export async function listAgentRunCatalog(
+    cwd: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<AgentRunCatalogRecord[]> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        const rows = database.prepare(`
+            SELECT owner_session_id, run_id, parent_cwd, execution_cwd, title, agent,
+                   agent_source, task, status, background, mutating, workspace_id,
+                   child_session_file, started_at, updated_at, usage_json,
+                   response_preview, mutation_report_json
+            FROM agent_runs
+            WHERE parent_cwd = ?
+            ORDER BY updated_at DESC, run_id ASC
+        `).all(path.resolve(cwd)) as WorkspaceRow[];
+        return rows
+            .map(rowToAgentRunCatalogRecord)
+            .filter((record): record is AgentRunCatalogRecord => record !== undefined);
     } finally {
         database.close();
     }
@@ -773,6 +981,37 @@ export async function releaseAgentWorkspaceAfterNoChanges(
                 lease_run_id = NULL, lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
         `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId);
+    } finally {
+        database.close();
+    }
+}
+
+/** Adopt an orphaned task lease into the current parent session without changing its result or worktree. */
+export async function recoverAgentWorkspaceLease(
+    workspaceId: string,
+    ownerSessionId: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<AgentWorkspace> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        const workspace = attachLatestWorkspaceResult(database, workspaceById(database, workspaceId));
+        if (!workspace || !workspace.leaseRunId || workspace.leaseKind !== "task") {
+            throw new Error(`Workspace ${workspaceId} does not have an orphaned task lease.`);
+        }
+        if (workspaceLeaseState(database, workspace) !== "orphaned") {
+            throw new Error(`Workspace ${workspaceId} does not have an orphaned task lease.`);
+        }
+        const oldOwnerSessionId = workspace.leaseOwnerSessionId;
+        if (!oldOwnerSessionId) throw new Error(`Workspace ${workspaceId} has no recorded lease owner.`);
+        const updated = database.prepare(`
+            UPDATE workspaces
+            SET lease_owner_session_id = ?, updated_at = ?
+            WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
+        `).run(ownerSessionId, Date.now(), workspaceId, oldOwnerSessionId, workspace.leaseRunId);
+        if (updated.changes !== 1) throw new Error(`Workspace ${workspaceId} lease changed during recovery.`);
+        const recovered = attachLatestWorkspaceResult(database, workspaceById(database, workspaceId));
+        if (!recovered) throw new Error(`Workspace ${workspaceId} disappeared during lease recovery.`);
+        return recovered;
     } finally {
         database.close();
     }

@@ -46,6 +46,7 @@ import {
     releaseAgentWorkspaceAfterApplication,
     releaseAgentWorkspaceAfterNoChanges,
     releaseAgentWorkspaceLease,
+    recoverAgentWorkspaceLease,
     releaseAgentWorkspaceLeaseForRecovery,
     reconcileNoChangeAgentWorkspaceLeases,
     resetAgentWorkspaceForReuse,
@@ -219,6 +220,11 @@ async function handleWorkspaceAction(
         if (activeLeaseRun) {
             throw new Error(`Workspace ${workspace.slug} is still used by active run ${activeLeaseRun.runId}; finish or cancel that run first.`);
         }
+        if (action === "recover") {
+            await recoverAgentWorkspaceLease(workspace.id, sessionId);
+            ctx.ui.notify(`Recovered the orphaned lease for workspace ${workspace.slug}.`, "info");
+            return await getAgentWorkspace(workspace.id);
+        }
         if (action === "release") {
             await releaseAgentWorkspaceLeaseForRecovery(workspace.id);
             ctx.ui.notify(`Released the stale lease for workspace ${workspace.slug}.`, "info");
@@ -384,6 +390,7 @@ export default function registerAgentTool(
     if (traceStore) registerAgentTraceCommand(pi, traceStore);
     const showAgentBrowser = async (_args: string, ctx: ExtensionCommandContext) => {
         const loadBrowserData = async (): Promise<AgentSessionBrowserData> => {
+            await manager.flushPersistence();
             const current = await loadAgentSessionTranscripts(
                 currentAgentSessionItems([...manager.listRuns(), ...setupRuns.values()]),
             );
@@ -432,6 +439,7 @@ export default function registerAgentTool(
         await showAgentSessionBrowser({
             ...initial,
             cwd: ctx.cwd,
+            currentSessionId: ctx.sessionManager.getSessionId(),
             eventBus: pi.events,
             onRefresh: loadBrowserData,
             onResume: async (item) => {
@@ -539,6 +547,7 @@ export default function registerAgentTool(
         refreshAgentUi(ctx);
         emitAgentEvent(events, ctx.cwd, { type: "runtime", action: "restored" });
         mailbox.reconcile(manager.listRuns());
+        await manager.flushPersistence();
     };
 
     pi.on("session_start", async (_event, ctx) => {
@@ -589,6 +598,7 @@ export default function registerAgentTool(
         // Prevent old-branch shutdown records from being appended at the new leaf.
         manager.setPersistence(undefined);
         await manager.shutdown();
+        await manager.flushPersistence();
         emitAgentEvent(events, ctx.cwd, { type: "runtime", action: "reset" });
         setupRuns.clear();
         ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
@@ -603,6 +613,7 @@ export default function registerAgentTool(
         setupRuns.clear();
         ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         await manager.shutdown();
+        await manager.flushPersistence();
         emitAgentEvent(events, ctx.cwd, { type: "runtime", action: "shutdown" });
         activeContext = undefined;
         unsubscribeAgentUiEvents();

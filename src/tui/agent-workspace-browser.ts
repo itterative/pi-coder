@@ -20,7 +20,7 @@ interface EmptyWorkspaceItem {
     message: string;
 }
 
-export type AgentWorkspaceAction = "inspect" | "apply" | "retain" | "reset" | "discard" | "release";
+export type AgentWorkspaceAction = "inspect" | "apply" | "retain" | "reset" | "discard" | "release" | "recover";
 type WorkspaceBrowserItem = AgentWorkspace | EmptyWorkspaceItem;
 interface AgentWorkspaceBrowserState extends ListViewState<WorkspaceBrowserItem> {}
 
@@ -57,6 +57,7 @@ function dateText(timestamp: number): string {
 }
 
 function statusText(workspace: AgentWorkspace): string {
+    if (workspace.leaseState === "orphaned") return "orphaned lease";
     if (workspace.leaseRunId) return "leased";
     return workspace.status.replaceAll("_", " ");
 }
@@ -64,7 +65,8 @@ function statusText(workspace: AgentWorkspace): string {
 function leaseText(workspace: AgentWorkspace): string {
     if (!workspace.leaseRunId) return "none";
     const kind = workspace.leaseKind ?? "unknown";
-    return `${kind} · ${workspace.leaseRunId}`;
+    const state = workspace.leaseState === "orphaned" ? " · orphaned" : "";
+    return `${kind} · ${workspace.leaseRunId}${state}`;
 }
 
 function setupText(workspace: AgentWorkspace): string {
@@ -105,6 +107,7 @@ export function agentWorkspaceDetailText(
     theme: Theme,
     width: number,
     gitState?: AgentWorkspaceGitState,
+    currentSessionId?: string,
 ): string {
     const lines = [
         `Workspace: ${workspace.slug}`,
@@ -131,7 +134,7 @@ export function agentWorkspaceDetailText(
         lines.push("", theme.fg("accent", "Setup summary:"));
         lines.push(...workspace.setupSummary.split("\n").flatMap((line) => wrapPreservingSpaces(line, width)));
     }
-    const actions = workspaceActionHelp(workspace);
+    const actions = workspaceActionHelp(workspace, currentSessionId);
     if (actions.length > 0) {
         lines.push(
             "",
@@ -141,18 +144,26 @@ export function agentWorkspaceDetailText(
         );
     }
     lines.push(
-        theme.fg("muted", workspace.leaseRunId
-            ? "This workspace is leased and cannot be selected until its current run is explicitly dispositioned."
-            : workspace.status === "review_required"
-                ? "This workspace requires explicit review before it can be reused."
-                : "This workspace may be selected for an isolated worker."),
+        theme.fg("muted", workspace.leaseState === "orphaned" && workspace.leaseOwnerSessionId !== currentSessionId
+            ? "The recorded run is no longer present in the durable run catalog. The lease and result remain protected until explicit recovery."
+            : workspace.leaseState === "orphaned"
+                ? "The recorded run is no longer present in the durable run catalog, but this session has recovered control of the lease."
+                : workspace.leaseRunId
+                ? "This workspace is leased and cannot be selected until its current run is explicitly dispositioned."
+                : workspace.status === "review_required"
+                    ? "This workspace requires explicit review before it can be reused."
+                    : "This workspace may be selected for an isolated worker."),
     );
     return lines.join("\n");
 }
 
-function workspaceActionHelp(workspace: AgentWorkspace): string[] {
+function workspaceActionHelp(workspace: AgentWorkspace, currentSessionId?: string): string[] {
     const actions: string[] = [];
+    if (workspace.leaseState === "orphaned" && workspace.leaseOwnerSessionId !== currentSessionId) {
+        actions.push("x recover orphaned lease");
+    }
     if (workspace.latestResult && workspace.latestResult.status !== "discarded") actions.push("i inspect diff");
+    if (workspace.leaseState === "orphaned" && workspace.leaseOwnerSessionId !== currentSessionId) return actions;
     const changed = Boolean(workspace.leaseRunId && workspace.latestResult?.status === "prepared"
         && (workspace.latestResult.workerHead !== workspace.latestResult.baseRevision || workspace.latestResult.commits.length > 0));
     if (changed) actions.push("a apply", "t retain");
@@ -166,8 +177,8 @@ function workspaceActionHelp(workspace: AgentWorkspace): string[] {
     return actions;
 }
 
-function workspaceDetailHelpText(workspace: AgentWorkspace): string {
-    return ["↑/↓ scroll", ...workspaceActionHelp(workspace), "Esc back"].join(" · ");
+function workspaceDetailHelpText(workspace: AgentWorkspace, currentSessionId?: string): string {
+    return ["↑/↓ scroll", ...workspaceActionHelp(workspace, currentSessionId), "Esc back"].join(" · ");
 }
 
 type WorkspaceDispositionAction = Exclude<AgentWorkspaceAction, "inspect">;
@@ -192,6 +203,7 @@ export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace
         fixedHeight?: () => number,
         gitState?: AgentWorkspaceGitState,
         callbacks: WorkspaceActionCallbacks = {},
+        private readonly currentSessionId?: string,
     ) {
         super({
             title: `Workspace · ${workspace.slug}`,
@@ -201,7 +213,7 @@ export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace
             fixedHeight,
             compactFooter: true,
             onKey: (key) => this.handleDetailKey(key),
-            helpText: workspaceDetailHelpText(workspace),
+            helpText: workspaceDetailHelpText(workspace, currentSessionId),
             renderItem: (item, renderOptions) => this.showingDiff
                 ? this.diffText
                 : [
@@ -210,6 +222,7 @@ export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace
                         renderOptions.theme,
                         this.contentWidth,
                         this.currentGitState,
+                        this.currentSessionId,
                     ),
                     ...(this.busy ? ["", renderOptions.theme.fg("muted", "Working…")] : []),
                     ...(this.pendingAction ? ["", renderOptions.theme.fg("warning", `Confirm ${this.pendingAction}? y/Enter confirm · n/Esc cancel`)] : []),
@@ -223,7 +236,7 @@ export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace
     private updateWorkspace(workspace: AgentWorkspace): void {
         this.currentWorkspace = workspace;
         this.state.items[0]!.value = workspace;
-        this.listOptions.helpText = workspaceDetailHelpText(workspace);
+        this.listOptions.helpText = workspaceDetailHelpText(workspace, this.currentSessionId);
         this.pendingAction = null;
         this.invalidate();
     }
@@ -265,9 +278,11 @@ export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace
                             ? "discard"
                             : key === "l"
                                 ? "release"
-                                : undefined;
+                                : key === "x"
+                                    ? "recover"
+                                    : undefined;
         if (!action) return false;
-        if (!workspaceActionHelp(this.currentWorkspace).some((entry) => entry.startsWith(`${key} `))) return true;
+        if (!workspaceActionHelp(this.currentWorkspace, this.currentSessionId).some((entry) => entry.startsWith(`${key} `))) return true;
         if (action === "inspect") {
             this.runAction(action);
         } else {

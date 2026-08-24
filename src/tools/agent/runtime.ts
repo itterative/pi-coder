@@ -137,6 +137,8 @@ export interface PersistedAgentRun {
     usageSnapshot: Usage;
     startedAt: number;
     updatedAt: number;
+    /** Parent project cwd; isolated runs execute in a different cwd. */
+    parentCwd?: string;
     /** Execution cwd, which may be an isolated worktree. */
     cwd?: string;
     childSessionFile?: string;
@@ -150,6 +152,7 @@ export interface AgentRunPersistence {
     ownerSessionId: string;
     childSessionDir: string;
     save(record: PersistedAgentRun): boolean;
+    flush?: () => Promise<void>;
     deleteChildSession(sessionFile: string): void;
 }
 
@@ -310,6 +313,10 @@ export class AgentRunManager {
         this.persistence = persistence;
     }
 
+    async flushPersistence(): Promise<void> {
+        await this.persistence?.flush?.();
+    }
+
     get activeCount(): number {
         return [...this.runs.values()].filter((run) => !isTerminalStatus(run.status)).length;
     }
@@ -414,7 +421,7 @@ export class AgentRunManager {
                 startedAt: record.startedAt,
                 updatedAt: record.updatedAt,
                 cwd: record.cwd ?? context.cwd,
-                parentCwd: context.parentCwd ?? context.cwd,
+                parentCwd: record.parentCwd ?? context.parentCwd ?? context.cwd,
                 disposed: persistedTerminal,
                 shutdownRequested: false,
                 cancelRequested: false,
@@ -1315,6 +1322,7 @@ export class AgentRunManager {
             usageSnapshot,
             startedAt: run.startedAt,
             updatedAt: run.updatedAt,
+            parentCwd: run.parentCwd,
             cwd: run.cwd,
             childSessionFile: run.childSessionFile,
             terminalContent: terminal?.content,
