@@ -264,6 +264,33 @@ async function executeParentWorkspaceAction(
     }
 
     const sessionId = ctx.sessionManager.getSessionId();
+    if (params.action === "discard") {
+        if (workspace.leaseRunId) {
+            const result = requireParentWorkspaceLease(workspace, sessionId, params.runId);
+            await discardAgentWorkspaceResult(workspace.id, sessionId, params.runId);
+            emitAgentEvent(events, ctx.cwd, {
+                type: "workspace",
+                action: "lease_changed",
+                workspaceId: workspace.id,
+                reason: "parent_discarded",
+            });
+            const updated = await getAgentWorkspace(workspace.id);
+            return parentWorkspaceOutcome(record, updated ?? workspace, `Discarded workspace result ${result.id}; the isolated workspace is reusable.`);
+        }
+        if (!workspace.latestResult || workspace.latestResult.runId !== params.runId) {
+            throw new AgentActionError(`Workspace ${workspace.id} has no result for run ${params.runId} to discard.`);
+        }
+        await resetAgentWorkspaceForReuse(workspace.id);
+        emitAgentEvent(events, ctx.cwd, {
+            type: "workspace",
+            action: "lease_changed",
+            workspaceId: workspace.id,
+            reason: "parent_discarded",
+        });
+        const updated = await getAgentWorkspace(workspace.id);
+        return parentWorkspaceOutcome(record, updated ?? workspace, `Cleaned up the isolated workspace for result ${params.runId}; the parent checkout was unchanged.`);
+    }
+
     const result = requireParentWorkspaceLease(workspace, sessionId, params.runId);
     if (params.action === "apply") {
         await applyAgentWorkspaceApplication(workspace, sessionId, params.runId);
@@ -276,18 +303,6 @@ async function executeParentWorkspaceAction(
         });
         const updated = await getAgentWorkspace(workspace.id);
         return parentWorkspaceOutcome(record, updated ?? workspace, `Applied workspace result ${result.id} to the parent checkout.`);
-    }
-
-    if (params.action === "discard") {
-        await discardAgentWorkspaceResult(workspace.id, sessionId, params.runId);
-        emitAgentEvent(events, ctx.cwd, {
-            type: "workspace",
-            action: "lease_changed",
-            workspaceId: workspace.id,
-            reason: "parent_discarded",
-        });
-        const updated = await getAgentWorkspace(workspace.id);
-        return parentWorkspaceOutcome(record, updated ?? workspace, `Discarded workspace result ${result.id}; the isolated workspace is reusable.`);
     }
 
     if (params.action !== "revise") throw new AgentActionError(`Unsupported parent workspace action: ${params.action}`);

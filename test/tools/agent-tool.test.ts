@@ -118,6 +118,100 @@ describe("agent extension registration", () => {
         await handlers.session_shutdown[0]({}, ctx);
     });
 
+    it("applies a parent workspace result and verifies the lease is cleared", async () => {
+        const handlers: Record<string, Handler[]> = {};
+        let tool: any;
+        const pi = {
+            events: { emit() {} },
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            registerTool(definition: any) {
+                tool = definition;
+            },
+            registerCommand() {},
+        } as any;
+        const result = {
+            id: "result-1",
+            workspaceId: "workspace-1",
+            runId: "worker-1",
+            baseRevision: "base",
+            workerHead: "worker",
+            commitRange: "base..worker",
+            commits: ["worker"],
+            preparedAt: 1,
+            status: "prepared",
+        } as const;
+        const workspace = {
+            id: "workspace-1",
+            cwd: process.cwd(),
+            repositoryRoot: process.cwd(),
+            worktreePath: process.cwd(),
+            slug: "test-workspace",
+            baseRevision: "base",
+            setupState: "ready",
+            status: "review_required",
+            leaseOwnerSessionId: "parent-1",
+            leaseRunId: "worker-1",
+            leaseKind: "task",
+            latestResult: result,
+            createdAt: 1,
+            updatedAt: 1,
+        } as any;
+        const releasedWorkspace = {
+            ...workspace,
+            status: "review_required",
+            leaseOwnerSessionId: undefined,
+            leaseRunId: undefined,
+            leaseKind: undefined,
+            latestResult: { ...result, status: "applied" },
+        };
+        vi.spyOn(workspaces, "listAgentRunCatalog").mockResolvedValue([{
+            ownerSessionId: "parent-1",
+            runId: "worker-1",
+            parentCwd: process.cwd(),
+            title: "Worker result",
+            agent: "worker",
+            agentSource: "builtin",
+            task: "Implement the change",
+            status: "removed",
+            background: true,
+            mutating: true,
+            workspaceId: "workspace-1",
+            startedAt: 1,
+            updatedAt: 1,
+            usageSnapshot: ZERO_USAGE,
+        }]);
+        vi.spyOn(workspaces, "getAgentWorkspace")
+            .mockResolvedValueOnce(workspace)
+            .mockResolvedValueOnce(releasedWorkspace);
+        const apply = vi.spyOn(workspaces, "applyAgentWorkspaceApplication").mockResolvedValue({
+            ...result,
+            status: "applied",
+            parentRevision: "base",
+            appliedAt: 2,
+        });
+        const release = vi.spyOn(workspaces, "releaseAgentWorkspaceAfterApplication").mockResolvedValue();
+        registerAgentTool(pi, async () => { throw new Error("not used"); });
+
+        const outcome = await tool.execute(
+            "call-apply",
+            { action: "apply", runId: "worker-1" },
+            undefined,
+            undefined,
+            {
+                cwd: process.cwd(),
+                sessionManager: { getSessionId: () => "parent-1" },
+                ui: { notify() {}, setWidget() {} },
+            },
+        );
+
+        expect(apply).toHaveBeenCalledWith(workspace, "parent-1", "worker-1");
+        expect(release).toHaveBeenCalledWith("workspace-1", "parent-1", "worker-1");
+        expect(outcome.details.workspaceResult).toMatchObject({ status: "applied" });
+        expect(releasedWorkspace.leaseRunId).toBeUndefined();
+    });
+
     it("renders and executes a complete start, wait, resume flow", async () => {
         const handlers: Record<string, Handler[]> = {};
         let tool: any;

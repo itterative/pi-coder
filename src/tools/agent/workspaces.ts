@@ -1123,8 +1123,8 @@ export async function resetAgentWorkspaceForReuse(
         } else if (workspace.leaseKind) {
             throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be reset.`);
         }
-        const parentStatus = await git(workspace.repositoryRoot, ["status", "--porcelain=v1", "--untracked-files=all"]);
-        if (parentStatus) throw new Error("Reset requires a clean parent checkout.");
+        // Resetting only changes the isolated worktree. The parent may have
+        // uncommitted changes; its current HEAD remains the workspace base.
         const targetRevision = await git(workspace.repositoryRoot, ["rev-parse", "HEAD"]);
         await git(workspace.worktreePath, ["reset", "--hard", targetRevision]);
         await git(workspace.worktreePath, ["clean", "-fd"]);
