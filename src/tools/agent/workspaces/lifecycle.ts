@@ -137,16 +137,9 @@ export async function resetAgentWorkspaceForReuse(
                 lease_owner_session_id = NULL, lease_run_id = NULL, lease_kind = NULL,
                 lease_acquired_at = NULL, updated_at = ? WHERE id = ?
         `).run(targetRevision, Date.now(), workspaceId);
-        return {
-            ...workspace,
-            baseRevision: targetRevision,
-            status: "available",
-            leaseOwnerSessionId: undefined,
-            leaseRunId: undefined,
-            leaseKind: undefined,
-            leaseAcquiredAt: undefined,
-            updatedAt: Date.now(),
-        };
+        const reset = workspaceById(database, workspaceId);
+        if (!reset) throw new Error(`Workspace ${workspaceId} disappeared while being reset.`);
+        return reset;
     } finally {
         database.close();
     }

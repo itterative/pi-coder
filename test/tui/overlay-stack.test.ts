@@ -4,6 +4,7 @@ import { TuiMainScreen } from "@earendil-works/pi-tui";
 import type { Component, OverlayHandle, Terminal, TUI } from "@earendil-works/pi-tui";
 import { AgentWorkspaceDetailComponent } from "../../src/tui/agent-workspace-browser";
 import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
+import { workspaceBrowserItem } from "../../src/tools/agent/presentation/browser-models";
 import { withOverlayStack } from "../../src/tui/overlay-stack";
 import { mockTheme, renderText } from "../helpers";
 
@@ -77,9 +78,8 @@ describe("withOverlayStack", () => {
             handleInput: () => {},
         };
         const detail = new AgentWorkspaceDetailComponent(
-            workspace,
+            workspaceBrowserItem(workspace),
             () => 27,
-            undefined,
             {
                 onAction: async (action) => {
                     expect(action).toBe("discard");

@@ -11,29 +11,7 @@ import { deriveAgentTitle } from "../runs/manager";
 import type { AgentRunSummary } from "../contracts/runs";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
 import { listAgentRunCatalog } from "../storage/run-catalog";
-
-export interface AgentSessionBrowserItem {
-    kind: "current" | "past" | "empty";
-    id: string;
-    title: string;
-    agent: string;
-    status: string;
-    task: string;
-    startedAt?: number;
-    updatedAt: number;
-    sessionFile?: string;
-    parentSessionId?: string;
-    messageCount?: number;
-    firstMessage?: string;
-    allMessagesText?: string;
-    transcript?: string;
-    activity?: string;
-    responsePreview?: string;
-    mutating?: boolean;
-    usage?: AgentRunSummary["usage"];
-    changedFiles?: string[];
-    readFiles?: string[];
-}
+import type { AgentSessionBrowserItem } from "./browser-models";
 
 function currentItem(run: AgentRunSummary): AgentSessionBrowserItem {
     return {

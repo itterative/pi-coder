@@ -6,6 +6,7 @@ import {
     AgentSessionBrowserComponent,
 } from "../../src/tui/agent-session-browser";
 import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
+import { workspaceBrowserItem } from "../../src/tools/agent/presentation/browser-models";
 import { KEY, interact, mockTheme, press, renderText, snapshotText } from "../helpers";
 
 const current = {
@@ -303,21 +304,21 @@ describe("AgentSessionBrowserComponent", () => {
 
     it("merges workspaces into the agents browser", () => {
         let invalidations = 0;
+        const workspaceView = workspaceBrowserItem(workspace, {
+            kind: "available",
+            dirty: true,
+            changedFiles: 2,
+            stagedFiles: 1,
+            unstagedFiles: 1,
+            untrackedFiles: 0,
+            headRevision: "abc123def456",
+        });
         const value = new AgentSessionBrowserComponent({
             current: [current],
             past: [past],
-            workspaces: [workspace],
-            workspaceGitStates: new Map([[workspace.id, {
-                kind: "available" as const,
-                dirty: true,
-                changedFiles: 2,
-                stagedFiles: 1,
-                unstagedFiles: 1,
-                untrackedFiles: 0,
-                headRevision: "abc123def456",
-            }]]),
+            workspaces: [workspaceView],
             onWorkspaceInspect: () => "diff text",
-            onWorkspaceAction: async () => workspace,
+            onWorkspaceAction: async () => workspaceView,
             onInvalidate: () => { invalidations++; },
         });
         value.initialize(mockTheme);
@@ -338,11 +339,51 @@ describe("AgentSessionBrowserComponent", () => {
         expect(ui.render()).toContain("Workspace: quiet-lantern-7k3");
     });
 
+    it("refreshes an open workspace detail and uses the refreshed item for actions", async () => {
+        const eventBus = createEventBus();
+        const original = workspaceBrowserItem(workspace);
+        const refreshed = workspaceBrowserItem({
+            ...workspace,
+            setupSummary: "Updated setup summary",
+            updatedAt: workspace.updatedAt + 1,
+        });
+        let actionWorkspaceUpdatedAt: number | undefined;
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            workspaces: [original],
+            cwd: workspace.cwd,
+            eventBus,
+            onRefresh: async () => ({ current: [], past: [], workspaces: [refreshed] }),
+            onWorkspaceAction: async (selected) => {
+                actionWorkspaceUpdatedAt = selected.updatedAt;
+                return null;
+            },
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+        ui.press(KEY.tab, KEY.tab, KEY.enter);
+
+        eventBus.emit(AGENT_EVENT_CHANNEL, {
+            cwd: workspace.cwd,
+            timestamp: Date.now(),
+            type: "workspace",
+            action: "updated",
+            workspaceId: workspace.id,
+        });
+        await vi.waitFor(() => expect(ui.render()).toContain("Updated setup summary"));
+
+        ui.press("d", "y");
+        await vi.waitFor(() => expect(actionWorkspaceUpdatedAt).toBe(refreshed.updatedAt));
+        value.dispose();
+        eventBus.clear();
+    });
+
     it("renders the validation workspace detail from the workspace registry", async () => {
         const value = new AgentSessionBrowserComponent({
             current: [],
             past: [],
-            workspaces: [validationWorkspace],
+            workspaces: [workspaceBrowserItem(validationWorkspace)],
             fixedHeight: () => 40,
         });
         value.initialize(mockTheme);
@@ -359,7 +400,7 @@ describe("AgentSessionBrowserComponent", () => {
         const value = new AgentSessionBrowserComponent({
             current: [],
             past: [],
-            workspaces: [workspace],
+            workspaces: [workspaceBrowserItem(workspace)],
             fixedHeight: () => 27,
             onWorkspaceAction: async (selected, action) => {
                 expect(selected.id).toBe(workspace.id);

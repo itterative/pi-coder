@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
     AgentWorkspaceBrowserComponent,
+    AgentWorkspaceDetailComponent,
 } from "../../src/tui/agent-workspace-browser";
 import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
+import { workspaceBrowserItem } from "../../src/tools/agent/presentation/browser-models";
 import { KEY, interact, mockTheme, renderText } from "../helpers";
 
 const available: AgentWorkspace = {
@@ -34,7 +36,7 @@ describe("AgentWorkspaceBrowserComponent", () => {
     it("renders workspace status and summary counts", () => {
         const component = new AgentWorkspaceBrowserComponent({
             cwd: "/repo/project",
-            workspaces: [available, reviewRequired],
+            workspaces: [workspaceBrowserItem(available), workspaceBrowserItem(reviewRequired)],
         });
         component.initialize(mockTheme);
 
@@ -47,7 +49,7 @@ describe("AgentWorkspaceBrowserComponent", () => {
     it("opens workspace details and returns to the list", () => {
         const component = new AgentWorkspaceBrowserComponent({
             cwd: "/repo/project",
-            workspaces: [available],
+            workspaces: [workspaceBrowserItem(available)],
         });
         component.initialize(mockTheme);
         const ui = interact(component, 100);
@@ -59,6 +61,19 @@ describe("AgentWorkspaceBrowserComponent", () => {
         ui.press(KEY.escape);
         expect(ui.render()).toContain("Agent workspaces");
         expect(ui.render()).not.toContain("Workspace: quiet-lantern-7k3");
+    });
+
+    it("renders rejected workspace actions without an unhandled rejection", async () => {
+        const component = new AgentWorkspaceDetailComponent(
+            workspaceBrowserItem(available),
+            undefined,
+            { onAction: async () => { throw new Error("workspace action failed"); } },
+        );
+        component.initialize(mockTheme);
+        const ui = interact(component, 100);
+
+        ui.press("d", "y");
+        await vi.waitFor(() => expect(ui.render()).toContain("Action failed: workspace action failed"));
     });
 
     it("renders an empty state", () => {

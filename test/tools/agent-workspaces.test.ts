@@ -400,7 +400,14 @@ describe("agent workspaces", () => {
         expect(retained).toMatchObject({ id: workspace.id, status: "review_required" });
         expect(retained?.leaseRunId).toBeUndefined();
         await fs.writeFile(path.join(repository, "parent-dirty.txt"), "keep parent changes\n");
-        await resetAgentWorkspaceForReuse(workspace.id, undefined, undefined, state);
+        const reset = await resetAgentWorkspaceForReuse(workspace.id, undefined, undefined, state);
+        expect(reset).toMatchObject({
+            id: workspace.id,
+            status: "available",
+            latestResult: { status: "discarded" },
+        });
+        expect(reset.leaseRunId).toBeUndefined();
+        expect(reset.leaseState).toBe("none");
         expect(await findAvailableAgentWorkspace(repository, state)).toMatchObject({ id: workspace.id });
         expect(await fs.readFile(path.join(workspace.worktreePath, "tracked.txt"), "utf8")).toBe("base\n");
         expect(await fs.readFile(path.join(repository, "parent-dirty.txt"), "utf8")).toBe("keep parent changes\n");

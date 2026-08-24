@@ -7,15 +7,15 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
-import type { AgentSessionBrowserItem } from "../tools/agent/presentation/sessions";
+import type {
+    AgentSessionBrowserItem,
+    AgentWorkspaceBrowserItem,
+    WorkspaceDispositionAction,
+} from "../tools/agent/presentation/browser-models";
 import {
     AGENT_EVENT_CHANNEL,
     isAgentEvent,
 } from "../tools/agent/observability/events";
-import type {
-    AgentWorkspace,
-    AgentWorkspaceGitState,
-} from "../tools/agent/contracts/workspaces";
 import { BORDER_STYLES } from "./border-box";
 import { withOverlayStack } from "./overlay-stack";
 import { AgentSessionDetailComponent } from "./agent-session-detail";
@@ -27,7 +27,7 @@ import {
 
 export type { AgentWorkspaceAction } from "./agent-workspace-browser";
 
-type AgentBrowserItem = AgentSessionBrowserItem | AgentWorkspace;
+type AgentBrowserItem = AgentSessionBrowserItem | AgentWorkspaceBrowserItem;
 type AgentBrowserTab = "current" | "past" | "workspaces";
 
 interface AgentSessionBrowserState extends ListViewState<AgentBrowserItem> {
@@ -37,20 +37,18 @@ interface AgentSessionBrowserState extends ListViewState<AgentBrowserItem> {
 export interface AgentSessionBrowserData {
     current: AgentSessionBrowserItem[];
     past: AgentSessionBrowserItem[];
-    workspaces?: AgentWorkspace[];
-    workspaceGitStates?: Map<string, AgentWorkspaceGitState>;
+    workspaces?: AgentWorkspaceBrowserItem[];
 }
 
 export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
     cwd?: string;
-    currentSessionId?: string;
     eventBus?: EventBus;
     onRefresh?: () => Promise<AgentSessionBrowserData>;
     fixedHeight?: () => number;
     onResume?: (item: AgentSessionBrowserItem) => void | Promise<void>;
     onCancel?: (item: AgentSessionBrowserItem) => void | Promise<void>;
-    onWorkspaceAction?: (workspace: AgentWorkspace, action: Exclude<AgentWorkspaceAction, "inspect">) => AgentWorkspace | null | undefined | Promise<AgentWorkspace | null | undefined>;
-    onWorkspaceInspect?: (workspace: AgentWorkspace) => string | Promise<string>;
+    onWorkspaceAction?: (workspace: AgentWorkspaceBrowserItem, action: WorkspaceDispositionAction) => AgentWorkspaceBrowserItem | null | undefined | Promise<AgentWorkspaceBrowserItem | null | undefined>;
+    onWorkspaceInspect?: (workspace: AgentWorkspaceBrowserItem) => string | Promise<string>;
     onInvalidate?: () => void;
 }
 
@@ -92,7 +90,7 @@ function asSessionListItems(items: AgentSessionBrowserItem[], empty: AgentSessio
     }));
 }
 
-function asWorkspaceListItems(workspaces: AgentWorkspace[]): ListItem<AgentBrowserItem>[] {
+function asWorkspaceListItems(workspaces: AgentWorkspaceBrowserItem[]): ListItem<AgentBrowserItem>[] {
     return (workspaces.length ? workspaces : [EMPTY_WORKSPACES]).map((value) => ({
         value,
         label: isWorkspace(value) ? value.slug : value.task,
@@ -100,8 +98,8 @@ function asWorkspaceListItems(workspaces: AgentWorkspace[]): ListItem<AgentBrows
     }));
 }
 
-function isWorkspace(item: AgentBrowserItem): item is AgentWorkspace {
-    return !("kind" in item);
+function isWorkspace(item: AgentBrowserItem): item is AgentWorkspaceBrowserItem {
+    return item.kind === "workspace";
 }
 
 function isSession(item: AgentBrowserItem): item is AgentSessionBrowserItem {
@@ -158,9 +156,8 @@ function tabText(tab: AgentBrowserTab, theme: Theme, includeWorkspaces: boolean)
 function itemText(
     item: AgentBrowserItem,
     theme: Theme,
-    workspaceGitStates?: ReadonlyMap<string, AgentWorkspaceGitState>,
 ): string {
-    if (isWorkspace(item)) return agentWorkspaceItemText(item, theme, workspaceGitStates?.get(item.id));
+    if (isWorkspace(item)) return agentWorkspaceItemText(item, theme);
     if (item.kind === "empty") return theme.fg("muted", item.task);
 
     const mode = item.agent === "workspace-setup"
@@ -186,8 +183,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
     private sessionDetail: AgentSessionDetailComponent | null = null;
     private workspaceDetail: AgentWorkspaceDetailComponent | null = null;
     private readonly past: AgentSessionBrowserItem[];
-    private readonly workspaces: AgentWorkspace[];
-    private readonly workspaceGitStates: Map<string, AgentWorkspaceGitState>;
+    private readonly workspaces: AgentWorkspaceBrowserItem[];
     private readonly onRefresh?: () => Promise<AgentSessionBrowserData>;
     private readonly onInvalidate?: () => void;
     private readonly unsubscribeEvents?: () => void;
@@ -195,7 +191,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
     private refreshPending = false;
     private disposed = false;
 
-    private updateWorkspace(workspace: AgentWorkspace, replacement: AgentWorkspace | null | undefined): void {
+    private updateWorkspace(workspace: AgentWorkspaceBrowserItem, replacement: AgentWorkspaceBrowserItem | null | undefined): void {
         const index = this.workspaces.findIndex((item) => item.id === workspace.id);
         if (index < 0) return;
         if (replacement === null) {
@@ -242,9 +238,15 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     this.current.splice(0, this.current.length, ...data.current);
                     this.past.splice(0, this.past.length, ...data.past);
                     this.workspaces.splice(0, this.workspaces.length, ...(data.workspaces ?? []));
-                    this.workspaceGitStates.clear();
-                    for (const [id, state] of data.workspaceGitStates ?? []) {
-                        this.workspaceGitStates.set(id, state);
+                    if (this.workspaceDetail) {
+                        const replacement = this.workspaces.find((item) => (
+                            item.id === this.workspaceDetail?.workspace.id
+                        ));
+                        if (replacement) {
+                            this.workspaceDetail.updateWorkspace(replacement);
+                        } else {
+                            this.workspaceDetail.close();
+                        }
                     }
                     this.rebuildItems();
                     this.invalidate();
@@ -268,9 +270,6 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
         const current = options.current;
         const past = options.past;
         const workspaces = options.workspaces ?? [];
-        const workspaceGitStates: Map<string, AgentWorkspaceGitState> = options.workspaceGitStates instanceof Map
-            ? options.workspaceGitStates
-            : new Map(options.workspaceGitStates ?? []);
         const includeWorkspaces = options.workspaces !== undefined;
         const tabs: AgentBrowserTab[] = includeWorkspaces
             ? ["current", "past", "workspaces"]
@@ -310,7 +309,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     ));
                 },
                 renderItem: (item: ListItem<AgentBrowserItem>, options: ListViewRenderItemOptions<AgentBrowserItem, AgentSessionBrowserState>) => {
-                    const content = itemText(item.value, options.theme, workspaceGitStates);
+                    const content = itemText(item.value, options.theme);
                     return options.isCursor ? content : options.theme.fg("text", content);
                 },
                 onKey: (key, state) => {
@@ -351,23 +350,25 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                         const selected = state.items[state.cursor ?? 0]?.value;
                         if (selected && this.theme) {
                             if (isWorkspace(selected)) {
-                                this.workspaceDetail = new AgentWorkspaceDetailComponent(
+                                let detail: AgentWorkspaceDetailComponent;
+                                detail = new AgentWorkspaceDetailComponent(
                                     selected,
                                     this.listOptions.fixedHeight,
-                                    workspaceGitStates?.get(selected.id),
                                     {
-                                        onInspect: () => options.onWorkspaceInspect?.(selected) ?? "No saved worker result is available.",
+                                        onInspect: () => options.onWorkspaceInspect?.(detail.workspace)
+                                            ?? "No saved worker result is available.",
                                         onAction: async (action) => {
-                                            const replacement = await options.onWorkspaceAction?.(selected, action);
-                                            this.updateWorkspace(selected, replacement);
+                                            const workspace = detail.workspace;
+                                            const replacement = await options.onWorkspaceAction?.(workspace, action);
+                                            this.updateWorkspace(workspace, replacement);
                                             return replacement;
                                         },
                                         onInvalidate: options.onInvalidate,
                                     },
-                                    options.currentSessionId,
                                 );
-                                this.workspaceDetail.initialize(this.theme);
-                                this.workspaceDetail.setDoneCallback(() => {
+                                this.workspaceDetail = detail;
+                                detail.initialize(this.theme);
+                                detail.setDoneCallback(() => {
                                     this.workspaceDetail = null;
                                     this.invalidate();
                                 });
@@ -413,7 +414,6 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
         this.current = current;
         this.past = past;
         this.workspaces = workspaces;
-        this.workspaceGitStates = workspaceGitStates;
         this.onRefresh = options.onRefresh;
         this.onInvalidate = options.onInvalidate;
         if (options.eventBus && options.cwd && options.onRefresh) {

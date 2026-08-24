@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
 import { PagerComponent } from "./pager";
-import type { AgentSessionBrowserItem } from "../tools/agent/presentation/sessions";
+import type { AgentSessionBrowserItem } from "../tools/agent/presentation/browser-models";
 import { compactNumber } from "./agent-session-format";
 import { wrapPreservingSpaces } from "../common/text";
 
