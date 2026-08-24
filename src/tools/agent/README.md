@@ -45,6 +45,10 @@ A child paused at `ask_parent` restores as `waiting_for_parent`. A child that wa
 
 Uncollected background terminal outcomes restore from bounded parent metadata without reopening their child transcript. Collection, cancellation, and terminal-result eviction append a removal tombstone but retain the child transcript so `/agent-sessions` can browse past work. Child transcripts contain raw conversation and tool-result content rather than sanitized trace previews; keep the private storage directory confidential. A later explicit prune policy can remove old transcripts, and parent sessions deleted outside pi may leave orphan directories until that policy is added.
 
+## Built-in scout
+
+The built-in `scout` has `read`, `grep`, `find`, `ls`, and a restricted `bash` tool. A scout bash call runs directly only when the cwd-confinement heuristic classifies the complete command as `SAFE_READONLY`. This permits the curated read-only command set within the working directory, while rejecting unknown commands, writes, outside or sensitive paths, symlink escapes, unsafe flags, and every `SAFE_EDIT` command. Rejections include a short explanation plus the heuristic's stable structured reason code; no prompt or approval bypass is available. Custom read-only agent definitions remain limited to `read`, `grep`, `find`, and `ls`.
+
 ## Built-in worker
 
 The built-in `worker` operates in the existing checkout with `read`, `grep`, `find`, `ls`, `edit`, `write`, and `bash`. Only one worker may be starting, running, or waiting at a time, while read-only scouts can continue concurrently. Foreground and background workers are supported.
@@ -92,7 +96,7 @@ Run these checks after changing child sessions, providers, lifecycle handling, o
 9. Reload while a child is waiting and while one is running. Verify the waiting child restores with the same ID/question, the running child restores as `interrupted`, no tool replays or resumes automatically, `r` continues an interrupted run from `/agent-sessions`, and `c` cancels it with a user-canceled parent message. Restart pi and switch away/back to repeat the restoration check.
 10. Fill all four active run slots and verify a fifth start/spawn is rejected; verify uncollected terminal background results do not consume active capacity.
 11. Verify a user agent loads, a trusted-project agent overrides it, and an untrusted project definition does not load.
-12. Ask the scout to access an absolute outside path, `..` escape, sensitive file, and in-cwd symlink to an outside target; all must be blocked without prompting.
+12. Ask the scout to access an absolute outside path, `..` escape, sensitive file, and in-cwd symlink to an outside target; all must be blocked without prompting. Run one known safe, in-cwd read-only bash command and verify it completes without a prompt; then try a write, unknown command, and outside-path command and verify each is blocked with a heuristic reason.
 13. Start a background worker and request one edit, one write, and one bash call. Verify every prompt names the worker run, queued mutations do not overlap, the widget shows permission waiting, denial is recoverable, and cancel closes an active gate.
 14. Try a second worker while the first is active; verify it is rejected while a scout can still start. Confirm outside/sensitive file paths and configured-deny bash commands block without an approval bypass.
 15. Complete a worker after edit/write and approved bash calls. Verify its mutation report lists tracked paths, includes the bash attribution caveat, and the actual checkout diff matches expectations.

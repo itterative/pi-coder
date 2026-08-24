@@ -13,7 +13,7 @@ import { lookpath } from "lookpath";
 
 import sandboxConfig from "../../../common/config";
 import sandbox from "../../../modules/sandbox/bubblewrap";
-import { getPathConfinementPermission } from "../../../modules/sandbox/heuristics";
+import { getPathConfinementPermission, Heuristic } from "../../../modules/sandbox/heuristics";
 import type { Permission } from "../../../modules/sandbox/permissions";
 import { resolvePermissionDetails } from "../../../modules/sandbox/resolve";
 import {
@@ -49,7 +49,7 @@ const SETUP_BASH_TIMEOUT_SECONDS = 10 * 60;
 
 function isWorkerPathAllowed(filePath: string | undefined, cwd: string): boolean {
     const target = filePath?.trim() || cwd;
-    return getPathConfinementPermission(target, cwd, WORKER_CONFINEMENT) !== undefined;
+    return getPathConfinementPermission(target, cwd, WORKER_CONFINEMENT) === Heuristic.SAFE_READONLY;
 }
 
 class MutationQueue {

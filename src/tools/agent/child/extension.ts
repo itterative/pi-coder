@@ -3,6 +3,7 @@ import {
     isToolCallEventType,
     type ExtensionAPI,
     type ExtensionContext,
+    type BashToolInput,
     type FindToolInput,
     type GrepToolInput,
     type LsToolInput,
@@ -11,7 +12,13 @@ import {
 import { Type } from "typebox";
 
 import type { SandboxConfigCwdConfinement } from "../../../common/config";
-import { getPathConfinementPermission } from "../../../modules/sandbox/heuristics";
+import {
+    describeUnsafeReason,
+    getCwdConfinementAssessment,
+    getPathConfinementPermission,
+    Heuristic,
+    type HeuristicAssessment,
+} from "../../../modules/sandbox/heuristics";
 import { askUser } from "../../../tui/ask-user";
 import { registerWorkerMutationHooks } from "./worker-permissions";
 import type { ChildAgentFactoryContext } from "../contracts/runs";
@@ -25,20 +32,31 @@ const CHILD_CONFINEMENT: SandboxConfigCwdConfinement = {
     resolveSymlinks: true,
 };
 
-export function childProtocolPrompt(background: boolean, mutating: boolean): string {
+export function childProtocolPrompt(background: boolean, mutating: boolean, restrictedBash: boolean): string {
     const interaction = background
         ? "Direct end-user dialogs are unavailable while you run in the background. Use ask_parent when guidance is materially necessary; make reasonable progress first, include evidence and a recommendation, and call it alone in its tool batch."
         : "Use ask_user when you need a preference, clarification, or decision directly from the end user, and call it alone in its tool batch so later work can incorporate the answer. The answer returns in the same turn, so continue your work afterward. Use ask_parent instead when the parent can answer, investigate, or decide; make reasonable progress first, include evidence and a recommendation, and call ask_parent alone in its tool batch. Do not ask questions only in prose when either interaction tool applies.";
     const capability = mutating
         ? "You are a mutation-capable worker operating in the parent's current checkout. Every edit, write, and bash call opens an explicit parent-visible permission gate. Call mutation tools one at a time, and remember that parent activity may concurrently affect the checkout."
-        : "You are a read-only subagent working for a parent coding agent. You cannot run commands or modify files.";
+        : restrictedBash
+            ? "You are a read-only subagent working for a parent coding agent. You may run only cwd-confined bash commands classified SAFE_READONLY by the safety heuristic. SAFE_READONLY means every part of the command uses a curated non-mutating form, and all file access—including resolved symlinks—stays inside the working directory and avoids sensitive paths. Unknown commands, writes, unsafe flags or modes, and dynamic or unmodeled behavior are blocked. Use a block reason to choose a supported read/search tool or report the limit; do not retry variants hoping to bypass it. You cannot modify files."
+            : "You are a read-only subagent working for a parent coding agent. You cannot run commands or modify files.";
     return `${capability}\n\n${interaction}\n\nWhen the task is complete, provide a self-contained final report to the parent. Mutation-capable workers must list changed files and validation performed.`;
 
 }
 
 export function isChildPathAllowed(filePath: string | undefined, cwd: string): boolean {
     const effectivePath = filePath?.trim() || cwd;
-    return getPathConfinementPermission(effectivePath, cwd, CHILD_CONFINEMENT) !== undefined;
+    return getPathConfinementPermission(effectivePath, cwd, CHILD_CONFINEMENT) === Heuristic.SAFE_READONLY;
+}
+
+/** Assess whether a scout's bash command is confined and read-only. */
+export function getScoutBashAssessment(command: string, cwd: string): HeuristicAssessment {
+    return getCwdConfinementAssessment(command, cwd, CHILD_CONFINEMENT);
+}
+
+export function isScoutBashAllowed(command: string, cwd: string): boolean {
+    return getScoutBashAssessment(command, cwd).classification === Heuristic.SAFE_READONLY;
 }
 
 export interface ChildUserQuestion {
@@ -249,6 +267,25 @@ export function registerChildExtension(
         }
 
         pi.on("tool_call", (event, ctx) => {
+            if (!mutating && isToolCallEventType<"bash", BashToolInput>("bash", event)) {
+                const assessment = getScoutBashAssessment(event.input.command, ctx.cwd);
+                if (assessment.classification === Heuristic.SAFE_READONLY) {
+                    onTrace?.("scout.bash.allowed", { classification: assessment.classification });
+                    return;
+                }
+                const reasons = assessment.reasons
+                    .map((reason) => `${describeUnsafeReason(reason)} [${reason}]`)
+                    .join("; ");
+                onTrace?.("scout.bash.blocked", {
+                    classification: assessment.classification,
+                    reasons: assessment.reasons.join(", "),
+                });
+                return {
+                    block: true,
+                    reason: `Read-only scout bash blocked: ${reasons}. Commands must be cwd-confined and classified SAFE_READONLY.`,
+                };
+            }
+
             let filePath: string | undefined;
             if (isToolCallEventType<"read", ReadToolInput>("read", event)) {
                 filePath = event.input.path;

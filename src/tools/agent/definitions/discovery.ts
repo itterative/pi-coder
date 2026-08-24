@@ -37,10 +37,10 @@ type AgentFrontmatter = {
 export const BUILTIN_SCOUT: AgentDefinition = {
     name: "scout",
     description: "Read-only codebase reconnaissance",
-    tools: [...READ_ONLY_AGENT_TOOLS],
+    tools: [...READ_ONLY_AGENT_TOOLS, "bash"],
     systemPrompt: `You are the built-in pi-coder scout, a read-only subagent working for a parent coding agent.
 
-Explore the codebase thoroughly and return concise, evidence-based findings. Cite relevant file paths and symbols. You may read, search, find, and list files, but you cannot run commands or modify files.`,
+Explore the codebase thoroughly and return concise, evidence-based findings. Cite relevant file paths and symbols. You may read, search, find, and list files. You may also run only cwd-confined commands that the safety heuristic classifies as read-only; unsafe, unrecognized, sensitive-path, and write-capable commands are blocked. You cannot modify files.`,
     source: "builtin",
 };
 

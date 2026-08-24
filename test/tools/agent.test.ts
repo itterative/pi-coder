@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Usage } from "@earendil-works/pi-ai";
 
-import { isChildPathAllowed } from "../../src/tools/agent/child";
+import {
+    getScoutBashAssessment,
+    isChildPathAllowed,
+    isScoutBashAllowed,
+} from "../../src/tools/agent/child";
 import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
 import {
     AgentActionError,
@@ -761,7 +765,7 @@ describe("AgentRunManager", () => {
     });
 });
 
-describe("scout path confinement", () => {
+describe("scout confinement", () => {
     it("allows cwd paths and blocks outside and sensitive paths", () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-coder-agent-"));
         tempDirs.push(cwd);
@@ -788,5 +792,20 @@ describe("scout path confinement", () => {
         expect(isChildPathAllowed(path.join(cwd, "outside"), cwd)).toBe(false);
         expect(isChildPathAllowed(path.join(cwd, "outside", "nested.txt"), cwd)).toBe(false);
         expect(isChildPathAllowed(path.join(cwd, "broken-outside"), cwd)).toBe(false);
+    });
+
+    it("allows only heuristic-classified read-only bash commands", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-coder-agent-"));
+        tempDirs.push(cwd);
+        fs.writeFileSync(path.join(cwd, "safe.txt"), "safe");
+
+        expect(isScoutBashAllowed("cat safe.txt", cwd)).toBe(true);
+        expect(isScoutBashAllowed("echo changed > safe.txt", cwd)).toBe(false);
+        expect(isScoutBashAllowed("cat /etc/passwd", cwd)).toBe(false);
+        expect(isScoutBashAllowed("unrecognized-command", cwd)).toBe(false);
+        expect(getScoutBashAssessment("cat /etc/passwd", cwd)).toMatchObject({
+            classification: "UNSAFE",
+            reasons: ["OUTSIDE_CWD"],
+        });
     });
 });

@@ -89,7 +89,8 @@ describe("agent discovery", () => {
         const worker = result.agents.find((agent) => agent.name === "worker");
         const custom = result.agents.find((agent) => agent.name === "custom");
 
-        expect(scout?.source).toBe("builtin");
+        expect(scout).toMatchObject({ source: "builtin" });
+        expect(scout?.tools).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(worker).toMatchObject({ source: "builtin", mutating: true });
         expect(worker?.tools).toEqual(["read", "grep", "find", "ls", "edit", "write", "bash"]);
         expect(custom?.tools).toEqual(["read", "grep"]);

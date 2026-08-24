@@ -21,7 +21,9 @@ import {
 
 export {
     askChildUser,
+    getScoutBashAssessment,
     isChildPathAllowed,
+    isScoutBashAllowed,
     type ChildUserAnswerDetails,
     type ChildUserAnswerResult,
     type ChildUserQuestion,
@@ -98,7 +100,11 @@ export async function createAgentChild(
         }],
         appendSystemPrompt: [
             context.definition.systemPrompt,
-            childProtocolPrompt(context.background === true, context.definition.mutating === true),
+            childProtocolPrompt(
+                context.background === true,
+                context.definition.mutating === true,
+                context.definition.tools.includes("bash") && context.definition.mutating !== true,
+            ),
         ].filter(Boolean),
     });
     await resourceLoader.reload();
