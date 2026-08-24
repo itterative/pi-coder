@@ -19,7 +19,6 @@ import { AgentMailbox } from "./mailbox";
 import { loadAgentRunPersistence } from "./persistence";
 import {
     claimAgentWorkspace,
-    completeAgentWorkspaceLease,
     createAgentWorkspace,
     findAvailableAgentWorkspace,
     findUnpreparedAgentWorkspace,
@@ -395,13 +394,6 @@ function oneLinePreview(text: string, maxChars = 180): string {
         : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function isTerminalAgentStatus(status: AgentRunDetails["status"]): boolean {
-    return status === "completed"
-        || status === "failed"
-        || status === "aborted"
-        || status === "canceled";
-}
-
 const AGENT_WIDGET_ID = "pi-coder-agent-activity";
 
 function updateAgentUi(
@@ -458,6 +450,20 @@ function updateAgentUi(
     ctx.ui.setWidget(AGENT_WIDGET_ID, activityLines, { placement: "aboveEditor" });
 }
 
+export function clearCompletedWorkspaceSetupRun(
+    setupRuns: Map<string, AgentRunSummary>,
+    details: Pick<AgentRunDetails, "agent" | "status" | "workspaceId">,
+): boolean {
+    if (details.status !== "completed" || !details.workspaceId || details.agent === "workspace-setup") return false;
+    let removed = false;
+    for (const [setupRunId, setupRun] of setupRuns) {
+        if (setupRun.workspaceId !== details.workspaceId) continue;
+        setupRuns.delete(setupRunId);
+        removed = true;
+    }
+    return removed;
+}
+
 export default function registerAgentTool(
     pi: ExtensionAPI,
     factory: ChildAgentFactory = createAgentChild,
@@ -495,30 +501,10 @@ export default function registerAgentTool(
         });
         refreshAgentUi(ctx);
     };
-    const mailbox = new AgentMailbox(pi);
-    const releaseWorkspaceForRun = async (ctx: ExtensionContext, details: AgentRunDetails): Promise<void> => {
-        if (!details.workspaceId || !isTerminalAgentStatus(details.status)) return;
-        try {
-            await completeAgentWorkspaceLease(
-                details.workspaceId,
-                ctx.sessionManager.getSessionId(),
-                details.runId,
-            );
-        } catch (error) {
-            ctx.ui.notify(
-                `Could not release workspace lease for ${details.runId}: ${error instanceof Error ? error.message : String(error)}`,
-                "warning",
-            );
-        }
-        if (details.status === "completed" && details.agent !== "workspace-setup") {
-            for (const [setupRunId, setupRun] of setupRuns) {
-                if (setupRun.workspaceId === details.workspaceId && setupRun.status === "completed") {
-                    setupRuns.delete(setupRunId);
-                }
-            }
-            refreshAgentUi(ctx);
-        }
+    const clearCompletedWorkspaceSetup = (ctx: ExtensionContext, details: AgentRunDetails): void => {
+        if (clearCompletedWorkspaceSetupRun(setupRuns, details)) refreshAgentUi(ctx);
     };
+    const mailbox = new AgentMailbox(pi);
     let mailboxFlushScheduled = false;
     const flushMailbox = () => {
         mailbox.reconcile(manager.listRuns());
@@ -577,7 +563,7 @@ export default function registerAgentTool(
             onResume: async (item) => {
                 try {
                     const outcome = await manager.resume(item.id, undefined, undefined, backgroundUpdate(ctx));
-                    await releaseWorkspaceForRun(ctx, outcome.details);
+                    clearCompletedWorkspaceSetup(ctx, outcome.details);
                     refreshAgentUi(ctx);
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
@@ -587,7 +573,6 @@ export default function registerAgentTool(
             onCancel: async (item) => {
                 try {
                     const outcome = await manager.cancel(item.id);
-                    await releaseWorkspaceForRun(ctx, outcome.details);
                     mailbox.notifyUserCanceled(outcome.details);
                     refreshAgentUi(ctx);
                 } catch (error) {
@@ -616,6 +601,9 @@ export default function registerAgentTool(
     };
 
     const backgroundUpdate = (ctx: ExtensionContext) => (details: AgentRunDetails) => {
+        if (details.status === "completed" || details.status === "failed" || details.status === "aborted" || details.status === "canceled") {
+            clearCompletedWorkspaceSetup(ctx, details);
+        }
         refreshAgentUi(ctx);
         mailbox.queue(details);
         mailbox.reconcile(manager.listRuns());
@@ -839,7 +827,6 @@ export default function registerAgentTool(
                     const background = backgroundUpdate(ctx);
                     const workspaceBackground = (details: AgentRunDetails) => {
                         background(details);
-                        void releaseWorkspaceForRun(ctx, details);
                     };
                     outcome = params.action === "start"
                         ? await manager.start(
@@ -865,20 +852,19 @@ export default function registerAgentTool(
                             reservation.provisionalLeaseRunId,
                             outcome.details.runId,
                         );
-                        await releaseWorkspaceForRun(ctx, outcome.details);
                     }
+                    clearCompletedWorkspaceSetup(ctx, outcome.details);
                     outcome.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
                 } else if (params.action === "resume") {
                     outcome = await manager.resume(params.runId, params.guidance, signal, progress);
-                    await releaseWorkspaceForRun(ctx, outcome.details);
+                    clearCompletedWorkspaceSetup(ctx, outcome.details);
                 } else if (params.action === "cancel") {
                     outcome = await manager.cancel(params.runId);
-                    await releaseWorkspaceForRun(ctx, outcome.details);
                 } else if (params.action === "status") {
                     outcome = manager.status(params.runId);
                 } else {
                     outcome = manager.collect(params.runId);
-                    await releaseWorkspaceForRun(ctx, outcome.details);
+                    clearCompletedWorkspaceSetup(ctx, outcome.details);
                 }
             } catch (error) {
                 if (reservation) {

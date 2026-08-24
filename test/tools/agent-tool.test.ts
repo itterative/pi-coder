@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import registerAgentTool from "../../src/tools/agent";
-import { ZERO_USAGE, type ChildAgentHandle } from "../../src/tools/agent/runtime";
+import registerAgentTool, { clearCompletedWorkspaceSetupRun } from "../../src/tools/agent";
+import { ZERO_USAGE, type AgentRunSummary, type ChildAgentHandle } from "../../src/tools/agent/runtime";
 import { AGENT_TRACE_ENV } from "../../src/tools/agent/trace";
 import { mockTheme, renderText } from "../helpers";
 
@@ -18,6 +18,28 @@ afterEach(() => {
 });
 
 describe("agent extension registration", () => {
+    it("keeps setup status for non-completed task outcomes", () => {
+        const setupRuns = new Map<string, AgentRunSummary>([
+            ["setup-1", { workspaceId: "workspace-1" } as AgentRunSummary],
+        ]);
+
+        for (const status of ["failed", "canceled", "interrupted"] as const) {
+            expect(clearCompletedWorkspaceSetupRun(setupRuns, {
+                agent: "worker",
+                status,
+                workspaceId: "workspace-1",
+            })).toBe(false);
+            expect(setupRuns.has("setup-1")).toBe(true);
+        }
+
+        expect(clearCompletedWorkspaceSetupRun(setupRuns, {
+            agent: "worker",
+            status: "completed",
+            workspaceId: "workspace-1",
+        })).toBe(true);
+        expect(setupRuns.has("setup-1")).toBe(false);
+    });
+
     it("registers the tool, advertises agents, and marks failed results as errors", async () => {
         const handlers: Record<string, Handler[]> = {};
         let tool: any;

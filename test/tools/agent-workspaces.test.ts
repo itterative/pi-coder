@@ -6,12 +6,16 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+    applyAgentWorkspaceApplication,
     claimAgentWorkspace,
     completeAgentWorkspaceLease,
     createAgentWorkspace,
     findAvailableAgentWorkspace,
     inspectAgentWorkspaceGitState,
+    listAgentWorkspaceResults,
     listAgentWorkspaces,
+    prepareAgentWorkspaceApplication,
+    releaseAgentWorkspaceAfterApplication,
     transferAgentWorkspaceLease,
     updateAgentWorkspace,
 } from "../../src/tools/agent/workspaces";
@@ -23,11 +27,23 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
     await execFileAsync("git", args, { cwd });
 }
 
+async function gitOutput(cwd: string, ...args: string[]): Promise<string> {
+    const result = await execFileAsync("git", args, { cwd });
+    return result.stdout.trim();
+}
+
 afterEach(async () => {
     await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
 });
 
 describe("agent workspaces", () => {
+    async function createClaimedWorkspace(repository: string, state: string) {
+        const workspace = await createAgentWorkspace(repository, state);
+        const prepared = await updateAgentWorkspace(workspace, { setupState: "skipped" }, state);
+        const claimed = await claimAgentWorkspace(prepared.id, "session-1", "worker-1", "task", state);
+        return { workspace: claimed, state };
+    }
+
     it("creates flat random-slug worktrees and claims them atomically", async () => {
         const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
         temporaryDirectories.push(root);
@@ -62,10 +78,116 @@ describe("agent workspaces", () => {
         const provisional = await claimAgentWorkspace(prepared.id, "session-1", "setup-1", "setup", state);
         expect(await findAvailableAgentWorkspace(repository, state)).toBeUndefined();
         await transferAgentWorkspaceLease(workspace.id, "session-1", provisional.leaseRunId!, "worker-1", "task", state);
+        await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        await applyAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
         await completeAgentWorkspaceLease(workspace.id, "session-1", "worker-1", state);
         expect(await findAvailableAgentWorkspace(repository, state)).toBeUndefined();
         expect(await listAgentWorkspaces(repository, state)).toMatchObject([
             { id: workspace.id, status: "review_required" },
         ]);
+    });
+
+    it("commits dirty tracked and untracked worker changes exactly once and persists the result", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "base\n");
+        await git(repository, "add", ".");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "changed\n");
+        await fs.writeFile(path.join(workspace.worktreePath, "new.txt"), "untracked\n");
+        const application = await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+
+        expect(application.status).toBe("prepared");
+        expect(application.commits).toHaveLength(1);
+        expect(await gitOutput(workspace.worktreePath, "log", "-1", "--format=%s")).toBe("pi-coder: finalize isolated worker result");
+        expect(await inspectAgentWorkspaceGitState(workspace)).toMatchObject({ dirty: false, changedFiles: 0 });
+        expect((await listAgentWorkspaces(repository, state))[0]?.latestResult).toMatchObject({
+            id: application.id,
+            workerHead: application.workerHead,
+            baseRevision: workspace.baseRevision,
+            commitRange: `${workspace.baseRevision}..${application.workerHead}`,
+            status: "prepared",
+            durableRef: `refs/pi-coder/workspace-results/${workspace.id}/${application.id}`,
+        });
+        expect(await listAgentWorkspaceResults(workspace.id, state)).toHaveLength(1);
+        expect(await gitOutput(workspace.worktreePath, "rev-parse", `refs/pi-coder/workspace-results/${workspace.id}/${application.id}`)).toBe(application.workerHead);
+    });
+
+    it("does not create an empty final commit for an already-committed worker and applies without committing the parent", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "base\n");
+        await git(repository, "add", ".");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+        const parentHead = await gitOutput(repository, "rev-parse", "HEAD");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "worker\n");
+        await git(workspace.worktreePath, "add", "tracked.txt");
+        await git(workspace.worktreePath, "commit", "--quiet", "-m", "worker change");
+        const workerCommit = await gitOutput(workspace.worktreePath, "rev-parse", "HEAD");
+        const application = await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        expect(application.workerHead).toBe(workerCommit);
+        expect(await gitOutput(workspace.worktreePath, "log", "--format=%s", "-2")).not.toContain("finalize isolated");
+
+        const applied = await applyAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        expect(applied.status).toBe("applied");
+        expect(await gitOutput(repository, "rev-parse", "HEAD")).toBe(parentHead);
+        expect(await fs.readFile(path.join(repository, "tracked.txt"), "utf8")).toBe("worker\n");
+        expect(await gitOutput(repository, "status", "--porcelain=v1")).toContain("tracked.txt");
+        expect((await listAgentWorkspaces(repository, state))[0]?.latestResult).toMatchObject({
+            id: application.id,
+            status: "applied",
+            parentRevision: parentHead,
+        });
+        // Application does not implicitly release the lease; the caller does so explicitly.
+        expect((await listAgentWorkspaces(repository, state))[0]?.leaseRunId).toBe("worker-1");
+        await releaseAgentWorkspaceAfterApplication(workspace.id, "session-1", "worker-1", state);
+        expect((await listAgentWorkspaces(repository, state))[0]?.leaseRunId).toBeUndefined();
+    });
+
+    it("keeps both workspaces and the lease untouched when parent preflight fails", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "base\n");
+        await git(repository, "add", ".");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "worker\n");
+        const application = await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        await expect(releaseAgentWorkspaceAfterApplication(workspace.id, "session-1", "worker-1", state)).rejects.toThrow("only after successful application");
+        const workerHead = await gitOutput(workspace.worktreePath, "rev-parse", "HEAD");
+        await fs.writeFile(path.join(repository, "parent-uncommitted.txt"), "do not apply\n");
+        await expect(applyAgentWorkspaceApplication(workspace, "session-1", "worker-1", state)).rejects.toThrow("uncommitted changes");
+        expect(await gitOutput(workspace.worktreePath, "rev-parse", "HEAD")).toBe(workerHead);
+        expect((await listAgentWorkspaces(repository, state))[0]).toMatchObject({ leaseRunId: "worker-1", latestResult: { status: "prepared", workerHead: application.workerHead } });
+        expect(await fs.readFile(path.join(repository, "tracked.txt"), "utf8")).toBe("base\n");
+
+        await fs.rm(path.join(repository, "parent-uncommitted.txt"));
+        await git(repository, "commit", "--quiet", "--allow-empty", "-m", "parent advanced");
+        await expect(applyAgentWorkspaceApplication(workspace, "session-1", "worker-1", state)).rejects.toThrow("expected workspace base");
+        expect((await listAgentWorkspaces(repository, state))[0]?.leaseRunId).toBe("worker-1");
+        expect(await fs.readFile(path.join(repository, "tracked.txt"), "utf8")).toBe("base\n");
     });
 });

@@ -541,13 +541,14 @@ User interface:
 - Add parent-driven result actions: inspect the isolated diff, apply the result, retain the workspace, reset it for reuse, or discard it. Do not add a mandatory “mark reviewed” action; `review_required` is a passive state.
 - The parent model should receive the task worker's normal result plus explicit isolated-workspace instructions. The internal setup worker should not create a normal collectable result or automatic mailbox conversation.
 
-Result application design:
+Result application design (result preparation and application API implemented; browser actions remain):
 
-- On explicit apply, first commit any remaining tracked/untracked worker changes in the isolated worktree as a final pi-coder result commit. If the worker already committed its changes, do not create an empty commit; use its existing final `HEAD`.
-- Save the worker result revision, base revision, commit range, and application metadata in SQLite. The final worker revision is the durable reference for later inspection or explicit resumption.
-- Apply the complete tree diff from `baseRevision..workerHead` to the parent checkout, including all worker commits and the final result commit, but do not commit the parent changes.
-- Require safe preflight: verify the parent revision/base relationship, detect parent dirtiness and conflicts, and leave both workspaces untouched when application fails. The worker lease is released only after successful application; retain it for retry after failure.
-- After successful application, keep the workspace out of automatic reuse and record that the result was applied. A later explicit action may retain, reset, discard, or resume it.
+- `prepareAgentWorkspaceApplication()` explicitly commits any remaining tracked/untracked worker changes in the isolated worktree as a final pi-coder result commit. If the worker already committed its changes, it does not create an empty commit and uses the existing final `HEAD`.
+- Migration v4 stores each worker result in a separate `workspace_results` table rather than overwriting workspace metadata. Results retain the worker run, base revision, commit range/commits, preparation timestamp, application metadata, and final worker revision.
+- Finalization also creates a private durable Git ref for the worker result, so the saved `workerHead` remains restorable even if the worktree is later recreated. The ref is removed only by an explicit discard operation.
+- `applyAgentWorkspaceApplication()` applies the complete tree diff from `baseRevision..workerHead` to the parent checkout, including all worker commits and the final result commit, without creating a parent commit. `releaseAgentWorkspaceAfterApplication()` is an explicit caller step.
+- Safe preflight verifies the parent is exactly at the base revision and clean, verifies the prepared worker HEAD is unchanged and based on the base, and checks the patch before applying. Both workspaces and the lease remain intact on preflight/application failure.
+- After successful application, metadata records the parent revision and applied timestamp. The workspace remains out of automatic reuse; explicit retain/reset/discard/resume browser actions are still pending.
 
 Open design questions for this phase:
 
