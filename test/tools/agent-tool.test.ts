@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import registerAgentTool, { clearCompletedWorkspaceSetupRun } from "../../src/tools/agent";
-import { AGENT_STATE_CHANGED_EVENT } from "../../src/tools/agent/events";
+import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/events";
 import { ZERO_USAGE, type AgentRunSummary, type ChildAgentHandle } from "../../src/tools/agent/runtime";
 import * as workspaceSetup from "../../src/tools/agent/workspace-setup";
 import * as workspaces from "../../src/tools/agent/workspaces";
@@ -103,8 +103,16 @@ describe("agent extension registration", () => {
         expect(repeatedPrompt.systemPrompt.match(/<delegated_agents>/g)).toHaveLength(1);
         expect(result.details).toMatchObject({ status: "completed", agent: "scout" });
         expect(events).toContainEqual({
-            channel: AGENT_STATE_CHANGED_EVENT,
-            data: expect.objectContaining({ cwd: process.cwd(), reason: "run_started", runId: "scout-1" }),
+            channel: AGENT_EVENT_CHANNEL,
+            data: expect.objectContaining({ cwd: process.cwd(), type: "run", action: "created", runId: "scout-1" }),
+        });
+        expect(events).toContainEqual({
+            channel: AGENT_EVENT_CHANNEL,
+            data: expect.objectContaining({ type: "run", action: "status_changed", status: "running", runId: "scout-1" }),
+        });
+        expect(events).toContainEqual({
+            channel: AGENT_EVENT_CHANNEL,
+            data: expect.objectContaining({ type: "run", action: "removed", reason: "terminal", runId: "scout-1" }),
         });
         expect(errorHook).toEqual({ isError: true });
         await handlers.session_shutdown[0]({}, ctx);

@@ -7,8 +7,9 @@ import type {
 import { createAgentChild } from "./child";
 import { discoverAgents } from "./discovery";
 import {
-    emitAgentStateChanged,
-    type AgentStateChangedEvent,
+    createAgentEventSink,
+    emitAgentEvent,
+    type AgentEventSink,
 } from "./events";
 import { AgentMailbox } from "./mailbox";
 import { loadAgentRunPersistence } from "./persistence";
@@ -142,6 +143,7 @@ async function handleWorkspaceAction(
 async function prepareCollectedWorkspaceResult(
     details: Pick<AgentRunDetails, "workspaceId" | "runId">,
     ctx: ExtensionContext,
+    events?: AgentEventSink,
 ): Promise<AgentWorkspaceResult | undefined> {
     if (!details.workspaceId) return undefined;
     const workspace = await getAgentWorkspace(details.workspaceId);
@@ -150,11 +152,18 @@ async function prepareCollectedWorkspaceResult(
             `Isolated workspace ${details.workspaceId} is missing; result was not collected.`,
         );
     }
-    return prepareAgentWorkspaceApplication(
+    const result = await prepareAgentWorkspaceApplication(
         workspace,
         ctx.sessionManager.getSessionId(),
         details.runId,
     );
+    emitAgentEvent(events, ctx.cwd, {
+        type: "workspace",
+        action: "result_changed",
+        workspaceId: result.workspaceId,
+        reason: "prepared",
+    });
+    return result;
 }
 
 function isTerminalAgentStatus(status: AgentRunDetails["status"]): boolean {
@@ -168,9 +177,10 @@ function isTerminalAgentStatus(status: AgentRunDetails["status"]): boolean {
 async function prepareForegroundWorkspaceResult(
     outcome: AgentRunOutcome,
     ctx: ExtensionContext,
+    events?: AgentEventSink,
 ): Promise<AgentRunOutcome> {
     if (!isTerminalAgentStatus(outcome.details.status) || !outcome.details.workspaceId) return outcome;
-    const workspaceResult = await prepareCollectedWorkspaceResult(outcome.details, ctx);
+    const workspaceResult = await prepareCollectedWorkspaceResult(outcome.details, ctx, events);
     if (!workspaceResult) return outcome;
     const noWorkspaceChanges = workspaceResult.workerHead === workspaceResult.baseRevision
         && workspaceResult.commits.length === 0;
@@ -180,6 +190,12 @@ async function prepareForegroundWorkspaceResult(
             ctx.sessionManager.getSessionId(),
             workspaceResult.runId,
         );
+        emitAgentEvent(events, ctx.cwd, {
+            type: "workspace",
+            action: "lease_changed",
+            workspaceId: workspaceResult.workspaceId,
+            reason: "released_no_changes",
+        });
     }
     outcome.details.workspaceResult = workspaceResult;
     outcome.content += workspaceResultSummary(workspaceResult, noWorkspaceChanges);
@@ -191,21 +207,26 @@ export default function registerAgentTool(
     factory: ChildAgentFactory = createAgentChild,
 ): void {
     const traceStore = isAgentTraceEnabled() ? new AgentTraceStore() : undefined;
-    const createManager = () => new AgentRunManager(factory, 4, traceStore);
+    const events: AgentEventSink = createAgentEventSink(pi.events);
+    const createManager = () => new AgentRunManager(factory, 4, traceStore, 20, events);
     let manager = createManager();
     let cachedAgentPrompt = "";
     const setupRuns: WorkspaceSetupRuns = new Map();
-    const refreshAgentUi = (
-        ctx: ExtensionContext,
-        change?: Omit<AgentStateChangedEvent, "cwd">,
-    ): void => {
+    const refreshAgentUi = (ctx: ExtensionContext): void => {
         updateAgentUi(ctx, manager, [...setupRuns.values()]);
-        if (change) {
-            emitAgentStateChanged(pi.events, {
-                cwd: ctx.cwd,
-                ...change,
-            });
-        }
+    };
+    const emitWorkspaceEvent = (
+        ctx: ExtensionContext,
+        workspaceId: string,
+        action: "created" | "updated" | "lease_changed" | "result_changed" | "removed",
+        reason?: string,
+    ): void => {
+        emitAgentEvent(events, ctx.cwd, {
+            type: "workspace",
+            action,
+            workspaceId,
+            reason,
+        });
     };
     const updateSetupRun = (
         ctx: ExtensionContext,
@@ -230,19 +251,11 @@ export default function registerAgentTool(
             mutating: true,
             workspaceId: workspace.id,
         });
-        refreshAgentUi(ctx, {
-            reason: "workspace_setup",
-            runId,
-            workspaceId: workspace.id,
-        });
+        refreshAgentUi(ctx);
     };
     const clearCompletedWorkspaceSetup = (ctx: ExtensionContext, details: AgentRunDetails): void => {
         if (clearCompletedWorkspaceSetupRun(setupRuns, details)) {
-            refreshAgentUi(ctx, {
-                reason: "workspace_setup",
-                runId: details.runId,
-                workspaceId: details.workspaceId,
-            });
+            refreshAgentUi(ctx);
         }
     };
     const mailbox = new AgentMailbox(pi);
@@ -292,9 +305,10 @@ export default function registerAgentTool(
                     `Released ${released} verified no-change workspace lease${released === 1 ? "" : "s"}.`,
                     "info",
                 );
-                emitAgentStateChanged(pi.events, {
-                    cwd: ctx.cwd,
-                    reason: "workspace_reconciled",
+                emitAgentEvent(events, ctx.cwd, {
+                    type: "runtime",
+                    action: "reconciled",
+                    released,
                 });
             }
             workspaces = await listAgentWorkspaces(ctx.cwd);
@@ -319,13 +333,10 @@ export default function registerAgentTool(
                     const outcome = await prepareForegroundWorkspaceResult(
                         await manager.resume(item.id, undefined, undefined, backgroundUpdate(ctx)),
                         ctx,
+                        events,
                     );
                     clearCompletedWorkspaceSetup(ctx, outcome.details);
-                    refreshAgentUi(ctx, {
-                        reason: "run_resumed",
-                        runId: outcome.details.runId,
-                        workspaceId: outcome.details.workspaceId,
-                    });
+                    refreshAgentUi(ctx);
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
                     ctx.ui.notify(`Could not resume ${item.id}: ${message}`, "warning");
@@ -336,13 +347,10 @@ export default function registerAgentTool(
                     const outcome = await prepareForegroundWorkspaceResult(
                         await manager.cancel(item.id),
                         ctx,
+                        events,
                     );
                     mailbox.notifyUserCanceled(outcome.details);
-                    refreshAgentUi(ctx, {
-                        reason: "run_canceled",
-                        runId: outcome.details.runId,
-                        workspaceId: outcome.details.workspaceId,
-                    });
+                    refreshAgentUi(ctx);
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
                     ctx.ui.notify(`Could not cancel ${item.id}: ${message}`, "warning");
@@ -354,11 +362,19 @@ export default function registerAgentTool(
                 if (replacement) {
                     workspaceGitStates.set(replacement.id, await inspectAgentWorkspaceGitState(replacement));
                 }
-                emitAgentStateChanged(pi.events, {
-                    cwd: ctx.cwd,
-                    reason: "workspace_action",
-                    workspaceId: workspace.id,
-                });
+                if (replacement !== workspace) {
+                    if (action === "discard") {
+                        emitWorkspaceEvent(ctx, workspace.id, "removed", action);
+                    } else {
+                        emitWorkspaceEvent(ctx, workspace.id, "updated", action);
+                        if (action === "apply" || action === "retain") {
+                            emitWorkspaceEvent(ctx, workspace.id, "result_changed", action);
+                        }
+                        if (action === "apply" || action === "retain" || action === "reset") {
+                            emitWorkspaceEvent(ctx, workspace.id, "lease_changed", action);
+                        }
+                    }
+                }
                 return replacement;
             },
         }, ctx);
@@ -385,16 +401,7 @@ export default function registerAgentTool(
         if (details.status === "completed" || details.status === "failed" || details.status === "aborted" || details.status === "canceled") {
             clearCompletedWorkspaceSetup(ctx, details);
         }
-        refreshAgentUi(ctx, {
-            reason: details.status === "completed"
-                || details.status === "failed"
-                || details.status === "aborted"
-                || details.status === "canceled"
-                ? "run_terminal"
-                : "run_progress",
-            runId: details.runId,
-            workspaceId: details.workspaceId,
-        });
+        refreshAgentUi(ctx);
         mailbox.queue(details);
         mailbox.reconcile(manager.listRuns());
         flushMailboxWhenIdle(ctx);
@@ -423,9 +430,8 @@ export default function registerAgentTool(
         if (result.restored > 0) {
             ctx.ui.notify(`Restored ${result.restored} delegated agent run${result.restored === 1 ? "" : "s"}.`, "info");
         }
-        refreshAgentUi(ctx, {
-            reason: "state_restored",
-        });
+        refreshAgentUi(ctx);
+        emitAgentEvent(events, ctx.cwd, { type: "runtime", action: "restored" });
         mailbox.reconcile(manager.listRuns());
     };
 
@@ -475,6 +481,7 @@ export default function registerAgentTool(
         // Prevent old-branch shutdown records from being appended at the new leaf.
         manager.setPersistence(undefined);
         await manager.shutdown();
+        emitAgentEvent(events, ctx.cwd, { type: "runtime", action: "reset" });
         setupRuns.clear();
         ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         manager = createManager();
@@ -488,6 +495,7 @@ export default function registerAgentTool(
         setupRuns.clear();
         ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         await manager.shutdown();
+        emitAgentEvent(events, ctx.cwd, { type: "runtime", action: "shutdown" });
     });
 
     pi.on("tool_result", (event) => {
@@ -519,6 +527,7 @@ export default function registerAgentTool(
                         ctx,
                         signal,
                         (runId, workspace, update) => updateSetupRun(ctx, runId, workspace, update),
+                        events,
                     )
                     : undefined;
                 const runContext = {
@@ -554,26 +563,28 @@ export default function registerAgentTool(
                         reservation.provisionalLeaseRunId,
                         outcome.details.runId,
                     );
+                    emitWorkspaceEvent(ctx, reservation.workspace.id, "lease_changed", "transferred");
                 }
                 if (params.action === "start") {
-                    outcome = await prepareForegroundWorkspaceResult(outcome, ctx);
+                    outcome = await prepareForegroundWorkspaceResult(outcome, ctx, events);
                 }
                 clearCompletedWorkspaceSetup(ctx, outcome.details);
                 outcome.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
             } else if (params.action === "resume") {
                 outcome = await manager.resume(params.runId, params.guidance, signal, progress);
-                outcome = await prepareForegroundWorkspaceResult(outcome, ctx);
+                outcome = await prepareForegroundWorkspaceResult(outcome, ctx, events);
                 clearCompletedWorkspaceSetup(ctx, outcome.details);
             } else if (params.action === "cancel") {
                 outcome = await prepareForegroundWorkspaceResult(
                     await manager.cancel(params.runId),
                     ctx,
+                    events,
                 );
             } else if (params.action === "status") {
                 outcome = manager.status(params.runId);
             } else {
                 const pending = manager.status(params.runId);
-                const workspaceResult = await prepareCollectedWorkspaceResult(pending.details, ctx);
+                const workspaceResult = await prepareCollectedWorkspaceResult(pending.details, ctx, events);
                 const noWorkspaceChanges = workspaceResult
                     ? workspaceResult.workerHead === workspaceResult.baseRevision && workspaceResult.commits.length === 0
                     : false;
@@ -588,6 +599,12 @@ export default function registerAgentTool(
                         ctx.sessionManager.getSessionId(),
                         workspaceResult.runId,
                     );
+                    emitAgentEvent(events, ctx.cwd, {
+                        type: "workspace",
+                        action: "lease_changed",
+                        workspaceId: workspaceResult.workspaceId,
+                        reason: "released_no_changes",
+                    });
                 }
                 if (workspaceResult) {
                     outcome.details.workspaceResult = workspaceResult;
@@ -606,24 +623,7 @@ export default function registerAgentTool(
             outcome = failedOutcome(params, error);
         }
 
-        const stateReason = params.action === "start" || params.action === "spawn"
-            ? "run_started"
-            : params.action === "resume"
-                ? "run_resumed"
-                : params.action === "cancel"
-                    ? "run_canceled"
-                    : params.action === "collect"
-                        ? "run_collected"
-                        : undefined;
-        if (stateReason) {
-            refreshAgentUi(ctx, {
-                reason: stateReason,
-                runId: outcome.details.runId,
-                workspaceId: outcome.details.workspaceId,
-            });
-        } else {
-            updateAgentUi(ctx, manager, [...setupRuns.values()]);
-        }
+        refreshAgentUi(ctx);
         mailbox.reconcile(manager.listRuns());
         return outcome;
     });

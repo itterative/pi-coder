@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { selectWithMessage } from "../../tui/select-with-message";
+import { emitAgentEvent, type AgentEventSink } from "./events";
 import {
     AgentActionError,
     AgentRunManager,
@@ -45,12 +46,19 @@ export async function runWorkspaceSetup(
     signal: AbortSignal | undefined,
     setupRunId: string,
     onUiUpdate?: WorkspaceSetupUiCallback,
+    events?: AgentEventSink,
 ): Promise<AgentWorkspace> {
+    await updateAgentWorkspace(workspace, { setupState: "running" });
+    emitAgentEvent(events, ctx.cwd, {
+        type: "workspace",
+        action: "updated",
+        workspaceId: workspace.id,
+        reason: "setup_started",
+    });
     onUiUpdate?.(setupRunId, workspace, {
         status: "starting",
         activity: "Starting workspace setup",
     });
-    await updateAgentWorkspace(workspace, { setupState: "running" });
     ctx.ui.notify(`Preparing isolated workspace ${workspace.slug}…`, "info");
     const setupDefinition: AgentDefinition = {
         name: "workspace-setup",
@@ -75,6 +83,12 @@ Do not implement the requested feature, edit unrelated source files, or make unr
             runId: `workspace-setup-${workspace.slug}`,
             runTitle: `Setup ${workspace.slug}`,
             onProgress: (progress) => {
+                emitAgentEvent(events, ctx.cwd, {
+                    type: "workspace",
+                    action: "updated",
+                    workspaceId: workspace.id,
+                    reason: "setup_progress",
+                });
                 onUiUpdate?.(setupRunId, workspace, {
                     status: "running",
                     activity: progress.recentActivity[progress.recentActivity.length - 1] ?? "Preparing workspace",
@@ -101,16 +115,23 @@ Do not implement the requested feature, edit unrelated source files, or make unr
         if (error) throw new AgentActionError(`Workspace setup failed: ${error}`);
         const summary = handle.getFinalOutput().trim();
         if (!summary) throw new AgentActionError("Workspace setup completed without a setup report.");
-        onUiUpdate?.(setupRunId, workspace, {
+        const readyWorkspace = await updateAgentWorkspace(workspace, {
+            setupState: "ready",
+            setupSummary: summary,
+        });
+        emitAgentEvent(events, ctx.cwd, {
+            type: "workspace",
+            action: "updated",
+            workspaceId: readyWorkspace.id,
+            reason: "setup_completed",
+        });
+        onUiUpdate?.(setupRunId, readyWorkspace, {
             status: "completed",
             activity: "Setup complete",
             responsePreview: summary,
             usage: handle.getUsage(),
         });
-        return updateAgentWorkspace(workspace, {
-            setupState: "ready",
-            setupSummary: summary,
-        });
+        return readyWorkspace;
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         onUiUpdate?.(setupRunId, workspace, {
@@ -118,7 +139,13 @@ Do not implement the requested feature, edit unrelated source files, or make unr
             activity: "Setup failed",
             responsePreview: message,
         });
-        await updateAgentWorkspace(workspace, { setupState: "failed", setupSummary: message });
+        const failedWorkspace = await updateAgentWorkspace(workspace, { setupState: "failed", setupSummary: message });
+        emitAgentEvent(events, ctx.cwd, {
+            type: "workspace",
+            action: "updated",
+            workspaceId: failedWorkspace.id,
+            reason: "setup_failed",
+        });
         throw error;
     } finally {
         handle?.dispose();
@@ -139,6 +166,7 @@ export async function prepareIsolatedWorkspace(
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
     onUiUpdate?: WorkspaceSetupUiCallback,
+    events?: AgentEventSink,
 ): Promise<WorkspaceReservation> {
     if (!definition.mutating) {
         throw new AgentActionError("Worktree isolation is currently available only for the mutation-capable worker.");
@@ -149,7 +177,14 @@ export async function prepareIsolatedWorkspace(
 
     const ownerSessionId = ctx.sessionManager.getSessionId();
     const provisionalLeaseRunId = `workspace-provision-${randomUUID()}`;
-    await reconcileNoChangeAgentWorkspaceLeases(cwd);
+    const released = await reconcileNoChangeAgentWorkspaceLeases(cwd);
+    if (released > 0) {
+        emitAgentEvent(events, cwd, {
+            type: "runtime",
+            action: "reconciled",
+            released,
+        });
+    }
     const available = await findAvailableAgentWorkspace(cwd);
     if (available) {
         const workspace = await claimAgentWorkspace(
@@ -158,6 +193,12 @@ export async function prepareIsolatedWorkspace(
             provisionalLeaseRunId,
             "task",
         );
+        emitAgentEvent(events, ctx.cwd, {
+            type: "workspace",
+            action: "lease_changed",
+            workspaceId: workspace.id,
+            reason: "claimed",
+        });
         return { workspace, ownerSessionId, provisionalLeaseRunId };
     }
 
@@ -212,6 +253,13 @@ export async function prepareIsolatedWorkspace(
     }
 
     const workspace = existing ?? await createAgentWorkspace(cwd);
+    if (!existing) {
+        emitAgentEvent(events, ctx.cwd, {
+            type: "workspace",
+            action: "created",
+            workspaceId: workspace.id,
+        });
+    }
     const leaseKind = choice === "setup" ? "setup" : "task";
     try {
         const claimed = await claimAgentWorkspace(
@@ -220,6 +268,12 @@ export async function prepareIsolatedWorkspace(
             provisionalLeaseRunId,
             leaseKind,
         );
+        emitAgentEvent(events, ctx.cwd, {
+            type: "workspace",
+            action: "lease_changed",
+            workspaceId: claimed.id,
+            reason: "claimed",
+        });
         if (choice === "setup") {
             await runWorkspaceSetup(
                 claimed,
@@ -229,16 +283,36 @@ export async function prepareIsolatedWorkspace(
                 signal,
                 provisionalLeaseRunId,
                 onUiUpdate,
+                events,
             );
         }
-        else await updateAgentWorkspace(claimed, { setupState: "skipped" });
+        else {
+            const skipped = await updateAgentWorkspace(claimed, { setupState: "skipped" });
+            emitAgentEvent(events, ctx.cwd, {
+                type: "workspace",
+                action: "updated",
+                workspaceId: skipped.id,
+                reason: "setup_skipped",
+            });
+        }
         return {
             workspace: claimed,
             ownerSessionId,
             provisionalLeaseRunId,
         };
     } catch (error) {
-        await releaseAgentWorkspaceLease(workspace.id, ownerSessionId, provisionalLeaseRunId).catch(() => {});
+        try {
+            await releaseAgentWorkspaceLease(workspace.id, ownerSessionId, provisionalLeaseRunId);
+            emitAgentEvent(events, ctx.cwd, {
+                type: "workspace",
+                action: "lease_changed",
+                workspaceId: workspace.id,
+                reason: "claim_rolled_back",
+            });
+        } catch {
+            // Preserve the original setup error; an uncertain lease remains
+            // protected for explicit recovery.
+        }
         throw error;
     }
 }

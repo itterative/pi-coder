@@ -1,6 +1,11 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
 import { fingerprintAgentDefinition, type AgentDefinition } from "./discovery";
+import {
+    emitAgentEvent,
+    type AgentEventPayload,
+    type AgentEventSink,
+} from "./events";
 import type { AgentTraceData, AgentTraceStore } from "./trace";
 import type { AgentWorkspaceResult } from "./workspaces";
 
@@ -294,6 +299,7 @@ export class AgentRunManager {
         private readonly maxActiveRuns = 4,
         private readonly trace?: AgentTraceStore,
         private readonly maxRetainedResults = 20,
+        private readonly events?: AgentEventSink,
     ) {}
 
     setPersistence(persistence: AgentRunPersistence | undefined): void {
@@ -415,6 +421,15 @@ export class AgentRunManager {
                 restoredMutationReport: record.mutationReport,
             };
             this.runs.set(run.id, run);
+            this.emitRunEvent(run, {
+                type: "run",
+                action: "restored",
+                runId: run.id,
+                agent: run.agent,
+                background: run.background,
+                status: run.status,
+                workspaceId: run.workspaceId,
+            });
 
             if (persistedTerminal) {
                 const content = record.terminalContent ?? `Agent ${run.id} ${record.status}.`;
@@ -429,7 +444,7 @@ export class AgentRunManager {
                     this.terminalOrder.push(run.id);
                     this.pruneRetainedResults();
                 } else {
-                    this.runs.delete(run.id);
+                    this.removeRun(run, "restored_terminal", false);
                 }
                 continue;
             }
@@ -546,7 +561,7 @@ export class AgentRunManager {
         if (signal?.aborted) throw new AgentActionError("Agent resume was aborted before launch.");
         const resumeGuidance = normalizedGuidance ?? INTERRUPTED_RESUME_GUIDANCE;
         this.record(run, "resume.requested", { guidanceChars: resumeGuidance.length, userDriven: !normalizedGuidance });
-        run.status = "running";
+        this.transitionStatus(run, "running");
         run.question = undefined;
         run.updatedAt = Date.now();
         this.persistRun(run);
@@ -604,7 +619,7 @@ export class AgentRunManager {
             this.progressSnapshot(run),
             terminalOutcome?.details.error,
         );
-        this.removeRun(run);
+        this.removeRun(run, "canceled");
         return outcome;
     }
 
@@ -659,7 +674,7 @@ export class AgentRunManager {
             run.terminalOutcome.details.error,
         );
         this.record(run, "result.collected");
-        this.removeRun(run);
+        this.removeRun(run, "collected");
         return outcome;
     }
 
@@ -723,6 +738,15 @@ export class AgentRunManager {
             permissionPending: false,
         };
         this.runs.set(id, run);
+        this.emitRunEvent(run, {
+            type: "run",
+            action: "created",
+            runId: run.id,
+            agent: run.agent,
+            background: run.background,
+            status: run.status,
+            workspaceId: run.workspaceId,
+        });
         this.persistRun(run);
         this.trace?.start(id, definition.name, {
             source: definition.source,
@@ -761,14 +785,18 @@ export class AgentRunManager {
                 },
                 onProgress: (progress) => {
                     run.updatedAt = Date.now();
+                    const previousStatus = run.permissionPending ? "waiting_for_permission" : run.status;
                     run.permissionPending = progress.permissionPending === true;
                     this.record(run, "child.progress", {
                         outputChars: progress.output.length,
                         activity: progress.recentActivity[progress.recentActivity.length - 1] ?? "",
                     });
                     const details = this.details(run, progress);
+                    if (previousStatus !== details.status) {
+                        this.emitRunStatusChanged(run, previousStatus, details.status);
+                    }
+                    this.emitBackgroundUpdate(run, details);
                     onProgress?.(details);
-                    if (run.background) this.emitBackgroundUpdate(run, details);
                 },
                 onTrace: (type, data) => this.record(run, `child.${type}`, data),
             });
@@ -864,11 +892,11 @@ export class AgentRunManager {
                 } else if (!isTerminalStatus(run.status)) {
                     this.finishInterrupted(run, "Agent run was interrupted during session shutdown.");
                 }
-                this.removeRun(run, false);
+                this.removeRun(run, "shutdown", false);
                 continue;
             }
             if (!isTerminalStatus(run.status)) {
-                run.status = "aborted";
+                this.transitionStatus(run, "aborted");
                 run.updatedAt = Date.now();
                 this.disposeRun(run);
                 this.trace?.finish(run.id, "aborted", {
@@ -876,7 +904,7 @@ export class AgentRunManager {
                     reason: "session_shutdown",
                 });
             }
-            this.removeRun(run, false);
+            this.removeRun(run, "shutdown", false);
         }
     }
 
@@ -895,15 +923,13 @@ export class AgentRunManager {
                 ? this.finishInterrupted(run, "Agent run was interrupted during session shutdown.")
                 : this.finishTerminal(run, "aborted", "Agent run was aborted.", true);
         }
-        run.status = "running";
+        this.transitionStatus(run, "running");
         run.updatedAt = Date.now();
         this.persistRun(run);
-        if (run.background) {
-            this.emitBackgroundUpdate(
-                run,
-                this.details(run, run.handle?.getProgress() ?? { output: "", recentActivity: [] }),
-            );
-        }
+        this.emitBackgroundUpdate(
+            run,
+            this.details(run, run.handle?.getProgress() ?? { output: "", recentActivity: [] }),
+        );
         this.record(run, "operation.started", {
             kind: prompt.startsWith("Parent guidance:\n") ? "resume" : "start",
             promptChars: prompt.length,
@@ -971,7 +997,7 @@ export class AgentRunManager {
                 questionPreview: truncate(question.question.replace(/\s+/g, " "), 240),
                 optionCount: question.options?.length ?? 0,
             });
-            run.status = "waiting_for_parent";
+            this.transitionStatus(run, "waiting_for_parent");
             run.question = question;
             run.updatedAt = Date.now();
             const outcome = this.outcome(
@@ -1051,7 +1077,7 @@ export class AgentRunManager {
 
     private finishInterrupted(run: AgentRun, content: string): AgentRunOutcome {
         const progress = run.handle?.getProgress() ?? run.restoredProgress ?? { output: "", recentActivity: [] };
-        run.status = "interrupted";
+        this.transitionStatus(run, "interrupted");
         run.permissionPending = false;
         run.updatedAt = Date.now();
         run.restoredProgress = progress;
@@ -1073,7 +1099,7 @@ export class AgentRunManager {
         progress: ChildProgress = run.handle?.getProgress() ?? { output: "", recentActivity: [] },
     ): AgentRunOutcome {
         if (isTerminalStatus(run.status) && run.terminalOutcome) return run.terminalOutcome;
-        run.status = status;
+        this.transitionStatus(run, status);
         run.permissionPending = false;
         run.updatedAt = Date.now();
         const report = this.mutationReport(run);
@@ -1108,7 +1134,7 @@ export class AgentRunManager {
             // the bounded in-memory result is collected or evicted.
             this.pruneRetainedResults();
         } else {
-            this.removeRun(run);
+            this.removeRun(run, "terminal");
         }
         return outcome;
     }
@@ -1170,6 +1196,13 @@ export class AgentRunManager {
 
     private emitBackgroundUpdate(run: AgentRun, details: AgentRunDetails): void {
         if (this.closing || run.cancelRequested) return;
+        this.emitRunEvent(run, {
+            type: "run",
+            action: "progress",
+            runId: run.id,
+            status: details.status,
+            workspaceId: run.workspaceId,
+        });
         try {
             run.backgroundCallback?.(details);
         } catch {
@@ -1215,13 +1248,25 @@ export class AgentRunManager {
         while (this.terminalOrder.length > this.maxRetainedResults) {
             const runId = this.terminalOrder.shift();
             const run = runId ? this.runs.get(runId) : undefined;
-            if (run) this.removeRun(run);
+            if (run) this.removeRun(run, "pruned");
         }
     }
 
-    private removeRun(run: AgentRun, persistRemoval = true): void {
+    private removeRun(
+        run: AgentRun,
+        reason: "collected" | "pruned" | "shutdown" | "terminal" | "canceled" | "restored_terminal" = "terminal",
+        persistRemoval = true,
+    ): void {
         run.backgroundCallback = undefined;
         this.runs.delete(run.id);
+        this.emitRunEvent(run, {
+            type: "run",
+            action: "removed",
+            runId: run.id,
+            status: run.status,
+            reason,
+            workspaceId: run.workspaceId,
+        });
         const terminalIndex = this.terminalOrder.indexOf(run.id);
         if (terminalIndex >= 0) this.terminalOrder.splice(terminalIndex, 1);
         if (persistRemoval) this.persistRun(run, "removed");
@@ -1312,6 +1357,32 @@ export class AgentRunManager {
         run.setup = undefined;
         run.abortPromise = undefined;
         handle?.dispose();
+    }
+
+    private transitionStatus(run: AgentRun, status: AgentRunStatus): void {
+        const previousStatus = run.status;
+        if (previousStatus === status) return;
+        run.status = status;
+        this.emitRunStatusChanged(run, previousStatus, status);
+    }
+
+    private emitRunStatusChanged(
+        run: AgentRun,
+        previousStatus: AgentRunStatus,
+        status: AgentRunStatus,
+    ): void {
+        emitAgentEvent(this.events, run.cwd, {
+            type: "run",
+            action: "status_changed",
+            runId: run.id,
+            status,
+            previousStatus,
+            workspaceId: run.workspaceId,
+        });
+    }
+
+    private emitRunEvent(run: AgentRun, event: Extract<AgentEventPayload, { type: "run" }>): void {
+        emitAgentEvent(this.events, run.cwd, event);
     }
 
     private record(run: AgentRun, type: string, data?: AgentTraceData): void {
