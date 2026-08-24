@@ -908,6 +908,7 @@ export async function reconcileNoChangeAgentWorkspaceLeases(
             || !workspace.leaseOwnerSessionId
             || !workspace.leaseRunId
             || workspace.latestResult?.status !== "prepared"
+            || workspace.latestResult.runId !== workspace.leaseRunId
             || workspace.latestResult.baseRevision !== workspace.latestResult.workerHead
             || workspace.latestResult.commits.length > 0
         ) continue;

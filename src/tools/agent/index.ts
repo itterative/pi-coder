@@ -474,6 +474,11 @@ export default function registerAgentTool(
                 const noWorkspaceChanges = workspaceResult
                     ? workspaceResult.workerHead === workspaceResult.baseRevision && workspaceResult.commits.length === 0
                     : false;
+                // Keep a no-change lease held until the retained agent result
+                // has actually been consumed. If manager.collect() rejects,
+                // the caller must be able to retry collection and the lease
+                // must not already have been released underneath it.
+                outcome = manager.collect(params.runId);
                 if (workspaceResult && noWorkspaceChanges) {
                     await releaseAgentWorkspaceAfterNoChanges(
                         workspaceResult.workspaceId,
@@ -481,7 +486,6 @@ export default function registerAgentTool(
                         workspaceResult.runId,
                     );
                 }
-                outcome = manager.collect(params.runId);
                 if (workspaceResult) {
                     outcome.details.workspaceResult = workspaceResult;
                     outcome.content += workspaceResultSummary(workspaceResult, noWorkspaceChanges);

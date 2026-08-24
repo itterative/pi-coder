@@ -19,6 +19,7 @@ import {
     prepareAgentWorkspaceApplication,
     releaseAgentWorkspaceAfterApplication,
     releaseAgentWorkspaceAfterNoChanges,
+    reconcileNoChangeAgentWorkspaceLeases,
     resetAgentWorkspaceForReuse,
     retainAgentWorkspaceResult,
     transferAgentWorkspaceLease,
@@ -137,6 +138,30 @@ describe("agent workspaces", () => {
             id: workspace.id,
             status: "available",
         });
+    });
+
+    it("does not reconcile an older no-change result from a newly claimed task lease", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "README.md"), "reconcile test\n");
+        await git(repository, "add", "README.md");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        await releaseAgentWorkspaceAfterNoChanges(workspace.id, "session-1", "worker-1", state);
+        await claimAgentWorkspace(workspace.id, "session-1", "worker-2", "task", state);
+
+        await expect(reconcileNoChangeAgentWorkspaceLeases(repository, state)).resolves.toBe(0);
+        await expect(listAgentWorkspaces(repository, state)).resolves.toMatchObject([
+            { id: workspace.id, leaseRunId: "worker-2", leaseKind: "task" },
+        ]);
     });
 
     it("commits dirty tracked and untracked worker changes exactly once and persists the result", async () => {

@@ -41,10 +41,10 @@ This checklist is for a separate validation agent/operator. It tests the current
 4. Use the built-in `worker` and `isolation: "worktree"` for isolated tasks. Example tool calls:
 
    ```text
-   agent(action="start", agent="worker", isolation="worktree",
+   agent(action="spawn", agent="worker", isolation="worktree",
          task="Inspect the repository and report its files. Do not change anything.")
 
-   agent(action="start", agent="worker", isolation="worktree",
+   agent(action="spawn", agent="worker", isolation="worktree",
          task="Create a new file named workspace-validation-marker.txt containing exactly `workspace test`. Do not change any other file.")
    ```
 
