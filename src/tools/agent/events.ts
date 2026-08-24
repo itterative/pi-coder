@@ -72,6 +72,14 @@ export function createAgentEventSink(events: EventBus | undefined): AgentEventSi
     };
 }
 
+export function isAgentEvent(value: unknown): value is AgentEvent {
+    if (!value || typeof value !== "object") return false;
+    const event = value as Partial<AgentEvent>;
+    return typeof event.cwd === "string"
+        && typeof event.timestamp === "number"
+        && (event.type === "run" || event.type === "workspace" || event.type === "runtime");
+}
+
 export function emitAgentEvent(
     sink: AgentEventSink | undefined,
     cwd: string,

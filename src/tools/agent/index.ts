@@ -54,6 +54,7 @@ import {
 } from "./workspaces";
 import {
     showAgentSessionBrowser,
+    type AgentSessionBrowserData,
     type AgentWorkspaceAction,
 } from "../../tui/agent-session-browser";
 import {
@@ -281,53 +282,57 @@ export default function registerAgentTool(
     };
     if (traceStore) registerAgentTraceCommand(pi, traceStore);
     const showAgentBrowser = async (_args: string, ctx: ExtensionCommandContext) => {
-        const current = await loadAgentSessionTranscripts(
-            currentAgentSessionItems([...manager.listRuns(), ...setupRuns.values()]),
-        );
-        let past: AgentSessionBrowserItem[];
-        try {
-            past = removeCurrentAgentTranscripts(
-                await listPastAgentSessions(ctx.cwd),
-                current,
+        const loadBrowserData = async (): Promise<AgentSessionBrowserData> => {
+            const current = await loadAgentSessionTranscripts(
+                currentAgentSessionItems([...manager.listRuns(), ...setupRuns.values()]),
             );
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            ctx.ui.notify(`Could not browse persisted delegated-agent sessions: ${message}`, "warning");
-            past = [];
-        }
-        let workspaces: AgentWorkspace[];
-        try {
-            // Reconcile only verified no-change results. Changed or otherwise
-            // uncertain leases remain protected until an explicit action.
-            const released = await reconcileNoChangeAgentWorkspaceLeases(ctx.cwd);
-            if (released > 0) {
-                ctx.ui.notify(
-                    `Released ${released} verified no-change workspace lease${released === 1 ? "" : "s"}.`,
-                    "info",
+            let past: AgentSessionBrowserItem[];
+            try {
+                past = removeCurrentAgentTranscripts(
+                    await listPastAgentSessions(ctx.cwd),
+                    current,
                 );
-                emitAgentEvent(events, ctx.cwd, {
-                    type: "runtime",
-                    action: "reconciled",
-                    released,
-                });
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                ctx.ui.notify(`Could not browse persisted delegated-agent sessions: ${message}`, "warning");
+                past = [];
             }
-            workspaces = await listAgentWorkspaces(ctx.cwd);
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            ctx.ui.notify(`Could not browse agent workspaces: ${message}`, "warning");
-            workspaces = [];
-        }
-        const workspaceGitStates = new Map(
-            await Promise.all(workspaces.map(async (workspace) => [
-                workspace.id,
-                await inspectAgentWorkspaceGitState(workspace),
-            ] as const)),
-        );
+            let workspaces: AgentWorkspace[];
+            try {
+                // Reconcile only verified no-change results. Changed or otherwise
+                // uncertain leases remain protected until an explicit action.
+                const released = await reconcileNoChangeAgentWorkspaceLeases(ctx.cwd);
+                if (released > 0) {
+                    ctx.ui.notify(
+                        `Released ${released} verified no-change workspace lease${released === 1 ? "" : "s"}.`,
+                        "info",
+                    );
+                    emitAgentEvent(events, ctx.cwd, {
+                        type: "runtime",
+                        action: "reconciled",
+                        released,
+                    });
+                }
+                workspaces = await listAgentWorkspaces(ctx.cwd);
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                ctx.ui.notify(`Could not browse agent workspaces: ${message}`, "warning");
+                workspaces = [];
+            }
+            const workspaceGitStates = new Map(
+                await Promise.all(workspaces.map(async (workspace) => [
+                    workspace.id,
+                    await inspectAgentWorkspaceGitState(workspace),
+                ] as const)),
+            );
+            return { current, past, workspaces, workspaceGitStates };
+        };
+        const initial = await loadBrowserData();
         await showAgentSessionBrowser({
-            current,
-            past,
-            workspaces,
-            workspaceGitStates,
+            ...initial,
+            cwd: ctx.cwd,
+            eventBus: pi.events,
+            onRefresh: loadBrowserData,
             onResume: async (item) => {
                 try {
                     const outcome = await prepareForegroundWorkspaceResult(
@@ -360,7 +365,7 @@ export default function registerAgentTool(
             onWorkspaceAction: async (workspace, action) => {
                 const replacement = await handleWorkspaceAction(workspace, action, ctx);
                 if (replacement) {
-                    workspaceGitStates.set(replacement.id, await inspectAgentWorkspaceGitState(replacement));
+                    initial.workspaceGitStates?.set(replacement.id, await inspectAgentWorkspaceGitState(replacement));
                 }
                 if (replacement !== workspace) {
                     if (action === "discard") {

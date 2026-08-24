@@ -1,4 +1,4 @@
-import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { EventBus, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
     matchesKey,
     truncateToWidth,
@@ -8,6 +8,10 @@ import {
 import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
 import type { AgentSessionBrowserItem } from "../tools/agent/sessions";
+import {
+    AGENT_EVENT_CHANNEL,
+    isAgentEvent,
+} from "../tools/agent/events";
 import type {
     AgentWorkspace,
     AgentWorkspaceGitState,
@@ -30,11 +34,17 @@ interface AgentSessionBrowserState extends ListViewState<AgentBrowserItem> {
     tab: AgentBrowserTab;
 }
 
-export interface AgentSessionBrowserOptions {
+export interface AgentSessionBrowserData {
     current: AgentSessionBrowserItem[];
     past: AgentSessionBrowserItem[];
     workspaces?: AgentWorkspace[];
-    workspaceGitStates?: ReadonlyMap<string, AgentWorkspaceGitState>;
+    workspaceGitStates?: Map<string, AgentWorkspaceGitState>;
+}
+
+export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
+    cwd?: string;
+    eventBus?: EventBus;
+    onRefresh?: () => Promise<AgentSessionBrowserData>;
     fixedHeight?: () => number;
     onResume?: (item: AgentSessionBrowserItem) => void | Promise<void>;
     onCancel?: (item: AgentSessionBrowserItem) => void | Promise<void>;
@@ -176,6 +186,13 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
     private workspaceDetail: AgentWorkspaceDetailComponent | null = null;
     private readonly past: AgentSessionBrowserItem[];
     private readonly workspaces: AgentWorkspace[];
+    private readonly workspaceGitStates: Map<string, AgentWorkspaceGitState>;
+    private readonly onRefresh?: () => Promise<AgentSessionBrowserData>;
+    private readonly onInvalidate?: () => void;
+    private readonly unsubscribeEvents?: () => void;
+    private refreshInFlight = false;
+    private refreshPending = false;
+    private disposed = false;
 
     private updateWorkspace(workspace: AgentWorkspace, replacement: AgentWorkspace | null | undefined): void {
         const index = this.workspaces.findIndex((item) => item.id === workspace.id);
@@ -192,11 +209,67 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
         this.invalidate();
     }
 
+    private rebuildItems(): void {
+        const selectedId = this.state.items[this.state.cursor ?? 0]?.value.id;
+        this.state.items = this.state.tab === "current"
+            ? asSessionListItems(this.current, EMPTY_CURRENT)
+            : this.state.tab === "past"
+                ? asSessionListItems(this.past, EMPTY_PAST)
+                : asWorkspaceListItems(this.workspaces);
+        const selectedIndex = selectedId === undefined
+            ? -1
+            : this.state.items.findIndex((item) => item.value.id === selectedId);
+        this.state.cursor = selectedIndex >= 0
+            ? selectedIndex
+            : Math.min(this.state.cursor ?? 0, Math.max(0, this.state.items.length - 1));
+        this.state.scrollOffset = 0;
+    }
+
+    private scheduleRefresh(): void {
+        if (this.disposed || !this.onRefresh) return;
+        if (this.refreshInFlight) {
+            this.refreshPending = true;
+            return;
+        }
+        this.refreshInFlight = true;
+        void (async () => {
+            try {
+                do {
+                    this.refreshPending = false;
+                    const data = await this.onRefresh!();
+                    if (this.disposed) return;
+                    this.current.splice(0, this.current.length, ...data.current);
+                    this.past.splice(0, this.past.length, ...data.past);
+                    this.workspaces.splice(0, this.workspaces.length, ...(data.workspaces ?? []));
+                    this.workspaceGitStates.clear();
+                    for (const [id, state] of data.workspaceGitStates ?? []) {
+                        this.workspaceGitStates.set(id, state);
+                    }
+                    this.rebuildItems();
+                    this.invalidate();
+                    this.onInvalidate?.();
+                } while (this.refreshPending && !this.disposed);
+            } catch (error) {
+                console.error("Agent browser refresh failed:", error);
+            } finally {
+                this.refreshInFlight = false;
+            }
+        })();
+    }
+
+    dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.unsubscribeEvents?.();
+    }
+
     constructor(options: AgentSessionBrowserOptions) {
         const current = options.current;
         const past = options.past;
         const workspaces = options.workspaces ?? [];
-        const workspaceGitStates = options.workspaceGitStates;
+        const workspaceGitStates: Map<string, AgentWorkspaceGitState> = options.workspaceGitStates instanceof Map
+            ? options.workspaceGitStates
+            : new Map(options.workspaceGitStates ?? []);
         const includeWorkspaces = options.workspaces !== undefined;
         const tabs: AgentBrowserTab[] = includeWorkspaces
             ? ["current", "past", "workspaces"]
@@ -338,6 +411,15 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
         this.current = current;
         this.past = past;
         this.workspaces = workspaces;
+        this.workspaceGitStates = workspaceGitStates;
+        this.onRefresh = options.onRefresh;
+        this.onInvalidate = options.onInvalidate;
+        if (options.eventBus && options.cwd && options.onRefresh) {
+            this.unsubscribeEvents = options.eventBus.on(AGENT_EVENT_CHANNEL, (data) => {
+                if (!isAgentEvent(data) || data.cwd !== options.cwd) return;
+                this.scheduleRefresh();
+            });
+        }
     }
 
     override render(width: number): string[] {
@@ -390,7 +472,10 @@ export async function showAgentSessionBrowser(
             fixedHeight,
             onInvalidate: () => tui.requestRender(),
         });
-        component.setDoneCallback(done);
+        component.setDoneCallback((result) => {
+            component.dispose();
+            done(result);
+        });
         component.initialize(theme);
         return component;
     }, {

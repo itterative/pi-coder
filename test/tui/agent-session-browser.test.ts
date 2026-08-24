@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 
+import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/events";
 import {
     AgentSessionBrowserComponent,
 } from "../../src/tui/agent-session-browser";
@@ -116,6 +118,35 @@ afterEach(() => {
 });
 
 describe("AgentSessionBrowserComponent", () => {
+    it("refreshes from agent events while remaining open", async () => {
+        const eventBus = createEventBus();
+        const value = new AgentSessionBrowserComponent({
+            current: [current],
+            past: [past],
+            cwd: "/repo/project",
+            eventBus,
+            onRefresh: async () => ({
+                current: [{ ...current, title: "Updated run" }],
+                past: [past],
+            }),
+        });
+        value.initialize(mockTheme);
+
+        eventBus.emit(AGENT_EVENT_CHANNEL, {
+            cwd: "/repo/project",
+            timestamp: Date.now(),
+            type: "run",
+            action: "progress",
+            runId: current.id,
+            status: "running",
+        });
+        for (let index = 0; index < 4; index++) await Promise.resolve();
+
+        expect(renderText(value, 100)).toContain("Updated run");
+        value.dispose();
+        eventBus.clear();
+    });
+
     it("renders the current tab", async () => {
         const value = component();
 
