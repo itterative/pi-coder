@@ -6,6 +6,10 @@ import type {
 
 import { createAgentChild } from "./child";
 import { discoverAgents } from "./discovery";
+import {
+    emitAgentStateChanged,
+    type AgentStateChangedEvent,
+} from "./events";
 import { AgentMailbox } from "./mailbox";
 import { loadAgentRunPersistence } from "./persistence";
 import {
@@ -191,8 +195,17 @@ export default function registerAgentTool(
     let manager = createManager();
     let cachedAgentPrompt = "";
     const setupRuns: WorkspaceSetupRuns = new Map();
-    const refreshAgentUi = (ctx: ExtensionContext): void => {
+    const refreshAgentUi = (
+        ctx: ExtensionContext,
+        change?: Omit<AgentStateChangedEvent, "cwd">,
+    ): void => {
         updateAgentUi(ctx, manager, [...setupRuns.values()]);
+        if (change) {
+            emitAgentStateChanged(pi.events, {
+                cwd: ctx.cwd,
+                ...change,
+            });
+        }
     };
     const updateSetupRun = (
         ctx: ExtensionContext,
@@ -217,10 +230,20 @@ export default function registerAgentTool(
             mutating: true,
             workspaceId: workspace.id,
         });
-        refreshAgentUi(ctx);
+        refreshAgentUi(ctx, {
+            reason: "workspace_setup",
+            runId,
+            workspaceId: workspace.id,
+        });
     };
     const clearCompletedWorkspaceSetup = (ctx: ExtensionContext, details: AgentRunDetails): void => {
-        if (clearCompletedWorkspaceSetupRun(setupRuns, details)) refreshAgentUi(ctx);
+        if (clearCompletedWorkspaceSetupRun(setupRuns, details)) {
+            refreshAgentUi(ctx, {
+                reason: "workspace_setup",
+                runId: details.runId,
+                workspaceId: details.workspaceId,
+            });
+        }
     };
     const mailbox = new AgentMailbox(pi);
     let mailboxFlushScheduled = false;
@@ -269,6 +292,10 @@ export default function registerAgentTool(
                     `Released ${released} verified no-change workspace lease${released === 1 ? "" : "s"}.`,
                     "info",
                 );
+                emitAgentStateChanged(pi.events, {
+                    cwd: ctx.cwd,
+                    reason: "workspace_reconciled",
+                });
             }
             workspaces = await listAgentWorkspaces(ctx.cwd);
         } catch (error) {
@@ -294,7 +321,11 @@ export default function registerAgentTool(
                         ctx,
                     );
                     clearCompletedWorkspaceSetup(ctx, outcome.details);
-                    refreshAgentUi(ctx);
+                    refreshAgentUi(ctx, {
+                        reason: "run_resumed",
+                        runId: outcome.details.runId,
+                        workspaceId: outcome.details.workspaceId,
+                    });
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
                     ctx.ui.notify(`Could not resume ${item.id}: ${message}`, "warning");
@@ -307,7 +338,11 @@ export default function registerAgentTool(
                         ctx,
                     );
                     mailbox.notifyUserCanceled(outcome.details);
-                    refreshAgentUi(ctx);
+                    refreshAgentUi(ctx, {
+                        reason: "run_canceled",
+                        runId: outcome.details.runId,
+                        workspaceId: outcome.details.workspaceId,
+                    });
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
                     ctx.ui.notify(`Could not cancel ${item.id}: ${message}`, "warning");
@@ -319,6 +354,11 @@ export default function registerAgentTool(
                 if (replacement) {
                     workspaceGitStates.set(replacement.id, await inspectAgentWorkspaceGitState(replacement));
                 }
+                emitAgentStateChanged(pi.events, {
+                    cwd: ctx.cwd,
+                    reason: "workspace_action",
+                    workspaceId: workspace.id,
+                });
                 return replacement;
             },
         }, ctx);
@@ -345,7 +385,16 @@ export default function registerAgentTool(
         if (details.status === "completed" || details.status === "failed" || details.status === "aborted" || details.status === "canceled") {
             clearCompletedWorkspaceSetup(ctx, details);
         }
-        refreshAgentUi(ctx);
+        refreshAgentUi(ctx, {
+            reason: details.status === "completed"
+                || details.status === "failed"
+                || details.status === "aborted"
+                || details.status === "canceled"
+                ? "run_terminal"
+                : "run_progress",
+            runId: details.runId,
+            workspaceId: details.workspaceId,
+        });
         mailbox.queue(details);
         mailbox.reconcile(manager.listRuns());
         flushMailboxWhenIdle(ctx);
@@ -374,7 +423,9 @@ export default function registerAgentTool(
         if (result.restored > 0) {
             ctx.ui.notify(`Restored ${result.restored} delegated agent run${result.restored === 1 ? "" : "s"}.`, "info");
         }
-        refreshAgentUi(ctx);
+        refreshAgentUi(ctx, {
+            reason: "state_restored",
+        });
         mailbox.reconcile(manager.listRuns());
     };
 
@@ -514,7 +565,10 @@ export default function registerAgentTool(
                 outcome = await prepareForegroundWorkspaceResult(outcome, ctx);
                 clearCompletedWorkspaceSetup(ctx, outcome.details);
             } else if (params.action === "cancel") {
-                outcome = await manager.cancel(params.runId);
+                outcome = await prepareForegroundWorkspaceResult(
+                    await manager.cancel(params.runId),
+                    ctx,
+                );
             } else if (params.action === "status") {
                 outcome = manager.status(params.runId);
             } else {
@@ -552,7 +606,24 @@ export default function registerAgentTool(
             outcome = failedOutcome(params, error);
         }
 
-        refreshAgentUi(ctx);
+        const stateReason = params.action === "start" || params.action === "spawn"
+            ? "run_started"
+            : params.action === "resume"
+                ? "run_resumed"
+                : params.action === "cancel"
+                    ? "run_canceled"
+                    : params.action === "collect"
+                        ? "run_collected"
+                        : undefined;
+        if (stateReason) {
+            refreshAgentUi(ctx, {
+                reason: stateReason,
+                runId: outcome.details.runId,
+                workspaceId: outcome.details.workspaceId,
+            });
+        } else {
+            updateAgentUi(ctx, manager, [...setupRuns.values()]);
+        }
         mailbox.reconcile(manager.listRuns());
         return outcome;
     });
