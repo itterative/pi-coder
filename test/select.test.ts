@@ -20,90 +20,24 @@ const items = (n: number) =>
     Array.from({ length: n }, (_, i) => ({ value: `v${i}`, label: `Item ${i}` }));
 
 describe("SelectComponent", () => {
-    it("renders initial state with cursor on first item", () => {
+    it("renders initial state with cursor on first item", async () => {
         const { component } = setup({ title: "Pick one", items: items(3) });
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Pick one                                     │
-          │                                                │
-          │   → Item 0                                     │
-          │     Item 1                                     │
-          │     Item 2                                     │
-          │                                                │
-          │     ↑/↓ navigate | Enter confirm | Esc         │
-          │   cancel                                       │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/select.initial-cursor.txt");
     });
 
-    it("moves the cursor with arrow keys and j/k", () => {
+    it("moves the cursor with arrow keys and j/k", async () => {
         const { component } = setup({ title: "Pick one", items: items(3) });
         press(component, KEY.down);
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Pick one                                     │
-          │                                                │
-          │     Item 0                                     │
-          │   → Item 1                                     │
-          │     Item 2                                     │
-          │                                                │
-          │     ↑/↓ navigate | Enter confirm | Esc         │
-          │   cancel                                       │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/select.after-down.txt");
         press(component, "k");
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Pick one                                     │
-          │                                                │
-          │   → Item 0                                     │
-          │     Item 1                                     │
-          │     Item 2                                     │
-          │                                                │
-          │     ↑/↓ navigate | Enter confirm | Esc         │
-          │   cancel                                       │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/select.after-up.txt");
     });
 
-    it("shows a scroll indicator when items exceed maxVisible", () => {
+    it("shows a scroll indicator when items exceed maxVisible", async () => {
         const { component } = setup({ title: "Many", items: items(8), maxVisible: 4 });
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Many                                         │
-          │                                                │
-          │   → Item 0                                     │
-          │     Item 1                                     │
-          │     Item 2                                     │
-          │     Item 3                                     │
-          │                                                │
-          │     Showing lines 1-4 of 8                     │
-          │                                                │
-          │     ↑/↓ navigate | Enter confirm | Esc         │
-          │   cancel                                       │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/select.scroll-indicator-initial.txt");
         press(component, KEY.down, KEY.down, KEY.down, KEY.down, KEY.down);
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Many                                         │
-          │                                                │
-          │     Item 4                                     │
-          │   → Item 5                                     │
-          │     Item 6                                     │
-          │     Item 7                                     │
-          │                                                │
-          │     Showing lines 5-8 of 8                     │
-          │                                                │
-          │     ↑/↓ navigate | Enter confirm | Esc         │
-          │   cancel                                       │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/select.scroll-indicator-after-down.txt");
     });
 
     it("confirms the cursor item on Enter", () => {
@@ -122,7 +56,7 @@ describe("SelectComponent", () => {
         expect(b.result()).toBeUndefined();
     });
 
-    it("supports custom renderItem and footerContent", () => {
+    it("supports custom renderItem and footerContent", async () => {
         const { component } = setup<string>({
             title: "Custom",
             items: items(2),
@@ -131,18 +65,6 @@ describe("SelectComponent", () => {
                 container.addChild(new Text(`  cursor at ${state.cursor}`, 1, 0));
             },
         });
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Custom                                       │
-          │                                                │
-          │   → Item 0 <                                   │
-          │     Item 1                                     │
-          │     cursor at 0                                │
-          │                                                │
-          │     ↑/↓ navigate | Enter confirm | Esc         │
-          │   cancel                                       │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/select.custom-footer.txt");
     });
 });

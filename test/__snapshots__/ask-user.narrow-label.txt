@@ -1,0 +1,13 @@
+──────────────────────────────
+   Proceed?                   
+
+    This will modify files.   
+                              
+  → Yes:                      
+      hi[ ]                     
+    No                        
+    Type a custom reply       
+                              
+    Enter confirm | Esc back  
+
+──────────────────────────────

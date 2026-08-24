@@ -37,103 +37,36 @@ const baseOptions: AskUserOptions = {
 };
 
 describe("AskUserComponent", () => {
-    it("renders title, description, options and custom entry", () => {
+    it("renders title, description, options and custom entry", async () => {
         const { ui } = setup(baseOptions);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Proceed?                                       
-
-              This will modify files.                       
-                                                            
-            → Yes - apply changes                           
-              No                                            
-              Type a custom reply                           
-                                                            
-              ↑/↓ navigate | Enter select | Tab add         
-            message | Esc cancel                            
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.renders-options.txt");
     });
 
-    it("navigates options including the custom entry", () => {
+    it("navigates options including the custom entry", async () => {
         const { ui } = setup(baseOptions);
         ui.press(KEY.down, KEY.down);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Proceed?                                       
-
-              This will modify files.                       
-                                                            
-              Yes - apply changes                           
-              No                                            
-            → Type a custom reply                           
-                                                            
-              ↑/↓ navigate | Enter select | Tab add         
-            message | Esc cancel                            
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.navigates-custom-entry.txt");
     });
 
-    it("Tab enters edit mode with placeholder and cursor", () => {
+    it("Tab enters edit mode with placeholder and cursor", async () => {
         const { ui } = setup(baseOptions);
         ui.press(KEY.tab);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Proceed?                                       
-
-              This will modify files.                       
-                                                            
-            → Yes: [ ]type your reply...                      
-              No                                            
-              Type a custom reply                           
-                                                            
-              Enter confirm | Esc back                      
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.edit-placeholder.txt");
     });
 
-    it("typing in edit mode renders the message inline", () => {
+    it("typing in edit mode renders the message inline", async () => {
         const { ui } = setup(baseOptions);
         ui.press(KEY.tab);
         ui.type("only the tests");
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Proceed?                                       
-
-              This will modify files.                       
-                                                            
-            → Yes: only the tests[ ]                          
-              No                                            
-              Type a custom reply                           
-                                                            
-              Enter confirm | Esc back                      
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.typed-message.txt");
     });
 
-    it("cursor renders on the character under it when mid-text", () => {
+    it("cursor renders on the character under it when mid-text", async () => {
         const { ui } = setup(baseOptions);
         ui.press(KEY.tab);
         ui.type("abc");
         ui.press(KEY.left);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Proceed?                                       
-
-              This will modify files.                       
-                                                            
-            → Yes: ab[c]                                      
-              No                                            
-              Type a custom reply                           
-                                                            
-              Enter confirm | Esc back                      
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.cursor-mid-text.txt");
     });
 
     it("Enter confirms the option with attached message", () => {
@@ -148,26 +81,12 @@ describe("AskUserComponent", () => {
         });
     });
 
-    it("Escape in edit mode returns to selection, second Escape cancels", () => {
+    it("Escape in edit mode returns to selection, second Escape cancels", async () => {
         const { ui, result } = setup(baseOptions);
         ui.press(KEY.tab);
         ui.type("draft");
         ui.press(KEY.escape);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Proceed?                                       
-
-              This will modify files.                       
-                                                            
-            → Yes - apply changes                           
-              No                                            
-              Type a custom reply                           
-                                                            
-              ↑/↓ navigate | Enter select | Tab add         
-            message | Esc cancel                            
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.escape-edit-mode.txt");
         ui.press(KEY.escape);
         expect(result()).toBeUndefined();
     });
@@ -184,64 +103,24 @@ describe("AskUserComponent", () => {
         });
     });
 
-    it("stacks the label above the edit text when narrow", () => {
+    it("stacks the label above the edit text when narrow", async () => {
         const { ui } = setup(baseOptions, 30);
         ui.press(KEY.tab);
         ui.type("hi");
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────
-             Proceed?                   
-
-              This will modify files.   
-                                        
-            → Yes:                      
-                hi[ ]                     
-              No                        
-              Type a custom reply       
-                                        
-              Enter confirm | Esc back  
-
-          ──────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.narrow-label.txt");
     });
 
-    it("large pastes render as an atomic placeholder", () => {
+    it("large pastes render as an atomic placeholder", async () => {
         const { ui } = setup(baseOptions);
         ui.press(KEY.tab);
         ui.paste("line one\nline two\nline three");
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Proceed?                                       
-
-              This will modify files.                       
-                                                            
-            → Yes: [Pasted 3 lines][ ]                        
-              No                                            
-              Type a custom reply                           
-                                                            
-              Enter confirm | Esc back                      
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.atomic-paste.txt");
         // Backspace removes the whole paste
         ui.press(KEY.backspace);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Proceed?                                       
-
-              This will modify files.                       
-                                                            
-            → Yes: [ ]type your reply...                      
-              No                                            
-              Type a custom reply                           
-                                                            
-              Enter confirm | Esc back                      
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.atomic-paste-backspace.txt");
     });
 
-    it("long messages truncate to a windowed view with ellipses", () => {
+    it("long messages truncate to a windowed view with ellipses", async () => {
         const { ui } = setup(baseOptions);
         ui.press(KEY.tab);
         // 199 chars at an edit width of 38 → 6 visual lines
@@ -249,22 +128,7 @@ describe("AskUserComponent", () => {
         // Move from the last visual line to a middle one so the window
         // truncates on both sides
         ui.press(KEY.up, KEY.up);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Proceed?                                       
-
-              This will modify files.                       
-                                                            
-            → Yes: …18 w19 w20 w21 w22 w23 w24 w25 w26      
-                   w27 w28 w29 w30 w31[ ]w32 w33 w34 w35      
-                   w36 w37 w38 w39 w40 w41 w42 w43 w44…     
-              No                                            
-              Type a custom reply                           
-                                                            
-              Enter confirm | Esc back                      
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.long-message-window.txt");
     });
 });
 

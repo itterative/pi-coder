@@ -1,0 +1,13 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   Delegated agent sessions                                                                       │
+│                                                                                                  │
+│     ○ Current    ● Past                                                                          │
+│     Current shows this parent session; Past shows durable child results for this cwd.            │
+│                                                                                                  │
+│   → Previous implementation review · delegated agent · completed · Nov 14 2023 22:13             │
+│     Task: Review the previous implementation                                                     │
+│                                                                                                  │
+│   1 session                                                                                      │
+│                                                                                                  │
+│     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

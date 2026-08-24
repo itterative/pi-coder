@@ -19,91 +19,25 @@ const items = (n: number) =>
     Array.from({ length: n }, (_, i) => ({ value: `v${i}`, label: `Item ${i}` }));
 
 describe("MultiSelectComponent", () => {
-    it("renders initial state with unchecked boxes", () => {
+    it("renders initial state with unchecked boxes", async () => {
         const { component } = setup({ title: "Pick many", items: items(3) });
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Pick many                                    │
-          │                                                │
-          │   → [ ] Item 0                                 │
-          │     [ ] Item 1                                 │
-          │     [ ] Item 2                                 │
-          │                                                │
-          │     ↑/↓ navigate | Space toggle | a all |      │
-          │   Enter confirm | Esc cancel                   │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/multi-select.initial-unchecked.txt");
     });
 
-    it("toggles items with Space and shows the selection count", () => {
+    it("toggles items with Space and shows the selection count", async () => {
         const { component } = setup({ title: "Pick many", items: items(3) });
         press(component, KEY.space);
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Pick many                                    │
-          │                                                │
-          │   → [x] Item 0                                 │
-          │     [ ] Item 1                                 │
-          │     [ ] Item 2                                 │
-          │                                                │
-          │     1 item(s) selected                         │
-          │                                                │
-          │     ↑/↓ navigate | Space toggle | a all |      │
-          │   Enter confirm | Esc cancel                   │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/multi-select.space-first.txt");
         press(component, KEY.down, KEY.space);
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Pick many                                    │
-          │                                                │
-          │     [x] Item 0                                 │
-          │   → [x] Item 1                                 │
-          │     [ ] Item 2                                 │
-          │                                                │
-          │     2 item(s) selected                         │
-          │                                                │
-          │     ↑/↓ navigate | Space toggle | a all |      │
-          │   Enter confirm | Esc cancel                   │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/multi-select.space-second.txt");
     });
 
-    it("toggles all with 'a'", () => {
+    it("toggles all with 'a'", async () => {
         const { component } = setup({ title: "Pick many", items: items(3) });
         press(component, "a");
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Pick many                                    │
-          │                                                │
-          │   → [x] Item 0                                 │
-          │     [x] Item 1                                 │
-          │     [x] Item 2                                 │
-          │                                                │
-          │     3 item(s) selected                         │
-          │                                                │
-          │     ↑/↓ navigate | Space toggle | a all |      │
-          │   Enter confirm | Esc cancel                   │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/multi-select.toggle-all.txt");
         press(component, "a");
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Pick many                                    │
-          │                                                │
-          │   → [ ] Item 0                                 │
-          │     [ ] Item 1                                 │
-          │     [ ] Item 2                                 │
-          │                                                │
-          │     ↑/↓ navigate | Space toggle | a all |      │
-          │   Enter confirm | Esc cancel                   │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/multi-select.toggle-all-off.txt");
     });
 
     it("confirms selected values on Enter", () => {
@@ -118,22 +52,8 @@ describe("MultiSelectComponent", () => {
         expect(result()).toEqual([]);
     });
 
-    it("respects initialSelected", () => {
+    it("respects initialSelected", async () => {
         const { component } = setup({ title: "Pick many", items: items(3), initialSelected: new Set([0, 2]) });
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Pick many                                    │
-          │                                                │
-          │   → [x] Item 0                                 │
-          │     [ ] Item 1                                 │
-          │     [x] Item 2                                 │
-          │                                                │
-          │     2 item(s) selected                         │
-          │                                                │
-          │     ↑/↓ navigate | Space toggle | a all |      │
-          │   Enter confirm | Esc cancel                   │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/multi-select.initial-selected.txt");
     });
 });

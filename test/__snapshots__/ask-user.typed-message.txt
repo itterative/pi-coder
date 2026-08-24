@@ -1,0 +1,12 @@
+──────────────────────────────────────────────────
+   Proceed?                                       
+
+    This will modify files.                       
+                                                  
+  → Yes: only the tests[ ]                          
+    No                                            
+    Type a custom reply                           
+                                                  
+    Enter confirm | Esc back                      
+
+──────────────────────────────────────────────────

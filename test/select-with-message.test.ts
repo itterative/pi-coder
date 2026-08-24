@@ -33,91 +33,22 @@ const baseOptions: SelectWithMessageOptions<string> = {
 };
 
 describe("SelectWithMessageComponent", () => {
-    it("renders numbered content lines above the items", () => {
+    it("renders numbered content lines above the items", async () => {
         const { ui } = setup(baseOptions);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Apply command?                                 
-
-            1 │ git rebase -i HEAD~3                        
-            2 │ # pick abc123 fix typo                      
-                                                            
-            → Apply - run it now                            
-              Edit                                          
-              Cancel                                        
-                                                            
-              ↑/↓ navigate | Enter select | Tab add         
-            message | PgUp/PgDn scroll | Esc cancel         
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/select-with-message.initial-content.txt");
     });
 
-    it("scrolls the content area with PageUp/PageDown", () => {
+    it("scrolls the content area with PageUp/PageDown", async () => {
         const { ui } = setup({
             ...baseOptions,
             contentLines: Array.from({ length: 8 }, (_, i) => `content line ${i + 1}`),
             maxContentLines: 3,
         });
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Apply command?                                 
-
-            1 │ content line 1                              
-            2 │ content line 2                              
-            3 │ content line 3                              
-                                                            
-              Showing lines 1-3 of 8 (PgUp/PgDn to scroll)  
-                                                            
-            → Apply - run it now                            
-              Edit                                          
-              Cancel                                        
-                                                            
-              ↑/↓ navigate | Enter select | Tab add         
-            message | PgUp/PgDn scroll | Esc cancel         
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/select-with-message.content-page-down.txt");
         ui.press(KEY.pageDown);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Apply command?                                 
-
-            4 │ content line 4                              
-            5 │ content line 5                              
-            6 │ content line 6                              
-                                                            
-              Showing lines 4-6 of 8 (PgUp/PgDn to scroll)  
-                                                            
-            → Apply - run it now                            
-              Edit                                          
-              Cancel                                        
-                                                            
-              ↑/↓ navigate | Enter select | Tab add         
-            message | PgUp/PgDn scroll | Esc cancel         
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/select-with-message.content-page-up.txt");
         ui.press(KEY.pageUp);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Apply command?                                 
-
-            1 │ content line 1                              
-            2 │ content line 2                              
-            3 │ content line 3                              
-                                                            
-              Showing lines 1-3 of 8 (PgUp/PgDn to scroll)  
-                                                            
-            → Apply - run it now                            
-              Edit                                          
-              Cancel                                        
-                                                            
-              ↑/↓ navigate | Enter select | Tab add         
-            message | PgUp/PgDn scroll | Esc cancel         
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/select-with-message.content-page-up-restored.txt");
     });
 
     it("Enter selects an item without a message", () => {
@@ -126,40 +57,12 @@ describe("SelectWithMessageComponent", () => {
         expect(result()).toEqual({ value: "edit", message: undefined, displayText: "Edit" });
     });
 
-    it("Tab enters edit mode; typed message is included in the result", () => {
+    it("Tab enters edit mode; typed message is included in the result", async () => {
         const { ui, result } = setup(baseOptions);
         ui.press(KEY.tab);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Apply command?                                 
-
-            1 │ git rebase -i HEAD~3                        
-            2 │ # pick abc123 fix typo                      
-                                                            
-            → Apply, [ ]type a message...                     
-              Edit                                          
-              Cancel                                        
-                                                            
-              Enter confirm | Esc back                      
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/select-with-message.edit-mode.txt");
         ui.type("with care");
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Apply command?                                 
-
-            1 │ git rebase -i HEAD~3                        
-            2 │ # pick abc123 fix typo                      
-                                                            
-            → Apply, with care[ ]                             
-              Edit                                          
-              Cancel                                        
-                                                            
-              Enter confirm | Esc back                      
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/select-with-message.typed-message.txt");
         ui.press(KEY.enter);
         expect(result()).toEqual({
             value: "apply",
@@ -168,27 +71,12 @@ describe("SelectWithMessageComponent", () => {
         });
     });
 
-    it("Escape in edit mode returns to selection with buffer cleared", () => {
+    it("Escape in edit mode returns to selection with buffer cleared", async () => {
         const { ui } = setup(baseOptions);
         ui.press(KEY.tab);
         ui.type("draft");
         ui.press(KEY.escape);
-        expect(ui.render()).toMatchInlineSnapshot(`
-          "──────────────────────────────────────────────────
-             Apply command?                                 
-
-            1 │ git rebase -i HEAD~3                        
-            2 │ # pick abc123 fix typo                      
-                                                            
-            → Apply - run it now                            
-              Edit                                          
-              Cancel                                        
-                                                            
-              ↑/↓ navigate | Enter select | Tab add         
-            message | PgUp/PgDn scroll | Esc cancel         
-
-          ──────────────────────────────────────────────────"
-        `);
+        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/select-with-message.escape-edit-mode.txt");
     });
 
     it("Escape in selection mode cancels", () => {

@@ -1,0 +1,13 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   [scout] Project structure audit · running                                                      │
+│                                                                                                  │
+│   Run ID: scout-1                                                                                │
+│   Task: Inspect the project structure                                                            │
+│   Started: Nov 14 2023 22:13                                                                     │
+│   Updated: Nov 14 2023 22:13                                                                     │
+│   Usage: 1.2k input, 2m output, $0.0300                                                          │
+│                                                                                                  │
+│   Transcript:                                                                                    │
+│   I found the main entry points and summarized the current architecture.                         │
+│     ↑/↓ scroll · Esc back                                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

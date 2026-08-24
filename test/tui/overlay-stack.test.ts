@@ -104,35 +104,7 @@ describe("withOverlayStack", () => {
             tui.setFocus(permissionDialog);
             (tui as TUI & { handleTerminalInput(data: string): void }).handleTerminalInput("d");
             expect(tui.getFocusedComponent()).toBe(detail);
-            expect(renderText(detail, 100)).toMatchInlineSnapshot(`
-              "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-              │   Workspace · quiet-lantern-7k3                                                                  │
-              │                                                                                                  │
-              │   Workspace: quiet-lantern-7k3                                                                   │
-              │   Git: unknown                                                                                   │
-              │   Status: available                                                                              │
-              │   Setup: ready                                                                                   │
-              │   Lease: none                                                                                    │
-              │   Created: Nov 14 2023 22:13                                                                     │
-              │   Updated: Nov 14 2023 22:13                                                                     │
-              │                                                                                                  │
-              │   ID: quiet-lantern-7k3                                                                          │
-              │   Cwd: /repo/project                                                                             │
-              │   Repository: /repo/project                                                                      │
-              │   Worktree: /state/workspaces/quiet-lantern-7k3                                                  │
-              │   Base revision: abc123def456                                                                    │
-              │                                                                                                  │
-              │   Actions:                                                                                       │
-              │   r reset · d discard                                                                            │
-              │                                                                                                  │
-              │   This workspace may be selected for an isolated worker.                                         │
-              │                                                                                                  │
-              │   Confirm discard? y/Enter confirm · n/Esc cancel                                                │
-              │     ↑/↓ scroll · r reset · d discard · Esc back                                                  │
-              │                                                                                                  │
-              │                                                                                                  │
-              ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-            `);
+            await expect(renderText(detail, 100)).toMatchFileSnapshot("__snapshots__/overlay-stack.workspace-discard-confirmation.txt");
 
             (tui as TUI & { handleTerminalInput(data: string): void }).handleTerminalInput("y");
             await vi.waitFor(() => expect(closed).toBe(true));

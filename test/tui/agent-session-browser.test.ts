@@ -104,7 +104,7 @@ function component() {
 }
 
 function snapshotText(text: string): string {
-    return text.replace(/[ \t]+$/gm, "").replaceAll("`", "'");
+    return text.replace(/[ \t]+$/gm, "");
 }
 
 beforeEach(() => {
@@ -116,25 +116,10 @@ afterEach(() => {
 });
 
 describe("AgentSessionBrowserComponent", () => {
-    it("renders the current tab", () => {
+    it("renders the current tab", async () => {
         const value = component();
 
-        expect(snapshotText(renderText(value, 100))).toMatchInlineSnapshot(`
-          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   Delegated agent sessions                                                                       │
-          │                                                                                                  │
-          │     ● Current    ○ Past                                                                          │
-          │     Current shows this parent session; Past shows durable child results for this cwd.            │
-          │                                                                                                  │
-          │   → Project structure audit · scout · running · Nov 14 2023 22:13                                │
-          │     Task: Inspect the project structure · Reading files                                          │
-          │     Result: I found the main entry points and summarized the current architecture.               │
-          │                                                                                                  │
-          │   1 session                                                                                      │
-          │                                                                                                  │
-          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
-          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-        `);
+        await expect(snapshotText(renderText(value, 100))).toMatchFileSnapshot("__snapshots__/agent-session-browser.current-tab.txt");
     });
 
     it("separates multiple session entries with a blank row", () => {
@@ -207,27 +192,13 @@ describe("AgentSessionBrowserComponent", () => {
         expect(canceled).toBe(true);
     });
 
-    it("opens a separate detail view with metadata and transcript", () => {
+    it("opens a separate detail view with metadata and transcript", async () => {
         const value = component();
         const ui = interact(value, 100);
 
         ui.press(KEY.enter);
 
-        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
-          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   [scout] Project structure audit · running                                                      │
-          │                                                                                                  │
-          │   Run ID: scout-1                                                                                │
-          │   Task: Inspect the project structure                                                            │
-          │   Started: Nov 14 2023 22:13                                                                     │
-          │   Updated: Nov 14 2023 22:13                                                                     │
-          │   Usage: 1.2k input, 2m output, $0.0300                                                          │
-          │                                                                                                  │
-          │   Transcript:                                                                                    │
-          │   I found the main entry points and summarized the current architecture.                         │
-          │     ↑/↓ scroll · Esc back                                                                        │
-          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-        `);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.session-detail.txt");
     });
 
     it("shows read and changed files in session details", () => {
@@ -266,27 +237,13 @@ describe("AgentSessionBrowserComponent", () => {
         expect(ui.render()).not.toContain("Transcript line 0");
     });
 
-    it("switches tabs and renders the past result entry", () => {
+    it("switches tabs and renders the past result entry", async () => {
         const value = component();
         const ui = interact(value, 100);
 
         ui.press(KEY.tab);
 
-        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
-          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   Delegated agent sessions                                                                       │
-          │                                                                                                  │
-          │     ○ Current    ● Past                                                                          │
-          │     Current shows this parent session; Past shows durable child results for this cwd.            │
-          │                                                                                                  │
-          │   → Previous implementation review · delegated agent · completed · Nov 14 2023 22:13             │
-          │     Task: Review the previous implementation                                                     │
-          │                                                                                                  │
-          │   1 session                                                                                      │
-          │                                                                                                  │
-          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
-          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-        `);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.past-tab.txt");
     });
 
     it("uses left and right for directional tab selection", () => {
@@ -336,7 +293,7 @@ describe("AgentSessionBrowserComponent", () => {
         expect(ui.render()).toContain("Workspace: quiet-lantern-7k3");
     });
 
-    it("renders the validation workspace detail from the workspace registry", () => {
+    it("renders the validation workspace detail from the workspace registry", async () => {
         const value = new AgentSessionBrowserComponent({
             current: [],
             past: [],
@@ -347,48 +304,9 @@ describe("AgentSessionBrowserComponent", () => {
         const ui = interact(value, 100);
 
         ui.press(KEY.tab, KEY.tab, KEY.enter);
-        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
-          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   Workspace · sunlit-lantern-6tk                                                                 │
-          │                                                                                                  │
-          │   Workspace: sunlit-lantern-6tk                                                                  │
-          │   Git: unknown                                                                                   │
-          │   Status: leased                                                                                 │
-          │   Setup: ready                                                                                   │
-          │   Lease: task · worker-1                                                                         │
-          │   Created: Nov 14 2023 22:13                                                                     │
-          │   Updated: Nov 14 2023 22:13                                                                     │
-          │                                                                                                  │
-          │   ID: sunlit-lantern-6tk                                                                         │
-          │   Cwd: /home/sd/Repos/pi-coder/.workspace-validation/repo                                        │
-          │   Repository: /home/sd/Repos/pi-coder/.workspace-validation/repo                                 │
-          │   Worktree: /home/sd/Repos/pi-coder/.state/workspaces/sunlit-lantern-6tk                         │
-          │   Base revision: feb634569ddcbd54faac5c270d6ecdf9a97952a5                                        │
-          │   Lease owner: 01a03327-5ba3-7301-b185-794ec34c8dbd                                              │
-          │   Lease acquired: Nov 14 2023 22:13                                                              │
-          │                                                                                                  │
-          │   Setup summary:                                                                                 │
-          │   Setup complete.                                                                                │
-          │                                                                                                  │
-          │   - Inspected 'AGENTS.md', 'README.md', and 'WORKSPACE-MANUAL-VALIDATION.md'.                    │
-          │   - No dependency manifests, setup scripts, or project-local environment artifacts are           │
-          │   present.                                                                                       │
-          │   - Verified prerequisites:                                                                      │
-          │     - Git 2.55.0                                                                                 │
-          │     - pi 0.84.2                                                                                  │
-          │   - No commands requiring mutation were needed.                                                  │
-          │   - Changed files: none.                                                                         │
-          │   - Final Git status: clean.                                                                     │
-          │                                                                                                  │
-          │   Later worker can proceed directly; use the manual validation checklist for workspace           │
-          │   testing.                                                                                       │
-          │   This workspace is leased and cannot be selected until its current run is explicitly            │
-          │   dispositioned.                                                                                 │
-          │     ↑/↓ scroll · Esc back                                                                        │
-          │                                                                                                  │
-          │                                                                                                  │
-          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-        `);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/sunlit-lantern-6tk.txt",
+        );
     });
 
     it("confirms workspace discard and removes the workspace", async () => {
@@ -409,98 +327,14 @@ describe("AgentSessionBrowserComponent", () => {
         const ui = interact(value, 100);
 
         ui.press(KEY.tab, KEY.tab, KEY.enter);
-        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
-          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   Workspace · quiet-lantern-7k3                                                                  │
-          │                                                                                                  │
-          │   Workspace: quiet-lantern-7k3                                                                   │
-          │   Git: unknown                                                                                   │
-          │   Status: available                                                                              │
-          │   Setup: ready                                                                                   │
-          │   Lease: none                                                                                    │
-          │   Created: Nov 14 2023 22:13                                                                     │
-          │   Updated: Nov 14 2023 22:13                                                                     │
-          │                                                                                                  │
-          │   ID: quiet-lantern-7k3                                                                          │
-          │   Cwd: /repo/project                                                                             │
-          │   Repository: /repo/project                                                                      │
-          │   Worktree: /state/workspaces/quiet-lantern-7k3                                                  │
-          │   Base revision: abc123def456                                                                    │
-          │                                                                                                  │
-          │   Actions:                                                                                       │
-          │   i inspect diff · r reset · d discard                                                           │
-          │                                                                                                  │
-          │   This workspace may be selected for an isolated worker.                                         │
-          │     ↑/↓ scroll · i inspect diff · r reset · d discard · Esc back                                 │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-        `);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspace-detail.txt");
 
         ui.press("d");
         expect(snapshotText(ui.render())).toContain("Confirm discard? y/Enter confirm · n/Esc cancel");
-        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
-          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   Workspace · quiet-lantern-7k3                                                                  │
-          │                                                                                                  │
-          │   Workspace: quiet-lantern-7k3                                                                   │
-          │   Git: unknown                                                                                   │
-          │   Status: available                                                                              │
-          │   Setup: ready                                                                                   │
-          │   Lease: none                                                                                    │
-          │   Created: Nov 14 2023 22:13                                                                     │
-          │   Updated: Nov 14 2023 22:13                                                                     │
-          │                                                                                                  │
-          │   ID: quiet-lantern-7k3                                                                          │
-          │   Cwd: /repo/project                                                                             │
-          │   Repository: /repo/project                                                                      │
-          │   Worktree: /state/workspaces/quiet-lantern-7k3                                                  │
-          │   Base revision: abc123def456                                                                    │
-          │                                                                                                  │
-          │   Actions:                                                                                       │
-          │   i inspect diff · r reset · d discard                                                           │
-          │                                                                                                  │
-          │   This workspace may be selected for an isolated worker.                                         │
-          │                                                                                                  │
-          │   Confirm discard? y/Enter confirm · n/Esc cancel                                                │
-          │     ↑/↓ scroll · i inspect diff · r reset · d discard · Esc back                                 │
-          │                                                                                                  │
-          │                                                                                                  │
-          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-        `);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspace-discard-confirmation.txt");
 
         ui.press("n");
-        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
-          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   Workspace · quiet-lantern-7k3                                                                  │
-          │                                                                                                  │
-          │   Workspace: quiet-lantern-7k3                                                                   │
-          │   Git: unknown                                                                                   │
-          │   Status: available                                                                              │
-          │   Setup: ready                                                                                   │
-          │   Lease: none                                                                                    │
-          │   Created: Nov 14 2023 22:13                                                                     │
-          │   Updated: Nov 14 2023 22:13                                                                     │
-          │                                                                                                  │
-          │   ID: quiet-lantern-7k3                                                                          │
-          │   Cwd: /repo/project                                                                             │
-          │   Repository: /repo/project                                                                      │
-          │   Worktree: /state/workspaces/quiet-lantern-7k3                                                  │
-          │   Base revision: abc123def456                                                                    │
-          │                                                                                                  │
-          │   Actions:                                                                                       │
-          │   i inspect diff · r reset · d discard                                                           │
-          │                                                                                                  │
-          │   This workspace may be selected for an isolated worker.                                         │
-          │     ↑/↓ scroll · i inspect diff · r reset · d discard · Esc back                                 │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-        `);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspace-discard-cancelled.txt");
         expect(discarded).toBe(false);
 
         ui.press("d", "y");
@@ -508,71 +342,17 @@ describe("AgentSessionBrowserComponent", () => {
             expect(discarded).toBe(true);
             expect(snapshotText(ui.render())).toContain("No isolated workspaces have been created for this cwd.");
         });
-        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
-          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   Agents                                                                                         │
-          │                                                                                                  │
-          │     ○ Current    ○ Past    ● Workspaces                                                          │
-          │     Current and Past show delegated sessions; Workspaces shows isolated worker checkouts.        │
-          │                                                                                                  │
-          │     No isolated workspaces have been created for this cwd.                                       │
-          │                                                                                                  │
-          │   0 workspaces                                                                                   │
-          │                                                                                                  │
-          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          │                                                                                                  │
-          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-        `);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspaces-empty-after-discard.txt");
     });
 
-    it("renders empty current and past tabs", () => {
+    it("renders empty current and past tabs", async () => {
         const value = new AgentSessionBrowserComponent({ current: [], past: [] });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
 
-        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
-          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   Delegated agent sessions                                                                       │
-          │                                                                                                  │
-          │     ● Current    ○ Past                                                                          │
-          │     Current shows this parent session; Past shows durable child results for this cwd.            │
-          │                                                                                                  │
-          │     No delegated agents are active in this parent session.                                       │
-          │                                                                                                  │
-          │   0 sessions                                                                                     │
-          │                                                                                                  │
-          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
-          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-        `);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.current-empty.txt");
         ui.press(KEY.tab);
-        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
-          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-          │   Delegated agent sessions                                                                       │
-          │                                                                                                  │
-          │     ○ Current    ● Past                                                                          │
-          │     Current shows this parent session; Past shows durable child results for this cwd.            │
-          │                                                                                                  │
-          │     No persisted child sessions were found for this cwd.                                         │
-          │                                                                                                  │
-          │   0 sessions                                                                                     │
-          │                                                                                                  │
-          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
-          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-        `);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.past-empty.txt");
     });
 
     it("uses Enter and Escape for details, then closes the browser", () => {

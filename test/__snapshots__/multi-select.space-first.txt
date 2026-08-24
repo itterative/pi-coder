@@ -1,0 +1,13 @@
+╭────────────────────────────────────────────────╮
+│   Pick many                                    │
+│                                                │
+│   → [x] Item 0                                 │
+│     [ ] Item 1                                 │
+│     [ ] Item 2                                 │
+│                                                │
+│     1 item(s) selected                         │
+│                                                │
+│     ↑/↓ navigate | Space toggle | a all |      │
+│   Enter confirm | Esc cancel                   │
+│                                                │
+╰────────────────────────────────────────────────╯

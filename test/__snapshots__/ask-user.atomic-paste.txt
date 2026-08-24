@@ -1,0 +1,12 @@
+──────────────────────────────────────────────────
+   Proceed?                                       
+
+    This will modify files.                       
+                                                  
+  → Yes: [Pasted 3 lines][ ]                        
+    No                                            
+    Type a custom reply                           
+                                                  
+    Enter confirm | Esc back                      
+
+──────────────────────────────────────────────────

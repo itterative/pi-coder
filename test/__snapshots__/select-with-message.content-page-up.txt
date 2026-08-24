@@ -1,0 +1,17 @@
+──────────────────────────────────────────────────
+   Apply command?                                 
+
+  4 │ content line 4                              
+  5 │ content line 5                              
+  6 │ content line 6                              
+                                                  
+    Showing lines 4-6 of 8 (PgUp/PgDn to scroll)  
+                                                  
+  → Apply - run it now                            
+    Edit                                          
+    Cancel                                        
+                                                  
+    ↑/↓ navigate | Enter select | Tab add         
+  message | PgUp/PgDn scroll | Esc cancel         
+
+──────────────────────────────────────────────────

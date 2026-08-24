@@ -1,0 +1,13 @@
+──────────────────────────────────────────────────
+   Proceed?                                       
+
+    This will modify files.                       
+                                                  
+  → Yes - apply changes                           
+    No                                            
+    Type a custom reply                           
+                                                  
+    ↑/↓ navigate | Enter select | Tab add         
+  message | Esc cancel                            
+
+──────────────────────────────────────────────────

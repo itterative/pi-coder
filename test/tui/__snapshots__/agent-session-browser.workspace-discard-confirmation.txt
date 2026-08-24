@@ -1,0 +1,27 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   Workspace · quiet-lantern-7k3                                                                  │
+│                                                                                                  │
+│   Workspace: quiet-lantern-7k3                                                                   │
+│   Git: unknown                                                                                   │
+│   Status: available                                                                              │
+│   Setup: ready                                                                                   │
+│   Lease: none                                                                                    │
+│   Created: Nov 14 2023 22:13                                                                     │
+│   Updated: Nov 14 2023 22:13                                                                     │
+│                                                                                                  │
+│   ID: quiet-lantern-7k3                                                                          │
+│   Cwd: /repo/project                                                                             │
+│   Repository: /repo/project                                                                      │
+│   Worktree: /state/workspaces/quiet-lantern-7k3                                                  │
+│   Base revision: abc123def456                                                                    │
+│                                                                                                  │
+│   Actions:                                                                                       │
+│   i inspect diff · r reset · d discard                                                           │
+│                                                                                                  │
+│   This workspace may be selected for an isolated worker.                                         │
+│                                                                                                  │
+│   Confirm discard? y/Enter confirm · n/Esc cancel                                                │
+│     ↑/↓ scroll · i inspect diff · r reset · d discard · Esc back                                 │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

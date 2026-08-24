@@ -1,0 +1,40 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   Workspace · sunlit-lantern-6tk                                                                 │
+│                                                                                                  │
+│   Workspace: sunlit-lantern-6tk                                                                  │
+│   Git: unknown                                                                                   │
+│   Status: leased                                                                                 │
+│   Setup: ready                                                                                   │
+│   Lease: task · worker-1                                                                         │
+│   Created: Nov 14 2023 22:13                                                                     │
+│   Updated: Nov 14 2023 22:13                                                                     │
+│                                                                                                  │
+│   ID: sunlit-lantern-6tk                                                                         │
+│   Cwd: /home/sd/Repos/pi-coder/.workspace-validation/repo                                        │
+│   Repository: /home/sd/Repos/pi-coder/.workspace-validation/repo                                 │
+│   Worktree: /home/sd/Repos/pi-coder/.state/workspaces/sunlit-lantern-6tk                         │
+│   Base revision: feb634569ddcbd54faac5c270d6ecdf9a97952a5                                        │
+│   Lease owner: 01a03327-5ba3-7301-b185-794ec34c8dbd                                              │
+│   Lease acquired: Nov 14 2023 22:13                                                              │
+│                                                                                                  │
+│   Setup summary:                                                                                 │
+│   Setup complete.                                                                                │
+│                                                                                                  │
+│   - Inspected `AGENTS.md`, `README.md`, and `WORKSPACE-MANUAL-VALIDATION.md`.                    │
+│   - No dependency manifests, setup scripts, or project-local environment artifacts are           │
+│   present.                                                                                       │
+│   - Verified prerequisites:                                                                      │
+│     - Git 2.55.0                                                                                 │
+│     - pi 0.84.2                                                                                  │
+│   - No commands requiring mutation were needed.                                                  │
+│   - Changed files: none.                                                                         │
+│   - Final Git status: clean.                                                                     │
+│                                                                                                  │
+│   Later worker can proceed directly; use the manual validation checklist for workspace           │
+│   testing.                                                                                       │
+│   This workspace is leased and cannot be selected until its current run is explicitly            │
+│   dispositioned.                                                                                 │
+│     ↑/↓ scroll · Esc back                                                                        │
+│                                                                                                  │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

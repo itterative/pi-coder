@@ -38,76 +38,23 @@ function scrollKeys(options: PagerOptions<string>): PagerOptions<string> {
 }
 
 describe("PagerComponent", () => {
-    it("renders items from the initial scroll offset", () => {
+    it("renders items from the initial scroll offset", async () => {
         const { component } = setup({ title: "Log", items: items(3), scrollOffset: 0 });
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Log                                          │
-          │                                                │
-          │   Line 0                                       │
-          │   Line 1                                       │
-          │   Line 2                                       │
-          │                                                │
-          │     Esc close                                  │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/pager.initial-scroll.txt");
     });
 
-    it("scrolls via the onKey hook and shows the scroll indicator", () => {
+    it("scrolls via the onKey hook and shows the scroll indicator", async () => {
         const { component } = setup(scrollKeys({
             title: "Log",
             items: items(8),
             scrollOffset: 0,
             maxVisibleLines: 4,
         }));
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Log                                          │
-          │                                                │
-          │   Line 0                                       │
-          │   Line 1                                       │
-          │   Line 2                                       │
-          │   Line 3                                       │
-          │                                                │
-          │     Showing lines 1-4 of 8                     │
-          │                                                │
-          │     Esc close                                  │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/pager.scroll-down.txt");
         press(component, KEY.down, KEY.down, KEY.down);
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Log                                          │
-          │                                                │
-          │   Line 3                                       │
-          │   Line 4                                       │
-          │   Line 5                                       │
-          │   Line 6                                       │
-          │                                                │
-          │     Showing lines 4-7 of 8                     │
-          │                                                │
-          │     Esc close                                  │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/pager.after-navigation-down.txt");
         press(component, KEY.up);
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Log                                          │
-          │                                                │
-          │   Line 2                                       │
-          │   Line 3                                       │
-          │   Line 4                                       │
-          │   Line 5                                       │
-          │                                                │
-          │     Showing lines 3-6 of 8                     │
-          │                                                │
-          │     Esc close                                  │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/pager.after-navigation-up.txt");
     });
 
     it("closes on Escape and q", () => {
@@ -120,7 +67,7 @@ describe("PagerComponent", () => {
         expect(b.closed()).toBe(true);
     });
 
-    it("supports multi-line items and custom renderItem", () => {
+    it("supports multi-line items and custom renderItem", async () => {
         const { component } = setup({
             title: "Details",
             items: [
@@ -130,18 +77,6 @@ describe("PagerComponent", () => {
             scrollOffset: 0,
             renderItem: (item) => `${item.label}\n  detail for ${item.value}`,
         });
-        expect(renderText(component)).toMatchInlineSnapshot(`
-          "╭────────────────────────────────────────────────╮
-          │   Details                                      │
-          │                                                │
-          │   First                                        │
-          │     detail for a                               │
-          │   Second                                       │
-          │     detail for b                               │
-          │                                                │
-          │     Esc close                                  │
-          │                                                │
-          ╰────────────────────────────────────────────────╯"
-        `);
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/pager.multiline-items.txt");
     });
 });

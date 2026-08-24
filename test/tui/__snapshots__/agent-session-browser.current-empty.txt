@@ -1,0 +1,12 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   Delegated agent sessions                                                                       │
+│                                                                                                  │
+│     ● Current    ○ Past                                                                          │
+│     Current shows this parent session; Past shows durable child results for this cwd.            │
+│                                                                                                  │
+│     No delegated agents are active in this parent session.                                       │
+│                                                                                                  │
+│   0 sessions                                                                                     │
+│                                                                                                  │
+│     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

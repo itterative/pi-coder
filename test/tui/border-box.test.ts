@@ -4,15 +4,10 @@ import { BORDER_STYLES, BorderBox } from "../../src/tui/border-box";
 import { renderText } from "../helpers";
 
 describe("BorderBox", () => {
-    it("wraps child content in a Unicode border and preserves the width", () => {
+    it("wraps child content in a Unicode border and preserves the width", async () => {
         const component = new BorderBox(new Text("Hello\nWorld", 0, 0));
 
-        expect(renderText(component, 12)).toMatchInlineSnapshot(`
-          "╭──────────╮
-          │Hello     │
-          │World     │
-          ╰──────────╯"
-        `);
+        await expect(renderText(component, 12)).toMatchFileSnapshot("__snapshots__/border-box.rounded.txt");
     });
 
     it("supports a fixed total height and keeps the bottom border visible", () => {
@@ -39,7 +34,7 @@ describe("BorderBox", () => {
         }
     });
 
-    it("supports custom border characters and colors", () => {
+    it("supports custom border characters and colors", async () => {
         const component = new BorderBox(new Text("Hi", 0, 0), {
             borderColor: (text) => `[${text}]`,
             characters: {
@@ -52,10 +47,6 @@ describe("BorderBox", () => {
             },
         });
 
-        expect(renderText(component, 6)).toMatchInlineSnapshot(`
-          "[+----+]
-          [|]Hi  [|]
-          [+----+]"
-        `);
+        await expect(renderText(component, 6)).toMatchFileSnapshot("__snapshots__/border-box.custom-glyphs.txt");
     });
 });
