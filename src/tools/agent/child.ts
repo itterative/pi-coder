@@ -80,7 +80,7 @@ export async function createAgentChild(
         noSkills: true,
         noPromptTemplates: true,
         noThemes: true,
-        noContextFiles: true,
+        noContextFiles: false,
         extensionFactories: [{
             name: context.definition.mutating ? "pi-coder-worker-child" : "pi-coder-scout-child",
             hidden: true,
