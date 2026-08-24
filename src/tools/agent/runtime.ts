@@ -580,17 +580,11 @@ export class AgentRunManager {
                 `Agent run ${runId} is already ${run.status}; collect its result instead.`,
             );
         }
-        if (!run.background && run.status !== "waiting_for_parent" && run.status !== "interrupted") {
-            throw new AgentActionError(
-                `Agent run ${runId} is ${run.status}; only waiting or interrupted foreground runs can be canceled.`,
-            );
-        }
-
         this.record(run, "cancel.requested", { status: run.status });
         run.cancelRequested = true;
         if (run.status === "starting" || run.status === "running") {
             void this.abortRun(run)?.catch(() => {});
-            await run.backgroundTask?.catch(() => {});
+            if (run.background) await run.backgroundTask?.catch(() => {});
         }
         let terminalOutcome = run.terminalOutcome;
         if (!isTerminalStatus(run.status)) {

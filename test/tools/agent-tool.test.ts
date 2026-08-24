@@ -406,6 +406,94 @@ describe("agent extension registration", () => {
         await handlers.session_shutdown[0]({}, ctx);
     });
 
+    it("prepares and releases a no-change isolated foreground result", async () => {
+        const handlers: Record<string, Handler[]> = {};
+        let tool: any;
+        const pi = {
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            registerTool(definition: any) {
+                tool = definition;
+            },
+            registerCommand() {},
+        } as any;
+        const workspace = {
+            id: "workspace-foreground",
+            cwd: process.cwd(),
+            repositoryRoot: process.cwd(),
+            worktreePath: "/tmp/workspace-foreground",
+            slug: "workspace-foreground",
+            baseRevision: "base-revision",
+            setupState: "ready",
+            status: "available",
+            createdAt: 1,
+            updatedAt: 1,
+        } as workspaces.AgentWorkspace;
+        const result: workspaces.AgentWorkspaceResult = {
+            id: "result-foreground",
+            workspaceId: workspace.id,
+            runId: "worker-1",
+            baseRevision: workspace.baseRevision,
+            workerHead: workspace.baseRevision,
+            commitRange: `${workspace.baseRevision}..${workspace.baseRevision}`,
+            commits: [],
+            preparedAt: 2,
+            status: "prepared",
+        };
+        vi.spyOn(workspaceSetup, "prepareIsolatedWorkspace").mockResolvedValue({
+            workspace,
+            ownerSessionId: "parent-session",
+            provisionalLeaseRunId: "provisional-foreground",
+        });
+        const transferSpy = vi.spyOn(workspaces, "transferAgentWorkspaceLease").mockResolvedValue();
+        vi.spyOn(workspaces, "getAgentWorkspace").mockResolvedValue(workspace);
+        const prepareResultSpy = vi.spyOn(workspaces, "prepareAgentWorkspaceApplication").mockResolvedValue(result);
+        const releaseSpy = vi.spyOn(workspaces, "releaseAgentWorkspaceAfterNoChanges").mockResolvedValue();
+        const child: ChildAgentHandle = {
+            prompt: async () => {},
+            abort: async () => {},
+            dispose: () => {},
+            takeParentQuestion: () => undefined,
+            getProgress: () => ({ output: "Finished", recentActivity: [] }),
+            getFinalOutput: () => "Finished in isolation",
+            getError: () => undefined,
+            getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
+        };
+        registerAgentTool(pi, async () => child);
+        const ctx = {
+            cwd: process.cwd(),
+            isProjectTrusted: () => false,
+            isIdle: () => false,
+            sessionManager: {
+                getSessionId: () => "parent-session",
+                getSessionFile: () => undefined,
+            },
+            ui: { notify: () => {}, setWidget: () => {} },
+        };
+        await handlers.session_start[0]({}, ctx);
+
+        const completed = await tool.execute(
+            "call-foreground",
+            { action: "start", agent: "worker", task: "Inspect in isolation", isolation: "worktree" },
+            undefined,
+            undefined,
+            ctx,
+        );
+
+        expect(transferSpy).toHaveBeenCalledWith(
+            workspace.id,
+            "parent-session",
+            "provisional-foreground",
+            "worker-1",
+        );
+        expect(prepareResultSpy).toHaveBeenCalledWith(workspace, "parent-session", "worker-1");
+        expect(releaseSpy).toHaveBeenCalledWith(workspace.id, "parent-session", "worker-1");
+        expect(completed.details.workspaceResult).toEqual(result);
+        expect(completed.content[0].text).toContain("workspace lease was released");
+        await handlers.session_shutdown[0]({}, ctx);
+    });
+
     it("automatically delivers a background completion once the parent is idle", async () => {
         const handlers: Record<string, Handler[]> = {};
         let tool: any;

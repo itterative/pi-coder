@@ -51,6 +51,15 @@ function currentItem(run: AgentRunSummary): AgentSessionBrowserItem {
     };
 }
 
+function historicalStatus(status: string | undefined): string | undefined {
+    // A past transcript has no live child handle in this runtime. Persisted
+    // startup/running states therefore describe an interrupted run, not one
+    // that is still executing.
+    return status === "starting" || status === "running" || status === "waiting_for_permission"
+        ? "interrupted"
+        : status;
+}
+
 function pastItem(info: SessionInfo, parentSessionId: string): AgentSessionBrowserItem {
     const candidate = readAgentSessionMetadata(info.path);
     const metadata = candidate?.ownerSessionId === parentSessionId ? candidate : undefined;
@@ -59,7 +68,7 @@ function pastItem(info: SessionInfo, parentSessionId: string): AgentSessionBrows
         id: info.id,
         title: metadata?.title ?? deriveAgentTitle(info.firstMessage),
         agent: metadata?.agent ?? "delegated agent",
-        status: metadata?.status ?? "historical",
+        status: historicalStatus(metadata?.status) ?? "historical",
         task: metadata?.task ?? info.firstMessage,
         startedAt: metadata?.startedAt,
         updatedAt: metadata?.updatedAt ?? info.modified.getTime(),

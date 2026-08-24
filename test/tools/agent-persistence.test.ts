@@ -78,6 +78,17 @@ describe("durable agent run persistence", () => {
             timestamp: Date.now(),
         });
         expect(child.getSessionFile()).toBeDefined();
+        fs.writeFileSync(`${child.getSessionFile()}.meta.json`, JSON.stringify({
+            version: 1,
+            ownerSessionId: "parent-1",
+            runId: "scout-1",
+            title: "Persisted child",
+            agent: "scout",
+            task: "Review the persisted child session",
+            status: "running",
+            startedAt: 1,
+            updatedAt: 2,
+        }));
         expect(fs.readdirSync(parentDir)).not.toHaveLength(0);
 
         const sessions = await listPastAgentSessions(process.cwd(), sessionsDir);
@@ -87,6 +98,7 @@ describe("durable agent run persistence", () => {
             parentSessionId: "parent-1",
             firstMessage: "Review the persisted child session",
             messageCount: 2,
+            status: "interrupted",
         });
     });
 

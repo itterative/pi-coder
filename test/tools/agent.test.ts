@@ -231,7 +231,7 @@ describe("AgentRunManager", () => {
         expect(child.disposed).toBe(true);
     });
 
-    it("cancels only waiting runs", async () => {
+    it("cancels a waiting run", async () => {
         const child = new FakeChild([{ question: { question: "Continue?" } }]);
         const manager = managerWith(child);
         await manager.start("scout", "Investigate", context());
@@ -242,6 +242,22 @@ describe("AgentRunManager", () => {
         expect(manager.activeCount).toBe(0);
         expect(child.disposed).toBe(true);
         await expect(manager.cancel("scout-1")).rejects.toThrow(AgentActionError);
+    });
+
+    it("cancels a running foreground child", async () => {
+        const child = new FakeChild([{ waitForAbort: true }]);
+        const manager = managerWith(child);
+        const pending = manager.start("scout", "Investigate", context());
+        await Promise.resolve();
+
+        const canceled = await manager.cancel("scout-1");
+        const settled = await pending;
+
+        expect(canceled.details.status).toBe("canceled");
+        expect(settled.details.status).toBe("canceled");
+        expect(child.abortCount).toBeGreaterThan(0);
+        expect(child.disposed).toBe(true);
+        expect(manager.activeCount).toBe(0);
     });
 
     it("bounds retained runs", async () => {

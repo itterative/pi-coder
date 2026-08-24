@@ -256,6 +256,22 @@ describe("AgentSessionBrowserComponent", () => {
         expect(ui.render()).toContain("● Current    ○ Past");
     });
 
+    it("allows explicit cancellation of a running current agent", async () => {
+        let canceled: string | undefined;
+        const value = new AgentSessionBrowserComponent({
+            current: [current],
+            past: [],
+            onCancel: async (item) => {
+                canceled = item.id;
+            },
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press("c");
+        await vi.waitFor(() => expect(canceled).toBe("scout-1"));
+    });
+
     it("merges workspaces into the agents browser", () => {
         let invalidations = 0;
         const value = new AgentSessionBrowserComponent({

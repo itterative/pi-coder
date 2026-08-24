@@ -247,7 +247,11 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                         return true;
                     }
                     if (key === "c" && selected && isSession(selected) && selected.kind === "current" && (
-                        selected.status === "interrupted" || selected.status === "waiting_for_parent"
+                        selected.status === "starting"
+                        || selected.status === "running"
+                        || selected.status === "waiting_for_permission"
+                        || selected.status === "interrupted"
+                        || selected.status === "waiting_for_parent"
                     )) {
                         this.finish(undefined);
                         queueMicrotask(() => void options.onCancel?.(selected));

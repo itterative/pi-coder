@@ -40,6 +40,7 @@ import {
     releaseAgentWorkspaceAfterApplication,
     releaseAgentWorkspaceAfterNoChanges,
     releaseAgentWorkspaceLease,
+    reconcileNoChangeAgentWorkspaceLeases,
     resetAgentWorkspaceForReuse,
     retainAgentWorkspaceResult,
     transferAgentWorkspaceLease,
@@ -152,6 +153,35 @@ async function prepareCollectedWorkspaceResult(
     );
 }
 
+function isTerminalAgentStatus(status: AgentRunDetails["status"]): boolean {
+    return status === "completed"
+        || status === "failed"
+        || status === "aborted"
+        || status === "canceled";
+}
+
+/** Finalize a foreground isolated run because it has no later collect action. */
+async function prepareForegroundWorkspaceResult(
+    outcome: AgentRunOutcome,
+    ctx: ExtensionContext,
+): Promise<AgentRunOutcome> {
+    if (!isTerminalAgentStatus(outcome.details.status) || !outcome.details.workspaceId) return outcome;
+    const workspaceResult = await prepareCollectedWorkspaceResult(outcome.details, ctx);
+    if (!workspaceResult) return outcome;
+    const noWorkspaceChanges = workspaceResult.workerHead === workspaceResult.baseRevision
+        && workspaceResult.commits.length === 0;
+    if (noWorkspaceChanges) {
+        await releaseAgentWorkspaceAfterNoChanges(
+            workspaceResult.workspaceId,
+            ctx.sessionManager.getSessionId(),
+            workspaceResult.runId,
+        );
+    }
+    outcome.details.workspaceResult = workspaceResult;
+    outcome.content += workspaceResultSummary(workspaceResult, noWorkspaceChanges);
+    return outcome;
+}
+
 export default function registerAgentTool(
     pi: ExtensionAPI,
     factory: ChildAgentFactory = createAgentChild,
@@ -231,6 +261,15 @@ export default function registerAgentTool(
         }
         let workspaces: AgentWorkspace[];
         try {
+            // Reconcile only verified no-change results. Changed or otherwise
+            // uncertain leases remain protected until an explicit action.
+            const released = await reconcileNoChangeAgentWorkspaceLeases(ctx.cwd);
+            if (released > 0) {
+                ctx.ui.notify(
+                    `Released ${released} verified no-change workspace lease${released === 1 ? "" : "s"}.`,
+                    "info",
+                );
+            }
             workspaces = await listAgentWorkspaces(ctx.cwd);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -250,7 +289,10 @@ export default function registerAgentTool(
             workspaceGitStates,
             onResume: async (item) => {
                 try {
-                    const outcome = await manager.resume(item.id, undefined, undefined, backgroundUpdate(ctx));
+                    const outcome = await prepareForegroundWorkspaceResult(
+                        await manager.resume(item.id, undefined, undefined, backgroundUpdate(ctx)),
+                        ctx,
+                    );
                     clearCompletedWorkspaceSetup(ctx, outcome.details);
                     refreshAgentUi(ctx);
                 } catch (error) {
@@ -260,7 +302,10 @@ export default function registerAgentTool(
             },
             onCancel: async (item) => {
                 try {
-                    const outcome = await manager.cancel(item.id);
+                    const outcome = await prepareForegroundWorkspaceResult(
+                        await manager.cancel(item.id),
+                        ctx,
+                    );
                     mailbox.notifyUserCanceled(outcome.details);
                     refreshAgentUi(ctx);
                 } catch (error) {
@@ -459,10 +504,14 @@ export default function registerAgentTool(
                         outcome.details.runId,
                     );
                 }
+                if (params.action === "start") {
+                    outcome = await prepareForegroundWorkspaceResult(outcome, ctx);
+                }
                 clearCompletedWorkspaceSetup(ctx, outcome.details);
                 outcome.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
             } else if (params.action === "resume") {
                 outcome = await manager.resume(params.runId, params.guidance, signal, progress);
+                outcome = await prepareForegroundWorkspaceResult(outcome, ctx);
                 clearCompletedWorkspaceSetup(ctx, outcome.details);
             } else if (params.action === "cancel") {
                 outcome = await manager.cancel(params.runId);
