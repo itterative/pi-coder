@@ -15,12 +15,10 @@ const LOG_SPEC: CommandSpec = {
 };
 
 /**
- * `git diff --check` can echo the offending changed line, so it is not safe
- * across the whole repository by itself. It is safe with an explicit `--`
- * pathspec because that has the same explicit-path boundary as `cat`; quiet
- * mode is safe even without a pathspec because it emits no diff contents.
- * Keep the option surface deliberately small so a later diff-output or
- * external-program option cannot make this an output or execution bypass.
+ * Keep the safe, metadata/checking modes of `git diff` deliberately small.
+ * `--check` may echo an offending changed line, but is useful for validating
+ * worktree changes; `--stat` only reports change metadata. Quiet mode emits no
+ * diff contents. Other output and external-program options remain ineligible.
  */
 const BRANCH_SPEC: CommandSpec = {
     // The default invocation lists branches. Creation, deletion, movement,
@@ -50,9 +48,10 @@ const TAG_SPEC: CommandSpec = {
     },
 };
 
-const DIFF_CHECK_SPEC: CommandSpec = {
+const DIFF_SPEC: CommandSpec = {
     validate: (args) => {
         let hasCheck = false;
+        let hasStat = false;
         let hasQuiet = false;
         let separator = -1;
 
@@ -68,6 +67,7 @@ const DIFF_CHECK_SPEC: CommandSpec = {
             if (
                 arg.startsWith("-") &&
                 arg !== "--check" &&
+                arg !== "--stat" &&
                 arg !== "--quiet" &&
                 arg !== "--cached" &&
                 arg !== "--staged" &&
@@ -80,13 +80,15 @@ const DIFF_CHECK_SPEC: CommandSpec = {
 
             if (arg === "--check") {
                 hasCheck = true;
+            } else if (arg === "--stat") {
+                hasStat = true;
             } else if (arg === "--quiet") {
                 hasQuiet = true;
             }
         }
 
         const hasPathspec = separator !== -1 && separator < args.length - 1;
-        return hasQuiet || (hasCheck && hasPathspec);
+        return hasCheck || hasStat || hasQuiet || hasPathspec;
     },
 };
 
@@ -117,9 +119,9 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
         subcommands: {
             // positionals are pathspecs
             status: {},
-            // --check is eligible only with an explicit pathspec; --quiet
-            // suppresses output and is eligible without one.
-            diff: DIFF_CHECK_SPEC,
+            // Keep only the explicitly modeled checking, stat, and quiet
+            // modes eligible; other diff output modes remain prompts.
+            diff: DIFF_SPEC,
             log: LOG_SPEC,
             "ls-files": {
                 flags: { "--exclude": VALUE, "--with-tree": VALUE },
