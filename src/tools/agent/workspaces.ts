@@ -12,6 +12,7 @@ import { randomSlug } from "../../common/slug";
 const execFileAsync = promisify(execFile);
 const WORKSPACE_VERSION = 1 as const;
 const DATABASE_NAME = "meta.sqlite";
+export const MAX_AGENT_WORKSPACES = 3;
 
 export type WorkspaceSetupState = "not_started" | "running" | "ready" | "skipped" | "failed";
 export type WorkspaceStatus = "available" | "review_required";
@@ -715,6 +716,14 @@ export async function createAgentWorkspace(
     const database = await openDatabase(workspacesDir);
     let worktreePath: string | undefined;
     try {
+        const countRow = database.prepare("SELECT COUNT(*) AS count FROM workspaces WHERE cwd = ?")
+            .get(resolvedCwd) as { count?: number } | undefined;
+        const count = Number(countRow?.count ?? 0);
+        if (count >= MAX_AGENT_WORKSPACES) {
+            throw new Error(
+                `Workspace capacity reached for ${resolvedCwd}: ${MAX_AGENT_WORKSPACES} workspaces already exist. Explicitly apply, retain, reset, or discard an existing workspace before creating another.`,
+            );
+        }
         let slug = randomSlug();
         while (
             database.prepare("SELECT 1 FROM workspaces WHERE slug = ?").get(slug)

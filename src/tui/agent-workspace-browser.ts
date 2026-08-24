@@ -57,6 +57,7 @@ function dateText(timestamp: number): string {
 }
 
 function statusText(workspace: AgentWorkspace): string {
+    if (workspace.leaseRunId) return "leased";
     return workspace.status.replaceAll("_", " ");
 }
 
@@ -132,9 +133,11 @@ export function agentWorkspaceDetailText(
     }
     lines.push(
         "",
-        theme.fg("muted", workspace.status === "review_required"
-            ? "This workspace requires explicit review before it can be reused."
-            : "This workspace may be selected for an isolated worker."),
+        theme.fg("muted", workspace.leaseRunId
+            ? "This workspace is leased and cannot be selected until its current run is explicitly dispositioned."
+            : workspace.status === "review_required"
+                ? "This workspace requires explicit review before it can be reused."
+                : "This workspace may be selected for an isolated worker."),
     );
     return lines.join("\n");
 }

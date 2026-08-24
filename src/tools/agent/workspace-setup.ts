@@ -14,6 +14,8 @@ import {
     createAgentWorkspace,
     findAvailableAgentWorkspace,
     findUnpreparedAgentWorkspace,
+    listAgentWorkspaces,
+    MAX_AGENT_WORKSPACES,
     releaseAgentWorkspaceLease,
     transferAgentWorkspaceLease,
     updateAgentWorkspace,
@@ -158,6 +160,18 @@ export async function prepareIsolatedWorkspace(
     }
 
     const existing = await findUnpreparedAgentWorkspace(cwd);
+    if (!existing) {
+        const workspaces = await listAgentWorkspaces(cwd);
+        if (workspaces.length >= MAX_AGENT_WORKSPACES) {
+            const summary = workspaces.map((workspace) => {
+                const lease = workspace.leaseRunId ? `leased by ${workspace.leaseRunId}` : workspace.status;
+                return `${workspace.slug} (${workspace.setupState}, ${lease})`;
+            }).join(", ");
+            throw new AgentActionError(
+                `Workspace capacity reached (${MAX_AGENT_WORKSPACES}) for this project. Existing workspaces: ${summary}. Explicitly apply, retain, reset, or discard one before creating another.`,
+            );
+        }
+    }
     const prompt = await selectWithMessage<WorkspacePromptChoice>({
         title: existing ? "Prepare isolated workspace?" : "Create isolated workspace?",
         contentLines: existing

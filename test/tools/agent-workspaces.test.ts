@@ -87,6 +87,27 @@ describe("agent workspaces", () => {
         ]);
     });
 
+    it("limits each project to three persistent workspaces", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "README.md"), "workspace capacity test\n");
+        await git(repository, "add", "README.md");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        await createAgentWorkspace(repository, state);
+        await createAgentWorkspace(repository, state);
+        await createAgentWorkspace(repository, state);
+
+        await expect(createAgentWorkspace(repository, state)).rejects.toThrow("Workspace capacity reached");
+        expect(await listAgentWorkspaces(repository, state)).toHaveLength(3);
+    });
+
     it("commits dirty tracked and untracked worker changes exactly once and persists the result", async () => {
         const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
         temporaryDirectories.push(root);

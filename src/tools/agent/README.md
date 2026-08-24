@@ -33,7 +33,7 @@ Use `/agent-sessions` to open an overlay for delegated-agent sessions. The **Cur
 
 ## Browse isolated workspaces
 
-Use `/agents` to open the unified agent browser. Its Current and Past tabs show delegated sessions (including internal workspace-setup agents), while Workspaces lists isolated workspaces for the current cwd, including setup state, lease state, Git clean/dirty state, changed-file counts, worktree path, and whether the workspace is available or requires review. Enter opens read-only session or workspace metadata. Workspaces marked `review_required` are deliberately excluded from automatic reuse until explicit review/reset/discard actions are added.
+Use `/agents` to open the unified agent browser. Its Current and Past tabs show delegated sessions (including internal workspace-setup agents), while Workspaces lists isolated workspaces for the current cwd, including setup state, lease state, Git clean/dirty state, changed-file counts, worktree path, and whether the workspace is available, leased, or requires review. Each project is limited to three persistent workspaces; reaching capacity reports the existing workspace leases instead of silently creating another worktree. Enter opens read-only session or workspace metadata. Workspaces marked `review_required` or holding a task lease are deliberately excluded from automatic reuse until explicit apply/retain/reset/discard actions are completed.
 
 ## Durable child sessions
 
