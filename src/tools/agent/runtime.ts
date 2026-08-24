@@ -2,6 +2,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 
 import { fingerprintAgentDefinition, type AgentDefinition } from "./discovery";
 import type { AgentTraceData, AgentTraceStore } from "./trace";
+import type { AgentWorkspaceResult } from "./workspaces";
 
 export type AgentRunStatus =
     | "starting"
@@ -92,6 +93,7 @@ export interface AgentRunDetails {
     error?: string;
     discoveryDiagnostics?: string[];
     workspaceId?: string;
+    workspaceResult?: AgentWorkspaceResult;
     mutating?: boolean;
     mutationReport?: WorkerMutationReport;
 }

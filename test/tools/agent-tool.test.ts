@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import registerAgentTool, { clearCompletedWorkspaceSetupRun } from "../../src/tools/agent";
 import { ZERO_USAGE, type AgentRunSummary, type ChildAgentHandle } from "../../src/tools/agent/runtime";
+import * as workspaceSetup from "../../src/tools/agent/workspace-setup";
+import * as workspaces from "../../src/tools/agent/workspaces";
 import { AGENT_TRACE_ENV } from "../../src/tools/agent/trace";
 import { mockTheme, renderText } from "../helpers";
 
@@ -14,6 +16,7 @@ interface Handler {
 
 const tempDirs: string[] = [];
 afterEach(() => {
+    vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -301,6 +304,105 @@ describe("agent extension registration", () => {
         expect(widgets[widgets.length - 1]).toBeUndefined();
         expect(widgetPlacements).toContain("aboveEditor");
         expect(background).toBe(true);
+        await handlers.session_shutdown[0]({}, ctx);
+    });
+
+    it("prepares an isolated result before collecting it in the parent", async () => {
+        const handlers: Record<string, Handler[]> = {};
+        let tool: any;
+        const pi = {
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            registerTool(definition: any) {
+                tool = definition;
+            },
+            registerCommand() {},
+            sendMessage() {},
+        } as any;
+        const workspace = {
+            id: "workspace-1",
+            cwd: process.cwd(),
+            repositoryRoot: process.cwd(),
+            worktreePath: "/tmp/workspace-1",
+            slug: "workspace-1",
+            baseRevision: "base-revision",
+            setupState: "ready",
+            status: "available",
+            createdAt: 1,
+            updatedAt: 1,
+        } as workspaces.AgentWorkspace;
+        const result: workspaces.AgentWorkspaceResult = {
+            id: "result-1",
+            workspaceId: workspace.id,
+            runId: "worker-1",
+            baseRevision: workspace.baseRevision,
+            workerHead: "worker-head",
+            commitRange: "base-revision..worker-head",
+            commits: ["worker-head"],
+            durableRef: "refs/pi-coder/workspace-results/workspace-1/result-1",
+            preparedAt: 2,
+            status: "prepared",
+        };
+        const setupSpy = vi.spyOn(workspaceSetup, "prepareIsolatedWorkspace").mockResolvedValue({
+            workspace,
+            ownerSessionId: "parent-session",
+            provisionalLeaseRunId: "provisional-1",
+        });
+        const transferSpy = vi.spyOn(workspaces, "transferAgentWorkspaceLease").mockResolvedValue();
+        const getWorkspaceSpy = vi.spyOn(workspaces, "getAgentWorkspace").mockResolvedValue(workspace);
+        const prepareResultSpy = vi.spyOn(workspaces, "prepareAgentWorkspaceApplication").mockResolvedValue(result);
+        const child: ChildAgentHandle = {
+            prompt: async () => {},
+            abort: async () => {},
+            dispose: () => {},
+            takeParentQuestion: () => undefined,
+            getProgress: () => ({ output: "Finished", recentActivity: [] }),
+            getFinalOutput: () => "Finished in isolation",
+            getError: () => undefined,
+            getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
+        };
+        registerAgentTool(pi, async () => child);
+        const ctx = {
+            cwd: process.cwd(),
+            isProjectTrusted: () => false,
+            isIdle: () => false,
+            sessionManager: {
+                getSessionId: () => "parent-session",
+                getSessionFile: () => undefined,
+            },
+            ui: { notify: () => {}, setWidget: () => {} },
+        };
+        await handlers.session_start[0]({}, ctx);
+        await tool.execute(
+            "call-1",
+            { action: "spawn", agent: "worker", task: "Implement in isolation", isolation: "worktree" },
+            undefined,
+            undefined,
+            ctx,
+        );
+        for (let index = 0; index < 12; index++) await Promise.resolve();
+
+        const collected = await tool.execute(
+            "call-2",
+            { action: "collect", runId: "worker-1" },
+            undefined,
+            undefined,
+            ctx,
+        );
+
+        expect(setupSpy).toHaveBeenCalledOnce();
+        expect(transferSpy).toHaveBeenCalledWith(
+            workspace.id,
+            "parent-session",
+            "provisional-1",
+            "worker-1",
+        );
+        expect(getWorkspaceSpy).toHaveBeenCalledWith(workspace.id);
+        expect(prepareResultSpy).toHaveBeenCalledWith(workspace, "parent-session", "worker-1");
+        expect(collected.details.workspaceResult).toEqual(result);
+        expect(collected.content[0].text).toContain("Isolated worker result prepared for review");
+        expect(collected.content[0].text).toContain("The parent checkout was not changed");
         await handlers.session_shutdown[0]({}, ctx);
     });
 

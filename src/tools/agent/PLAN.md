@@ -525,14 +525,14 @@ Design:
 
 - A worker `start`/`spawn` request may explicitly opt into worktree isolation. Shared-checkout execution remains available separately.
 - Workspace worktrees live at `.state/workspaces/<random-word-slug>/`; the slug is intentionally independent of the source path and task text. Workspace metadata is stored in `.state/workspaces/meta.sqlite` using the shared versioned migration helper in `src/common/sqlite.ts`; the normalized cwd helper remains useful for agent-session storage and workspace matching, but is not part of the workspace path.
-- An isolated worker selects the first compatible workspace in stable order that is `ready`, `available`, and not leased. SQLite schema migration v2 adds owner/session/run lease fields; claims are atomic, leases transfer from setup provisioning to the task run, and terminal workers release them. Migration v3 adds `workspace_status`; leases do not expire automatically.
+- An isolated worker selects the first compatible workspace in stable order that is `ready`, `available`, and not leased. SQLite schema migration v2 adds owner/session/run lease fields; claims are atomic, leases transfer from setup provisioning to the task run, and leases do not expire automatically. Migration v3 adds `workspace_status`; task leases remain held through result review and are released only after an explicit successful application.
 - If no ready workspace exists, pi-coder creates one and launches a limited internal setup worker before launching the requested task worker. The setup worker uses a dedicated setup definition, inspects the existing environment, does not install packages or modify project/environment files, and reports missing prerequisites rather than repairing them.
 - The setup worker is setup-only and receives no implementation task. Its lifecycle is visible in the unified `/agents` Current tab and bottom activity widget as an internal workspace-setup run; it is not a normal collectable parent-model run or mailbox result. Completed setup status remains visible while the task runs and clears when the task completes; failed setup status remains for future manual recovery UI.
 - The requested task worker starts only after setup succeeds. It receives the prepared worktree as its cwd and may reuse persistent dependencies, virtual environments, generated artifacts, and other project-local setup state.
 - Setup and task workers share the existing one-active-worker mutation limit. A setup worker occupies that capacity until it settles; the task worker does not start concurrently with it.
 - Workspace metadata persists alongside agent state: workspace ID, repository/cwd, worktree path, base revision, setup status/report, current assignment, dirty/review status, Git state, and last-use information. Interrupted setup and task runs retain the same workspace for explicit user recovery.
-- Workspaces are never automatically merged, reset, or deleted. After a task, the worktree enters passive `review_required`; the parent may inspect it without a separate user approval step. Its lease is released, but it remains excluded from automatic selection.
-- The parent receives explicit isolated-result guidance after collection: inspect the worker status/diff, then choose whether to apply, retain, reset, or discard. No generic dependency setup code is required.
+- Workspaces are never automatically merged, reset, or deleted. After a task, the worktree remains available for passive review; the parent may inspect it without a separate user approval step. Its task lease remains held until an explicit disposition completes, and it remains excluded from automatic selection.
+- On parent collection of a terminal isolated run, pi-coder finalizes the worker tree, records a separate durable workspace result, and attaches explicit guidance containing the workspace/result IDs and revisions. The parent checkout is not changed. The parent then chooses whether to apply, retain, reset, or discard. No generic dependency setup code is required.
 
 User interface:
 
@@ -541,7 +541,7 @@ User interface:
 - Add parent-driven result actions: inspect the isolated diff, apply the result, retain the workspace, reset it for reuse, or discard it. Do not add a mandatory “mark reviewed” action; `review_required` is a passive state.
 - The parent model should receive the task worker's normal result plus explicit isolated-workspace instructions. The internal setup worker should not create a normal collectable result or automatic mailbox conversation.
 
-Result application design (result preparation and application API implemented; browser actions remain):
+Result application design (collection-time result preparation and application API implemented; browser actions remain):
 
 - `prepareAgentWorkspaceApplication()` explicitly commits any remaining tracked/untracked worker changes in the isolated worktree as a final pi-coder result commit. If the worker already committed its changes, it does not create an empty commit and uses the existing final `HEAD`.
 - Migration v4 stores each worker result in a separate `workspace_results` table rather than overwriting workspace metadata. Results retain the worker run, base revision, commit range/commits, preparation timestamp, application metadata, and final worker revision.

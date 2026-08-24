@@ -30,11 +30,14 @@ import {
     registerAgentTraceCommand,
 } from "./trace";
 import {
+    getAgentWorkspace,
+    prepareAgentWorkspaceApplication,
     releaseAgentWorkspaceLease,
     inspectAgentWorkspaceGitState,
     listAgentWorkspaces,
     transferAgentWorkspaceLease,
     type AgentWorkspace,
+    type AgentWorkspaceResult,
 } from "./workspaces";
 import { showAgentSessionBrowser } from "../../tui/agent-session-browser";
 import {
@@ -61,6 +64,41 @@ import { registerAgentTool as registerAgentToolDefinition } from "./tool";
 export { clearCompletedWorkspaceSetupRun } from "./ui";
 
 type WorkspaceSetupRuns = Map<string, AgentRunSummary>;
+
+function workspaceResultSummary(result: AgentWorkspaceResult): string {
+    const commits = result.commits.length
+        ? `${result.commits.length} commit${result.commits.length === 1 ? "" : "s"}: ${result.commits.slice(0, 8).join(", ")}${result.commits.length > 8 ? ", …" : ""}`
+        : "none (worker tree matches the base revision)";
+    return [
+        "\n\nIsolated worker result prepared for review. The parent checkout was not changed.",
+        `Workspace: ${result.workspaceId}`,
+        `Result: ${result.id}`,
+        `Base revision: ${result.baseRevision}`,
+        `Worker revision: ${result.workerHead}`,
+        `Commit range: ${result.commitRange}`,
+        `Commits: ${commits}`,
+        `Durable ref: ${result.durableRef ?? "none"}`,
+        "Keep this result until it has been explicitly inspected and explicitly applied, retained, reset, or discarded.",
+    ].join("\n");
+}
+
+async function prepareCollectedWorkspaceResult(
+    details: Pick<AgentRunDetails, "workspaceId" | "runId">,
+    ctx: ExtensionContext,
+): Promise<AgentWorkspaceResult | undefined> {
+    if (!details.workspaceId) return undefined;
+    const workspace = await getAgentWorkspace(details.workspaceId);
+    if (!workspace) {
+        throw new AgentActionError(
+            `Isolated workspace ${details.workspaceId} is missing; result was not collected.`,
+        );
+    }
+    return prepareAgentWorkspaceApplication(
+        workspace,
+        ctx.sessionManager.getSessionId(),
+        details.runId,
+    );
+}
 
 export default function registerAgentTool(
     pi: ExtensionAPI,
@@ -371,7 +409,13 @@ export default function registerAgentTool(
             } else if (params.action === "status") {
                 outcome = manager.status(params.runId);
             } else {
+                const pending = manager.status(params.runId);
+                const workspaceResult = await prepareCollectedWorkspaceResult(pending.details, ctx);
                 outcome = manager.collect(params.runId);
+                if (workspaceResult) {
+                    outcome.details.workspaceResult = workspaceResult;
+                    outcome.content += workspaceResultSummary(workspaceResult);
+                }
                 clearCompletedWorkspaceSetup(ctx, outcome.details);
             }
         } catch (error) {
