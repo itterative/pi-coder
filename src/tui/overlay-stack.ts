@@ -1,4 +1,4 @@
-import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 
 /**
  * A focus binding for one overlay participating in the local overlay stack.
@@ -18,9 +18,11 @@ interface OverlayEntry {
 class OverlayStackManager {
     private readonly entries: OverlayEntry[] = [];
     private readonly removeInputListener: () => void;
+    private restoreTarget: Component | undefined;
 
-    constructor(tui: TUI) {
+    constructor(private readonly tui: TUI) {
         this.removeInputListener = tui.addInputListener(() => {
+            this.rememberFocusBeforeCatch();
             this.focusTop();
             // Focus is corrected before TUI dispatches the current key.
             return undefined;
@@ -53,6 +55,20 @@ class OverlayStackManager {
             if (!handle.isFocused()) handle.focus();
             return;
         }
+    }
+
+    private rememberFocusBeforeCatch(): void {
+        if (this.entries.some((entry) => entry.handle?.isFocused())) return;
+        // getFocusedComponent() exists on pi-tui's concrete TUI base but is
+        // not part of the structural TUI interface in all supported versions.
+        const focused = (this.tui as TUI & { getFocusedComponent?: () => Component | null }).getFocusedComponent?.();
+        if (focused) this.restoreTarget = focused;
+    }
+
+    restoreFocus(): void {
+        const target = this.restoreTarget;
+        this.restoreTarget = undefined;
+        if (target) this.tui.setFocus(target);
     }
 
     isEmpty(): boolean {
@@ -99,7 +115,9 @@ function releaseManager(tui: TUI, manager: OverlayStackManager): void {
  * Overlays not registered with this helper are not represented in its stack.
  * If one is simultaneously visible, this guard cannot distinguish it from a
  * non-overlay focus change and may reclaim focus; participating nested
- * overlays should also register with this helper.
+ * overlays should also register with this helper. When the last registered
+ * overlay closes, the most recent focus target caught by this guard is
+ * restored.
  */
 export async function withOverlayStack<T>(
     show: (binding: OverlayStackBinding) => Promise<T>,
@@ -129,7 +147,10 @@ export async function withOverlayStack<T>(
             manager.remove(entry);
             // The manager is shared by nested stack entries. It is safe to
             // release its listener only once this entry was the last one.
-            if (manager.isEmpty()) releaseManager(tui, manager);
+            if (manager.isEmpty()) {
+                manager.restoreFocus();
+                releaseManager(tui, manager);
+            }
         }
     }
 }

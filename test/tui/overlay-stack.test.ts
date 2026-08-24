@@ -26,14 +26,18 @@ describe("withOverlayStack", () => {
     it("keeps the top participating overlay focused and restores the next one", async () => {
         let listener: InputListener | undefined;
         let removed = false;
+        let focusedComponent: object = {};
         const tui = {
             addInputListener(next: InputListener) {
                 listener = next;
                 return () => { removed = true; };
             },
+            getFocusedComponent() { return focusedComponent; },
+            setFocus(component: object) { focusedComponent = component; },
         } as unknown as TUI;
         const outer = fakeHandle();
         const inner = fakeHandle();
+        const permissionDialog = focusedComponent;
 
         await withOverlayStack(async (outerBinding) => {
             outerBinding.bind(tui);
@@ -60,5 +64,6 @@ describe("withOverlayStack", () => {
         });
 
         expect(removed).toBe(true);
+        expect(focusedComponent).toBe(permissionDialog);
     });
 });
