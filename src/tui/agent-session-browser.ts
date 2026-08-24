@@ -13,6 +13,7 @@ import type {
     AgentWorkspaceGitState,
 } from "../tools/agent/workspaces";
 import { BORDER_STYLES } from "./border-box";
+import { withOverlayStack } from "./overlay-stack";
 import { AgentSessionDetailComponent } from "./agent-session-detail";
 import {
     AgentWorkspaceDetailComponent,
@@ -371,7 +372,8 @@ export async function showAgentSessionBrowser(
 ): Promise<void> {
     if (!ctx.hasUI || ctx.mode !== "tui") return;
 
-    await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+    await withOverlayStack((overlay) => ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+        overlay.bind(tui);
         const fixedHeight = () => Math.max(
             2,
             Math.min(
@@ -396,5 +398,6 @@ export async function showAgentSessionBrowser(
             anchor: "center",
             margin: 1,
         },
-    });
+        onHandle: overlay.setHandle,
+    }));
 }
