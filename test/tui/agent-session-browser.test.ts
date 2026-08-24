@@ -37,6 +37,17 @@ const workspace: AgentWorkspace = {
     baseRevision: "abc123def456",
     setupState: "ready",
     status: "available",
+    latestResult: {
+        id: "result-1",
+        workspaceId: "quiet-lantern-7k3",
+        runId: "worker-1",
+        baseRevision: "abc123def456",
+        workerHead: "abc123def456",
+        commitRange: "abc123def456..abc123def456",
+        commits: [],
+        preparedAt: 1_700_000_001_000,
+        status: "prepared",
+    },
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_001_000,
 };
@@ -272,6 +283,8 @@ describe("AgentSessionBrowserComponent", () => {
                 untrackedFiles: 0,
                 headRevision: "abc123def456",
             }]]),
+            onWorkspaceInspect: () => "diff text",
+            onWorkspaceAction: async () => workspace,
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -282,6 +295,11 @@ describe("AgentSessionBrowserComponent", () => {
         expect(ui.render()).toContain("Git: dirty · 2 changed files");
 
         ui.press(KEY.enter);
+        expect(ui.render()).toContain("Workspace: quiet-lantern-7k3");
+        expect(ui.render()).toContain("i inspect · a apply · t retain · r reset · d discard");
+        ui.press("i");
+        expect(ui.render()).toContain("diff text");
+        ui.press(KEY.escape);
         expect(ui.render()).toContain("Workspace: quiet-lantern-7k3");
     });
 

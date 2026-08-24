@@ -9,14 +9,18 @@ import {
     applyAgentWorkspaceApplication,
     claimAgentWorkspace,
     completeAgentWorkspaceLease,
+    discardAgentWorkspace,
     createAgentWorkspace,
     findAvailableAgentWorkspace,
+    inspectAgentWorkspaceDiff,
     inspectAgentWorkspaceGitState,
     listAgentWorkspaceResults,
     listAgentWorkspaces,
     prepareAgentWorkspaceApplication,
     releaseAgentWorkspaceAfterApplication,
     releaseAgentWorkspaceAfterNoChanges,
+    resetAgentWorkspaceForReuse,
+    retainAgentWorkspaceResult,
     transferAgentWorkspaceLease,
     updateAgentWorkspace,
 } from "../../src/tools/agent/workspaces";
@@ -206,6 +210,45 @@ describe("agent workspaces", () => {
         expect((await listAgentWorkspaces(repository, state))[0]?.leaseRunId).toBe("worker-1");
         await releaseAgentWorkspaceAfterApplication(workspace.id, "session-1", "worker-1", state);
         expect((await listAgentWorkspaces(repository, state))[0]?.leaseRunId).toBeUndefined();
+    });
+
+    it("retains, inspects, resets, and discards changed workspace results explicitly", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "base\n");
+        await git(repository, "add", ".");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "worker\n");
+        const result = await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        const diff = await inspectAgentWorkspaceDiff({
+            ...workspace,
+            latestResult: result,
+        });
+        expect(diff).toContain("worker");
+
+        await retainAgentWorkspaceResult(workspace.id, "session-1", "worker-1", state);
+        const retained = (await listAgentWorkspaces(repository, state))[0];
+        expect(retained).toMatchObject({ id: workspace.id, status: "review_required" });
+        expect(retained?.leaseRunId).toBeUndefined();
+        await resetAgentWorkspaceForReuse(workspace.id, undefined, undefined, state);
+        expect(await findAvailableAgentWorkspace(repository, state)).toMatchObject({ id: workspace.id });
+        expect(await fs.readFile(path.join(workspace.worktreePath, "tracked.txt"), "utf8")).toBe("base\n");
+        const resetResult = (await listAgentWorkspaceResults(workspace.id, state))[0];
+        expect(resetResult).toMatchObject({ status: "discarded" });
+        expect(resetResult?.durableRef).toBeUndefined();
+
+        const discarded = await createAgentWorkspace(repository, state);
+        await discardAgentWorkspace(discarded.id, undefined, undefined, state);
+        expect(await listAgentWorkspaces(repository, state)).toHaveLength(1);
+        await expect(fs.access(discarded.worktreePath)).rejects.toThrow();
     });
 
     it("keeps both workspaces and the lease untouched when parent preflight fails", async () => {

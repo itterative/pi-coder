@@ -475,7 +475,7 @@ Implemented a deliberately narrow first worker:
 - return clear changed-file reporting, with explicit caveats when concurrent parent/bash activity makes attribution uncertain;
 - automated coverage includes confinement denial, active-dialog cancellation, queued mutation prompts, permission-waiting progress, one-worker capacity, child SDK construction, changed-file reporting, and existing lifecycle/stale-run cleanup; real-provider background behavior remains in the manual checklist.
 
-An isolated git-worktree worker is Phase 9 and is now partially implemented. The persistent workspace registry, leases, setup phase, unified `/agents` browser, Git-state inspection, and passive `review_required` completion state are implemented. The remaining work is the parent-driven result/application lifecycle and explicit workspace disposition actions.
+An isolated git-worktree worker is Phase 9 and is now partially implemented. The persistent workspace registry, leases, setup phase, unified `/agents` browser, Git-state inspection, passive `review_required` completion state, and parent-driven result/application lifecycle are implemented. Workspace disposition actions and the saved diff viewer are available directly inside the unified browser's workspace details view.
 
 ### Phase 7: Chains and explicit batch work — deferred
 
@@ -538,17 +538,17 @@ User interface:
 
 - `/agents` is the unified Current/Past/Workspaces browser; the separate `/agent-sessions` and `/agent-workspaces` commands are not registered.
 - The Workspaces view shows readiness, setup progress/report, assignment, worktree/base revision, Git clean/dirty state, changed-file counts, and read-only metadata details.
-- Add parent-driven result actions: inspect the isolated diff, apply the result, retain the workspace, reset it for reuse, or discard it. Do not add a mandatory “mark reviewed” action; `review_required` is a passive state.
+- The unified browser's workspace details view exposes direct inspect/apply/retain/reset/discard actions and an inline diff viewer. Destructive actions require in-overlay confirmation. Do not add a mandatory “mark reviewed” action; `review_required` is a passive state.
 - The parent model should receive the task worker's normal result plus explicit isolated-workspace instructions. The internal setup worker should not create a normal collectable result or automatic mailbox conversation.
 
-Result application design (collection-time result preparation and application API implemented; browser actions remain):
+Result application design (collection-time preparation, application API, and browser actions implemented):
 
 - `prepareAgentWorkspaceApplication()` explicitly commits any remaining tracked/untracked worker changes in the isolated worktree as a final pi-coder result commit. If the worker already committed its changes, it does not create an empty commit and uses the existing final `HEAD`.
 - Migration v4 stores each worker result in a separate `workspace_results` table rather than overwriting workspace metadata. Results retain the worker run, base revision, commit range/commits, preparation timestamp, application metadata, and final worker revision.
 - Finalization creates a private durable Git ref for a changed worker result, so the saved `workerHead` remains restorable even if the worktree is later recreated. No-change results remain in history without a ref; changed-result refs are removed only by an explicit discard operation.
 - `applyAgentWorkspaceApplication()` applies the complete tree diff from `baseRevision..workerHead` to the parent checkout, including all worker commits and the final result commit, without creating a parent commit. `releaseAgentWorkspaceAfterApplication()` is an explicit caller step.
 - Safe preflight verifies the parent is exactly at the base revision and clean, verifies the prepared worker HEAD is unchanged and based on the base, and checks the patch before applying. Both workspaces and the lease remain intact on preflight/application failure.
-- After successful application, metadata records the parent revision and applied timestamp. The workspace remains out of automatic reuse; explicit retain/reset/discard/resume browser actions are still pending.
+- After successful application, metadata records the parent revision and applied timestamp. The workspace remains out of automatic reuse until the user explicitly resets it; retain/reset/discard actions are available in the browser.
 
 Open design questions for this phase:
 
@@ -556,7 +556,7 @@ Open design questions for this phase:
 - How to handle parent uncommitted changes when creating a worktree; the safe first default may require a clean checkout.
 - Whether setup reports should be injected into the task worker prompt, stored as a workspace note, or both.
 - Whether workspace reset preserves ignored dependency artifacts while removing tracked task changes.
-- Whether the apply operation should be exposed as an `agent` action, a dedicated parent tool, or only a `/agents` action.
+- Whether the apply operation should also be exposed as an `agent` action or dedicated parent tool; it is currently available through `/agents`.
 
 ## Testing Plan
 

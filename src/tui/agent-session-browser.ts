@@ -17,7 +17,10 @@ import { AgentSessionDetailComponent } from "./agent-session-detail";
 import {
     AgentWorkspaceDetailComponent,
     agentWorkspaceItemText,
+    type AgentWorkspaceAction,
 } from "./agent-workspace-browser";
+
+export type { AgentWorkspaceAction } from "./agent-workspace-browser";
 
 type AgentBrowserItem = AgentSessionBrowserItem | AgentWorkspace;
 type AgentBrowserTab = "current" | "past" | "workspaces";
@@ -34,6 +37,8 @@ export interface AgentSessionBrowserOptions {
     fixedHeight?: () => number;
     onResume?: (item: AgentSessionBrowserItem) => void | Promise<void>;
     onCancel?: (item: AgentSessionBrowserItem) => void | Promise<void>;
+    onWorkspaceAction?: (workspace: AgentWorkspace, action: Exclude<AgentWorkspaceAction, "inspect">) => AgentWorkspace | null | undefined | Promise<AgentWorkspace | null | undefined>;
+    onWorkspaceInspect?: (workspace: AgentWorkspace) => string | Promise<string>;
 }
 
 const EMPTY_CURRENT: AgentSessionBrowserItem = {
@@ -170,6 +175,21 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
     private readonly past: AgentSessionBrowserItem[];
     private readonly workspaces: AgentWorkspace[];
 
+    private updateWorkspace(workspace: AgentWorkspace, replacement: AgentWorkspace | null | undefined): void {
+        const index = this.workspaces.findIndex((item) => item.id === workspace.id);
+        if (index < 0) return;
+        if (replacement === null) {
+            this.workspaces.splice(index, 1);
+        } else if (replacement) {
+            this.workspaces[index] = replacement;
+        }
+        if (this.state.tab === "workspaces") {
+            this.state.items = asWorkspaceListItems(this.workspaces);
+            this.state.cursor = Math.min(this.state.cursor ?? 0, Math.max(0, this.state.items.length - 1));
+        }
+        this.invalidate();
+    }
+
     constructor(options: AgentSessionBrowserOptions) {
         const current = options.current;
         const past = options.past;
@@ -255,6 +275,14 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                                     selected,
                                     this.listOptions.fixedHeight,
                                     workspaceGitStates?.get(selected.id),
+                                    {
+                                        onInspect: () => options.onWorkspaceInspect?.(selected) ?? "No saved worker result is available.",
+                                        onAction: async (action) => {
+                                            const replacement = await options.onWorkspaceAction?.(selected, action);
+                                            this.updateWorkspace(selected, replacement);
+                                            return replacement;
+                                        },
+                                    },
                                 );
                                 this.workspaceDetail.initialize(this.theme);
                                 this.workspaceDetail.setDoneCallback(() => {

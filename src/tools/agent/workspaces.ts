@@ -17,7 +17,7 @@ export const MAX_AGENT_WORKSPACES = 3;
 export type WorkspaceSetupState = "not_started" | "running" | "ready" | "skipped" | "failed";
 export type WorkspaceStatus = "available" | "review_required";
 export type WorkspaceLeaseKind = "setup" | "task";
-export type WorkspaceResultStatus = "prepared" | "applied";
+export type WorkspaceResultStatus = "prepared" | "applied" | "discarded";
 
 export interface AgentWorkspaceResult {
     id: string;
@@ -236,7 +236,7 @@ function rowToWorkspaceResult(row: WorkspaceRow): AgentWorkspaceResult | undefin
         || !Array.isArray(commits)
         || !commits.every((commit): commit is string => typeof commit === "string")
         || typeof row.prepared_at !== "number"
-        || !["prepared", "applied"].includes(row.status as string)
+        || !["prepared", "applied", "discarded"].includes(row.status as string)
     ) return undefined;
     return {
         id: row.id,
@@ -682,6 +682,34 @@ export async function applyAgentWorkspaceApplication(
     }
 }
 
+/** Retain a changed prepared result for later review without applying it. */
+export async function retainAgentWorkspaceResult(
+    workspaceId: string,
+    ownerSessionId: string,
+    leaseRunId: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<void> {
+    const { database, workspace } = await workspaceForLease(workspaceId, ownerSessionId, leaseRunId, workspacesDir);
+    try {
+        const result = workspace.latestResult;
+        if (workspace.leaseKind !== "task" || !result || result.status !== "prepared" || result.commits.length === 0) {
+            throw new Error(`Workspace ${workspaceId} has no changed prepared result to retain.`);
+        }
+        const state = await inspectAgentWorkspaceGitState(workspace);
+        const head = state.kind === "available" ? state.headRevision : undefined;
+        if (state.kind !== "available" || state.dirty || head !== result.workerHead) {
+            throw new Error(`Workspace ${workspaceId} changed after its result was prepared.`);
+        }
+        database.prepare(`
+            UPDATE workspaces SET workspace_status = 'review_required', lease_owner_session_id = NULL,
+                lease_run_id = NULL, lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
+            WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
+        `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId);
+    } finally {
+        database.close();
+    }
+}
+
 /** Release a task lease only after its prepared result was applied successfully. */
 export async function releaseAgentWorkspaceAfterApplication(
     workspaceId: string,
@@ -748,6 +776,123 @@ export async function releaseAgentWorkspaceAfterNoChanges(
     } finally {
         database.close();
     }
+}
+
+/** Reset a workspace to the current parent revision and make it reusable. */
+export async function resetAgentWorkspaceForReuse(
+    workspaceId: string,
+    ownerSessionId?: string,
+    leaseRunId?: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<AgentWorkspace> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        const workspace = workspaceById(database, workspaceId);
+        if (!workspace) throw new Error(`Workspace ${workspaceId} was not found.`);
+        if (workspace.leaseRunId) {
+            if (
+                workspace.leaseKind !== "task"
+                || workspace.leaseOwnerSessionId !== ownerSessionId
+                || workspace.leaseRunId !== leaseRunId
+            ) throw new Error(`Workspace ${workspaceId} is actively leased and cannot be reset by this session.`);
+            if (!workspace.latestResult || !["prepared", "applied"].includes(workspace.latestResult.status)) {
+                throw new Error(`Workspace ${workspaceId} has no completed task result to reset.`);
+            }
+        } else if (workspace.leaseKind) {
+            throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be reset.`);
+        }
+        const parentStatus = await git(workspace.repositoryRoot, ["status", "--porcelain=v1", "--untracked-files=all"]);
+        if (parentStatus) throw new Error("Reset requires a clean parent checkout.");
+        const targetRevision = await git(workspace.repositoryRoot, ["rev-parse", "HEAD"]);
+        await git(workspace.worktreePath, ["reset", "--hard", targetRevision]);
+        await git(workspace.worktreePath, ["clean", "-fd"]);
+        const refs = database.prepare("SELECT durable_ref FROM workspace_results WHERE workspace_id = ? AND durable_ref IS NOT NULL")
+            .all(workspaceId) as WorkspaceRow[];
+        for (const row of refs) {
+            if (typeof row.durable_ref === "string") {
+                await git(workspace.repositoryRoot, ["update-ref", "-d", row.durable_ref]);
+            }
+        }
+        database.prepare("UPDATE workspace_results SET status = CASE WHEN status = 'prepared' THEN 'discarded' ELSE status END, durable_ref = NULL WHERE workspace_id = ?")
+            .run(workspaceId);
+        database.prepare(`
+            UPDATE workspaces SET base_revision = ?, workspace_status = 'available',
+                lease_owner_session_id = NULL, lease_run_id = NULL, lease_kind = NULL,
+                lease_acquired_at = NULL, updated_at = ? WHERE id = ?
+        `).run(targetRevision, Date.now(), workspaceId);
+        return {
+            ...workspace,
+            baseRevision: targetRevision,
+            status: "available",
+            leaseOwnerSessionId: undefined,
+            leaseRunId: undefined,
+            leaseKind: undefined,
+            leaseAcquiredAt: undefined,
+            updatedAt: Date.now(),
+        };
+    } finally {
+        database.close();
+    }
+}
+
+/** Permanently discard a workspace and all of its saved result refs. */
+export async function discardAgentWorkspace(
+    workspaceId: string,
+    ownerSessionId?: string,
+    leaseRunId?: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<void> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        const workspace = workspaceById(database, workspaceId);
+        if (!workspace) throw new Error(`Workspace ${workspaceId} was not found.`);
+        if (workspace.leaseRunId) {
+            if (
+                workspace.leaseKind !== "task"
+                || workspace.leaseOwnerSessionId !== ownerSessionId
+                || workspace.leaseRunId !== leaseRunId
+                || !workspace.latestResult
+                || !["prepared", "applied"].includes(workspace.latestResult.status)
+            ) throw new Error(`Workspace ${workspaceId} is actively leased and cannot be discarded by this session.`);
+        } else if (workspace.leaseKind) {
+            throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be discarded.`);
+        }
+        const refs = database.prepare("SELECT durable_ref FROM workspace_results WHERE workspace_id = ? AND durable_ref IS NOT NULL")
+            .all(workspaceId) as WorkspaceRow[];
+        for (const row of refs) {
+            if (typeof row.durable_ref === "string") {
+                await git(workspace.repositoryRoot, ["update-ref", "-d", row.durable_ref]);
+            }
+        }
+        if (fs.existsSync(workspace.worktreePath)) {
+            await git(workspace.repositoryRoot, ["worktree", "remove", "--force", workspace.worktreePath]);
+        }
+        database.prepare("DELETE FROM workspace_results WHERE workspace_id = ?").run(workspaceId);
+        database.prepare("DELETE FROM workspaces WHERE id = ?").run(workspaceId);
+    } finally {
+        database.close();
+    }
+}
+
+/** Inspect the prepared base-to-worker diff for a workspace. */
+export async function inspectAgentWorkspaceDiff(workspace: AgentWorkspace): Promise<string> {
+    const result = workspace.latestResult;
+    if (!result || result.status === "discarded") return "No saved worker result is available for this workspace.";
+    if (result.baseRevision === result.workerHead) return "No changes: the worker revision matches the workspace base revision.";
+    const [stat, patch] = await Promise.all([
+        git(workspace.worktreePath, ["diff", "--stat", "--no-ext-diff", `${result.baseRevision}..${result.workerHead}`]),
+        gitRaw(workspace.worktreePath, ["diff", "--no-ext-diff", "--find-renames", `${result.baseRevision}..${result.workerHead}`]),
+    ]);
+    return [
+        `Workspace: ${workspace.slug}`,
+        `Base: ${result.baseRevision}`,
+        `Worker: ${result.workerHead}`,
+        "",
+        "Diff stat:",
+        stat || "(none)",
+        "",
+        patch || "(empty)",
+    ].join("\n").slice(0, 250_000);
 }
 
 /** Reconcile previously collected no-change results from before automatic release existed. */

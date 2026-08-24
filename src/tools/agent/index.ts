@@ -30,17 +30,26 @@ import {
     registerAgentTraceCommand,
 } from "./trace";
 import {
+    applyAgentWorkspaceApplication,
+    discardAgentWorkspace,
     getAgentWorkspace,
-    prepareAgentWorkspaceApplication,
-    releaseAgentWorkspaceAfterNoChanges,
-    releaseAgentWorkspaceLease,
+    inspectAgentWorkspaceDiff,
     inspectAgentWorkspaceGitState,
     listAgentWorkspaces,
+    prepareAgentWorkspaceApplication,
+    releaseAgentWorkspaceAfterApplication,
+    releaseAgentWorkspaceAfterNoChanges,
+    releaseAgentWorkspaceLease,
+    resetAgentWorkspaceForReuse,
+    retainAgentWorkspaceResult,
     transferAgentWorkspaceLease,
     type AgentWorkspace,
     type AgentWorkspaceResult,
 } from "./workspaces";
-import { showAgentSessionBrowser } from "../../tui/agent-session-browser";
+import {
+    showAgentSessionBrowser,
+    type AgentWorkspaceAction,
+} from "../../tui/agent-session-browser";
 import {
     availableAgentsPrompt,
     type AgentParameters,
@@ -85,6 +94,44 @@ function workspaceResultSummary(result: AgentWorkspaceResult, noChanges = false)
             ? ["No application is needed."]
             : ["Keep this result until it has been explicitly inspected and explicitly applied, retained, reset, or discarded."]),
     ].join("\n");
+}
+
+async function handleWorkspaceAction(
+    workspace: AgentWorkspace,
+    requestedAction: Exclude<AgentWorkspaceAction, "inspect"> | undefined,
+    ctx: ExtensionCommandContext,
+): Promise<AgentWorkspace | null | undefined> {
+    if (!requestedAction) return workspace;
+    const action = requestedAction;
+    try {
+        const sessionId = ctx.sessionManager.getSessionId();
+        const leaseRunId = workspace.leaseRunId;
+        if (action === "apply") {
+            if (!leaseRunId) throw new Error("The workspace result is not currently leased.");
+            await applyAgentWorkspaceApplication(workspace, sessionId, leaseRunId);
+            await releaseAgentWorkspaceAfterApplication(workspace.id, sessionId, leaseRunId);
+            ctx.ui.notify(`Applied and released workspace ${workspace.slug}.`, "info");
+            return await getAgentWorkspace(workspace.id);
+        }
+        if (action === "retain") {
+            if (!leaseRunId) throw new Error("The workspace result is not currently leased.");
+            await retainAgentWorkspaceResult(workspace.id, sessionId, leaseRunId);
+            ctx.ui.notify(`Retained workspace ${workspace.slug} for review.`, "info");
+            return await getAgentWorkspace(workspace.id);
+        }
+        if (action === "reset") {
+            await resetAgentWorkspaceForReuse(workspace.id, sessionId, leaseRunId);
+            ctx.ui.notify(`Reset workspace ${workspace.slug}; it is reusable.`, "info");
+            return await getAgentWorkspace(workspace.id);
+        }
+        await discardAgentWorkspace(workspace.id, sessionId, leaseRunId);
+        ctx.ui.notify(`Discarded workspace ${workspace.slug}.`, "info");
+        return null;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(`Workspace ${workspace.slug}: ${message}`, "warning");
+        return workspace;
+    }
 }
 
 async function prepareCollectedWorkspaceResult(
@@ -220,6 +267,14 @@ export default function registerAgentTool(
                     const message = error instanceof Error ? error.message : String(error);
                     ctx.ui.notify(`Could not cancel ${item.id}: ${message}`, "warning");
                 }
+            },
+            onWorkspaceInspect: async (workspace) => inspectAgentWorkspaceDiff(workspace),
+            onWorkspaceAction: async (workspace, action) => {
+                const replacement = await handleWorkspaceAction(workspace, action, ctx);
+                if (replacement) {
+                    workspaceGitStates.set(replacement.id, await inspectAgentWorkspaceGitState(replacement));
+                }
+                return replacement;
             },
         }, ctx);
     };

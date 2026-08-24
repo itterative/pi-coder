@@ -20,8 +20,8 @@ interface EmptyWorkspaceItem {
     message: string;
 }
 
+export type AgentWorkspaceAction = "inspect" | "apply" | "retain" | "reset" | "discard";
 type WorkspaceBrowserItem = AgentWorkspace | EmptyWorkspaceItem;
-
 interface AgentWorkspaceBrowserState extends ListViewState<WorkspaceBrowserItem> {}
 
 export interface AgentWorkspaceBrowserOptions {
@@ -133,6 +133,9 @@ export function agentWorkspaceDetailText(
     }
     lines.push(
         "",
+        theme.fg("accent", "Actions:"),
+        theme.fg("muted", workspaceActionHelp(workspace).join(" · ")),
+        "",
         theme.fg("muted", workspace.leaseRunId
             ? "This workspace is leased and cannot be selected until its current run is explicitly dispositioned."
             : workspace.status === "review_required"
@@ -142,29 +145,145 @@ export function agentWorkspaceDetailText(
     return lines.join("\n");
 }
 
+function workspaceActionHelp(workspace: AgentWorkspace): string[] {
+    const actions: string[] = [];
+    if (workspace.latestResult && workspace.latestResult.status !== "discarded") actions.push("i inspect diff");
+    const changed = Boolean(workspace.leaseRunId && workspace.latestResult?.status === "prepared"
+        && (workspace.latestResult.workerHead !== workspace.latestResult.baseRevision || workspace.latestResult.commits.length > 0));
+    if (changed) actions.push("a apply", "t retain");
+    if (!workspace.leaseKind || workspace.leaseKind === "task") {
+        if (!workspace.leaseRunId || workspace.latestResult) actions.push("r reset", "d discard");
+    }
+    return actions;
+}
+
+type WorkspaceDispositionAction = Exclude<AgentWorkspaceAction, "inspect">;
+type WorkspaceActionCallbacks = {
+    onInspect?: () => string | Promise<string>;
+    onAction?: (action: WorkspaceDispositionAction) => AgentWorkspace | null | undefined | Promise<AgentWorkspace | null | undefined>;
+};
+
 export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace> {
     private contentWidth = 80;
+    private currentWorkspace: AgentWorkspace;
+    private currentGitState?: AgentWorkspaceGitState;
+    private readonly callbacks: WorkspaceActionCallbacks;
+    private showingDiff = false;
+    private diffText = "";
+    private pendingAction: WorkspaceDispositionAction | null = null;
+    private busy = false;
 
     constructor(
         workspace: AgentWorkspace,
         fixedHeight?: () => number,
-        private readonly gitState?: AgentWorkspaceGitState,
+        gitState?: AgentWorkspaceGitState,
+        callbacks: WorkspaceActionCallbacks = {},
     ) {
         super({
             title: `Workspace · ${workspace.slug}`,
             items: [{ value: workspace, label: "" }],
             scrollOffset: 0,
             maxVisibleLines: 16,
-            helpText: "↑/↓ scroll · Esc back",
             fixedHeight,
             compactFooter: true,
-            renderItem: (item, renderOptions) => agentWorkspaceDetailText(
-                item.value,
-                renderOptions.theme,
-                this.contentWidth,
-                this.gitState,
-            ),
+            onKey: (key) => this.handleDetailKey(key),
+            helpText: "↑/↓ scroll · i inspect · a apply · t retain · r reset · d discard · Esc back",
+            renderItem: (item, renderOptions) => this.showingDiff
+                ? this.diffText
+                : [
+                    agentWorkspaceDetailText(
+                        item.value,
+                        renderOptions.theme,
+                        this.contentWidth,
+                        this.currentGitState,
+                    ),
+                    ...(this.busy ? ["", renderOptions.theme.fg("muted", "Working…")] : []),
+                    ...(this.pendingAction ? ["", renderOptions.theme.fg("warning", `Confirm ${this.pendingAction}? y/Enter confirm · n/Esc cancel`)] : []),
+                ].join("\n"),
         });
+        this.currentWorkspace = workspace;
+        this.currentGitState = gitState;
+        this.callbacks = callbacks;
+    }
+
+    private updateWorkspace(workspace: AgentWorkspace): void {
+        this.currentWorkspace = workspace;
+        this.state.items[0]!.value = workspace;
+        this.pendingAction = null;
+        this.invalidate();
+    }
+
+    private handleDetailKey(key: string): boolean {
+        if (this.busy) return true;
+        if (this.showingDiff) {
+            if (matchesKey(key, "escape") || key === "q") {
+                this.showingDiff = false;
+                this.diffText = "";
+                this.invalidate();
+                return true;
+            }
+            return false;
+        }
+        if (this.pendingAction) {
+            if (key === "y" || matchesKey(key, "enter")) {
+                const action = this.pendingAction;
+                this.pendingAction = null;
+                this.runAction(action);
+                return true;
+            }
+            if (key === "n" || matchesKey(key, "escape")) {
+                this.pendingAction = null;
+                this.invalidate();
+                return true;
+            }
+            return true;
+        }
+        const action = key === "i"
+            ? "inspect"
+            : key === "a"
+                ? "apply"
+                : key === "t"
+                    ? "retain"
+                    : key === "r"
+                        ? "reset"
+                        : key === "d"
+                            ? "discard"
+                            : undefined;
+        if (!action) return false;
+        if (!workspaceActionHelp(this.currentWorkspace).some((entry) => entry.startsWith(`${key} `))) return true;
+        if (action === "inspect") {
+            this.runAction(action);
+        } else {
+            this.pendingAction = action;
+            this.invalidate();
+        }
+        return true;
+    }
+
+    private runAction(action: AgentWorkspaceAction): void {
+        this.busy = true;
+        this.invalidate();
+        void (async () => {
+            try {
+                if (action === "inspect") {
+                    const diff = this.callbacks.onInspect?.();
+                    this.diffText = typeof diff === "string"
+                        ? diff
+                        : await diff ?? "No saved worker result is available.";
+                    this.showingDiff = true;
+                } else {
+                    const replacement = await this.callbacks.onAction?.(action);
+                    if (replacement === null) {
+                        this.finish(undefined);
+                        return;
+                    }
+                    if (replacement) this.updateWorkspace(replacement);
+                }
+            } finally {
+                this.busy = false;
+                this.invalidate();
+            }
+        })();
     }
 
     override render(width: number): string[] {
