@@ -9,7 +9,7 @@ import { ZERO_USAGE, type AgentRunSummary, type ChildAgentHandle } from "../../s
 import * as workspaceSetup from "../../src/tools/agent/workspace-setup";
 import * as workspaces from "../../src/tools/agent/workspaces";
 import { AGENT_TRACE_ENV } from "../../src/tools/agent/trace";
-import { mockTheme, renderText } from "../helpers";
+import { mockTheme, renderText, snapshotText } from "../helpers";
 
 interface Handler {
     (event: any, ctx: any): Promise<unknown> | unknown;
@@ -172,7 +172,7 @@ describe("agent extension registration", () => {
             undefined,
             ctx,
         );
-        const waitingText = renderText(
+        const waitingText = snapshotText(renderText(
             tool.renderResult(waiting, { expanded: false }, mockTheme),
             120,
         );
@@ -187,7 +187,7 @@ describe("agent extension registration", () => {
             undefined,
             ctx,
         );
-        const completedText = renderText(
+        const completedText = snapshotText(renderText(
             tool.renderResult(completed, { expanded: true }, mockTheme),
             120,
         );

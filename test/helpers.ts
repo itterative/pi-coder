@@ -76,6 +76,11 @@ export function renderText(component: Component, width = 50): string {
         .join("\n");
 }
 
+/** Remove terminal padding from rendered snapshots while preserving layout lines. */
+export function snapshotText(text: string): string {
+    return text.replace(/[ \t]+$/gm, "");
+}
+
 /**
  * Interaction helper that emulates the real TUI loop: a render happens
  * after every keypress. This matters for components whose input handling

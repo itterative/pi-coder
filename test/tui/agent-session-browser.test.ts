@@ -6,7 +6,7 @@ import {
     AgentSessionBrowserComponent,
 } from "../../src/tui/agent-session-browser";
 import type { AgentWorkspace } from "../../src/tools/agent/workspaces";
-import { KEY, interact, mockTheme, press, renderText } from "../helpers";
+import { KEY, interact, mockTheme, press, renderText, snapshotText } from "../helpers";
 
 const current = {
     kind: "current" as const,
@@ -103,10 +103,6 @@ function component() {
     const value = new AgentSessionBrowserComponent({ current: [current], past: [past] });
     value.initialize(mockTheme);
     return value;
-}
-
-function snapshotText(text: string): string {
-    return text.replace(/[ \t]+$/gm, "");
 }
 
 beforeEach(() => {
