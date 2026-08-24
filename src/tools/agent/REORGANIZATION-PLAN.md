@@ -6,9 +6,20 @@ Reorganize `src/tools/agent` around stable responsibility boundaries without cha
 
 This is a structural plan, not a feature phase. Each stage should be independently reviewable and leave the full suite passing.
 
-## Current shape
+## Implementation status
 
-The directory currently has 16 TypeScript files and about 6,829 lines. Four files account for most of the implementation:
+The first reorganization pass is implemented:
+
+- Stages 1–6 are complete: dependency-neutral contracts, definition contracts, shared metadata/catalog storage, workspace store/results/lifecycle/action modules, child decomposition, and a run-manager compatibility facade.
+- Stage 0 coverage was strengthened with a real shared-action apply/lease-release test; direct setup and standalone formatting characterization remain optional follow-up.
+- Stage 7 is partially complete: `index.ts` is now a tiny public facade, formatting/finalization/parent/TUI workspace adapters are extracted, and orchestration lives in `extension/register.ts`. The remaining registration function is still about 546 lines and should be split only along tested lifecycle/browser/dispatch seams.
+- Stage 8 is partially complete: workspace action contracts moved out of TUI and compatibility facades preserve existing deep imports; broader test-file and browser-view-model alignment remains follow-up work.
+
+The implementation has no internal import cycles. Compatibility facades at the old paths are intentionally retained while internal and external callers transition.
+
+## Pre-reorganization shape
+
+The directory had 16 TypeScript files and about 6,829 lines. Four files accounted for most of the implementation:
 
 | File | Lines | Current responsibilities |
 | --- | ---: | --- |
@@ -17,7 +28,7 @@ The directory currently has 16 TypeScript files and about 6,829 lines. Four file
 | `index.ts` | 911 | Composition root, extension lifecycle, discovery cache, mailbox scheduling, TUI controller, workspace actions, setup UI, tool dispatch, result formatting |
 | `child.ts` | 869 | Child tools, read confinement, direct interaction, progress/tracing, usage aggregation, model runtime/auth, transcript repair, SDK session construction |
 
-The remaining modules are generally cohesive, but most depend on `runtime.ts`, making it the subsystem's de facto contract module. `discovery.ts`, `mailbox.ts`, `trace.ts`, and `worker.ts` do not need internal redesign initially; they mainly need relocation or narrower contracts after the larger boundaries are established.
+The remaining modules were generally cohesive, but most depended on `runtime.ts`, making it the subsystem's de facto contract module. `discovery.ts`, `mailbox.ts`, `trace.ts`, and `worker.ts` do not need internal redesign initially; they mainly need relocation or narrower contracts after the larger boundaries are established.
 
 Useful seams already exist and should be preserved: `ChildAgentFactory`, `AgentRunPersistence`, `AgentEventSink`, injected tracing, function-based workspace APIs, and provider-free registration tests.
 
@@ -302,7 +313,7 @@ Use small commits in this order:
 8. extension-controller extraction;
 9. presentation/test alignment and compatibility cleanup.
 
-The recommended first implementation tranche is stages 0–4. It removes the dependency cycle, separates shared metadata ownership, and eliminates duplicated workspace disposition orchestration. Stop and reassess the target structure before moving child/runtime/presentation files; do not create empty destination modules merely to match the diagram.
+The recommended first implementation tranche was stages 0–4. It removed the dependency cycle, separated shared metadata ownership, and eliminated duplicated workspace disposition orchestration. The subsequent child/runtime/presentation moves retained compatibility facades and avoided empty destination modules.
 
 For each commit:
 

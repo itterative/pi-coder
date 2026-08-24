@@ -182,16 +182,18 @@ describe("agent extension registration", () => {
             updatedAt: 1,
             usageSnapshot: ZERO_USAGE,
         }]);
-        vi.spyOn(workspaces, "getAgentWorkspace")
-            .mockResolvedValueOnce(workspace)
-            .mockResolvedValueOnce(releasedWorkspace);
-        const apply = vi.spyOn(workspaces, "applyAgentWorkspaceApplication").mockResolvedValue({
-            ...result,
-            status: "applied",
-            parentRevision: "base",
-            appliedAt: 2,
+        vi.spyOn(workspaces, "getAgentWorkspace").mockResolvedValueOnce(workspace);
+        const executeWorkspaceAction = vi.spyOn(workspaces, "executeWorkspaceAction").mockResolvedValue({
+            workspace: releasedWorkspace,
+            result: {
+                ...result,
+                status: "applied",
+                parentRevision: "base",
+                appliedAt: 2,
+            },
+            effects: ["result_changed", "lease_changed", "workspace_updated"],
+            disposition: "applied",
         });
-        const release = vi.spyOn(workspaces, "releaseAgentWorkspaceAfterApplication").mockResolvedValue();
         registerAgentTool(pi, async () => { throw new Error("not used"); });
 
         const outcome = await tool.execute(
@@ -206,8 +208,12 @@ describe("agent extension registration", () => {
             },
         );
 
-        expect(apply).toHaveBeenCalledWith(workspace, "parent-1", "worker-1");
-        expect(release).toHaveBeenCalledWith("workspace-1", "parent-1", "worker-1");
+        expect(executeWorkspaceAction).toHaveBeenCalledWith({
+            action: "apply",
+            workspace,
+            ownerSessionId: "parent-1",
+            runId: "worker-1",
+        });
         expect(outcome.details.workspaceResult).toMatchObject({ status: "applied" });
         expect(releasedWorkspace.leaseRunId).toBeUndefined();
     });

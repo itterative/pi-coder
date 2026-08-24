@@ -7,8 +7,11 @@ import {
 } from "@earendil-works/pi-tui";
 import type {
     AgentWorkspace,
+    AgentWorkspaceAction,
     AgentWorkspaceGitState,
 } from "../tools/agent/workspaces";
+
+export type { AgentWorkspaceAction } from "../tools/agent/workspaces";
 import { PagerComponent } from "./pager";
 import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
@@ -20,7 +23,6 @@ interface EmptyWorkspaceItem {
     message: string;
 }
 
-export type AgentWorkspaceAction = "inspect" | "apply" | "retain" | "reset" | "discard" | "release" | "recover";
 type WorkspaceBrowserItem = AgentWorkspace | EmptyWorkspaceItem;
 interface AgentWorkspaceBrowserState extends ListViewState<WorkspaceBrowserItem> {}
 
