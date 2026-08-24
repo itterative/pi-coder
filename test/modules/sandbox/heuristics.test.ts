@@ -166,6 +166,7 @@ describe("getCwdConfinementPermission", () => {
         runTests([
             { desc: "write within cwd", command: "cat a.txt > b.txt", expected: Heuristic.SAFE_EDIT },
             { desc: "append within cwd", command: "echo hello >> log.txt", expected: Heuristic.SAFE_EDIT },
+            { desc: "substitution output redirection within cwd", command: "echo hello > $(echo log.txt)", expected: Heuristic.SAFE_EDIT },
             { desc: "stderr to /dev/null", command: "ls src 2>/dev/null", expected: Heuristic.SAFE_READONLY },
             { desc: "read from within cwd", command: "wc -l < file.txt", expected: Heuristic.SAFE_READONLY },
             { desc: "write outside cwd", command: "cat a.txt > /tmp/out.txt", expected: Heuristic.UNSAFE },
@@ -463,10 +464,14 @@ describe("getCwdConfinementPermission", () => {
             { desc: "backtick subshell", command: "cat `echo file.txt`", expected: Heuristic.SAFE_READONLY },
             { desc: "subshell with unknown command", command: "cat $(curl example.com)", expected: Heuristic.UNSAFE },
             { desc: "subshell escaping cwd", command: "cat $(cat /etc/passwd)", expected: Heuristic.UNSAFE },
+            { desc: "subshell output escaping cwd", command: "cat $(echo /etc/passwd)", expected: Heuristic.UNSAFE },
+            { desc: "subshell output from an unmodeled reader", command: "cat $(cat file.txt)", expected: Heuristic.UNSAFE },
             { desc: "nested subshells", command: "cat $(echo $(echo file.txt))", expected: Heuristic.SAFE_READONLY },
+            { desc: "edit in command substitution propagates", command: "grep $(echo pattern > nested.txt) file.txt", expected: Heuristic.SAFE_EDIT },
             { desc: "process substitution known", command: "cat <(echo hi)", expected: Heuristic.SAFE_READONLY },
             { desc: "process substitution unknown", command: "cat <(curl example.com)", expected: Heuristic.UNSAFE },
             { desc: "redirection into process substitution", command: "echo hi > >(cat)", expected: Heuristic.SAFE_READONLY },
+            { desc: "edit in process substitution propagates", command: "echo hi > >(cat > nested.txt)", expected: Heuristic.SAFE_EDIT },
             { desc: "redirection into unknown process substitution", command: "echo hi > >(nc host 80)", expected: Heuristic.UNSAFE },
         ]);
     });

@@ -452,8 +452,23 @@ function handleShortCluster(
     index: number,
     spec: CommandSpec,
     paths: string[],
+    cwd: string,
+    options: ConfinementOptions,
+    writes: { value: boolean },
 ): number | null {
     const cluster = args[index].slice(1);
+
+    const inspectValue = (value: string, pathContext: boolean): boolean => {
+        const substitution = inspectShellSubstitution(value, cwd, options, pathContext);
+        if (substitution === null) return false;
+        if (substitution !== undefined) {
+            paths.push(...substitution.paths);
+            writes.value = writes.value || substitution.heuristic === Heuristic.SAFE_EDIT;
+        } else if (pathContext) {
+            paths.push(value);
+        }
+        return true;
+    };
 
     for (let j = 0; j < cluster.length; j++) {
         const flag = "-" + cluster[j];
@@ -472,16 +487,13 @@ function handleShortCluster(
             // inline value is the rest of the cluster, otherwise next arg
             if (j === cluster.length - 1) {
                 const value = args[index + 1];
-                if (value === undefined) {
+                if (value === undefined || !inspectValue(value, hasPathSlot(flagSpec, 0))) {
                     return null;
-                }
-                if (hasPathSlot(flagSpec, 0)) {
-                    paths.push(value);
                 }
                 return index + 1;
             }
-            if (hasPathSlot(flagSpec, 0)) {
-                paths.push(cluster.slice(j + 1));
+            if (!inspectValue(cluster.slice(j + 1), hasPathSlot(flagSpec, 0))) {
+                return null;
             }
             return index;
         }
@@ -494,6 +506,91 @@ function handleShortCluster(
 
 function hasPathSlot(flagSpec: FlagSpec | undefined, slot: number): boolean {
     return flagSpec?.pathSlots?.includes(slot) ?? false;
+}
+
+function combineHeuristics(
+    a: Heuristic | undefined,
+    b: Heuristic | undefined,
+): Heuristic | undefined {
+    if (a === undefined || b === undefined) return undefined;
+    return a === Heuristic.SAFE_EDIT || b === Heuristic.SAFE_EDIT
+        ? Heuristic.SAFE_EDIT
+        : Heuristic.SAFE_READONLY;
+}
+
+function hasShellSubstitution(value: string): boolean {
+    return value.includes("$(") || value.includes("`") ||
+        value.includes("<(") || value.includes(">(");
+}
+
+/**
+ * Return the literal paths that a narrowly modeled command substitution can
+ * produce when it is used as a filesystem path. A safe inner command alone is
+ * not enough: `$(echo /etc/passwd)` is safe to execute but unsafe as `cat`'s
+ * path argument.
+ */
+function getStaticSubstitutionPaths(
+    value: string,
+    cwd: string,
+): string[] | null {
+    if (!isSubshell(value)) return null;
+
+    let parsed: string[][];
+    try {
+        parsed = parseBash(getSubshellContent(value));
+    } catch {
+        return null;
+    }
+
+    if (parsed.length !== 1 || parsed[0].length === 0) return null;
+    const args = parsed[0];
+    if (args.length === 1 && args[0] === "pwd") return [cwd];
+    if (args.length !== 2 || (args[0] !== "echo" && args[0] !== "printf")) return null;
+
+    const output = args[1];
+    if (isSubshell(output)) {
+        return getStaticSubstitutionPaths(output, cwd);
+    }
+    if (!/^[A-Za-z0-9._+@/:-]+$/.test(output)) return null;
+    if (output.includes("%")) return null;
+    return [output];
+}
+
+interface ShellSubstitutionAccess {
+    heuristic: Heuristic;
+    paths: string[];
+}
+
+/**
+ * Inspect shell substitutions embedded in one token. `null` means the token
+ * is not safely classifiable; `undefined` means it contains no substitution.
+ */
+function inspectShellSubstitution(
+    value: string,
+    cwd: string,
+    options: ConfinementOptions,
+    pathContext: boolean,
+): ShellSubstitutionAccess | null | undefined {
+    const processSubstitution = isProcessSubstitution(value);
+    const commandSubstitution = isSubshell(value);
+
+    if (!processSubstitution && !commandSubstitution) {
+        return hasShellSubstitution(value) ? null : undefined;
+    }
+
+    const inner = isConfined(getSubshellContent(value), cwd, options);
+    if (inner === undefined) return null;
+
+    if (processSubstitution) {
+        return { heuristic: inner, paths: [] };
+    }
+
+    if (!pathContext) {
+        return { heuristic: inner, paths: [] };
+    }
+
+    const paths = getStaticSubstitutionPaths(value, cwd);
+    return paths === null ? null : { heuristic: inner, paths };
 }
 
 /**
@@ -537,6 +634,18 @@ function extractCommandPaths(
             positionals !== "first-pattern" || hasPatternBypass(args, s);
     };
 
+    const inspectValue = (value: string, pathContext: boolean): boolean => {
+        const substitution = inspectShellSubstitution(value, cwd, options, pathContext);
+        if (substitution === null) return false;
+        if (substitution !== undefined) {
+            paths.push(...substitution.paths);
+            writes = writes || substitution.heuristic === Heuristic.SAFE_EDIT;
+        } else if (pathContext) {
+            paths.push(value);
+        }
+        return true;
+    };
+
     for (let i = 1; i < args.length; i++) {
         const arg = args[i];
 
@@ -558,24 +667,21 @@ function extractCommandPaths(
                     return null;
                 }
 
-                if (isSubshell(target) || isProcessSubstitution(target)) {
-                    if (!isConfined(getSubshellContent(target), cwd, options)) {
-                        return null;
-                    }
-                } else {
-                    paths.push(target);
-                    // File-descriptor duplication (for example 2>&1) is not
-                    // a filesystem write. All other non-special redirection
-                    // targets can create or overwrite a file.
-                    if (arg !== "<" && !target.startsWith("&") && !SPECIAL_ALLOWED_PATHS.has(target)) {
-                        writes = true;
-                    }
+                if (!inspectValue(target, true)) {
+                    return null;
+                }
+                // File-descriptor duplication (for example 2>&1) is not
+                // a filesystem write. All other non-special redirection
+                // targets can create or overwrite a file.
+                if (!isProcessSubstitution(target) && arg !== "<" &&
+                    !target.startsWith("&") && !SPECIAL_ALLOWED_PATHS.has(target)) {
+                    writes = true;
                 }
                 continue;
             }
 
-            if (isSubshell(arg) || isProcessSubstitution(arg)) {
-                if (!isConfined(getSubshellContent(arg), cwd, options)) {
+            if (isProcessSubstitution(arg)) {
+                if (!inspectValue(arg, false)) {
                     return null;
                 }
                 continue;
@@ -602,8 +708,8 @@ function extractCommandPaths(
                         if (values > 1) {
                             return null;
                         }
-                        if (hasPathSlot(flagSpec, 0)) {
-                            paths.push(inline);
+                        if (!inspectValue(inline, hasPathSlot(flagSpec, 0))) {
+                            return null;
                         }
                         continue;
                     }
@@ -612,8 +718,8 @@ function extractCommandPaths(
                         if (value === undefined) {
                             return null;
                         }
-                        if (hasPathSlot(flagSpec, slot)) {
-                            paths.push(value);
+                        if (!inspectValue(value, hasPathSlot(flagSpec, slot))) {
+                            return null;
                         }
                     }
                     i += values;
@@ -621,8 +727,8 @@ function extractCommandPaths(
                 }
 
                 // unknown long flag with inline value: treat value as path
-                if (inline !== undefined) {
-                    paths.push(inline);
+                if (inline !== undefined && !inspectValue(inline, true)) {
+                    return null;
                 }
                 continue;
             }
@@ -646,7 +752,17 @@ function extractCommandPaths(
                     }
                 }
 
-                const next = handleShortCluster(args, i, activeSpec, paths);
+                const writeState: { value: boolean } = { value: writes };
+                const next = handleShortCluster(
+                    args,
+                    i,
+                    activeSpec,
+                    paths,
+                    cwd,
+                    options,
+                    writeState,
+                );
+                writes = writeState.value;
                 if (next === null) {
                     return null;
                 }
@@ -671,18 +787,30 @@ function extractCommandPaths(
             case "none":
                 return null;
             case "ignore":
+                if (!inspectValue(arg, false)) {
+                    return null;
+                }
                 continue;
             case "first-pattern":
                 if (!positionalSeen && !patternProvided) {
                     positionalSeen = true;
+                    if (!inspectValue(arg, false)) {
+                        return null;
+                    }
                     continue;
                 }
-                paths.push(arg);
+                if (!inspectValue(arg, true)) {
+                    return null;
+                }
                 continue;
             case "first-path":
                 if (!positionalSeen) {
                     positionalSeen = true;
-                    paths.push(arg);
+                    if (!inspectValue(arg, true)) {
+                        return null;
+                    }
+                } else if (!inspectValue(arg, false)) {
+                    return null;
                 }
                 continue;
             case "assignments": {
@@ -704,11 +832,16 @@ function extractCommandPaths(
                 if (isDangerousEnvName(name)) {
                     return null;
                 }
-                paths.push(arg.slice(eq + 1));
+                if (!inspectValue(arg.slice(eq + 1), true)) {
+                    return null;
+                }
                 continue;
             }
             default:
-                paths.push(arg);
+                if (!inspectValue(arg, true)) {
+                    return null;
+                }
+                continue;
         }
     }
 
@@ -1060,9 +1193,8 @@ function isConfined(
             if (result === undefined) {
                 return undefined;
             }
-            heuristic = heuristic === Heuristic.SAFE_EDIT || result === Heuristic.SAFE_EDIT
-                ? Heuristic.SAFE_EDIT
-                : Heuristic.SAFE_READONLY;
+            heuristic = combineHeuristics(heuristic ?? Heuristic.SAFE_READONLY, result)
+                ?? Heuristic.SAFE_READONLY;
         }
     }
 
