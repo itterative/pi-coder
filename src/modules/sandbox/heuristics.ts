@@ -499,6 +499,7 @@ function extractCommandPaths(
     // e.g. `git log -C` means detect-copies, not change directory).
     const subcommands = spec.subcommands;
     let activeSpec = spec;
+    let activeStart = 0;
     let dispatched = subcommands === undefined;
     let positionals = activeSpec.positionals ?? "paths";
     let patternProvided =
@@ -616,6 +617,7 @@ function extractCommandPaths(
                 return null;
             }
             adoptSpec(sub);
+            activeStart = i;
             dispatched = true;
             continue;
         }
@@ -667,6 +669,16 @@ function extractCommandPaths(
 
     // a subcommand-taking command with no subcommand (e.g. bare `git`)
     if (!dispatched) {
+        return null;
+    }
+
+    // Subcommands may have their own invocation-level safety check (the
+    // parent check is performed by isCommandConfined before extraction).
+    if (
+        activeSpec !== spec &&
+        activeSpec.validate &&
+        !activeSpec.validate(args.slice(activeStart))
+    ) {
         return null;
     }
 

@@ -18,9 +18,9 @@ The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` a
 
 ## Command registry
 
-`src/modules/sandbox/commands/` contains curated `CommandSpec` data. Unknown or unclassifiable arguments are treated as paths and must resolve inside the cwd. Only explicitly modeled value slots and safe pattern slots bypass path checking. Commands that can execute code are excluded from the whitelist; unsafe flags and traversal modes are marked ineligible. Commands with semantics hidden in arguments may use `CommandSpec.validate`; `sed` is limited to lexically audited print/substitute scripts, rejects script files, execution/read/write commands, and in-place mode. Stream-only text filters include `fold`, `fmt`, `expand`, `unexpand`, `nl`, `tac`, and `rev`.
+`src/modules/sandbox/commands/` contains curated `CommandSpec` data. Unknown or unclassifiable arguments are treated as paths and must resolve inside the cwd. Only explicitly modeled value slots and safe pattern slots bypass path checking. Commands that can execute code are excluded from the whitelist; unsafe flags and traversal modes are marked ineligible. Commands with semantics hidden in arguments may use `CommandSpec.validate` (including subcommand specs, which receive args starting at the subcommand); `sed` is limited to lexically audited print/substitute scripts, rejects script files, execution/read/write commands, and in-place mode. Normal `git diff` and `git diff --check` remain prompts because diff output can expose changed lines; quiet diff modes are allowlisted with pathspec confinement and no patch/output/external-helper options. Stream-only text filters include `fold`, `fmt`, `expand`, `unexpand`, `nl`, `tac`, and `rev`.
 
-Important exclusions include `git diff`/`show`/`cat-file` (output-channel risk), credential-printing/network/mutating git subcommands, shell wrappers, interpreters, and exec-capable flags. Commands invoked by path (`./cat`, `/tmp/cat`) are never trusted.
+Important exclusions include normal `git diff`, `show`, and `cat-file` (output-channel risk), credential-printing/network/mutating git subcommands, shell wrappers, interpreters, and exec-capable flags. Commands invoked by path (`./cat`, `/tmp/cat`) are never trusted.
 
 ## Path and environment safety
 

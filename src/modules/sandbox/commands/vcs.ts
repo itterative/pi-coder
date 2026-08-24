@@ -15,6 +15,47 @@ const LOG_SPEC: CommandSpec = {
 };
 
 /**
+ * `git diff --check` can echo the offending changed line, so it is not safe
+ * by itself. The quiet form emits no diff contents (or diagnostics), making
+ * it suitable for the cwd heuristic. Keep the option surface deliberately
+ * small so a later diff-output or external-program option cannot make this
+ * an output or execution bypass.
+ */
+const DIFF_QUIET_SPEC: CommandSpec = {
+    validate: (args) => {
+        let hasQuiet = false;
+
+        for (let i = 1; i < args.length; i++) {
+            const arg = args[i];
+            if (arg === "--") {
+                break;
+            }
+
+            // Revision/path arguments are still checked by the normal path
+            // extractor. Only option-looking arguments need allowlisting.
+            if (
+                arg.startsWith("-") &&
+                arg !== "--check" &&
+                arg !== "--quiet" &&
+                arg !== "--cached" &&
+                arg !== "--staged" &&
+                arg !== "--relative" &&
+                arg !== "--no-ext-diff" &&
+                arg !== "--no-textconv"
+            ) {
+                return false;
+            }
+
+            if (arg === "--quiet") {
+                hasQuiet = true;
+            }
+        }
+
+        return hasQuiet;
+    },
+};
+
+/**
  * Version control (read-only inspection of the repo in cwd).
  *
  * Excluded subcommands: diff/show/cat-file print file CONTENTS from the
@@ -38,6 +79,9 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
         subcommands: {
             // positionals are pathspecs
             status: {},
+            // Only quiet diff modes are eligible: --check alone echoes the
+            // offending line, while --quiet suppresses all diff output.
+            diff: DIFF_QUIET_SPEC,
             log: LOG_SPEC,
             "ls-files": {
                 flags: { "--exclude": VALUE, "--with-tree": VALUE },
