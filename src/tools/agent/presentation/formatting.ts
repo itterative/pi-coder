@@ -1,6 +1,6 @@
 import type { AgentRunOutcome } from "../contracts/runs";
 import type { AgentWorkspaceResult } from "../contracts/workspaces";
-import type { AgentParameters } from "../prompt";
+import type { AgentParameters } from "../definitions/prompt";
 
 export function workspaceResultMetadata(result: AgentWorkspaceResult, noChanges = false): string {
     const commits = result.commits.length

@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import type { AgentRunDetails, AgentRunStatus, AgentRunSummary } from "../runtime";
+import type { AgentRunDetails, AgentRunStatus, AgentRunSummary } from "../contracts/runs";
 
 export const AGENT_MAILBOX_MESSAGE_TYPE = "pi-coder-agent-mailbox";
 

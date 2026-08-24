@@ -7,15 +7,10 @@ import { Text } from "@earendil-works/pi-tui";
 import {
     type AgentParameters,
     parameters,
-} from "../prompt";
-import {
-    updateResult,
-} from "../outcomes";
-import type {
-    AgentRunDetails,
-    AgentRunOutcome,
-} from "../runtime";
-import { oneLinePreview } from "../ui";
+} from "../definitions/prompt";
+import { updateResult } from "./outcomes";
+import type { AgentRunDetails, AgentRunOutcome } from "../contracts/runs";
+import { oneLinePreview } from "./widget";
 
 export type AgentToolExecutor = (
     params: AgentParameters,

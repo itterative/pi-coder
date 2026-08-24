@@ -25,9 +25,6 @@ export interface AgentWorkspaceResult {
     appliedAt?: number;
 }
 
-/** @deprecated Use AgentWorkspaceResult. */
-export type AgentWorkspaceApplication = AgentWorkspaceResult;
-
 export interface AgentWorkspaceGitState {
     kind: "available" | "unavailable";
     dirty?: boolean;

@@ -1,7 +1,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
 import { fingerprintAgentDefinition, type AgentDefinition } from "../definitions/types";
-import { emitAgentEvent } from "../events";
+import { emitAgentEvent } from "../observability/events";
 import type { AgentEventPayload, AgentEventSink } from "../contracts/events";
 import type {
     AgentBackgroundCallback,

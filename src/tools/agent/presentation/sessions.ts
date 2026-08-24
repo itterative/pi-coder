@@ -6,8 +6,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { PI_CODER_AGENT_SESSIONS_DIR } from "../../../common/constants";
-import { getAgentCwdSessionDir } from "../persistence";
-import { deriveAgentTitle, type AgentRunSummary } from "../runtime";
+import { getAgentCwdSessionDir } from "../runs/persistence";
+import { deriveAgentTitle } from "../runs/manager";
+import type { AgentRunSummary } from "../contracts/runs";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
 import { listAgentRunCatalog } from "../storage/run-catalog";
 

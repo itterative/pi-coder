@@ -3,12 +3,11 @@ import type { Usage } from "@earendil-works/pi-ai";
 import {
     AgentRunManager,
     BACKGROUND_AGENT_WAIT_GUIDANCE,
-    ZERO_USAGE,
     deriveAgentTitle,
-    type AgentRunDetails,
-    type AgentRunOutcome,
-} from "../runtime";
-import type { AgentParameters } from "../prompt";
+} from "../runs/manager";
+import { ZERO_USAGE } from "../runs/usage";
+import type { AgentRunDetails, AgentRunOutcome } from "../contracts/runs";
+import type { AgentParameters } from "../definitions/prompt";
 
 export function cloneUsage(): Usage {
     return { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } };

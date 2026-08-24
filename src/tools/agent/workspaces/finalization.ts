@@ -1,7 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { emitAgentEvent, type AgentEventSink } from "../events";
-import { AgentActionError, type AgentRunDetails, type AgentRunOutcome } from "../runtime";
+import { emitAgentEvent } from "../observability/events";
+import type { AgentEventSink } from "../contracts/events";
+import type { AgentRunDetails, AgentRunOutcome } from "../contracts/runs";
+import { AgentActionError } from "../runs/manager";
 import {
     getAgentWorkspace,
     prepareAgentWorkspaceApplication,

@@ -1,16 +1,13 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { discoverAgents } from "../discovery";
-import { emitAgentEvent, type AgentEventSink } from "../events";
-import type { AgentParameters } from "../prompt";
-import {
-    AgentActionError,
-    AgentRunManager,
-    ZERO_USAGE,
-    type AgentRunDetails,
-    type AgentRunOutcome,
-} from "../runtime";
-import { diagnosticText } from "../ui";
+import { discoverAgents } from "../definitions/discovery";
+import type { AgentParameters } from "../definitions/prompt";
+import { emitAgentEvent } from "../observability/events";
+import type { AgentEventSink } from "../contracts/events";
+import type { AgentRunDetails, AgentRunOutcome } from "../contracts/runs";
+import { AgentActionError, AgentRunManager } from "../runs/manager";
+import { ZERO_USAGE } from "../runs/usage";
+import { diagnosticText } from "../presentation/widget";
 import { prepareForegroundWorkspaceResult } from "./finalization";
 import {
     executeWorkspaceAction,

@@ -1,9 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import {
-    type AgentRunDetails,
-    type AgentRunSummary,
-} from "../runtime";
+import type { AgentRunDetails, AgentRunSummary } from "../contracts/runs";
 
 export const AGENT_WIDGET_ID = "pi-coder-agent-activity";
 

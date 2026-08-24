@@ -3,27 +3,23 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { selectWithMessage } from "../../../tui/select-with-message";
-import { emitAgentEvent, type AgentEventSink } from "../events";
-import {
-    AgentActionError,
-    AgentRunManager,
-    type AgentRunSummary,
-    type ChildAgentFactory,
-} from "../runtime";
+import { emitAgentEvent } from "../observability/events";
+import type { AgentEventSink } from "../contracts/events";
+import { AgentActionError, AgentRunManager } from "../runs/manager";
+import type { AgentRunSummary, ChildAgentFactory } from "../contracts/runs";
+import type { AgentWorkspace } from "../contracts/workspaces";
+import type { AgentDefinition } from "../definitions/types";
 import {
     claimAgentWorkspace,
-    createAgentWorkspace,
     findAvailableAgentWorkspace,
     findUnpreparedAgentWorkspace,
     listAgentWorkspaces,
     MAX_AGENT_WORKSPACES,
-    reconcileNoChangeAgentWorkspaceLeases,
     releaseAgentWorkspaceLease,
     transferAgentWorkspaceLease,
-    updateAgentWorkspace,
-    type AgentWorkspace,
-} from "../workspaces";
-import type { AgentDefinition } from "../discovery";
+} from "./store";
+import { createAgentWorkspace, updateAgentWorkspace } from "./lifecycle";
+import { reconcileNoChangeAgentWorkspaceLeases } from "./results";
 
 export type WorkspacePromptChoice = "setup" | "skip" | "cancel";
 

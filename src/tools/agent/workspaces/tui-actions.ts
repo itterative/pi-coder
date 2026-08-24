@@ -1,7 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import type { AgentWorkspace, AgentWorkspaceAction } from "../contracts/workspaces";
-import type { AgentRunManager } from "../runtime";
+import type { AgentRunManager } from "../runs/manager";
 import { executeWorkspaceAction } from "./actions";
 
 export async function handleWorkspaceAction(

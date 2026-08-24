@@ -364,33 +364,6 @@ export async function transferAgentWorkspaceLease(
     }
 }
 
-export async function completeAgentWorkspaceLease(
-    workspaceId: string,
-    ownerSessionId: string,
-    leaseRunId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-): Promise<void> {
-    const database = await openDatabase(workspacesDir);
-    try {
-        const workspace = workspaceById(database, workspaceId);
-        if (workspace?.leaseOwnerSessionId !== ownerSessionId || workspace.leaseRunId !== leaseRunId) {
-            throw new Error(`Workspace ${workspaceId} is not leased by ${leaseRunId}.`);
-        }
-        if (workspace.leaseKind === "task" && workspace.latestResult?.status !== "applied") {
-            throw new Error(`Workspace ${workspaceId} can be released only after successful application.`);
-        }
-        database.prepare(`
-            UPDATE workspaces
-            SET workspace_status = 'review_required',
-                lease_owner_session_id = NULL, lease_run_id = NULL,
-                lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
-            WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
-        `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId);
-    } finally {
-        database.close();
-    }
-}
-
 export async function releaseAgentWorkspaceLease(
     workspaceId: string,
     ownerSessionId: string,
@@ -412,25 +385,6 @@ export async function releaseAgentWorkspaceLease(
                 lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
         `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId);
-    } finally {
-        database.close();
-    }
-}
-
-export async function releaseAgentWorkspaceLeaseForRun(
-    ownerSessionId: string,
-    leaseRunId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-): Promise<void> {
-    const database = await openDatabase(workspacesDir);
-    try {
-        database.prepare(`
-            UPDATE workspaces
-            SET lease_owner_session_id = NULL, lease_run_id = NULL,
-                lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
-            WHERE lease_owner_session_id = ? AND lease_run_id = ?
-              AND lease_kind != 'task'
-        `).run(Date.now(), ownerSessionId, leaseRunId);
     } finally {
         database.close();
     }

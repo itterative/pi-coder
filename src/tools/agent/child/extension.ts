@@ -14,7 +14,7 @@ import type { SandboxConfigCwdConfinement } from "../../../common/config";
 import { getPathConfinementPermission } from "../../../modules/sandbox/heuristics";
 import { askUser } from "../../../tui/ask-user";
 import { registerWorkerMutationHooks } from "./worker-permissions";
-import type { ChildAgentFactoryContext } from "../runtime";
+import type { ChildAgentFactoryContext } from "../contracts/runs";
 import type { ChildProgressTracker as ProgressTracker } from "./progress";
 
 const MAX_RECENT_ACTIVITY = 8;

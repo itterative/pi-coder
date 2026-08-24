@@ -2,8 +2,9 @@ import type { Usage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import type { AgentTraceData } from "../contracts/trace";
-import type { ChildProgress, ParentQuestion, WorkerMutationReport } from "../runtime";
-import { ZERO_USAGE } from "../runtime";
+import type { ChildProgress, ParentQuestion } from "../contracts/runs";
+import type { WorkerMutationReport } from "../contracts/mutations";
+import { ZERO_USAGE } from "../runs/usage";
 
 const MAX_RECENT_ACTIVITY = 8;
 const UPDATE_THROTTLE_MS = 100;

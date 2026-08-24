@@ -7,11 +7,8 @@ import {
 
 import { PI_CODER_AGENT_SESSIONS_DIR } from "../../../common/constants";
 import { normalizeCwdForSessionDirectory } from "../../../common/paths";
-import {
-    type AgentRunPersistence,
-    type PersistedAgentRun,
-    ZERO_USAGE,
-} from "../runtime";
+import type { AgentRunPersistence, PersistedAgentRun } from "../contracts/runs";
+import { ZERO_USAGE } from "./usage";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
 import { upsertAgentRunCatalogRecord } from "../storage/run-catalog";
 

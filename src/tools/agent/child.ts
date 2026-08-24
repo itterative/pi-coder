@@ -6,7 +6,7 @@ import {
     getAgentDir,
     type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { READ_ONLY_AGENT_TOOLS } from "./discovery";
+import { READ_ONLY_AGENT_TOOLS } from "./definitions/discovery";
 import { createChildModelRuntime, resolveChildModel } from "./child/model-runtime";
 import { childProtocolPrompt, registerChildExtension } from "./child/extension";
 import { materializePersistentSession, repairInterruptedToolCalls } from "./child/transcript";
@@ -28,14 +28,14 @@ export {
 } from "./child/extension";
 export { createChildModelRuntime, shouldCopyParentApiKey } from "./child/model-runtime";
 export { materializePersistentSession, repairInterruptedToolCalls } from "./child/transcript";
-import {
-    ZERO_USAGE,
-    type ChildAgentFactoryContext,
-    type ChildAgentHandle,
-    type ChildProgress,
-    type ParentQuestion,
-    type WorkerMutationReport,
-} from "./runtime";
+import type {
+    ChildAgentFactoryContext,
+    ChildAgentHandle,
+    ChildProgress,
+    ParentQuestion,
+} from "./contracts/runs";
+import type { WorkerMutationReport } from "./contracts/mutations";
+import { ZERO_USAGE } from "./runs/usage";
 
 export async function createAgentChild(
     context: ChildAgentFactoryContext,

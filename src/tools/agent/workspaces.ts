@@ -8,7 +8,6 @@ export {
     type AgentRunCatalogRecord,
     type AgentWorkspace,
     type AgentWorkspaceAction,
-    type AgentWorkspaceApplication,
     type AgentWorkspaceGitState,
     type AgentWorkspaceResult,
     type WorkspaceLeaseKind,
@@ -21,7 +20,6 @@ export {
 export {
     MAX_AGENT_WORKSPACES,
     claimAgentWorkspace,
-    completeAgentWorkspaceLease,
     findAvailableAgentWorkspace,
     findUnpreparedAgentWorkspace,
     getAgentWorkspace,
@@ -29,7 +27,6 @@ export {
     listAgentWorkspaceResults,
     listAgentWorkspaces,
     releaseAgentWorkspaceLease,
-    releaseAgentWorkspaceLeaseForRun,
     transferAgentWorkspaceLease,
 } from "./workspaces/store";
 
