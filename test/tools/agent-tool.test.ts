@@ -175,7 +175,7 @@ describe("agent extension registration", () => {
         const waitingText = snapshotText(renderText(
             tool.renderResult(waiting, { expanded: false }, mockTheme),
             120,
-        );
+        ));
         expect(waiting.details.status).toBe("waiting_for_parent");
         await expect(waiting.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.foreground-waiting.txt");
         await expect(waitingText).toMatchFileSnapshot("__snapshots__/agent-tool.tui.foreground-waiting.txt");
@@ -190,7 +190,7 @@ describe("agent extension registration", () => {
         const completedText = snapshotText(renderText(
             tool.renderResult(completed, { expanded: true }, mockTheme),
             120,
-        );
+        ));
         expect(completed.details.status).toBe("completed");
         await expect(completed.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.foreground-completed.txt");
         await expect(completedText).toMatchFileSnapshot("__snapshots__/agent-tool.tui.foreground-completed.txt");

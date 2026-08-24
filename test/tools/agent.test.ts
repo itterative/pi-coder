@@ -558,9 +558,15 @@ describe("AgentRunManager", () => {
 
         const result = await manager.start(BUILTIN_WORKER, "Implement", context());
 
-        expect(result.details).toMatchObject({ mutating: true, status: "completed" });
-        expect(result.content).toContain("src/example.ts");
-        expect(result.content).toContain("bash commands may have changed additional files");
+        expect(result.details).toMatchObject({
+            mutating: true,
+            status: "completed",
+            mutationReport: {
+                changedFiles: ["src/example.ts", "test/example.test.ts"],
+                bashApproved: true,
+            },
+        });
+        expect(result.content).toBe("Implemented the change.");
     });
 
     it("exposes permission-waiting progress without consuming another run state", async () => {

@@ -1111,18 +1111,6 @@ export class AgentRunManager {
         const report = this.mutationReport(run);
         run.restoredProgress = progress;
         run.restoredMutationReport = report;
-        if (run.mutating) {
-            const files = report?.changedFiles.length
-                ? report.changedFiles.map((file) => `  - ${file}`).join("\n")
-                : "  - none tracked";
-            const bashCaveat = report.bashApproved
-                ? "\n- One or more approved bash commands may have changed additional files; inspect the checkout before attributing the final diff."
-                : "";
-            const interruptedCaveat = report.interrupted
-                ? "\n- This run was interrupted previously; a tool may have mutated files before its result was durably recorded."
-                : "";
-            content += `\n\nMutation report:\n- Files changed by successful edit/write calls:\n${files}${bashCaveat}${interruptedCaveat}`;
-        }
         const outcome = this.outcome(run, content, isError, progress, status === "failed" ? content : undefined);
         this.disposeRun(run);
         this.trace?.finish(run.id, status, {
