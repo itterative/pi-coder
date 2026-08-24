@@ -224,6 +224,8 @@ The tested loader used `noExtensions`, `noSkills`, `noPromptTemplates`, `noTheme
 
 ## Proposed Architecture
 
+> This section records the original MVP shape. The post-MVP architecture review and staged reorganization plan are in [`REORGANIZATION-PLAN.md`](./REORGANIZATION-PLAN.md).
+
 ### Top-level extension module
 
 Register an agent tool from `src/index.ts`:
@@ -552,11 +554,14 @@ Result application design (collection-time preparation, application API, and bro
 
 Open design questions for this phase:
 
-- Whether a no-ready-workspace request creates another worktree or reports workspace capacity when an existing workspace is busy.
 - How to handle parent uncommitted changes when creating a worktree; the safe first default may require a clean checkout.
 - Whether setup reports should be injected into the task worker prompt, stored as a workspace note, or both.
 - Whether workspace reset preserves ignored dependency artifacts while removing tracked task changes.
-- Whether the apply operation should also be exposed as an `agent` action or dedicated parent tool; it is currently available through `/agents`.
+
+Decisions implemented:
+
+- Workspace capacity is fixed at three; a busy pool reports capacity rather than creating another worktree.
+- Parent `agent` actions now expose `inspect`, `apply`, `discard`, and `revise`; the TUI remains the manual fallback.
 
 ## Testing Plan
 
