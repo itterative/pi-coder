@@ -1,4 +1,4 @@
-import { PATH_VALUE, UNSAFE, VALUE, type CommandSpec } from "./spec";
+import { OUTPUT_PATH_VALUE, PATH_VALUE, UNSAFE, VALUE, type CommandSpec } from "./spec";
 
 /** File readers and binary/compressed readers. */
 export const READER_COMMANDS: Record<string, CommandSpec> = {
@@ -63,7 +63,7 @@ export const READER_COMMANDS: Record<string, CommandSpec> = {
     base64: {
         flags: {
             "-w": VALUE, "--wrap": VALUE,
-            "-o": PATH_VALUE, "--output": PATH_VALUE,
+            "-o": OUTPUT_PATH_VALUE, "--output": OUTPUT_PATH_VALUE,
         },
     },
 };

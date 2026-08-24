@@ -173,7 +173,7 @@ export default function registerFileToolHook(
         const cwd = ctx.cwd ?? process.cwd();
         const confinement = sandboxConfig.current?.heuristics?.cwdConfinement;
 
-        if (getPathConfinementPermission(filePath, cwd, confinement) !== undefined) {
+        if (getPathConfinementPermission(filePath, cwd, confinement, operation) !== undefined) {
             return { block: false };
         }
 

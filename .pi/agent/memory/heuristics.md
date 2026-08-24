@@ -6,21 +6,21 @@ category: architecture
 
 # Cwd-confinement heuristic
 
-The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`. Direct read/write path checks are also implemented in `src/modules/sandbox/heuristics.ts` and used by `src/tools/file-permissions.ts`.
+The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`. Direct read/write path checks are also implemented in `src/modules/sandbox/heuristics.ts` and used by `src/tools/file-permissions.ts`; path checks classify read access as `SAFE_READONLY` and write access as `SAFE_EDIT`.
 
 ## Resolution order
 
 - `resolvePermissionDetails()` first checks the whole parsed line against explicit patterns; a whole-line match wins.
 - Otherwise it resolves each chain segment independently: explicit segment pattern, then cwd-confinement heuristic only when the segment would otherwise be `ask`.
 - A non-`ask` `**` default is authoritative: heuristics do not relax `deny` or downgrade `allow`.
-- `deny` dominates; unresolved segments force `ask`; policy permissions combine most-restrictively; heuristic-only chains resolve to the configured heuristic permission (normally `allow:sandbox`).
+- `deny` dominates; unresolved segments force `ask`; policy permissions combine most-restrictively; heuristic-only chains resolve to the configured heuristic permission (normally `allow:sandbox`). The heuristic classifiers themselves return `Heuristic.SAFE_READONLY` or `Heuristic.SAFE_EDIT` (or `undefined`); the resolver maps either successful classification to the configured execution permission.
 - Chain operators remain parser arguments and must be present in whole-command patterns.
 
 ## Command registry
 
 `src/modules/sandbox/commands/` contains curated `CommandSpec` data. Unknown or unclassifiable arguments are treated as paths and must resolve inside the cwd. Only explicitly modeled value slots and safe pattern slots bypass path checking. Commands that can execute code are excluded from the whitelist; unsafe flags and traversal modes are marked ineligible. Commands with semantics hidden in arguments may use `CommandSpec.validate` (including subcommand specs, which receive args starting at the subcommand); `sed` is limited to lexically audited print/substitute scripts, rejects script files, execution/read/write commands, and in-place mode. Normal whole-repository `git diff` remains a prompt, while `git diff --check`, `git diff --stat`, explicit `git diff -- <confined-path>`, and quiet diff modes are allowlisted; no patch/output/external-helper options are accepted. Stream-only text filters include `fold`, `fmt`, `expand`, `unexpand`, `nl`, `tac`, and `rev`.
 
-Important exclusions include normal `git diff`, `show`, and `cat-file` (output-channel risk), credential-printing/network/mutating git subcommands, shell wrappers, interpreters, and exec-capable flags. Commands invoked by path (`./cat`, `/tmp/cat`) are never trusted.
+Important exclusions include normal `git diff`, `show`, and `cat-file` (output-channel risk), credential-printing/network/mutating git subcommands, shell wrappers, interpreters, and exec-capable flags. Safe output flags use `OUTPUT_PATH_VALUE` and classify successful invocations as `SAFE_EDIT`. Commands invoked by path (`./cat`, `/tmp/cat`) are never trusted.
 
 ## Path and environment safety
 

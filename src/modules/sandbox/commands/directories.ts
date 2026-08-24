@@ -1,4 +1,4 @@
-import { PATH_VALUE, UNSAFE, VALUE, type CommandSpec } from "./spec";
+import { OUTPUT_PATH_VALUE, PATH_VALUE, UNSAFE, VALUE, type CommandSpec } from "./spec";
 
 // first positional is a search pattern, remaining positionals are paths
 const FD_SPEC: CommandSpec = {
@@ -36,7 +36,7 @@ export const DIRECTORY_COMMANDS: Record<string, CommandSpec> = {
         flags: {
             "-L": VALUE, "-P": VALUE, "-I": VALUE,
             "--filelimit": VALUE, "--charset": VALUE,
-            "-o": PATH_VALUE,
+            "-o": OUTPUT_PATH_VALUE,
             // -l follows symlinks to directories during traversal
             "-l": UNSAFE,
         },

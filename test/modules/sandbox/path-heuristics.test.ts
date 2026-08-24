@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
     getPathConfinementPermission,
+    Heuristic,
     isPathWithinDirectory,
 } from "../../../src/modules/sandbox/heuristics";
 
@@ -19,7 +20,7 @@ describe("file path confinement", () => {
     });
 
     it("allows ordinary paths in cwd and rejects paths outside or sensitive paths", () => {
-        expect(getPathConfinementPermission("src/index.ts", "/project", {})).toBe("allow:sandbox");
+        expect(getPathConfinementPermission("src/index.ts", "/project", {})).toBe(Heuristic.SAFE_READONLY);
         expect(getPathConfinementPermission("../secrets.txt", "/project", {})).toBeUndefined();
         expect(getPathConfinementPermission(".env", "/project", {})).toBeUndefined();
         expect(getPathConfinementPermission("src/app.pem", "/project", {})).toBeUndefined();
@@ -28,7 +29,7 @@ describe("file path confinement", () => {
     it("honors the cwd heuristic configuration", () => {
         expect(getPathConfinementPermission("file.txt", "/project", {
             permission: "allow",
-        })).toBe("allow");
+        })).toBe(Heuristic.SAFE_READONLY);
         expect(getPathConfinementPermission("file.txt", "/project", {
             enabled: false,
         })).toBeUndefined();
@@ -43,7 +44,8 @@ describe("file path confinement", () => {
 
         expect(getPathConfinementPermission("link/file.txt", cwd, {})).toBeUndefined();
         expect(getPathConfinementPermission("dangling", cwd, {})).toBeUndefined();
-        expect(getPathConfinementPermission("new/file.txt", cwd, {})).toBe("allow:sandbox");
+        expect(getPathConfinementPermission("new/file.txt", cwd, {})).toBe(Heuristic.SAFE_READONLY);
+        expect(getPathConfinementPermission("new/file.txt", cwd, {}, "write")).toBe(Heuristic.SAFE_EDIT);
     });
 
     it("keeps an approved folder scoped to that folder", () => {

@@ -117,6 +117,13 @@ describe("resolvePermission: patterns vs heuristics", () => {
                 permissions: { "npm *": "allow" },
                 expected: "allow:sandbox",
             },
+            {
+                desc: "heuristic classification maps to configured permission",
+                command: "cat file.txt",
+                permissions: {},
+                cwdConfinement: { permission: "allow" },
+                expected: "allow",
+            },
         ]);
     });
 

@@ -10,6 +10,7 @@ import {
     cloneCwdConfinementState,
     createCwdConfinementState,
     getArgsConfinementPermission,
+    getConfiguredCwdConfinementPermission,
     isNonPersistentChainOperator,
     restoreCwdConfinementState,
     splitAtChainOperatorsWithOperators,
@@ -55,7 +56,7 @@ export interface ResolvePermissionDetails {
  *    Heuristic grants only rescue segments that would prompt — they never
  *    downgrade policy results, so `cd /project && npx vitest | tail -5` with
  *    `"npx *": "allow"` resolves to "allow". A chain covered *only* by
- *    heuristics resolves to the heuristic permission ("allow:sandbox").
+ *    heuristics resolves to the configured heuristic permission.
  */
 export function resolvePermissionDetails(
     command: string,
@@ -184,7 +185,12 @@ function resolveLine(
         } else {
             // would prompt: heuristics may rescue the segment
             if (grant) {
-                heuristic = heuristic === null ? grant : moreRestrictive(heuristic, grant);
+                const grantPermission = getConfiguredCwdConfinementPermission(
+                    options?.cwdConfinement,
+                );
+                heuristic = heuristic === null
+                    ? grantPermission
+                    : moreRestrictive(heuristic, grantPermission);
             } else {
                 hasUnresolved = true;
                 unresolved.push(segment);

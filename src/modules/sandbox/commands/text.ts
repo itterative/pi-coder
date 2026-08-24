@@ -1,4 +1,4 @@
-import { PATH_VALUE, UNSAFE, VALUE, VALUE2, type CommandSpec } from "./spec";
+import { OUTPUT_PATH_VALUE, PATH_VALUE, UNSAFE, VALUE, VALUE2, type CommandSpec } from "./spec";
 
 const SED_SHELL_TOKENS = new Set(["<", ">", ">>", "2>", "2>>"]);
 
@@ -259,8 +259,8 @@ export const TEXT_COMMANDS: Record<string, CommandSpec> = {
             "-t": VALUE, "--field-separator": VALUE,
             "-S": VALUE, "--buffer-size": VALUE,
             "--parallel": VALUE, "--batch-size": VALUE,
-            "-o": PATH_VALUE, "--output": PATH_VALUE,
-            "-T": PATH_VALUE, "--temporary-dir": PATH_VALUE,
+            "-o": OUTPUT_PATH_VALUE, "--output": OUTPUT_PATH_VALUE,
+            "-T": OUTPUT_PATH_VALUE, "--temporary-dir": OUTPUT_PATH_VALUE,
             "--files0-from": PATH_VALUE,
             // executes an external program
             "--compress-program": UNSAFE,

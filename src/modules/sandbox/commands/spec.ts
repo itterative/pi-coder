@@ -20,6 +20,8 @@ export interface FlagSpec {
      * files, executes programs, or follows symlinks).
      */
     unsafe?: boolean;
+    /** The flag writes to the supplied path without otherwise being unsafe. */
+    writes?: boolean;
 }
 
 /**
@@ -83,5 +85,11 @@ export const VALUE: FlagSpec = { values: 1 };
 export const VALUE2: FlagSpec = { values: 2 };
 /** consumes one value that IS a path */
 export const PATH_VALUE: FlagSpec = { values: 1, pathSlots: [0] };
+/** consumes one value that is an output path */
+export const OUTPUT_PATH_VALUE: FlagSpec = {
+    values: 1,
+    pathSlots: [0],
+    writes: true,
+};
 /** makes the command ineligible */
 export const UNSAFE: FlagSpec = { unsafe: true };

@@ -18,6 +18,18 @@ import type { CommandSpec, FlagSpec } from "./commands";
 export { KNOWN_COMMANDS };
 export type { CommandSpec, FlagSpec };
 
+/**
+ * Capability granted by a successful cwd-confinement heuristic.
+ *
+ * These are deliberately independent from bash's execution permission. A
+ * caller can use them to give an agent only the capabilities it needs.
+ */
+export enum Heuristic {
+    SAFE_READONLY = "SAFE_READONLY",
+    SAFE_EDIT = "SAFE_EDIT",
+}
+
+export type FileAccess = "read" | "write";
 
 // pseudo-files available inside the sandbox's devtmpfs
 const SPECIAL_ALLOWED_PATHS = new Set([
@@ -482,13 +494,19 @@ function hasPathSlot(flagSpec: FlagSpec | undefined, slot: number): boolean {
  * Returns null if the command usage cannot be classified safely.
  * args[0] is the command name.
  */
+interface ExtractedCommandAccess {
+    paths: string[];
+    writes: boolean;
+}
+
 function extractCommandPaths(
     args: string[],
     spec: CommandSpec,
     cwd: string,
     options: ConfinementOptions,
-): string[] | null {
+): ExtractedCommandAccess | null {
     const paths: string[] = [];
+    let writes = false;
     let afterDoubleDash = false;
     let positionalSeen = false;
 
@@ -539,6 +557,12 @@ function extractCommandPaths(
                     }
                 } else {
                     paths.push(target);
+                    // File-descriptor duplication (for example 2>&1) is not
+                    // a filesystem write. All other non-special redirection
+                    // targets can create or overwrite a file.
+                    if (arg !== "<" && !target.startsWith("&") && !SPECIAL_ALLOWED_PATHS.has(target)) {
+                        writes = true;
+                    }
                 }
                 continue;
             }
@@ -558,6 +582,9 @@ function extractCommandPaths(
 
                 if (flagSpec?.unsafe) {
                     return null;
+                }
+                if (flagSpec?.writes) {
+                    writes = true;
                 }
 
                 const values = flagSpec?.values ?? 0;
@@ -599,6 +626,17 @@ function extractCommandPaths(
                 // (-delete, -exec, -fprint, ...)
                 if (activeSpec.flags?.[arg]?.unsafe) {
                     return null;
+                }
+
+                const cluster = arg.slice(1);
+                for (let j = 0; j < cluster.length; j++) {
+                    if (activeSpec.flags?.[`-${cluster[j]}`]?.writes) {
+                        writes = true;
+                        break;
+                    }
+                    if ((activeSpec.flags?.[`-${cluster[j]}`]?.values ?? 0) > 0) {
+                        break;
+                    }
                 }
 
                 const next = handleShortCluster(args, i, activeSpec, paths);
@@ -687,7 +725,7 @@ function extractCommandPaths(
         return null;
     }
 
-    return paths;
+    return { paths, writes };
 }
 
 const CHAIN_OPERATORS = new Set(["&&", "||", "|", ";", "&"]);
@@ -876,9 +914,9 @@ function isCommandConfined(
     rootCwd: string,
     options: ConfinementOptions,
     state: CwdConfinementState,
-): boolean {
+): Heuristic | undefined {
     if (state.blocked) {
-        return false;
+        return undefined;
     }
     // skip leading environment assignments (FOO=bar cmd ...), but reject
     // assignments that can alter the command's behavior (LD_PRELOAD, PATH,
@@ -889,26 +927,26 @@ function isCommandConfined(
         const eq = args[idx].indexOf("=");
         const name = args[idx].slice(0, eq);
         if (isDangerousEnvName(name)) {
-            return false;
+            return undefined;
         }
         envValues.push(args[idx].slice(eq + 1));
         idx++;
     }
 
     if (idx >= args.length) {
-        return false;
+        return undefined;
     }
 
     const commandName = args[idx];
 
     // commands invoked by path are not trusted to be the real binary
     if (commandName.includes("/") || commandName.includes("\\")) {
-        return false;
+        return undefined;
     }
 
     const spec = KNOWN_COMMANDS[commandName];
     if (!spec) {
-        return false;
+        return undefined;
     }
 
     const commandArgs = args.slice(idx);
@@ -922,25 +960,27 @@ function isCommandConfined(
         );
         const commandAllowed =
             options.allowedCommands === null || options.allowedCommands.has(commandName);
-        return directoryResult && envConfined && commandAllowed;
+        return directoryResult && envConfined && commandAllowed
+            ? Heuristic.SAFE_READONLY
+            : undefined;
     }
 
     if (options.allowedCommands !== null && !options.allowedCommands.has(commandName)) {
-        return false;
+        return undefined;
     }
 
     if (spec.validate && !spec.validate(commandArgs)) {
-        return false;
+        return undefined;
     }
 
-    const paths = extractCommandPaths(commandArgs, spec, cwd, options);
-    if (paths === null) {
-        return false;
+    const access = extractCommandPaths(commandArgs, spec, cwd, options);
+    if (access === null) {
+        return undefined;
     }
 
     const home = os.homedir();
-    const allPaths = [...envValues, ...paths];
-    return allPaths.every((p) => {
+    const allPaths = [...envValues, ...access.paths];
+    const confined = allPaths.every((p) => {
         if (!isAllowedPath(p, cwd, home, rootCwd)) {
             return false;
         }
@@ -952,6 +992,10 @@ function isCommandConfined(
         }
         return true;
     });
+
+    return confined
+        ? (access.writes ? Heuristic.SAFE_EDIT : Heuristic.SAFE_READONLY)
+        : undefined;
 }
 
 /**
@@ -962,51 +1006,60 @@ function isConfined(
     command: string,
     cwd: string,
     options: ConfinementOptions,
-): boolean {
+): Heuristic | undefined {
     let parsed: string[][];
     try {
         parsed = parseBash(command);
     } catch {
-        return false;
+        return undefined;
     }
 
     if (parsed.length === 0) {
-        return false;
+        return undefined;
     }
 
     const state = createCwdConfinementState(cwd);
-    return parsed.every((cmdArgs) => {
+    let heuristic: Heuristic | null = null;
+    for (const cmdArgs of parsed) {
         const segments = splitAtChainOperatorsWithOperators(cmdArgs);
         let nonPersistentBase: CwdConfinementState | null = null;
 
-        return (
-            segments.length > 0 &&
-            segments.every(({ args, operatorAfter }) => {
-                const beforeSegment = cloneCwdConfinementState(state);
-                if (nonPersistentBase === null && isNonPersistentChainOperator(operatorAfter)) {
-                    nonPersistentBase = beforeSegment;
-                }
-                const segmentState = nonPersistentBase
-                    ? cloneCwdConfinementState(nonPersistentBase)
-                    : state;
-                const result = isCommandConfined(
-                    args,
-                    segmentState.currentCwd,
-                    cwd,
-                    options,
-                    segmentState,
-                );
+        if (segments.length === 0) {
+            return undefined;
+        }
 
-                if (nonPersistentBase !== null) {
-                    restoreCwdConfinementState(state, nonPersistentBase);
-                    if (!isNonPersistentChainOperator(operatorAfter)) {
-                        nonPersistentBase = null;
-                    }
+        for (const { args, operatorAfter } of segments) {
+            const beforeSegment = cloneCwdConfinementState(state);
+            if (nonPersistentBase === null && isNonPersistentChainOperator(operatorAfter)) {
+                nonPersistentBase = beforeSegment;
+            }
+            const segmentState = nonPersistentBase
+                ? cloneCwdConfinementState(nonPersistentBase)
+                : state;
+            const result = isCommandConfined(
+                args,
+                segmentState.currentCwd,
+                cwd,
+                options,
+                segmentState,
+            );
+
+            if (nonPersistentBase !== null) {
+                restoreCwdConfinementState(state, nonPersistentBase);
+                if (!isNonPersistentChainOperator(operatorAfter)) {
+                    nonPersistentBase = null;
                 }
-                return result;
-            })
-        );
-    });
+            }
+            if (result === undefined) {
+                return undefined;
+            }
+            heuristic = heuristic === Heuristic.SAFE_EDIT || result === Heuristic.SAFE_EDIT
+                ? Heuristic.SAFE_EDIT
+                : Heuristic.SAFE_READONLY;
+        }
+    }
+
+    return heuristic ?? undefined;
 }
 
 function buildConfinementOptions(
@@ -1038,16 +1091,25 @@ function resolveConfinementConfig(
         : (config ?? undefined);
 }
 
+/** Return the configured execution permission for a successful heuristic. */
+export function getConfiguredCwdConfinementPermission(
+    config?: SandboxConfigCwdConfinement | null,
+): Permission {
+    return resolveConfinementConfig(config)?.permission ?? "allow:sandbox";
+}
+
 /**
  * Cwd-confinement heuristic for a direct file-tool access. A path is granted
  * only when it is inside cwd and does not touch a sensitive segment. The
- * symlink check also handles nonexistent write targets.
+ * symlink check also handles nonexistent write targets. Read access returns
+ * SAFE_READONLY; write access returns SAFE_EDIT.
  */
 export function getPathConfinementPermission(
     filePath: string,
     cwd: string,
     config?: SandboxConfigCwdConfinement | null,
-): Permission | undefined {
+    access: FileAccess = "read",
+): Heuristic | undefined {
     const confinement = resolveConfinementConfig(config);
 
     if (confinement?.enabled === false || filePath.trim() === "") {
@@ -1071,13 +1133,12 @@ export function getPathConfinementPermission(
         return undefined;
     }
 
-    return confinement?.permission ?? "allow:sandbox";
+    return access === "write" ? Heuristic.SAFE_EDIT : Heuristic.SAFE_READONLY;
 }
 
 /**
  * Cwd-confinement heuristic: known, safe commands whose file accesses all
- * resolve inside the working directory are granted the configured permission
- * (default "allow:sandbox").
+ * resolve inside the working directory are classified by capability.
  *
  * Returns undefined when the heuristic does not apply — unknown commands,
  * paths outside the working directory, or unclassifiable usage — in which
@@ -1087,7 +1148,7 @@ export function getCwdConfinementPermission(
     command: string,
     cwd: string,
     config?: SandboxConfigCwdConfinement | null,
-): Permission | undefined {
+): Heuristic | undefined {
     const confinement = resolveConfinementConfig(config);
 
     if (confinement?.enabled === false) {
@@ -1099,12 +1160,7 @@ export function getCwdConfinementPermission(
     }
 
     const resolvedCwd = path.resolve(cwd);
-
-    if (!isConfined(command, resolvedCwd, buildConfinementOptions(confinement, resolvedCwd))) {
-        return undefined;
-    }
-
-    return confinement?.permission ?? "allow:sandbox";
+    return isConfined(command, resolvedCwd, buildConfinementOptions(confinement, resolvedCwd));
 }
 
 /**
@@ -1118,7 +1174,7 @@ export function getArgsConfinementPermission(
     cwd: string,
     config?: SandboxConfigCwdConfinement | null,
     state?: CwdConfinementState,
-): Permission | undefined {
+): Heuristic | undefined {
     const confinement = resolveConfinementConfig(config);
 
     if (confinement?.enabled === false || args.length === 0) {
@@ -1128,15 +1184,11 @@ export function getArgsConfinementPermission(
     const resolvedCwd = path.resolve(cwd);
     const confinementState = state ?? createCwdConfinementState(resolvedCwd);
 
-    if (!isCommandConfined(
+    return isCommandConfined(
         args,
         confinementState.currentCwd,
         resolvedCwd,
         buildConfinementOptions(confinement, resolvedCwd),
         confinementState,
-    )) {
-        return undefined;
-    }
-
-    return confinement?.permission ?? "allow:sandbox";
+    );
 }

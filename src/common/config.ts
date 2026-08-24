@@ -27,6 +27,7 @@ export interface SandboxConfigAudit {
 
 export interface SandboxConfigCwdConfinement {
     enabled?: boolean;  // default: true
+    /** Execution permission used when a heuristic classification succeeds. */
     permission?: "allow" | "allow:sandbox";  // default: "allow:sandbox"
     commands?: string[];  // restrict heuristic to these known commands (default: all known)
     denyPaths?: string[];  // additional sensitive path segment patterns (glob, e.g. "*.secret")
