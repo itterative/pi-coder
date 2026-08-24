@@ -80,6 +80,16 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
         && (event.type === "run" || event.type === "workspace" || event.type === "runtime");
 }
 
+export function subscribeAgentEvents(
+    events: EventBus | undefined,
+    handler: (event: AgentEvent) => void,
+): () => void {
+    if (!events || typeof events.on !== "function") return () => {};
+    return events.on(AGENT_EVENT_CHANNEL, (data) => {
+        if (isAgentEvent(data)) handler(data);
+    });
+}
+
 export function emitAgentEvent(
     sink: AgentEventSink | undefined,
     cwd: string,

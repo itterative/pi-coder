@@ -9,6 +9,7 @@ import { discoverAgents } from "./discovery";
 import {
     createAgentEventSink,
     emitAgentEvent,
+    subscribeAgentEvents,
     type AgentEventSink,
 } from "./events";
 import { AgentMailbox } from "./mailbox";
@@ -212,10 +213,15 @@ export default function registerAgentTool(
     const createManager = () => new AgentRunManager(factory, 4, traceStore, 20, events);
     let manager = createManager();
     let cachedAgentPrompt = "";
+    let activeContext: ExtensionContext | undefined;
     const setupRuns: WorkspaceSetupRuns = new Map();
     const refreshAgentUi = (ctx: ExtensionContext): void => {
         updateAgentUi(ctx, manager, [...setupRuns.values()]);
     };
+    const unsubscribeAgentUiEvents = subscribeAgentEvents(pi.events, (event) => {
+        if (!activeContext || activeContext.cwd !== event.cwd) return;
+        refreshAgentUi(activeContext);
+    });
     const emitWorkspaceEvent = (
         ctx: ExtensionContext,
         workspaceId: string,
@@ -441,6 +447,7 @@ export default function registerAgentTool(
     };
 
     pi.on("session_start", async (_event, ctx) => {
+        activeContext = ctx;
         const discovered = discover(ctx);
         cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
         await restoreManager(ctx);
@@ -482,6 +489,7 @@ export default function registerAgentTool(
     });
 
     pi.on("session_tree", async (_event, ctx) => {
+        activeContext = ctx;
         mailbox.clear();
         // Prevent old-branch shutdown records from being appended at the new leaf.
         manager.setPersistence(undefined);
@@ -501,6 +509,8 @@ export default function registerAgentTool(
         ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
         await manager.shutdown();
         emitAgentEvent(events, ctx.cwd, { type: "runtime", action: "shutdown" });
+        activeContext = undefined;
+        unsubscribeAgentUiEvents();
     });
 
     pi.on("tool_result", (event) => {
