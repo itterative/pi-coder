@@ -567,6 +567,7 @@ export default function registerAgentTool(
                     : undefined;
                 const runContext = {
                     cwd: reservation?.workspace.worktreePath ?? ctx.cwd,
+                    parentCwd: ctx.cwd,
                     workspaceId: reservation?.workspace.id,
                     parentContext: ctx,
                 };

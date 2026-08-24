@@ -118,7 +118,7 @@ afterEach(() => {
 });
 
 describe("AgentSessionBrowserComponent", () => {
-    it("refreshes from agent events while remaining open", async () => {
+    it("refreshes from agent events while remaining open, including isolated runs", async () => {
         const eventBus = createEventBus();
         const value = new AgentSessionBrowserComponent({
             current: [current],
@@ -133,12 +133,14 @@ describe("AgentSessionBrowserComponent", () => {
         value.initialize(mockTheme);
 
         eventBus.emit(AGENT_EVENT_CHANNEL, {
-            cwd: "/repo/project",
+            cwd: "/repo/project/.state/workspaces/quiet-lantern-7k3",
+            parentCwd: "/repo/project",
             timestamp: Date.now(),
             type: "run",
             action: "progress",
             runId: current.id,
             status: "running",
+            workspaceId: "quiet-lantern-7k3",
         });
         for (let index = 0; index < 4; index++) await Promise.resolve();
 

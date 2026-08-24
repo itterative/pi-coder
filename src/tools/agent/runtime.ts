@@ -54,7 +54,10 @@ export interface ChildAgentHandle {
 }
 
 export interface ChildAgentFactoryContext {
+    /** Execution cwd; isolated workers use their persistent worktree here. */
     cwd: string;
+    /** Parent project cwd used for browser/event scoping. */
+    parentCwd?: string;
     definition: AgentDefinition;
     parentContext: unknown;
     background?: boolean;
@@ -186,6 +189,7 @@ interface AgentRun {
     startedAt: number;
     updatedAt: number;
     cwd: string;
+    parentCwd: string;
     disposed: boolean;
     shutdownRequested: boolean;
     cancelRequested: boolean;
@@ -410,6 +414,7 @@ export class AgentRunManager {
                 startedAt: record.startedAt,
                 updatedAt: record.updatedAt,
                 cwd: record.cwd ?? context.cwd,
+                parentCwd: context.parentCwd ?? context.cwd,
                 disposed: persistedTerminal,
                 shutdownRequested: false,
                 cancelRequested: false,
@@ -729,6 +734,7 @@ export class AgentRunManager {
             startedAt: now,
             updatedAt: now,
             cwd: context.cwd,
+            parentCwd: context.parentCwd ?? context.cwd,
             workspaceId: context.workspaceId,
             disposed: false,
             shutdownRequested: false,
@@ -1374,6 +1380,7 @@ export class AgentRunManager {
         emitAgentEvent(this.events, run.cwd, {
             type: "run",
             action: "status_changed",
+            parentCwd: run.parentCwd,
             runId: run.id,
             status,
             previousStatus,
@@ -1382,7 +1389,7 @@ export class AgentRunManager {
     }
 
     private emitRunEvent(run: AgentRun, event: Extract<AgentEventPayload, { type: "run" }>): void {
-        emitAgentEvent(this.events, run.cwd, event);
+        emitAgentEvent(this.events, run.cwd, { ...event, parentCwd: run.parentCwd });
     }
 
     private record(run: AgentRun, type: string, data?: AgentTraceData): void {

@@ -4,7 +4,7 @@ import type { AgentRunStatus } from "./runtime";
 /** Shared pi event channel for delegated-agent runtime changes. */
 export const AGENT_EVENT_CHANNEL = "pi-coder:agent-event";
 
-export type AgentRunEvent =
+export type AgentRunEvent = (
     | {
         type: "run";
         action: "created" | "restored";
@@ -36,7 +36,11 @@ export type AgentRunEvent =
         status: AgentRunStatus;
         reason: "collected" | "pruned" | "shutdown" | "terminal" | "canceled" | "restored_terminal";
         workspaceId?: string;
-    };
+    }
+) & {
+    /** Parent project cwd used to scope browser refreshes for isolated worktrees. */
+    parentCwd?: string;
+};
 
 export type AgentWorkspaceEvent = {
     type: "workspace";

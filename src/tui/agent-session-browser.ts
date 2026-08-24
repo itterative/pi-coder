@@ -416,7 +416,10 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
         this.onInvalidate = options.onInvalidate;
         if (options.eventBus && options.cwd && options.onRefresh) {
             this.unsubscribeEvents = options.eventBus.on(AGENT_EVENT_CHANNEL, (data) => {
-                if (!isAgentEvent(data) || data.cwd !== options.cwd) return;
+                if (!isAgentEvent(data)) return;
+                const isRelevant = data.cwd === options.cwd
+                    || (data.type === "run" && data.parentCwd === options.cwd);
+                if (!isRelevant) return;
                 this.scheduleRefresh();
             });
         }
