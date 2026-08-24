@@ -12,7 +12,7 @@ The first reorganization pass is implemented:
 
 - Stages 1–6 are complete: dependency-neutral contracts, definition contracts, shared metadata/catalog storage, workspace store/results/lifecycle/action modules, child decomposition, and a run-manager compatibility facade.
 - Stage 0 coverage was strengthened with a real shared-action apply/lease-release test; direct setup and standalone formatting characterization remain optional follow-up.
-- Stage 7 is partially complete: `index.ts` is now a tiny public facade, formatting/finalization/parent/TUI workspace adapters are extracted, and orchestration lives in `extension/register.ts`. The remaining registration function is still about 546 lines and should be split only along tested lifecycle/browser/dispatch seams.
+- Stage 7 is complete: `index.ts` contains the 43-line registration/composition function, while top-level `lifecycle.ts`, `browser.ts`, and `action-dispatch.ts` own session state/hooks, `/agents` orchestration, and tool action routing respectively. Formatting/finalization/parent/TUI workspace adapters remain independently extracted.
 - Stage 8 is partially complete: workspace action contracts moved out of TUI and compatibility facades preserve existing deep imports; broader test-file and browser-view-model alignment remains follow-up work.
 
 The implementation has no internal import cycles. Compatibility facades at the old paths are intentionally retained while internal and external callers transition.
@@ -59,7 +59,7 @@ The registration function owns mutable extension-wide state and also implements:
 
 This makes behavior such as apply/release/discard easy to implement differently between parent tool actions and TUI actions.
 
-**Recommendation:** keep `index.ts` as a small public composition facade and move orchestration into explicit controllers/services.
+**Implemented:** keep the registration function in a small `index.ts` composition root and move lifecycle state/hooks, browser orchestration, and action dispatch into explicit top-level modules.
 
 ### 3. Workspace persistence and workspace behavior are fused
 
@@ -148,7 +148,10 @@ Names may be adjusted during extraction, but the responsibility boundaries shoul
 
 ```text
 src/tools/agent/
-├── index.ts                         # stable public registration facade
+├── index.ts                         # registration function and composition root
+├── lifecycle.ts                     # owned state, mailbox, restoration, pi session hooks
+├── browser.ts                       # /agents data and callback orchestration
+├── action-dispatch.ts               # agent tool action routing
 ├── contracts/
 │   ├── runs.ts                      # run status/details/factory/usage-facing contracts
 │   ├── persistence.ts               # persisted-run and persistence-port contracts
@@ -191,10 +194,6 @@ src/tools/agent/
 │   ├── events.ts                    # pi event-bus adapter
 │   ├── trace-store.ts
 │   └── trace-command.ts
-├── extension/
-│   ├── state.ts                     # owned mutable runtime state
-│   ├── lifecycle.ts                 # pi session hooks
-│   └── dispatch.ts                  # agent action routing
 ├── README.md
 ├── PLAN.md
 └── REORGANIZATION-PLAN.md
@@ -284,8 +283,9 @@ This structure is a destination, not a requirement to create every directory imm
 - Move browser data/callback orchestration into a browser controller.
 - Move action dispatch and isolated-result finalization into application services.
 - Move metadata/result formatting into presentation helpers.
-- Leave `index.ts` responsible only for constructing dependencies and registering the small lifecycle/dispatch adapters.
-- Do not replace the current closure with one large `AgentExtensionController`; split application workflows first so any coordinator remains thin.
+- Leave `index.ts` responsible only for constructing dependencies and registering lifecycle, browser, and action-dispatch modules.
+- Keep these extension-level modules at the top of the agent package so the composition boundary is visible without another wrapper directory.
+- Do not replace the current closure with one large controller; keep browser and action workflows separate from lifecycle-owned state.
 
 **Exit criterion:** `index.ts` is a small, readable composition root; no replacement controller becomes the new hotspot; session tree/shutdown/restore behavior remains integration-tested.
 
@@ -337,7 +337,7 @@ Prefer pure moves plus import changes before refactoring bodies. Do not combine 
 
 ## Definition of done
 
-- `index.ts` is a composition facade rather than the application implementation.
+- `index.ts` contains the public registration function and acts as the composition root rather than the application implementation.
 - Shared contracts do not depend on concrete runtime, workspace, storage, or presentation modules.
 - Run/event/workspace implementation modules have no dependency cycle.
 - `agent_runs` catalog ownership is separated from workspace behavior while remaining in `meta.sqlite`.

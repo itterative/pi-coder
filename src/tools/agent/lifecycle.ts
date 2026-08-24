@@ -1,0 +1,292 @@
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+import { createAgentChild } from "./child";
+import { discoverAgents } from "./discovery";
+import {
+    createAgentEventSink,
+    emitAgentEvent,
+    subscribeAgentEvents,
+    type AgentEventSink,
+} from "./events";
+import { AgentMailbox } from "./mailbox";
+import { loadAgentRunPersistence } from "./persistence";
+import { availableAgentsPrompt } from "./prompt";
+import {
+    AgentRunManager,
+    ZERO_USAGE,
+    type AgentRunDetails,
+    type AgentRunSummary,
+    type ChildAgentFactory,
+} from "./runtime";
+import type { AgentTraceStore } from "./trace";
+import type { AgentWorkspace } from "./workspaces";
+import type { WorkspaceSetupUiUpdate } from "./workspace-setup";
+import {
+    AGENT_WIDGET_ID,
+    clearCompletedWorkspaceSetupRun,
+    diagnosticText,
+    updateAgentUi,
+} from "./ui";
+
+export type WorkspaceEventAction = "created" | "updated" | "lease_changed" | "result_changed" | "removed";
+
+export class AgentLifecycle {
+    readonly events: AgentEventSink;
+
+    private managerValue: AgentRunManager;
+    private cachedAgentPrompt = "";
+    private activeContext: ExtensionContext | undefined;
+    private readonly setupRuns = new Map<string, AgentRunSummary>();
+    private readonly mailbox: AgentMailbox;
+    private mailboxFlushScheduled = false;
+    private readonly notifiedWarnings = new Set<string>();
+    private unsubscribeAgentUiEvents: () => void = () => {};
+
+    constructor(
+        private readonly pi: ExtensionAPI,
+        readonly factory: ChildAgentFactory = createAgentChild,
+        private readonly traceStore?: AgentTraceStore,
+    ) {
+        this.events = createAgentEventSink(pi.events);
+        this.managerValue = this.createManager();
+        this.mailbox = new AgentMailbox(pi);
+        this.unsubscribeAgentUiEvents = subscribeAgentEvents(pi.events, (event) => {
+            if (!this.activeContext || this.activeContext.cwd !== event.cwd) return;
+            this.refreshAgentUi(this.activeContext);
+        });
+    }
+
+    get manager(): AgentRunManager {
+        return this.managerValue;
+    }
+
+    get setupRunSummaries(): AgentRunSummary[] {
+        return [...this.setupRuns.values()];
+    }
+
+    register(): void {
+        this.pi.on("session_start", async (_event, ctx) => {
+            this.activeContext = ctx;
+            const discovered = this.discover(ctx);
+            this.cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
+            await this.restoreManager(ctx);
+        });
+
+        this.pi.on("agent_settled", () => {
+            this.flushMailbox();
+        });
+
+        this.pi.on("before_agent_start", (event, ctx) => {
+            if (event.systemPrompt.includes("<delegated_agents>")) {
+                return { systemPrompt: event.systemPrompt };
+            }
+            if (!this.cachedAgentPrompt) {
+                const discovered = this.discover(ctx);
+                this.cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
+            }
+            const projectContextEnd = "</project_context>";
+            const idx = event.systemPrompt.indexOf(projectContextEnd);
+            const systemPrompt = idx === -1
+                ? `${event.systemPrompt}\n\n${this.cachedAgentPrompt}`
+                : event.systemPrompt.slice(0, idx + projectContextEnd.length)
+                    + "\n\n"
+                    + this.cachedAgentPrompt
+                    + "\n"
+                    + event.systemPrompt.slice(idx + projectContextEnd.length);
+            return { systemPrompt };
+        });
+
+        this.pi.on("session_before_tree", (_event, ctx) => {
+            const unsafe = this.manager.listRuns().some((run) => (
+                run.status === "starting" || run.status === "running" || run.status === "waiting_for_permission"
+            )) || this.setupRunSummaries.some((run) => (
+                run.status === "starting" || run.status === "running"
+            ));
+            if (!unsafe) return;
+            ctx.ui.notify("Pause, finish, or cancel running delegated agents before navigating the session tree.", "warning");
+            return { cancel: true };
+        });
+
+        this.pi.on("session_tree", async (_event, ctx) => {
+            this.activeContext = ctx;
+            this.mailbox.clear();
+            // Prevent old-branch shutdown records from being appended at the new leaf.
+            this.manager.setPersistence(undefined);
+            await this.manager.shutdown();
+            await this.manager.flushPersistence();
+            emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "reset" });
+            this.setupRuns.clear();
+            ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
+            this.managerValue = this.createManager();
+            const discovered = this.discover(ctx);
+            this.cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
+            await this.restoreManager(ctx);
+        });
+
+        this.pi.on("session_shutdown", async (_event, ctx) => {
+            this.mailbox.close();
+            this.setupRuns.clear();
+            ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
+            await this.manager.shutdown();
+            await this.manager.flushPersistence();
+            emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "shutdown" });
+            this.activeContext = undefined;
+            this.unsubscribeAgentUiEvents();
+        });
+
+        this.pi.on("tool_result", (event) => {
+            if (event.toolName !== "agent") return;
+            const details = event.details as Partial<AgentRunDetails> | undefined;
+            if (details?.status === "failed" || details?.status === "aborted") {
+                return { isError: true };
+            }
+        });
+    }
+
+    discover(ctx: ExtensionContext): ReturnType<typeof discoverAgents> {
+        const result = discoverAgents(ctx.cwd, ctx.isProjectTrusted());
+        for (const diagnostic of result.diagnostics) {
+            if (diagnostic.level !== "warning") continue;
+            const text = diagnosticText(diagnostic);
+            if (this.notifiedWarnings.has(text)) continue;
+            this.notifiedWarnings.add(text);
+            ctx.ui.notify(`pi-coder agents: ${text}`, "warning");
+        }
+        return result;
+    }
+
+    refreshAgentUi(ctx: ExtensionContext): void {
+        updateAgentUi(ctx, this.manager, this.setupRunSummaries);
+    }
+
+    emitWorkspaceEvent(
+        ctx: ExtensionContext,
+        workspaceId: string,
+        action: WorkspaceEventAction,
+        reason?: string,
+    ): void {
+        emitAgentEvent(this.events, ctx.cwd, {
+            type: "workspace",
+            action,
+            workspaceId,
+            reason,
+        });
+    }
+
+    updateSetupRun(
+        ctx: ExtensionContext,
+        runId: string,
+        workspace: AgentWorkspace,
+        update: WorkspaceSetupUiUpdate,
+    ): void {
+        const previous = this.setupRuns.get(runId);
+        const now = Date.now();
+        this.setupRuns.set(runId, {
+            runId,
+            title: `Setup ${workspace.slug}`,
+            agent: "workspace-setup",
+            status: update.status,
+            background: false,
+            task: "Prepare the isolated workspace for the implementation worker",
+            startedAt: previous?.startedAt ?? now,
+            updatedAt: now,
+            activity: update.activity ?? previous?.activity,
+            responsePreview: update.responsePreview ?? previous?.responsePreview,
+            usage: update.usage ?? previous?.usage ?? ZERO_USAGE,
+            mutating: true,
+            workspaceId: workspace.id,
+        });
+        this.refreshAgentUi(ctx);
+    }
+
+    clearCompletedWorkspaceSetup(ctx: ExtensionContext, details: AgentRunDetails): void {
+        if (clearCompletedWorkspaceSetupRun(this.setupRuns, details)) {
+            this.refreshAgentUi(ctx);
+        }
+    }
+
+    backgroundUpdate(ctx: ExtensionContext): (details: AgentRunDetails) => void {
+        return (details) => {
+            if (
+                details.status === "completed"
+                || details.status === "failed"
+                || details.status === "aborted"
+                || details.status === "canceled"
+            ) {
+                this.clearCompletedWorkspaceSetup(ctx, details);
+            }
+            this.refreshAgentUi(ctx);
+            this.mailbox.queue(details);
+            this.reconcileMailbox();
+            this.flushMailboxWhenIdle(ctx);
+        };
+    }
+
+    notifyUserCanceled(details: AgentRunDetails): void {
+        this.mailbox.notifyUserCanceled(details);
+    }
+
+    reconcileMailbox(): void {
+        this.mailbox.reconcile(this.manager.listRuns());
+    }
+
+    private createManager(): AgentRunManager {
+        return new AgentRunManager(this.factory, 4, this.traceStore, 20, this.events);
+    }
+
+    private flushMailbox(): void {
+        this.reconcileMailbox();
+        this.mailbox.flush();
+    }
+
+    private isParentIdle(ctx: ExtensionContext): boolean {
+        try {
+            return ctx.isIdle();
+        } catch {
+            return false;
+        }
+    }
+
+    private flushMailboxWhenIdle(ctx: ExtensionContext): void {
+        if (this.mailboxFlushScheduled || !this.isParentIdle(ctx)) return;
+        this.mailboxFlushScheduled = true;
+        queueMicrotask(() => {
+            this.mailboxFlushScheduled = false;
+            if (this.isParentIdle(ctx)) this.flushMailbox();
+        });
+    }
+
+    private async restoreManager(ctx: ExtensionContext): Promise<void> {
+        let loaded: ReturnType<typeof loadAgentRunPersistence>;
+        try {
+            loaded = loadAgentRunPersistence(this.pi, ctx);
+        } catch (error) {
+            this.manager.setPersistence(undefined);
+            const message = error instanceof Error ? error.message : String(error);
+            ctx.ui.notify(`pi-coder agents: durable child storage is unavailable: ${message}`, "warning");
+            return;
+        }
+        this.manager.setPersistence(loaded?.persistence);
+        if (!loaded) return;
+        const discovered = this.discover(ctx);
+        const result = await this.manager.restore(
+            loaded.records,
+            discovered.agents,
+            { cwd: ctx.cwd, parentContext: ctx },
+            this.backgroundUpdate(ctx),
+        );
+        for (const diagnostic of result.diagnostics) {
+            ctx.ui.notify(`pi-coder agents: ${diagnostic}`, "warning");
+        }
+        if (result.restored > 0) {
+            ctx.ui.notify(
+                `Restored ${result.restored} delegated agent run${result.restored === 1 ? "" : "s"}.`,
+                "info",
+            );
+        }
+        this.refreshAgentUi(ctx);
+        emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "restored" });
+        this.reconcileMailbox();
+        await this.manager.flushPersistence();
+    }
+}
