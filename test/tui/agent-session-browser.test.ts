@@ -270,6 +270,7 @@ describe("AgentSessionBrowserComponent", () => {
     });
 
     it("merges workspaces into the agents browser", () => {
+        let invalidations = 0;
         const value = new AgentSessionBrowserComponent({
             current: [current],
             past: [past],
@@ -285,6 +286,7 @@ describe("AgentSessionBrowserComponent", () => {
             }]]),
             onWorkspaceInspect: () => "diff text",
             onWorkspaceAction: async () => workspace,
+            onInvalidate: () => { invalidations++; },
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -299,6 +301,7 @@ describe("AgentSessionBrowserComponent", () => {
         expect(ui.render()).toContain("i inspect · a apply · t retain · r reset · d discard");
         ui.press("i");
         expect(ui.render()).toContain("diff text");
+        expect(invalidations).toBe(1);
         ui.press(KEY.escape);
         expect(ui.render()).toContain("Workspace: quiet-lantern-7k3");
     });

@@ -39,6 +39,7 @@ export interface AgentSessionBrowserOptions {
     onCancel?: (item: AgentSessionBrowserItem) => void | Promise<void>;
     onWorkspaceAction?: (workspace: AgentWorkspace, action: Exclude<AgentWorkspaceAction, "inspect">) => AgentWorkspace | null | undefined | Promise<AgentWorkspace | null | undefined>;
     onWorkspaceInspect?: (workspace: AgentWorkspace) => string | Promise<string>;
+    onInvalidate?: () => void;
 }
 
 const EMPTY_CURRENT: AgentSessionBrowserItem = {
@@ -282,6 +283,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                                             this.updateWorkspace(selected, replacement);
                                             return replacement;
                                         },
+                                        onInvalidate: options.onInvalidate,
                                     },
                                 );
                                 this.workspaceDetail.initialize(this.theme);
@@ -377,7 +379,11 @@ export async function showAgentSessionBrowser(
                 Math.max(2, tui.terminal.rows - 2),
             ),
         );
-        const component = new AgentSessionBrowserComponent({ ...options, fixedHeight });
+        const component = new AgentSessionBrowserComponent({
+            ...options,
+            fixedHeight,
+            onInvalidate: () => tui.requestRender(),
+        });
         component.setDoneCallback(done);
         component.initialize(theme);
         return component;

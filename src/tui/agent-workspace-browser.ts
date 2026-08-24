@@ -161,6 +161,7 @@ type WorkspaceDispositionAction = Exclude<AgentWorkspaceAction, "inspect">;
 type WorkspaceActionCallbacks = {
     onInspect?: () => string | Promise<string>;
     onAction?: (action: WorkspaceDispositionAction) => AgentWorkspace | null | undefined | Promise<AgentWorkspace | null | undefined>;
+    onInvalidate?: () => void;
 };
 
 export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace> {
@@ -282,6 +283,7 @@ export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace
             } finally {
                 this.busy = false;
                 this.invalidate();
+                this.callbacks.onInvalidate?.();
             }
         })();
     }
