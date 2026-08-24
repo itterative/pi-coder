@@ -217,6 +217,8 @@ export class AgentActionError extends Error {
     }
 }
 
+export const BACKGROUND_AGENT_WAIT_GUIDANCE = "If you have no other work to do, report your current progress to the user and end your turn. Do not sleep or poll; an automatic notification will arrive when the run finishes or needs parent guidance.";
+
 export const ZERO_USAGE: Usage = {
     input: 0,
     output: 0,
@@ -538,7 +540,7 @@ export class AgentRunManager {
         this.trackBackgroundTask(run, taskPromise);
         return this.checkpointOutcome(
             run,
-            `Agent ${run.id} started in the background. Do not poll its status; you will receive an automatic notification when it finishes or needs parent guidance. After a terminal notification, retrieve the full result with agent(action="collect", runId="${run.id}").`,
+            `Agent ${run.id} started in the background. ${BACKGROUND_AGENT_WAIT_GUIDANCE} After a terminal notification, retrieve the full result with agent(action="collect", runId="${run.id}").`,
             false,
             { output: "", recentActivity: [] },
         );
@@ -594,7 +596,7 @@ export class AgentRunManager {
         this.trackBackgroundTask(run, taskPromise);
         return this.checkpointOutcome(
             run,
-            `Agent ${run.id} resumed in the background. Do not poll its status; you will receive an automatic notification when it finishes or needs parent guidance.`,
+            `Agent ${run.id} resumed in the background. ${BACKGROUND_AGENT_WAIT_GUIDANCE}`,
             false,
             run.handle?.getProgress() ?? { output: "", recentActivity: [] },
         );
@@ -655,7 +657,7 @@ export class AgentRunManager {
             if (progress.recentActivity.length) {
                 sections.push(`Recent activity:\n- ${progress.recentActivity.slice(-8).join("\n- ")}`);
             }
-            sections.push("Do not poll again; an automatic notification will arrive when the run finishes or needs parent guidance.");
+            sections.push(BACKGROUND_AGENT_WAIT_GUIDANCE);
             content = sections.join("\n\n");
         }
         return this.checkpointOutcome(

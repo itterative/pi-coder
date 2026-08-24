@@ -2,6 +2,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 
 import {
     AgentRunManager,
+    BACKGROUND_AGENT_WAIT_GUIDANCE,
     ZERO_USAGE,
     deriveAgentTitle,
     type AgentRunDetails,
@@ -21,7 +22,7 @@ export function listOutcome(manager: AgentRunManager): AgentRunOutcome {
                 ? `resume with guidance using runId=${JSON.stringify(run.runId)}`
                 : run.status === "completed" || run.status === "failed" || run.status === "aborted" || run.status === "canceled"
                     ? `collect with runId=${JSON.stringify(run.runId)}`
-                    : "wait for its automatic notification";
+                    : BACKGROUND_AGENT_WAIT_GUIDANCE;
             return `- ${JSON.stringify(run.runId)} · ${JSON.stringify(run.title)} · ${run.agent} · ${run.status}\n  Task: ${JSON.stringify(run.task)}\n  Next: ${nextAction}`;
         }).join("\n")
         : "No delegated agent runs are currently tracked.";

@@ -60,7 +60,7 @@ export function availableAgentsPrompt(agents: AgentDefinition[]): string {
     lines.push(
         "Use the agent tool with action=\"start\" for foreground delegation or action=\"spawn\" to launch concurrent background work.",
         "Use the agent tool with action=\"list\" to recover delegated run IDs, titles, statuses, and next actions; this is preferable to polling each run.",
-        "Do not poll background runs with the agent tool's action=\"status\". Automatic mailbox notifications arrive when a run finishes or needs parent guidance.",
+        "Do not poll background runs with the agent tool's action=\"status\" or wait by sleeping. If you have no other work to do, report your current progress to the user and end your turn; an automatic mailbox notification will arrive when a run finishes or needs parent guidance.",
         "After a terminal agent notification, use the agent tool with action=\"collect\" to retrieve the full result; mailbox markers never inject full child output automatically.",
         "A waiting agent result is paused, not completed. Investigate or obtain guidance, then use the agent tool to resume it; cancel it if no longer needed. An interrupted durable run never resumes automatically; wait for explicit user direction before resuming or canceling it.",
         "The parent agent may use its own active built-in tools (including read, edit, write, and bash) directly; delegation is optional and is for substantial, parallel, or isolated work.",

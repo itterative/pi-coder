@@ -380,7 +380,7 @@ describe("AgentRunManager", () => {
         const second = manager.spawn("scout", "Second task", context());
 
         expect(first.details).toMatchObject({ runId: "scout-1", status: "starting", background: true });
-        expect(first.content).toContain("Do not poll its status");
+        expect(first.content).toContain("Do not sleep or poll");
         expect(first.content).toContain("automatic notification");
         expect(second.details).toMatchObject({ runId: "scout-2", status: "starting", background: true });
         expect(manager.activeCount).toBe(2);
@@ -428,7 +428,7 @@ describe("AgentRunManager", () => {
 
         const resumed = await manager.resume("scout-1", "Inspect A");
         expect(resumed.details.status).toBe("running");
-        expect(resumed.content).toContain("Do not poll its status");
+        expect(resumed.content).toContain("Do not sleep or poll");
         expect(resumed.content).toContain("automatic notification");
         expect(resumed.usage).toMatchObject({ input: 12, output: 3 });
         await flushBackground();
