@@ -16,18 +16,50 @@ const LOG_SPEC: CommandSpec = {
 
 /**
  * `git diff --check` can echo the offending changed line, so it is not safe
- * by itself. The quiet form emits no diff contents (or diagnostics), making
- * it suitable for the cwd heuristic. Keep the option surface deliberately
- * small so a later diff-output or external-program option cannot make this
- * an output or execution bypass.
+ * across the whole repository by itself. It is safe with an explicit `--`
+ * pathspec because that has the same explicit-path boundary as `cat`; quiet
+ * mode is safe even without a pathspec because it emits no diff contents.
+ * Keep the option surface deliberately small so a later diff-output or
+ * external-program option cannot make this an output or execution bypass.
  */
-const DIFF_QUIET_SPEC: CommandSpec = {
+const BRANCH_SPEC: CommandSpec = {
+    // The default invocation lists branches. Creation, deletion, movement,
+    // copying, and upstream/description changes must remain explicit.
+    positionals: "none",
+    flags: {
+        "-d": UNSAFE, "--delete": UNSAFE, "-D": UNSAFE,
+        "-m": UNSAFE, "--move": UNSAFE, "-M": UNSAFE,
+        "-c": UNSAFE, "--copy": UNSAFE, "-C": UNSAFE,
+        "-u": UNSAFE, "--set-upstream-to": UNSAFE,
+        "--unset-upstream": UNSAFE, "--edit-description": UNSAFE,
+        "--track": UNSAFE, "--no-track": UNSAFE,
+    },
+};
+
+const TAG_SPEC: CommandSpec = {
+    // The default invocation lists tags. Tag creation, deletion, signing,
+    // movement, and reflog changes are not heuristic-safe.
+    positionals: "none",
+    flags: {
+        "-d": UNSAFE, "--delete": UNSAFE, "-D": UNSAFE,
+        "-a": UNSAFE, "--annotate": UNSAFE,
+        "-s": UNSAFE, "--sign": UNSAFE, "-u": UNSAFE, "--local-user": UNSAFE,
+        "-f": UNSAFE, "--force": UNSAFE,
+        "-m": UNSAFE, "--move": UNSAFE,
+        "--create-reflog": UNSAFE,
+    },
+};
+
+const DIFF_CHECK_SPEC: CommandSpec = {
     validate: (args) => {
+        let hasCheck = false;
         let hasQuiet = false;
+        let separator = -1;
 
         for (let i = 1; i < args.length; i++) {
             const arg = args[i];
             if (arg === "--") {
+                separator = i;
                 break;
             }
 
@@ -46,12 +78,15 @@ const DIFF_QUIET_SPEC: CommandSpec = {
                 return false;
             }
 
-            if (arg === "--quiet") {
+            if (arg === "--check") {
+                hasCheck = true;
+            } else if (arg === "--quiet") {
                 hasQuiet = true;
             }
         }
 
-        return hasQuiet;
+        const hasPathspec = separator !== -1 && separator < args.length - 1;
+        return hasQuiet || (hasCheck && hasPathspec);
     },
 };
 
@@ -75,13 +110,16 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
         flags: {
             "-c": UNSAFE, "-C": UNSAFE,
             "--git-dir": UNSAFE, "--work-tree": UNSAFE, "--exec-path": UNSAFE,
+            // Can inject arbitrary git config through an inherited env var,
+            // including helper and external-diff settings.
+            "--config-env": UNSAFE,
         },
         subcommands: {
             // positionals are pathspecs
             status: {},
-            // Only quiet diff modes are eligible: --check alone echoes the
-            // offending line, while --quiet suppresses all diff output.
-            diff: DIFF_QUIET_SPEC,
+            // --check is eligible only with an explicit pathspec; --quiet
+            // suppresses output and is eligible without one.
+            diff: DIFF_CHECK_SPEC,
             log: LOG_SPEC,
             "ls-files": {
                 flags: { "--exclude": VALUE, "--with-tree": VALUE },
@@ -111,9 +149,8 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
             },
             // alias of log
             whatchanged: LOG_SPEC,
-            // list mode only: a ref name as positional means create/delete
-            branch: { positionals: "none" },
-            tag: { positionals: "none" },
+            branch: BRANCH_SPEC,
+            tag: TAG_SPEC,
         },
     },
 };
