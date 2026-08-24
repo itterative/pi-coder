@@ -168,12 +168,13 @@ function availableAgentsPrompt(agents: AgentDefinition[]): string {
     }
     if (agents.length > 20) lines.push(`- …and ${agents.length - 20} more agents`);
     lines.push(
-        "Use action=\"start\" for foreground delegation or action=\"spawn\" to launch concurrent background work.",
-        "Use action=\"list\" to recover delegated run IDs, titles, statuses, and next actions; this is preferable to polling each run.",
-        "Do not poll background runs with action=\"status\". Automatic mailbox notifications arrive when a run finishes or needs parent guidance.",
-        "After a terminal notification, retrieve the full result with action=\"collect\"; mailbox markers never inject full child output automatically.",
-        "A waiting result is paused, not completed. Investigate or obtain guidance, then resume it; cancel it if no longer needed. An interrupted durable run never resumes automatically; wait for explicit user direction before resuming or canceling it.",
-        "The built-in worker mutates the selected checkout or explicitly requested worktree. Every edit/write/bash action requires an explicit user permission prompt, and only one worker can be active at once.",
+        "Use the agent tool with action=\"start\" for foreground delegation or action=\"spawn\" to launch concurrent background work.",
+        "Use the agent tool with action=\"list\" to recover delegated run IDs, titles, statuses, and next actions; this is preferable to polling each run.",
+        "Do not poll background runs with the agent tool's action=\"status\". Automatic mailbox notifications arrive when a run finishes or needs parent guidance.",
+        "After a terminal agent notification, use the agent tool with action=\"collect\" to retrieve the full result; mailbox markers never inject full child output automatically.",
+        "A waiting agent result is paused, not completed. Investigate or obtain guidance, then use the agent tool to resume it; cancel it if no longer needed. An interrupted durable run never resumes automatically; wait for explicit user direction before resuming or canceling it.",
+        "The parent agent may use its own active built-in tools (including read, edit, write, and bash) directly; delegation is optional and is for substantial, parallel, or isolated work.",
+        "Scout and custom agents are read-only. The built-in worker is the only mutation-capable child; each worker edit/write/bash action requires an explicit user permission prompt, and only one worker child may be active at once.",
         "Use isolation=\"worktree\" when the worker should run in a persistent isolated Git worktree; a new worktree may prompt for an optional setup worker.",
     );
     return `<delegated_agents>\n${lines.join("\n")}\n</delegated_agents>`;
@@ -710,22 +711,21 @@ export default function registerAgentTool(
         name: "agent",
         label: "Agent",
         description:
-            "Delegate codebase work to a built-in or custom agent. Scout and custom agents are read-only; the built-in "
-            + "worker can edit the selected checkout or isolated worktree and run bash only through explicit per-action user permission prompts. "
+            "Delegate codebase work when useful to a built-in or custom agent. The parent agent may also use its own active built-in tools directly, including read, edit, write, and bash; delegation is not required for file changes. "
+            + "Scout and custom agents are read-only; the built-in worker can edit the selected checkout or isolated worktree and run bash only through explicit per-action user permission prompts. "
             + "Run work in the foreground or background; optionally provide a short human-readable title; list, status, collect, resume, or cancel retained runs. In persisted "
             + "parent sessions, paused and interrupted child context survives reload, restart, and switching away and back.",
         promptSnippet:
-            "Use agent for substantial delegated work: scout/custom agents explore read-only, while worker performs permission-gated implementation.",
+            "Use agent for optional delegated work; the parent may edit directly with its own built-in tools, while worker handles permission-gated child implementation.",
         promptGuidelines: [
-            "Use list to recover delegated run IDs and statuses after compaction or session restoration; use the returned IDs for status, resume, collect, or cancel",
-            "Use start when the result is needed immediately; use spawn for independent work that can run concurrently; provide a short title when the run should be easy to identify later",
-            "Do not poll spawned runs with status; automatic follow-up mailbox context notifies you when they finish or need parent guidance",
-            "After a terminal notification, retrieve the full result with collect; mailbox updates never interrupt current work and never include the full result",
-            "A waiting agent is paused, not completed; investigate or obtain guidance, then resume it, or cancel it if no longer needed",
-            "Durable interrupted runs never replay or resume automatically; wait for explicit user direction before resuming or canceling them, and account for uncertain tool outcomes",
-            "Background agents cannot open direct user dialogs; they request parent guidance instead",
-            "Use the returned run ID exactly; runs are cwd-confined and durable only within the exact persisted parent session",
-            "Only the built-in worker may mutate; each edit, write, or bash call requires an explicit user prompt, and only one worker may be active at once",
+            "Use agent with action=\"list\" to recover delegated run IDs and statuses after compaction or session restoration; use the returned IDs with agent actions status, resume, collect, or cancel",
+            "Use agent with action=\"start\" when the result is needed immediately; use agent with action=\"spawn\" for independent work that can run concurrently; provide a short title when the run should be easy to identify later",
+            "Do not poll spawned agent runs with agent action=\"status\"; automatic follow-up mailbox context notifies you when they finish or need parent guidance",
+            "After a terminal agent notification, use agent action=\"collect\" to retrieve the full result; mailbox updates never interrupt current work and never include the full result",
+            "Treat a waiting agent as paused, not completed; investigate or obtain guidance, then use agent action=\"resume\" or action=\"cancel\" as appropriate",
+            "Durable interrupted agent runs never replay or resume automatically; wait for explicit user direction before using agent action=\"resume\" or action=\"cancel\", and account for uncertain tool outcomes",
+            "Remember that background agents cannot open direct user dialogs; use agent action=\"resume\" after providing parent guidance instead",
+            "Use the returned agent run ID exactly; agent runs are cwd-confined and durable only within the exact persisted parent session",
         ],
         parameters,
         executionMode: "sequential",
