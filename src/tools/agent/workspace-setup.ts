@@ -52,13 +52,15 @@ export async function runWorkspaceSetup(
     const setupDefinition: AgentDefinition = {
         name: "workspace-setup",
         description: "Prepare an isolated development workspace without implementing the task",
-        tools: [...definition.tools],
+        tools: ["read", "bash"],
         model: definition.model,
         source: "builtin",
-        mutating: definition.mutating,
+        mutating: true,
         systemPrompt: `You are the isolated workspace setup specialist for a later implementation worker.
 
-Your only job is to inspect the project and assess its existing development environment. Do not install packages, update dependencies, edit configuration or lockfiles, generate files, run formatters, or otherwise modify any project or environment files. You may inspect existing dependencies and run read-only validation commands when useful. If a prerequisite is missing, report it instead of trying to install or repair it. Do not implement features or make unrelated source changes. Stop after inspection and report the commands you ran, environment assumptions, missing prerequisites, and how the later worker should validate its work.`,
+Your job is to prepare the development environment inside this isolated worktree. You are allowed and expected to install dependencies, create project-local environments, update dependency lockfiles, configure setup files, and generate project-local setup artifacts when needed. Use bash commands only inside this worktree; every command requires explicit parent approval, must be non-interactive, and should use a suitable timeout. Run setup commands one at a time and report a missing prerequisite instead of waiting for interactive input.
+
+Do not implement the requested feature, edit unrelated source files, or make unrelated configuration changes. Keep changes limited to dependencies, environment configuration, and generated artifacts required for the later worker. When setup is complete, report the commands run, files or environment artifacts changed, remaining prerequisites, and how the later worker should validate its work.`,
     };
     let handle: Awaited<ReturnType<ChildAgentFactory>> | undefined;
     try {
@@ -85,7 +87,7 @@ Your only job is to inspect the project and assess its existing development envi
         signal?.addEventListener("abort", abortSetup, { once: true });
         try {
             await handle.prompt(
-                "Inspect this isolated workspace for a later implementation worker. Check the existing dependencies and available development/test commands, but do not install packages or modify any project or environment files. If something is missing, report it instead of repairing it. Do not implement features; stop with a concise environment report.",
+                "Prepare this isolated workspace for the later implementation worker. Inspect the project configuration, then install or configure whatever project-local dependencies and environment artifacts are needed. Use only non-interactive bash commands inside this worktree, one command at a time with a suitable timeout; every command will require explicit approval. Do not implement the requested feature or make unrelated source changes. If setup needs unavailable credentials, interactive input, or a missing prerequisite, report it instead of waiting. Stop with a concise setup report."
             );
         } finally {
             signal?.removeEventListener("abort", abortSetup);

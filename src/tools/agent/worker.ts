@@ -45,6 +45,7 @@ const WORKER_CONFINEMENT = {
     permission: "allow" as const,
     resolveSymlinks: true,
 };
+const SETUP_BASH_TIMEOUT_SECONDS = 10 * 60;
 
 function isWorkerPathAllowed(filePath: string | undefined, cwd: string): boolean {
     const target = filePath?.trim() || cwd;
@@ -217,6 +218,9 @@ export function registerWorkerMutationHooks(
         }
 
         const input = event.input as BashToolInput;
+        if (options.agentName === "workspace-setup" && input.timeout === undefined) {
+            input.timeout = SETUP_BASH_TIMEOUT_SECONDS;
+        }
         let permission: Permission = "ask";
         try {
             permission = resolvePermissionDetails(input.command, ctx.cwd, {
