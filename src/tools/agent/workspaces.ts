@@ -346,9 +346,10 @@ function workspaceLeaseState(database: WorkspaceDatabase, workspace: AgentWorksp
         WHERE owner_session_id = ? AND run_id = ?
     `).get(workspace.leaseOwnerSessionId, workspace.leaseRunId) as WorkspaceRow | undefined;
     if (!row || typeof row.status !== "string") return "orphaned";
-    return ["completed", "failed", "aborted", "canceled", "removed", "collected", "interrupted"].includes(row.status)
-        ? "orphaned"
-        : "known";
+    // A terminal run can still own a prepared result awaiting explicit
+    // disposition. Presence in the catalog means the lease is known; only a
+    // missing catalog row is orphaned.
+    return "known";
 }
 
 function attachLatestWorkspaceResult(
