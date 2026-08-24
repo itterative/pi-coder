@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import { TuiMainScreen } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, Terminal, TUI } from "@earendil-works/pi-tui";
+import { AgentWorkspaceDetailComponent } from "../../src/tui/agent-workspace-browser";
+import type { AgentWorkspace } from "../../src/tools/agent/workspaces";
 import { withOverlayStack } from "../../src/tui/overlay-stack";
+import { mockTheme, renderText } from "../helpers";
 
 type InputListener = (data: string) => unknown;
 
@@ -22,7 +26,119 @@ function fakeHandle(): OverlayHandle & { focusCount: number } {
     };
 }
 
+function fakeTerminal(): Terminal {
+    return {
+        columns: 100,
+        rows: 40,
+        kittyProtocolActive: false,
+        start() {},
+        stop() {},
+        drainInput: async () => {},
+        write() {},
+        moveBy() {},
+        hideCursor() {},
+        showCursor() {},
+        clearLine() {},
+        clearFromCursor() {},
+        clearScreen() {},
+        setTitle() {},
+        setProgress() {},
+    };
+}
+
+const workspace: AgentWorkspace = {
+    version: 1,
+    id: "quiet-lantern-7k3",
+    cwd: "/repo/project",
+    repositoryRoot: "/repo/project",
+    worktreePath: "/state/workspaces/quiet-lantern-7k3",
+    slug: "quiet-lantern-7k3",
+    baseRevision: "abc123def456",
+    setupState: "ready",
+    status: "available",
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_001_000,
+};
+
+beforeEach(() => {
+    vi.spyOn(Date.prototype, "toLocaleString").mockReturnValue("Nov 14 2023 22:13");
+});
+
+afterEach(() => {
+    vi.restoreAllMocks();
+});
+
 describe("withOverlayStack", () => {
+    it("keeps workspace actions reachable after another component steals focus", async () => {
+        const tui = new TuiMainScreen(fakeTerminal());
+        const permissionDialog: Component = {
+            render: () => [],
+            invalidate() {},
+            handleInput: () => {},
+        };
+        const detail = new AgentWorkspaceDetailComponent(
+            workspace,
+            () => 27,
+            undefined,
+            {
+                onAction: async (action) => {
+                    expect(action).toBe("discard");
+                    return null;
+                },
+            },
+        );
+        detail.initialize(mockTheme);
+
+        let overlayHandle: OverlayHandle | undefined;
+        let closed = false;
+        await withOverlayStack(async (binding) => {
+            tui.setFocus(permissionDialog);
+            binding.bind(tui);
+            overlayHandle = tui.showOverlay(detail);
+            binding.setHandle(overlayHandle);
+            detail.setDoneCallback(() => {
+                closed = true;
+                overlayHandle?.hide();
+            });
+
+            tui.setFocus(permissionDialog);
+            (tui as TUI & { handleTerminalInput(data: string): void }).handleTerminalInput("d");
+            expect(tui.getFocusedComponent()).toBe(detail);
+            expect(renderText(detail, 100)).toMatchInlineSnapshot(`
+              "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+              │   Workspace · quiet-lantern-7k3                                                                  │
+              │                                                                                                  │
+              │   Workspace: quiet-lantern-7k3                                                                   │
+              │   Git: unknown                                                                                   │
+              │   Status: available                                                                              │
+              │   Setup: ready                                                                                   │
+              │   Lease: none                                                                                    │
+              │   Created: Nov 14 2023 22:13                                                                     │
+              │   Updated: Nov 14 2023 22:13                                                                     │
+              │                                                                                                  │
+              │   ID: quiet-lantern-7k3                                                                          │
+              │   Cwd: /repo/project                                                                             │
+              │   Repository: /repo/project                                                                      │
+              │   Worktree: /state/workspaces/quiet-lantern-7k3                                                  │
+              │   Base revision: abc123def456                                                                    │
+              │                                                                                                  │
+              │   Actions:                                                                                       │
+              │   r reset · d discard                                                                            │
+              │                                                                                                  │
+              │   This workspace may be selected for an isolated worker.                                         │
+              │                                                                                                  │
+              │   Confirm discard? y/Enter confirm · n/Esc cancel                                                │
+              │     ↑/↓ scroll · r reset · d discard · Esc back                                                  │
+              │                                                                                                  │
+              │                                                                                                  │
+              ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
+            `);
+
+            (tui as TUI & { handleTerminalInput(data: string): void }).handleTerminalInput("y");
+            await vi.waitFor(() => expect(closed).toBe(true));
+        });
+    });
+
     it("keeps the top participating overlay focused and restores the next one", async () => {
         let listener: InputListener | undefined;
         let removed = false;

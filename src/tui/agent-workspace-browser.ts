@@ -131,11 +131,16 @@ export function agentWorkspaceDetailText(
         lines.push("", theme.fg("accent", "Setup summary:"));
         lines.push(...workspace.setupSummary.split("\n").flatMap((line) => wrapPreservingSpaces(line, width)));
     }
+    const actions = workspaceActionHelp(workspace);
+    if (actions.length > 0) {
+        lines.push(
+            "",
+            theme.fg("accent", "Actions:"),
+            theme.fg("muted", actions.join(" · ")),
+            "",
+        );
+    }
     lines.push(
-        "",
-        theme.fg("accent", "Actions:"),
-        theme.fg("muted", workspaceActionHelp(workspace).join(" · ")),
-        "",
         theme.fg("muted", workspace.leaseRunId
             ? "This workspace is leased and cannot be selected until its current run is explicitly dispositioned."
             : workspace.status === "review_required"
@@ -155,6 +160,10 @@ function workspaceActionHelp(workspace: AgentWorkspace): string[] {
         if (!workspace.leaseRunId || workspace.latestResult) actions.push("r reset", "d discard");
     }
     return actions;
+}
+
+function workspaceDetailHelpText(workspace: AgentWorkspace): string {
+    return ["↑/↓ scroll", ...workspaceActionHelp(workspace), "Esc back"].join(" · ");
 }
 
 type WorkspaceDispositionAction = Exclude<AgentWorkspaceAction, "inspect">;
@@ -188,7 +197,7 @@ export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace
             fixedHeight,
             compactFooter: true,
             onKey: (key) => this.handleDetailKey(key),
-            helpText: "↑/↓ scroll · i inspect · a apply · t retain · r reset · d discard · Esc back",
+            helpText: workspaceDetailHelpText(workspace),
             renderItem: (item, renderOptions) => this.showingDiff
                 ? this.diffText
                 : [
@@ -210,6 +219,7 @@ export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace
     private updateWorkspace(workspace: AgentWorkspace): void {
         this.currentWorkspace = workspace;
         this.state.items[0]!.value = workspace;
+        this.listOptions.helpText = workspaceDetailHelpText(workspace);
         this.pendingAction = null;
         this.invalidate();
     }

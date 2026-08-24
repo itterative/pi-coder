@@ -52,6 +52,36 @@ const workspace: AgentWorkspace = {
     updatedAt: 1_700_000_001_000,
 };
 
+const validationWorkspace: AgentWorkspace = {
+    version: 1,
+    id: "sunlit-lantern-6tk",
+    cwd: "/home/sd/Repos/pi-coder/.workspace-validation/repo",
+    repositoryRoot: "/home/sd/Repos/pi-coder/.workspace-validation/repo",
+    worktreePath: "/home/sd/Repos/pi-coder/.state/workspaces/sunlit-lantern-6tk",
+    slug: "sunlit-lantern-6tk",
+    baseRevision: "feb634569ddcbd54faac5c270d6ecdf9a97952a5",
+    setupState: "ready",
+    setupSummary: `Setup complete.
+
+- Inspected \`AGENTS.md\`, \`README.md\`, and \`WORKSPACE-MANUAL-VALIDATION.md\`.
+- No dependency manifests, setup scripts, or project-local environment artifacts are present.
+- Verified prerequisites:
+  - Git 2.55.0
+  - pi 0.84.2
+- No commands requiring mutation were needed.
+- Changed files: none.
+- Final Git status: clean.
+
+Later worker can proceed directly; use the manual validation checklist for workspace testing.`,
+    leaseOwnerSessionId: "01a03327-5ba3-7301-b185-794ec34c8dbd",
+    leaseRunId: "worker-1",
+    leaseKind: "task",
+    leaseAcquiredAt: 1_787_564_674_474,
+    status: "available",
+    createdAt: 1_787_564_636_346,
+    updatedAt: 1_787_564_662_721,
+};
+
 const past = {
     kind: "past" as const,
     id: "child-session-1",
@@ -74,7 +104,7 @@ function component() {
 }
 
 function snapshotText(text: string): string {
-    return text.replace(/[ \t]+$/gm, "");
+    return text.replace(/[ \t]+$/gm, "").replaceAll("`", "'");
 }
 
 beforeEach(() => {
@@ -298,12 +328,215 @@ describe("AgentSessionBrowserComponent", () => {
 
         ui.press(KEY.enter);
         expect(ui.render()).toContain("Workspace: quiet-lantern-7k3");
-        expect(ui.render()).toContain("i inspect · a apply · t retain · r reset · d discard");
+        expect(ui.render()).toContain("i inspect diff · r reset · d discard · Esc back");
         ui.press("i");
         expect(ui.render()).toContain("diff text");
         expect(invalidations).toBe(1);
         ui.press(KEY.escape);
         expect(ui.render()).toContain("Workspace: quiet-lantern-7k3");
+    });
+
+    it("renders the validation workspace detail from the workspace registry", () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            workspaces: [validationWorkspace],
+            fixedHeight: () => 40,
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab, KEY.tab, KEY.enter);
+        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
+          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+          │   Workspace · sunlit-lantern-6tk                                                                 │
+          │                                                                                                  │
+          │   Workspace: sunlit-lantern-6tk                                                                  │
+          │   Git: unknown                                                                                   │
+          │   Status: leased                                                                                 │
+          │   Setup: ready                                                                                   │
+          │   Lease: task · worker-1                                                                         │
+          │   Created: Nov 14 2023 22:13                                                                     │
+          │   Updated: Nov 14 2023 22:13                                                                     │
+          │                                                                                                  │
+          │   ID: sunlit-lantern-6tk                                                                         │
+          │   Cwd: /home/sd/Repos/pi-coder/.workspace-validation/repo                                        │
+          │   Repository: /home/sd/Repos/pi-coder/.workspace-validation/repo                                 │
+          │   Worktree: /home/sd/Repos/pi-coder/.state/workspaces/sunlit-lantern-6tk                         │
+          │   Base revision: feb634569ddcbd54faac5c270d6ecdf9a97952a5                                        │
+          │   Lease owner: 01a03327-5ba3-7301-b185-794ec34c8dbd                                              │
+          │   Lease acquired: Nov 14 2023 22:13                                                              │
+          │                                                                                                  │
+          │   Setup summary:                                                                                 │
+          │   Setup complete.                                                                                │
+          │                                                                                                  │
+          │   - Inspected 'AGENTS.md', 'README.md', and 'WORKSPACE-MANUAL-VALIDATION.md'.                    │
+          │   - No dependency manifests, setup scripts, or project-local environment artifacts are           │
+          │   present.                                                                                       │
+          │   - Verified prerequisites:                                                                      │
+          │     - Git 2.55.0                                                                                 │
+          │     - pi 0.84.2                                                                                  │
+          │   - No commands requiring mutation were needed.                                                  │
+          │   - Changed files: none.                                                                         │
+          │   - Final Git status: clean.                                                                     │
+          │                                                                                                  │
+          │   Later worker can proceed directly; use the manual validation checklist for workspace           │
+          │   testing.                                                                                       │
+          │   This workspace is leased and cannot be selected until its current run is explicitly            │
+          │   dispositioned.                                                                                 │
+          │     ↑/↓ scroll · Esc back                                                                        │
+          │                                                                                                  │
+          │                                                                                                  │
+          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
+        `);
+    });
+
+    it("confirms workspace discard and removes the workspace", async () => {
+        let discarded = false;
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            workspaces: [workspace],
+            fixedHeight: () => 27,
+            onWorkspaceAction: async (selected, action) => {
+                expect(selected.id).toBe(workspace.id);
+                expect(action).toBe("discard");
+                discarded = true;
+                return null;
+            },
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab, KEY.tab, KEY.enter);
+        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
+          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+          │   Workspace · quiet-lantern-7k3                                                                  │
+          │                                                                                                  │
+          │   Workspace: quiet-lantern-7k3                                                                   │
+          │   Git: unknown                                                                                   │
+          │   Status: available                                                                              │
+          │   Setup: ready                                                                                   │
+          │   Lease: none                                                                                    │
+          │   Created: Nov 14 2023 22:13                                                                     │
+          │   Updated: Nov 14 2023 22:13                                                                     │
+          │                                                                                                  │
+          │   ID: quiet-lantern-7k3                                                                          │
+          │   Cwd: /repo/project                                                                             │
+          │   Repository: /repo/project                                                                      │
+          │   Worktree: /state/workspaces/quiet-lantern-7k3                                                  │
+          │   Base revision: abc123def456                                                                    │
+          │                                                                                                  │
+          │   Actions:                                                                                       │
+          │   i inspect diff · r reset · d discard                                                           │
+          │                                                                                                  │
+          │   This workspace may be selected for an isolated worker.                                         │
+          │     ↑/↓ scroll · i inspect diff · r reset · d discard · Esc back                                 │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
+        `);
+
+        ui.press("d");
+        expect(snapshotText(ui.render())).toContain("Confirm discard? y/Enter confirm · n/Esc cancel");
+        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
+          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+          │   Workspace · quiet-lantern-7k3                                                                  │
+          │                                                                                                  │
+          │   Workspace: quiet-lantern-7k3                                                                   │
+          │   Git: unknown                                                                                   │
+          │   Status: available                                                                              │
+          │   Setup: ready                                                                                   │
+          │   Lease: none                                                                                    │
+          │   Created: Nov 14 2023 22:13                                                                     │
+          │   Updated: Nov 14 2023 22:13                                                                     │
+          │                                                                                                  │
+          │   ID: quiet-lantern-7k3                                                                          │
+          │   Cwd: /repo/project                                                                             │
+          │   Repository: /repo/project                                                                      │
+          │   Worktree: /state/workspaces/quiet-lantern-7k3                                                  │
+          │   Base revision: abc123def456                                                                    │
+          │                                                                                                  │
+          │   Actions:                                                                                       │
+          │   i inspect diff · r reset · d discard                                                           │
+          │                                                                                                  │
+          │   This workspace may be selected for an isolated worker.                                         │
+          │                                                                                                  │
+          │   Confirm discard? y/Enter confirm · n/Esc cancel                                                │
+          │     ↑/↓ scroll · i inspect diff · r reset · d discard · Esc back                                 │
+          │                                                                                                  │
+          │                                                                                                  │
+          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
+        `);
+
+        ui.press("n");
+        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
+          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+          │   Workspace · quiet-lantern-7k3                                                                  │
+          │                                                                                                  │
+          │   Workspace: quiet-lantern-7k3                                                                   │
+          │   Git: unknown                                                                                   │
+          │   Status: available                                                                              │
+          │   Setup: ready                                                                                   │
+          │   Lease: none                                                                                    │
+          │   Created: Nov 14 2023 22:13                                                                     │
+          │   Updated: Nov 14 2023 22:13                                                                     │
+          │                                                                                                  │
+          │   ID: quiet-lantern-7k3                                                                          │
+          │   Cwd: /repo/project                                                                             │
+          │   Repository: /repo/project                                                                      │
+          │   Worktree: /state/workspaces/quiet-lantern-7k3                                                  │
+          │   Base revision: abc123def456                                                                    │
+          │                                                                                                  │
+          │   Actions:                                                                                       │
+          │   i inspect diff · r reset · d discard                                                           │
+          │                                                                                                  │
+          │   This workspace may be selected for an isolated worker.                                         │
+          │     ↑/↓ scroll · i inspect diff · r reset · d discard · Esc back                                 │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
+        `);
+        expect(discarded).toBe(false);
+
+        ui.press("d", "y");
+        await vi.waitFor(() => {
+            expect(discarded).toBe(true);
+            expect(snapshotText(ui.render())).toContain("No isolated workspaces have been created for this cwd.");
+        });
+        expect(snapshotText(ui.render())).toMatchInlineSnapshot(`
+          "╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+          │   Agents                                                                                         │
+          │                                                                                                  │
+          │     ○ Current    ○ Past    ● Workspaces                                                          │
+          │     Current and Past show delegated sessions; Workspaces shows isolated worker checkouts.        │
+          │                                                                                                  │
+          │     No isolated workspaces have been created for this cwd.                                       │
+          │                                                                                                  │
+          │   0 workspaces                                                                                   │
+          │                                                                                                  │
+          │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          │                                                                                                  │
+          ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
+        `);
     });
 
     it("renders empty current and past tabs", () => {
