@@ -98,6 +98,8 @@ Run these checks after changing child sessions, providers, lifecycle handling, o
 
 Provider calls stay manual so automated tests do not require credentials or incur usage.
 
+For a focused manual workspace lifecycle pass, use [`WORKSPACE-MANUAL-VALIDATION.md`](./WORKSPACE-MANUAL-VALIDATION.md). It covers no-change reuse, saved diffs, apply/retain/reset/discard, preflight failures, and reload recovery.
+
 ## Diagnostic traces
 
 The intended release behavior is to enable delegated-agent tracing with `PI_CODER_AGENT_TRACE=1`. During current agent development, `isAgentTraceEnabled()` is temporarily hardcoded on, so `/agent-trace` is registered without the flag.
