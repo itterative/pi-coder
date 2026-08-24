@@ -659,6 +659,15 @@ export default function registerAgentTool(
             outcome = failedOutcome(params, error);
         }
 
+        if (
+            (params.action === "start" || params.action === "resume" || params.action === "cancel")
+            && outcome.details.background === false
+            && outcome.details.runId !== "unstarted"
+            && outcome.details.runId !== "unknown"
+        ) {
+            outcome.content += "\n\nThis was a foreground agent run; its result was returned directly and must not be collected.";
+        }
+
         refreshAgentUi(ctx);
         mailbox.reconcile(manager.listRuns());
         return outcome;

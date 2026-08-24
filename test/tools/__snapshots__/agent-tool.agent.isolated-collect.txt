@@ -1,0 +1,15 @@
+Finished in isolation
+
+Mutation report:
+- Files changed by successful edit/write calls:
+  - none tracked
+
+Isolated worker result prepared for review. The parent checkout was not changed.
+Workspace: workspace-1
+Result: result-1
+Base revision: base-revision
+Worker revision: worker-head
+Commit range: base-revision..worker-head
+Commits: 1 commit: worker-head
+Durable ref: refs/pi-coder/workspace-results/workspace-1/result-1
+Keep this result until it has been explicitly inspected and explicitly applied, retained, reset, or discarded.

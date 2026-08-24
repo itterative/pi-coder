@@ -1,0 +1,3 @@
+Implementation A is preferred because it preserves the existing contract.
+
+This was a foreground agent run; its result was returned directly and must not be collected.

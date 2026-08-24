@@ -8,7 +8,7 @@ This checklist is for a separate validation agent/operator. It tests the current
 - Do not automatically merge, reset, delete, or reuse a workspace. Every workspace disposition must be an explicit user action.
 - The validation agent may create the test repository and its fixture files, but must not delete or reinitialize an existing `.workspace-validation/` directory without explicit approval.
 - Approve worker mutations only when the command and path are expected.
-- Record the workspace slug, run ID, result ID, base revision, worker revision, and durable ref from each result.
+- Record the workspace slug, delegated run ID, result ID, base revision, worker revision, and durable ref from each result. The delegated run ID is the `details.runId` returned by the parent `agent` tool (for example, `worker-1`); it is not a parent/child session ID or workspace result ID.
 - Stop and report immediately if the parent checkout changes before an explicit `apply` action.
 - When a test says “clean parent”, verify with `git status --short` before continuing.
 
@@ -38,7 +38,7 @@ This checklist is for a separate validation agent/operator. It tests the current
    ```
 
    The starting status must be empty before apply/reset tests. Keep the fixture repository available until all results have been recorded.
-4. Use the built-in `worker` and `isolation: "worktree"` for isolated tasks. Example tool calls:
+4. Use the built-in `worker` and `isolation: "worktree"` for isolated tasks. Use `spawn` for scenarios that require later collection. Foreground `start` returns its terminal result directly and must not be followed by `collect`. Example background tool calls:
 
    ```text
    agent(action="spawn", agent="worker", isolation="worktree",
@@ -48,11 +48,13 @@ This checklist is for a separate validation agent/operator. It tests the current
          task="Create a new file named workspace-validation-marker.txt containing exactly `workspace test`. Do not change any other file.")
    ```
 
-5. Collect terminal runs explicitly:
+5. Collect background runs explicitly after their terminal notification. Use the delegated run ID from the parent tool result exactly:
 
    ```text
-   agent(action="collect", runId="<run-id>")
+   agent(action="collect", runId="<delegated-run-id>")
    ```
+
+   A child session ID, parent session ID, workspace ID, or workspace result ID cannot be passed to `collect`.
 
 6. Use `/agents` for workspace inspection. Open **Workspaces**, select the workspace, and press `Enter` for details.
 
@@ -75,8 +77,8 @@ Expected: no parent diff, no durable ref, and no manual cleanup required for thi
 
 **Goal:** Collection finalizes the worker tree but does not modify the parent checkout.
 
-1. Start the marker-file worker and approve only the expected write.
-2. Collect the completed run.
+1. Spawn the marker-file worker and approve only the expected write. Record the delegated run ID from the returned parent tool result.
+2. After the terminal notification, collect that background run.
 3. Verify:
    - the parent does not contain `workspace-validation-marker.txt`;
    - the result includes workspace ID, result ID, base revision, worker revision, commit range, and durable ref;

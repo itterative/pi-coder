@@ -1,0 +1,1 @@
+pi-coder agents: Agent name "scout" is reserved; the markdown definition was ignored. [<fixture-cwd>/.pi/agents/reserved.md]

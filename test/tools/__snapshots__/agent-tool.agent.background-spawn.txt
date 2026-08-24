@@ -1,0 +1,1 @@
+Agent scout-1 started in the background. Do not poll its status; you will receive an automatic notification when it finishes or needs parent guidance. After a terminal notification, retrieve the full result with agent(action="collect", runId="scout-1").

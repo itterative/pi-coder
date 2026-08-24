@@ -1,0 +1,13 @@
+Agent scout-1 is waiting for parent guidance.
+
+Question: Should I compare both implementations?
+
+Context:
+Implementation A is simpler; B has more callers.
+
+Partial child output:
+I found two plausible implementations.
+
+Resume with agent(action="resume", runId="scout-1", guidance="...").
+
+This was a foreground agent run; its result was returned directly and must not be collected.

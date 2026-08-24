@@ -177,8 +177,8 @@ describe("agent extension registration", () => {
             120,
         );
         expect(waiting.details.status).toBe("waiting_for_parent");
-        expect(waitingText).toContain("Question: Should I compare both implementations?");
-        expect(waitingText).toContain("Resume required: scout-1");
+        await expect(waiting.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.foreground-waiting.txt");
+        await expect(waitingText).toMatchFileSnapshot("__snapshots__/agent-tool.tui.foreground-waiting.txt");
 
         const completed = await tool.execute(
             "call-2",
@@ -188,11 +188,12 @@ describe("agent extension registration", () => {
             ctx,
         );
         const completedText = renderText(
-            tool.renderResult(completed, { expanded: false }, mockTheme),
+            tool.renderResult(completed, { expanded: true }, mockTheme),
             120,
         );
         expect(completed.details.status).toBe("completed");
-        expect(completedText).toContain("Result: Implementation A is preferred");
+        await expect(completed.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.foreground-completed.txt");
+        await expect(completedText).toMatchFileSnapshot("__snapshots__/agent-tool.tui.foreground-completed.txt");
         expect(promptCount).toBe(2);
         await handlers.session_shutdown[0]({}, ctx);
     });
@@ -283,9 +284,7 @@ describe("agent extension registration", () => {
             customType: "pi-coder-agent-mailbox",
             display: false,
         });
-        expect(sentMessages[0]?.message.content).toContain('Run ID: "scout-1"');
-        expect(sentMessages[0]?.message.content).toContain("Status: completed");
-        expect(sentMessages[0]?.message.content).toContain("This is not a new user request");
+        await expect(sentMessages[0]?.message.content).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-mailbox-completion.txt");
         const listed = await tool.execute(
             "call-list",
             { action: "list" },
@@ -302,24 +301,17 @@ describe("agent extension registration", () => {
         );
 
         expect(spawned.details).toMatchObject({ status: "starting", background: true });
-        expect(spawned.content[0].text).toContain("Do not poll its status");
-        expect(spawned.content[0].text).toContain("automatic notification");
+        await expect(spawned.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-spawn.txt");
         expect(status.details.status).toBe("completed");
-        expect(status.content[0].text).toContain("action=\"collect\"");
+        await expect(status.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-status.txt");
         const promptAfterSpawn = await handlers.before_agent_start[0]({ systemPrompt: "Parent prompt" }, ctx) as any;
         expect(promptAfterSpawn.systemPrompt).not.toContain("scout-1");
         expect(promptAfterSpawn.systemPrompt).not.toContain("Tracked background runs");
-        expect(listed.content[0].text).toContain('"scout-1"');
-        expect(listed.content[0].text).toContain('"Inspect concurrently"');
+        await expect(listed.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-list.txt");
         expect(collected.details.status).toBe("completed");
-        expect(collected.content[0].text).toBe("Background result");
+        await expect(collected.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-collect.txt");
         const widgetLines = widgets.flatMap((lines) => lines ?? []);
-        expect(widgetLines).toContain(
-            "● scout-1 — Reading src/tools/agent/runtime.ts · “Inspecting the run manager lifecycle.”",
-        );
-        expect(widgetLines).toContain(
-            "✓ scout-1 — Ready to collect · “Inspecting the run manager lifecycle.”",
-        );
+        await expect(widgetLines.join("\n")).toMatchFileSnapshot("__snapshots__/agent-tool.tui.background-widget.txt");
         expect(widgets[widgets.length - 1]).toBeUndefined();
         expect(widgetPlacements).toContain("aboveEditor");
         expect(background).toBe(true);
@@ -420,8 +412,7 @@ describe("agent extension registration", () => {
         expect(getWorkspaceSpy).toHaveBeenCalledWith(workspace.id);
         expect(prepareResultSpy).toHaveBeenCalledWith(workspace, "parent-session", "worker-1");
         expect(collected.details.workspaceResult).toEqual(result);
-        expect(collected.content[0].text).toContain("Isolated worker result prepared for review");
-        expect(collected.content[0].text).toContain("The parent checkout was not changed");
+        await expect(collected.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.isolated-collect.txt");
         await handlers.session_shutdown[0]({}, ctx);
     });
 
@@ -509,7 +500,7 @@ describe("agent extension registration", () => {
         expect(prepareResultSpy).toHaveBeenCalledWith(workspace, "parent-session", "worker-1");
         expect(releaseSpy).toHaveBeenCalledWith(workspace.id, "parent-session", "worker-1");
         expect(completed.details.workspaceResult).toEqual(result);
-        expect(completed.content[0].text).toContain("workspace lease was released");
+        await expect(completed.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.isolated-foreground.txt");
         await handlers.session_shutdown[0]({}, ctx);
     });
 
@@ -569,7 +560,7 @@ describe("agent extension registration", () => {
             deliverAs: "followUp",
             triggerTurn: true,
         });
-        expect(sentMessages[0]?.message.content).toContain("Status: completed");
+        await expect(sentMessages[0]?.message.content).toMatchFileSnapshot("__snapshots__/agent-tool.agent.idle-mailbox-completion.txt");
         await handlers.session_shutdown[0]({}, ctx);
     });
 
@@ -608,7 +599,10 @@ describe("agent extension registration", () => {
         await handlers.before_agent_start[0]({ systemPrompt: "Parent" }, ctx);
         await handlers.before_agent_start[0]({ systemPrompt: "Parent" }, ctx);
 
-        expect(notifications.filter((message) => message.includes("reserved"))).toHaveLength(1);
+        const reservedNotifications = notifications.filter((message) => message.includes("reserved"));
+        expect(reservedNotifications).toHaveLength(1);
+        const normalizedNotifications = reservedNotifications.map((message) => message.replaceAll(cwd, "<fixture-cwd>"));
+        await expect(normalizedNotifications.join("\n")).toMatchFileSnapshot("__snapshots__/agent-tool.tui.discovery-warning.txt");
         await handlers.session_shutdown[0]({}, ctx);
     });
 

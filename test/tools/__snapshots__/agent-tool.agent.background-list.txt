@@ -1,0 +1,3 @@
+- "scout-1" · "Inspect concurrently" · scout · completed
+  Task: "Inspect concurrently"
+  Next: collect with runId="scout-1"
