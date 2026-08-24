@@ -21,9 +21,9 @@ describe("file path confinement", () => {
 
     it("allows ordinary paths in cwd and rejects paths outside or sensitive paths", () => {
         expect(getPathConfinementPermission("src/index.ts", "/project", {})).toBe(Heuristic.SAFE_READONLY);
-        expect(getPathConfinementPermission("../secrets.txt", "/project", {})).toBeUndefined();
-        expect(getPathConfinementPermission(".env", "/project", {})).toBeUndefined();
-        expect(getPathConfinementPermission("src/app.pem", "/project", {})).toBeUndefined();
+        expect(getPathConfinementPermission("../secrets.txt", "/project", {})).toBe(Heuristic.UNSAFE);
+        expect(getPathConfinementPermission(".env", "/project", {})).toBe(Heuristic.UNSAFE);
+        expect(getPathConfinementPermission("src/app.pem", "/project", {})).toBe(Heuristic.UNSAFE);
     });
 
     it("honors the cwd heuristic configuration", () => {
@@ -32,7 +32,7 @@ describe("file path confinement", () => {
         })).toBe(Heuristic.SAFE_READONLY);
         expect(getPathConfinementPermission("file.txt", "/project", {
             enabled: false,
-        })).toBeUndefined();
+        })).toBe(Heuristic.UNSAFE);
     });
 
     it("rejects symlink escapes and dangling symlinks", () => {
@@ -42,8 +42,8 @@ describe("file path confinement", () => {
         fs.symlinkSync(outside, path.join(cwd, "link"), "dir");
         fs.symlinkSync(path.join(outside, "missing"), path.join(cwd, "dangling"));
 
-        expect(getPathConfinementPermission("link/file.txt", cwd, {})).toBeUndefined();
-        expect(getPathConfinementPermission("dangling", cwd, {})).toBeUndefined();
+        expect(getPathConfinementPermission("link/file.txt", cwd, {})).toBe(Heuristic.UNSAFE);
+        expect(getPathConfinementPermission("dangling", cwd, {})).toBe(Heuristic.UNSAFE);
         expect(getPathConfinementPermission("new/file.txt", cwd, {})).toBe(Heuristic.SAFE_READONLY);
         expect(getPathConfinementPermission("new/file.txt", cwd, {}, "write")).toBe(Heuristic.SAFE_EDIT);
     });

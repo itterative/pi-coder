@@ -11,6 +11,7 @@ import {
     createCwdConfinementState,
     getArgsConfinementPermission,
     getConfiguredCwdConfinementPermission,
+    isSafeHeuristic,
     isNonPersistentChainOperator,
     restoreCwdConfinementState,
     splitAtChainOperatorsWithOperators,
@@ -184,7 +185,7 @@ function resolveLine(
             }
         } else {
             // would prompt: heuristics may rescue the segment
-            if (grant) {
+            if (isSafeHeuristic(grant)) {
                 const grantPermission = getConfiguredCwdConfinementPermission(
                     options?.cwdConfinement,
                 );

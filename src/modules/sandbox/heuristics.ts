@@ -27,9 +27,16 @@ export type { CommandSpec, FlagSpec };
 export enum Heuristic {
     SAFE_READONLY = "SAFE_READONLY",
     SAFE_EDIT = "SAFE_EDIT",
+    UNSAFE = "UNSAFE",
 }
 
 export type FileAccess = "read" | "write";
+
+export function isSafeHeuristic(
+    heuristic: Heuristic,
+): heuristic is Heuristic.SAFE_READONLY | Heuristic.SAFE_EDIT {
+    return heuristic === Heuristic.SAFE_READONLY || heuristic === Heuristic.SAFE_EDIT;
+}
 
 // pseudo-files available inside the sandbox's devtmpfs
 const SPECIAL_ALLOWED_PATHS = new Set([
@@ -1102,18 +1109,19 @@ export function getConfiguredCwdConfinementPermission(
  * Cwd-confinement heuristic for a direct file-tool access. A path is granted
  * only when it is inside cwd and does not touch a sensitive segment. The
  * symlink check also handles nonexistent write targets. Read access returns
- * SAFE_READONLY; write access returns SAFE_EDIT.
+ * SAFE_READONLY; write access returns SAFE_EDIT. Rejected accesses return
+ * UNSAFE so callers can distinguish them from a successful classification.
  */
 export function getPathConfinementPermission(
     filePath: string,
     cwd: string,
     config?: SandboxConfigCwdConfinement | null,
     access: FileAccess = "read",
-): Heuristic | undefined {
+): Heuristic {
     const confinement = resolveConfinementConfig(config);
 
     if (confinement?.enabled === false || filePath.trim() === "") {
-        return undefined;
+        return Heuristic.UNSAFE;
     }
 
     const resolvedCwd = path.resolve(cwd);
@@ -1121,16 +1129,16 @@ export function getPathConfinementPermission(
     const options = buildConfinementOptions(confinement, resolvedCwd);
 
     if (!isLexicallyWithin(filePath, resolvedCwd, resolvedCwd, home)) {
-        return undefined;
+        return Heuristic.UNSAFE;
     }
 
     if (isSensitivePath(filePath, resolvedCwd, home, options)) {
-        return undefined;
+        return Heuristic.UNSAFE;
     }
 
     if ((confinement?.resolveSymlinks ?? true) &&
         !isRealPathConfined(filePath, resolvedCwd, home, options)) {
-        return undefined;
+        return Heuristic.UNSAFE;
     }
 
     return access === "write" ? Heuristic.SAFE_EDIT : Heuristic.SAFE_READONLY;
@@ -1140,45 +1148,45 @@ export function getPathConfinementPermission(
  * Cwd-confinement heuristic: known, safe commands whose file accesses all
  * resolve inside the working directory are classified by capability.
  *
- * Returns undefined when the heuristic does not apply — unknown commands,
- * paths outside the working directory, or unclassifiable usage — in which
- * case the caller should fall back to the permission system.
+ * Returns UNSAFE for unknown commands, paths outside the working directory,
+ * or unclassifiable usage. Callers should fall back to the permission system.
  */
 export function getCwdConfinementPermission(
     command: string,
     cwd: string,
     config?: SandboxConfigCwdConfinement | null,
-): Heuristic | undefined {
+): Heuristic {
     const confinement = resolveConfinementConfig(config);
 
     if (confinement?.enabled === false) {
-        return undefined;
+        return Heuristic.UNSAFE;
     }
 
     if (command.trim() === "") {
-        return undefined;
+        return Heuristic.UNSAFE;
     }
 
     const resolvedCwd = path.resolve(cwd);
-    return isConfined(command, resolvedCwd, buildConfinementOptions(confinement, resolvedCwd));
+    return isConfined(command, resolvedCwd, buildConfinementOptions(confinement, resolvedCwd))
+        ?? Heuristic.UNSAFE;
 }
 
 /**
  * Segment-level variant of the cwd-confinement heuristic: evaluates a single
  * already-parsed command (list of arguments, no chain operators).
  *
- * Returns undefined when the heuristic does not apply.
+ * Returns UNSAFE when the heuristic does not apply.
  */
 export function getArgsConfinementPermission(
     args: string[],
     cwd: string,
     config?: SandboxConfigCwdConfinement | null,
     state?: CwdConfinementState,
-): Heuristic | undefined {
+): Heuristic {
     const confinement = resolveConfinementConfig(config);
 
     if (confinement?.enabled === false || args.length === 0) {
-        return undefined;
+        return Heuristic.UNSAFE;
     }
 
     const resolvedCwd = path.resolve(cwd);
@@ -1190,5 +1198,5 @@ export function getArgsConfinementPermission(
         resolvedCwd,
         buildConfinementOptions(confinement, resolvedCwd),
         confinementState,
-    );
+    ) ?? Heuristic.UNSAFE;
 }

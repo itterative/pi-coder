@@ -6,14 +6,14 @@ category: architecture
 
 # Cwd-confinement heuristic
 
-The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`. Direct read/write path checks are also implemented in `src/modules/sandbox/heuristics.ts` and used by `src/tools/file-permissions.ts`; path checks classify read access as `SAFE_READONLY` and write access as `SAFE_EDIT`.
+The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`. Direct read/write path checks are also implemented in `src/modules/sandbox/heuristics.ts` and used by `src/tools/file-permissions.ts`; path checks classify read access as `SAFE_READONLY`, write access as `SAFE_EDIT`, and rejected access as `UNSAFE`.
 
 ## Resolution order
 
 - `resolvePermissionDetails()` first checks the whole parsed line against explicit patterns; a whole-line match wins.
 - Otherwise it resolves each chain segment independently: explicit segment pattern, then cwd-confinement heuristic only when the segment would otherwise be `ask`.
 - A non-`ask` `**` default is authoritative: heuristics do not relax `deny` or downgrade `allow`.
-- `deny` dominates; unresolved segments force `ask`; policy permissions combine most-restrictively; heuristic-only chains resolve to the configured heuristic permission (normally `allow:sandbox`). The heuristic classifiers themselves return `Heuristic.SAFE_READONLY` or `Heuristic.SAFE_EDIT` (or `undefined`); the resolver maps either successful classification to the configured execution permission.
+- `deny` dominates; unresolved segments force `ask`; policy permissions combine most-restrictively; heuristic-only chains resolve to the configured heuristic permission (normally `allow:sandbox`). The heuristic classifiers return `Heuristic.SAFE_READONLY`, `Heuristic.SAFE_EDIT`, or `Heuristic.UNSAFE`; the resolver only treats the two SAFE variants as grants and maps them to the configured execution permission.
 - Chain operators remain parser arguments and must be present in whole-command patterns.
 
 ## Command registry

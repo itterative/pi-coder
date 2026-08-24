@@ -21,6 +21,7 @@ import {
 import {
     getPathConfinementPermission,
     isPathWithinDirectory,
+    isSafeHeuristic,
 } from "../modules/sandbox/heuristics";
 import {
     selectWithMessage,
@@ -173,7 +174,7 @@ export default function registerFileToolHook(
         const cwd = ctx.cwd ?? process.cwd();
         const confinement = sandboxConfig.current?.heuristics?.cwdConfinement;
 
-        if (getPathConfinementPermission(filePath, cwd, confinement, operation) !== undefined) {
+        if (isSafeHeuristic(getPathConfinementPermission(filePath, cwd, confinement, operation))) {
             return { block: false };
         }
 
