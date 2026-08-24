@@ -32,9 +32,9 @@
 │                                                                                                  │
 │   Later worker can proceed directly; use the manual validation checklist for workspace           │
 │   testing.                                                                                       │
-│   This workspace is leased and cannot be selected until its current run is explicitly            │
-│   dispositioned.                                                                                 │
-│     ↑/↓ scroll · Esc back                                                                        │
 │                                                                                                  │
+│   Actions:                                                                                       │
 │                                                                                                  │
+│     Showing lines 1-33 of 37                                                                     │
+│     ↑/↓ scroll · l release stale lease · d discard · Esc back                                    │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

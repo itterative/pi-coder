@@ -46,6 +46,7 @@ import {
     releaseAgentWorkspaceAfterApplication,
     releaseAgentWorkspaceAfterNoChanges,
     releaseAgentWorkspaceLease,
+    releaseAgentWorkspaceLeaseForRecovery,
     reconcileNoChangeAgentWorkspaceLeases,
     resetAgentWorkspaceForReuse,
     retainAgentWorkspaceResult,
@@ -108,6 +109,7 @@ async function handleWorkspaceAction(
     workspace: AgentWorkspace,
     requestedAction: Exclude<AgentWorkspaceAction, "inspect"> | undefined,
     ctx: ExtensionCommandContext,
+    manager: AgentRunManager,
 ): Promise<AgentWorkspace | null | undefined> {
     if (!requestedAction) return workspace;
     const action = requestedAction;
@@ -132,7 +134,25 @@ async function handleWorkspaceAction(
             ctx.ui.notify(`Reset workspace ${workspace.slug}; it is reusable.`, "info");
             return await getAgentWorkspace(workspace.id);
         }
-        await discardAgentWorkspace(workspace.id, sessionId, leaseRunId);
+        const activeLeaseRun = workspace.leaseRunId
+            ? manager.listRuns().find((run) => (
+                run.runId === workspace.leaseRunId
+                && !["completed", "failed", "aborted", "canceled"].includes(run.status)
+            ))
+            : undefined;
+        if (activeLeaseRun) {
+            throw new Error(`Workspace ${workspace.slug} is still used by active run ${activeLeaseRun.runId}; finish or cancel that run first.`);
+        }
+        if (action === "release") {
+            await releaseAgentWorkspaceLeaseForRecovery(workspace.id);
+            ctx.ui.notify(`Released the stale lease for workspace ${workspace.slug}.`, "info");
+            return await getAgentWorkspace(workspace.id);
+        }
+        if (action === "discard" && workspace.leaseRunId && !workspace.latestResult) {
+            await discardAgentWorkspace(workspace.id);
+        } else {
+            await discardAgentWorkspace(workspace.id, sessionId, leaseRunId);
+        }
         ctx.ui.notify(`Discarded workspace ${workspace.slug}.`, "info");
         return null;
     } catch (error) {
@@ -369,7 +389,7 @@ export default function registerAgentTool(
             },
             onWorkspaceInspect: async (workspace) => inspectAgentWorkspaceDiff(workspace),
             onWorkspaceAction: async (workspace, action) => {
-                const replacement = await handleWorkspaceAction(workspace, action, ctx);
+                const replacement = await handleWorkspaceAction(workspace, action, ctx, manager);
                 if (replacement) {
                     initial.workspaceGitStates?.set(replacement.id, await inspectAgentWorkspaceGitState(replacement));
                 }
@@ -381,7 +401,7 @@ export default function registerAgentTool(
                         if (action === "apply" || action === "retain") {
                             emitWorkspaceEvent(ctx, workspace.id, "result_changed", action);
                         }
-                        if (action === "apply" || action === "retain" || action === "reset") {
+                        if (action === "apply" || action === "retain" || action === "reset" || action === "release") {
                             emitWorkspaceEvent(ctx, workspace.id, "lease_changed", action);
                         }
                     }

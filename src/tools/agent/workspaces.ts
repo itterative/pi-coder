@@ -778,6 +778,52 @@ export async function releaseAgentWorkspaceAfterNoChanges(
     }
 }
 
+/**
+ * Release a stale task lease that has no prepared result.
+ *
+ * This is an explicit recovery action only. It never resets or cleans the
+ * worktree and therefore refuses to release anything that is not exactly at
+ * its recorded base revision and Git-clean.
+ */
+export async function releaseAgentWorkspaceLeaseForRecovery(
+    workspaceId: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<AgentWorkspace> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        const workspace = workspaceById(database, workspaceId);
+        if (!workspace) throw new Error(`Workspace ${workspaceId} was not found.`);
+        if (workspace.leaseKind !== "task" || !workspace.leaseRunId || workspace.latestResult) {
+            throw new Error(`Workspace ${workspaceId} does not have a recoverable stale task lease.`);
+        }
+        const status = await git(workspace.worktreePath, ["status", "--porcelain=v1", "--untracked-files=all"]);
+        if (status) {
+            throw new Error(`Workspace ${workspaceId} has uncommitted or untracked changes; discard it explicitly instead.`);
+        }
+        const head = await git(workspace.worktreePath, ["rev-parse", "HEAD"]);
+        if (head !== workspace.baseRevision) {
+            throw new Error(`Workspace ${workspaceId} has committed changes beyond its base revision; discard it explicitly instead.`);
+        }
+        const updatedAt = Date.now();
+        database.prepare(`
+            UPDATE workspaces SET workspace_status = 'available',
+                lease_owner_session_id = NULL, lease_run_id = NULL, lease_kind = NULL,
+                lease_acquired_at = NULL, updated_at = ? WHERE id = ?
+        `).run(updatedAt, workspaceId);
+        return {
+            ...workspace,
+            status: "available",
+            leaseOwnerSessionId: undefined,
+            leaseRunId: undefined,
+            leaseKind: undefined,
+            leaseAcquiredAt: undefined,
+            updatedAt,
+        };
+    } finally {
+        database.close();
+    }
+}
+
 /** Reset a workspace to the current parent revision and make it reusable. */
 export async function resetAgentWorkspaceForReuse(
     workspaceId: string,
@@ -847,13 +893,15 @@ export async function discardAgentWorkspace(
         const workspace = workspaceById(database, workspaceId);
         if (!workspace) throw new Error(`Workspace ${workspaceId} was not found.`);
         if (workspace.leaseRunId) {
-            if (
+            const staleTaskLease = workspace.leaseKind === "task"
+                && !workspace.latestResult
+                && ownerSessionId === undefined
+                && leaseRunId === undefined;
+            if (!staleTaskLease && (
                 workspace.leaseKind !== "task"
                 || workspace.leaseOwnerSessionId !== ownerSessionId
                 || workspace.leaseRunId !== leaseRunId
-                || !workspace.latestResult
-                || !["prepared", "applied"].includes(workspace.latestResult.status)
-            ) throw new Error(`Workspace ${workspaceId} is actively leased and cannot be discarded by this session.`);
+            )) throw new Error(`Workspace ${workspaceId} is actively leased by another session or run.`);
         } else if (workspace.leaseKind) {
             throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be discarded.`);
         }

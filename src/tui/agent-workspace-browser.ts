@@ -20,7 +20,7 @@ interface EmptyWorkspaceItem {
     message: string;
 }
 
-export type AgentWorkspaceAction = "inspect" | "apply" | "retain" | "reset" | "discard";
+export type AgentWorkspaceAction = "inspect" | "apply" | "retain" | "reset" | "discard" | "release";
 type WorkspaceBrowserItem = AgentWorkspace | EmptyWorkspaceItem;
 interface AgentWorkspaceBrowserState extends ListViewState<WorkspaceBrowserItem> {}
 
@@ -157,7 +157,11 @@ function workspaceActionHelp(workspace: AgentWorkspace): string[] {
         && (workspace.latestResult.workerHead !== workspace.latestResult.baseRevision || workspace.latestResult.commits.length > 0));
     if (changed) actions.push("a apply", "t retain");
     if (!workspace.leaseKind || workspace.leaseKind === "task") {
-        if (!workspace.leaseRunId || workspace.latestResult) actions.push("r reset", "d discard");
+        if (workspace.leaseRunId && !workspace.latestResult) {
+            actions.push("l release stale lease", "d discard");
+        } else if (!workspace.leaseRunId || workspace.latestResult) {
+            actions.push("r reset", "d discard");
+        }
     }
     return actions;
 }
@@ -259,7 +263,9 @@ export class AgentWorkspaceDetailComponent extends PagerComponent<AgentWorkspace
                         ? "reset"
                         : key === "d"
                             ? "discard"
-                            : undefined;
+                            : key === "l"
+                                ? "release"
+                                : undefined;
         if (!action) return false;
         if (!workspaceActionHelp(this.currentWorkspace).some((entry) => entry.startsWith(`${key} `))) return true;
         if (action === "inspect") {

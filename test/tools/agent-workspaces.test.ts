@@ -19,6 +19,7 @@ import {
     prepareAgentWorkspaceApplication,
     releaseAgentWorkspaceAfterApplication,
     releaseAgentWorkspaceAfterNoChanges,
+    releaseAgentWorkspaceLeaseForRecovery,
     reconcileNoChangeAgentWorkspaceLeases,
     resetAgentWorkspaceForReuse,
     retainAgentWorkspaceResult,
@@ -91,6 +92,72 @@ describe("agent workspaces", () => {
         expect(await listAgentWorkspaces(repository, state)).toMatchObject([
             { id: workspace.id, status: "review_required" },
         ]);
+    });
+
+    it("releases an explicit stale clean task lease without resetting the worktree", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "README.md"), "stale lease test\n");
+        await git(repository, "add", "README.md");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        const recovered = await releaseAgentWorkspaceLeaseForRecovery(workspace.id, state);
+
+        expect(recovered).toMatchObject({
+            id: workspace.id,
+            status: "available",
+            leaseRunId: undefined,
+            leaseKind: undefined,
+        });
+        await expect(inspectAgentWorkspaceGitState(recovered)).resolves.toMatchObject({ dirty: false });
+    });
+
+    it("allows explicit discard of a stale task lease without a result", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "README.md"), "stale discard test\n");
+        await git(repository, "add", "README.md");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(workspace.worktreePath, "untracked.txt"), "discard me\n");
+        await discardAgentWorkspace(workspace.id, undefined, undefined, state);
+
+        expect(await listAgentWorkspaces(repository, state)).toHaveLength(0);
+        await expect(fs.access(workspace.worktreePath)).rejects.toThrow();
+    });
+
+    it("does not recover a stale lease when the worktree is dirty", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "README.md"), "dirty stale lease test\n");
+        await git(repository, "add", "README.md");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(workspace.worktreePath, "untracked.txt"), "keep me\n");
+
+        await expect(releaseAgentWorkspaceLeaseForRecovery(workspace.id, state)).rejects.toThrow("discard it explicitly");
+        expect((await listAgentWorkspaces(repository, state))[0]).toMatchObject({ leaseRunId: "worker-1" });
     });
 
     it("limits each project to three persistent workspaces", async () => {
