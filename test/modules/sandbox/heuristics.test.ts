@@ -2,7 +2,13 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { getCwdConfinementPermission, Heuristic } from "../../../src/modules/sandbox/heuristics";
+import {
+    getCwdConfinementAssessment,
+    getCwdConfinementPermission,
+    getPathConfinementAssessment,
+    Heuristic,
+    UnsafeReason,
+} from "../../../src/modules/sandbox/heuristics";
 import type { SandboxConfigCwdConfinement } from "../../../src/common/config";
 
 const CWD = "/project";
@@ -21,6 +27,33 @@ const runTests = (tests: HeuristicTest[]) => {
         );
     });
 };
+
+describe("heuristic assessments", () => {
+    it("reports a useful reason for unsafe commands", () => {
+        expect(getCwdConfinementAssessment("cat /etc/passwd", CWD, {})).toEqual({
+            classification: Heuristic.UNSAFE,
+            reasons: [UnsafeReason.OUTSIDE_CWD],
+        });
+        expect(getCwdConfinementAssessment("cat $(echo /etc/passwd)", CWD, {})).toEqual({
+            classification: Heuristic.UNSAFE,
+            reasons: [UnsafeReason.OUTSIDE_CWD],
+        });
+    });
+
+    it("reports no reasons for safe classifications", () => {
+        expect(getCwdConfinementAssessment("cat file.txt", CWD, {})).toEqual({
+            classification: Heuristic.SAFE_READONLY,
+            reasons: [],
+        });
+    });
+
+    it("reports path-specific reasons", () => {
+        expect(getPathConfinementAssessment(".env", CWD, {})).toEqual({
+            classification: Heuristic.UNSAFE,
+            reasons: [UnsafeReason.SENSITIVE_PATH],
+        });
+    });
+});
 
 describe("getCwdConfinementPermission", () => {
     describe("known commands within cwd", () => {

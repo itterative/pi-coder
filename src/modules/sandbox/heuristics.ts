@@ -32,6 +32,50 @@ export enum Heuristic {
 
 export type FileAccess = "read" | "write";
 
+export enum UnsafeReason {
+    HEURISTIC_DISABLED = "HEURISTIC_DISABLED",
+    EMPTY_INPUT = "EMPTY_INPUT",
+    PARSE_ERROR = "PARSE_ERROR",
+    UNKNOWN_COMMAND = "UNKNOWN_COMMAND",
+    COMMAND_PATH = "COMMAND_PATH",
+    COMMAND_NOT_ALLOWED = "COMMAND_NOT_ALLOWED",
+    DANGEROUS_ENVIRONMENT = "DANGEROUS_ENVIRONMENT",
+    OUTSIDE_CWD = "OUTSIDE_CWD",
+    SENSITIVE_PATH = "SENSITIVE_PATH",
+    SYMLINK_ESCAPE = "SYMLINK_ESCAPE",
+    DYNAMIC_CWD = "DYNAMIC_CWD",
+    DYNAMIC_PATH = "DYNAMIC_PATH",
+    UNSAFE_FLAG = "UNSAFE_FLAG",
+    UNSAFE_SUBCOMMAND = "UNSAFE_SUBCOMMAND",
+    UNSAFE_MODE = "UNSAFE_MODE",
+    UNSAFE_COMMAND = "UNSAFE_COMMAND",
+}
+
+export interface HeuristicAssessment {
+    classification: Heuristic;
+    reasons: UnsafeReason[];
+}
+
+interface ConfinementDiagnostics {
+    reasons: UnsafeReason[];
+}
+
+function addUnsafeReason(
+    diagnostics: ConfinementDiagnostics | undefined,
+    reason: UnsafeReason,
+): void {
+    if (diagnostics !== undefined && !diagnostics.reasons.includes(reason)) {
+        diagnostics.reasons.push(reason);
+    }
+}
+
+function assessment(
+    classification: Heuristic,
+    reasons: UnsafeReason[] = [],
+): HeuristicAssessment {
+    return { classification, reasons };
+}
+
 export function isSafeHeuristic(
     heuristic: Heuristic,
 ): heuristic is Heuristic.SAFE_READONLY | Heuristic.SAFE_EDIT {
@@ -455,11 +499,18 @@ function handleShortCluster(
     cwd: string,
     options: ConfinementOptions,
     writes: { value: boolean },
+    diagnostics?: ConfinementDiagnostics,
 ): number | null {
     const cluster = args[index].slice(1);
 
     const inspectValue = (value: string, pathContext: boolean): boolean => {
-        const substitution = inspectShellSubstitution(value, cwd, options, pathContext);
+        const substitution = inspectShellSubstitution(
+            value,
+            cwd,
+            options,
+            pathContext,
+            diagnostics,
+        );
         if (substitution === null) return false;
         if (substitution !== undefined) {
             paths.push(...substitution.paths);
@@ -475,6 +526,7 @@ function handleShortCluster(
         const flagSpec = spec.flags?.[flag];
 
         if (flagSpec?.unsafe) {
+            addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_FLAG);
             return null;
         }
 
@@ -570,16 +622,26 @@ function inspectShellSubstitution(
     cwd: string,
     options: ConfinementOptions,
     pathContext: boolean,
+    diagnostics?: ConfinementDiagnostics,
 ): ShellSubstitutionAccess | null | undefined {
     const processSubstitution = isProcessSubstitution(value);
     const commandSubstitution = isSubshell(value);
 
     if (!processSubstitution && !commandSubstitution) {
-        return hasShellSubstitution(value) ? null : undefined;
+        if (hasShellSubstitution(value)) {
+            addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+            return null;
+        }
+        return undefined;
     }
 
-    const inner = isConfined(getSubshellContent(value), cwd, options);
-    if (inner === undefined) return null;
+    const inner = isConfined(getSubshellContent(value), cwd, options, diagnostics);
+    if (inner === undefined) {
+        if (diagnostics?.reasons.length === 0) {
+            addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
+        }
+        return null;
+    }
 
     if (processSubstitution) {
         return { heuristic: inner, paths: [] };
@@ -590,7 +652,11 @@ function inspectShellSubstitution(
     }
 
     const paths = getStaticSubstitutionPaths(value, cwd);
-    return paths === null ? null : { heuristic: inner, paths };
+    if (paths === null) {
+        addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+        return null;
+    }
+    return { heuristic: inner, paths };
 }
 
 /**
@@ -608,6 +674,7 @@ function extractCommandPaths(
     spec: CommandSpec,
     cwd: string,
     options: ConfinementOptions,
+    diagnostics?: ConfinementDiagnostics,
 ): ExtractedCommandAccess | null {
     const paths: string[] = [];
     let writes = false;
@@ -635,7 +702,13 @@ function extractCommandPaths(
     };
 
     const inspectValue = (value: string, pathContext: boolean): boolean => {
-        const substitution = inspectShellSubstitution(value, cwd, options, pathContext);
+        const substitution = inspectShellSubstitution(
+            value,
+            cwd,
+            options,
+            pathContext,
+            diagnostics,
+        );
         if (substitution === null) return false;
         if (substitution !== undefined) {
             paths.push(...substitution.paths);
@@ -694,6 +767,7 @@ function extractCommandPaths(
                 const flagSpec = activeSpec.flags?.[name];
 
                 if (flagSpec?.unsafe) {
+                    addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_FLAG);
                     return null;
                 }
                 if (flagSpec?.writes) {
@@ -738,6 +812,7 @@ function extractCommandPaths(
                 // single-dash multi-character tokens, not short clusters
                 // (-delete, -exec, -fprint, ...)
                 if (activeSpec.flags?.[arg]?.unsafe) {
+                    addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_FLAG);
                     return null;
                 }
 
@@ -761,6 +836,7 @@ function extractCommandPaths(
                     cwd,
                     options,
                     writeState,
+                    diagnostics,
                 );
                 writes = writeState.value;
                 if (next === null) {
@@ -775,6 +851,7 @@ function extractCommandPaths(
         if (!dispatched) {
             const sub = subcommands![arg];
             if (sub === undefined) {
+                addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_SUBCOMMAND);
                 return null;
             }
             adoptSpec(sub);
@@ -862,6 +939,7 @@ function extractCommandPaths(
 
     // default mode is unsafe unless a read-only mode flag is present
     if (activeSpec.safeModeFlags && !hasSafeModeFlag(args, activeSpec)) {
+        addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_MODE);
         return null;
     }
 
@@ -1054,8 +1132,10 @@ function isCommandConfined(
     rootCwd: string,
     options: ConfinementOptions,
     state: CwdConfinementState,
+    diagnostics?: ConfinementDiagnostics,
 ): Heuristic | undefined {
     if (state.blocked) {
+        addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_CWD);
         return undefined;
     }
     // skip leading environment assignments (FOO=bar cmd ...), but reject
@@ -1067,6 +1147,7 @@ function isCommandConfined(
         const eq = args[idx].indexOf("=");
         const name = args[idx].slice(0, eq);
         if (isDangerousEnvName(name)) {
+            addUnsafeReason(diagnostics, UnsafeReason.DANGEROUS_ENVIRONMENT);
             return undefined;
         }
         envValues.push(args[idx].slice(eq + 1));
@@ -1074,6 +1155,7 @@ function isCommandConfined(
     }
 
     if (idx >= args.length) {
+        addUnsafeReason(diagnostics, UnsafeReason.EMPTY_INPUT);
         return undefined;
     }
 
@@ -1081,11 +1163,13 @@ function isCommandConfined(
 
     // commands invoked by path are not trusted to be the real binary
     if (commandName.includes("/") || commandName.includes("\\")) {
+        addUnsafeReason(diagnostics, UnsafeReason.COMMAND_PATH);
         return undefined;
     }
 
     const spec = KNOWN_COMMANDS[commandName];
     if (!spec) {
+        addUnsafeReason(diagnostics, UnsafeReason.UNKNOWN_COMMAND);
         return undefined;
     }
 
@@ -1100,21 +1184,29 @@ function isCommandConfined(
         );
         const commandAllowed =
             options.allowedCommands === null || options.allowedCommands.has(commandName);
+        if (!directoryResult) addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_CWD);
+        if (!envConfined) addUnsafeReason(diagnostics, UnsafeReason.OUTSIDE_CWD);
+        if (!commandAllowed) addUnsafeReason(diagnostics, UnsafeReason.COMMAND_NOT_ALLOWED);
         return directoryResult && envConfined && commandAllowed
             ? Heuristic.SAFE_READONLY
             : undefined;
     }
 
     if (options.allowedCommands !== null && !options.allowedCommands.has(commandName)) {
+        addUnsafeReason(diagnostics, UnsafeReason.COMMAND_NOT_ALLOWED);
         return undefined;
     }
 
     if (spec.validate && !spec.validate(commandArgs)) {
+        addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
         return undefined;
     }
 
-    const access = extractCommandPaths(commandArgs, spec, cwd, options);
+    const access = extractCommandPaths(commandArgs, spec, cwd, options, diagnostics);
     if (access === null) {
+        if (diagnostics?.reasons.length === 0) {
+            addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
+        }
         return undefined;
     }
 
@@ -1122,12 +1214,15 @@ function isCommandConfined(
     const allPaths = [...envValues, ...access.paths];
     const confined = allPaths.every((p) => {
         if (!isAllowedPath(p, cwd, home, rootCwd)) {
+            addUnsafeReason(diagnostics, UnsafeReason.OUTSIDE_CWD);
             return false;
         }
         if (isSensitivePath(p, cwd, home, options)) {
+            addUnsafeReason(diagnostics, UnsafeReason.SENSITIVE_PATH);
             return false;
         }
         if (!isRealPathConfined(p, cwd, home, options)) {
+            addUnsafeReason(diagnostics, UnsafeReason.SYMLINK_ESCAPE);
             return false;
         }
         return true;
@@ -1146,15 +1241,18 @@ function isConfined(
     command: string,
     cwd: string,
     options: ConfinementOptions,
+    diagnostics?: ConfinementDiagnostics,
 ): Heuristic | undefined {
     let parsed: string[][];
     try {
         parsed = parseBash(command);
     } catch {
+        addUnsafeReason(diagnostics, UnsafeReason.PARSE_ERROR);
         return undefined;
     }
 
     if (parsed.length === 0) {
+        addUnsafeReason(diagnostics, UnsafeReason.EMPTY_INPUT);
         return undefined;
     }
 
@@ -1165,6 +1263,7 @@ function isConfined(
         let nonPersistentBase: CwdConfinementState | null = null;
 
         if (segments.length === 0) {
+            addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
             return undefined;
         }
 
@@ -1182,6 +1281,7 @@ function isConfined(
                 cwd,
                 options,
                 segmentState,
+                diagnostics,
             );
 
             if (nonPersistentBase !== null) {
@@ -1191,6 +1291,9 @@ function isConfined(
                 }
             }
             if (result === undefined) {
+                if (diagnostics?.reasons.length === 0) {
+                    addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
+                }
                 return undefined;
             }
             heuristic = combineHeuristics(heuristic ?? Heuristic.SAFE_READONLY, result)
@@ -1276,6 +1379,36 @@ export function getPathConfinementPermission(
     return access === "write" ? Heuristic.SAFE_EDIT : Heuristic.SAFE_READONLY;
 }
 
+export function getPathConfinementAssessment(
+    filePath: string,
+    cwd: string,
+    config?: SandboxConfigCwdConfinement | null,
+    access: FileAccess = "read",
+): HeuristicAssessment {
+    const classification = getPathConfinementPermission(filePath, cwd, config, access);
+    if (isSafeHeuristic(classification)) return assessment(classification);
+
+    const confinement = resolveConfinementConfig(config);
+    if (confinement?.enabled === false || filePath.trim() === "") {
+        return assessment(Heuristic.UNSAFE, [
+            confinement?.enabled === false
+                ? UnsafeReason.HEURISTIC_DISABLED
+                : UnsafeReason.EMPTY_INPUT,
+        ]);
+    }
+
+    const resolvedCwd = path.resolve(cwd);
+    const home = os.homedir();
+    const options = buildConfinementOptions(confinement, resolvedCwd);
+    if (!isLexicallyWithin(filePath, resolvedCwd, resolvedCwd, home)) {
+        return assessment(Heuristic.UNSAFE, [UnsafeReason.OUTSIDE_CWD]);
+    }
+    if (isSensitivePath(filePath, resolvedCwd, home, options)) {
+        return assessment(Heuristic.UNSAFE, [UnsafeReason.SENSITIVE_PATH]);
+    }
+    return assessment(Heuristic.UNSAFE, [UnsafeReason.SYMLINK_ESCAPE]);
+}
+
 /**
  * Cwd-confinement heuristic: known, safe commands whose file accesses all
  * resolve inside the working directory are classified by capability.
@@ -1283,24 +1416,45 @@ export function getPathConfinementPermission(
  * Returns UNSAFE for unknown commands, paths outside the working directory,
  * or unclassifiable usage. Callers should fall back to the permission system.
  */
+export function getCwdConfinementAssessment(
+    command: string,
+    cwd: string,
+    config?: SandboxConfigCwdConfinement | null,
+): HeuristicAssessment {
+    const confinement = resolveConfinementConfig(config);
+
+    if (confinement?.enabled === false) {
+        return assessment(Heuristic.UNSAFE, [UnsafeReason.HEURISTIC_DISABLED]);
+    }
+
+    if (command.trim() === "") {
+        return assessment(Heuristic.UNSAFE, [UnsafeReason.EMPTY_INPUT]);
+    }
+
+    const diagnostics: ConfinementDiagnostics = { reasons: [] };
+    const resolvedCwd = path.resolve(cwd);
+    const classification = isConfined(
+        command,
+        resolvedCwd,
+        buildConfinementOptions(confinement, resolvedCwd),
+        diagnostics,
+    ) ?? Heuristic.UNSAFE;
+    if (isSafeHeuristic(classification)) return assessment(classification);
+
+    return assessment(
+        Heuristic.UNSAFE,
+        diagnostics.reasons.length > 0
+            ? diagnostics.reasons
+            : [UnsafeReason.UNSAFE_COMMAND],
+    );
+}
+
 export function getCwdConfinementPermission(
     command: string,
     cwd: string,
     config?: SandboxConfigCwdConfinement | null,
 ): Heuristic {
-    const confinement = resolveConfinementConfig(config);
-
-    if (confinement?.enabled === false) {
-        return Heuristic.UNSAFE;
-    }
-
-    if (command.trim() === "") {
-        return Heuristic.UNSAFE;
-    }
-
-    const resolvedCwd = path.resolve(cwd);
-    return isConfined(command, resolvedCwd, buildConfinementOptions(confinement, resolvedCwd))
-        ?? Heuristic.UNSAFE;
+    return getCwdConfinementAssessment(command, cwd, config).classification;
 }
 
 /**
@@ -1309,26 +1463,47 @@ export function getCwdConfinementPermission(
  *
  * Returns UNSAFE when the heuristic does not apply.
  */
+export function getArgsConfinementAssessment(
+    args: string[],
+    cwd: string,
+    config?: SandboxConfigCwdConfinement | null,
+    state?: CwdConfinementState,
+): HeuristicAssessment {
+    const confinement = resolveConfinementConfig(config);
+
+    if (confinement?.enabled === false) {
+        return assessment(Heuristic.UNSAFE, [UnsafeReason.HEURISTIC_DISABLED]);
+    }
+    if (args.length === 0) {
+        return assessment(Heuristic.UNSAFE, [UnsafeReason.EMPTY_INPUT]);
+    }
+
+    const diagnostics: ConfinementDiagnostics = { reasons: [] };
+    const resolvedCwd = path.resolve(cwd);
+    const confinementState = state ?? createCwdConfinementState(resolvedCwd);
+    const classification = isCommandConfined(
+        args,
+        confinementState.currentCwd,
+        resolvedCwd,
+        buildConfinementOptions(confinement, resolvedCwd),
+        confinementState,
+        diagnostics,
+    ) ?? Heuristic.UNSAFE;
+    if (isSafeHeuristic(classification)) return assessment(classification);
+
+    return assessment(
+        Heuristic.UNSAFE,
+        diagnostics.reasons.length > 0
+            ? diagnostics.reasons
+            : [UnsafeReason.UNSAFE_COMMAND],
+    );
+}
+
 export function getArgsConfinementPermission(
     args: string[],
     cwd: string,
     config?: SandboxConfigCwdConfinement | null,
     state?: CwdConfinementState,
 ): Heuristic {
-    const confinement = resolveConfinementConfig(config);
-
-    if (confinement?.enabled === false || args.length === 0) {
-        return Heuristic.UNSAFE;
-    }
-
-    const resolvedCwd = path.resolve(cwd);
-    const confinementState = state ?? createCwdConfinementState(resolvedCwd);
-
-    return isCommandConfined(
-        args,
-        confinementState.currentCwd,
-        resolvedCwd,
-        buildConfinementOptions(confinement, resolvedCwd),
-        confinementState,
-    ) ?? Heuristic.UNSAFE;
+    return getArgsConfinementAssessment(args, cwd, config, state).classification;
 }
