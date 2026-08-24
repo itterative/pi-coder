@@ -16,6 +16,7 @@ import {
     findUnpreparedAgentWorkspace,
     listAgentWorkspaces,
     MAX_AGENT_WORKSPACES,
+    reconcileNoChangeAgentWorkspaceLeases,
     releaseAgentWorkspaceLease,
     transferAgentWorkspaceLease,
     updateAgentWorkspace,
@@ -148,6 +149,7 @@ export async function prepareIsolatedWorkspace(
 
     const ownerSessionId = ctx.sessionManager.getSessionId();
     const provisionalLeaseRunId = `workspace-provision-${randomUUID()}`;
+    await reconcileNoChangeAgentWorkspaceLeases(cwd);
     const available = await findAvailableAgentWorkspace(cwd);
     if (available) {
         const workspace = await claimAgentWorkspace(

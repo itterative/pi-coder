@@ -16,6 +16,7 @@ import {
     listAgentWorkspaces,
     prepareAgentWorkspaceApplication,
     releaseAgentWorkspaceAfterApplication,
+    releaseAgentWorkspaceAfterNoChanges,
     transferAgentWorkspaceLease,
     updateAgentWorkspace,
 } from "../../src/tools/agent/workspaces";
@@ -106,6 +107,32 @@ describe("agent workspaces", () => {
 
         await expect(createAgentWorkspace(repository, state)).rejects.toThrow("Workspace capacity reached");
         expect(await listAgentWorkspaces(repository, state)).toHaveLength(3);
+    });
+
+    it("releases a clean no-change result without creating a durable ref", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "README.md"), "no change test\n");
+        await git(repository, "add", "README.md");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        const result = await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        expect(result.workerHead).toBe(result.baseRevision);
+        expect(result.commits).toEqual([]);
+        expect(result.durableRef).toBeUndefined();
+
+        await releaseAgentWorkspaceAfterNoChanges(workspace.id, "session-1", "worker-1", state);
+        await expect(findAvailableAgentWorkspace(repository, state)).resolves.toMatchObject({
+            id: workspace.id,
+            status: "available",
+        });
     });
 
     it("commits dirty tracked and untracked worker changes exactly once and persists the result", async () => {

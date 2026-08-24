@@ -599,9 +599,12 @@ export async function prepareAgentWorkspaceApplication(
             throw new Error(`Worker revision ${workerHead} is not based on workspace base ${current.baseRevision}.`);
         }
         const commitsOutput = await git(current.worktreePath, ["rev-list", "--reverse", `${current.baseRevision}..${workerHead}`]);
+        const commits = commitsOutput ? commitsOutput.split("\n").filter(Boolean) : [];
         const resultId = randomUUID();
-        durableRef = `${RESULT_REF_PREFIX}/${current.id}/${resultId}`;
-        await git(current.worktreePath, ["update-ref", durableRef, workerHead]);
+        if (workerHead !== current.baseRevision || commits.length > 0) {
+            durableRef = `${RESULT_REF_PREFIX}/${current.id}/${resultId}`;
+            await git(current.worktreePath, ["update-ref", durableRef, workerHead]);
+        }
         const result: AgentWorkspaceResult = {
             id: resultId,
             workspaceId: current.id,
@@ -609,8 +612,8 @@ export async function prepareAgentWorkspaceApplication(
             baseRevision: current.baseRevision,
             workerHead,
             commitRange: `${current.baseRevision}..${workerHead}`,
-            commits: commitsOutput ? commitsOutput.split("\n").filter(Boolean) : [],
-            durableRef,
+            commits,
+            ...(durableRef ? { durableRef } : {}),
             preparedAt: Date.now(),
             status: "prepared",
         };
@@ -703,6 +706,79 @@ export async function releaseAgentWorkspaceAfterApplication(
     } finally {
         database.close();
     }
+}
+
+/** Release a task lease when the worker produced no changes, making the clean workspace reusable. */
+export async function releaseAgentWorkspaceAfterNoChanges(
+    workspaceId: string,
+    ownerSessionId: string,
+    leaseRunId: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<void> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        const workspace = workspaceById(database, workspaceId);
+        if (workspace?.leaseOwnerSessionId !== ownerSessionId || workspace.leaseRunId !== leaseRunId) {
+            throw new Error(`Workspace ${workspaceId} is not leased by ${leaseRunId}.`);
+        }
+        const result = workspace.latestResult;
+        if (
+            workspace.leaseKind !== "task"
+            || !result
+            || result.status !== "prepared"
+            || result.baseRevision !== result.workerHead
+            || result.commits.length > 0
+        ) {
+            throw new Error(`Workspace ${workspaceId} can be released without application only when its prepared result has no changes.`);
+        }
+        const state = await inspectAgentWorkspaceGitState(workspace);
+        if (state.kind !== "available" || state.dirty || state.headRevision !== result.baseRevision) {
+            throw new Error(`Workspace ${workspaceId} changed after its no-change result was prepared.`);
+        }
+        if (result.durableRef) {
+            await git(workspace.worktreePath, ["update-ref", "-d", result.durableRef]);
+            database.prepare("UPDATE workspace_results SET durable_ref = NULL WHERE id = ? AND workspace_id = ?")
+                .run(result.id, workspaceId);
+        }
+        database.prepare(`
+            UPDATE workspaces SET workspace_status = 'available', lease_owner_session_id = NULL,
+                lease_run_id = NULL, lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
+            WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
+        `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId);
+    } finally {
+        database.close();
+    }
+}
+
+/** Reconcile previously collected no-change results from before automatic release existed. */
+export async function reconcileNoChangeAgentWorkspaceLeases(
+    cwd: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<number> {
+    const workspaces = await listAgentWorkspaces(cwd, workspacesDir);
+    let released = 0;
+    for (const workspace of workspaces) {
+        if (
+            workspace.leaseKind !== "task"
+            || !workspace.leaseOwnerSessionId
+            || !workspace.leaseRunId
+            || workspace.latestResult?.status !== "prepared"
+            || workspace.latestResult.baseRevision !== workspace.latestResult.workerHead
+            || workspace.latestResult.commits.length > 0
+        ) continue;
+        try {
+            await releaseAgentWorkspaceAfterNoChanges(
+                workspace.id,
+                workspace.leaseOwnerSessionId,
+                workspace.leaseRunId,
+                workspacesDir,
+            );
+            released++;
+        } catch {
+            // Leave a changed or otherwise unsafe workspace leased for explicit recovery.
+        }
+    }
+    return released;
 }
 
 export async function createAgentWorkspace(

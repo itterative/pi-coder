@@ -32,6 +32,7 @@ import {
 import {
     getAgentWorkspace,
     prepareAgentWorkspaceApplication,
+    releaseAgentWorkspaceAfterNoChanges,
     releaseAgentWorkspaceLease,
     inspectAgentWorkspaceGitState,
     listAgentWorkspaces,
@@ -65,12 +66,14 @@ export { clearCompletedWorkspaceSetupRun } from "./ui";
 
 type WorkspaceSetupRuns = Map<string, AgentRunSummary>;
 
-function workspaceResultSummary(result: AgentWorkspaceResult): string {
+function workspaceResultSummary(result: AgentWorkspaceResult, noChanges = false): string {
     const commits = result.commits.length
         ? `${result.commits.length} commit${result.commits.length === 1 ? "" : "s"}: ${result.commits.slice(0, 8).join(", ")}${result.commits.length > 8 ? ", …" : ""}`
         : "none (worker tree matches the base revision)";
     return [
-        "\n\nIsolated worker result prepared for review. The parent checkout was not changed.",
+        noChanges
+            ? "\n\nIsolated worker produced no changes. The parent checkout was not changed and the workspace lease was released for reuse."
+            : "\n\nIsolated worker result prepared for review. The parent checkout was not changed.",
         `Workspace: ${result.workspaceId}`,
         `Result: ${result.id}`,
         `Base revision: ${result.baseRevision}`,
@@ -78,7 +81,9 @@ function workspaceResultSummary(result: AgentWorkspaceResult): string {
         `Commit range: ${result.commitRange}`,
         `Commits: ${commits}`,
         `Durable ref: ${result.durableRef ?? "none"}`,
-        "Keep this result until it has been explicitly inspected and explicitly applied, retained, reset, or discarded.",
+        ...(noChanges
+            ? ["No application is needed."]
+            : ["Keep this result until it has been explicitly inspected and explicitly applied, retained, reset, or discarded."]),
     ].join("\n");
 }
 
@@ -411,10 +416,20 @@ export default function registerAgentTool(
             } else {
                 const pending = manager.status(params.runId);
                 const workspaceResult = await prepareCollectedWorkspaceResult(pending.details, ctx);
+                const noWorkspaceChanges = workspaceResult
+                    ? workspaceResult.workerHead === workspaceResult.baseRevision && workspaceResult.commits.length === 0
+                    : false;
+                if (workspaceResult && noWorkspaceChanges) {
+                    await releaseAgentWorkspaceAfterNoChanges(
+                        workspaceResult.workspaceId,
+                        ctx.sessionManager.getSessionId(),
+                        workspaceResult.runId,
+                    );
+                }
                 outcome = manager.collect(params.runId);
                 if (workspaceResult) {
                     outcome.details.workspaceResult = workspaceResult;
-                    outcome.content += workspaceResultSummary(workspaceResult);
+                    outcome.content += workspaceResultSummary(workspaceResult, noWorkspaceChanges);
                 }
                 clearCompletedWorkspaceSetup(ctx, outcome.details);
             }
