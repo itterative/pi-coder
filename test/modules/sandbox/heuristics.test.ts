@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+    describeUnsafeReason,
     getCwdConfinementAssessment,
     getCwdConfinementPermission,
     getPathConfinementAssessment,
@@ -38,6 +39,15 @@ describe("heuristic assessments", () => {
             classification: Heuristic.UNSAFE,
             reasons: [UnsafeReason.OUTSIDE_CWD],
         });
+    });
+
+    it("deduplicates reasons and gives each a short description", () => {
+        expect(getCwdConfinementAssessment("cat /etc/passwd /etc/hosts", CWD, {})).toEqual({
+            classification: Heuristic.UNSAFE,
+            reasons: [UnsafeReason.OUTSIDE_CWD],
+        });
+        expect(describeUnsafeReason(UnsafeReason.OUTSIDE_CWD))
+            .toBe("a path is outside the working directory");
     });
 
     it("reports no reasons for safe classifications", () => {
