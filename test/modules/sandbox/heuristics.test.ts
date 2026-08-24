@@ -42,7 +42,7 @@ describe("heuristic assessments", () => {
     });
 
     it("deduplicates reasons and gives each a short description", () => {
-        expect(getCwdConfinementAssessment("cat /etc/passwd /etc/hosts", CWD, {})).toEqual({
+        expect(getCwdConfinementAssessment("cat /etc/passwd && cat /etc/hosts", CWD, {})).toEqual({
             classification: Heuristic.UNSAFE,
             reasons: [UnsafeReason.OUTSIDE_CWD],
         });

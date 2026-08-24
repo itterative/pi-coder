@@ -117,7 +117,10 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
             "--config-env": UNSAFE,
         },
         subcommands: {
-            // positionals are pathspecs
+            // `git status` may refresh the .git/index stat cache. This is an
+            // intentional SAFE_READONLY exception: it changes only Git metadata,
+            // and bash defaults to sandboxed execution.
+            // Positionals are pathspecs.
             status: {},
             // Keep only the explicitly modeled checking, stat, and quiet
             // modes eligible; other diff output modes remain prompts.
