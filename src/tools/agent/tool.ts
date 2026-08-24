@@ -32,7 +32,7 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
             "Delegate codebase work when useful to a built-in or custom agent. The parent agent may also use its own active built-in tools directly, including read, edit, write, and bash; delegation is not required for file changes. "
             + "Scout and custom agents are read-only; the built-in worker can edit the selected checkout or isolated worktree and run bash only through explicit per-action user permission prompts. "
             + "Run work in the foreground or background; optionally provide a short human-readable title; list, status, collect, resume, or cancel retained runs. In persisted "
-            + "parent sessions, paused and interrupted child context survives reload, restart, and switching away and back.",
+            + "parent sessions, paused and interrupted child context survives reload, restart, and switching away and back. The parent can inspect, apply, discard, or revise isolated workspace results without opening the TUI.",
         promptSnippet:
             "Use agent for optional delegated work; the parent may edit directly with its own built-in tools, while worker handles permission-gated child implementation.",
         promptGuidelines: [
@@ -40,6 +40,7 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
             "Use agent with action=\"start\" when the result is needed immediately; use agent with action=\"spawn\" for independent work that can run concurrently; provide a short title when the run should be easy to identify later",
             "Do not poll spawned agent runs with agent action=\"status\"; automatic follow-up mailbox context notifies you when they finish or need parent guidance",
             "After a terminal agent notification, use agent action=\"collect\" to retrieve the full result; mailbox updates never interrupt current work and never include the full result",
+            "For isolated workspace results, use action=\"inspect\", \"apply\", \"discard\", or \"revise\" with the runId; these are parent-controlled dispositions and only apply modifies the parent checkout.",
             "Treat a waiting agent as paused, not completed; investigate or obtain guidance, then use agent action=\"resume\" or action=\"cancel\" as appropriate",
             "Durable interrupted agent runs never replay or resume automatically; wait for explicit user direction before using agent action=\"resume\" or action=\"cancel\", and account for uncertain tool outcomes",
             "Remember that background agents cannot open direct user dialogs; use agent action=\"resume\" after providing parent guidance instead",

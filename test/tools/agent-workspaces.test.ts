@@ -10,6 +10,7 @@ import {
     claimAgentWorkspace,
     completeAgentWorkspaceLease,
     discardAgentWorkspace,
+    discardAgentWorkspaceResult,
     createAgentWorkspace,
     findAvailableAgentWorkspace,
     inspectAgentWorkspaceDiff,
@@ -368,6 +369,31 @@ describe("agent workspaces", () => {
         await discardAgentWorkspace(discarded.id, undefined, undefined, state);
         expect(await listAgentWorkspaces(repository, state)).toHaveLength(1);
         await expect(fs.access(discarded.worktreePath)).rejects.toThrow();
+    });
+
+    it("lets an owner discard a prepared result without requiring a clean parent", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "base\\n");
+        await git(repository, "add", ".");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "worker\\n");
+        await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        await fs.writeFile(path.join(repository, "parent-dirty.txt"), "leave me\\n");
+        await discardAgentWorkspaceResult(workspace.id, "session-1", "worker-1", state);
+
+        expect(await fs.readFile(path.join(workspace.worktreePath, "tracked.txt"), "utf8")).toBe("base\\n");
+        expect(await fs.readFile(path.join(repository, "parent-dirty.txt"), "utf8")).toBe("leave me\\n");
+        expect(await findAvailableAgentWorkspace(repository, state)).toMatchObject({ id: workspace.id });
+        expect((await listAgentWorkspaceResults(workspace.id, state))[0]).toMatchObject({ status: "discarded" });
     });
 
     it("keeps both workspaces and the lease untouched when parent preflight fails", async () => {

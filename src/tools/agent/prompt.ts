@@ -30,6 +30,19 @@ export const parameters = Type.Union([
         runId: Type.String({ minLength: 1, maxLength: 100 }),
     }, { additionalProperties: false }),
     Type.Object({
+        action: Type.Union([
+            Type.Literal("inspect"),
+            Type.Literal("apply"),
+            Type.Literal("discard"),
+        ]),
+        runId: Type.String({ minLength: 1, maxLength: 100 }),
+    }, { additionalProperties: false }),
+    Type.Object({
+        action: Type.Literal("revise"),
+        runId: Type.String({ minLength: 1, maxLength: 100 }),
+        guidance: Type.String({ minLength: 1, maxLength: 16_000 }),
+    }, { additionalProperties: false }),
+    Type.Object({
         action: Type.Union([Type.Literal("status"), Type.Literal("collect")]),
         runId: Type.String({ minLength: 1, maxLength: 100 }),
     }, { additionalProperties: false }),
@@ -53,6 +66,7 @@ export function availableAgentsPrompt(agents: AgentDefinition[]): string {
         "The parent agent may use its own active built-in tools (including read, edit, write, and bash) directly; delegation is optional and is for substantial, parallel, or isolated work.",
         "Scout and custom agents are read-only. The built-in worker is the only mutation-capable child; each worker edit/write/bash action requires an explicit user permission prompt, and only one worker child may be active at once.",
         "Use isolation=\"worktree\" when the worker should run in a persistent isolated Git worktree; a new worktree may prompt for an optional setup worker.",
+        "For an isolated result, the parent can use agent action=\"inspect\", \"apply\", or \"discard\" with the runId, or action=\"revise\" with guidance to continue work in the same workspace.",
     );
     return `<delegated_agents>\n${lines.join("\n")}\n</delegated_agents>`;
 }

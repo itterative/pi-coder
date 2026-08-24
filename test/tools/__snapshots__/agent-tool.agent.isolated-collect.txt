@@ -22,7 +22,7 @@ Mutation report:
 - Commits: 1 commit: worker-head
 - Durable ref: `refs/pi-coder/workspace-results/workspace-1/result-1`
 - Outcome: result prepared for review; the parent checkout was unchanged.
-- Disposition: explicitly inspect, apply, retain, reset, or discard this result.
+- Disposition: the parent can inspect, apply, discard, or revise this result with agent actions; the TUI remains available for manual review.
 </metadata>
 
 Finished in isolation

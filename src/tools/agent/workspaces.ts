@@ -919,6 +919,42 @@ export async function retainAgentWorkspaceResult(
     }
 }
 
+/** Discard a prepared result and make its existing isolated workspace reusable. */
+export async function discardAgentWorkspaceResult(
+    workspaceId: string,
+    ownerSessionId: string,
+    leaseRunId: string,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<void> {
+    const { database, workspace } = await workspaceForLease(workspaceId, ownerSessionId, leaseRunId, workspacesDir);
+    try {
+        if (workspace.leaseKind !== "task" || !workspace.latestResult || workspace.latestResult.status !== "prepared") {
+            throw new Error(`Workspace ${workspaceId} has no prepared result to discard.`);
+        }
+        const result = workspace.latestResult;
+        const state = await inspectAgentWorkspaceGitState(workspace);
+        if (state.kind !== "available" || state.dirty || state.headRevision !== result.workerHead) {
+            throw new Error(`Workspace ${workspaceId} changed after its result was prepared; inspect it before discarding.`);
+        }
+        await git(workspace.worktreePath, ["reset", "--hard", result.baseRevision]);
+        await git(workspace.worktreePath, ["clean", "-fd"]);
+        if (result.durableRef) {
+            await git(workspace.repositoryRoot, ["update-ref", "-d", result.durableRef]);
+        }
+        const updatedAt = Date.now();
+        database.prepare("UPDATE workspace_results SET status = 'discarded', durable_ref = NULL WHERE id = ? AND workspace_id = ?")
+            .run(result.id, workspaceId);
+        database.prepare(`
+            UPDATE workspaces SET workspace_status = 'available', base_revision = ?,
+                lease_owner_session_id = NULL, lease_run_id = NULL, lease_kind = NULL,
+                lease_acquired_at = NULL, updated_at = ?
+            WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
+        `).run(result.baseRevision, updatedAt, workspaceId, ownerSessionId, leaseRunId);
+    } finally {
+        database.close();
+    }
+}
+
 /** Release a task lease only after its prepared result was applied successfully. */
 export async function releaseAgentWorkspaceAfterApplication(
     workspaceId: string,
