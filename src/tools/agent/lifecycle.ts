@@ -1,32 +1,32 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { createAgentChild } from "./child";
-import { discoverAgents } from "./discovery";
+import { discoverAgents } from "./definitions/discovery";
 import {
     createAgentEventSink,
     emitAgentEvent,
     subscribeAgentEvents,
     type AgentEventSink,
-} from "./events";
-import { AgentMailbox } from "./mailbox";
-import { loadAgentRunPersistence } from "./persistence";
-import { availableAgentsPrompt } from "./prompt";
+} from "./observability/events";
+import { AgentMailbox } from "./presentation/mailbox";
+import { loadAgentRunPersistence } from "./runs/persistence";
+import { availableAgentsPrompt } from "./definitions/prompt";
 import {
     AgentRunManager,
     ZERO_USAGE,
     type AgentRunDetails,
     type AgentRunSummary,
     type ChildAgentFactory,
-} from "./runtime";
-import type { AgentTraceStore } from "./trace";
-import type { AgentWorkspace } from "./workspaces";
-import type { WorkspaceSetupUiUpdate } from "./workspace-setup";
+} from "./runs/manager";
+import type { AgentTraceStore } from "./observability/trace";
+import type { AgentWorkspace } from "./contracts/workspaces";
+import type { WorkspaceSetupUiUpdate } from "./workspaces/setup";
 import {
     AGENT_WIDGET_ID,
     clearCompletedWorkspaceSetupRun,
     diagnosticText,
     updateAgentUi,
-} from "./ui";
+} from "./presentation/widget";
 
 export type WorkspaceEventAction = "created" | "updated" | "lease_changed" | "result_changed" | "removed";
 

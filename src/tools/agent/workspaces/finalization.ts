@@ -4,12 +4,12 @@ import { emitAgentEvent } from "../observability/events";
 import type { AgentEventSink } from "../contracts/events";
 import type { AgentRunDetails, AgentRunOutcome } from "../contracts/runs";
 import { AgentActionError } from "../runs/manager";
+import type { AgentWorkspaceResult } from "../contracts/workspaces";
+import { getAgentWorkspace } from "./store";
 import {
-    getAgentWorkspace,
     prepareAgentWorkspaceApplication,
     releaseAgentWorkspaceAfterNoChanges,
-    type AgentWorkspaceResult,
-} from "../workspaces";
+} from "./results";
 
 export async function prepareCollectedWorkspaceResult(
     details: Pick<AgentRunDetails, "workspaceId" | "runId">,

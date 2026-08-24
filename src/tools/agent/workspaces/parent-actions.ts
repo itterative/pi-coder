@@ -9,15 +9,11 @@ import { AgentActionError, AgentRunManager } from "../runs/manager";
 import { ZERO_USAGE } from "../runs/usage";
 import { diagnosticText } from "../presentation/widget";
 import { prepareForegroundWorkspaceResult } from "./finalization";
-import {
-    executeWorkspaceAction,
-    getAgentWorkspace,
-    inspectAgentWorkspaceDiff,
-    listAgentRunCatalog,
-    transferAgentWorkspaceLease,
-    type AgentWorkspace,
-    type AgentWorkspaceResult,
-} from "../workspaces";
+import type { AgentWorkspace, AgentWorkspaceResult } from "../contracts/workspaces";
+import { listAgentRunCatalog } from "../storage/run-catalog";
+import { executeWorkspaceAction } from "./actions";
+import { inspectAgentWorkspaceDiff } from "./results";
+import { getAgentWorkspace, transferAgentWorkspaceLease } from "./store";
 
 function parentWorkspaceOutcome(
     record: Awaited<ReturnType<typeof listAgentRunCatalog>>[number],

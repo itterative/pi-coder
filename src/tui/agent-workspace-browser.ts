@@ -9,9 +9,9 @@ import type {
     AgentWorkspace,
     AgentWorkspaceAction,
     AgentWorkspaceGitState,
-} from "../tools/agent/workspaces";
+} from "../tools/agent/contracts/workspaces";
 
-export type { AgentWorkspaceAction } from "../tools/agent/workspaces";
+export type { AgentWorkspaceAction } from "../tools/agent/contracts/workspaces";
 import { PagerComponent } from "./pager";
 import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";

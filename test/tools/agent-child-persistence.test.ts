@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { materializePersistentSession, repairInterruptedToolCalls } from "../../src/tools/agent/child";
-import { ZERO_USAGE } from "../../src/tools/agent/runtime";
+import { ZERO_USAGE } from "../../src/tools/agent/runs/manager";
 
 const tempDirs: string[] = [];
 afterEach(() => {

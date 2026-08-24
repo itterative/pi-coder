@@ -10,12 +10,12 @@ This is a structural plan, not a feature phase. Each stage should be independent
 
 The first reorganization pass is implemented:
 
-- Stages 1–6 are complete: dependency-neutral contracts, definition contracts, shared metadata/catalog storage, workspace store/results/lifecycle/action modules, child decomposition, and a run-manager compatibility facade.
+- Stages 1–6 are complete: dependency-neutral contracts, definition contracts, shared metadata/catalog storage, workspace store/results/lifecycle/action modules, child decomposition, and run-manager extraction.
 - Stage 0 coverage was strengthened with a real shared-action apply/lease-release test; direct setup and standalone formatting characterization remain optional follow-up.
 - Stage 7 is complete: `index.ts` contains the 43-line registration/composition function, while top-level `lifecycle.ts`, `browser.ts`, and `action-dispatch.ts` own session state/hooks, `/agents` orchestration, and tool action routing respectively. Formatting/finalization/parent/TUI workspace adapters remain independently extracted.
-- Stage 8 is partially complete: workspace action contracts moved out of TUI and compatibility facades preserve existing deep imports; broader test-file and browser-view-model alignment remains follow-up work.
+- Stage 8 compatibility cleanup is complete: workspace action contracts live outside TUI, source and tests import canonical modules, and the temporary deep-import facades have been removed. Broader browser view-model changes remain optional rather than required architecture work.
 
-The implementation has no internal import cycles. Compatibility facades at the old paths are intentionally retained while internal and external callers transition.
+The implementation has no internal import cycles, and dependency direction is expressed directly by canonical module imports.
 
 ## Pre-reorganization shape
 
@@ -313,7 +313,7 @@ Use small commits in this order:
 8. extension-controller extraction;
 9. presentation/test alignment and compatibility cleanup.
 
-The recommended first implementation tranche was stages 0–4. It removed the dependency cycle, separated shared metadata ownership, and eliminated duplicated workspace disposition orchestration. The subsequent child/runtime/presentation moves retained compatibility facades and avoided empty destination modules.
+The recommended first implementation tranche was stages 0–4. It removed the dependency cycle, separated shared metadata ownership, and eliminated duplicated workspace disposition orchestration. Subsequent child/runtime/presentation moves used temporary compatibility facades to stage the migration; those facades were removed after source and tests adopted canonical modules.
 
 For each commit:
 

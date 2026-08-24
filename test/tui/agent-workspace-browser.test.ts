@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
     AgentWorkspaceBrowserComponent,
 } from "../../src/tui/agent-workspace-browser";
-import type { AgentWorkspace } from "../../src/tools/agent/workspaces";
+import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
 import { KEY, interact, mockTheme, renderText } from "../helpers";
 
 const available: AgentWorkspace = {

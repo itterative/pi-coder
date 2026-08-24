@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Usage } from "@earendil-works/pi-ai";
 
 import { isChildPathAllowed } from "../../src/tools/agent/child";
-import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/discovery";
+import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
 import {
     AgentActionError,
     AgentRunManager,
@@ -14,7 +14,7 @@ import {
     type ChildAgentHandle,
     type ParentQuestion,
     type PersistedAgentRun,
-} from "../../src/tools/agent/runtime";
+} from "../../src/tools/agent/runs/manager";
 
 interface Step {
     output?: string;

@@ -4,16 +4,19 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { fingerprintAgentDefinition, BUILTIN_SCOUT } from "../../src/tools/agent/discovery";
+import { fingerprintAgentDefinition, BUILTIN_SCOUT } from "../../src/tools/agent/definitions/discovery";
 import {
     AGENT_RUN_STATE_ENTRY,
     getAgentCwdSessionDir,
     loadAgentRunPersistence,
     normalizeCwdForSessionDirectory,
-} from "../../src/tools/agent/persistence";
-import { ZERO_USAGE, type PersistedAgentRun } from "../../src/tools/agent/runtime";
-import { listAgentRunCatalog, upsertAgentRunCatalogRecord } from "../../src/tools/agent/workspaces";
-import { listPastAgentSessions } from "../../src/tools/agent/sessions";
+} from "../../src/tools/agent/runs/persistence";
+import { ZERO_USAGE, type PersistedAgentRun } from "../../src/tools/agent/runs/manager";
+import {
+    listAgentRunCatalog,
+    upsertAgentRunCatalogRecord,
+} from "../../src/tools/agent/storage/run-catalog";
+import { listPastAgentSessions } from "../../src/tools/agent/presentation/sessions";
 
 const tempDirs: string[] = [];
 afterEach(() => {

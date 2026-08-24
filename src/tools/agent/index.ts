@@ -5,15 +5,15 @@ import { registerAgentBrowser } from "./browser";
 import { createAgentChild } from "./child";
 import { AgentLifecycle } from "./lifecycle";
 import { formatAgentToolContent } from "./presentation/formatting";
-import type { ChildAgentFactory } from "./runtime";
+import type { ChildAgentFactory } from "./runs/manager";
 import {
     AgentTraceStore,
     isAgentTraceEnabled,
     registerAgentTraceCommand,
-} from "./trace";
-import { registerAgentTool as registerAgentToolDefinition } from "./tool";
+} from "./observability/trace";
+import { registerAgentTool as registerAgentToolDefinition } from "./presentation/tool";
 
-export { clearCompletedWorkspaceSetupRun } from "./ui";
+export { clearCompletedWorkspaceSetupRun } from "./presentation/widget";
 
 export default function registerAgentTool(
     pi: ExtensionAPI,

@@ -1,23 +1,23 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { emitAgentEvent } from "./events";
-import type { AgentParameters } from "./prompt";
+import { emitAgentEvent } from "./observability/events";
+import type { AgentParameters } from "./definitions/prompt";
 import {
     AgentActionError,
     type AgentRunDetails,
     type AgentRunOutcome,
-} from "./runtime";
-import { diagnosticText } from "./ui";
-import { failedOutcome, listOutcome } from "./outcomes";
+} from "./runs/manager";
+import { diagnosticText } from "./presentation/widget";
+import { failedOutcome, listOutcome } from "./presentation/outcomes";
 import {
     prepareIsolatedWorkspace,
     type WorkspaceReservation,
-} from "./workspace-setup";
+} from "./workspaces/setup";
+import { releaseAgentWorkspaceAfterNoChanges } from "./workspaces/results";
 import {
-    releaseAgentWorkspaceAfterNoChanges,
     releaseAgentWorkspaceLease,
     transferAgentWorkspaceLease,
-} from "./workspaces";
+} from "./workspaces/store";
 import { executeParentWorkspaceAction } from "./workspaces/parent-actions";
 import {
     prepareCollectedWorkspaceResult,

@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 
-import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/events";
+import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/observability/events";
 import {
     AgentSessionBrowserComponent,
 } from "../../src/tui/agent-session-browser";
-import type { AgentWorkspace } from "../../src/tools/agent/workspaces";
+import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
 import { KEY, interact, mockTheme, press, renderText, snapshotText } from "../helpers";
 
 const current = {

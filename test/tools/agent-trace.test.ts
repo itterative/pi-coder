@@ -4,12 +4,12 @@ import {
     AgentRunManager,
     ZERO_USAGE,
     type ChildAgentHandle,
-} from "../../src/tools/agent/runtime";
+} from "../../src/tools/agent/runs/manager";
 import {
     AgentTraceStore,
     isAgentTraceEnabled,
     registerAgentTraceCommand,
-} from "../../src/tools/agent/trace";
+} from "../../src/tools/agent/observability/trace";
 
 describe("delegated-agent traces", () => {
     it("retains bounded terminal traces and bounded event timelines", () => {

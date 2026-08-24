@@ -5,30 +5,33 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { executeWorkspaceAction } from "../../src/tools/agent/workspaces/actions";
+import {
+    createAgentWorkspace,
+    discardAgentWorkspace,
+    recoverAgentWorkspaceLease,
+    releaseAgentWorkspaceLeaseForRecovery,
+    resetAgentWorkspaceForReuse,
+    updateAgentWorkspace,
+} from "../../src/tools/agent/workspaces/lifecycle";
 import {
     applyAgentWorkspaceApplication,
-    claimAgentWorkspace,
-    completeAgentWorkspaceLease,
-    discardAgentWorkspace,
     discardAgentWorkspaceResult,
-    createAgentWorkspace,
-    executeWorkspaceAction,
-    findAvailableAgentWorkspace,
     inspectAgentWorkspaceDiff,
+    prepareAgentWorkspaceApplication,
+    reconcileNoChangeAgentWorkspaceLeases,
+    releaseAgentWorkspaceAfterApplication,
+    releaseAgentWorkspaceAfterNoChanges,
+    retainAgentWorkspaceResult,
+} from "../../src/tools/agent/workspaces/results";
+import {
+    claimAgentWorkspace,
+    findAvailableAgentWorkspace,
     inspectAgentWorkspaceGitState,
     listAgentWorkspaceResults,
     listAgentWorkspaces,
-    prepareAgentWorkspaceApplication,
-    releaseAgentWorkspaceAfterApplication,
-    releaseAgentWorkspaceAfterNoChanges,
-    recoverAgentWorkspaceLease,
-    releaseAgentWorkspaceLeaseForRecovery,
-    reconcileNoChangeAgentWorkspaceLeases,
-    resetAgentWorkspaceForReuse,
-    retainAgentWorkspaceResult,
     transferAgentWorkspaceLease,
-    updateAgentWorkspace,
-} from "../../src/tools/agent/workspaces";
+} from "../../src/tools/agent/workspaces/store";
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -90,7 +93,7 @@ describe("agent workspaces", () => {
         await transferAgentWorkspaceLease(workspace.id, "session-1", provisional.leaseRunId!, "worker-1", "task", state);
         await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
         await applyAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
-        await completeAgentWorkspaceLease(workspace.id, "session-1", "worker-1", state);
+        await releaseAgentWorkspaceAfterApplication(workspace.id, "session-1", "worker-1", state);
         expect(await findAvailableAgentWorkspace(repository, state)).toBeUndefined();
         expect(await listAgentWorkspaces(repository, state)).toMatchObject([
             { id: workspace.id, status: "review_required" },

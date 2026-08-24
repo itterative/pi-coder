@@ -4,11 +4,18 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import registerAgentTool, { clearCompletedWorkspaceSetupRun } from "../../src/tools/agent";
-import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/events";
-import { ZERO_USAGE, type AgentRunSummary, type ChildAgentHandle } from "../../src/tools/agent/runtime";
-import * as workspaceSetup from "../../src/tools/agent/workspace-setup";
-import * as workspaces from "../../src/tools/agent/workspaces";
-import { AGENT_TRACE_ENV } from "../../src/tools/agent/trace";
+import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/observability/events";
+import { ZERO_USAGE, type AgentRunSummary, type ChildAgentHandle } from "../../src/tools/agent/runs/manager";
+import type {
+    AgentWorkspace,
+    AgentWorkspaceResult,
+} from "../../src/tools/agent/contracts/workspaces";
+import * as runCatalog from "../../src/tools/agent/storage/run-catalog";
+import * as workspaceActions from "../../src/tools/agent/workspaces/actions";
+import * as workspaceResults from "../../src/tools/agent/workspaces/results";
+import * as workspaceSetup from "../../src/tools/agent/workspaces/setup";
+import * as workspaceStore from "../../src/tools/agent/workspaces/store";
+import { AGENT_TRACE_ENV } from "../../src/tools/agent/observability/trace";
 import { mockTheme, renderText, snapshotText } from "../helpers";
 
 interface Handler {
@@ -166,7 +173,7 @@ describe("agent extension registration", () => {
             leaseKind: undefined,
             latestResult: { ...result, status: "applied" },
         };
-        vi.spyOn(workspaces, "listAgentRunCatalog").mockResolvedValue([{
+        vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([{
             ownerSessionId: "parent-1",
             runId: "worker-1",
             parentCwd: process.cwd(),
@@ -182,8 +189,8 @@ describe("agent extension registration", () => {
             updatedAt: 1,
             usageSnapshot: ZERO_USAGE,
         }]);
-        vi.spyOn(workspaces, "getAgentWorkspace").mockResolvedValueOnce(workspace);
-        const executeWorkspaceAction = vi.spyOn(workspaces, "executeWorkspaceAction").mockResolvedValue({
+        vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValueOnce(workspace);
+        const executeWorkspaceAction = vi.spyOn(workspaceActions, "executeWorkspaceAction").mockResolvedValue({
             workspace: releasedWorkspace,
             result: {
                 ...result,
@@ -442,8 +449,8 @@ describe("agent extension registration", () => {
             status: "available",
             createdAt: 1,
             updatedAt: 1,
-        } as workspaces.AgentWorkspace;
-        const result: workspaces.AgentWorkspaceResult = {
+        } as AgentWorkspace;
+        const result: AgentWorkspaceResult = {
             id: "result-1",
             workspaceId: workspace.id,
             runId: "worker-1",
@@ -460,9 +467,9 @@ describe("agent extension registration", () => {
             ownerSessionId: "parent-session",
             provisionalLeaseRunId: "provisional-1",
         });
-        const transferSpy = vi.spyOn(workspaces, "transferAgentWorkspaceLease").mockResolvedValue();
-        const getWorkspaceSpy = vi.spyOn(workspaces, "getAgentWorkspace").mockResolvedValue(workspace);
-        const prepareResultSpy = vi.spyOn(workspaces, "prepareAgentWorkspaceApplication").mockResolvedValue(result);
+        const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
+        const getWorkspaceSpy = vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace);
+        const prepareResultSpy = vi.spyOn(workspaceResults, "prepareAgentWorkspaceApplication").mockResolvedValue(result);
         const child: ChildAgentHandle = {
             prompt: async () => {},
             abort: async () => {},
@@ -539,8 +546,8 @@ describe("agent extension registration", () => {
             status: "available",
             createdAt: 1,
             updatedAt: 1,
-        } as workspaces.AgentWorkspace;
-        const result: workspaces.AgentWorkspaceResult = {
+        } as AgentWorkspace;
+        const result: AgentWorkspaceResult = {
             id: "result-foreground",
             workspaceId: workspace.id,
             runId: "worker-1",
@@ -556,10 +563,10 @@ describe("agent extension registration", () => {
             ownerSessionId: "parent-session",
             provisionalLeaseRunId: "provisional-foreground",
         });
-        const transferSpy = vi.spyOn(workspaces, "transferAgentWorkspaceLease").mockResolvedValue();
-        vi.spyOn(workspaces, "getAgentWorkspace").mockResolvedValue(workspace);
-        const prepareResultSpy = vi.spyOn(workspaces, "prepareAgentWorkspaceApplication").mockResolvedValue(result);
-        const releaseSpy = vi.spyOn(workspaces, "releaseAgentWorkspaceAfterNoChanges").mockResolvedValue();
+        const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
+        vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace);
+        const prepareResultSpy = vi.spyOn(workspaceResults, "prepareAgentWorkspaceApplication").mockResolvedValue(result);
+        const releaseSpy = vi.spyOn(workspaceResults, "releaseAgentWorkspaceAfterNoChanges").mockResolvedValue();
         const child: ChildAgentHandle = {
             prompt: async () => {},
             abort: async () => {},

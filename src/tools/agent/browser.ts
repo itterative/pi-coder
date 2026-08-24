@@ -6,19 +6,18 @@ import {
     loadAgentSessionTranscripts,
     removeCurrentAgentTranscripts,
     type AgentSessionBrowserItem,
-} from "./sessions";
+} from "./presentation/sessions";
+import type { AgentWorkspace } from "./contracts/workspaces";
+import { inspectAgentWorkspaceGitState, listAgentWorkspaces } from "./workspaces/store";
 import {
     inspectAgentWorkspaceDiff,
-    inspectAgentWorkspaceGitState,
-    listAgentWorkspaces,
     reconcileNoChangeAgentWorkspaceLeases,
-    type AgentWorkspace,
-} from "./workspaces";
+} from "./workspaces/results";
 import {
     showAgentSessionBrowser,
     type AgentSessionBrowserData,
 } from "../../tui/agent-session-browser";
-import { emitAgentEvent } from "./events";
+import { emitAgentEvent } from "./observability/events";
 import { handleWorkspaceAction } from "./workspaces/tui-actions";
 import { prepareForegroundWorkspaceResult } from "./workspaces/finalization";
 import type { AgentLifecycle } from "./lifecycle";

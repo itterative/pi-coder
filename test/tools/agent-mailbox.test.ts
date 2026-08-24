@@ -3,12 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
     AGENT_MAILBOX_MESSAGE_TYPE,
     AgentMailbox,
-} from "../../src/tools/agent/mailbox";
+} from "../../src/tools/agent/presentation/mailbox";
 import {
     ZERO_USAGE,
     type AgentRunDetails,
     type AgentRunStatus,
-} from "../../src/tools/agent/runtime";
+} from "../../src/tools/agent/runs/manager";
 
 function details(
     runId: string,

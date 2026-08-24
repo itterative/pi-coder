@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { discoverAgentsInDirectories } from "../../src/tools/agent/discovery";
+import { discoverAgentsInDirectories } from "../../src/tools/agent/definitions/discovery";
 
 const tempDirs: string[] = [];
 

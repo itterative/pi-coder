@@ -14,8 +14,8 @@ import {
     createChildModelRuntime,
     shouldCopyParentApiKey,
 } from "../../src/tools/agent/child";
-import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/discovery";
-import { ZERO_USAGE } from "../../src/tools/agent/runtime";
+import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
+import { ZERO_USAGE } from "../../src/tools/agent/runs/manager";
 
 describe("in-process scout SDK session", () => {
     it("constructs and disposes without a provider call or discovered parent extensions", async () => {

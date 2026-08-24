@@ -7,15 +7,15 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
-import type { AgentSessionBrowserItem } from "../tools/agent/sessions";
+import type { AgentSessionBrowserItem } from "../tools/agent/presentation/sessions";
 import {
     AGENT_EVENT_CHANNEL,
     isAgentEvent,
-} from "../tools/agent/events";
+} from "../tools/agent/observability/events";
 import type {
     AgentWorkspace,
     AgentWorkspaceGitState,
-} from "../tools/agent/workspaces";
+} from "../tools/agent/contracts/workspaces";
 import { BORDER_STYLES } from "./border-box";
 import { withOverlayStack } from "./overlay-stack";
 import { AgentSessionDetailComponent } from "./agent-session-detail";

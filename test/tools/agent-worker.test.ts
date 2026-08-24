@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { registerWorkerMutationHooks } from "../../src/tools/agent/worker";
+import { registerWorkerMutationHooks } from "../../src/tools/agent/child/worker-permissions";
 import { KEY, mockTheme } from "../helpers";
 
 interface Handler {
