@@ -14,7 +14,19 @@
   * otherwise, it should either coalesce at the end (probably flow is already there for the agent collection side)
 * isolated worker workspace apply should still work if there's no conflict
   * needs ironing out for the proper flow here
+
+
+
 * sometimes (isolated) workers get stuck
   * applies to more types of workers, also setup ones seem to get stuck
   * seems to always happen during an (pre-)approved command
   * /home/sd/.pi/agent/traces/2026-08-25T10-20-38.932Z-worker-5.json
+  * issue: calls are preflighted, which acquire a mutation lock, but the lock is only released on the
+  * see TODO in src/tools/agent/child.ts ("session.agent.toolExecution = "sequential";")
+  * long termm would be to recreate the tools and the permission gate inside the tool call instead
+
+AGENT:
+The deadlock is real and follows directly from Pi 0.84.1’s execution order:
+- Parallel mode preflights calls sequentially, but executes them only after all preflights finish (`node_modules/.../pi-agent-core/dist/agent-loop.js:287-371`).
+- The first mutation acquires `MutationQueue` in `tool_call` and stores its release until `tool_result` (`src/tools/agent/child/worker-permissions.ts:181-216, 294-301`).
+- A second mutation therefore waits during preflight for a result that cannot exist yet.

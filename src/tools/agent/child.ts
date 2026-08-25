@@ -157,6 +157,16 @@ export async function createAgentChild(
             "ask_parent",
         ],
     });
+    // Worker mutation permission is implemented in beforeToolCall. The SDK
+    // preflights every tool in a parallel batch before executing any of them;
+    // waiting for a previous tool_result from that hook would therefore
+    // deadlock a batch containing multiple mutations. Run worker batches
+    // sequentially so each approval can reach execution and release its gate.
+    // TODO(agent): Consider moving permission/queue handling into tool execution
+    // wrappers so read-only worker calls can remain parallel.
+    if (context.definition.mutating) {
+        session.agent.toolExecution = "sequential";
+    }
 
     context.onTrace?.("session.created", {
         toolCount: tools.length + interactionToolCount,
