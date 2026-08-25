@@ -12,7 +12,7 @@ import { prepareForegroundWorkspaceResult } from "./finalization";
 import type { AgentWorkspace, AgentWorkspaceResult } from "../contracts/workspaces";
 import { listAgentRunCatalog } from "../storage/run-catalog";
 import { executeWorkspaceAction } from "./actions";
-import { inspectAgentWorkspaceDiff } from "./results";
+import { inspectAgentWorkspaceResult } from "./results";
 import { getAgentWorkspace, transferAgentWorkspaceLease } from "./store";
 
 function parentWorkspaceOutcome(
@@ -90,7 +90,7 @@ export async function executeParentWorkspaceAction(
     const resolved = await resolveParentWorkspaceRun(params.runId, ctx, manager);
     const { record, workspace } = resolved;
     if (params.action === "inspect") {
-        return parentWorkspaceOutcome(record, workspace, await inspectAgentWorkspaceDiff(workspace));
+        return parentWorkspaceOutcome(record, workspace, await inspectAgentWorkspaceResult(workspace));
     }
 
     const sessionId = ctx.sessionManager.getSessionId();

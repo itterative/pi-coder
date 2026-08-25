@@ -85,9 +85,9 @@ Expected: no parent diff, no durable ref, and no manual cleanup required for thi
    - the workspace remains leased or otherwise excluded from automatic reuse;
    - the result is described as awaiting explicit disposition.
 4. Open `/agents` → **Workspaces** → the workspace → `Enter`.
-5. Press `i` and verify the inline diff contains only the marker file change. Press `Escape` or `q` to leave the diff.
+5. Press `i` and verify the inspection shows only the marker file in the changed-file stat, along with the worker revision and durable ref. Press `Escape` or `q` to leave the inspection.
 
-Expected: the saved diff is readable and the parent remains unchanged.
+Expected: the changed-file summary and result reference are readable and the parent remains unchanged.
 
 ## C. Retain disposition
 

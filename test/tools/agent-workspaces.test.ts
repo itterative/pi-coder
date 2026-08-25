@@ -17,7 +17,7 @@ import {
 import {
     applyAgentWorkspaceApplication,
     discardAgentWorkspaceResult,
-    inspectAgentWorkspaceDiff,
+    inspectAgentWorkspaceResult,
     prepareAgentWorkspaceApplication,
     reconcileNoChangeAgentWorkspaceLeases,
     releaseAgentWorkspaceAfterApplication,
@@ -397,11 +397,13 @@ describe("agent workspaces", () => {
         const { workspace } = await createClaimedWorkspace(repository, state);
         await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "worker\n");
         const result = await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
-        const diff = await inspectAgentWorkspaceDiff({
+        const inspection = await inspectAgentWorkspaceResult({
             ...workspace,
             latestResult: result,
         });
-        expect(diff).toContain("worker");
+        expect(inspection).toContain("tracked.txt");
+        expect(inspection).toContain(`Durable ref: ${result.durableRef}`);
+        expect(inspection).not.toContain("worker\n");
 
         await retainAgentWorkspaceResult(workspace.id, "session-1", "worker-1", state);
         const retained = (await listAgentWorkspaces(repository, state))[0];

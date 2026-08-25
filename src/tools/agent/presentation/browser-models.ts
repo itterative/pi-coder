@@ -99,7 +99,7 @@ function workspaceActions(
         actions.push({ action: "recover", key: "x", label: "recover orphaned lease" });
     }
     if (workspace.latestResult && workspace.latestResult.status !== "discarded") {
-        actions.push({ action: "inspect", key: "i", label: "inspect diff" });
+        actions.push({ action: "inspect", key: "i", label: "inspect changes" });
     }
     if (ownedByAnotherSession) return actions;
 

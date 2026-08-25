@@ -266,25 +266,24 @@ export async function releaseAgentWorkspaceAfterNoChanges(
     }
 }
 
-/** Inspect the prepared base-to-worker diff for a workspace. */
-export async function inspectAgentWorkspaceDiff(workspace: AgentWorkspace): Promise<string> {
+/** Inspect a prepared workspace result without returning its full patch. */
+export async function inspectAgentWorkspaceResult(workspace: AgentWorkspace): Promise<string> {
     const result = workspace.latestResult;
     if (!result || result.status === "discarded") return "No saved worker result is available for this workspace.";
     if (result.baseRevision === result.workerHead) return "No changes: the worker revision matches the workspace base revision.";
-    const [stat, patch] = await Promise.all([
-        git(workspace.worktreePath, ["diff", "--stat", "--no-ext-diff", `${result.baseRevision}..${result.workerHead}`]),
-        gitRaw(workspace.worktreePath, ["diff", "--no-ext-diff", "--find-renames", `${result.baseRevision}..${result.workerHead}`]),
-    ]);
+    const stat = await git(workspace.worktreePath, ["diff", "--stat", "--no-ext-diff", `${result.baseRevision}..${result.workerHead}`]);
+    const commits = result.commits.length > 0 ? result.commits.join(", ") : "none";
     return [
         `Workspace: ${workspace.slug}`,
-        `Base: ${result.baseRevision}`,
-        `Worker: ${result.workerHead}`,
+        `Base revision: ${result.baseRevision}`,
+        `Worker revision: ${result.workerHead}`,
+        `Commit range: ${result.commitRange}`,
+        `Commits: ${commits}`,
+        `Durable ref: ${result.durableRef ?? "none"}`,
         "",
-        "Diff stat:",
+        "Changed files:",
         stat || "(none)",
-        "",
-        patch || "(empty)",
-    ].join("\n").slice(0, 250_000);
+    ].join("\n");
 }
 
 /** Reconcile previously collected no-change results from before automatic release existed. */

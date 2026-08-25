@@ -16,12 +16,12 @@
 │   Base revision: abc123def456                                                                    │
 │                                                                                                  │
 │   Actions:                                                                                       │
-│   i inspect diff · r reset · d discard                                                           │
+│   i inspect changes · r reset · d discard                                                        │
 │                                                                                                  │
 │   This workspace may be selected for an isolated worker.                                         │
 │                                                                                                  │
 │   Confirm discard? y/Enter confirm · n/Esc cancel                                                │
-│     ↑/↓ scroll · i inspect diff · r reset · d discard · Esc back                                 │
+│     ↑/↓ scroll · i inspect changes · r reset · d discard · Esc back                              │
 │                                                                                                  │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

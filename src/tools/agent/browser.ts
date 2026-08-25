@@ -21,7 +21,7 @@ import {
 } from "../../tui/agent-session-browser";
 import type { AgentLifecycle } from "./lifecycle";
 import { prepareForegroundWorkspaceResult } from "./workspaces/finalization";
-import { inspectAgentWorkspaceDiff, reconcileNoChangeAgentWorkspaceLeases } from "./workspaces/results";
+import { inspectAgentWorkspaceResult, reconcileNoChangeAgentWorkspaceLeases } from "./workspaces/results";
 import { inspectAgentWorkspaceGitState, listAgentWorkspaces } from "./workspaces/store";
 import { handleWorkspaceAction } from "./workspaces/tui-actions";
 
@@ -171,7 +171,7 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                     ctx.ui.notify(`Could not cancel ${item.id}: ${message}`, "warning");
                 }
             },
-            onWorkspaceInspect: async (item) => inspectAgentWorkspaceDiff(requireWorkspace(item.id)),
+            onWorkspaceInspect: async (item) => inspectAgentWorkspaceResult(requireWorkspace(item.id)),
             onModelChange: (agent, model) => {
                 agentConfig.setModel(agent, model, ctx.cwd);
             },

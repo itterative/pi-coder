@@ -531,7 +531,7 @@ describe("AgentSessionBrowserComponent", () => {
 
         ui.press(KEY.enter);
         expect(ui.render()).toContain("Workspace: quiet-lantern-7k3");
-        expect(ui.render()).toContain("i inspect diff · r reset · d discard · Esc back");
+        expect(ui.render()).toContain("i inspect changes · r reset · d discard · Esc back");
         ui.press("i");
         expect(ui.render()).toContain("diff text");
         expect(invalidations).toBe(1);
