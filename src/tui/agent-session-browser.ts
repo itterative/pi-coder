@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { EventBus, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
     matchesKey,
@@ -135,6 +136,13 @@ function isSetting(item: AgentBrowserItem): item is AgentSettingItem {
 
 function isSession(item: AgentBrowserItem): item is AgentSessionBrowserItem {
     return !isWorkspace(item) && !isSetting(item);
+}
+
+function sameSession(a: AgentSessionBrowserItem, b: AgentSessionBrowserItem): boolean {
+    if (a.sessionFile !== undefined && b.sessionFile !== undefined) {
+        return path.resolve(a.sessionFile) === path.resolve(b.sessionFile);
+    }
+    return a.id === b.id;
 }
 
 function dateText(timestamp: number | undefined): string {
@@ -298,7 +306,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     if (this.sessionDetail) {
                         const selected = this.sessionDetail.sessionItem;
                         const replacement = [...this.current, ...this.past].find((item) => (
-                            item.kind === selected.kind && item.id === selected.id
+                            sameSession(item, selected)
                         ));
                         if (replacement) this.sessionDetail.updateItem(replacement);
                     }

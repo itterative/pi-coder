@@ -216,6 +216,87 @@ describe("AgentSessionBrowserComponent", () => {
         eventBus.clear();
     });
 
+    it("updates an open detail when a live run moves to the past tab", async () => {
+        const eventBus = createEventBus();
+        const sessionFile = "/tmp/.state/agent-sessions/--cwd--/parent/child-session-1.jsonl";
+        let refreshCount = 0;
+        const liveWithoutFile = {
+            ...current,
+            transcript: liveTranscript(30),
+            transcriptCollapsed: liveTranscript(30),
+        };
+        const liveWithFile = {
+            ...liveWithoutFile,
+            sessionFile,
+            transcript: liveTranscript(60),
+            transcriptCollapsed: liveTranscript(60),
+        };
+        const completed = {
+            ...past,
+            id: "child-session-1",
+            sessionFile,
+            transcript: liveTranscript(90),
+            transcriptCollapsed: liveTranscript(90),
+        };
+        const value = new AgentSessionBrowserComponent({
+            current: [liveWithoutFile],
+            past: [],
+            cwd: "/repo/project",
+            eventBus,
+            fixedHeight: () => 20,
+            onRefresh: async () => {
+                refreshCount++;
+                return refreshCount === 1
+                    ? { current: [liveWithFile], past: [] }
+                    : { current: [], past: [completed] };
+            },
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.enter);
+        expect(ui.render()).toContain("Live transcript line 29");
+
+        eventBus.emit(AGENT_EVENT_CHANNEL, {
+            cwd: "/repo/project",
+            timestamp: Date.now(),
+            type: "run",
+            action: "progress",
+            runId: current.id,
+            status: "running",
+        });
+        await vi.waitFor(() => expect(ui.render()).toContain("Live transcript line 59"));
+
+        eventBus.emit(AGENT_EVENT_CHANNEL, {
+            cwd: "/repo/project",
+            timestamp: Date.now(),
+            type: "run",
+            action: "status_changed",
+            runId: current.id,
+            previousStatus: "running",
+            status: "completed",
+        });
+        await vi.waitFor(() => expect(ui.render()).toContain("Live transcript line 89"));
+
+        ui.press(KEY.up);
+        eventBus.emit(AGENT_EVENT_CHANNEL, {
+            cwd: "/repo/project",
+            timestamp: Date.now(),
+            type: "run",
+            action: "progress",
+            runId: current.id,
+            status: "completed",
+        });
+        await vi.waitFor(() => expect(refreshCount).toBe(3));
+        expect(ui.render()).not.toContain("Live transcript line 89");
+
+        ui.press(KEY.tab);
+        ui.press(KEY.escape);
+        expect(ui.render()).not.toContain("Run ID: child-session-1");
+        value.dispose();
+        eventBus.clear();
+    });
+
     it("renders the current tab", async () => {
         const value = component();
 
