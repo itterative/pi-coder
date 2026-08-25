@@ -88,7 +88,7 @@ export class AgentActionError extends Error {
     }
 }
 
-export const BACKGROUND_AGENT_WAIT_GUIDANCE = "If you have no other work to do, report your current progress to the user and end your turn. Do not sleep or poll; an automatic notification will arrive when the run finishes or needs parent guidance.";
+export const BACKGROUND_AGENT_WAIT_GUIDANCE = "Progress and the final result will be delivered asynchronously. Do not duplicate the same investigation in the parent unless you intentionally want overlapping work. If you have no other work to do, report your current progress to the user and end your turn. Do not sleep or poll; an automatic notification will arrive when the run finishes or needs parent guidance.";
 
 function truncate(text: string, maxChars: number): string {
     if (text.length <= maxChars) return text;
