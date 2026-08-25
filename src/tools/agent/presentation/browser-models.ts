@@ -23,6 +23,7 @@ export interface AgentSessionBrowserItem {
     firstMessage?: string;
     allMessagesText?: string;
     transcript?: string;
+    transcriptCollapsed?: string;
     activity?: string;
     responsePreview?: string;
     mutating?: boolean;

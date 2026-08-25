@@ -1,0 +1,20 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   [delegated agent] Previous implementation review · completed                                   │
+│                                                                                                  │
+│   Detailed transcript line 6                                                                     │
+│   Detailed transcript line 7                                                                     │
+│   Detailed transcript line 8                                                                     │
+│   Detailed transcript line 9                                                                     │
+│   Detailed transcript line 10                                                                    │
+│   Detailed transcript line 11                                                                    │
+│   Detailed transcript line 12                                                                    │
+│   Detailed transcript line 13                                                                    │
+│   Detailed transcript line 14                                                                    │
+│   Detailed transcript line 15                                                                    │
+│   Detailed transcript line 16                                                                    │
+│   Detailed transcript line 17                                                                    │
+│   Detailed transcript line 18                                                                    │
+│                                                                                                  │
+│     Showing lines 14-26 of 37                                                                    │
+│     ↑/↓ scroll · End follow · Tab toggle view · Esc back                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

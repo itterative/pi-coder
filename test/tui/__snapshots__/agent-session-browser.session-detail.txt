@@ -7,7 +7,7 @@
 │   Updated: Nov 14 2023 22:13                                                                     │
 │   Usage: 1.2k input, 2m output, $0.0300                                                          │
 │                                                                                                  │
-│   Transcript:                                                                                    │
+│   Transcript (collapsed):                                                                        │
 │   I found the main entry points and summarized the current architecture.                         │
-│     ↑/↓ scroll · End follow · Esc back                                                           │
+│     ↑/↓ scroll · End follow · Tab toggle view · Esc back                                         │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

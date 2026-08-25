@@ -4,6 +4,7 @@ import { PagerComponent } from "./pager";
 import type { AgentSessionBrowserItem } from "../tools/agent/presentation/browser-models";
 import { compactNumber } from "./agent-session-format";
 import { wrapPreservingSpaces } from "../common/text";
+import type { AgentTranscriptView } from "../tools/agent/presentation/transcript";
 
 export interface AgentSessionDetailOptions {
     item: AgentSessionBrowserItem;
@@ -38,18 +39,31 @@ function isLiveExecution(item: AgentSessionBrowserItem): boolean {
     );
 }
 
-function detailText(item: AgentSessionBrowserItem, theme: Theme, width: number): string {
-    if (item.kind === "empty") return item.task;
+function detailText(
+    item: AgentSessionBrowserItem,
+    theme: Theme,
+    width: number,
+    transcriptView: AgentTranscriptView,
+): string {
+    if (item.kind === "empty") {
+        return item.task;
+    }
 
-    const transcript = item.transcript ?? item.allMessagesText ?? item.responsePreview;
+    const transcript = transcriptView === "collapsed"
+        ? item.transcriptCollapsed ?? item.transcript ?? item.allMessagesText ?? item.responsePreview
+        : item.transcript ?? item.allMessagesText ?? item.responsePreview;
     const lines = [
         `Run ID: ${item.id}`,
         `Task: ${oneLine(item.task)}`,
         `Started: ${dateText(item.startedAt)}`,
         `Updated: ${dateText(item.updatedAt)}`,
     ];
-    if (item.messageCount !== undefined) lines.push(`Messages: ${item.messageCount}`);
-    if (item.usage) lines.push(`Usage: ${usageText(item.usage)}`);
+    if (item.messageCount !== undefined) {
+        lines.push(`Messages: ${item.messageCount}`);
+    }
+    if (item.usage) {
+        lines.push(`Usage: ${usageText(item.usage)}`);
+    }
     if (item.readFiles?.length) {
         lines.push(`Read files (${item.readFiles.length}):`);
         lines.push(...item.readFiles.map((file) => `  - ${file}`));
@@ -58,7 +72,7 @@ function detailText(item: AgentSessionBrowserItem, theme: Theme, width: number):
         lines.push(`Changed files (${item.changedFiles.length}):`);
         lines.push(...item.changedFiles.map((file) => `  - ${file}`));
     }
-    lines.push("", theme.fg("accent", "Transcript:"));
+    lines.push("", theme.fg("accent", `Transcript (${transcriptView}):`));
 
     if (transcript) {
         for (const paragraph of transcript.split("\n")) {
@@ -76,6 +90,7 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
     private contentWidth = 80;
     private followLiveExecution: boolean;
     private item: AgentSessionBrowserItem;
+    private transcriptView: AgentTranscriptView = "collapsed";
     private totalLines = 0;
 
     constructor(options: AgentSessionDetailOptions) {
@@ -84,10 +99,16 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
             items: [{ value: options.item, label: "" }],
             scrollOffset: 0,
             maxVisibleLines: 16,
-            helpText: "↑/↓ scroll · End follow · Esc back",
+            helpText: "↑/↓ scroll · End follow · Tab toggle view · Esc back",
             fixedHeight: options.fixedHeight,
             compactFooter: true,
             onKey: (key, state) => {
+                if (matchesKey(key, "tab")) {
+                    this.transcriptView = this.transcriptView === "collapsed" ? "detailed" : "collapsed";
+                    this.invalidate();
+                    return true;
+                }
+
                 const page = state.maxVisibleLines;
                 const delta = matchesKey(key, "pageUp") ? -page
                     : matchesKey(key, "pageDown") ? page
@@ -100,16 +121,23 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
                     state.scrollOffset = maximumOffset;
                     return true;
                 }
-                if (delta === 0) return false;
-                if (delta < 0) this.followLiveExecution = false;
+                if (delta === 0) {
+                    return false;
+                }
+                if (delta < 0) {
+                    this.followLiveExecution = false;
+                }
                 state.scrollOffset = Math.max(0, Math.min(maximumOffset, state.scrollOffset + delta));
-                if (state.scrollOffset === maximumOffset) this.followLiveExecution = true;
+                if (state.scrollOffset === maximumOffset) {
+                    this.followLiveExecution = true;
+                }
                 return true;
             },
             renderItem: (item, renderOptions) => detailText(
                 item.value,
                 renderOptions.theme,
                 this.contentWidth,
+                this.transcriptView,
             ),
         });
         this.item = options.item;
@@ -129,15 +157,20 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
 
     protected override onCacheBuilt(totalLines: number): void {
         this.totalLines = totalLines;
+        const maximumOffset = Math.max(0, totalLines - this.state.maxVisibleLines);
         if (this.followLiveExecution) {
-            this.state.scrollOffset = Math.max(0, totalLines - this.state.maxVisibleLines);
+            this.state.scrollOffset = maximumOffset;
+            return;
         }
+        this.state.scrollOffset = Math.min(this.state.scrollOffset, maximumOffset);
     }
 
     override render(width: number): string[] {
         this.contentWidth = Math.max(1, width - 8);
         const height = this.options.fixedHeight?.();
-        if (height !== undefined) this.state.maxVisibleLines = Math.max(1, height - 7);
+        if (height !== undefined) {
+            this.state.maxVisibleLines = Math.max(1, height - 7);
+        }
         return super.render(width);
     }
 }

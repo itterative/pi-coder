@@ -2,4 +2,7 @@
   - const oldValue = true;
   + const newValue = true;
 ● bash npm test
+
+The first checks are complete.
+
 ● read README.md

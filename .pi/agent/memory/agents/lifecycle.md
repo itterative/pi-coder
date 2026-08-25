@@ -20,6 +20,7 @@ keep_updated: true
 - Parent abort/shutdown closes foreground dialogs, aborts child sessions, waits for settlement, and disposes resources. Non-TUI children are told to use `ask_parent`.
 - The above-editor widget is the sole persistent agent UI: do not add a footer `setStatus` entry. It shows running (`●`), waiting (`?`), ready (`✓`), failed (`!`), and permission-waiting states, sanitized current activity, a short assistant preview, and up to three recent terminal rows.
 - Terminal child sessions are disposed promptly while bounded results remain collectable. Full child output remains behind explicit `collect`; compact results show the question/run ID or a short final-result preview.
+- The `/agents` session detail view defaults to a collapsed transcript: consecutive tool calls between user/assistant messages become one human-readable summary. `c` selects collapsed and `d` selects detailed tool-call output; live detail refresh preserves the selected view.
 
 ## Mailbox and recovery
 

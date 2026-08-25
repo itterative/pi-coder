@@ -12,7 +12,7 @@ import type { AgentRunSummary } from "../contracts/runs";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
 import { listAgentRunCatalog } from "../storage/run-catalog";
 import type { AgentSessionBrowserItem } from "./browser-models";
-import { loadAgentSessionTranscript } from "./transcript";
+import { loadAgentSessionTranscriptViews } from "./transcript";
 
 function currentItem(run: AgentRunSummary): AgentSessionBrowserItem {
     return {
@@ -48,6 +48,7 @@ function pastItem(
     parentSessionId: string,
     metadata: AgentRunCatalogRecord | undefined,
 ): AgentSessionBrowserItem {
+    const transcript = loadAgentSessionTranscriptViews(info.path);
     return {
         kind: "past",
         id: info.id,
@@ -62,7 +63,8 @@ function pastItem(
         messageCount: info.messageCount,
         firstMessage: info.firstMessage,
         allMessagesText: info.allMessagesText.slice(-4_000),
-        transcript: loadAgentSessionTranscript(info.path) ?? info.allMessagesText,
+        transcript: transcript?.detailed ?? info.allMessagesText,
+        transcriptCollapsed: transcript?.collapsed,
         mutating: metadata?.mutating,
         usage: metadata?.usageSnapshot,
         responsePreview: metadata?.responsePreview,
@@ -90,14 +92,21 @@ export async function loadAgentSessionTranscripts(
     };
 
     return Promise.all(items.map(async (item) => {
-        if (!item.sessionFile || item.transcript !== undefined) return item;
+        if (!item.sessionFile || item.transcript !== undefined) {
+            return item;
+        }
         const directory = path.dirname(item.sessionFile);
         const info = (await infosFor(directory)).find(
             (candidate) => path.resolve(candidate.path) === path.resolve(item.sessionFile!),
         );
-        return info
-            ? { ...item, transcript: loadAgentSessionTranscript(info.path) ?? info.allMessagesText }
-            : item;
+        if (!info) {
+            return item;
+        }
+
+        const transcript = loadAgentSessionTranscriptViews(info.path);
+        return transcript
+            ? { ...item, transcript: transcript.detailed, transcriptCollapsed: transcript.collapsed }
+            : { ...item, transcript: info.allMessagesText };
     }));
 }
 

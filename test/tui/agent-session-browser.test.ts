@@ -301,6 +301,31 @@ describe("AgentSessionBrowserComponent", () => {
         await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.session-detail.txt");
     });
 
+    it("toggles between collapsed and detailed transcript views", () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [{
+                ...past,
+                transcript: "The agent inspected the project.\n\n● read src/index.ts\n● read README.md",
+                transcriptCollapsed: "The agent inspected the project.\n\n▸ 2 tool calls: read src/index.ts; read README.md",
+            }],
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab, KEY.enter);
+        expect(ui.render()).toContain("Transcript (collapsed):");
+        expect(ui.render()).toContain("▸ 2 tool calls: read src/index.ts; read README.md");
+
+        ui.press(KEY.tab);
+        expect(ui.render()).toContain("Transcript (detailed):");
+        expect(ui.render()).toContain("● read src/index.ts");
+        expect(ui.render()).toContain("● read README.md");
+
+        ui.press(KEY.tab);
+        expect(ui.render()).toContain("Transcript (collapsed):");
+    });
+
     it("shows read and changed files in session details", () => {
         const value = new AgentSessionBrowserComponent({
             current: [{
@@ -335,6 +360,30 @@ describe("AgentSessionBrowserComponent", () => {
         ui.press(KEY.pageDown);
         expect(ui.render()).toContain("Transcript line 16");
         expect(ui.render()).not.toContain("Transcript line 0");
+    });
+
+    it("restores the collapsed viewport after scrolling detailed output", async () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [{
+                ...past,
+                transcript: Array.from({ length: 30 }, (_, index) => `Detailed transcript line ${index}`).join("\n"),
+                transcriptCollapsed: "Collapsed transcript summary",
+            }],
+            fixedHeight: () => 20,
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab, KEY.enter, KEY.tab, KEY.pageDown);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.session-detail-scrolled.txt",
+        );
+
+        ui.press(KEY.tab);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.session-detail-collapsed-after-scroll.txt",
+        );
     });
 
     it("switches tabs and renders the past result entry", async () => {

@@ -107,13 +107,23 @@ describe("delegated-agent transcript formatting", () => {
         });
         session.appendMessage({
             role: "assistant",
+            content: [{ type: "text", text: "The first checks are complete." }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage,
+            stopReason: "stop",
+            timestamp: 4,
+        });
+        session.appendMessage({
+            role: "assistant",
             content: [{ type: "toolCall", id: "call-read", name: "read", arguments: { path: "README.md" } }],
             api: "test",
             provider: "test",
             model: "test",
             usage,
             stopReason: "toolUse",
-            timestamp: 4,
+            timestamp: 5,
         });
         session.appendMessage({
             role: "toolResult",
@@ -121,11 +131,15 @@ describe("delegated-agent transcript formatting", () => {
             toolName: "read",
             content: [{ type: "text", text: "Read successfully" }],
             isError: false,
-            timestamp: 5,
+            timestamp: 6,
         });
 
         await expect(formatAgentSessionTranscript(session.getBranch())).toMatchFileSnapshot(
             "__snapshots__/agent-transcript.tool-calls.txt",
+        );
+
+        expect(formatAgentSessionTranscript(session.getBranch(), "collapsed")).toBe(
+            "▸ 2 tool calls (1 failed): edit src/index.ts; run npm test\n\nThe first checks are complete.\n\n▸ 1 tool call: read README.md",
         );
     });
 
