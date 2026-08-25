@@ -40,7 +40,7 @@ export function childProtocolPrompt(
         ? "Direct end-user dialogs are unavailable while you run in the background. Use ask_parent when guidance is materially necessary; make reasonable progress first, include evidence and a recommendation, and call it alone in its tool batch."
         : "Use ask_user when you need a preference, clarification, or decision directly from the end user, and call it alone in its tool batch so later work can incorporate the answer. The answer returns in the same turn, so continue your work afterward. Use ask_parent instead when the parent can answer, investigate, or decide; make reasonable progress first, include evidence and a recommendation, and call ask_parent alone in its tool batch. Do not ask questions only in prose when either interaction tool applies.";
     const capability = mutating
-        ? "You are a mutation-capable worker operating in the parent's current checkout. Every edit, write, and bash call opens an explicit parent-visible permission gate. Call mutation tools one at a time, and remember that parent activity may concurrently affect the checkout."
+        ? "You are a mutation-capable worker operating in the parent's current checkout or an isolated worktree. Every edit, write, and bash call opens an explicit parent-visible permission gate. Call mutation tools one at a time; same-checkout workers are single-flight, while isolated workers may run concurrently with other isolated work."
         : [
             "You are a read-only subagent working for a parent coding agent.",
             `Enabled capabilities: codebase-read${safeBash ? ", safe-bash" : ""}.`,

@@ -544,7 +544,7 @@ describe("AgentRunManager", () => {
 
         manager.spawn(BUILTIN_WORKER, "Implement", context());
         expect(() => manager.spawn(BUILTIN_WORKER, "Also implement", context()))
-            .toThrow("mutation-capable worker is already active");
+            .toThrow("same-checkout mutation-capable worker is already active");
         expect(() => manager.spawn(BUILTIN_SCOUT, "Inspect", context())).not.toThrow();
 
         await flushBackground();

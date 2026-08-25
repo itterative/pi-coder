@@ -117,6 +117,14 @@ function isTerminalStatus(status: AgentRunStatus): boolean {
         || status === "canceled";
 }
 
+function mutationRunsConflict(candidateWorkspaceId: string | undefined, activeWorkspaceId: string | undefined): boolean {
+    // Same-checkout workers share the parent's files and remain single-flight.
+    // Isolated workers have separate worktrees and may mutate concurrently.
+    return candidateWorkspaceId === undefined
+        || activeWorkspaceId === undefined
+        || candidateWorkspaceId === activeWorkspaceId;
+}
+
 export class AgentRunManager {
     private readonly runs = new Map<string, AgentRun>();
     private readonly terminalOrder: string[] = [];
@@ -148,6 +156,14 @@ export class AgentRunManager {
 
     get hasActiveMutatingRun(): boolean {
         return [...this.runs.values()].some((run) => run.mutating && !isTerminalStatus(run.status));
+    }
+
+    get hasActiveNonIsolatedMutatingRun(): boolean {
+        return [...this.runs.values()].some((run) => (
+            run.mutating
+            && run.workspaceId === undefined
+            && !isTerminalStatus(run.status)
+        ));
     }
 
     listRuns(): AgentRunSummary[] {
@@ -222,8 +238,12 @@ export class AgentRunManager {
                 diagnostics.push(`Could not restore ${record.runId}: the active-run limit is ${this.maxActiveRuns}.`);
                 continue;
             }
-            if (!persistedTerminal && record.mutating && [...this.runs.values()].some((run) => run.mutating && !isTerminalStatus(run.status))) {
-                diagnostics.push(`Could not restore ${record.runId}: another mutation-capable worker was restored first.`);
+            if (!persistedTerminal && record.mutating && [...this.runs.values()].some((run) => (
+                run.mutating
+                && !isTerminalStatus(run.status)
+                && mutationRunsConflict(record.workspaceId, run.workspaceId)
+            ))) {
+                diagnostics.push(`Could not restore ${record.runId}: another conflicting mutation-capable worker was restored first.`);
                 continue;
             }
 
@@ -545,10 +565,16 @@ export class AgentRunManager {
         if (
             definition.mutating
             && [...this.runs.values()].some((candidate) => (
-                candidate.mutating && !isTerminalStatus(candidate.status)
+                candidate.mutating
+                && !isTerminalStatus(candidate.status)
+                && mutationRunsConflict(context.workspaceId, candidate.workspaceId)
             ))
         ) {
-            throw new AgentActionError("A mutation-capable worker is already active.");
+            throw new AgentActionError(
+                context.workspaceId
+                    ? "A mutation-capable worker is already active in this workspace."
+                    : "A same-checkout mutation-capable worker is already active.",
+            );
         }
         const now = Date.now();
         const id = `${definition.name}-${this.nextRunNumber++}`;

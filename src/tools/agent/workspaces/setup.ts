@@ -167,8 +167,8 @@ export async function prepareIsolatedWorkspace(
     if (!definition.mutating) {
         throw new AgentActionError("Worktree isolation is currently available only for the mutation-capable worker.");
     }
-    if (manager.hasActiveMutatingRun) {
-        throw new AgentActionError("A mutation-capable worker is already active.");
+    if (manager.hasActiveNonIsolatedMutatingRun) {
+        throw new AgentActionError("A same-checkout mutation-capable worker is already active.");
     }
 
     const ownerSessionId = ctx.sessionManager.getSessionId();
