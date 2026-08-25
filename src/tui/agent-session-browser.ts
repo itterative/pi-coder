@@ -248,6 +248,13 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                             this.workspaceDetail.close();
                         }
                     }
+                    if (this.sessionDetail) {
+                        const selected = this.sessionDetail.sessionItem;
+                        const replacement = [...this.current, ...this.past].find((item) => (
+                            item.kind === selected.kind && item.id === selected.id
+                        ));
+                        if (replacement) this.sessionDetail.updateItem(replacement);
+                    }
                     this.rebuildItems();
                     this.invalidate();
                     this.onInvalidate?.();

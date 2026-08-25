@@ -106,6 +106,10 @@ function component() {
     return value;
 }
 
+function liveTranscript(lineCount: number): string {
+    return Array.from({ length: lineCount }, (_, index) => `Live transcript line ${index}`).join("\n");
+}
+
 beforeEach(() => {
     vi.spyOn(Date.prototype, "toLocaleString").mockReturnValue("Nov 14 2023 22:13");
 });
@@ -142,6 +146,56 @@ describe("AgentSessionBrowserComponent", () => {
         for (let index = 0; index < 4; index++) await Promise.resolve();
 
         expect(renderText(value, 100)).toContain("Updated run");
+        value.dispose();
+        eventBus.clear();
+    });
+
+    it("refreshes an open live detail and follows output until the user scrolls up", async () => {
+        const eventBus = createEventBus();
+        let transcript = liveTranscript(30);
+        let refreshes = 0;
+        const value = new AgentSessionBrowserComponent({
+            current: [{ ...current, transcript }],
+            past: [],
+            cwd: "/repo/project",
+            eventBus,
+            fixedHeight: () => 20,
+            onRefresh: async () => {
+                refreshes++;
+                return { current: [{ ...current, transcript }], past: [] };
+            },
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+        ui.press(KEY.enter);
+        expect(ui.render()).toContain("Live transcript line 29");
+
+        transcript = liveTranscript(60);
+        eventBus.emit(AGENT_EVENT_CHANNEL, {
+            cwd: "/repo/project",
+            timestamp: Date.now(),
+            type: "run",
+            action: "progress",
+            runId: current.id,
+            status: "running",
+        });
+        await vi.waitFor(() => expect(ui.render()).toContain("Live transcript line 59"));
+
+        ui.press(KEY.up);
+        transcript = liveTranscript(90);
+        eventBus.emit(AGENT_EVENT_CHANNEL, {
+            cwd: "/repo/project",
+            timestamp: Date.now(),
+            type: "run",
+            action: "progress",
+            runId: current.id,
+            status: "running",
+        });
+        await vi.waitFor(() => expect(refreshes).toBe(2));
+        expect(ui.render()).not.toContain("Live transcript line 89");
+
+        ui.press("\x1b[F");
+        expect(ui.render()).toContain("Live transcript line 89");
         value.dispose();
         eventBus.clear();
     });

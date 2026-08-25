@@ -278,6 +278,12 @@ export class ListViewComponent<
         // Default: no status lines
     }
 
+    /**
+     * Called after the visual-line cache is rebuilt and before visible content
+     * is selected. Pagers that follow live content can adjust scrollOffset here.
+     */
+    protected onCacheBuilt(_totalLines: number): void {}
+
     /** Finish the dialog with a result. */
     protected finish(result: R): void {
         this.done?.(result);
@@ -356,6 +362,7 @@ export class ListViewComponent<
         }
 
         this.cachedTotalLines = totalLines;
+        this.onCacheBuilt(totalLines);
         this.updateScrollOffset();
     }
 

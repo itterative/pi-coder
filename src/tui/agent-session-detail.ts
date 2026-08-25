@@ -23,6 +23,14 @@ function usageText(usage: NonNullable<AgentSessionBrowserItem["usage"]>): string
     return `${compactNumber(usage.input)} input, ${compactNumber(usage.output)} output, $${usage.cost.total.toFixed(4)}`;
 }
 
+function isLiveExecution(item: AgentSessionBrowserItem): boolean {
+    return item.kind === "current" && (
+        item.status === "starting"
+        || item.status === "running"
+        || item.status === "waiting_for_permission"
+    );
+}
+
 function detailText(item: AgentSessionBrowserItem, theme: Theme, width: number): string {
     if (item.kind === "empty") return item.task;
 
@@ -59,6 +67,8 @@ function detailText(item: AgentSessionBrowserItem, theme: Theme, width: number):
 /** Read-only detail view for one delegated-agent session. */
 export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrowserItem> {
     private contentWidth = 80;
+    private followLiveExecution: boolean;
+    private item: AgentSessionBrowserItem;
     private totalLines = 0;
 
     constructor(options: AgentSessionDetailOptions) {
@@ -71,7 +81,7 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
             items: [{ value: options.item, label: "" }],
             scrollOffset: 0,
             maxVisibleLines: 16,
-            helpText: "↑/↓ scroll · Esc back",
+            helpText: "↑/↓ scroll · End follow · Esc back",
             fixedHeight: options.fixedHeight,
             compactFooter: true,
             onKey: (key, state) => {
@@ -81,19 +91,43 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
                         : matchesKey(key, "up") ? -1
                             : matchesKey(key, "down") ? 1
                                 : 0;
+                const maximumOffset = Math.max(0, this.totalLines - state.maxVisibleLines);
+                if (matchesKey(key, "end")) {
+                    this.followLiveExecution = true;
+                    state.scrollOffset = maximumOffset;
+                    return true;
+                }
                 if (delta === 0) return false;
-                state.scrollOffset = Math.max(
-                    0,
-                    Math.min(this.totalLines - state.maxVisibleLines, state.scrollOffset + delta),
-                );
+                if (delta < 0) this.followLiveExecution = false;
+                state.scrollOffset = Math.max(0, Math.min(maximumOffset, state.scrollOffset + delta));
+                if (state.scrollOffset === maximumOffset) this.followLiveExecution = true;
                 return true;
             },
-            renderItem: (item, renderOptions) => {
-                const text = detailText(item.value, renderOptions.theme, this.contentWidth);
-                this.totalLines = text.split("\n").length;
-                return text;
-            },
+            renderItem: (item, renderOptions) => detailText(
+                item.value,
+                renderOptions.theme,
+                this.contentWidth,
+            ),
         });
+        this.item = options.item;
+        this.followLiveExecution = isLiveExecution(options.item);
+    }
+
+    get sessionItem(): AgentSessionBrowserItem {
+        return this.item;
+    }
+
+    updateItem(item: AgentSessionBrowserItem): void {
+        this.item = item;
+        this.state.items[0] = { value: item, label: "" };
+        this.invalidate();
+    }
+
+    protected override onCacheBuilt(totalLines: number): void {
+        this.totalLines = totalLines;
+        if (this.followLiveExecution) {
+            this.state.scrollOffset = Math.max(0, totalLines - this.state.maxVisibleLines);
+        }
     }
 
     override render(width: number): string[] {

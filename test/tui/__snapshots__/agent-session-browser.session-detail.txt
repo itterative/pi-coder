@@ -9,5 +9,5 @@
 │                                                                                                  │
 │   Transcript:                                                                                    │
 │   I found the main entry points and summarized the current architecture.                         │
-│     ↑/↓ scroll · Esc back                                                                        │
+│     ↑/↓ scroll · End follow · Esc back                                                           │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
