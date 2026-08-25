@@ -40,7 +40,7 @@
  *   ellipsis prefix ("… │ ") to indicate it belongs to the line above
  */
 
-import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { EventBus, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable } from "@earendil-works/pi-tui";
 import {
@@ -52,7 +52,7 @@ import {
     visibleWidth,
     wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { withDialogQueue } from "./dialog-queue";
+import { hasQueuedDialog, withDialogQueue } from "./dialog-queue";
 import { InlineEditor } from "./inline-editor";
 
 // ─── Layout & behavior constants ─────────────────────────────────────
@@ -510,7 +510,7 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
 // Show select-with-message UI and return result (or undefined if cancelled)
 export async function selectWithMessage<T>(
     options: SelectWithMessageOptions<T>,
-    ctx: { hasUI: boolean; ui: ExtensionContext["ui"] },
+    ctx: { hasUI: boolean; ui: ExtensionContext["ui"]; events?: EventBus },
     signal?: AbortSignal,
 ): Promise<SelectWithMessageResult<T> | undefined> {
     if (!ctx.hasUI || signal?.aborted) return undefined;
@@ -542,7 +542,9 @@ export async function selectWithMessage<T>(
         } finally {
             signal?.removeEventListener("abort", abort);
             finish = undefined;
-            ctx.ui.setWorkingVisible(true);
+            if (!hasQueuedDialog(ctx.events)) {
+                ctx.ui.setWorkingVisible(true);
+            }
         }
-    });
+    }, ctx.events);
 }

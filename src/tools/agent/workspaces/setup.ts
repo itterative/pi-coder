@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { selectWithMessage } from "../../../tui/select-with-message";
 import { emitAgentEvent } from "../observability/events";
@@ -163,6 +163,7 @@ export async function prepareIsolatedWorkspace(
     signal: AbortSignal | undefined,
     onUiUpdate?: WorkspaceSetupUiCallback,
     events?: AgentEventSink,
+    dialogEvents?: EventBus,
 ): Promise<WorkspaceReservation> {
     if (!definition.mutating) {
         throw new AgentActionError("Worktree isolation is currently available only for the mutation-capable worker.");
@@ -242,7 +243,7 @@ export async function prepareIsolatedWorkspace(
             },
         ],
         selectHelpText: "↑/↓ choose · Enter confirm · Esc cancel",
-    }, ctx, signal);
+    }, { ...ctx, events: dialogEvents }, signal);
     const choice = prompt?.value;
     if (!choice || choice === "cancel") {
         const message = prompt?.message?.trim();

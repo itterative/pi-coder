@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
     isToolCallEventType,
+    type EventBus,
     type ExtensionAPI,
     type ExtensionContext,
     type BashToolInput,
@@ -84,6 +85,7 @@ export async function askChildUser(
     parentContext: ExtensionContext,
     agentName: string,
     signal?: AbortSignal,
+    events?: EventBus,
 ): Promise<ChildUserAnswerResult> {
     if (!parentContext.hasUI || parentContext.mode !== "tui") {
         return {
@@ -99,7 +101,7 @@ export async function askChildUser(
         title: `${agentName} asks: ${question.title}`,
         description: question.description,
         options: question.options,
-    }, parentContext, signal);
+    }, { hasUI: parentContext.hasUI, ui: parentContext.ui, events }, signal);
 
     if (signal?.aborted) {
         throw signal.reason instanceof Error
@@ -141,6 +143,7 @@ export function registerChildExtension(
     runTitle: string,
     onProgress: ChildAgentFactoryContext["onProgress"],
     onTrace?: ChildAgentFactoryContext["onTrace"],
+    events?: EventBus,
 ) {
     return (pi: ExtensionAPI): void => {
         if (!background) pi.registerTool({
@@ -170,7 +173,7 @@ export function registerChildExtension(
                     optionCount: params.options.length,
                 });
                 try {
-                    const result = await askChildUser(params, parentContext, agentName, signal);
+                    const result = await askChildUser(params, parentContext, agentName, signal, events);
                     const outcome = result.details.unavailable
                         ? "unavailable"
                         : result.details.canceled
@@ -244,6 +247,7 @@ export function registerChildExtension(
         if (mutating) {
             registerWorkerMutationHooks(pi, {
                 parentContext,
+                events,
                 runId,
                 runTitle,
                 agentName,

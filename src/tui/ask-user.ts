@@ -30,7 +30,7 @@
  * this component only owns the dialog layout and selection flow.
  */
 
-import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { EventBus, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable } from "@earendil-works/pi-tui";
 import {
@@ -41,7 +41,7 @@ import {
     Text,
     visibleWidth,
 } from "@earendil-works/pi-tui";
-import { withDialogQueue } from "./dialog-queue";
+import { hasQueuedDialog, withDialogQueue } from "./dialog-queue";
 import { InlineEditor } from "./inline-editor";
 
 // ─── Layout constants ───────────────────────────────────────────────
@@ -395,7 +395,7 @@ export class AskUserComponent implements Component, Focusable {
 
 export async function askUser(
     options: AskUserOptions,
-    ctx: { hasUI: boolean; ui: ExtensionContext["ui"] },
+    ctx: { hasUI: boolean; ui: ExtensionContext["ui"]; events?: EventBus },
     signal?: AbortSignal,
 ): Promise<AskUserResult | undefined> {
     if (!ctx.hasUI || signal?.aborted) return undefined;
@@ -427,7 +427,9 @@ export async function askUser(
         } finally {
             signal?.removeEventListener("abort", abort);
             finish = undefined;
-            ctx.ui.setWorkingVisible(true);
+            if (!hasQueuedDialog(ctx.events)) {
+                ctx.ui.setWorkingVisible(true);
+            }
         }
-    });
+    }, ctx.events);
 }

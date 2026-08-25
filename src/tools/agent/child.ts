@@ -107,6 +107,7 @@ export async function createAgentChild(
                 context.runTitle ?? context.runId ?? context.definition.name,
                 context.onProgress,
                 context.onTrace,
+                context.events,
             ),
         }],
         appendSystemPrompt: [

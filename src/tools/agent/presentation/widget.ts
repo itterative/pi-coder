@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
@@ -17,6 +17,10 @@ interface AgentWidgetState {
 }
 
 const widgetStates = new WeakMap<object, AgentWidgetState>();
+
+function widgetOwner(ctx: ExtensionContext, events?: EventBus): object {
+    return (events ?? ctx.ui) as object;
+}
 
 export function diagnosticText(diagnostic: { message: string; paths: string[] }): string {
     const paths = diagnostic.paths.length ? ` [${diagnostic.paths.join(", ")}]` : "";
@@ -127,9 +131,14 @@ export class AgentActivityWidget implements Component {
     private runs: AgentRunSummary[];
     private hiddenCount: number;
 
-    constructor(tui: TUI, runs: AgentRunSummary[] = [], hiddenCount = 0) {
+    constructor(
+        tui: TUI,
+        runs: AgentRunSummary[] = [],
+        hiddenCount = 0,
+        events?: EventBus,
+    ) {
         this.tui = tui;
-        this.spinner = new Spinner(tui);
+        this.spinner = new Spinner(tui, { events });
         this.runs = runs;
         this.hiddenCount = hiddenCount;
         this.updateSpinner();
@@ -183,14 +192,13 @@ export function updateAgentUi(
     ctx: ExtensionContext,
     manager: { listRuns(): AgentRunSummary[] },
     extraRuns: AgentRunSummary[] = [],
+    events?: EventBus,
 ): void {
     const visible = visibleRuns(manager, extraRuns);
-    const state = widgetStates.get(ctx);
+    const owner = widgetOwner(ctx, events);
+    const state = widgetStates.get(owner);
     if (!visible.runs.length) {
-        if (state) {
-            ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
-            widgetStates.delete(ctx);
-        }
+        clearAgentUi(ctx, events);
         return;
     }
 
@@ -205,16 +213,21 @@ export function updateAgentUi(
         runs: visible.runs,
         hiddenCount: visible.hiddenCount,
     };
-    widgetStates.set(ctx, nextState);
+    widgetStates.set(owner, nextState);
     ctx.ui.setWidget(
         AGENT_WIDGET_ID,
         (tui) => {
-            const component = new AgentActivityWidget(tui, nextState.runs, nextState.hiddenCount);
+            const component = new AgentActivityWidget(tui, nextState.runs, nextState.hiddenCount, events);
             nextState.component = component;
             return component;
         },
         { placement: "aboveEditor" },
     );
+}
+
+export function clearAgentUi(ctx: ExtensionContext, events?: EventBus): void {
+    ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
+    widgetStates.delete(widgetOwner(ctx, events));
 }
 
 export function clearCompletedWorkspaceSetupRun(

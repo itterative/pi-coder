@@ -112,6 +112,7 @@ async function promptForFileAccess(
     filePath: string,
     folder: string,
     ctx: ExtensionContext,
+    events: ExtensionAPI["events"],
 ): Promise<SelectWithMessageResult<PromptChoice> | undefined> {
     if (!ctx.hasUI) {
         return undefined;
@@ -142,7 +143,7 @@ async function promptForFileAccess(
             contentLines: [filePath],
             items,
         },
-        ctx,
+        { ...ctx, events },
         ctx.signal,
     );
 
@@ -190,7 +191,7 @@ export default function registerFileToolHook(
         }
 
         const folder = sessionFolderFor(filePath, cwd);
-        const result = await promptForFileAccess(operation, filePath, folder, ctx);
+        const result = await promptForFileAccess(operation, filePath, folder, ctx, pi.events);
         const choice = result?.value;
 
         if (result?.message) {

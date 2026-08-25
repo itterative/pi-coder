@@ -23,7 +23,7 @@ import type { AgentTraceStore } from "./observability/trace";
 import type { AgentWorkspace } from "./contracts/workspaces";
 import type { WorkspaceSetupUiUpdate } from "./workspaces/setup";
 import {
-    AGENT_WIDGET_ID,
+    clearAgentUi,
     clearCompletedWorkspaceSetupRun,
     diagnosticText,
     updateAgentUi,
@@ -33,6 +33,7 @@ export type WorkspaceEventAction = "created" | "updated" | "lease_changed" | "re
 
 export class AgentLifecycle {
     readonly events: AgentEventSink;
+    readonly eventBus: ExtensionAPI["events"];
 
     private managerValue: AgentRunManager;
     private cachedAgentPrompt = "";
@@ -42,12 +43,15 @@ export class AgentLifecycle {
     private mailboxFlushScheduled = false;
     private readonly notifiedWarnings = new Set<string>();
     private unsubscribeAgentUiEvents: () => void = () => {};
+    readonly factory: ChildAgentFactory;
 
     constructor(
         private readonly pi: ExtensionAPI,
-        readonly factory: ChildAgentFactory = createAgentChild,
+        factory: ChildAgentFactory = createAgentChild,
         private readonly traceStore?: AgentTraceStore,
     ) {
+        this.eventBus = pi.events;
+        this.factory = (context) => factory({ ...context, events: pi.events });
         this.events = createAgentEventSink(pi.events);
         this.managerValue = this.createManager();
         this.mailbox = new AgentMailbox(pi);
@@ -117,7 +121,7 @@ export class AgentLifecycle {
             await this.manager.flushPersistence();
             emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "reset" });
             this.setupRuns.clear();
-            ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
+            clearAgentUi(ctx, this.pi.events);
             this.managerValue = this.createManager();
             const discovered = this.discover(ctx);
             this.cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
@@ -127,7 +131,7 @@ export class AgentLifecycle {
         this.pi.on("session_shutdown", async (_event, ctx) => {
             this.mailbox.close();
             this.setupRuns.clear();
-            ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
+            clearAgentUi(ctx, this.pi.events);
             await this.manager.shutdown();
             await this.manager.flushPersistence();
             emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "shutdown" });
@@ -158,7 +162,7 @@ export class AgentLifecycle {
     }
 
     refreshAgentUi(ctx: ExtensionContext): void {
-        updateAgentUi(ctx, this.manager, this.setupRunSummaries);
+        updateAgentUi(ctx, this.manager, this.setupRunSummaries, this.pi.events);
     }
 
     emitWorkspaceEvent(

@@ -1,4 +1,5 @@
 import type { Usage } from "@earendil-works/pi-ai";
+import type { EventBus } from "@earendil-works/pi-coding-agent";
 
 import type { AgentDefinition } from "../definitions/types";
 import type { WorkerMutationReport } from "./mutations";
@@ -53,6 +54,7 @@ export interface ChildAgentFactoryContext {
     parentCwd?: string;
     definition: AgentDefinition;
     parentContext: unknown;
+    events?: EventBus;
     background?: boolean;
     runId?: string;
     runTitle?: string;

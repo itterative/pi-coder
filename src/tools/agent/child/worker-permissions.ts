@@ -2,6 +2,7 @@ import path from "node:path";
 
 import {
     isToolCallEventType,
+    type EventBus,
     type BashToolInput,
     type EditToolInput,
     type ExtensionAPI,
@@ -29,6 +30,7 @@ interface WorkerMutationCallbacks {
 
 interface WorkerMutationOptions extends WorkerMutationCallbacks {
     parentContext: ExtensionContext;
+    events?: EventBus;
     runId: string;
     runTitle?: string;
     agentName: string;
@@ -125,7 +127,7 @@ async function prompt(
                 handleSelectInput: dialogOptions.handleSelectInput,
                 selectHelpText: dialogOptions.selectHelpText,
             },
-            options.parentContext,
+            { ...options.parentContext, events: options.events },
             ctx.signal,
         );
         return {

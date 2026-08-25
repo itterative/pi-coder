@@ -222,7 +222,7 @@ Pay attention to these notes as they provide context about the user's preference
                         return false;
                     },
                 },
-                ctx,
+                { ...ctx, events: pi.events },
                 ctx.signal,
             );
 

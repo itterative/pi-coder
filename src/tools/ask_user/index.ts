@@ -92,7 +92,7 @@ export default function registerAskUserTool(pi: ExtensionAPI) {
                     description: params.description,
                     options: params.options,
                 },
-                ctx,
+                { ...ctx, events: pi.events },
                 signal,
             );
 

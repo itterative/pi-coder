@@ -65,6 +65,7 @@ export async function executeAgentAction(
                     signal,
                     (runId, workspace, update) => lifecycle.updateSetupRun(ctx, runId, workspace, update),
                     lifecycle.events,
+                    lifecycle.eventBus,
                 )
                 : undefined;
             const runContext = {
