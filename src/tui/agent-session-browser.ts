@@ -30,11 +30,14 @@ import {
 
 export type { AgentWorkspaceAction } from "./agent-workspace-browser";
 
+export type AgentSettingId = BuiltinAgentName | "notifyBusyWorkerChanges";
+
 export interface AgentSetting {
-    id: BuiltinAgentName;
+    id: AgentSettingId;
     label: string;
     description: string;
     model?: string;
+    enabled?: boolean;
 }
 
 export interface AgentModelOption {
@@ -69,6 +72,7 @@ export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
     onWorkspaceAction?: (workspace: AgentWorkspaceBrowserItem, action: WorkspaceDispositionAction) => AgentWorkspaceBrowserItem | null | undefined | Promise<AgentWorkspaceBrowserItem | null | undefined>;
     onWorkspaceInspect?: (workspace: AgentWorkspaceBrowserItem) => string | Promise<string>;
     onModelChange?: (agent: BuiltinAgentName, model: string | undefined) => void | Promise<void>;
+    onToggleChange?: (setting: "notifyBusyWorkerChanges", enabled: boolean) => void | Promise<void>;
     onModelChangeError?: (error: unknown) => void;
     onInvalidate?: () => void;
 }
@@ -122,7 +126,9 @@ function asWorkspaceListItems(workspaces: AgentWorkspaceBrowserItem[]): ListItem
 function asSettingsListItems(settings: AgentSetting[]): ListItem<AgentBrowserItem>[] {
     return settings.map((setting) => ({
         value: { ...setting, kind: "setting" },
-        label: `${setting.label}: ${setting.model ?? "Parent model"}`,
+        label: setting.enabled === undefined
+            ? `${setting.label}: ${setting.model ?? "Parent model"}`
+            : `${setting.label} · ${setting.enabled ? "On" : "Off"}`,
     }));
 }
 
@@ -205,8 +211,15 @@ function itemText(
 ): string {
     if (isWorkspace(item)) return agentWorkspaceItemText(item, theme);
     if (isSetting(item)) {
+        const value = item.enabled === undefined
+            ? item.model ?? "Parent model (uses the current pi model)"
+            : item.enabled ? "On" : "Off";
+        if (item.enabled !== undefined) {
+            const styledValue = theme.fg(item.enabled ? "accent" : "muted", value);
+            return `${theme.fg("accent", item.label)} · ${styledValue}\n${theme.fg("muted", item.description)}`;
+        }
         return theme.fg("accent", item.label)
-            + `\n${theme.fg("muted", item.description)}\nValue: ${item.model ?? "Parent model (uses the current pi model)"}`;
+            + `\n${theme.fg("muted", item.description)}\nValue: ${value}`;
     }
     if (item.kind === "empty") return theme.fg("muted", item.task);
 
@@ -368,7 +381,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     container.addChild(tabHeader);
                     container.addChild(new Text(
                         theme.fg("muted", includeSettings
-                            ? "Current and Past show delegated sessions; Settings controls built-in agent models."
+                            ? "Current and Past show delegated sessions; Settings controls agent models and notifications."
                             : includeWorkspaces
                                 ? "Current and Past show delegated sessions; Workspaces shows isolated worker checkouts."
                                 : "Current shows this parent session; Past shows durable child results for this cwd."),
@@ -441,6 +454,31 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                                     this.invalidate();
                                 });
                             } else if (isSetting(selected)) {
+                                const setting = this.settings.find((item) => item.id === selected.id);
+                                if (!setting) {
+                                    this.invalidate();
+                                    return true;
+                                }
+                                if (setting.id === "notifyBusyWorkerChanges") {
+                                    const previous = setting.enabled !== false;
+                                    const enabled = !previous;
+                                    setting.enabled = enabled;
+                                    this.rebuildItems();
+                                    this.invalidate();
+                                    const restore = (error: unknown) => {
+                                        setting.enabled = previous;
+                                        this.rebuildItems();
+                                        options.onModelChangeError?.(error);
+                                        this.invalidate();
+                                    };
+                                    try {
+                                        const update = options.onToggleChange?.(setting.id, enabled);
+                                        if (update) void update.catch(restore);
+                                    } catch (error) {
+                                        restore(error);
+                                    }
+                                    return true;
+                                }
                                 const modelItems = (options.models ?? [{
                                     label: "Parent model",
                                     description: "Use the current pi model",
@@ -470,7 +508,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                                             return;
                                         }
                                         const setting = this.settings.find((item) => item.id === selected.id);
-                                        if (!setting) {
+                                        if (!setting || setting.id === "notifyBusyWorkerChanges") {
                                             this.invalidate();
                                             return;
                                         }

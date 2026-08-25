@@ -1,6 +1,10 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
-import agentConfig, { BUILTIN_AGENT_NAMES, type BuiltinAgentName } from "./config";
+import agentConfig, {
+    BUILTIN_AGENT_NAMES,
+    shouldNotifyBusyWorkerChanges,
+    type BuiltinAgentName,
+} from "./config";
 import type { AgentWorkspace } from "./contracts/workspaces";
 import { emitAgentEvent } from "./observability/events";
 import {
@@ -31,12 +35,20 @@ function settingLabel(name: BuiltinAgentName): string {
 
 function buildSettings(cwd: string): AgentSetting[] {
     const config = agentConfig.get(cwd);
-    return BUILTIN_AGENT_NAMES.map((id) => ({
-        id,
-        label: settingLabel(id),
-        description: `Model used when the built-in ${id} agent runs.`,
-        model: config.models?.[id],
-    }));
+    return [
+        {
+            id: "notifyBusyWorkerChanges" as const,
+            label: "Busy worker change notifications",
+            description: "Get an immediate update when a worker changes your files while the main assistant is still working. Turn this off to receive the update only when the worker finishes.",
+            enabled: shouldNotifyBusyWorkerChanges(config),
+        },
+        ...BUILTIN_AGENT_NAMES.map((id) => ({
+            id,
+            label: settingLabel(id),
+            description: `Model used when the built-in ${id} agent runs.`,
+            model: config.models?.[id],
+        })),
+    ];
 }
 
 function buildModelOptions(ctx: ExtensionCommandContext, cwd: string): AgentModelOption[] {
@@ -174,6 +186,9 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             onWorkspaceInspect: async (item) => inspectAgentWorkspaceResult(requireWorkspace(item.id)),
             onModelChange: (agent, model) => {
                 agentConfig.setModel(agent, model, ctx.cwd);
+            },
+            onToggleChange: (_setting, enabled) => {
+                agentConfig.setNotifyBusyWorkerChanges(enabled, ctx.cwd);
             },
             onModelChangeError: (error) => {
                 const message = error instanceof Error ? error.message : String(error);

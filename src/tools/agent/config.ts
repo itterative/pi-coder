@@ -11,6 +11,8 @@ export type BuiltinAgentModels = Partial<Record<BuiltinAgentName, string>>;
 export interface AgentConfig {
     /** Models override the parent model for individual built-in agents. */
     models?: BuiltinAgentModels;
+    /** Notify an active parent immediately when a same-checkout worker changes a file. */
+    notifyBusyWorkerChanges?: boolean;
 }
 
 function globalConfigPath(): string {
@@ -34,14 +36,20 @@ function parseConfig(filePath: string | undefined): AgentConfig | null {
     try {
         const value: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
         if (!value || typeof value !== "object") return null;
-        const modelsValue = (value as { models?: unknown }).models;
-        if (!modelsValue || typeof modelsValue !== "object") return {};
+        const record = value as { models?: unknown; notifyBusyWorkerChanges?: unknown };
         const models: BuiltinAgentModels = {};
-        for (const name of BUILTIN_AGENT_NAMES) {
-            const model = (modelsValue as Record<string, unknown>)[name];
-            if (typeof model === "string" && model.trim()) models[name] = model.trim();
+        if (record.models && typeof record.models === "object") {
+            for (const name of BUILTIN_AGENT_NAMES) {
+                const model = (record.models as Record<string, unknown>)[name];
+                if (typeof model === "string" && model.trim()) models[name] = model.trim();
+            }
         }
-        return { models };
+        return {
+            ...(Object.keys(models).length ? { models } : {}),
+            ...(typeof record.notifyBusyWorkerChanges === "boolean"
+                ? { notifyBusyWorkerChanges: record.notifyBusyWorkerChanges }
+                : {}),
+        };
     } catch {
         return null;
     }
@@ -52,7 +60,12 @@ function mergeConfigs(global: AgentConfig | null, project: AgentConfig | null): 
         ...(global?.models ?? {}),
         ...(project?.models ?? {}),
     };
-    return Object.keys(models).length ? { models } : {};
+    const notifyBusyWorkerChanges = project?.notifyBusyWorkerChanges
+        ?? global?.notifyBusyWorkerChanges;
+    return {
+        ...(Object.keys(models).length ? { models } : {}),
+        ...(notifyBusyWorkerChanges === undefined ? {} : { notifyBusyWorkerChanges }),
+    };
 }
 
 function locations(cwd: string): { global: string; project?: string } {
@@ -76,11 +89,19 @@ function configPath(cwd: string): string {
     return paths.project ?? paths.global;
 }
 
+function targetConfig(cwd: string): AgentConfig {
+    return parseConfig(configPath(cwd)) ?? {};
+}
+
 export function configuredBuiltinModel(
     config: AgentConfig,
     name: BuiltinAgentName,
 ): string | undefined {
     return config.models?.[name];
+}
+
+export function shouldNotifyBusyWorkerChanges(config: AgentConfig): boolean {
+    return config.notifyBusyWorkerChanges !== false;
 }
 
 /** Apply persisted built-in model overrides without mutating shared definitions. */
@@ -117,10 +138,24 @@ const agentConfig = {
     },
 
     setModel(name: BuiltinAgentName, model: string | undefined, cwd = process.cwd()): AgentConfig {
-        const next: BuiltinAgentModels = { ...loadConfig(cwd).models };
+        const current = targetConfig(cwd);
+        const next: BuiltinAgentModels = { ...current.models };
         if (model) next[name] = model;
         else delete next[name];
-        return this.save(Object.keys(next).length ? { models: next } : {}, cwd);
+        return this.save({
+            ...(Object.keys(next).length ? { models: next } : {}),
+            ...(current.notifyBusyWorkerChanges === undefined
+                ? {}
+                : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
+        }, cwd);
+    },
+
+    setNotifyBusyWorkerChanges(enabled: boolean, cwd = process.cwd()): AgentConfig {
+        const current = targetConfig(cwd);
+        return this.save({
+            ...(current.models ? { models: { ...current.models } } : {}),
+            notifyBusyWorkerChanges: enabled,
+        }, cwd);
     },
 };
 

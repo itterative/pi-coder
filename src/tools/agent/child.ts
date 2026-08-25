@@ -106,6 +106,7 @@ export async function createAgentChild(
                 context.runId ?? context.definition.name,
                 context.runTitle ?? context.runId ?? context.definition.name,
                 context.onProgress,
+                context.onFileChanged,
                 context.onTrace,
                 context.events,
             ),

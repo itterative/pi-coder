@@ -69,7 +69,7 @@ The built-in `worker` operates in the existing checkout with `read`, `grep`, `fi
 
 Every worker `edit`, `write`, and `bash` call enters the shared abort-aware permission queue and opens a parent-visible prompt labelled with its title and run ID. Approvals are one-shot and never become parent or child session rules. File paths remain cwd-confined with sensitive and symlink escapes blocked before prompting. Bash honors configured denial and sandbox/direct policy; unresolved commands default to sandbox when bubblewrap is available and the prompt permits toggling to direct mode. Mutation calls are serialized through completion, so concurrent child tool calls cannot overlap mutations.
 
-The activity widget shows `waiting_for_permission` while a gate is queued or open. Canceling the run closes or removes its prompt. Successful `edit`/`write` paths are tracked in a terminal mutation report. Because approved bash and concurrent parent activity can change arbitrary checkout files, the report explicitly warns when attribution may be incomplete; inspect the final diff before committing.
+The activity widget shows `waiting_for_permission` while a gate is queued or open. Canceling the run closes or removes its prompt. Successful `edit`/`write` paths are tracked in a terminal mutation report and drive immediate busy-parent change notifications. SAFE_EDIT heuristics and approved bash authorize commands but do not provide reliable path attribution for arbitrary command effects; such changes may be missing from immediate notifications and individual path lists. The report explicitly warns when attribution may be incomplete; inspect the final diff before committing.
 
 ## Agent definitions
 
@@ -93,7 +93,7 @@ Locations:
 
 Definitions are sorted by path. Within one scope, the first valid duplicate wins and later files warn. Trusted-project definitions override user definitions with an informational diagnostic. Built-in names `scout`, `reviewer`, and `worker` are reserved.
 
-The `/agents` browser also has a Settings tab. It stores optional built-in model overrides in `~/.pi/agent-config.json` (or the nearest trusted project `.pi/agent-config.json` when that file already exists). Omitting an override makes the built-in use the parent session's model. The model picker lists the currently available provider/model pairs.
+The `/agents` browser also has a Settings tab. It stores optional built-in model overrides and the busy-worker change-notification preference in `~/.pi/agent-config.json` (or the nearest trusted project `.pi/agent-config.json` when that file already exists). Omitting a model override makes the built-in use the parent session's model; busy-worker notifications are enabled by default. The model picker lists the currently available provider/model pairs.
 
 Every custom definition receives baseline codebase-read access (`read`, `grep`, `find`, and `ls`). Its optional `capabilities` must be an array containing only `safe-bash`; unknown or malformed capability lists invalidate the definition. `safe-bash` grants only cwd-confined, heuristically `SAFE_READONLY` Bash—including ordinary Git history inspection—and is not a sandbox against a hostile local environment. Worker mutation permissions are built-in only. Every baseline read/search path is confined to the working directory and sensitive paths remain blocked.
 

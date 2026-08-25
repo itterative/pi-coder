@@ -59,6 +59,7 @@ export interface ChildAgentFactoryContext {
     runId?: string;
     runTitle?: string;
     onProgress: (progress: ChildProgress) => void;
+    onFileChanged?: (filePath: string) => void;
     onTrace?: (type: string, data?: AgentTraceData) => void;
     childSessionDir?: string;
     childSessionFile?: string;

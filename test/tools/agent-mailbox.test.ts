@@ -41,6 +41,7 @@ describe("agent parent mailbox", () => {
         }));
         mailbox.queue(details("scout-1", "completed", {
             output: `Final\nresult ${"x".repeat(300)}`,
+            mutationReport: { changedFiles: ["src/example.ts"], bashApproved: false },
         }));
 
         expect(sendMessage).not.toHaveBeenCalled();
@@ -58,8 +59,54 @@ describe("agent parent mailbox", () => {
         expect(message.content).toContain("This is not a new user request");
         expect(message.content).toContain('Run ID: "scout-1"');
         expect(message.content).toContain("Status: completed");
+        expect(message.content).toContain('Changed files: "src/example.ts"');
         expect(message.content).not.toContain("Which implementation?");
         expect(message.content.length).toBeLessThan(1_000);
+        expect(mailbox.flush()).toBe(0);
+    });
+
+    it("notifies a busy parent immediately when a worker changes the checkout", async () => {
+        const sendMessage = vi.fn();
+        const mailbox = new AgentMailbox({ sendMessage });
+
+        mailbox.notifyMutation(
+            details("worker-1", "running", { agent: "worker", mutating: true }),
+            ["src/example.ts"],
+            true,
+        );
+
+        expect(sendMessage).toHaveBeenCalledWith(
+            expect.objectContaining({
+                customType: AGENT_MAILBOX_MESSAGE_TYPE,
+                content: expect.stringContaining('Changed files: "src/example.ts"'),
+                details: {
+                    updates: [{
+                        runId: "worker-1",
+                        agent: "worker",
+                        status: "changed",
+                        changedFiles: ["src/example.ts"],
+                    }],
+                },
+            }),
+            { deliverAs: "steer", triggerTurn: true },
+        );
+        await expect(sendMessage.mock.calls[0]?.[0].content).toMatchFileSnapshot(
+            "__snapshots__/agent-mailbox.mutation-notification.txt",
+        );
+        expect(mailbox.flush()).toBe(0);
+    });
+
+    it("defers a change notification for an idle parent until completion", () => {
+        const sendMessage = vi.fn();
+        const mailbox = new AgentMailbox({ sendMessage });
+
+        mailbox.notifyMutation(
+            details("worker-1", "running", { agent: "worker", mutating: true }),
+            ["src/example.ts", "test/example.test.ts"],
+            false,
+        );
+
+        expect(sendMessage).not.toHaveBeenCalled();
         expect(mailbox.flush()).toBe(0);
     });
 

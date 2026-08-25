@@ -142,6 +142,7 @@ export function registerChildExtension(
     runId: string,
     runTitle: string,
     onProgress: ChildAgentFactoryContext["onProgress"],
+    onFileChanged?: ChildAgentFactoryContext["onFileChanged"],
     onTrace?: ChildAgentFactoryContext["onTrace"],
     events?: EventBus,
 ) {
@@ -269,7 +270,9 @@ export function registerChildExtension(
                     });
                 },
                 fileChanged(filePath) {
+                    const wasChanged = tracker.changedFiles.has(filePath);
                     tracker.changedFiles.add(filePath);
+                    if (!wasChanged) onFileChanged?.(filePath);
                     onTrace?.("mutation.file_changed", { path: filePath });
                 },
                 bashApproved() {

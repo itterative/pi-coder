@@ -641,6 +641,52 @@ describe("AgentSessionBrowserComponent", () => {
         await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.past-empty.txt");
     });
 
+    it("toggles busy worker change notifications in settings", async () => {
+        let enabled: boolean | undefined;
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            settings: [
+                {
+                    id: "notifyBusyWorkerChanges",
+                    label: "Busy worker change notifications",
+                    description: "Get an immediate update when a worker changes your files while the main assistant is still working. Turn this off to receive the update only when the worker finishes.",
+                    enabled: true,
+                },
+                {
+                    id: "scout",
+                    label: "Scout model",
+                    description: "Model used when the built-in scout agent runs.",
+                },
+                {
+                    id: "reviewer",
+                    label: "Reviewer model",
+                    description: "Model used when the built-in reviewer agent runs.",
+                },
+                {
+                    id: "worker",
+                    label: "Worker model",
+                    description: "Model used when the built-in worker agent runs.",
+                },
+            ],
+            onToggleChange: (_setting, next) => {
+                enabled = next;
+            },
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab, KEY.tab);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.settings-notifications-on.txt",
+        );
+        ui.press(KEY.enter);
+        await vi.waitFor(() => expect(enabled).toBe(false));
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.settings-notifications-off.txt",
+        );
+    });
+
     it("uses Enter and Escape for details, then closes the browser", () => {
         const value = component();
         const ui = interact(value, 100);

@@ -11,7 +11,7 @@ const MAX_PREVIEW_CHARS = 240;
 type MailboxStatus = Extract<
     AgentRunStatus,
     "waiting_for_parent" | "completed" | "failed" | "aborted"
->;
+> | "changed";
 
 interface MailboxUpdate {
     runId: string;
@@ -19,6 +19,7 @@ interface MailboxUpdate {
     agent: string;
     status: MailboxStatus;
     preview?: string;
+    changedFiles?: string[];
 }
 
 function oneLine(text: string | undefined, maxChars = MAX_PREVIEW_CHARS): string | undefined {
@@ -37,6 +38,9 @@ function toUpdate(details: AgentRunDetails): MailboxUpdate | undefined {
             agent: details.agent,
             status: details.status,
             preview: oneLine(details.question?.question),
+            ...(details.mutationReport?.changedFiles?.length
+                ? { changedFiles: [...details.mutationReport.changedFiles] }
+                : {}),
         };
     }
     if (
@@ -52,6 +56,9 @@ function toUpdate(details: AgentRunDetails): MailboxUpdate | undefined {
         agent: details.agent,
         status: details.status,
         preview: oneLine(details.status === "completed" ? details.output : details.error ?? details.output),
+        ...(details.mutationReport?.changedFiles?.length
+            ? { changedFiles: [...details.mutationReport.changedFiles] }
+            : {}),
     };
 }
 
@@ -69,11 +76,25 @@ function formatUpdate(update: MailboxUpdate): string[] {
                 : `  Preview: ${JSON.stringify(update.preview)}`,
         );
     }
-    lines.push(
-        update.status === "waiting_for_parent"
-            ? `  Next action: inspect with agent(action="status", runId=${JSON.stringify(update.runId)}), then resume with grounded guidance or cancel.`
-            : `  Next action: retrieve the retained result with agent(action="collect", runId=${JSON.stringify(update.runId)}).`,
-    );
+    if (update.changedFiles?.length) {
+        lines.push(
+            `  Changed files: ${update.changedFiles.map((filePath) => JSON.stringify(filePath)).join(", ")}`,
+        );
+    }
+    if (update.status === "changed") {
+        lines.push(
+            "  Instruction: do not poll this worker or wait for another update; continue your current task or end your turn.",
+            "  Completion: an automatic notification will arrive when the worker finishes.",
+            "  Next action: account for this concurrent checkout change before editing overlapping files.",
+        );
+    } else {
+        lines.push(
+            update.status === "waiting_for_parent"
+                ? `  Next action: inspect with agent(action="status", runId=${JSON.stringify(update.runId)}), then resume with grounded guidance or cancel.`
+                : `  Next action: retrieve the retained result with agent(action="collect", runId=${JSON.stringify(update.runId)}).`,
+        );
+    }
+
     return lines;
 }
 
@@ -115,6 +136,40 @@ export class AgentMailbox {
             if (oldest === undefined) break;
             this.pending.delete(oldest);
         }
+    }
+
+    notifyMutation(
+        details: Pick<AgentRunDetails, "runId" | "title" | "agent">,
+        changedFiles: readonly string[],
+        parentBusy: boolean,
+    ): void {
+        if (this.closed || !changedFiles.length || !parentBusy) return;
+        const update: MailboxUpdate = {
+            runId: details.runId,
+            title: details.title,
+            agent: details.agent,
+            status: "changed",
+            changedFiles: [...changedFiles],
+        };
+        this.pi.sendMessage(
+            {
+                customType: AGENT_MAILBOX_MESSAGE_TYPE,
+                content: formatMailbox([update]),
+                display: false,
+                details: {
+                    updates: [{
+                        runId: update.runId,
+                        agent: update.agent,
+                        status: update.status,
+                        changedFiles: update.changedFiles,
+                    }],
+                },
+            },
+            {
+                deliverAs: parentBusy ? "steer" : "followUp",
+                triggerTurn: true,
+            },
+        );
     }
 
     clear(): void {

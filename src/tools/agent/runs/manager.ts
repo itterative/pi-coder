@@ -653,6 +653,14 @@ export class AgentRunManager {
                     this.persistRun(run);
                     context.onSessionCreated?.(sessionFile);
                 },
+                onFileChanged: () => {
+                    run.updatedAt = Date.now();
+                    this.persistRun(run);
+                    this.emitBackgroundUpdate(
+                        run,
+                        this.details(run, run.handle?.getProgress() ?? { output: "", recentActivity: [] }),
+                    );
+                },
                 onProgress: (progress) => {
                     run.updatedAt = Date.now();
                     const previousStatus = run.permissionPending ? "waiting_for_permission" : run.status;

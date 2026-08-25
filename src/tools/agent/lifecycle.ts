@@ -1,7 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { createAgentChild } from "./child";
-import agentConfig, { applyAgentConfig } from "./config";
+import agentConfig, {
+    applyAgentConfig,
+    shouldNotifyBusyWorkerChanges,
+} from "./config";
 import { discoverAgents } from "./definitions/discovery";
 import {
     createAgentEventSink,
@@ -41,6 +44,7 @@ export class AgentLifecycle {
     private readonly setupRuns = new Map<string, AgentRunSummary>();
     private readonly mailbox: AgentMailbox;
     private mailboxFlushScheduled = false;
+    private readonly notifiedMutationFiles = new Map<string, Set<string>>();
     private readonly notifiedWarnings = new Set<string>();
     private unsubscribeAgentUiEvents: () => void = () => {};
     readonly factory: ChildAgentFactory;
@@ -115,6 +119,7 @@ export class AgentLifecycle {
         this.pi.on("session_tree", async (_event, ctx) => {
             this.activeContext = ctx;
             this.mailbox.clear();
+            this.notifiedMutationFiles.clear();
             // Prevent old-branch shutdown records from being appended at the new leaf.
             this.manager.setPersistence(undefined);
             await this.manager.shutdown();
@@ -130,6 +135,7 @@ export class AgentLifecycle {
 
         this.pi.on("session_shutdown", async (_event, ctx) => {
             this.mailbox.close();
+            this.notifiedMutationFiles.clear();
             this.setupRuns.clear();
             clearAgentUi(ctx, this.pi.events);
             await this.manager.shutdown();
@@ -222,6 +228,21 @@ export class AgentLifecycle {
                 this.clearCompletedWorkspaceSetup(ctx, details);
             }
             this.refreshAgentUi(ctx);
+            if (
+                details.background
+                && details.mutating
+                && details.workspaceId === undefined
+                && shouldNotifyBusyWorkerChanges(agentConfig.get(ctx.cwd))
+            ) {
+                const changedFiles = details.mutationReport?.changedFiles ?? [];
+                const notified = this.notifiedMutationFiles.get(details.runId) ?? new Set<string>();
+                const newChangedFiles = changedFiles.filter((filePath) => !notified.has(filePath));
+                if (newChangedFiles.length) {
+                    for (const filePath of newChangedFiles) notified.add(filePath);
+                    this.notifiedMutationFiles.set(details.runId, notified);
+                    this.mailbox.notifyMutation(details, newChangedFiles, !this.isParentIdle(ctx));
+                }
+            }
             this.mailbox.queue(details);
             this.reconcileMailbox();
             this.flushMailboxWhenIdle(ctx);
@@ -233,7 +254,12 @@ export class AgentLifecycle {
     }
 
     reconcileMailbox(): void {
-        this.mailbox.reconcile(this.manager.listRuns());
+        const runs = this.manager.listRuns();
+        this.mailbox.reconcile(runs);
+        const runIds = new Set(runs.map((run) => run.runId));
+        for (const runId of this.notifiedMutationFiles.keys()) {
+            if (!runIds.has(runId)) this.notifiedMutationFiles.delete(runId);
+        }
     }
 
     private createManager(): AgentRunManager {
