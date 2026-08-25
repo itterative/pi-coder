@@ -245,7 +245,10 @@ export async function prepareIsolatedWorkspace(
     }, ctx, signal);
     const choice = prompt?.value;
     if (!choice || choice === "cancel") {
-        throw new AgentActionError("Isolated worker canceled before workspace setup.");
+        const message = prompt?.message?.trim();
+        throw new AgentActionError(
+            `Isolated worker canceled before workspace setup.${message ? ` User message: ${message}` : ""}`,
+        );
     }
 
     const workspace = existing ?? await createAgentWorkspace(cwd);
