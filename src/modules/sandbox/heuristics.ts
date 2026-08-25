@@ -172,14 +172,16 @@ const REDIRECTION_OPERATORS = new Set([">", ">>", "<", "2>", "2>>"]);
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 /**
- * Environment variable names that can alter how the (trusted) command itself
- * behaves — code injection, PATH shadowing, or relocating the command's state
- * (repo, config, helper) — so any assignment to them makes the heuristic
- * ineligible. NOTE: this only covers assignments on the command line; the
- * INHERITED process environment is not checked (the sandbox passes it through
- * unless inheritEnv is configured). E.g. a shell-exported GIT_DIR still
- * relocates git — accepted risk, and the reason env-dominated commands
- * (less/more with LESSOPEN) are excluded from the whitelist entirely.
+ * Environment variable names that can alter command behavior — code injection,
+ * PATH shadowing, or relocating command state (repo, config, helper) — so any
+ * assignment to them makes the heuristic ineligible. This protects against an
+ * agent placing an unsafe assignment in its command text.
+ *
+ * The INHERITED process environment is deliberately out of scope: the
+ * cwd-confinement heuristic is an approval-reduction and accidental-mutation
+ * control, not a security sandbox. Pi's process environment, installed
+ * executables, and local tool configuration are trusted by this policy (the
+ * sandbox can instead apply an explicit inheritEnv policy when needed).
  */
 const DANGEROUS_ENV_NAMES = new Set([
     "PATH", "IFS", "CDPATH",
