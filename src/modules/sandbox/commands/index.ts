@@ -9,6 +9,7 @@ import { ARCHIVE_COMMANDS } from "./archives";
 import { VCS_COMMANDS } from "./vcs";
 import { SYSTEM_COMMANDS } from "./system";
 
+export { CommandTag } from "./spec";
 export type { CommandSpec, FlagSpec } from "./spec";
 
 /**

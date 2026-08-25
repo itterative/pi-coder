@@ -21,7 +21,7 @@ function git(cwd: string, args: string[]): string {
 
 function commit(cwd: string, message: string): string {
     git(cwd, ["add", "--all"]);
-    git(cwd, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", message]);
+    git(cwd, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", message]);
     return git(cwd, ["rev-parse", "HEAD"]);
 }
 
@@ -53,6 +53,70 @@ describe("reviewHistory", () => {
         expect(result.text).not.toContain(".env");
         expect(result.text).not.toContain("removed-secret");
         expect(result.text).not.toContain("visible-secret");
+    });
+
+    it("treats changed filenames as literal pathspecs", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-history-review-"));
+        tempDirs.push(cwd);
+        git(cwd, ["init", "-q"]);
+        fs.writeFileSync(path.join(cwd, "safe.txt"), "before\n");
+        const base = commit(cwd, "baseline");
+
+        fs.writeFileSync(path.join(cwd, ".env"), "API_KEY=withheld-by-path\n");
+        fs.writeFileSync(path.join(cwd, ":(glob)**"), "ordinary literal filename\n");
+        const head = commit(cwd, "pathspec magic");
+
+        const result = await reviewHistory(cwd, { base, head });
+
+        expect(result.details).toMatchObject({ changedFiles: 2, reviewedFiles: 1, withheldSensitiveFiles: 1 });
+        expect(result.text).toContain("ordinary literal filename");
+        expect(result.text).not.toContain("withheld-by-path");
+    });
+
+    it("ignores inherited Git relocation variables and requires the repository root", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-history-review-"));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-history-review-outside-"));
+        tempDirs.push(cwd, outside);
+        git(cwd, ["init", "-q"]);
+        fs.writeFileSync(path.join(cwd, "file.txt"), "one\n");
+        const base = commit(cwd, "first");
+        fs.writeFileSync(path.join(cwd, "file.txt"), "two\n");
+        const head = commit(cwd, "second");
+        git(outside, ["init", "-q"]);
+
+        const originalGitDir = process.env.GIT_DIR;
+        const originalWorkTree = process.env.GIT_WORK_TREE;
+        process.env.GIT_DIR = path.join(outside, ".git");
+        process.env.GIT_WORK_TREE = outside;
+        try {
+            const result = await reviewHistory(cwd, { base, head });
+            expect(result.text).toContain("two");
+        } finally {
+            if (originalGitDir === undefined) delete process.env.GIT_DIR;
+            else process.env.GIT_DIR = originalGitDir;
+            if (originalWorkTree === undefined) delete process.env.GIT_WORK_TREE;
+            else process.env.GIT_WORK_TREE = originalWorkTree;
+        }
+
+        fs.mkdirSync(path.join(cwd, "nested"));
+        await expect(reviewHistory(path.join(cwd, "nested"), { base, head }))
+            .rejects.toThrow("requires the agent cwd to be the repository root");
+    });
+
+    it("rejects ranges whose changed-path metadata is truncated", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-history-review-"));
+        tempDirs.push(cwd);
+        git(cwd, ["init", "-q"]);
+        const base = commit(cwd, "baseline");
+        fs.mkdirSync(path.join(cwd, "src"));
+        for (let index = 0; index < 500; index++) {
+            const name = `metadata-${String(index).padStart(4, "0")}-${"x".repeat(32)}.ts`;
+            fs.writeFileSync(path.join(cwd, "src", name), "export {};\n");
+        }
+        const head = commit(cwd, "large change");
+
+        await expect(reviewHistory(cwd, { base, head }))
+            .rejects.toThrow("Changed-path metadata exceeds");
     });
 
     it("requires a linear, constrained commit range", async () => {

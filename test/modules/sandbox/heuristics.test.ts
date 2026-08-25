@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+    CommandTag,
     describeUnsafeReason,
     getCwdConfinementAssessment,
     getCwdConfinementPermission,
@@ -34,10 +35,12 @@ describe("heuristic assessments", () => {
         expect(getCwdConfinementAssessment("cat /etc/passwd", CWD, {})).toEqual({
             classification: Heuristic.UNSAFE,
             reasons: [UnsafeReason.OUTSIDE_CWD],
+            tags: [],
         });
         expect(getCwdConfinementAssessment("cat $(echo /etc/passwd)", CWD, {})).toEqual({
             classification: Heuristic.UNSAFE,
             reasons: [UnsafeReason.OUTSIDE_CWD],
+            tags: [],
         });
     });
 
@@ -45,6 +48,7 @@ describe("heuristic assessments", () => {
         expect(getCwdConfinementAssessment("cat /etc/passwd && cat /etc/hosts", CWD, {})).toEqual({
             classification: Heuristic.UNSAFE,
             reasons: [UnsafeReason.OUTSIDE_CWD],
+            tags: [],
         });
         expect(describeUnsafeReason(UnsafeReason.OUTSIDE_CWD))
             .toBe("a path is outside the working directory");
@@ -54,6 +58,15 @@ describe("heuristic assessments", () => {
         expect(getCwdConfinementAssessment("cat file.txt", CWD, {})).toEqual({
             classification: Heuristic.SAFE_READONLY,
             reasons: [],
+            tags: [],
+        });
+    });
+
+    it("tags successful git status operations across a chain", () => {
+        expect(getCwdConfinementAssessment("git status --short && git log --oneline -1", CWD, {})).toEqual({
+            classification: Heuristic.SAFE_READONLY,
+            reasons: [],
+            tags: [CommandTag.GIT_STATUS],
         });
     });
 
@@ -61,6 +74,7 @@ describe("heuristic assessments", () => {
         expect(getPathConfinementAssessment(".env", CWD, {})).toEqual({
             classification: Heuristic.UNSAFE,
             reasons: [UnsafeReason.SENSITIVE_PATH],
+            tags: [],
         });
     });
 });

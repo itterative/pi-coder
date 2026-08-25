@@ -8,19 +8,18 @@ import {
     type GrepToolInput,
     type LsToolInput,
     type ReadToolInput,
+    type ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import type { SandboxConfigCwdConfinement } from "../../../common/config";
 import {
-    describeUnsafeReason,
-    getCwdConfinementAssessment,
     getPathConfinementPermission,
     Heuristic,
-    type HeuristicAssessment,
 } from "../../../modules/sandbox/heuristics";
 import { askUser } from "../../../tui/ask-user";
 import { reviewHistory } from "./history-review";
+import { guardSafeBashCommand } from "./safe-bash";
 import { registerWorkerMutationHooks } from "./worker-permissions";
 import type { ChildAgentFactoryContext } from "../contracts/runs";
 import type { ChildProgressTracker as ProgressTracker } from "./progress";
@@ -48,12 +47,12 @@ export function childProtocolPrompt(
             "You are a read-only subagent working for a parent coding agent.",
             `Enabled capabilities: codebase-read${safeBash ? ", safe-bash" : ""}${safeGitHistory ? ", safe-git-history" : ""}.`,
             safeBash
-                ? "safe-bash permits only cwd-confined commands classified SAFE_READONLY by the safety heuristic. Every file access—including resolved symlinks—must stay inside the working directory and avoid sensitive paths. Unknown commands, writes, unsafe flags or modes, and dynamic or unmodeled behavior are blocked. Use a block reason to choose a supported read/search tool or report the limit; do not retry variants hoping to bypass it."
+                ? "safe-bash permits only cwd-confined commands classified SAFE_READONLY by the safety heuristic. Every file access—including resolved symlinks—must stay inside the working directory and avoid sensitive paths. Unknown commands, project working-tree writes, unsafe flags or modes, and dynamic or unmodeled behavior are blocked. Use a block reason to choose a supported read/search tool or report the limit; do not retry variants hoping to bypass it."
                 : "safe-bash is not enabled, so you cannot run bash commands.",
             safeGitHistory
                 ? "safe-git-history provides review_history for specific linear commit ranges. It withholds sensitive paths and returns a bounded, best-effort-redacted patch; it is not an exhaustive secret scanner."
                 : "safe-git-history is not enabled, so you cannot inspect historical patch content.",
-            "You cannot modify files.",
+            "You cannot modify project working-tree files.",
         ].join(" ");
     return `${capability}\n\n${interaction}\n\nWhen the task is complete, provide a self-contained final report to the parent. Mutation-capable workers must list changed files and validation performed.`;
 
@@ -64,14 +63,7 @@ export function isChildPathAllowed(filePath: string | undefined, cwd: string): b
     return getPathConfinementPermission(effectivePath, cwd, CHILD_CONFINEMENT) === Heuristic.SAFE_READONLY;
 }
 
-/** Assess whether a scout's bash command is confined and read-only. */
-export function getScoutBashAssessment(command: string, cwd: string): HeuristicAssessment {
-    return getCwdConfinementAssessment(command, cwd, CHILD_CONFINEMENT);
-}
-
-export function isScoutBashAllowed(command: string, cwd: string): boolean {
-    return getScoutBashAssessment(command, cwd).classification === Heuristic.SAFE_READONLY;
-}
+export { getScoutBashAssessment, isScoutBashAllowed } from "./safe-bash";
 
 export interface ChildUserQuestion {
     title: string;
@@ -315,53 +307,28 @@ export function registerChildExtension(
 
         pi.on("tool_call", (event, ctx) => {
             if (!mutating && isToolCallEventType<"bash", BashToolInput>("bash", event)) {
-                if (!safeBash) {
-                    return {
-                        block: true,
-                        reason: "Read-only agent bash blocked: the safe-bash capability is not enabled.",
-                    };
-                }
-                const assessment = getScoutBashAssessment(event.input.command, ctx.cwd);
-                if (assessment.classification === Heuristic.SAFE_READONLY) {
-                    onTrace?.("scout.bash.allowed", { classification: assessment.classification });
-                    return;
-                }
-                const reasons = assessment.reasons
-                    .map((reason) => `${describeUnsafeReason(reason)} [${reason}]`)
-                    .join("; ");
-                onTrace?.("scout.bash.blocked", {
-                    classification: assessment.classification,
-                    reasons: assessment.reasons.join(", "),
-                });
+                return guardSafeBashCommand(event.input.command, ctx.cwd, safeBash, onTrace);
+            }
+
+            const filePath = readToolPath(event);
+            if (filePath === undefined) return;
+            if (!isChildPathAllowed(filePath, ctx.cwd)) {
                 return {
                     block: true,
-                    reason: `Read-only scout bash blocked: ${reasons}. Commands must be cwd-confined and classified SAFE_READONLY.`,
+                    reason: "Read-only scout access blocked: path is outside the allowed working directory or is sensitive.",
                 };
             }
-
-            let filePath: string | undefined;
-            if (isToolCallEventType<"read", ReadToolInput>("read", event)) {
-                filePath = event.input.path;
-            } else if (isToolCallEventType<"grep", GrepToolInput>("grep", event)) {
-                filePath = event.input.path;
-            } else if (isToolCallEventType<"find", FindToolInput>("find", event)) {
-                filePath = event.input.path;
-            } else if (isToolCallEventType<"ls", LsToolInput>("ls", event)) {
-                filePath = event.input.path;
-            } else {
-                return;
-            }
-
-            if (isChildPathAllowed(filePath, ctx.cwd)) {
-                tracker.readFiles.add(relativeReadPath(filePath, ctx.cwd));
-                return;
-            }
-            return {
-                block: true,
-                reason: "Read-only scout access blocked: path is outside the allowed working directory or is sensitive.",
-            };
+            tracker.readFiles.add(relativeReadPath(filePath, ctx.cwd));
         });
     };
+}
+
+function readToolPath(event: ToolCallEvent): string | undefined {
+    if (isToolCallEventType<"read", ReadToolInput>("read", event)) return event.input.path;
+    if (isToolCallEventType<"grep", GrepToolInput>("grep", event)) return event.input.path;
+    if (isToolCallEventType<"find", FindToolInput>("find", event)) return event.input.path;
+    if (isToolCallEventType<"ls", LsToolInput>("ls", event)) return event.input.path;
+    return undefined;
 }
 
 function relativeReadPath(filePath: string | undefined, cwd: string): string {

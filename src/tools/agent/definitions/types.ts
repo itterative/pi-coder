@@ -36,7 +36,7 @@ export function fingerprintAgentDefinition(definition: AgentDefinition): string 
     const normalized = JSON.stringify({
         name: definition.name,
         description: definition.description,
-        capabilities: [...definition.capabilities],
+        capabilities: [...definition.capabilities].sort(),
         model: definition.model ?? null,
         systemPrompt: definition.systemPrompt,
         source: definition.source,

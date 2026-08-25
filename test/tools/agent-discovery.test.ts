@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { agentTools, discoverAgentsInDirectories } from "../../src/tools/agent/definitions/discovery";
+import {
+    agentTools,
+    BUILTIN_REVIEWER,
+    discoverAgentsInDirectories,
+    fingerprintAgentDefinition,
+} from "../../src/tools/agent/definitions/discovery";
 
 const tempDirs: string[] = [];
 
@@ -116,6 +121,13 @@ describe("agent discovery", () => {
 
         expect(history?.capabilities).toEqual(["safe-git-history"]);
         expect(agentTools(history!)).toEqual(["read", "grep", "find", "ls", "review_history"]);
+    });
+
+    it("normalizes capability order in durable fingerprints", () => {
+        expect(fingerprintAgentDefinition(BUILTIN_REVIEWER)).toBe(fingerprintAgentDefinition({
+            ...BUILTIN_REVIEWER,
+            capabilities: ["safe-git-history", "safe-bash"],
+        }));
     });
 
     it("rejects malformed or unknown capability lists", () => {

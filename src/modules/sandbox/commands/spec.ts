@@ -2,6 +2,11 @@
  * Semantics of a single flag, used by the cwd-confinement heuristic to
  * figure out which arguments may access the filesystem.
  */
+/** Semantic tags emitted for successfully classified command invocations. */
+export enum CommandTag {
+    GIT_STATUS = "git-status",
+}
+
 export interface FlagSpec {
     /**
      * How many value tokens this flag consumes (default 0 = boolean).
@@ -53,6 +58,11 @@ export interface CommandSpec {
     positionals?: "paths" | "none" | "ignore" | "first-pattern" | "first-path" | "assignments";
     /** Flag semantics, keyed by full flag name ("-n" or "--max-count"). */
     flags?: Record<string, FlagSpec>;
+    /**
+     * Semantic tags for a successfully classified invocation. Consumers may
+     * apply contextual safety checks without reparsing the original command.
+     */
+    tags?: readonly CommandTag[];
     /**
      * Additional whole-invocation safety check for commands whose positional
      * arguments are not enough to describe their behavior (e.g. sed scripts).

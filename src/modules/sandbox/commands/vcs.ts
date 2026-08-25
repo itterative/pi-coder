@@ -1,4 +1,4 @@
-import { UNSAFE, VALUE, type CommandSpec } from "./spec";
+import { CommandTag, UNSAFE, VALUE, type CommandSpec } from "./spec";
 
 // shared by log and whatchanged (an alias of log)
 const LOG_SPEC: CommandSpec = {
@@ -147,7 +147,7 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
             // intentional SAFE_READONLY exception: it changes only Git metadata,
             // and bash defaults to sandboxed execution.
             // Positionals are pathspecs.
-            status: {},
+            status: { tags: [CommandTag.GIT_STATUS] },
             // Keep only the explicitly modeled checking, stat, and quiet
             // modes eligible; other diff output modes remain prompts.
             diff: DIFF_SPEC,

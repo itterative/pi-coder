@@ -11,11 +11,11 @@ import {
     isProcessSubstitution,
     getSubshellContent,
 } from "./bash";
-import { KNOWN_COMMANDS } from "./commands";
+import { CommandTag, KNOWN_COMMANDS } from "./commands";
 import type { CommandSpec, FlagSpec } from "./commands";
 
 // re-export the public surface so existing imports of "./heuristics" keep working
-export { KNOWN_COMMANDS };
+export { CommandTag, KNOWN_COMMANDS };
 export type { CommandSpec, FlagSpec };
 
 /**
@@ -54,6 +54,8 @@ export enum UnsafeReason {
 export interface HeuristicAssessment {
     classification: Heuristic;
     reasons: UnsafeReason[];
+    /** Semantic tags for parsed command operations, in first-seen order. */
+    tags: CommandTag[];
 }
 
 const UNSAFE_REASON_DESCRIPTIONS: Record<UnsafeReason, string> = {
@@ -82,6 +84,17 @@ export function describeUnsafeReason(reason: UnsafeReason): string {
 
 interface ConfinementDiagnostics {
     reasons: UnsafeReason[];
+    tags: CommandTag[];
+}
+
+function addCommandTags(
+    diagnostics: ConfinementDiagnostics | undefined,
+    tags: readonly CommandTag[],
+): void {
+    if (diagnostics === undefined) return;
+    for (const tag of tags) {
+        if (!diagnostics.tags.includes(tag)) diagnostics.tags.push(tag);
+    }
 }
 
 function addUnsafeReason(
@@ -96,8 +109,13 @@ function addUnsafeReason(
 function assessment(
     classification: Heuristic,
     reasons: UnsafeReason[] = [],
+    tags: CommandTag[] = [],
 ): HeuristicAssessment {
-    return { classification, reasons: [...new Set(reasons)] };
+    return {
+        classification,
+        reasons: [...new Set(reasons)],
+        tags: [...new Set(tags)],
+    };
 }
 
 export function isSafeHeuristic(
@@ -691,6 +709,7 @@ function inspectShellSubstitution(
 interface ExtractedCommandAccess {
     paths: string[];
     writes: boolean;
+    tags: CommandTag[];
 }
 
 function extractCommandPaths(
@@ -701,6 +720,7 @@ function extractCommandPaths(
     diagnostics?: ConfinementDiagnostics,
 ): ExtractedCommandAccess | null {
     const paths: string[] = [];
+    const tags = new Set<CommandTag>(spec.tags);
     let writes = false;
     let afterDoubleDash = false;
     let positionalSeen = false;
@@ -720,6 +740,7 @@ function extractCommandPaths(
 
     const adoptSpec = (s: CommandSpec) => {
         activeSpec = s;
+        s.tags?.forEach((tag) => tags.add(tag));
         positionals = s.positionals ?? "paths";
         patternProvided =
             positionals !== "first-pattern" || hasPatternBypass(args, s);
@@ -967,7 +988,7 @@ function extractCommandPaths(
         return null;
     }
 
-    return { paths, writes };
+    return { paths, writes, tags: [...tags] };
 }
 
 const CHAIN_OPERATORS = new Set(["&&", "||", "|", ";", "&"]);
@@ -1252,9 +1273,9 @@ function isCommandConfined(
         return true;
     });
 
-    return confined
-        ? (access.writes ? Heuristic.SAFE_EDIT : Heuristic.SAFE_READONLY)
-        : undefined;
+    if (!confined) return undefined;
+    addCommandTags(diagnostics, access.tags);
+    return access.writes ? Heuristic.SAFE_EDIT : Heuristic.SAFE_READONLY;
 }
 
 /**
@@ -1455,7 +1476,7 @@ export function getCwdConfinementAssessment(
         return assessment(Heuristic.UNSAFE, [UnsafeReason.EMPTY_INPUT]);
     }
 
-    const diagnostics: ConfinementDiagnostics = { reasons: [] };
+    const diagnostics: ConfinementDiagnostics = { reasons: [], tags: [] };
     const resolvedCwd = path.resolve(cwd);
     const classification = isConfined(
         command,
@@ -1463,13 +1484,14 @@ export function getCwdConfinementAssessment(
         buildConfinementOptions(confinement, resolvedCwd),
         diagnostics,
     ) ?? Heuristic.UNSAFE;
-    if (isSafeHeuristic(classification)) return assessment(classification);
+    if (isSafeHeuristic(classification)) return assessment(classification, [], diagnostics.tags);
 
     return assessment(
         Heuristic.UNSAFE,
         diagnostics.reasons.length > 0
             ? diagnostics.reasons
             : [UnsafeReason.UNSAFE_COMMAND],
+        diagnostics.tags,
     );
 }
 
@@ -1502,7 +1524,7 @@ export function getArgsConfinementAssessment(
         return assessment(Heuristic.UNSAFE, [UnsafeReason.EMPTY_INPUT]);
     }
 
-    const diagnostics: ConfinementDiagnostics = { reasons: [] };
+    const diagnostics: ConfinementDiagnostics = { reasons: [], tags: [] };
     const resolvedCwd = path.resolve(cwd);
     const confinementState = state ?? createCwdConfinementState(resolvedCwd);
     const classification = isCommandConfined(
@@ -1513,13 +1535,14 @@ export function getArgsConfinementAssessment(
         confinementState,
         diagnostics,
     ) ?? Heuristic.UNSAFE;
-    if (isSafeHeuristic(classification)) return assessment(classification);
+    if (isSafeHeuristic(classification)) return assessment(classification, [], diagnostics.tags);
 
     return assessment(
         Heuristic.UNSAFE,
         diagnostics.reasons.length > 0
             ? diagnostics.reasons
             : [UnsafeReason.UNSAFE_COMMAND],
+        diagnostics.tags,
     );
 }
 

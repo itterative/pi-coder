@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { realpath } from "node:fs/promises";
 import os from "node:os";
 import { promisify } from "node:util";
 
@@ -10,6 +11,7 @@ import {
 
 const execFile = promisify(execFileCallback);
 const MAX_DIFF_CHARS = 24_000;
+const MAX_NAME_STATUS_CHARS = 24_000;
 const REVISION = /^(?:HEAD(?:~[0-9]+)?|[0-9a-f]{7,64})$/i;
 
 const REVIEW_CONFINEMENT: SandboxConfigCwdConfinement = {
@@ -39,13 +41,23 @@ interface GitResult {
 }
 
 function gitEnvironment(): NodeJS.ProcessEnv {
+    const environment: NodeJS.ProcessEnv = {};
+    for (const [name, value] of Object.entries(process.env)) {
+        // Git's environment can relocate a repository, replace its object
+        // database, or inject config. A history review must always inspect the
+        // repository rooted at its supplied cwd instead.
+        if (value !== undefined && !name.startsWith("GIT_")) environment[name] = value;
+    }
     return {
-        ...process.env,
+        ...environment,
         // Do not load machine-wide or user Git configuration while producing
         // reviewer output. The repository's local configuration still cannot
         // enable external diff/textconv because those modes are disabled below.
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_CONFIG_GLOBAL: os.devNull,
+        // Git pathspec magic must never expand a safe-looking filename into
+        // paths that were withheld from the review.
+        GIT_LITERAL_PATHSPECS: "1",
     };
 }
 
@@ -65,6 +77,14 @@ async function git(cwd: string, args: string[], maxBuffer = MAX_DIFF_CHARS): Pro
             return { stdout: candidate.stdout, truncated: true };
         }
         throw error;
+    }
+}
+
+async function assertRepositoryRoot(cwd: string): Promise<void> {
+    const { stdout } = await git(cwd, ["rev-parse", "--show-toplevel"]);
+    const [resolvedCwd, resolvedRoot] = await Promise.all([realpath(cwd), realpath(stdout.trim())]);
+    if (resolvedCwd !== resolvedRoot) {
+        throw new Error("safe-git-history requires the agent cwd to be the repository root.");
     }
 }
 
@@ -148,6 +168,7 @@ export async function reviewHistory(cwd: string, input: HistoryReviewInput): Pro
     text: string;
     details: HistoryReviewDetails;
 }> {
+    await assertRepositoryRoot(cwd);
     const base = await resolveCommit(cwd, input.base);
     const head = await resolveCommit(cwd, input.head);
     if (base === head) throw new Error("Base and head must identify different commits.");
@@ -158,7 +179,10 @@ export async function reviewHistory(cwd: string, input: HistoryReviewInput): Pro
         throw new Error("Base must be an ancestor of head.");
     }
 
-    const names = await git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames=50%", "--name-status", "-z", base, head]);
+    const names = await git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames=50%", "--name-status", "-z", base, head], MAX_NAME_STATUS_CHARS);
+    if (names.truncated) {
+        throw new Error(`Changed-path metadata exceeds ${MAX_NAME_STATUS_CHARS} characters; review a smaller commit range.`);
+    }
     const records = changedPathRecords(names.stdout);
     const { paths, withheld } = reviewablePaths(records, cwd);
     const details: HistoryReviewDetails = {
@@ -179,7 +203,7 @@ export async function reviewHistory(cwd: string, input: HistoryReviewInput): Pro
     }
 
     const patch = await git(cwd, [
-        "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3",
+        "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3",
         base, head, "--", ...paths,
     ]);
     const redacted = redactDiff(patch.stdout);
