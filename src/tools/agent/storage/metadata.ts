@@ -104,6 +104,22 @@ export const AGENT_METADATA_MIGRATIONS = [{
                 ON agent_runs (child_session_file);
         `);
     },
+}, {
+    version: 6,
+    apply(database: AgentMetadataDatabase): void {
+        database.exec(`
+            CREATE TABLE IF NOT EXISTS agent_run_states (
+                owner_session_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                branch_entry_id TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                state_json TEXT NOT NULL,
+                PRIMARY KEY (owner_session_id, run_id, branch_entry_id)
+            );
+            CREATE INDEX IF NOT EXISTS agent_run_states_branch
+                ON agent_run_states (owner_session_id, branch_entry_id, updated_at DESC);
+        `);
+    },
 }] as const;
 
 export function agentWorkspacesRoot(workspacesDir = PI_CODER_WORKSPACES_DIR): string {

@@ -125,10 +125,12 @@ export class AgentLifecycle {
             this.activeContext = ctx;
             this.mailbox.clear();
             this.notifiedMutationFiles.clear();
-            // Prevent old-branch shutdown records from being appended at the new leaf.
+            // Drain old-branch writes before detaching persistence. Shutdown must not
+            // append records at the newly selected branch leaf.
+            await this.manager.flushPersistence();
+            this.manager.closePersistence();
             this.manager.setPersistence(undefined);
             await this.manager.shutdown();
-            await this.manager.flushPersistence();
             emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "reset" });
             this.setupRuns.clear();
             clearAgentUi(ctx, this.pi.events);
@@ -145,6 +147,7 @@ export class AgentLifecycle {
             clearAgentUi(ctx, this.pi.events);
             await this.manager.shutdown();
             await this.manager.flushPersistence();
+            this.manager.closePersistence();
             emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "shutdown" });
             this.activeContext = undefined;
             this.unsubscribeAgentUiEvents();
@@ -299,9 +302,9 @@ export class AgentLifecycle {
     }
 
     private async restoreManager(ctx: ExtensionContext): Promise<void> {
-        let loaded: ReturnType<typeof loadAgentRunPersistence>;
+        let loaded: Awaited<ReturnType<typeof loadAgentRunPersistence>>;
         try {
-            loaded = loadAgentRunPersistence(this.pi, ctx);
+            loaded = await loadAgentRunPersistence(ctx);
         } catch (error) {
             this.manager.setPersistence(undefined);
             const message = error instanceof Error ? error.message : String(error);

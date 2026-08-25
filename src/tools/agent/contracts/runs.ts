@@ -151,6 +151,7 @@ export interface AgentRunPersistence {
     childSessionDir: string;
     save(record: PersistedAgentRun): boolean;
     flush?: () => Promise<void>;
+    close?: () => void;
     deleteChildSession(sessionFile: string): void;
 }
 

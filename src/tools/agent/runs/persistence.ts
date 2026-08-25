@@ -1,18 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-    type ExtensionAPI,
-    type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { PI_CODER_AGENT_SESSIONS_DIR } from "../../../common/constants";
 import { normalizeCwdForSessionDirectory } from "../../../common/paths";
 import type { AgentRunPersistence, PersistedAgentRun } from "../contracts/runs";
 import { ZERO_USAGE } from "./usage";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
-import { upsertAgentRunCatalogRecord } from "../storage/run-catalog";
+import {
+    openAgentMetadataDatabase,
+    type AgentMetadataDatabase,
+} from "../storage/metadata";
+import { upsertAgentRunCatalogRecordInDatabase } from "../storage/run-catalog";
+import {
+    listAgentRunStatesInDatabase,
+    upsertAgentRunStateInDatabase,
+} from "../storage/run-state";
 
-export const AGENT_RUN_STATE_ENTRY = "pi-coder:agent-run-state-v1";
 const RUN_ID = /^[a-z][a-z0-9_-]{0,63}-\d+$/;
 const RESTORABLE_STATUSES = new Set<PersistedAgentRun["status"]>([
     "starting",
@@ -96,9 +100,10 @@ function responsePreview(record: PersistedAgentRun): string | undefined {
 }
 
 
-export interface AgentRunCatalogWriter {
-    enqueue(record: PersistedAgentRun): void;
+export interface AgentRunStateWriter {
+    save(record: PersistedAgentRun, branchEntryId: string): { ok: true } | { ok: false; error: unknown };
     flush(): Promise<void>;
+    close(): void;
 }
 
 function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCatalogRecord {
@@ -124,25 +129,40 @@ function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCa
     };
 }
 
-export function createAgentRunCatalogWriter(
+export function createAgentRunStateWriter(
     parentCwd: string,
-    workspacesDir = path.join(path.dirname(path.resolve(PI_CODER_AGENT_SESSIONS_DIR)), "workspaces"),
-): AgentRunCatalogWriter {
-    let pending = Promise.resolve();
-    let failure: unknown;
+    database: AgentMetadataDatabase,
+): AgentRunStateWriter {
+    let closed = false;
     return {
-        enqueue(record) {
-            pending = pending.then(async () => {
+        save(record, branchEntryId) {
+            if (closed) {
+                return { ok: false, error: new Error("Agent run state storage is closed.") };
+            }
+            try {
+                database.exec("BEGIN IMMEDIATE");
                 try {
-                    await upsertAgentRunCatalogRecord(catalogRecord(record, parentCwd), workspacesDir);
+                    upsertAgentRunStateInDatabase(database, record, branchEntryId);
+                    upsertAgentRunCatalogRecordInDatabase(database, catalogRecord(record, parentCwd));
+                    database.exec("COMMIT");
+                    return { ok: true };
                 } catch (error) {
-                    failure ??= error;
+                    try {
+                        database.exec("ROLLBACK");
+                    } catch {
+                        // Preserve the original write failure.
+                    }
+                    return { ok: false, error };
                 }
-            });
+            } catch (error) {
+                return { ok: false, error };
+            }
         },
-        async flush() {
-            await pending;
-            if (failure) throw failure;
+        async flush() {},
+        close() {
+            if (closed) return;
+            closed = true;
+            database.close();
         },
     };
 }
@@ -256,14 +276,13 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
 export interface LoadedAgentRunPersistence {
     persistence: AgentRunPersistence;
     records: PersistedAgentRun[];
-    catalog: AgentRunCatalogWriter;
+    catalog: AgentRunStateWriter;
 }
 
-export function loadAgentRunPersistence(
-    pi: ExtensionAPI,
+export async function loadAgentRunPersistence(
     ctx: ExtensionContext,
     agentSessionsDir = PI_CODER_AGENT_SESSIONS_DIR,
-): LoadedAgentRunPersistence | undefined {
+): Promise<LoadedAgentRunPersistence | undefined> {
     if (!ctx.sessionManager.getSessionFile()) return undefined;
     const ownerSessionId = ctx.sessionManager.getSessionId();
     const cwdSessionDir = getAgentCwdSessionDir(ctx.cwd, agentSessionsDir);
@@ -271,38 +290,47 @@ export function loadAgentRunPersistence(
     fs.mkdirSync(childSessionDir, { recursive: true, mode: 0o700 });
     fs.chmodSync(childSessionDir, 0o700);
 
-    const latest = new Map<string, PersistedAgentRun>();
-    for (const entry of ctx.sessionManager.getBranch()) {
-        if (entry.type !== "custom" || entry.customType !== AGENT_RUN_STATE_ENTRY) continue;
-        const parsed = parseRecord(entry.data, ownerSessionId, childSessionDir);
-        if (parsed) latest.set(parsed.runId, parsed);
+    const branchEntryIds = ctx.sessionManager.getBranch()
+        .map((entry) => entry.id)
+        .filter((id): id is string => typeof id === "string");
+    const effectiveBranchEntryIds = ["root", ...branchEntryIds.filter((id) => id !== "root")];
+    const workspacesDir = path.join(path.dirname(path.resolve(agentSessionsDir)), "workspaces");
+    const database = await openAgentMetadataDatabase(workspacesDir);
+    const storedStates = listAgentRunStatesInDatabase(database, ownerSessionId, effectiveBranchEntryIds);
+    const branchPositions = new Map(effectiveBranchEntryIds.map((id, index) => [id, index]));
+    const latest = new Map<string, { record: PersistedAgentRun; branchPosition: number; updatedAt: number }>();
+    for (const stored of storedStates) {
+        const parsed = parseRecord(stored.state, ownerSessionId, childSessionDir);
+        if (!parsed) continue;
+        const branchPosition = branchPositions.get(stored.branchEntryId) ?? -1;
+        const previous = latest.get(parsed.runId);
+        if (
+            previous
+            && (previous.branchPosition > branchPosition
+                || (previous.branchPosition === branchPosition && previous.updatedAt >= stored.updatedAt))
+        ) continue;
+        latest.set(parsed.runId, { record: parsed, branchPosition, updatedAt: stored.updatedAt });
     }
 
-    const catalog = createAgentRunCatalogWriter(
-        ctx.cwd,
-        path.join(path.dirname(path.resolve(agentSessionsDir)), "workspaces"),
-    );
-    for (const record of latest.values()) catalog.enqueue(record);
+    const catalog = createAgentRunStateWriter(ctx.cwd, database);
 
     let persistenceWarningShown = false;
     const persistence: AgentRunPersistence = {
         ownerSessionId,
         childSessionDir,
         save(record) {
-            try {
-                pi.appendEntry(AGENT_RUN_STATE_ENTRY, record);
-                catalog.enqueue(record);
-                return true;
-            } catch (error) {
-                if (!persistenceWarningShown) {
-                    persistenceWarningShown = true;
-                    const message = error instanceof Error ? error.message : String(error);
-                    ctx.ui.notify(`pi-coder agents: could not persist delegated run state: ${message}`, "warning");
-                }
-                return false;
+            const branchEntryId = ctx.sessionManager.getLeafId() ?? "root";
+            const result = catalog.save(record, branchEntryId);
+            if (result.ok) return true;
+            if (!persistenceWarningShown) {
+                persistenceWarningShown = true;
+                const message = result.error instanceof Error ? result.error.message : String(result.error);
+                ctx.ui.notify(`pi-coder agents: could not persist delegated run state: ${message}`, "warning");
             }
+            return false;
         },
         flush: () => catalog.flush(),
+        close: () => catalog.close(),
         deleteChildSession(sessionFile) {
             const resolved = path.resolve(sessionFile);
             if (!inside(childSessionDir, resolved)) return;
@@ -313,5 +341,5 @@ export function loadAgentRunPersistence(
             }
         },
     };
-    return { persistence, records: [...latest.values()], catalog };
+    return { persistence, records: [...latest.values()].map((entry) => entry.record), catalog };
 }

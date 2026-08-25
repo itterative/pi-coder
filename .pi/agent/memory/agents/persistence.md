@@ -10,7 +10,7 @@ keep_updated: true
 ## Storage and ownership
 
 - Persisted parents use SDK `SessionManager.create/open` for child JSONL under `<pi-coder-install>/.state/agent-sessions/--<encoded-cwd>--/<parent-session-id>/`. The install root comes from `import.meta.url`; cwd normalization is centralized; private directories use mode `0700`; `.state/` is gitignored.
-- Parent custom entries form a versioned append-only run-state journal because child transcripts do not contain the parent run ID, task/status, pending question, usage checkpoint, or retention state.
+- Full parent run-state snapshots are stored in the extension-local SQLite metadata database, keyed by owner parent session, run ID, and active-branch entry. Saves use a session-scoped synchronous `DatabaseSync` transaction for the state and catalog projections; stale timestamps are rejected. Child transcripts do not contain the parent run ID, task/status, pending question, usage checkpoint, or retention state.
 - Records are bound to the exact parent session UUID and active branch. Reload/restart and switching away/back restore that session; `/new`, `/fork`, `/clone`, and ephemeral parents do not inherit children. `/tree` navigation is blocked during active streaming or permission waits and rebuilds state at the new branch afterward.
 
 ## Restoration rules

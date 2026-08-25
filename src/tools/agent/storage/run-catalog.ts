@@ -4,7 +4,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { PI_CODER_WORKSPACES_DIR } from "../../../common/constants";
 import type { WorkerMutationReport } from "../contracts/mutations";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
-import { openAgentMetadataDatabase } from "./metadata";
+import { openAgentMetadataDatabase, type AgentMetadataDatabase } from "./metadata";
 
 type CatalogRow = Record<string, unknown>;
 
@@ -59,13 +59,11 @@ function rowToAgentRunCatalogRecord(row: CatalogRow): AgentRunCatalogRecord | un
     };
 }
 
-export async function upsertAgentRunCatalogRecord(
+export function upsertAgentRunCatalogRecordInDatabase(
+    database: AgentMetadataDatabase,
     record: AgentRunCatalogRecord,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-): Promise<void> {
-    const database = await openAgentMetadataDatabase(workspacesDir);
-    try {
-        database.prepare(`
+): void {
+    database.prepare(`
             INSERT INTO agent_runs (
                 owner_session_id, run_id, parent_cwd, execution_cwd, title, agent,
                 agent_source, task, status, background, mutating, workspace_id,
@@ -89,26 +87,36 @@ export async function upsertAgentRunCatalogRecord(
                 usage_json = excluded.usage_json,
                 response_preview = excluded.response_preview,
                 mutation_report_json = excluded.mutation_report_json
+            WHERE excluded.updated_at >= agent_runs.updated_at
         `).run(
-            record.ownerSessionId,
-            record.runId,
-            path.resolve(record.parentCwd),
-            record.executionCwd ?? null,
-            record.title,
-            record.agent,
-            record.agentSource,
-            record.task,
-            record.status,
-            record.background ? 1 : 0,
-            record.mutating ? 1 : 0,
-            record.workspaceId ?? null,
-            record.childSessionFile ?? null,
-            record.startedAt,
-            record.updatedAt,
-            JSON.stringify(record.usageSnapshot),
-            record.responsePreview ?? null,
-            record.mutationReport ? JSON.stringify(record.mutationReport) : null,
-        );
+        record.ownerSessionId,
+        record.runId,
+        path.resolve(record.parentCwd),
+        record.executionCwd ?? null,
+        record.title,
+        record.agent,
+        record.agentSource,
+        record.task,
+        record.status,
+        record.background ? 1 : 0,
+        record.mutating ? 1 : 0,
+        record.workspaceId ?? null,
+        record.childSessionFile ?? null,
+        record.startedAt,
+        record.updatedAt,
+        JSON.stringify(record.usageSnapshot),
+        record.responsePreview ?? null,
+        record.mutationReport ? JSON.stringify(record.mutationReport) : null,
+    );
+}
+
+export async function upsertAgentRunCatalogRecord(
+    record: AgentRunCatalogRecord,
+    workspacesDir = PI_CODER_WORKSPACES_DIR,
+): Promise<void> {
+    const database = await openAgentMetadataDatabase(workspacesDir);
+    try {
+        upsertAgentRunCatalogRecordInDatabase(database, record);
     } finally {
         database.close();
     }

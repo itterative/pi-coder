@@ -156,6 +156,10 @@ export class AgentRunManager {
         await this.persistence?.flush?.();
     }
 
+    closePersistence(): void {
+        this.persistence?.close?.();
+    }
+
     get activeCount(): number {
         return [...this.runs.values()].filter((run) => !isTerminalStatus(run.status)).length;
     }

@@ -91,7 +91,7 @@ Isolated workers use a persistent pool of up to three Git worktrees. Setup runs 
 
 ## Persistence and diagnostics
 
-Persisted parent sessions store child transcripts under the extension's private `.state/agent-sessions` area and journal run metadata in the parent session. Restore is limited to the exact parent session and active tree branch; new, forked, cloned, or ephemeral sessions do not inherit runs. Waiting and interrupted runs require user action; retained uncollected background terminal outcomes can also be restored. Stale tool calls are marked uncertain before continuation.
+Persisted parent sessions store child transcripts under the extension's private `.state/agent-sessions` area and full run metadata in the extension's SQLite metadata database. State snapshots are associated with parent-session branch entries, so restore is limited to the exact parent session and active tree branch; new, forked, cloned, or ephemeral sessions do not inherit runs. Waiting and interrupted runs require user action; retained uncollected background terminal outcomes can also be restored. Stale tool calls are marked uncertain before continuation.
 
 The event bus publishes bounded invalidation events; consumers reload authoritative state. `/agent-trace` retains sanitized, bounded timelines for recent runs. Tracing is temporarily enabled during development and should return to the intended `PI_CODER_AGENT_TRACE=1` opt-in before release.
 
