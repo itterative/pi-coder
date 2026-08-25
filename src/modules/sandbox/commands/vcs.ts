@@ -53,6 +53,7 @@ const DIFF_SPEC: CommandSpec = {
         let hasCheck = false;
         let hasStat = false;
         let hasNameStatus = false;
+        let hasNameOnly = false;
         let hasQuiet = false;
         let separator = -1;
 
@@ -70,6 +71,7 @@ const DIFF_SPEC: CommandSpec = {
                 arg !== "--check" &&
                 arg !== "--stat" &&
                 arg !== "--name-status" &&
+                arg !== "--name-only" &&
                 arg !== "--quiet" &&
                 arg !== "--cached" &&
                 arg !== "--staged" &&
@@ -86,13 +88,15 @@ const DIFF_SPEC: CommandSpec = {
                 hasStat = true;
             } else if (arg === "--name-status") {
                 hasNameStatus = true;
+            } else if (arg === "--name-only") {
+                hasNameOnly = true;
             } else if (arg === "--quiet") {
                 hasQuiet = true;
             }
         }
 
         const hasPathspec = separator !== -1 && separator < args.length - 1;
-        return hasCheck || hasStat || hasNameStatus || hasQuiet || hasPathspec;
+        return hasCheck || hasStat || hasNameStatus || hasNameOnly || hasQuiet || hasPathspec;
     },
 };
 
