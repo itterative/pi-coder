@@ -51,6 +51,12 @@ function toolCallText(name: string, args: ToolArguments, failed: boolean): strin
             return editCall(args, prefix).join("\n");
         case "bash":
             return `${prefix} bash ${stringArgument(args, "command") ?? ""}`.trimEnd();
+        case "find":
+        case "grep": {
+            const pattern = stringArgument(args, "pattern");
+            const path = stringArgument(args, "path");
+            return [prefix, name, pattern, path].filter((value) => value !== undefined).join(" ");
+        }
         default: {
             const path = stringArgument(args, "path");
             return path ? `${prefix} ${name} ${path}` : `${prefix} ${name}`;

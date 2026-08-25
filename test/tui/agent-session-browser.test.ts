@@ -153,6 +153,7 @@ describe("AgentSessionBrowserComponent", () => {
     it("refreshes an open live detail and follows output until the user scrolls up", async () => {
         const eventBus = createEventBus();
         let transcript = liveTranscript(30);
+        let completed = false;
         let refreshes = 0;
         const value = new AgentSessionBrowserComponent({
             current: [{ ...current, transcript }],
@@ -162,7 +163,10 @@ describe("AgentSessionBrowserComponent", () => {
             fixedHeight: () => 20,
             onRefresh: async () => {
                 refreshes++;
-                return { current: [{ ...current, transcript }], past: [] };
+                return {
+                    current: [{ ...current, transcript, status: completed ? "completed" : "running" }],
+                    past: [],
+                };
             },
         });
         value.initialize(mockTheme);
@@ -196,6 +200,18 @@ describe("AgentSessionBrowserComponent", () => {
 
         ui.press("\x1b[F");
         expect(ui.render()).toContain("Live transcript line 89");
+
+        completed = true;
+        eventBus.emit(AGENT_EVENT_CHANNEL, {
+            cwd: "/repo/project",
+            timestamp: Date.now(),
+            type: "run",
+            action: "status_changed",
+            runId: current.id,
+            previousStatus: "running",
+            status: "completed",
+        });
+        await vi.waitFor(() => expect(ui.render()).toContain("[scout] Project structure audit · completed"));
         value.dispose();
         eventBus.clear();
     });

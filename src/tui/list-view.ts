@@ -132,6 +132,7 @@ export class ListViewComponent<
     private readonly container: Container;
     private readonly contentContainer: Box;
     private borderedContainer: BorderBox | null = null;
+    private titleText: Text | null = null;
     private done: ((result: R) => void) | null = null;
 
     // Cache built during render: lines per item and start line for each item
@@ -158,6 +159,13 @@ export class ListViewComponent<
         this.done = done;
     }
 
+    /** Update the framed title after initialization. */
+    protected setTitle(title: string): void {
+        if (!this.theme || !this.titleText) return;
+        this.titleText.setText(this.theme.fg("accent", this.theme.bold(`  ${title}`)));
+        this.invalidate();
+    }
+
     /**
      * Initialize the component with a theme. Must be called before render.
      */
@@ -166,13 +174,12 @@ export class ListViewComponent<
         const borderColor = (s: string) => theme.fg(this.listOptions.borderColor ?? "border", s);
 
         // Header
-        this.container.addChild(
-            new Text(
-                theme.fg("accent", theme.bold(`  ${this.listOptions.title}`)),
-                1,
-                0,
-            ),
+        this.titleText = new Text(
+            theme.fg("accent", theme.bold(`  ${this.listOptions.title}`)),
+            1,
+            0,
         );
+        this.container.addChild(this.titleText);
         this.container.addChild(new Spacer(1));
 
         // Custom header content if provided

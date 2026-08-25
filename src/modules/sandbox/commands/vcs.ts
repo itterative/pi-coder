@@ -52,6 +52,7 @@ const DIFF_SPEC: CommandSpec = {
     validate: (args) => {
         let hasCheck = false;
         let hasStat = false;
+        let hasNameStatus = false;
         let hasQuiet = false;
         let separator = -1;
 
@@ -68,6 +69,7 @@ const DIFF_SPEC: CommandSpec = {
                 arg.startsWith("-") &&
                 arg !== "--check" &&
                 arg !== "--stat" &&
+                arg !== "--name-status" &&
                 arg !== "--quiet" &&
                 arg !== "--cached" &&
                 arg !== "--staged" &&
@@ -82,21 +84,45 @@ const DIFF_SPEC: CommandSpec = {
                 hasCheck = true;
             } else if (arg === "--stat") {
                 hasStat = true;
+            } else if (arg === "--name-status") {
+                hasNameStatus = true;
             } else if (arg === "--quiet") {
                 hasQuiet = true;
             }
         }
 
         const hasPathspec = separator !== -1 && separator < args.length - 1;
-        return hasCheck || hasStat || hasQuiet || hasPathspec;
+        return hasCheck || hasStat || hasNameStatus || hasQuiet || hasPathspec;
+    },
+};
+
+/** Metadata-only `git show` modes. Any patch/content option remains ineligible. */
+const SHOW_METADATA_SPEC: CommandSpec = {
+    validate: (args) => {
+        let hasMetadataMode = false;
+        for (let i = 1; i < args.length; i++) {
+            const arg = args[i];
+            if (
+                arg === "--stat"
+                || arg === "--summary"
+                || arg === "--name-only"
+                || arg === "--name-status"
+                || arg === "--format="
+            ) {
+                hasMetadataMode = true;
+                continue;
+            }
+            if (arg.startsWith("-")) return false;
+        }
+        return hasMetadataMode;
     },
 };
 
 /**
  * Version control (read-only inspection of the repo in cwd).
  *
- * Excluded subcommands: diff/show/cat-file print file CONTENTS from the
- * worktree or history (a sensitive file's content can reach the output
+ * Excluded subcommands: cat-file and content-printing diff/show modes print
+ * file contents from the worktree or history (a sensitive file can reach the output
  * with no sensitive path argument), remote/config can print credentials
  * stored in .git/config, and fetch/pull/push/checkout/... write or use
  * the network. Those need explicit allow rules or output protections.
@@ -125,6 +151,7 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
             // Keep only the explicitly modeled checking, stat, and quiet
             // modes eligible; other diff output modes remain prompts.
             diff: DIFF_SPEC,
+            show: SHOW_METADATA_SPEC,
             log: LOG_SPEC,
             "ls-files": {
                 flags: { "--exclude": VALUE, "--with-tree": VALUE },

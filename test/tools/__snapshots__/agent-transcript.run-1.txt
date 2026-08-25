@@ -2,8 +2,8 @@
 
 ● bash git status --short --branch && printf '\nHEAD: ' && git rev-parse HEAD
 ● ls .
-● find .
-● find .
+● find *validation* .
+● find AGENTS.md .
 ● read AGENTS.md
 ● read WORKSPACE-MANUAL-VALIDATION.md
 ● read WORKSPACE-VALIDATION-REPORT.md

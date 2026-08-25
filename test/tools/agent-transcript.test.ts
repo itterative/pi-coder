@@ -129,6 +129,27 @@ describe("delegated-agent transcript formatting", () => {
         );
     });
 
+    it("shows search patterns and paths", async () => {
+        const session = SessionManager.inMemory("/project");
+        session.appendMessage({
+            role: "assistant",
+            content: [
+                { type: "toolCall", id: "call-find", name: "find", arguments: { pattern: "*.test.ts", path: "test" } },
+                { type: "toolCall", id: "call-grep", name: "grep", arguments: { pattern: "AgentSession", path: "src/tui" } },
+            ],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage,
+            stopReason: "toolUse",
+            timestamp: 1,
+        });
+
+        await expect(formatAgentSessionTranscript(session.getBranch())).toMatchFileSnapshot(
+            "__snapshots__/agent-transcript.search-calls.txt",
+        );
+    });
+
     it("renders the saved delegated-agent transcript", async () => {
         const transcript = loadAgentSessionTranscript(transcriptFixture("run-0"));
 
@@ -141,5 +162,12 @@ describe("delegated-agent transcript formatting", () => {
 
         expect(transcript).toBeDefined();
         await expect(transcript).toMatchFileSnapshot("__snapshots__/agent-transcript.run-1.txt");
+    });
+
+    it("renders the reviewer delegated-agent transcript", async () => {
+        const transcript = loadAgentSessionTranscript(transcriptFixture("run-2"));
+
+        expect(transcript).toBeDefined();
+        await expect(transcript).toMatchFileSnapshot("__snapshots__/agent-transcript.run-2.txt");
     });
 });

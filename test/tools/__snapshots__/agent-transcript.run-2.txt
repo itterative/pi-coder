@@ -1,0 +1,122 @@
+> Functionally review the last two commits in this repository, with special attention to the newest commit because the user wants to test it. Remain read-only. Inspect git history/diffs and relevant tests/docs. Report: (1) concise functional summary of each commit, (2) concrete manual test plan for the newest change including commands, expected behavior, and prerequisites, (3) any likely regressions or missing test coverage. Do not modify files or run provider calls.
+
+● bash git status --short && git log -2 --format=fuller
+× bash git diff --stat HEAD~2..HEAD && git diff --name-status HEAD~2..HEAD
+● read AGENTS.md
+× bash git show --stat --summary HEAD
+× bash git show --stat --summary HEAD~1
+× bash git show --format= --name-only HEAD
+× bash git show --format= --name-only HEAD~1
+● find **/*agent* src
+● find **/*transcript* src
+× bash git log -p -2
+● ls src/tools/agent
+● ls src/tui
+● read src/tools/agent/README.md
+● grep transcript|auto.?scroll|autoscroll|scroll src
+● find **/*agent* test
+● find **/*transcript* test
+● bash git log -2 --name-only --format=%H
+● bash git log -1 --numstat --format=%H HEAD
+● bash git log -1 --numstat --format=%H HEAD~1
+● read src/tui/agent-session-detail.ts
+● read src/tui/agent-session-browser.ts
+● read src/tui/list-view.ts
+● read test/tui/agent-session-browser.test.ts
+● read src/tools/agent/presentation/transcript.ts
+● read src/tools/agent/presentation/sessions.ts
+● read test/tools/agent-transcript.test.ts
+● read test/tools/agent-persistence.test.ts
+● read test/tools/__snapshots__/agent-transcript.tool-calls.txt
+● read test/tools/fixtures/agent-transcripts/run-0.jsonl
+● read test/tui/__snapshots__/agent-session-browser.session-detail.txt
+● read package.json
+● read README.md
+● read src/tools/agent/browser.ts
+● read src/tools/agent/presentation/browser-models.ts
+● read src/tui/pager.ts
+● grep formatAgentSessionTranscript|loadAgentSessionTranscripts|followLiveExecution|End follow|live detail|tool calls test
+● grep showAgentSessionBrowser|agent-sessions|/agent-sessions src
+● read src/tools/agent/child/progress.ts
+● grep emitAgentEvent|action: "progress"|onProgress src/tools/agent
+● read src/tools/agent/observability/events.ts
+● read src/tools/agent/lifecycle.ts
+● read src/tools/agent/presentation/transcript.ts
+● read test/tools/__snapshots__/agent-transcript.complete.txt
+● read test/tools/__snapshots__/agent-transcript.run-0.txt
+● read src/tools/agent/runs/manager.ts
+● read src/tools/agent/runs/manager.ts
+● read src/tools/agent/child.ts
+● read test/tools/__snapshots__/agent-transcript.run-1.txt
+● read test/tools/__snapshots__/agent-transcript.complete.txt
+● read test/tools/__snapshots__/agent-transcript.run-0.txt
+● read src/tools/agent/action-dispatch.ts
+● grep registerCommand\("agent-sessions"|agent-sessions src
+
+## Commit summaries
+
+1. **`61c55a7` — “update transcript preview with tool calls”**
+   - Adds `formatAgentSessionTranscript()` in `src/tools/agent/presentation/transcript.ts`.
+   - Session details now show formatted user/assistant text and compact tool calls; failed calls use `×`, edits show `-`/`+` lines, and bash calls show commands. Thinking and tool-result bodies are omitted.
+   - Loads this transcript for both past sessions and current persisted runs via `src/tools/agent/presentation/sessions.ts`.
+   - Adds formatter fixtures/snapshots in `test/tools/agent-transcript.test.ts`.
+
+2. **`58ed03b` — “autoscroll and update live agent transcript”** (newest)
+   - `/agents` refreshes an already-open session detail on agent events and replaces its transcript item (`src/tui/agent-session-browser.ts`).
+   - `AgentSessionDetailComponent` follows live `starting`/`running`/`waiting_for_permission` sessions at the bottom; Up/PageUp pauses following and End resumes it (`src/tui/agent-session-detail.ts`).
+   - Adds the `ListViewComponent.onCacheBuilt()` extension point needed to calculate bottom offset after wrapped-line cache construction.
+   - Tests the mocked event-driven follow/pause/End behavior in `test/tui/agent-session-browser.test.ts`.
+
+## Manual test plan: newest change
+
+**Prerequisites**
+- Run from this project checkout with dependencies installed and the project extension loaded.
+- Use a TUI terminal (preferably ≥80×24).
+- Configure an authenticated child-capable provider; this test intentionally makes provider calls.
+- Use a **scout** only—no worker permissions or mutations required.
+
+**Automated preflight**
+```bash
+npx tsc --noEmit
+npx vitest run test/tui/agent-session-browser.test.ts
+npm run test:run
+```
+Expected: all pass. The focused suite includes the new follow/pause/End test.
+
+**Interactive TUI pass**
+```bash
+pi
+```
+1. Ask the parent to spawn a background scout with a deliberately multi-step read-only task, e.g.:
+   ```text
+   agent(action="spawn", agent="scout", title="Live transcript UI test",
+     task="Read AGENTS.md, src/index.ts, src/tools/agent/README.md, and several files under src/tools/agent one at a time. After each read, give a short observation before continuing. Do not modify files or ask the parent.")
+   ```
+   Expected: spawn returns promptly and the scout remains visible as a current running run.
+
+2. Immediately open:
+   ```text
+   /agents
+   ```
+   Select the running scout in **Current** and press Enter.
+   Expected: detail view opens with metadata and `Transcript:`. As the scout reads/responds, new assistant text and `● read …` calls appear without closing/reopening the view; the viewport stays at the newest lines.
+
+3. While more output is arriving, press **Up** or **PageUp**.
+   Expected: the view remains at the manually selected older content; new output does not pull the viewport down.
+
+4. Press **End**.
+   Expected: following resumes and the newest transcript line is visible. Verify normal Up/Down/PageUp/PageDown bounds and no blank/corrupted frame rows.
+
+5. Let the scout finish, close detail with Escape, and verify the browser list refreshes to its completed state. Reopen it and verify the finished transcript remains readable. Also confirm tool-result payloads and thinking are absent, while tool-call summaries remain.
+
+Use `/agents`, not `/agent-sessions`: `src/tools/agent/browser.ts` only registers the former.
+
+## Likely regressions / coverage gaps
+
+- **Stale detail title/status:** `AgentSessionDetailComponent.updateItem()` replaces content but not the `PagerComponent` title created from the initial status. A run that completes while detail is open can continue to show `· running` in the header, although the list updates after closing. (`src/tui/agent-session-detail.ts`)
+- **Refresh cost while streaming:** every progress event can call `flushPersistence()`, reload the active transcript, and scan/load all past sessions (`src/tools/agent/browser.ts`, `src/tools/agent/presentation/sessions.ts`). The browser coalesces overlapping refreshes, but no test measures long-transcript/many-past-session responsiveness.
+- **Integration gap:** the new UI test mocks an event bus and injects transcript strings. It does not exercise the real child session file, persistence flush, formatter, manager progress event, and open-detail refresh together.
+- **Follow behavior coverage gap:** no tests cover wrapped/resize-dependent transcript growth, terminal transition while detail is open, or status/title refresh.
+- **Documentation mismatch:** `src/tools/agent/README.md` still directs users to `/agent-sessions`, but the implementation registers `/agents`.
+
+No files were modified and no provider calls or test suites were run.

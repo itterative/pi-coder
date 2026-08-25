@@ -2,21 +2,21 @@
 
 ● bash git status --short && git diff --stat && git diff --check
 ● bash git diff -- src test tests
-● grep src
+● grep heuristic|block message|blocked|SAFE_READONLY|scout src
 × bash git status --short && git diff --cached --stat && git diff --cached --check && git diff --cached
 ● read src/tools/agent/child/extension.ts
 ● read src/modules/sandbox/heuristics.ts
 ● read src/modules/sandbox/heuristics.ts
-● find src
-● find src
-● find src
-● find test
+● find **/*heuristic*.test.ts src
+● find **/*child*.test.ts src
+● find **/*sandbox*.test.ts src
+● find **/*agent*.test.ts test
 ● ls .
 ● ls src/modules/sandbox
 ● read test/tools/agent-scout-bash.test.ts
-● find test
-● grep test
-● grep src/modules/sandbox/heuristics.ts
+● find **/*heuristic* test
+● grep getCwdConfinementAssessment|UnsafeReason|describeUnsafeReason|reasons: test
+● grep addUnsafeReason src/modules/sandbox/heuristics.ts
 ● read test/modules/sandbox/heuristics.test.ts
 ● read src/modules/sandbox/heuristics.ts
 ● read src/modules/sandbox/heuristics.ts
@@ -29,15 +29,15 @@
 ● bash git diff --quiet
 ● bash git diff --quiet --cached
 ● read package.json
-● grep src
+● grep getCwdConfinementPermission\(|getArgsConfinementPermission\(|getPathConfinementPermission\( src
 ● bash git diff --stat HEAD^ HEAD
 ● bash git diff --check HEAD^ HEAD
 ● bash git log --oneline -3
 ● bash git rev-parse HEAD^
 ● bash git diff --stat HEAD~2 HEAD
 ● bash git log --oneline -10
-● grep src
-● grep test
+● grep getCwdConfinementAssessment src
+● grep UnsafeReason test
 ● read src/tools/agent/child.ts
 ● read src/tools/agent/child/worker-permissions.ts
 ● read src/tools/agent/definitions/discovery.ts
@@ -47,14 +47,14 @@
 ● read src/modules/sandbox/commands/index.ts
 ● read src/modules/sandbox/heuristics.ts
 ● read test/modules/sandbox/path-heuristics.test.ts
-● grep src/modules/sandbox/commands/vcs.ts
-● grep test/modules/sandbox/heuristics.test.ts
-● grep src/tools/agent/child/extension.ts
-● grep test/tools/agent-scout-bash.test.ts
-● grep test/modules/sandbox/heuristics.test.ts
-● grep test/modules/sandbox/heuristics.test.ts
-● grep src/modules/sandbox/heuristics.ts
-● grep src/modules/sandbox/commands/vcs.ts
+● grep git status|status refreshes|scout bash blocked|SAFE_READONLY src/modules/sandbox/commands/vcs.ts
+● grep git status|permits only heuristic|SAFE_READONLY test/modules/sandbox/heuristics.test.ts
+● grep assessment.classification|Read-only scout bash blocked src/tools/agent/child/extension.ts
+● grep git status test/tools/agent-scout-bash.test.ts
+● grep command: "git status test/modules/sandbox/heuristics.test.ts
+● grep deduplicates reasons test/modules/sandbox/heuristics.test.ts
+● grep const allPaths src/modules/sandbox/heuristics.ts
+● grep status: {} src/modules/sandbox/commands/vcs.ts
 
 - **High — `src/tools/agent/child/extension.ts:271-285`, `src/modules/sandbox/commands/vcs.ts:103,121`:** Scouts directly execute `git status` as `SAFE_READONLY`, but `git status` can refresh/write `.git/index` (explicitly acknowledged in the VCS spec) despite `.git` being sensitive. It may also invoke configured fsmonitor helpers. This violates the read-only/no-sensitive-access guarantee without a sandbox. `test/modules/sandbox/heuristics.test.ts:394-398` codifies the unsafe classification.
 

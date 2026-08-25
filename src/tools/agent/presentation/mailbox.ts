@@ -133,7 +133,7 @@ export class AgentMailbox {
         if (this.closed) return;
         const content = [
             "<delegated-agent-mailbox>",
-            "The user explicitly canceled a delegated agent from the /agent-sessions browser.",
+            "The user explicitly canceled a delegated agent from the /agents browser.",
             `- Run ID: ${JSON.stringify(details.runId)}`,
             `  Title: ${JSON.stringify(details.title)}`,
             `  Agent: ${JSON.stringify(details.agent)}`,

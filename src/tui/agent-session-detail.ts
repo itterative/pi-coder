@@ -23,6 +23,13 @@ function usageText(usage: NonNullable<AgentSessionBrowserItem["usage"]>): string
     return `${compactNumber(usage.input)} input, ${compactNumber(usage.output)} output, $${usage.cost.total.toFixed(4)}`;
 }
 
+function detailTitle(item: AgentSessionBrowserItem): string {
+    const mode = item.agent === "workspace-setup"
+        ? "workspace setup"
+        : item.mutating ? "worker" : item.agent;
+    return `[${mode}] ${item.title || "Untitled run"} · ${item.status.replaceAll("_", " ")}`;
+}
+
 function isLiveExecution(item: AgentSessionBrowserItem): boolean {
     return item.kind === "current" && (
         item.status === "starting"
@@ -72,12 +79,8 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
     private totalLines = 0;
 
     constructor(options: AgentSessionDetailOptions) {
-        const mode = options.item.agent === "workspace-setup"
-            ? "workspace setup"
-            : options.item.mutating ? "worker" : options.item.agent;
-        const status = options.item.status.replaceAll("_", " ");
         super({
-            title: `[${mode}] ${options.item.title || "Untitled run"} · ${status}`,
+            title: detailTitle(options.item),
             items: [{ value: options.item, label: "" }],
             scrollOffset: 0,
             maxVisibleLines: 16,
@@ -120,6 +123,7 @@ export class AgentSessionDetailComponent extends PagerComponent<AgentSessionBrow
     updateItem(item: AgentSessionBrowserItem): void {
         this.item = item;
         this.state.items[0] = { value: item, label: "" };
+        this.setTitle(detailTitle(item));
         this.invalidate();
     }
 

@@ -956,7 +956,7 @@ export class AgentRunManager {
             run.terminalOutcome = outcome;
             this.terminalOrder.push(run.id);
             this.persistRun(run);
-            // Completed transcripts remain browseable from /agent-sessions even after
+            // Completed transcripts remain browseable from /agents even after
             // the bounded in-memory result is collected or evicted.
             this.pruneRetainedResults();
         } else {
