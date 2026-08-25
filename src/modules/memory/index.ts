@@ -88,10 +88,10 @@ You have access to a persistent memory system for storing and recalling informat
 
 ### Locations
 
-- Project-level: ${projectDir}/*.md
-- User-level: ${userDir}/*.md
+- Project-level indexed memories: ${projectDir}/*.md
+- User-level indexed memories: ${userDir}/*.md
 
-All memory files are stored directly in these directories. The \`category\` field is frontmatter metadata and does not create subdirectories.
+Indexed memories are stored directly in these directories. Detailed reference documents may be kept in subdirectories and linked from an indexed memory; they are not listed automatically. The \`category\` field is frontmatter metadata and does not create subdirectories.
 
 ### How to use
 
