@@ -4,13 +4,15 @@ import path from "node:path";
 
 import type { AgentDefinition } from "./definitions/types";
 
-export const BUILTIN_AGENT_NAMES = ["scout", "reviewer", "worker"] as const;
+export const BUILTIN_AGENT_NAMES = ["scout", "reviewer", "advisor", "worker"] as const;
 export type BuiltinAgentName = (typeof BUILTIN_AGENT_NAMES)[number];
 export type BuiltinAgentModels = Partial<Record<BuiltinAgentName, string>>;
 
 export interface AgentConfig {
     /** Models override the parent model for individual built-in agents. */
     models?: BuiltinAgentModels;
+    /** Enable the opt-in senior advisor built-in. */
+    advisorEnabled?: boolean;
     /** Notify an active parent immediately when a same-checkout worker changes a file. */
     notifyBusyWorkerChanges?: boolean;
 }
@@ -36,7 +38,11 @@ function parseConfig(filePath: string | undefined): AgentConfig | null {
     try {
         const value: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
         if (!value || typeof value !== "object") return null;
-        const record = value as { models?: unknown; notifyBusyWorkerChanges?: unknown };
+        const record = value as {
+            models?: unknown;
+            advisorEnabled?: unknown;
+            notifyBusyWorkerChanges?: unknown;
+        };
         const models: BuiltinAgentModels = {};
         if (record.models && typeof record.models === "object") {
             for (const name of BUILTIN_AGENT_NAMES) {
@@ -46,6 +52,9 @@ function parseConfig(filePath: string | undefined): AgentConfig | null {
         }
         return {
             ...(Object.keys(models).length ? { models } : {}),
+            ...(typeof record.advisorEnabled === "boolean"
+                ? { advisorEnabled: record.advisorEnabled }
+                : {}),
             ...(typeof record.notifyBusyWorkerChanges === "boolean"
                 ? { notifyBusyWorkerChanges: record.notifyBusyWorkerChanges }
                 : {}),
@@ -60,10 +69,13 @@ function mergeConfigs(global: AgentConfig | null, project: AgentConfig | null): 
         ...(global?.models ?? {}),
         ...(project?.models ?? {}),
     };
+    const advisorEnabled = project?.advisorEnabled
+        ?? global?.advisorEnabled;
     const notifyBusyWorkerChanges = project?.notifyBusyWorkerChanges
         ?? global?.notifyBusyWorkerChanges;
     return {
         ...(Object.keys(models).length ? { models } : {}),
+        ...(advisorEnabled === undefined ? {} : { advisorEnabled }),
         ...(notifyBusyWorkerChanges === undefined ? {} : { notifyBusyWorkerChanges }),
     };
 }
@@ -104,15 +116,21 @@ export function shouldNotifyBusyWorkerChanges(config: AgentConfig): boolean {
     return config.notifyBusyWorkerChanges !== false;
 }
 
-/** Apply persisted built-in model overrides without mutating shared definitions. */
+/** The advisor is opt-in because it may use a more expensive model. */
+export function isAdvisorEnabled(config: AgentConfig): boolean {
+    return config.advisorEnabled === true;
+}
+
+/** Apply persisted built-in settings without mutating shared definitions. */
 export function applyAgentConfig(
     agents: AgentDefinition[],
     config: AgentConfig,
 ): AgentDefinition[] {
-    return agents.map((agent) => {
-        if (!BUILTIN_AGENT_NAMES.includes(agent.name as BuiltinAgentName)) return agent;
+    return agents.flatMap((agent) => {
+        if (agent.name === "advisor" && !isAdvisorEnabled(config)) return [];
+        if (!BUILTIN_AGENT_NAMES.includes(agent.name as BuiltinAgentName)) return [agent];
         const model = configuredBuiltinModel(config, agent.name as BuiltinAgentName);
-        return model ? { ...agent, model } : agent;
+        return [model ? { ...agent, model } : agent];
     });
 }
 
@@ -144,6 +162,18 @@ const agentConfig = {
         else delete next[name];
         return this.save({
             ...(Object.keys(next).length ? { models: next } : {}),
+            ...(current.advisorEnabled === undefined ? {} : { advisorEnabled: current.advisorEnabled }),
+            ...(current.notifyBusyWorkerChanges === undefined
+                ? {}
+                : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
+        }, cwd);
+    },
+
+    setAdvisorEnabled(enabled: boolean, cwd = process.cwd()): AgentConfig {
+        const current = targetConfig(cwd);
+        return this.save({
+            ...(current.models ? { models: { ...current.models } } : {}),
+            advisorEnabled: enabled,
             ...(current.notifyBusyWorkerChanges === undefined
                 ? {}
                 : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
@@ -154,6 +184,7 @@ const agentConfig = {
         const current = targetConfig(cwd);
         return this.save({
             ...(current.models ? { models: { ...current.models } } : {}),
+            ...(current.advisorEnabled === undefined ? {} : { advisorEnabled: current.advisorEnabled }),
             notifyBusyWorkerChanges: enabled,
         }, cwd);
     },

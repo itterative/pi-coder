@@ -30,7 +30,7 @@ import {
 
 export type { AgentWorkspaceAction } from "./agent-workspace-browser";
 
-export type AgentSettingId = BuiltinAgentName | "notifyBusyWorkerChanges";
+export type AgentSettingId = BuiltinAgentName | "advisorEnabled" | "notifyBusyWorkerChanges";
 
 export interface AgentSetting {
     id: AgentSettingId;
@@ -72,7 +72,7 @@ export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
     onWorkspaceAction?: (workspace: AgentWorkspaceBrowserItem, action: WorkspaceDispositionAction) => AgentWorkspaceBrowserItem | null | undefined | Promise<AgentWorkspaceBrowserItem | null | undefined>;
     onWorkspaceInspect?: (workspace: AgentWorkspaceBrowserItem) => string | Promise<string>;
     onModelChange?: (agent: BuiltinAgentName, model: string | undefined) => void | Promise<void>;
-    onToggleChange?: (setting: "notifyBusyWorkerChanges", enabled: boolean) => void | Promise<void>;
+    onToggleChange?: (setting: "advisorEnabled" | "notifyBusyWorkerChanges", enabled: boolean) => void | Promise<void>;
     onModelChangeError?: (error: unknown) => void;
     onInvalidate?: () => void;
 }
@@ -459,7 +459,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                                     this.invalidate();
                                     return true;
                                 }
-                                if (setting.id === "notifyBusyWorkerChanges") {
+                                if (setting.id === "notifyBusyWorkerChanges" || setting.id === "advisorEnabled") {
                                     const previous = setting.enabled !== false;
                                     const enabled = !previous;
                                     setting.enabled = enabled;
@@ -508,7 +508,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                                             return;
                                         }
                                         const setting = this.settings.find((item) => item.id === selected.id);
-                                        if (!setting || setting.id === "notifyBusyWorkerChanges") {
+                                        if (!setting || setting.id === "notifyBusyWorkerChanges" || setting.id === "advisorEnabled") {
                                             this.invalidate();
                                             return;
                                         }

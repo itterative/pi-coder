@@ -45,11 +45,12 @@ Built-ins:
 
 - `scout` — read-only exploration with restricted safe-bash;
 - `reviewer` — read-only exploration including safe Git history inspection;
+- `advisor` — opt-in read-only senior advice on implementation decisions and tradeoffs, using a configured model;
 - `worker` — same-checkout or isolated implementation with permission-gated mutations.
 
 Custom definitions are read-only by default, may opt into `safe-bash`, and may select a model; otherwise they use the parent model.
 
-Custom Markdown definitions are loaded from `~/.pi/agent/agents` and the nearest trusted `.pi/agents`. Every custom agent gets `read`, `grep`, `find`, and `ls`; `capabilities: [safe-bash]` is the only additional capability. Built-in names are reserved, paths are sorted, same-scope duplicates are first-wins, and trusted-project definitions override user definitions.
+Custom Markdown definitions are loaded from `~/.pi/agent/agents` and the nearest trusted `.pi/agents`. Every custom agent gets `read`, `grep`, `find`, and `ls`; `capabilities: [safe-bash]` is the only additional capability. Built-in names `scout`, `reviewer`, `advisor`, and `worker` are reserved, paths are sorted, same-scope duplicates are first-wins, and trusted-project definitions override user definitions.
 
 ### Actions and lifecycle
 

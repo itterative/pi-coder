@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 
 import agentConfig, {
     BUILTIN_AGENT_NAMES,
+    isAdvisorEnabled,
     shouldNotifyBusyWorkerChanges,
     type BuiltinAgentName,
 } from "./config";
@@ -41,6 +42,12 @@ function buildSettings(cwd: string): AgentSetting[] {
             label: "Busy worker change notifications",
             description: "Get an immediate update when a worker changes your files while the main assistant is still working. Turn this off to receive the update only when the worker finishes.",
             enabled: shouldNotifyBusyWorkerChanges(config),
+        },
+        {
+            id: "advisorEnabled" as const,
+            label: "Advisor availability",
+            description: "Allow the parent agent to consult the read-only senior advisor. Configure its model separately below.",
+            enabled: isAdvisorEnabled(config),
         },
         ...BUILTIN_AGENT_NAMES.map((id) => ({
             id,
@@ -187,7 +194,12 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             onModelChange: (agent, model) => {
                 agentConfig.setModel(agent, model, ctx.cwd);
             },
-            onToggleChange: (_setting, enabled) => {
+            onToggleChange: (setting, enabled) => {
+                if (setting === "advisorEnabled") {
+                    agentConfig.setAdvisorEnabled(enabled, ctx.cwd);
+                    lifecycle.refreshAgentPrompt(ctx);
+                    return;
+                }
                 agentConfig.setNotifyBusyWorkerChanges(enabled, ctx.cwd);
             },
             onModelChangeError: (error) => {

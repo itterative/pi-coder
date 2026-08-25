@@ -86,12 +86,17 @@ export class AgentLifecycle {
         });
 
         this.pi.on("before_agent_start", (event, ctx) => {
-            if (event.systemPrompt.includes("<delegated_agents>")) {
-                return { systemPrompt: event.systemPrompt };
-            }
             if (!this.cachedAgentPrompt) {
-                const discovered = this.discover(ctx);
-                this.cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
+                this.refreshAgentPrompt(ctx);
+            }
+            const delegatedStart = event.systemPrompt.indexOf("<delegated_agents>");
+            const delegatedEndMarker = "</delegated_agents>";
+            const delegatedEnd = event.systemPrompt.indexOf(delegatedEndMarker);
+            if (delegatedStart !== -1 && delegatedEnd !== -1 && delegatedEnd > delegatedStart) {
+                const systemPrompt = event.systemPrompt.slice(0, delegatedStart)
+                    + this.cachedAgentPrompt
+                    + event.systemPrompt.slice(delegatedEnd + delegatedEndMarker.length);
+                return { systemPrompt };
             }
             const projectContextEnd = "</project_context>";
             const idx = event.systemPrompt.indexOf(projectContextEnd);
@@ -165,6 +170,11 @@ export class AgentLifecycle {
             ctx.ui.notify(`pi-coder agents: ${text}`, "warning");
         }
         return result;
+    }
+
+    refreshAgentPrompt(ctx: ExtensionContext): void {
+        const discovered = this.discover(ctx);
+        this.cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
     }
 
     refreshAgentUi(ctx: ExtensionContext): void {

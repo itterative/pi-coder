@@ -15,10 +15,10 @@ keep_updated: true
 
 ## Definitions
 
-- Built-ins: read-only `scout` and `reviewer`, plus permission-gated `worker`.
-- Custom Markdown definitions are loaded from `~/.pi/agent/agents` and the nearest trusted `.pi/agents`. Built-in names are reserved; files sort by path; same-scope duplicates are first-wins with warnings; trusted-project definitions override user definitions with an informational diagnostic.
+- Built-ins: read-only `scout`, `reviewer`, and opt-in `advisor`, plus permission-gated `worker`.
+- Custom Markdown definitions are loaded from `~/.pi/agent/agents` and the nearest trusted `.pi/agents`. Built-in names are reserved; `advisor` is disabled by default and is only exposed when enabled in agent configuration; files sort by path; same-scope duplicates are first-wins with warnings; trusted-project definitions override user definitions with an informational diagnostic.
 - Every custom agent receives baseline `read`, `grep`, `find`, and `ls`. `capabilities: [safe-bash]` is the only custom privilege. Legacy `tools` is ignored with a warning. A definition may specify `model`; otherwise it uses the parent model.
-- The parent prompt receives an idempotent, session-cached `<delegated_agents>` catalog with names, sources, capabilities, and descriptions. Live run state is recovered with `agent(action="list")`, not injected into the system prompt.
+- The parent prompt receives an idempotent, session-cached `<delegated_agents>` catalog with names, sources, capabilities, and descriptions; changing advisor availability refreshes the catalog. Live run state is recovered with `agent(action="list")`, not injected into the system prompt.
 
 ## Child runtime
 

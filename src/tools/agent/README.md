@@ -73,7 +73,7 @@ The activity widget shows `waiting_for_permission` while a gate is queued or ope
 
 ## Agent definitions
 
-The built-in `scout`, `reviewer`, and `worker` require no configuration. Custom definitions use Markdown with YAML frontmatter:
+The built-in `scout`, `reviewer`, `advisor`, and `worker` require no definition files. The advisor is disabled by default and must be enabled and assigned a model in `/agents` before use. Custom definitions use Markdown with YAML frontmatter:
 
 ```markdown
 ---
@@ -91,9 +91,9 @@ Locations:
 - user: `~/.pi/agent/agents/*.md`
 - project: nearest `.pi/agents/*.md`, only when pi trusts the project
 
-Definitions are sorted by path. Within one scope, the first valid duplicate wins and later files warn. Trusted-project definitions override user definitions with an informational diagnostic. Built-in names `scout`, `reviewer`, and `worker` are reserved.
+Definitions are sorted by path. Within one scope, the first valid duplicate wins and later files warn. Trusted-project definitions override user definitions with an informational diagnostic. Built-in names `scout`, `reviewer`, `advisor`, and `worker` are reserved.
 
-The `/agents` browser also has a Settings tab. It stores optional built-in model overrides and the busy-worker change-notification preference in `~/.pi/agent-config.json` (or the nearest trusted project `.pi/agent-config.json` when that file already exists). Omitting a model override makes the built-in use the parent session's model; busy-worker notifications are enabled by default. The model picker lists the currently available provider/model pairs.
+The `/agents` browser also has a Settings tab. It stores optional built-in model overrides and the busy-worker change-notification preference in `~/.pi/agent-config.json` (or the nearest trusted project `.pi/agent-config.json` when that file already exists). Omitting a model override makes ordinary built-ins use the parent session's model; the advisor must have an explicit model override before it can run. Busy-worker notifications are enabled by default. The model picker lists the currently available provider/model pairs.
 
 Every custom definition receives baseline codebase-read access (`read`, `grep`, `find`, and `ls`). Its optional `capabilities` must be an array containing only `safe-bash`; unknown or malformed capability lists invalidate the definition. `safe-bash` grants only cwd-confined, heuristically `SAFE_READONLY` Bash—including ordinary Git history inspection—and is not a sandbox against a hostile local environment. Worker mutation permissions are built-in only. Every baseline read/search path is confined to the working directory and sensitive paths remain blocked.
 

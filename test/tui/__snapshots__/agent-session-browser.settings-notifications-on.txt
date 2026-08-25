@@ -9,18 +9,18 @@
 │     Get an immediate update when a worker changes your files while the main assistant is still   │
 │   working. Turn this off to receive the update only when the worker finishes.                    │
 │                                                                                                  │
+│     Advisor availability · Off                                                                   │
+│     Allow the parent agent to consult the read-only senior advisor. Configure its model          │
+│   separately below.                                                                              │
+│                                                                                                  │
 │     Scout model                                                                                  │
 │     Model used when the built-in scout agent runs.                                               │
 │     Value: Parent model (uses the current pi model)                                              │
 │                                                                                                  │
-│     Reviewer model                                                                               │
-│     Model used when the built-in reviewer agent runs.                                            │
-│     Value: Parent model (uses the current pi model)                                              │
 │                                                                                                  │
+│     Showing lines 1-12 of 23                                                                     │
 │                                                                                                  │
-│     Showing lines 1-12 of 15                                                                     │
-│                                                                                                  │
-│   4 settings                                                                                     │
+│   6 settings                                                                                     │
 │                                                                                                  │
 │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

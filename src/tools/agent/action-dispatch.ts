@@ -55,6 +55,11 @@ export async function executeAgentAction(
             if (!definition) {
                 throw new AgentActionError(`Unknown agent: ${params.agent}`);
             }
+            if (definition.name === "advisor" && !definition.model) {
+                throw new AgentActionError(
+                    "The advisor is enabled but has no model configured. Select an advisor model in /agents first.",
+                );
+            }
             reservation = params.isolation === "worktree"
                 ? await prepareIsolatedWorkspace(
                     ctx.cwd,

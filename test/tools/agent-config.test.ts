@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import agentConfig, {
     applyAgentConfig,
+    isAdvisorEnabled,
     shouldNotifyBusyWorkerChanges,
 } from "../../src/tools/agent/config";
-import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
+import { BUILTIN_ADVISOR, BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
 
 function clearCache(): void {
     (agentConfig as unknown as { _config: unknown })._config = null;
@@ -53,6 +54,15 @@ describe("agent configuration", () => {
         });
     });
 
+    it("merges and defaults advisor availability", () => {
+        fs.writeFileSync(globalPath, JSON.stringify({ advisorEnabled: true }));
+        expect(isAdvisorEnabled(agentConfig.load(project))).toBe(true);
+
+        fs.writeFileSync(path.join(project, ".pi", "agent-config.json"), JSON.stringify({ advisorEnabled: false }));
+        expect(isAdvisorEnabled(agentConfig.load(project))).toBe(false);
+        expect(isAdvisorEnabled({})).toBe(false);
+    });
+
     it("merges and defaults busy worker change notifications", () => {
         fs.writeFileSync(globalPath, JSON.stringify({ notifyBusyWorkerChanges: false }));
         expect(shouldNotifyBusyWorkerChanges(agentConfig.load(project))).toBe(false);
@@ -65,25 +75,30 @@ describe("agent configuration", () => {
         const projectConfigPath = path.join(project, ".pi", "agent-config.json");
         fs.writeFileSync(globalPath, JSON.stringify({
             models: { scout: "global/scout", reviewer: "global/reviewer" },
+            advisorEnabled: true,
             notifyBusyWorkerChanges: false,
         }));
         fs.writeFileSync(projectConfigPath, JSON.stringify({
             models: { worker: "project/worker" },
+            advisorEnabled: false,
         }));
 
         agentConfig.setNotifyBusyWorkerChanges(true, project);
         expect(JSON.parse(fs.readFileSync(projectConfigPath, "utf8"))).toEqual({
             models: { worker: "project/worker" },
+            advisorEnabled: false,
             notifyBusyWorkerChanges: true,
         });
         expect(JSON.parse(fs.readFileSync(globalPath, "utf8"))).toEqual({
             models: { scout: "global/scout", reviewer: "global/reviewer" },
+            advisorEnabled: true,
             notifyBusyWorkerChanges: false,
         });
 
         agentConfig.setModel("scout", "project/scout", project);
         expect(JSON.parse(fs.readFileSync(projectConfigPath, "utf8"))).toEqual({
             models: { worker: "project/worker", scout: "project/scout" },
+            advisorEnabled: false,
             notifyBusyWorkerChanges: true,
         });
         expect(agentConfig.load(project)).toEqual({
@@ -92,34 +107,49 @@ describe("agent configuration", () => {
                 reviewer: "global/reviewer",
                 worker: "project/worker",
             },
+            advisorEnabled: false,
             notifyBusyWorkerChanges: true,
         });
     });
 
     it("applies overrides without mutating built-in definitions", () => {
-        const result = applyAgentConfig([BUILTIN_SCOUT, BUILTIN_WORKER], {
-            models: { scout: "openai/gpt-4.1", worker: "anthropic/sonnet" },
+        const result = applyAgentConfig([BUILTIN_ADVISOR, BUILTIN_SCOUT, BUILTIN_WORKER], {
+            advisorEnabled: true,
+            models: { advisor: "openai/o3", scout: "openai/gpt-4.1", worker: "anthropic/sonnet" },
         });
 
-        expect(result.map((agent) => agent.model)).toEqual(["openai/gpt-4.1", "anthropic/sonnet"]);
+        expect(result.map((agent) => agent.model)).toEqual(["openai/o3", "openai/gpt-4.1", "anthropic/sonnet"]);
+        expect(BUILTIN_ADVISOR.model).toBeUndefined();
         expect(BUILTIN_SCOUT.model).toBeUndefined();
         expect(BUILTIN_WORKER.model).toBeUndefined();
+        expect(applyAgentConfig([BUILTIN_ADVISOR], {})).toEqual([]);
     });
 
-    it("persists notification preference and model overrides", () => {
+    it("persists notification preference, advisor availability, and model overrides", () => {
+        agentConfig.setAdvisorEnabled(true, project);
+        expect(JSON.parse(fs.readFileSync(globalPath, "utf8"))).toEqual({
+            advisorEnabled: true,
+        });
+
         agentConfig.setNotifyBusyWorkerChanges(false, project);
         expect(JSON.parse(fs.readFileSync(globalPath, "utf8"))).toEqual({
+            advisorEnabled: true,
             notifyBusyWorkerChanges: false,
         });
         expect(agentConfig.load(project).notifyBusyWorkerChanges).toBe(false);
+        expect(agentConfig.load(project).advisorEnabled).toBe(true);
 
         agentConfig.setModel("scout", "openai/gpt-4.1", project);
         expect(JSON.parse(fs.readFileSync(globalPath, "utf8"))).toEqual({
             models: { scout: "openai/gpt-4.1" },
+            advisorEnabled: true,
             notifyBusyWorkerChanges: false,
         });
 
         agentConfig.setModel("scout", undefined, project);
-        expect(agentConfig.load(project)).toEqual({ notifyBusyWorkerChanges: false });
+        expect(agentConfig.load(project)).toEqual({
+            advisorEnabled: true,
+            notifyBusyWorkerChanges: false,
+        });
     });
 });

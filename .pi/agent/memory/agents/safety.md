@@ -13,8 +13,10 @@ Delegated-agent restrictions are local permission and accident-prevention contro
 
 ## Read-only children
 
+The built-in `advisor` has the same read-only capability boundary as `scout` and `reviewer`; it is an explicit consultation agent and cannot mutate files.
+
 - All children receive cwd-confined `read`, `grep`, `find`, and `ls`; paths are checked for sensitive segments, symlink escapes, and outside traversal.
-- Custom `safe-bash` and built-in scout/reviewer Bash calls run only when the complete command is classified `SAFE_READONLY`. Unknown commands, mutating/network/interpreter commands, unsafe flags, and `SAFE_EDIT` classifications are blocked without an approval bypass.
+- Custom `safe-bash` and built-in scout/reviewer/advisor Bash calls run only when the complete command is classified `SAFE_READONLY`. Unknown commands, mutating/network/interpreter commands, unsafe flags, and `SAFE_EDIT` classifications are blocked without an approval bypass.
 - The shared heuristic emits structured `UnsafeReason` values and `CommandTag`s. The child consumes tags rather than reparsing shell text. `CommandTag.GIT_STATUS` drives the direct-child `core.fsmonitor` preflight: external helper values are blocked.
 - Ordinary safe Git history inspection (`git log`, `git show`, including historical patch content) is allowed under the trusted-local policy. Git network, mutation, credential/config exposure, and unsafe output modes remain blocked.
 

@@ -65,7 +65,7 @@ export function availableAgentsPrompt(agents: AgentDefinition[]): string {
         "After a terminal agent notification, use the agent tool with action=\"collect\" to retrieve the full result; mailbox markers never inject full child output automatically.",
         "A waiting agent result is paused, not completed. Investigate or obtain guidance, then use the agent tool to resume it; cancel it if no longer needed. An interrupted durable run never resumes automatically; wait for explicit user direction before resuming or canceling it.",
         "The parent agent may use its own active built-in tools (including read, edit, write, and bash) directly; delegation is optional and is for substantial, parallel, or isolated work.",
-        "Scout and custom agents are read-only. The built-in worker is the only mutation-capable child; each worker edit/write/bash action requires an explicit user permission prompt. Same-checkout workers are single-flight, while workers in distinct isolated worktrees may run concurrently.",
+        "Scout, reviewer, advisor, and custom agents are read-only. Use advisor for explicit implementation guidance and tradeoff review. The built-in worker is the only mutation-capable child; each worker edit/write/bash action requires an explicit user permission prompt. Same-checkout workers are single-flight, while workers in distinct isolated worktrees may run concurrently.",
         "Use isolation=\"worktree\" when the worker should run in a persistent isolated Git worktree; a new worktree may prompt for an optional setup worker.",
         "For an isolated result, the parent can use agent action=\"inspect\", \"apply\", or \"discard\" with the runId, or action=\"revise\" with guidance to continue work in the same workspace.",
     );

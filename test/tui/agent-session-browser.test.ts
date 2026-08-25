@@ -646,12 +646,19 @@ describe("AgentSessionBrowserComponent", () => {
         const value = new AgentSessionBrowserComponent({
             current: [],
             past: [],
+            // TODO: This test should not need to manually provide every production setting just to render the settings view. Use a shared settings fixture or component defaults.
             settings: [
                 {
                     id: "notifyBusyWorkerChanges",
                     label: "Busy worker change notifications",
                     description: "Get an immediate update when a worker changes your files while the main assistant is still working. Turn this off to receive the update only when the worker finishes.",
                     enabled: true,
+                },
+                {
+                    id: "advisorEnabled",
+                    label: "Advisor availability",
+                    description: "Allow the parent agent to consult the read-only senior advisor. Configure its model separately below.",
+                    enabled: false,
                 },
                 {
                     id: "scout",
@@ -662,6 +669,11 @@ describe("AgentSessionBrowserComponent", () => {
                     id: "reviewer",
                     label: "Reviewer model",
                     description: "Model used when the built-in reviewer agent runs.",
+                },
+                {
+                    id: "advisor",
+                    label: "Advisor model",
+                    description: "Model used when the built-in advisor agent runs.",
                 },
                 {
                     id: "worker",

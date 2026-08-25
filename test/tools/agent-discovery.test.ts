@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
     agentTools,
+    BUILTIN_ADVISOR,
     BUILTIN_REVIEWER,
     discoverAgentsInDirectories,
 } from "../../src/tools/agent/definitions/discovery";
@@ -78,14 +79,15 @@ describe("agent discovery", () => {
         const untrusted = discoverAgentsInDirectories(userDir);
         const trusted = discoverAgentsInDirectories(userDir, projectDir);
 
-        expect(untrusted.agents.map((agent) => agent.name)).toEqual(["scout", "reviewer", "worker"]);
-        expect(trusted.agents.map((agent) => agent.name)).toEqual(["scout", "reviewer", "worker", "project-only"]);
+        expect(untrusted.agents.map((agent) => agent.name)).toEqual(["scout", "reviewer", "advisor", "worker"]);
+        expect(trusted.agents.map((agent) => agent.name)).toEqual(["scout", "reviewer", "advisor", "worker", "project-only"]);
     });
 
     it("protects reserved names and grants only declared capabilities", () => {
         const userDir = tempScope();
         writeAgent(userDir, "scout.md", "scout", "Override built-in");
         writeAgent(userDir, "reviewer.md", "reviewer", "Override reviewer");
+        writeAgent(userDir, "advisor.md", "advisor", "Override advisor");
         writeAgent(userDir, "worker.md", "worker", "Override worker");
         writeAgent(userDir, "custom.md", "custom", "Custom", "capabilities: [safe-bash]\n");
         writeAgent(userDir, "stale.md", "stale", "Stale", "tools: [read, bash]\n");
@@ -93,12 +95,15 @@ describe("agent discovery", () => {
         const result = discoverAgentsInDirectories(userDir);
         const scout = result.agents.find((agent) => agent.name === "scout");
         const reviewer = result.agents.find((agent) => agent.name === "reviewer");
+        const advisor = result.agents.find((agent) => agent.name === "advisor");
         const worker = result.agents.find((agent) => agent.name === "worker");
         const custom = result.agents.find((agent) => agent.name === "custom");
         const stale = result.agents.find((agent) => agent.name === "stale");
 
         expect(scout).toMatchObject({ source: "builtin", capabilities: ["safe-bash"] });
         expect(reviewer).toMatchObject({ source: "builtin", capabilities: ["safe-bash"] });
+        expect(advisor).toBe(BUILTIN_ADVISOR);
+        expect(agentTools(advisor!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(agentTools(scout!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(worker).toMatchObject({ source: "builtin", mutating: true });
         expect(agentTools(worker!)).toEqual(["read", "grep", "find", "ls", "edit", "write", "bash"]);
@@ -132,7 +137,7 @@ describe("agent discovery", () => {
 
         const result = discoverAgentsInDirectories(userDir);
 
-        expect(result.agents.map((agent) => agent.name)).toEqual(["scout", "reviewer", "worker", "valid"]);
+        expect(result.agents.map((agent) => agent.name)).toEqual(["scout", "reviewer", "advisor", "worker", "valid"]);
         expect(result.diagnostics).toContainEqual(expect.objectContaining({
             level: "warning",
             paths: [path.join(userDir, "bad.md")],
