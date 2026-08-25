@@ -9,11 +9,6 @@
   * or, we make use of heuristics to give it restrained access to bash tool
   * if we do the second, we might want to extend the heuristics a bit to
     give more details on why certain bash commands are not allowed
-* non-isolated workers should notify the parent there was a change
-  * should notify the parent immediatly if the parent is working
-  * otherwise, it should either coalesce at the end (probably flow is already there for the agent collection side)
-
-
 
 * sometimes (isolated) workers get stuck
   * applies to more types of workers, also setup ones seem to get stuck
