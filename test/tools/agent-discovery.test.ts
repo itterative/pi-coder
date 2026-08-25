@@ -7,7 +7,6 @@ import {
     agentTools,
     BUILTIN_REVIEWER,
     discoverAgentsInDirectories,
-    fingerprintAgentDefinition,
 } from "../../src/tools/agent/definitions/discovery";
 
 const tempDirs: string[] = [];
@@ -88,7 +87,7 @@ describe("agent discovery", () => {
         writeAgent(userDir, "scout.md", "scout", "Override built-in");
         writeAgent(userDir, "reviewer.md", "reviewer", "Override reviewer");
         writeAgent(userDir, "worker.md", "worker", "Override worker");
-        writeAgent(userDir, "custom.md", "custom", "Custom", "capabilities: [safe-bash, safe-git-history]\n");
+        writeAgent(userDir, "custom.md", "custom", "Custom", "capabilities: [safe-bash]\n");
         writeAgent(userDir, "stale.md", "stale", "Stale", "tools: [read, bash]\n");
 
         const result = discoverAgentsInDirectories(userDir);
@@ -99,35 +98,17 @@ describe("agent discovery", () => {
         const stale = result.agents.find((agent) => agent.name === "stale");
 
         expect(scout).toMatchObject({ source: "builtin", capabilities: ["safe-bash"] });
-        expect(reviewer).toMatchObject({ source: "builtin", capabilities: ["safe-bash", "safe-git-history"] });
+        expect(reviewer).toMatchObject({ source: "builtin", capabilities: ["safe-bash"] });
         expect(agentTools(scout!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(worker).toMatchObject({ source: "builtin", mutating: true });
         expect(agentTools(worker!)).toEqual(["read", "grep", "find", "ls", "edit", "write", "bash"]);
-        expect(agentTools(custom!)).toEqual(["read", "grep", "find", "ls", "bash", "review_history"]);
+        expect(agentTools(custom!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(stale?.capabilities).toEqual([]);
         expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "warning"))
             .toEqual(expect.arrayContaining([
                 expect.objectContaining({ message: expect.stringContaining("reserved") }),
                 expect.objectContaining({ message: expect.stringContaining("field \"tools\" is unsupported") }),
             ]));
-    });
-
-    it("keeps safe-git-history independent from safe-bash", () => {
-        const userDir = tempScope();
-        writeAgent(userDir, "history.md", "history", "History", "capabilities: [safe-git-history]\n");
-
-        const result = discoverAgentsInDirectories(userDir);
-        const history = result.agents.find((agent) => agent.name === "history");
-
-        expect(history?.capabilities).toEqual(["safe-git-history"]);
-        expect(agentTools(history!)).toEqual(["read", "grep", "find", "ls", "review_history"]);
-    });
-
-    it("normalizes capability order in durable fingerprints", () => {
-        expect(fingerprintAgentDefinition(BUILTIN_REVIEWER)).toBe(fingerprintAgentDefinition({
-            ...BUILTIN_REVIEWER,
-            capabilities: ["safe-git-history", "safe-bash"],
-        }));
     });
 
     it("rejects malformed or unknown capability lists", () => {

@@ -51,11 +51,11 @@ Explore the codebase thoroughly and return concise, evidence-based findings. Cit
 
 export const BUILTIN_REVIEWER: AgentDefinition = {
     name: "reviewer",
-    description: "Read-only code and constrained Git-history review",
-    capabilities: ["safe-bash", "safe-git-history"],
+    description: "Read-only code and Git-history review",
+    capabilities: ["safe-bash"],
     systemPrompt: `You are the built-in pi-coder reviewer, a read-only subagent working for a parent coding agent.
 
-Review code changes for concrete correctness, security, API, and test-coverage issues. Cite file paths and concise evidence, prioritizing findings by severity. Use review_history only for a specific, linear commit range after obtaining commit SHAs through safe Git metadata commands. Its output omits sensitive paths, is bounded, and uses best-effort value redaction; do not treat it as an exhaustive secret scanner. Do not modify files.`,
+Review code changes for concrete correctness, security, API, and test-coverage issues. Cite file paths and concise evidence, prioritizing findings by severity. Use ordinary safe-bash Git history commands such as git log and git show to inspect relevant commits. Do not modify files.`,
     source: "builtin",
 };
 

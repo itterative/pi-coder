@@ -22,7 +22,7 @@ afterEach(() => {
 
 function setup(
     cwd: string,
-    { safeBash = true, safeGitHistory = false }: { safeBash?: boolean; safeGitHistory?: boolean } = {},
+    { safeBash = true }: { safeBash?: boolean } = {},
 ) {
     const handlers: Record<string, Handler[]> = {};
     const tools: Array<{ name: string }> = [];
@@ -49,7 +49,6 @@ function setup(
         true,
         false,
         safeBash,
-        safeGitHistory,
         "scout-1",
         "Bash safety",
         () => {},
@@ -104,14 +103,6 @@ describe("scout restricted bash", () => {
         expect(fs.existsSync(marker)).toBe(false);
     });
 
-    it("registers historical review only for the dedicated capability", () => {
-        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
-        tempDirs.push(cwd);
-
-        expect(setup(cwd).tools.map((tool) => tool.name)).not.toContain("review_history");
-        expect(setup(cwd, { safeGitHistory: true }).tools.map((tool) => tool.name)).toContain("review_history");
-    });
-
     it("blocks bash when safe-bash is absent", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
         tempDirs.push(cwd);
@@ -127,11 +118,5 @@ describe("scout restricted bash", () => {
 
         expect(prompt).toContain("safe-bash permits only cwd-confined commands classified SAFE_READONLY");
         expect(prompt).toContain("do not retry variants hoping to bypass it");
-        const reviewerPrompt = childProtocolPrompt(false, false, true, true);
-        expect(reviewerPrompt).toContain("Enabled capabilities: codebase-read, safe-bash, safe-git-history.");
-        expect(reviewerPrompt).toContain("safe-bash permits only cwd-confined commands classified SAFE_READONLY");
-        const historyOnlyPrompt = childProtocolPrompt(false, false, false, true);
-        expect(historyOnlyPrompt).toContain("Enabled capabilities: codebase-read, safe-git-history.");
-        expect(historyOnlyPrompt).toContain("safe-bash is not enabled, so you cannot run bash commands.");
     });
 });

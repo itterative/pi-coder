@@ -61,7 +61,7 @@ The built-in `scout` has `read`, `grep`, `find`, `ls`, and a restricted `bash` t
 
 ## Built-in reviewer
 
-The built-in `reviewer` has the scout's read/search tools and restricted `bash`, plus `review_history`. It accepts a specific linear range whose base and head are `HEAD`, `HEAD~<number>`, or commit SHAs; the agent cwd must be the repository root. The dedicated tool provides predictable, bounded review output: it treats changed filenames as literal pathspecs, rejects oversized changed-path metadata, bounds patch output, and applies best-effort filtering/redaction for sensitive paths and common secret values. Its Git environment scrubbing and external-diff/text-conversion flags are defense in depth, not a substitute for trusting the local Git executable and configuration. It is deliberately not an exhaustive secret scanner or a security boundary; do not use it to recover withheld content or assume that every secret in ordinary source is detected. Custom definitions may explicitly opt into this behavior with the `safe-git-history` capability.
+The built-in `reviewer` has the scout's read/search tools and restricted `bash`. It uses ordinary safe-bash Git history commands such as `git log` and `git show`, including historical patch content, to inspect relevant commits. Git history is treated as ordinary read-only project access within the trusted local environment described above; there is no separate history capability, output filter, or secret scanner.
 
 ## Built-in worker
 
@@ -79,7 +79,7 @@ The built-in `scout`, `reviewer`, and `worker` require no configuration. Custom 
 ---
 name: analyst
 description: Inspect architecture and identify risks
-capabilities: [safe-bash, safe-git-history]
+capabilities: [safe-bash]
 model: provider/model-id
 ---
 
@@ -93,7 +93,7 @@ Locations:
 
 Definitions are sorted by path. Within one scope, the first valid duplicate wins and later files warn. Trusted-project definitions override user definitions with an informational diagnostic. Built-in names `scout`, `reviewer`, and `worker` are reserved.
 
-Every custom definition receives baseline codebase-read access (`read`, `grep`, `find`, and `ls`). Its optional `capabilities` must be an array containing only `safe-bash` and/or `safe-git-history`; unknown or malformed capability lists invalidate the definition. `safe-bash` grants only cwd-confined, heuristically `SAFE_READONLY` Bash; it is not a sandbox against a hostile local environment. `safe-git-history` independently grants the bounded `review_history` tool with best-effort filtering/redaction, not a guaranteed secret scanner. Worker mutation permissions are built-in only. Every baseline read/search path is confined to the working directory and sensitive paths remain blocked.
+Every custom definition receives baseline codebase-read access (`read`, `grep`, `find`, and `ls`). Its optional `capabilities` must be an array containing only `safe-bash`; unknown or malformed capability lists invalidate the definition. `safe-bash` grants only cwd-confined, heuristically `SAFE_READONLY` Bash—including ordinary Git history inspection—and is not a sandbox against a hostile local environment. Worker mutation permissions are built-in only. Every baseline read/search path is confined to the working directory and sensitive paths remain blocked.
 
 ## Manual stabilization checklist
 
@@ -110,7 +110,7 @@ Run these checks after changing child sessions, providers, lifecycle handling, o
 9. Reload while a child is waiting and while one is running. Verify the waiting child restores with the same ID/question, the running child restores as `interrupted`, no tool replays or resumes automatically, `r` continues an interrupted run from `/agents`, and `c` cancels it with a user-canceled parent message. Restart pi and switch away/back to repeat the restoration check.
 10. Fill all four active run slots and verify a fifth start/spawn is rejected; verify uncollected terminal background results do not consume active capacity.
 11. Verify a user agent loads, a trusted-project agent overrides it, and an untrusted project definition does not load.
-12. Start `reviewer` on a known two-commit range. Verify `review_history` shows ordinary changed code, withholds a changed/deleted `.env` path without naming it, redacts a representative secret value, treats a literal `:(glob)**` filename without expanding it, ignores an inherited `GIT_DIR`, rejects an inverted/non-SHA/`HEAD` range, and rejects an oversized changed-path list.
+12. Start `reviewer` on a known two-commit range. Verify it can inspect the commits with ordinary `git log` and `git show` safe-bash commands, including historical patch content, and that write-capable or otherwise unmodeled Git commands remain blocked.
 13. Ask the scout to access an absolute outside path, `..` escape, sensitive file, and in-cwd symlink to an outside target; all must be blocked without prompting. Run one known safe, in-cwd read-only bash command and verify it completes without a prompt; then try a write, unknown command, and outside-path command and verify each is blocked with a heuristic reason.
 14. Start a background worker and request one edit, one write, and one bash call. Verify every prompt names the worker run, queued mutations do not overlap, the widget shows permission waiting, denial is recoverable, and cancel closes an active gate.
 15. Try a second worker while the first is active; verify it is rejected while a scout can still start. Confirm outside/sensitive file paths and configured-deny bash commands block without an approval bypass.

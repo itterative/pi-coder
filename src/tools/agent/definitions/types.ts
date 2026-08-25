@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 export type AgentSource = "builtin" | "user" | "project";
 
 /** User-configurable capabilities for read-only delegated agents. */
-export const AGENT_CAPABILITIES = ["safe-bash", "safe-git-history"] as const;
+export const AGENT_CAPABILITIES = ["safe-bash"] as const;
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
 
 /** Tools granted to every delegated agent for baseline codebase inspection. */
@@ -27,7 +27,6 @@ export function agentTools(definition: AgentDefinition): string[] {
     const tools: string[] = [...READ_ONLY_AGENT_TOOLS];
     if (definition.mutating) return [...tools, "edit", "write", "bash"];
     if (definition.capabilities.includes("safe-bash")) tools.push("bash");
-    if (definition.capabilities.includes("safe-git-history")) tools.push("review_history");
     return tools;
 }
 

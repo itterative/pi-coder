@@ -57,13 +57,6 @@ function toolCallText(name: string, args: ToolArguments, failed: boolean): strin
             const path = stringArgument(args, "path");
             return [prefix, name, pattern, path].filter((value) => value !== undefined).join(" ");
         }
-        case "review_history": {
-            const base = stringArgument(args, "base");
-            const head = stringArgument(args, "head");
-            return [prefix, "review history", base && head ? `${base}..${head}` : undefined]
-                .filter((value) => value !== undefined)
-                .join(" ");
-        }
         default: {
             const path = stringArgument(args, "path");
             return path ? `${prefix} ${name} ${path}` : `${prefix} ${name}`;

@@ -87,9 +87,7 @@ export async function createAgentChild(
         extensionFactories: [{
             name: context.definition.mutating
                 ? "pi-coder-worker-child"
-                : context.definition.capabilities.includes("safe-git-history")
-                    ? "pi-coder-reviewer-child"
-                    : "pi-coder-scout-child",
+                : "pi-coder-readonly-child",
             hidden: true,
             factory: registerChildExtension(
                 tracker,
@@ -99,7 +97,6 @@ export async function createAgentChild(
                 context.background === true,
                 context.definition.mutating === true,
                 context.definition.capabilities.includes("safe-bash"),
-                context.definition.capabilities.includes("safe-git-history"),
                 context.runId ?? context.definition.name,
                 context.runTitle ?? context.runId ?? context.definition.name,
                 context.onProgress,
@@ -112,7 +109,6 @@ export async function createAgentChild(
                 context.background === true,
                 context.definition.mutating === true,
                 context.definition.capabilities.includes("safe-bash"),
-                context.definition.capabilities.includes("safe-git-history"),
             ),
         ].filter(Boolean),
     });

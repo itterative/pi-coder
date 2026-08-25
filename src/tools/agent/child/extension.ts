@@ -18,7 +18,6 @@ import {
     Heuristic,
 } from "../../../modules/sandbox/heuristics";
 import { askUser } from "../../../tui/ask-user";
-import { reviewHistory } from "./history-review";
 import { guardSafeBashCommand } from "./safe-bash";
 import { registerWorkerMutationHooks } from "./worker-permissions";
 import type { ChildAgentFactoryContext } from "../contracts/runs";
@@ -36,7 +35,6 @@ export function childProtocolPrompt(
     background: boolean,
     mutating: boolean,
     safeBash: boolean,
-    safeGitHistory = false,
 ): string {
     const interaction = background
         ? "Direct end-user dialogs are unavailable while you run in the background. Use ask_parent when guidance is materially necessary; make reasonable progress first, include evidence and a recommendation, and call it alone in its tool batch."
@@ -45,13 +43,10 @@ export function childProtocolPrompt(
         ? "You are a mutation-capable worker operating in the parent's current checkout. Every edit, write, and bash call opens an explicit parent-visible permission gate. Call mutation tools one at a time, and remember that parent activity may concurrently affect the checkout."
         : [
             "You are a read-only subagent working for a parent coding agent.",
-            `Enabled capabilities: codebase-read${safeBash ? ", safe-bash" : ""}${safeGitHistory ? ", safe-git-history" : ""}.`,
+            `Enabled capabilities: codebase-read${safeBash ? ", safe-bash" : ""}.`,
             safeBash
                 ? "safe-bash permits only cwd-confined commands classified SAFE_READONLY by the safety heuristic. Every file access—including resolved symlinks—must stay inside the working directory and avoid sensitive paths. Unknown commands, project working-tree writes, unsafe flags or modes, and dynamic or unmodeled behavior are blocked. Use a block reason to choose a supported read/search tool or report the limit; do not retry variants hoping to bypass it."
                 : "safe-bash is not enabled, so you cannot run bash commands.",
-            safeGitHistory
-                ? "safe-git-history provides review_history for specific linear commit ranges. It withholds sensitive paths and returns a bounded, best-effort-redacted patch; it is not an exhaustive secret scanner."
-                : "safe-git-history is not enabled, so you cannot inspect historical patch content.",
             "You cannot modify project working-tree files.",
         ].join(" ");
     return `${capability}\n\n${interaction}\n\nWhen the task is complete, provide a self-contained final report to the parent. Mutation-capable workers must list changed files and validation performed.`;
@@ -142,7 +137,6 @@ export function registerChildExtension(
     background: boolean,
     mutating: boolean,
     safeBash: boolean,
-    safeGitHistory: boolean,
     runId: string,
     runTitle: string,
     onProgress: ChildAgentFactoryContext["onProgress"],
@@ -246,36 +240,6 @@ export function registerChildExtension(
                 };
             },
         });
-
-        if (safeGitHistory) {
-            pi.registerTool({
-                name: "review_history",
-                label: "Review History",
-                description: "Review one linear Git commit range with sensitive paths withheld and best-effort value redaction. Base and head must be HEAD, HEAD~<number>, or commit SHAs.",
-                promptSnippet: "Review a constrained, redacted historical Git diff.",
-                promptGuidelines: [
-                    "Use review_history only after identifying a specific base and head commit",
-                    "Treat its best-effort redaction as defense in depth, not proof that no secret exists",
-                    "Report withheld paths only as a count; do not try to recover their contents through other tools",
-                ],
-                executionMode: "sequential",
-                parameters: Type.Object({
-                    base: Type.String({ minLength: 1, maxLength: 64 }),
-                    head: Type.String({ minLength: 1, maxLength: 64 }),
-                }, { additionalProperties: false }),
-                async execute(_toolCallId, params) {
-                    try {
-                        const result = await reviewHistory(cwd, params);
-                        onTrace?.("review_history.completed", { ...result.details });
-                        return { content: [{ type: "text" as const, text: result.text }], details: result.details };
-                    } catch (error) {
-                        const message = error instanceof Error ? error.message : String(error);
-                        onTrace?.("review_history.blocked", { reason: message.slice(0, 500) });
-                        throw new Error(`History review unavailable: ${message}`);
-                    }
-                },
-            });
-        }
 
         if (mutating) {
             registerWorkerMutationHooks(pi, {

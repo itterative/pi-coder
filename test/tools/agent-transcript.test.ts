@@ -129,14 +129,13 @@ describe("delegated-agent transcript formatting", () => {
         );
     });
 
-    it("shows search patterns, paths, and review ranges", async () => {
+    it("shows search patterns and paths", async () => {
         const session = SessionManager.inMemory("/project");
         session.appendMessage({
             role: "assistant",
             content: [
                 { type: "toolCall", id: "call-find", name: "find", arguments: { pattern: "*.test.ts", path: "test" } },
                 { type: "toolCall", id: "call-grep", name: "grep", arguments: { pattern: "AgentSession", path: "src/tui" } },
-                { type: "toolCall", id: "call-review", name: "review_history", arguments: { base: "a1b2c3d", head: "d4e5f6a" } },
             ],
             api: "test",
             provider: "test",

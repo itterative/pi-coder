@@ -9,8 +9,8 @@ const LOG_SPEC: CommandSpec = {
         "-S": VALUE, "-G": VALUE,
         "--format": VALUE, "--pretty": VALUE,
         "--diff-filter": VALUE,
-        // patch output prints file contents from history
-        "-p": UNSAFE, "--patch": UNSAFE, "-U": UNSAFE, "--unified": UNSAFE,
+        // Historical patches are normal read-only project access in the
+        // trusted local environment assumed by safe-bash.
     },
 };
 
@@ -96,36 +96,22 @@ const DIFF_SPEC: CommandSpec = {
     },
 };
 
-/** Metadata-only `git show` modes. Any patch/content option remains ineligible. */
-const SHOW_METADATA_SPEC: CommandSpec = {
-    validate: (args) => {
-        let hasMetadataMode = false;
-        for (let i = 1; i < args.length; i++) {
-            const arg = args[i];
-            if (
-                arg === "--stat"
-                || arg === "--summary"
-                || arg === "--name-only"
-                || arg === "--name-status"
-                || arg === "--format="
-            ) {
-                hasMetadataMode = true;
-                continue;
-            }
-            if (arg.startsWith("-")) return false;
-        }
-        return hasMetadataMode;
-    },
+/**
+ * `git show` is history inspection, including its default patch output. Keep
+ * only output-file redirection ineligible because it mutates the checkout.
+ */
+const SHOW_SPEC: CommandSpec = {
+    flags: { "--output": UNSAFE },
+    validate: (args) => !args.some((arg) => arg === "--output" || arg.startsWith("--output=")),
 };
 
 /**
  * Version control (read-only inspection of the repo in cwd).
  *
- * Excluded subcommands: cat-file and content-printing diff/show modes print
- * file contents from the worktree or history (a sensitive file can reach the output
- * with no sensitive path argument), remote/config can print credentials
- * stored in .git/config, and fetch/pull/push/checkout/... write or use
- * the network. Those need explicit allow rules or output protections.
+ * Excluded subcommands: cat-file, remote/config, and
+ * fetch/pull/push/checkout/... can expose unrelated configuration, write, or
+ * use the network. Historical `log` and `show` content is ordinary read-only
+ * project access in the trusted local environment assumed by safe-bash.
  * Note: `git status` refreshes .git/index stat caches, which is normal
  * git behavior (it happens outside the sandbox too).
  */
@@ -149,9 +135,9 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
             // Positionals are pathspecs.
             status: { tags: [CommandTag.GIT_STATUS] },
             // Keep only the explicitly modeled checking, stat, and quiet
-            // modes eligible; other diff output modes remain prompts.
+            // modes eligible; worktree diff content remains a prompt.
             diff: DIFF_SPEC,
-            show: SHOW_METADATA_SPEC,
+            show: SHOW_SPEC,
             log: LOG_SPEC,
             "ls-files": {
                 flags: { "--exclude": VALUE, "--with-tree": VALUE },
