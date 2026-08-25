@@ -215,9 +215,10 @@ export default function registerFileToolHook(
         }
 
         const mode = ctx.hasUI ? "user" : "non-interactive mode";
+        const baseReason = `File ${operation} blocked by ${mode}; path is outside the allowed working directory.`;
         return {
             block: true,
-            reason: `File ${operation} blocked by ${mode}; path is outside the allowed working directory.`,
+            reason: result?.message ? `${baseReason} User message: ${result.message}` : baseReason,
         };
     });
 

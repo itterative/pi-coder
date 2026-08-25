@@ -1,6 +1,5 @@
 # User-managed todos (DO NOT MODIFY)
 
-* refusing a read with a reason shows "File read blocked by the user; path is outside the allowed working directory" - should show message
 * agent list should also show dead agents holding a lease or ones that prevent a workspace from being used
 * agent tool tui output needs refinement
   * list action shows usage

@@ -552,6 +552,29 @@ describe("AgentRunManager", () => {
         await manager.shutdown();
     });
 
+    it("allows mutation-capable workers in distinct isolated worktrees to run concurrently", async () => {
+        const children = [
+            new FakeChild([{ waitForAbort: true }]),
+            new FakeChild([{ waitForAbort: true }]),
+        ];
+        let index = 0;
+        const manager = new AgentRunManager(async () => children[index++]!);
+
+        manager.spawn(BUILTIN_WORKER, "Implement one", {
+            ...context(),
+            workspaceId: "workspace-one",
+        });
+        manager.spawn(BUILTIN_WORKER, "Implement two", {
+            ...context(),
+            workspaceId: "workspace-two",
+        });
+
+        await flushBackground();
+        await manager.cancel("worker-1");
+        await manager.cancel("worker-2");
+        await manager.shutdown();
+    });
+
     it("adds an authoritative changed-file report to worker outcomes", async () => {
         const child = new FakeChild([{ output: "Implemented the change." }]);
         (child as ChildAgentHandle).getMutationReport = () => ({

@@ -95,4 +95,80 @@ describe("file permission session entries", () => {
 
         expect(result).toEqual({ block: false });
     });
+
+    it.each(["read", "write"] as const)("includes a refusal message in blocked %s reasons", async (operation) => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-session-"));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-outside-"));
+        temporaryDirectories.push(cwd, outside);
+
+        const handlers: Record<string, Handler[]> = {};
+        const pi = {
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            appendEntry() {},
+        } as any;
+        registerFileToolHook(pi, operation);
+        const refusalMessage = "do not access that folder";
+        const ctx = {
+            cwd,
+            hasUI: true,
+            ui: {
+                theme: { bold: (value: string) => value },
+                setWorkingVisible() {},
+                custom: async () => ({
+                    value: { kind: "no" },
+                    message: refusalMessage,
+                    displayText: "No, do not access that folder",
+                }),
+            },
+        };
+
+        const result = await handlers.tool_call[0]({
+            toolName: operation,
+            input: { path: path.join(outside, "notes.txt") },
+        }, ctx);
+
+        expect(result).toEqual({
+            block: true,
+            reason: `File ${operation} blocked by user; path is outside the allowed working directory. User message: ${refusalMessage}`,
+        });
+    });
+
+    it.each(["read", "write"] as const)("keeps the generic blocked %s reason without a refusal message", async (operation) => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-session-"));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-outside-"));
+        temporaryDirectories.push(cwd, outside);
+
+        const handlers: Record<string, Handler[]> = {};
+        const pi = {
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            appendEntry() {},
+        } as any;
+        registerFileToolHook(pi, operation);
+        const ctx = {
+            cwd,
+            hasUI: true,
+            ui: {
+                theme: { bold: (value: string) => value },
+                setWorkingVisible() {},
+                custom: async () => ({
+                    value: { kind: "no" },
+                    displayText: "No",
+                }),
+            },
+        };
+
+        const result = await handlers.tool_call[0]({
+            toolName: operation,
+            input: { path: path.join(outside, "notes.txt") },
+        }, ctx);
+
+        expect(result).toEqual({
+            block: true,
+            reason: `File ${operation} blocked by user; path is outside the allowed working directory.`,
+        });
+    });
 });
