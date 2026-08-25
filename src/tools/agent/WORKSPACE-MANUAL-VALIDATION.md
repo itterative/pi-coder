@@ -106,13 +106,14 @@ Expected: retain preserves the result for later review and does not apply it.
 
 ## D. Successful apply and post-apply state
 
-Use a fresh changed result whose parent is still exactly at the recorded base revision and clean.
+Use a fresh changed result with a clean parent checkout. The parent may contain unrelated commits made after the result base.
 
-1. Confirm the parent is clean and at the result base revision:
+1. Confirm the parent is clean and record its current revision. If it has advanced since the result base, verify the result base is still an ancestor:
 
    ```bash
    git status --short
    git rev-parse HEAD
+   git merge-base --is-ancestor <result-base-revision> HEAD
    ```
 
 2. In workspace details, press `a` and confirm with `y` or `Enter`.
@@ -137,21 +138,28 @@ Use a fresh changed result for each failure case. The result must remain prepare
 3. Verify apply fails with a clean-checkout error.
 4. Verify the unrelated parent change is intact and the workspace/result remain available for explicit recovery.
 
-### E2. Parent revision drift
+### E2. Unrelated parent revision drift
 
 1. After collecting the worker result, make and commit an unrelated parent change.
-2. Try `a` and confirm.
-3. Verify apply fails because the parent is no longer at the recorded base revision.
-4. Verify the parent commit is unchanged by the failed apply.
+2. Verify the parent remains clean and the result base is an ancestor of the parent revision.
+3. Try `a` and confirm.
+4. Verify apply succeeds, preserves the unrelated parent commit, leaves the worker change uncommitted in the parent, and records the current parent revision.
 
-### E3. Worker changed after preparation
+### E3. Conflicting parent revision drift
+
+1. After collecting the worker result, make and commit a parent change that overlaps the worker's changed lines or patch hunks.
+2. Try `a` and confirm.
+3. Verify Git rejects the patch because it conflicts.
+4. Verify the parent, prepared result, and lease remain unchanged.
+
+### E4. Worker changed after preparation
 
 1. After collection, edit or create a file directly in the recorded workspace worktree path.
 2. Try `a` and confirm.
 3. Verify apply fails because the worker tree is dirty or its HEAD changed.
 4. Verify the parent remains unchanged and the lease/result are not silently released.
 
-Expected for all three: failed preflight is non-destructive and leaves the workspace available for explicit inspection or disposition.
+Expected: dirty-parent and conflict failures are non-destructive; unrelated clean parent descendants apply successfully.
 
 ## F. Reset for reuse
 
@@ -167,7 +175,7 @@ Use a workspace with a prepared or applied changed result and a clean parent che
    - status is `available` and there is no lease.
 3. Run a new isolated worker and verify the workspace can be selected again.
 
-Note: reset requires a clean parent. It is intentionally destructive inside the isolated workspace but must not modify the parent checkout.
+Note: reset may be performed with parent changes present. It is intentionally destructive inside the isolated workspace but must not modify the parent checkout.
 
 ## G. Discard workspace
 

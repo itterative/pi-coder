@@ -463,7 +463,7 @@ describe("agent workspaces", () => {
         expect((await listAgentWorkspaceResults(workspace.id, state))[0]).toMatchObject({ status: "discarded" });
     });
 
-    it("keeps both workspaces and the lease untouched when parent preflight fails", async () => {
+    it("rejects dirty parents and applies clean descendant parent changes", async () => {
         const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
         temporaryDirectories.push(root);
         const repository = path.join(root, "repo");
@@ -488,9 +488,74 @@ describe("agent workspaces", () => {
         expect(await fs.readFile(path.join(repository, "tracked.txt"), "utf8")).toBe("base\n");
 
         await fs.rm(path.join(repository, "parent-uncommitted.txt"));
-        await git(repository, "commit", "--quiet", "--allow-empty", "-m", "parent advanced");
-        await expect(applyAgentWorkspaceApplication(workspace, "session-1", "worker-1", state)).rejects.toThrow("expected workspace base");
-        expect((await listAgentWorkspaces(repository, state))[0]?.leaseRunId).toBe("worker-1");
-        expect(await fs.readFile(path.join(repository, "tracked.txt"), "utf8")).toBe("base\n");
+        await fs.writeFile(path.join(repository, "parent-advanced.txt"), "parent advanced\n");
+        await git(repository, "add", "parent-advanced.txt");
+        await git(repository, "commit", "--quiet", "-m", "parent advanced");
+        const parentHead = await gitOutput(repository, "rev-parse", "HEAD");
+        const applied = await applyAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        expect(applied).toMatchObject({ status: "applied", parentRevision: parentHead });
+        expect((await listAgentWorkspaces(repository, state))[0]).toMatchObject({
+            leaseRunId: "worker-1",
+            latestResult: { status: "applied", parentRevision: parentHead },
+        });
+        expect(await fs.readFile(path.join(repository, "tracked.txt"), "utf8")).toBe("worker\n");
+        expect(await fs.readFile(path.join(repository, "parent-advanced.txt"), "utf8")).toBe("parent advanced\n");
+    });
+
+    it("rejects a conflicting parent change without consuming the prepared result", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "base\n");
+        await git(repository, "add", ".");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "worker\n");
+        const application = await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        await fs.writeFile(path.join(repository, "tracked.txt"), "parent\n");
+        await git(repository, "add", "tracked.txt");
+        await git(repository, "commit", "--quiet", "-m", "parent conflict");
+
+        await expect(applyAgentWorkspaceApplication(workspace, "session-1", "worker-1", state)).rejects.toThrow();
+        expect((await listAgentWorkspaces(repository, state))[0]).toMatchObject({
+            leaseRunId: "worker-1",
+            latestResult: { id: application.id, status: "prepared" },
+        });
+        expect(await fs.readFile(path.join(repository, "tracked.txt"), "utf8")).toBe("parent\n");
+    });
+
+    it("rejects a clean parent history that no longer contains the workspace base", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "base\n");
+        await git(repository, "add", ".");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "worker\n");
+        const application = await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        await git(repository, "checkout", "--orphan", "diverged");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "diverged\n");
+        await git(repository, "add", "tracked.txt");
+        await git(repository, "commit", "--quiet", "-m", "diverged history");
+
+        await expect(applyAgentWorkspaceApplication(workspace, "session-1", "worker-1", state)).rejects.toThrow("no longer contains workspace base");
+        expect((await listAgentWorkspaces(repository, state))[0]).toMatchObject({
+            leaseRunId: "worker-1",
+            latestResult: { id: application.id, status: "prepared" },
+        });
+        expect(await fs.readFile(path.join(repository, "tracked.txt"), "utf8")).toBe("diverged\n");
     });
 });

@@ -17,7 +17,7 @@ keep_updated: true
 
 - Collection finalizes the worker tree. Existing worker commits are preserved; remaining changes are committed as a final private pi-coder result commit. Changed results receive a durable private ref; no-change results receive no durable ref.
 - A changed result leaves the parent checkout untouched and keeps its lease until explicit disposition. The parent may inspect, apply, retain, reset/reuse, discard, or revise it through `agent` actions or `/agents`; destructive TUI actions require confirmation. Workspaces are never merged, reset, or deleted implicitly.
-- Applying uses the complete base-to-worker tree diff without creating a parent commit. Safe preflight requires the parent to be clean and exactly at the recorded base revision; failures leave the workspace and lease intact.
+- Applying uses the complete base-to-worker tree diff without creating a parent commit. Safe preflight requires a clean parent whose revision still contains the recorded base; Git's patch check decides whether later unrelated commits conflict. Failures leave the workspace and lease intact.
 
 ## Lease invariants
 

@@ -103,8 +103,8 @@ export async function applyAgentWorkspaceApplication(
             throw new Error("The prepared worker revision is no longer based on the workspace base revision.");
         }
         const parentRevision = await git(current.repositoryRoot, ["rev-parse", "HEAD"]);
-        if (parentRevision !== result.baseRevision) {
-            throw new Error(`Parent checkout is at ${parentRevision}, expected workspace base ${result.baseRevision}.`);
+        if (!(await hasAncestor(current.repositoryRoot, result.baseRevision, parentRevision))) {
+            throw new Error(`Parent checkout at ${parentRevision} no longer contains workspace base ${result.baseRevision}.`);
         }
         const parentStatus = await git(current.repositoryRoot, ["status", "--porcelain=v1", "--untracked-files=all"]);
         if (parentStatus) throw new Error("Parent checkout has uncommitted changes; apply requires a clean checkout.");

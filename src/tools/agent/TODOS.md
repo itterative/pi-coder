@@ -12,8 +12,6 @@
 * non-isolated workers should notify the parent there was a change
   * should notify the parent immediatly if the parent is working
   * otherwise, it should either coalesce at the end (probably flow is already there for the agent collection side)
-* isolated worker workspace apply should still work if there's no conflict
-  * needs ironing out for the proper flow here
 
 
 

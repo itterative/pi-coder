@@ -122,7 +122,7 @@ Run these checks after changing child sessions, providers, lifecycle handling, o
 
 Provider calls stay manual so automated tests do not require credentials or incur usage.
 
-For a focused manual workspace lifecycle pass, use [`WORKSPACE-MANUAL-VALIDATION.md`](./WORKSPACE-MANUAL-VALIDATION.md). It covers no-change reuse, saved diffs, apply/retain/reset/discard, preflight failures, and reload recovery.
+For a focused manual workspace lifecycle pass, use [`WORKSPACE-MANUAL-VALIDATION.md`](./WORKSPACE-MANUAL-VALIDATION.md). It covers no-change reuse, saved diffs, apply with unrelated parent descendants, conflict/dirty preflight failures, retain/reset/discard, and reload recovery.
 
 ## Diagnostic traces
 
