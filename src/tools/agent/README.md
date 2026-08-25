@@ -93,6 +93,8 @@ Locations:
 
 Definitions are sorted by path. Within one scope, the first valid duplicate wins and later files warn. Trusted-project definitions override user definitions with an informational diagnostic. Built-in names `scout`, `reviewer`, and `worker` are reserved.
 
+The `/agents` browser also has a Settings tab. It stores optional built-in model overrides in `~/.pi/agent-config.json` (or the nearest trusted project `.pi/agent-config.json` when that file already exists). Omitting an override makes the built-in use the parent session's model. The model picker lists the currently available provider/model pairs.
+
 Every custom definition receives baseline codebase-read access (`read`, `grep`, `find`, and `ls`). Its optional `capabilities` must be an array containing only `safe-bash`; unknown or malformed capability lists invalidate the definition. `safe-bash` grants only cwd-confined, heuristically `SAFE_READONLY` Bash—including ordinary Git history inspection—and is not a sandbox against a hostile local environment. Worker mutation permissions are built-in only. Every baseline read/search path is confined to the working directory and sensitive paths remain blocked.
 
 ## Manual stabilization checklist

@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { createAgentChild } from "./child";
+import agentConfig, { applyAgentConfig } from "./config";
 import { discoverAgents } from "./definitions/discovery";
 import {
     createAgentEventSink,
@@ -145,6 +146,7 @@ export class AgentLifecycle {
 
     discover(ctx: ExtensionContext): ReturnType<typeof discoverAgents> {
         const result = discoverAgents(ctx.cwd, ctx.isProjectTrusted());
+        result.agents = applyAgentConfig(result.agents, agentConfig.load(ctx.cwd));
         for (const diagnostic of result.diagnostics) {
             if (diagnostic.level !== "warning") continue;
             const text = diagnosticText(diagnostic);

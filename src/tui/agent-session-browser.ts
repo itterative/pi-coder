@@ -7,6 +7,8 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
+import { SelectComponent } from "./select";
+import type { BuiltinAgentName } from "../tools/agent/config";
 import type {
     AgentSessionBrowserItem,
     AgentWorkspaceBrowserItem,
@@ -27,8 +29,22 @@ import {
 
 export type { AgentWorkspaceAction } from "./agent-workspace-browser";
 
-type AgentBrowserItem = AgentSessionBrowserItem | AgentWorkspaceBrowserItem;
-type AgentBrowserTab = "current" | "past" | "workspaces";
+export interface AgentSetting {
+    id: BuiltinAgentName;
+    label: string;
+    description: string;
+    model?: string;
+}
+
+export interface AgentModelOption {
+    id?: string;
+    label: string;
+    description?: string;
+}
+
+type AgentSettingItem = AgentSetting & { kind: "setting" };
+type AgentBrowserItem = AgentSessionBrowserItem | AgentWorkspaceBrowserItem | AgentSettingItem;
+type AgentBrowserTab = "current" | "past" | "workspaces" | "settings";
 
 interface AgentSessionBrowserState extends ListViewState<AgentBrowserItem> {
     tab: AgentBrowserTab;
@@ -38,6 +54,8 @@ export interface AgentSessionBrowserData {
     current: AgentSessionBrowserItem[];
     past: AgentSessionBrowserItem[];
     workspaces?: AgentWorkspaceBrowserItem[];
+    settings?: AgentSetting[];
+    models?: AgentModelOption[];
 }
 
 export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
@@ -49,6 +67,8 @@ export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
     onCancel?: (item: AgentSessionBrowserItem) => void | Promise<void>;
     onWorkspaceAction?: (workspace: AgentWorkspaceBrowserItem, action: WorkspaceDispositionAction) => AgentWorkspaceBrowserItem | null | undefined | Promise<AgentWorkspaceBrowserItem | null | undefined>;
     onWorkspaceInspect?: (workspace: AgentWorkspaceBrowserItem) => string | Promise<string>;
+    onModelChange?: (agent: BuiltinAgentName, model: string | undefined) => void | Promise<void>;
+    onModelChangeError?: (error: unknown) => void;
     onInvalidate?: () => void;
 }
 
@@ -93,8 +113,15 @@ function asSessionListItems(items: AgentSessionBrowserItem[], empty: AgentSessio
 function asWorkspaceListItems(workspaces: AgentWorkspaceBrowserItem[]): ListItem<AgentBrowserItem>[] {
     return (workspaces.length ? workspaces : [EMPTY_WORKSPACES]).map((value) => ({
         value,
-        label: isWorkspace(value) ? value.slug : value.task,
+        label: isWorkspace(value) ? value.slug : isSetting(value) ? value.label : value.task,
         disabled: !isWorkspace(value),
+    }));
+}
+
+function asSettingsListItems(settings: AgentSetting[]): ListItem<AgentBrowserItem>[] {
+    return settings.map((setting) => ({
+        value: { ...setting, kind: "setting" },
+        label: `${setting.label}: ${setting.model ?? "Parent model"}`,
     }));
 }
 
@@ -102,8 +129,12 @@ function isWorkspace(item: AgentBrowserItem): item is AgentWorkspaceBrowserItem 
     return item.kind === "workspace";
 }
 
+function isSetting(item: AgentBrowserItem): item is AgentSettingItem {
+    return item.kind === "setting";
+}
+
 function isSession(item: AgentBrowserItem): item is AgentSessionBrowserItem {
-    return !isWorkspace(item);
+    return !isWorkspace(item) && !isSetting(item);
 }
 
 function dateText(timestamp: number | undefined): string {
@@ -139,18 +170,25 @@ function returnedText(item: AgentSessionBrowserItem): string | undefined {
     return undefined;
 }
 
-function tabText(tab: AgentBrowserTab, theme: Theme, includeWorkspaces: boolean): string {
+function tabText(tab: AgentBrowserTab, theme: Theme, includeWorkspaces: boolean, includeSettings: boolean): string {
     const current = tab === "current"
         ? theme.fg("accent", theme.bold("● Current"))
         : theme.fg("dim", "○ Current");
     const past = tab === "past"
         ? theme.fg("accent", theme.bold("● Past"))
         : theme.fg("dim", "○ Past");
-    if (!includeWorkspaces) return `${current}    ${past}`;
-    const workspaces = tab === "workspaces"
-        ? theme.fg("accent", theme.bold("● Workspaces"))
-        : theme.fg("dim", "○ Workspaces");
-    return `${current}    ${past}    ${workspaces}`;
+    const tabs = [`${current}    ${past}`];
+    if (includeWorkspaces) {
+        tabs.push(tab === "workspaces"
+            ? theme.fg("accent", theme.bold("● Workspaces"))
+            : theme.fg("dim", "○ Workspaces"));
+    }
+    if (includeSettings) {
+        tabs.push(tab === "settings"
+            ? theme.fg("accent", theme.bold("● Settings"))
+            : theme.fg("dim", "○ Settings"));
+    }
+    return tabs.join("    ");
 }
 
 function itemText(
@@ -158,6 +196,10 @@ function itemText(
     theme: Theme,
 ): string {
     if (isWorkspace(item)) return agentWorkspaceItemText(item, theme);
+    if (isSetting(item)) {
+        return theme.fg("accent", item.label)
+            + `\n${theme.fg("muted", item.description)}\nValue: ${item.model ?? "Parent model (uses the current pi model)"}`;
+    }
     if (item.kind === "empty") return theme.fg("muted", item.task);
 
     const mode = item.agent === "workspace-setup"
@@ -182,8 +224,10 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
     private readonly current: AgentSessionBrowserItem[];
     private sessionDetail: AgentSessionDetailComponent | null = null;
     private workspaceDetail: AgentWorkspaceDetailComponent | null = null;
+    private modelSelector: SelectComponent<AgentModelOption> | null = null;
     private readonly past: AgentSessionBrowserItem[];
     private readonly workspaces: AgentWorkspaceBrowserItem[];
+    private readonly settings: AgentSetting[];
     private readonly onRefresh?: () => Promise<AgentSessionBrowserData>;
     private readonly onInvalidate?: () => void;
     private readonly unsubscribeEvents?: () => void;
@@ -212,7 +256,9 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
             ? asSessionListItems(this.current, EMPTY_CURRENT)
             : this.state.tab === "past"
                 ? asSessionListItems(this.past, EMPTY_PAST)
-                : asWorkspaceListItems(this.workspaces);
+                : this.state.tab === "workspaces"
+                    ? asWorkspaceListItems(this.workspaces)
+                    : asSettingsListItems(this.settings);
         const selectedIndex = selectedId === undefined
             ? -1
             : this.state.items.findIndex((item) => item.value.id === selectedId);
@@ -238,6 +284,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     this.current.splice(0, this.current.length, ...data.current);
                     this.past.splice(0, this.past.length, ...data.past);
                     this.workspaces.splice(0, this.workspaces.length, ...(data.workspaces ?? []));
+                    if (data.settings) this.settings.splice(0, this.settings.length, ...data.settings);
                     if (this.workspaceDetail) {
                         const replacement = this.workspaces.find((item) => (
                             item.id === this.workspaceDetail?.workspace.id
@@ -277,10 +324,12 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
         const current = options.current;
         const past = options.past;
         const workspaces = options.workspaces ?? [];
+        const settings = options.settings ?? [];
         const includeWorkspaces = options.workspaces !== undefined;
-        const tabs: AgentBrowserTab[] = includeWorkspaces
-            ? ["current", "past", "workspaces"]
-            : ["current", "past"];
+        const includeSettings = options.settings !== undefined;
+        const tabs: AgentBrowserTab[] = ["current", "past"];
+        if (includeWorkspaces) tabs.push("workspaces");
+        if (includeSettings) tabs.push("settings");
         let activeTab: AgentSessionBrowserState["tab"] = "current";
         let tabHeader: Text | undefined;
         let tabTheme: Theme | undefined;
@@ -289,10 +338,12 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                 ? asSessionListItems(current, EMPTY_CURRENT)
                 : tab === "past"
                     ? asSessionListItems(past, EMPTY_PAST)
-                    : asWorkspaceListItems(workspaces)
+                    : tab === "workspaces"
+                        ? asWorkspaceListItems(workspaces)
+                        : asSettingsListItems(settings)
         );
         const refreshTabHeader = () => {
-            if (tabHeader && tabTheme) tabHeader.setText(tabText(activeTab, tabTheme, includeWorkspaces));
+            if (tabHeader && tabTheme) tabHeader.setText(tabText(activeTab, tabTheme, includeWorkspaces, includeSettings));
         };
         super(
             {
@@ -305,12 +356,14 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                 helpText: `↑/↓ navigate · Tab/←/→ switch tab · Enter open${options.onResume || options.onCancel ? " · r resume · c cancel" : ""} · Esc close`,
                 headerContent: (container, theme) => {
                     tabTheme = theme;
-                    tabHeader = new Text(tabText(activeTab, theme, includeWorkspaces), 5, 0);
+                    tabHeader = new Text(tabText(activeTab, theme, includeWorkspaces, includeSettings), 5, 0);
                     container.addChild(tabHeader);
                     container.addChild(new Text(
-                        theme.fg("muted", includeWorkspaces
-                            ? "Current and Past show delegated sessions; Workspaces shows isolated worker checkouts."
-                            : "Current shows this parent session; Past shows durable child results for this cwd."),
+                        theme.fg("muted", includeSettings
+                            ? "Current and Past show delegated sessions; Settings controls built-in agent models."
+                            : includeWorkspaces
+                                ? "Current and Past show delegated sessions; Workspaces shows isolated worker checkouts."
+                                : "Current shows this parent session; Past shows durable child results for this cwd."),
                         5,
                         0,
                     ));
@@ -379,6 +432,59 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                                     this.workspaceDetail = null;
                                     this.invalidate();
                                 });
+                            } else if (isSetting(selected)) {
+                                const modelItems = (options.models ?? [{
+                                    label: "Parent model",
+                                    description: "Use the current pi model",
+                                }]).map((model) => ({
+                                    value: model,
+                                    label: model.label,
+                                }));
+                                if (modelItems.length > 0) {
+                                    const selector = new SelectComponent<AgentModelOption>({
+                                        title: `${selected.label} · model`,
+                                        items: modelItems,
+                                        initialCursor: Math.max(0, modelItems.findIndex((item) => item.value.id === selected.model)),
+                                        maxVisible: 12,
+                                        helpText: "↑/↓ navigate · Enter select · Esc back",
+                                        renderItem: (item, renderOptions) => {
+                                            const value = item.value;
+                                            return value.description
+                                                ? `${value.label}\n${renderOptions.theme.fg("muted", value.description)}`
+                                                : value.label;
+                                        },
+                                    });
+                                    this.modelSelector = selector;
+                                    selector.setDoneCallback((model) => {
+                                        this.modelSelector = null;
+                                        if (!model) {
+                                            this.invalidate();
+                                            return;
+                                        }
+                                        const setting = this.settings.find((item) => item.id === selected.id);
+                                        if (!setting) {
+                                            this.invalidate();
+                                            return;
+                                        }
+                                        const previous = setting.model;
+                                        setting.model = model.id;
+                                        this.rebuildItems();
+                                        this.invalidate();
+                                        const restore = (error: unknown) => {
+                                            setting.model = previous;
+                                            this.rebuildItems();
+                                            options.onModelChangeError?.(error);
+                                            this.invalidate();
+                                        };
+                                        try {
+                                            const update = options.onModelChange?.(setting.id, model.id);
+                                            if (update) void update.catch(restore);
+                                        } catch (error) {
+                                            restore(error);
+                                        }
+                                    });
+                                    selector.initialize(this.theme);
+                                }
                             } else if (selected.kind !== "empty") {
                                 this.sessionDetail = new AgentSessionDetailComponent({
                                     item: selected,
@@ -400,8 +506,14 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                         ? current.length
                         : state.tab === "past"
                             ? past.length
-                            : workspaces.length;
-                    const label = state.tab === "workspaces" ? "workspace" : "session";
+                            : state.tab === "workspaces"
+                                ? workspaces.length
+                                : settings.length;
+                    const label = state.tab === "workspaces"
+                        ? "workspace"
+                        : state.tab === "settings"
+                            ? "setting"
+                            : "session";
                     container.addChild(new Spacer(1));
                     container.addChild(new Text(
                         theme.fg("dim", `${count} ${label}${count === 1 ? "" : "s"}`),
@@ -421,6 +533,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
         this.current = current;
         this.past = past;
         this.workspaces = workspaces;
+        this.settings = settings;
         this.onRefresh = options.onRefresh;
         this.onInvalidate = options.onInvalidate;
         if (options.eventBus && options.cwd && options.onRefresh) {
@@ -437,6 +550,7 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
     override render(width: number): string[] {
         if (this.sessionDetail) return this.sessionDetail.render(width);
         if (this.workspaceDetail) return this.workspaceDetail.render(width);
+        if (this.modelSelector) return this.modelSelector.render(width);
         const height = this.listOptions.fixedHeight?.();
         if (height !== undefined) this.state.maxVisibleLines = Math.max(1, height - 11);
         return super.render(width).map((line) => truncateToWidth(line, width, ""));
@@ -449,6 +563,10 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
         }
         if (this.workspaceDetail) {
             this.workspaceDetail.handleInput(key);
+            return;
+        }
+        if (this.modelSelector) {
+            this.modelSelector.handleInput(key);
             return;
         }
         super.handleInput(key);

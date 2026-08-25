@@ -524,4 +524,35 @@ describe("AgentSessionBrowserComponent", () => {
         ui.press(KEY.escape);
         expect(closed).toBe(true);
     });
+
+    it("shows built-in model settings and edits a model in a nested selector", async () => {
+        let changed: { agent: string; model: string | undefined } | undefined;
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            settings: [{
+                id: "scout",
+                label: "Scout model",
+                description: "Model used by scout",
+            }],
+            models: [
+                { label: "Parent model", description: "Use the current pi model" },
+                { id: "openai/gpt-4.1", label: "openai/gpt-4.1", description: "GPT-4.1" },
+            ],
+            onModelChange: (agent, model) => {
+                changed = { agent, model };
+            },
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab, KEY.tab);
+        expect(ui.render()).toContain("● Settings");
+        expect(ui.render()).toContain("Value: Parent model");
+        ui.press(KEY.enter);
+        expect(ui.render()).toContain("Scout model · model");
+        ui.press(KEY.down, KEY.enter);
+        await vi.waitFor(() => expect(changed).toEqual({ agent: "scout", model: "openai/gpt-4.1" }));
+        expect(ui.render()).toContain("Value: openai/gpt-4.1");
+    });
 });
