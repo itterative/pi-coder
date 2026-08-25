@@ -15,6 +15,7 @@ import {
 } from "./workspaces/setup";
 import { releaseAgentWorkspaceAfterNoChanges } from "./workspaces/results";
 import {
+    listAgentWorkspaces,
     releaseAgentWorkspaceLease,
     transferAgentWorkspaceLease,
 } from "./workspaces/store";
@@ -24,6 +25,7 @@ import {
     prepareForegroundWorkspaceResult,
 } from "./workspaces/finalization";
 import type { AgentLifecycle } from "./lifecycle";
+import type { AgentWorkspace } from "./contracts/workspaces";
 
 export async function executeAgentAction(
     params: AgentParameters,
@@ -36,7 +38,17 @@ export async function executeAgentAction(
     let reservation: WorkspaceReservation | undefined;
     try {
         if (params.action === "list") {
-            outcome = listOutcome(lifecycle.manager);
+            let workspaces: AgentWorkspace[] = [];
+            let catalogWarning: string | undefined;
+            try {
+                workspaces = await listAgentWorkspaces(ctx.cwd, undefined, true);
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                catalogWarning = `Could not read isolated workspace catalog: ${message}`;
+                ctx.ui.notify(catalogWarning, "warning");
+            }
+            outcome = listOutcome(lifecycle.manager, workspaces);
+            if (catalogWarning) outcome.content += `\n\nWarning: ${catalogWarning}`;
         } else if (params.action === "start" || params.action === "spawn") {
             const discovered = lifecycle.discover(ctx);
             const definition = discovered.agents.find((agent) => agent.name === params.agent);

@@ -242,8 +242,6 @@ export async function releaseAgentWorkspaceAfterNoChanges(
         }
         if (result.durableRef) {
             await git(workspace.worktreePath, ["update-ref", "-d", result.durableRef]);
-            database.prepare("UPDATE workspace_results SET durable_ref = NULL WHERE id = ? AND workspace_id = ?")
-                .run(result.id, workspaceId);
         }
         database.prepare(`
             UPDATE workspaces SET workspace_status = 'available', lease_owner_session_id = NULL,

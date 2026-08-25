@@ -1,6 +1,5 @@
 # User-managed todos (DO NOT MODIFY)
 
-* agent list should also show dead agents holding a lease or ones that prevent a workspace from being used
 * agent tool tui output needs refinement
   * list action shows usage
   * clean up both compact view and detailed view
