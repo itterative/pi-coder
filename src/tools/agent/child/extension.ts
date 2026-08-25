@@ -20,6 +20,7 @@ import {
     type HeuristicAssessment,
 } from "../../../modules/sandbox/heuristics";
 import { askUser } from "../../../tui/ask-user";
+import { reviewHistory } from "./history-review";
 import { registerWorkerMutationHooks } from "./worker-permissions";
 import type { ChildAgentFactoryContext } from "../contracts/runs";
 import type { ChildProgressTracker as ProgressTracker } from "./progress";
@@ -32,15 +33,28 @@ const CHILD_CONFINEMENT: SandboxConfigCwdConfinement = {
     resolveSymlinks: true,
 };
 
-export function childProtocolPrompt(background: boolean, mutating: boolean, restrictedBash: boolean): string {
+export function childProtocolPrompt(
+    background: boolean,
+    mutating: boolean,
+    safeBash: boolean,
+    safeGitHistory = false,
+): string {
     const interaction = background
         ? "Direct end-user dialogs are unavailable while you run in the background. Use ask_parent when guidance is materially necessary; make reasonable progress first, include evidence and a recommendation, and call it alone in its tool batch."
         : "Use ask_user when you need a preference, clarification, or decision directly from the end user, and call it alone in its tool batch so later work can incorporate the answer. The answer returns in the same turn, so continue your work afterward. Use ask_parent instead when the parent can answer, investigate, or decide; make reasonable progress first, include evidence and a recommendation, and call ask_parent alone in its tool batch. Do not ask questions only in prose when either interaction tool applies.";
     const capability = mutating
         ? "You are a mutation-capable worker operating in the parent's current checkout. Every edit, write, and bash call opens an explicit parent-visible permission gate. Call mutation tools one at a time, and remember that parent activity may concurrently affect the checkout."
-        : restrictedBash
-            ? "You are a read-only subagent working for a parent coding agent. You may run only cwd-confined bash commands classified SAFE_READONLY by the safety heuristic. SAFE_READONLY means every part of the command uses a curated non-mutating form, and all file access—including resolved symlinks—stays inside the working directory and avoids sensitive paths. Unknown commands, writes, unsafe flags or modes, and dynamic or unmodeled behavior are blocked. Use a block reason to choose a supported read/search tool or report the limit; do not retry variants hoping to bypass it. You cannot modify files."
-            : "You are a read-only subagent working for a parent coding agent. You cannot run commands or modify files.";
+        : [
+            "You are a read-only subagent working for a parent coding agent.",
+            `Enabled capabilities: codebase-read${safeBash ? ", safe-bash" : ""}${safeGitHistory ? ", safe-git-history" : ""}.`,
+            safeBash
+                ? "safe-bash permits only cwd-confined commands classified SAFE_READONLY by the safety heuristic. Every file access—including resolved symlinks—must stay inside the working directory and avoid sensitive paths. Unknown commands, writes, unsafe flags or modes, and dynamic or unmodeled behavior are blocked. Use a block reason to choose a supported read/search tool or report the limit; do not retry variants hoping to bypass it."
+                : "safe-bash is not enabled, so you cannot run bash commands.",
+            safeGitHistory
+                ? "safe-git-history provides review_history for specific linear commit ranges. It withholds sensitive paths and returns a bounded, best-effort-redacted patch; it is not an exhaustive secret scanner."
+                : "safe-git-history is not enabled, so you cannot inspect historical patch content.",
+            "You cannot modify files.",
+        ].join(" ");
     return `${capability}\n\n${interaction}\n\nWhen the task is complete, provide a self-contained final report to the parent. Mutation-capable workers must list changed files and validation performed.`;
 
 }
@@ -131,9 +145,12 @@ export async function askChildUser(
 export function registerChildExtension(
     tracker: ProgressTracker,
     parentContext: ExtensionContext,
+    cwd: string,
     agentName: string,
     background: boolean,
     mutating: boolean,
+    safeBash: boolean,
+    safeGitHistory: boolean,
     runId: string,
     runTitle: string,
     onProgress: ChildAgentFactoryContext["onProgress"],
@@ -238,6 +255,36 @@ export function registerChildExtension(
             },
         });
 
+        if (safeGitHistory) {
+            pi.registerTool({
+                name: "review_history",
+                label: "Review History",
+                description: "Review one linear Git commit range with sensitive paths withheld and best-effort value redaction. Base and head must be HEAD, HEAD~<number>, or commit SHAs.",
+                promptSnippet: "Review a constrained, redacted historical Git diff.",
+                promptGuidelines: [
+                    "Use review_history only after identifying a specific base and head commit",
+                    "Treat its best-effort redaction as defense in depth, not proof that no secret exists",
+                    "Report withheld paths only as a count; do not try to recover their contents through other tools",
+                ],
+                executionMode: "sequential",
+                parameters: Type.Object({
+                    base: Type.String({ minLength: 1, maxLength: 64 }),
+                    head: Type.String({ minLength: 1, maxLength: 64 }),
+                }, { additionalProperties: false }),
+                async execute(_toolCallId, params) {
+                    try {
+                        const result = await reviewHistory(cwd, params);
+                        onTrace?.("review_history.completed", { ...result.details });
+                        return { content: [{ type: "text" as const, text: result.text }], details: result.details };
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        onTrace?.("review_history.blocked", { reason: message.slice(0, 500) });
+                        throw new Error(`History review unavailable: ${message}`);
+                    }
+                },
+            });
+        }
+
         if (mutating) {
             registerWorkerMutationHooks(pi, {
                 parentContext,
@@ -268,6 +315,12 @@ export function registerChildExtension(
 
         pi.on("tool_call", (event, ctx) => {
             if (!mutating && isToolCallEventType<"bash", BashToolInput>("bash", event)) {
+                if (!safeBash) {
+                    return {
+                        block: true,
+                        reason: "Read-only agent bash blocked: the safe-bash capability is not enabled.",
+                    };
+                }
                 const assessment = getScoutBashAssessment(event.input.command, ctx.cwd);
                 if (assessment.classification === Heuristic.SAFE_READONLY) {
                     onTrace?.("scout.bash.allowed", { classification: assessment.classification });

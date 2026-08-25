@@ -14,7 +14,12 @@ import {
     createChildModelRuntime,
     shouldCopyParentApiKey,
 } from "../../src/tools/agent/child";
-import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
+import {
+    agentTools,
+    BUILTIN_REVIEWER,
+    BUILTIN_SCOUT,
+    BUILTIN_WORKER,
+} from "../../src/tools/agent/definitions/discovery";
 import { ZERO_USAGE } from "../../src/tools/agent/runs/manager";
 
 describe("in-process scout SDK session", () => {
@@ -62,17 +67,32 @@ describe("in-process scout SDK session", () => {
         });
         expect(backgroundEvents).toContainEqual({
             type: "session.created",
-            data: { toolCount: BUILTIN_SCOUT.tools.length + 1 },
+            data: { toolCount: agentTools(BUILTIN_SCOUT).length + 1 },
         });
         expect(backgroundEvents).toContainEqual({
             type: "resources.loaded",
             data: {
-                readOnlyToolCount: BUILTIN_SCOUT.tools.length,
+                readOnlyToolCount: agentTools(BUILTIN_SCOUT).length,
                 directUserUI: false,
                 background: true,
             },
         });
         backgroundChild.dispose();
+
+        const reviewerEvents: Array<{ type: string; data?: Record<string, unknown> }> = [];
+        const reviewer = await createAgentChild({
+            cwd: process.cwd(),
+            definition: BUILTIN_REVIEWER,
+            parentContext,
+            background: true,
+            onProgress: () => {},
+            onTrace: (type, data) => reviewerEvents.push({ type, data }),
+        });
+        expect(reviewerEvents).toContainEqual({
+            type: "session.created",
+            data: { toolCount: agentTools(BUILTIN_REVIEWER).length + 1 },
+        });
+        reviewer.dispose();
 
         const workerEvents: Array<{ type: string; data?: Record<string, unknown> }> = [];
         const worker = await createAgentChild({
@@ -86,7 +106,7 @@ describe("in-process scout SDK session", () => {
         });
         expect(workerEvents).toContainEqual({
             type: "session.created",
-            data: { toolCount: BUILTIN_WORKER.tools.length + 1 },
+            data: { toolCount: agentTools(BUILTIN_WORKER).length + 1 },
         });
         expect(worker.getMutationReport?.()).toEqual({ changedFiles: [], bashApproved: false });
         worker.dispose();

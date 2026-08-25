@@ -537,7 +537,7 @@ export class AgentRunManager {
             ? {
                 name: definitionOrName,
                 description: "Test or built-in agent",
-                tools: ["read", "grep", "find", "ls"],
+                capabilities: [],
                 systemPrompt: "",
                 source: "builtin",
             }

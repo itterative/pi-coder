@@ -59,7 +59,7 @@ export async function runWorkspaceSetup(
     const setupDefinition: AgentDefinition = {
         name: "workspace-setup",
         description: "Prepare an isolated development workspace without implementing the task",
-        tools: ["read", "bash"],
+        capabilities: [],
         model: definition.model,
         source: "builtin",
         mutating: true,

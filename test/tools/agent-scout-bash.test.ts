@@ -19,13 +19,17 @@ afterEach(() => {
     }
 });
 
-function setup(cwd: string) {
+function setup(
+    cwd: string,
+    { safeBash = true, safeGitHistory = false }: { safeBash?: boolean; safeGitHistory?: boolean } = {},
+) {
     const handlers: Record<string, Handler[]> = {};
+    const tools: Array<{ name: string }> = [];
     const pi = {
         on(event: string, handler: Handler) {
             (handlers[event] ??= []).push(handler);
         },
-        registerTool() {},
+        registerTool(tool: { name: string }) { tools.push(tool); },
     } as any;
     const tracker = {
         progress: { output: "", recentActivity: [] },
@@ -39,15 +43,18 @@ function setup(cwd: string) {
     registerChildExtension(
         tracker,
         { cwd, hasUI: false, mode: "print" } as any,
+        cwd,
         "scout",
         true,
         false,
+        safeBash,
+        safeGitHistory,
         "scout-1",
         "Bash safety",
         () => {},
     )(pi);
 
-    return { handlers, ctx: { cwd } };
+    return { handlers, ctx: { cwd }, tools };
 }
 
 describe("scout restricted bash", () => {
@@ -71,10 +78,34 @@ describe("scout restricted bash", () => {
             .toMatchObject({ block: true, reason: expect.stringContaining("UNKNOWN_COMMAND") });
     });
 
+    it("registers historical review only for the dedicated capability", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
+        tempDirs.push(cwd);
+
+        expect(setup(cwd).tools.map((tool) => tool.name)).not.toContain("review_history");
+        expect(setup(cwd, { safeGitHistory: true }).tools.map((tool) => tool.name)).toContain("review_history");
+    });
+
+    it("blocks bash when safe-bash is absent", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
+        tempDirs.push(cwd);
+        const runtime = setup(cwd, { safeBash: false });
+        const check = runtime.handlers.tool_call[0]!;
+
+        expect(check({ toolName: "bash", input: { command: "cat safe.txt" } }, runtime.ctx))
+            .toMatchObject({ block: true, reason: expect.stringContaining("safe-bash capability is not enabled") });
+    });
+
     it("explains SAFE_READONLY in the scout protocol", () => {
         const prompt = childProtocolPrompt(false, false, true);
 
-        expect(prompt).toContain("SAFE_READONLY means every part of the command uses a curated non-mutating form");
+        expect(prompt).toContain("safe-bash permits only cwd-confined commands classified SAFE_READONLY");
         expect(prompt).toContain("do not retry variants hoping to bypass it");
+        const reviewerPrompt = childProtocolPrompt(false, false, true, true);
+        expect(reviewerPrompt).toContain("Enabled capabilities: codebase-read, safe-bash, safe-git-history.");
+        expect(reviewerPrompt).toContain("safe-bash permits only cwd-confined commands classified SAFE_READONLY");
+        const historyOnlyPrompt = childProtocolPrompt(false, false, false, true);
+        expect(historyOnlyPrompt).toContain("Enabled capabilities: codebase-read, safe-git-history.");
+        expect(historyOnlyPrompt).toContain("safe-bash is not enabled, so you cannot run bash commands.");
     });
 });

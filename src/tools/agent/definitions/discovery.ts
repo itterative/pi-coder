@@ -6,14 +6,16 @@ import {
     parseFrontmatter,
 } from "@earendil-works/pi-coding-agent";
 
-import type { AgentDefinition } from "./types";
+import {
+    AGENT_CAPABILITIES,
+    READ_ONLY_AGENT_TOOLS,
+    type AgentCapability,
+    type AgentDefinition,
+} from "./types";
 
-export type { AgentDefinition, AgentSource } from "./types";
-export { fingerprintAgentDefinition } from "./types";
-
-export const READ_ONLY_AGENT_TOOLS = ["read", "grep", "find", "ls"] as const;
-const READ_ONLY_TOOL_SET = new Set<string>(READ_ONLY_AGENT_TOOLS);
-const RESERVED_AGENT_NAMES = new Set(["scout", "worker"]);
+export type { AgentCapability, AgentDefinition, AgentSource } from "./types";
+export { agentTools, fingerprintAgentDefinition, READ_ONLY_AGENT_TOOLS } from "./types";
+const RESERVED_AGENT_NAMES = new Set(["scout", "reviewer", "worker"]);
 const AGENT_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
 
 export interface AgentDiagnostic {
@@ -30,6 +32,9 @@ export interface AgentDiscoveryResult {
 type AgentFrontmatter = {
     name?: unknown;
     description?: unknown;
+    capabilities?: unknown;
+    // Deliberately unsupported: retaining it here lets us diagnose a stale
+    // WIP definition instead of silently ignoring a privilege request.
     tools?: unknown;
     model?: unknown;
 };
@@ -37,17 +42,27 @@ type AgentFrontmatter = {
 export const BUILTIN_SCOUT: AgentDefinition = {
     name: "scout",
     description: "Read-only codebase reconnaissance",
-    tools: [...READ_ONLY_AGENT_TOOLS, "bash"],
+    capabilities: ["safe-bash"],
     systemPrompt: `You are the built-in pi-coder scout, a read-only subagent working for a parent coding agent.
 
 Explore the codebase thoroughly and return concise, evidence-based findings. Cite relevant file paths and symbols. You may read, search, find, and list files. You may also run only cwd-confined commands that the safety heuristic classifies as read-only; unsafe, unrecognized, sensitive-path, and write-capable commands are blocked. You cannot modify files.`,
     source: "builtin",
 };
 
+export const BUILTIN_REVIEWER: AgentDefinition = {
+    name: "reviewer",
+    description: "Read-only code and constrained Git-history review",
+    capabilities: ["safe-bash", "safe-git-history"],
+    systemPrompt: `You are the built-in pi-coder reviewer, a read-only subagent working for a parent coding agent.
+
+Review code changes for concrete correctness, security, API, and test-coverage issues. Cite file paths and concise evidence, prioritizing findings by severity. Use review_history only for a specific, linear commit range after obtaining commit SHAs through safe Git metadata commands. Its output omits sensitive paths, is bounded, and uses best-effort value redaction; do not treat it as an exhaustive secret scanner. Do not modify files.`,
+    source: "builtin",
+};
+
 export const BUILTIN_WORKER: AgentDefinition = {
     name: "worker",
     description: "Permission-gated implementation work in the current checkout",
-    tools: [...READ_ONLY_AGENT_TOOLS, "edit", "write", "bash"],
+    capabilities: [],
     systemPrompt: `You are the built-in pi-coder worker, a mutation-capable subagent working in the parent's current checkout.
 
 Inspect relevant code before changing it. Every edit, write, and bash call requires explicit end-user approval; call mutation tools one at a time rather than batching them. Keep changes narrow, avoid destructive git operations, and account for concurrent parent activity in the same checkout. When complete, report what you changed, list affected files, state validation performed, and disclose any uncertainty.`,
@@ -66,13 +81,14 @@ function sortedMarkdownFiles(dir: string): string[] {
     }
 }
 
-function parseTools(value: unknown): string[] {
-    const raw = Array.isArray(value)
-        ? value.filter((tool): tool is string => typeof tool === "string")
-        : typeof value === "string"
-            ? value.split(",")
-            : [...READ_ONLY_AGENT_TOOLS];
-    return [...new Set(raw.map((tool) => tool.trim()).filter(Boolean))];
+function parseCapabilities(value: unknown): AgentCapability[] | undefined {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.some((capability) => typeof capability !== "string")) return undefined;
+    const capabilities = [...new Set(value.map((capability) => capability.trim()).filter(Boolean))];
+    if (capabilities.some((capability) => !AGENT_CAPABILITIES.includes(capability as AgentCapability))) {
+        return undefined;
+    }
+    return capabilities as AgentCapability[];
 }
 
 function loadScope(
@@ -107,7 +123,7 @@ function loadScope(
             continue;
         }
 
-        const { name, description, tools, model } = parsed.frontmatter;
+        const { name, description, capabilities: requestedCapabilities, tools, model } = parsed.frontmatter;
         if (typeof name !== "string" || !AGENT_NAME.test(name)) {
             diagnostics.push({
                 level: "warning",
@@ -141,15 +157,21 @@ function loadScope(
             continue;
         }
 
-        const requestedTools = parseTools(tools);
-        const allowedTools = requestedTools.filter((tool) => READ_ONLY_TOOL_SET.has(tool));
-        const ignoredTools = requestedTools.filter((tool) => !READ_ONLY_TOOL_SET.has(tool));
-        if (ignoredTools.length) {
+        if (tools !== undefined) {
             diagnostics.push({
                 level: "warning",
-                message: `Unsupported tools were removed from agent "${name}": ${ignoredTools.join(", ")}.`,
+                message: "Agent frontmatter field \"tools\" is unsupported; use the capabilities list instead.",
                 paths: [filePath],
             });
+        }
+        const capabilities = parseCapabilities(requestedCapabilities);
+        if (!capabilities) {
+            diagnostics.push({
+                level: "warning",
+                message: `Agent capabilities must be an array containing only: ${AGENT_CAPABILITIES.join(", ")}.`,
+                paths: [filePath],
+            });
+            continue;
         }
 
         const existing = selected.get(name);
@@ -165,7 +187,7 @@ function loadScope(
         selected.set(name, {
             name,
             description: description.trim(),
-            tools: allowedTools,
+            capabilities,
             model: typeof model === "string" && model.trim() ? model.trim() : undefined,
             systemPrompt: parsed.body.trim(),
             source,
@@ -201,6 +223,7 @@ export function discoverAgentsInDirectories(
 
     const merged = new Map<string, AgentDefinition>();
     merged.set(BUILTIN_SCOUT.name, BUILTIN_SCOUT);
+    merged.set(BUILTIN_REVIEWER.name, BUILTIN_REVIEWER);
     merged.set(BUILTIN_WORKER.name, BUILTIN_WORKER);
     for (const agent of userAgents) merged.set(agent.name, agent);
     for (const agent of projectAgents) {

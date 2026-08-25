@@ -54,7 +54,8 @@ export function availableAgentsPrompt(agents: AgentDefinition[]): string {
     const lines = ["## Delegated agents"];
     for (const agent of agents.slice(0, 20)) {
         const description = agent.description.replace(/\s+/g, " ").slice(0, 300);
-        lines.push(`- ${agent.name} (${agent.source}): [${agent.mutating ? "mutation-capable" : "read-only"}] ${JSON.stringify(description)}`);
+        const capabilities = ["codebase-read", ...agent.capabilities].join(", ");
+        lines.push(`- ${agent.name} (${agent.source}): [${agent.mutating ? "mutation-capable" : "read-only"}; ${capabilities}] ${JSON.stringify(description)}`);
     }
     if (agents.length > 20) lines.push(`- …and ${agents.length - 20} more agents`);
     lines.push(

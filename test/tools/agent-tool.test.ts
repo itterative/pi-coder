@@ -105,7 +105,7 @@ describe("agent extension registration", () => {
         expect(tool.executionMode).toBe("sequential");
         expect(prompt.systemPrompt).toContain("<delegated_agents>");
         expect(prompt.systemPrompt).toContain("scout (builtin)");
-        expect(prompt.systemPrompt).toContain("worker (builtin): [mutation-capable]");
+        expect(prompt.systemPrompt).toContain("worker (builtin): [mutation-capable; codebase-read]");
         const repeatedPrompt = await handlers.before_agent_start[0](prompt, ctx) as any;
         expect(repeatedPrompt.systemPrompt.match(/<delegated_agents>/g)).toHaveLength(1);
         expect(result.details).toMatchObject({ status: "completed", agent: "scout" });

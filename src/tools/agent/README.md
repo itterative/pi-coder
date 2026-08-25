@@ -47,7 +47,11 @@ Uncollected background terminal outcomes restore from bounded parent metadata wi
 
 ## Built-in scout
 
-The built-in `scout` has `read`, `grep`, `find`, `ls`, and a restricted `bash` tool. A scout bash call runs directly only when the cwd-confinement heuristic classifies the complete command as `SAFE_READONLY`. This permits the curated read-only command set within the working directory, including Git metadata views such as diff stat/name-status and show stat/summary/name-only, while rejecting unknown commands, writes, outside or sensitive paths, symlink escapes, unsafe flags, patch/history-content views, and every `SAFE_EDIT` command. Rejections include a short explanation plus the heuristic's stable structured reason code; no prompt or approval bypass is available. Custom read-only agent definitions remain limited to `read`, `grep`, `find`, and `ls`.
+The built-in `scout` has `read`, `grep`, `find`, `ls`, and a restricted `bash` tool. A scout bash call runs directly only when the cwd-confinement heuristic classifies the complete command as `SAFE_READONLY`. This permits the curated read-only command set within the working directory, including Git metadata views such as diff stat/name-status and show stat/summary/name-only, while rejecting unknown commands, writes, outside or sensitive paths, symlink escapes, unsafe flags, patch/history-content views, and every `SAFE_EDIT` command. Rejections include a short explanation plus the heuristic's stable structured reason code; no prompt or approval bypass is available. Custom agents receive codebase-read tools by default and may explicitly opt into this behavior with the `safe-bash` capability.
+
+## Built-in reviewer
+
+The built-in `reviewer` has the scout's read/search tools and restricted `bash`, plus `review_history`. It accepts a specific linear range whose base and head are `HEAD`, `HEAD~<number>`, or commit SHAs; first use safe Git metadata commands to identify the intended commits. The tool reads only that range, withholds every changed record containing a sensitive or out-of-cwd path (including either side of a rename), disables external diff and text conversion, bounds patch output, and applies best-effort redaction to common secret values and private-key blocks. It is deliberately not an exhaustive secret scanner: do not use it to recover withheld content or assume that every secret in ordinary source is detected. Custom definitions may explicitly opt into this behavior with the `safe-git-history` capability.
 
 ## Built-in worker
 
@@ -59,13 +63,13 @@ The activity widget shows `waiting_for_permission` while a gate is queued or ope
 
 ## Agent definitions
 
-The built-in `scout` and `worker` require no configuration. Custom definitions use Markdown with YAML frontmatter:
+The built-in `scout`, `reviewer`, and `worker` require no configuration. Custom definitions use Markdown with YAML frontmatter:
 
 ```markdown
 ---
-name: reviewer
+name: analyst
 description: Inspect architecture and identify risks
-tools: [read, grep, find, ls]
+capabilities: [safe-bash, safe-git-history]
 model: provider/model-id
 ---
 
@@ -77,9 +81,9 @@ Locations:
 - user: `~/.pi/agent/agents/*.md`
 - project: nearest `.pi/agents/*.md`, only when pi trusts the project
 
-Definitions are sorted by path. Within one scope, the first valid duplicate wins and later files warn. Trusted-project definitions override user definitions with an informational diagnostic. Built-in names `scout` and `worker` are reserved.
+Definitions are sorted by path. Within one scope, the first valid duplicate wins and later files warn. Trusted-project definitions override user definitions with an informational diagnostic. Built-in names `scout`, `reviewer`, and `worker` are reserved.
 
-Custom definitions cannot raise the read-only capability ceiling. Unsupported tools are removed with a warning; every enabled `read`, `grep`, `find`, and `ls` path is confined to the working directory and sensitive paths remain blocked.
+Every custom definition receives baseline codebase-read access (`read`, `grep`, `find`, and `ls`). Its optional `capabilities` must be an array containing only `safe-bash` and/or `safe-git-history`; unknown or malformed capability lists invalidate the definition. `safe-bash` grants only cwd-confined `SAFE_READONLY` Bash. `safe-git-history` independently grants the bounded, redacted `review_history` tool. Worker mutation permissions are built-in only. Every baseline read/search path is confined to the working directory and sensitive paths remain blocked.
 
 ## Manual stabilization checklist
 
@@ -96,12 +100,13 @@ Run these checks after changing child sessions, providers, lifecycle handling, o
 9. Reload while a child is waiting and while one is running. Verify the waiting child restores with the same ID/question, the running child restores as `interrupted`, no tool replays or resumes automatically, `r` continues an interrupted run from `/agents`, and `c` cancels it with a user-canceled parent message. Restart pi and switch away/back to repeat the restoration check.
 10. Fill all four active run slots and verify a fifth start/spawn is rejected; verify uncollected terminal background results do not consume active capacity.
 11. Verify a user agent loads, a trusted-project agent overrides it, and an untrusted project definition does not load.
-12. Ask the scout to access an absolute outside path, `..` escape, sensitive file, and in-cwd symlink to an outside target; all must be blocked without prompting. Run one known safe, in-cwd read-only bash command and verify it completes without a prompt; then try a write, unknown command, and outside-path command and verify each is blocked with a heuristic reason.
-13. Start a background worker and request one edit, one write, and one bash call. Verify every prompt names the worker run, queued mutations do not overlap, the widget shows permission waiting, denial is recoverable, and cancel closes an active gate.
-14. Try a second worker while the first is active; verify it is rejected while a scout can still start. Confirm outside/sensitive file paths and configured-deny bash commands block without an approval bypass.
-15. Complete a worker after edit/write and approved bash calls. Verify its mutation report lists tracked paths, includes the bash attribution caveat, and the actual checkout diff matches expectations.
-16. Produce long findings and expand/collapse the result; verify the compact preview stays useful and expanded activity/usage remain readable.
-17. Open `/agents`, select a delegated run, and verify the details pager shows user/assistant messages and compact tool calls in order; failed calls use `×`, edit calls show `-`/`+` diff lines, bash calls show commands, consecutive tool-only responses have no blank rows, and neither model thinking nor tool-result output is shown. For a live run, verify the detail reloads and follows new content, scrolling up pauses following, and `End` resumes it.
+12. Start `reviewer` on a known two-commit range. Verify `review_history` shows ordinary changed code, withholds a changed/deleted `.env` path without naming it, redacts a representative secret value, and rejects an inverted or non-SHA/`HEAD` range.
+13. Ask the scout to access an absolute outside path, `..` escape, sensitive file, and in-cwd symlink to an outside target; all must be blocked without prompting. Run one known safe, in-cwd read-only bash command and verify it completes without a prompt; then try a write, unknown command, and outside-path command and verify each is blocked with a heuristic reason.
+14. Start a background worker and request one edit, one write, and one bash call. Verify every prompt names the worker run, queued mutations do not overlap, the widget shows permission waiting, denial is recoverable, and cancel closes an active gate.
+15. Try a second worker while the first is active; verify it is rejected while a scout can still start. Confirm outside/sensitive file paths and configured-deny bash commands block without an approval bypass.
+16. Complete a worker after edit/write and approved bash calls. Verify its mutation report lists tracked paths, includes the bash attribution caveat, and the actual checkout diff matches expectations.
+17. Produce long findings and expand/collapse the result; verify the compact preview stays useful and expanded activity/usage remain readable.
+18. Open `/agents`, select a delegated run, and verify the details pager shows user/assistant messages and compact tool calls in order; failed calls use `×`, edit calls show `-`/`+` diff lines, bash calls show commands, consecutive tool-only responses have no blank rows, and neither model thinking nor tool-result output is shown. For a live run, verify the detail reloads and follows new content, scrolling up pauses following, and `End` resumes it.
 
 Provider calls stay manual so automated tests do not require credentials or incur usage.
 

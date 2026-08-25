@@ -6,7 +6,7 @@ import {
     getAgentDir,
     type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { READ_ONLY_AGENT_TOOLS } from "./definitions/discovery";
+import { agentTools, READ_ONLY_AGENT_TOOLS } from "./definitions/discovery";
 import { createChildModelRuntime, resolveChildModel } from "./child/model-runtime";
 import { childProtocolPrompt, registerChildExtension } from "./child/extension";
 import { materializePersistentSession, repairInterruptedToolCalls } from "./child/transcript";
@@ -58,6 +58,7 @@ export async function createAgentChild(
         interrupted: initialMutation.interrupted === true || context.repairInterrupted === true,
     };
     const cwd = context.cwd;
+    const tools = agentTools(context.definition);
     const agentDir = getAgentDir();
     let sessionManager = context.childSessionFile
         ? SessionManager.open(context.childSessionFile, context.childSessionDir, cwd)
@@ -84,14 +85,21 @@ export async function createAgentChild(
         noThemes: true,
         noContextFiles: false,
         extensionFactories: [{
-            name: context.definition.mutating ? "pi-coder-worker-child" : "pi-coder-scout-child",
+            name: context.definition.mutating
+                ? "pi-coder-worker-child"
+                : context.definition.capabilities.includes("safe-git-history")
+                    ? "pi-coder-reviewer-child"
+                    : "pi-coder-scout-child",
             hidden: true,
             factory: registerChildExtension(
                 tracker,
                 parentContext,
+                cwd,
                 context.definition.name,
                 context.background === true,
                 context.definition.mutating === true,
+                context.definition.capabilities.includes("safe-bash"),
+                context.definition.capabilities.includes("safe-git-history"),
                 context.runId ?? context.definition.name,
                 context.runTitle ?? context.runId ?? context.definition.name,
                 context.onProgress,
@@ -103,18 +111,19 @@ export async function createAgentChild(
             childProtocolPrompt(
                 context.background === true,
                 context.definition.mutating === true,
-                context.definition.tools.includes("bash") && context.definition.mutating !== true,
+                context.definition.capabilities.includes("safe-bash"),
+                context.definition.capabilities.includes("safe-git-history"),
             ),
         ].filter(Boolean),
     });
     await resourceLoader.reload();
     const interactionToolCount = context.background ? 1 : 2;
     context.onTrace?.("resources.loaded", {
-        readOnlyToolCount: context.definition.mutating ? READ_ONLY_AGENT_TOOLS.length : context.definition.tools.length,
+        readOnlyToolCount: context.definition.mutating ? READ_ONLY_AGENT_TOOLS.length : tools.length,
         directUserUI: !context.background && parentContext.hasUI && parentContext.mode === "tui",
         background: context.background === true,
         ...(context.definition.mutating
-            ? { configuredToolCount: context.definition.tools.length, mutating: true }
+            ? { configuredToolCount: tools.length, mutating: true }
             : {}),
     });
 
@@ -147,14 +156,14 @@ export async function createAgentChild(
         settingsManager,
         sessionManager,
         tools: [
-            ...context.definition.tools,
+            ...tools,
             ...(context.background ? [] : ["ask_user"]),
             "ask_parent",
         ],
     });
 
     context.onTrace?.("session.created", {
-        toolCount: context.definition.tools.length + interactionToolCount,
+        toolCount: tools.length + interactionToolCount,
     });
     const unsubscribe = session.subscribe((event) => {
         const traceEvent = traceSessionEvent(event);

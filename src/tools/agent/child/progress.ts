@@ -129,6 +129,12 @@ function traceToolArgs(toolName: string, args: unknown): AgentTraceData {
     if (toolName === "bash") {
         return { commandChars: typeof input.command === "string" ? input.command.length : 0 };
     }
+    if (toolName === "review_history") {
+        return {
+            base: tracePreview(typeof input.base === "string" ? input.base : "", 64),
+            head: tracePreview(typeof input.head === "string" ? input.head : "", 64),
+        };
+    }
     if (toolName === "ask_user") {
         return {
             titlePreview: tracePreview(typeof input.title === "string" ? input.title : "", 120),
@@ -238,6 +244,7 @@ function toolActivity(toolName: string, args: unknown): string {
     if (toolName === "edit") return `Editing ${filePath}`;
     if (toolName === "write") return `Writing ${filePath}`;
     if (toolName === "bash") return "Running approved bash command";
+    if (toolName === "review_history") return "Reviewing constrained Git history";
     if (toolName === "ask_parent") return "Requesting parent guidance";
     if (toolName === "ask_user") return "Requesting user guidance";
     return `Using ${toolName}`;
