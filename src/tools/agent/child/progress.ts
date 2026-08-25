@@ -243,6 +243,23 @@ function toolActivity(toolName: string, args: unknown): string {
     return `Using ${toolName}`;
 }
 
+function reportProgress(
+    tracker: ChildProgressTracker,
+    onProgress: (progress: ChildProgress) => void,
+): void {
+    onProgress({
+        output: tracker.progress.output,
+        ...(tracker.progress.lastAssistantMessage
+            ? { lastAssistantMessage: tracker.progress.lastAssistantMessage }
+            : {}),
+        recentActivity: [...tracker.progress.recentActivity],
+        ...(tracker.progress.phase ? { phase: tracker.progress.phase } : {}),
+        ...(tracker.progress.lastToolActivity ? { lastToolActivity: tracker.progress.lastToolActivity } : {}),
+        ...(tracker.progress.toolCounts ? { toolCounts: { ...tracker.progress.toolCounts } } : {}),
+        permissionPending: tracker.progress.permissionPending,
+    });
+}
+
 export function updateTracker(
     event: AgentSessionEvent,
     tracker: ChildProgressTracker,
@@ -251,9 +268,20 @@ export function updateTracker(
     let forceUpdate = false;
     if (event.type === "message_start" && event.message.role === "assistant") {
         forceUpdate = true;
+        if (tracker.progress.output.trim()) {
+            tracker.progress.lastAssistantMessage = tracker.progress.output;
+        }
         tracker.progress.output = textFromAssistantMessage(event.message);
+        tracker.progress.phase = "Thinking";
         tracker.progress.recentActivity.push("Thinking");
         tracker.progress.recentActivity = tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
+    } else if (
+        event.type === "message_update"
+        && event.message.role === "assistant"
+        && event.assistantMessageEvent.type === "thinking_start"
+    ) {
+        forceUpdate = true;
+        tracker.progress.phase = "Thinking";
     } else if (
         event.type === "message_update"
         && event.message.role === "assistant"
@@ -262,9 +290,16 @@ export function updateTracker(
         tracker.progress.output += event.assistantMessageEvent.delta;
     } else if (event.type === "message_end" && event.message.role === "assistant") {
         tracker.progress.output = textFromAssistantMessage(event.message);
+        if (tracker.progress.output.trim()) {
+            tracker.progress.lastAssistantMessage = tracker.progress.output;
+        }
     } else if (event.type === "tool_execution_start") {
         forceUpdate = true;
-        tracker.progress.recentActivity.push(toolActivity(event.toolName, event.args));
+        const activity = toolActivity(event.toolName, event.args);
+        tracker.progress.lastToolActivity = activity;
+        tracker.progress.toolCounts ??= {};
+        tracker.progress.toolCounts[event.toolName] = (tracker.progress.toolCounts[event.toolName] ?? 0) + 1;
+        tracker.progress.recentActivity.push(activity);
         tracker.progress.recentActivity = tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
     } else {
         return;
@@ -273,11 +308,7 @@ export function updateTracker(
     const now = Date.now();
     if (forceUpdate || now - tracker.lastUpdateAt >= UPDATE_THROTTLE_MS) {
         tracker.lastUpdateAt = now;
-        onProgress({
-            output: tracker.progress.output,
-            recentActivity: [...tracker.progress.recentActivity],
-            permissionPending: tracker.progress.permissionPending,
-        });
+        reportProgress(tracker, onProgress);
     }
 }
 

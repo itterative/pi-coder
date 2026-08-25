@@ -347,6 +347,12 @@ describe("agent extension registration", () => {
         });
         const widgets: Array<string[] | undefined> = [];
         const widgetPlacements: Array<string | undefined> = [];
+        let widgetComponent: { render(width: number): string[] } | undefined;
+        const widgetTui = {
+            requestRender() {
+                if (widgetComponent) widgets.push(widgetComponent.render(200));
+            },
+        };
         const ctx = {
             cwd: process.cwd(),
             isProjectTrusted: () => false,
@@ -355,10 +361,16 @@ describe("agent extension registration", () => {
                 notify: () => {},
                 setWidget: (
                     _id: string,
-                    value: string[] | undefined,
+                    value: string[] | ((tui: typeof widgetTui, theme: unknown) => { render(width: number): string[] }) | undefined,
                     options?: { placement?: string },
                 ) => {
-                    widgets.push(value);
+                    if (typeof value === "function") {
+                        widgetComponent = value(widgetTui, {});
+                        widgets.push(widgetComponent.render(200));
+                    } else {
+                        widgetComponent = undefined;
+                        widgets.push(value);
+                    }
                     if (value) widgetPlacements.push(options?.placement);
                 },
             },
@@ -417,7 +429,7 @@ describe("agent extension registration", () => {
         await expect(listed.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-list.txt");
         expect(collected.details.status).toBe("completed");
         await expect(collected.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-collect.txt");
-        const widgetLines = widgets.flatMap((lines) => lines ?? []);
+        const widgetLines = widgets.flatMap((lines) => lines ?? []).map((line) => line.trimEnd());
         await expect(widgetLines.join("\n")).toMatchFileSnapshot("__snapshots__/agent-tool.tui.background-widget.txt");
         expect(widgets[widgets.length - 1]).toBeUndefined();
         expect(widgetPlacements).toContain("aboveEditor");

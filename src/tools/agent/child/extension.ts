@@ -254,7 +254,13 @@ export function registerChildExtension(
                     onTrace?.("mutation.permission", { pending, activity });
                     onProgress({
                         output: tracker.progress.output,
+                        ...(tracker.progress.lastAssistantMessage
+                            ? { lastAssistantMessage: tracker.progress.lastAssistantMessage }
+                            : {}),
                         recentActivity: [...tracker.progress.recentActivity],
+                        ...(tracker.progress.phase ? { phase: tracker.progress.phase } : {}),
+                        ...(tracker.progress.lastToolActivity ? { lastToolActivity: tracker.progress.lastToolActivity } : {}),
+                        ...(tracker.progress.toolCounts ? { toolCounts: { ...tracker.progress.toolCounts } } : {}),
                         permissionPending: pending,
                     });
                 },

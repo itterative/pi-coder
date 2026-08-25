@@ -74,13 +74,23 @@ function boundedString(value: unknown, max: number): string | undefined {
     return value.slice(0, max);
 }
 
+function boundedToolCounts(value: unknown): Record<string, number> | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const counts: Record<string, number> = {};
+    for (const [name, count] of Object.entries(value as Record<string, unknown>)) {
+        if (name.length > 80 || typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) continue;
+        counts[name] = count;
+    }
+    return Object.keys(counts).length ? counts : undefined;
+}
+
 function inside(directory: string, candidate: string): boolean {
     const relative = path.relative(directory, candidate);
     return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
 }
 
 function responsePreview(record: PersistedAgentRun): string | undefined {
-    const text = record.progress.output.replace(/\s+/g, " ").trim();
+    const text = (record.progress.output || record.progress.lastAssistantMessage || "").replace(/\s+/g, " ").trim();
     if (!text) return undefined;
     return text.length <= 240 ? text : `${text.slice(0, 239)}…`;
 }
@@ -174,6 +184,10 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
     const activity = Array.isArray(progressValue?.recentActivity)
         ? progressValue.recentActivity.filter((item): item is string => typeof item === "string").slice(-8).map((item) => item.slice(0, 500))
         : [];
+    const phase = boundedString(progressValue?.phase, 120);
+    const lastAssistantMessage = boundedString(progressValue?.lastAssistantMessage, 32_000);
+    const lastToolActivity = boundedString(progressValue?.lastToolActivity, 500);
+    const toolCounts = boundedToolCounts(progressValue?.toolCounts);
     const childSessionFile = boundedString(record.childSessionFile, 4_096);
     const resolvedChildFile = childSessionFile
         ? safeExistingChildFile(childSessionDir, childSessionFile)
@@ -206,6 +220,10 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         progress: {
             output: boundedString(progressValue?.output, 32_000) ?? "",
             recentActivity: activity,
+            ...(phase ? { phase } : {}),
+            ...(lastAssistantMessage ? { lastAssistantMessage } : {}),
+            ...(lastToolActivity ? { lastToolActivity } : {}),
+            ...(toolCounts ? { toolCounts } : {}),
         },
         usageCheckpoint: cloneUsage(record.usageCheckpoint),
         usageSnapshot: cloneUsage(record.usageSnapshot),

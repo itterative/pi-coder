@@ -170,7 +170,7 @@ export class AgentRunManager {
         return [...this.runs.values()].map((run) => {
             const progress = this.progressSnapshot(run);
             const activity = progress.recentActivity[progress.recentActivity.length - 1];
-            const response = progress.output.replace(/\s+/g, " ").trim();
+            const response = progress.output.trim() || progress.lastAssistantMessage?.trim() || "";
             return {
                 runId: run.id,
                 title: run.title,
@@ -182,6 +182,12 @@ export class AgentRunManager {
                 updatedAt: run.updatedAt,
                 sessionFile: run.childSessionFile,
                 activity: activity ? truncate(activity, 120) : undefined,
+                phase: progress.phase,
+                lastAssistantMessage: progress.lastAssistantMessage,
+                lastToolActivity: progress.lastToolActivity
+                    ? truncate(progress.lastToolActivity, 120)
+                    : undefined,
+                toolCounts: progress.toolCounts ? { ...progress.toolCounts } : undefined,
                 responsePreview: response ? truncate(response, 120) : undefined,
                 question: run.question ? truncate(run.question.question, 500) : undefined,
                 usage: this.readUsage(run),
@@ -1037,6 +1043,10 @@ export class AgentRunManager {
             output: progress.output ? truncate(progress.output, MAX_OUTPUT_CHARS) : undefined,
             question: run.question,
             recentActivity: progress.recentActivity.slice(-8),
+            phase: progress.phase,
+            lastAssistantMessage: progress.lastAssistantMessage,
+            lastToolActivity: progress.lastToolActivity,
+            toolCounts: progress.toolCounts ? { ...progress.toolCounts } : undefined,
             usage: cloneUsage(cumulative),
             startedAt: run.startedAt,
             updatedAt: run.updatedAt,

@@ -49,8 +49,14 @@ export async function createAgentChild(
         ?? { changedFiles: [], bashApproved: false };
     const tracker: ProgressTracker = {
         progress: context.initialProgress
-            ? { ...context.initialProgress, recentActivity: [...context.initialProgress.recentActivity] }
-            : { output: "", recentActivity: [] },
+            ? {
+                ...context.initialProgress,
+                recentActivity: [...context.initialProgress.recentActivity],
+                ...(context.initialProgress.toolCounts
+                    ? { toolCounts: { ...context.initialProgress.toolCounts } }
+                    : {}),
+            }
+            : { output: "", recentActivity: [], toolCounts: {} },
         lastUpdateAt: 0,
         changedFiles: new Set(initialMutation.changedFiles),
         readFiles: new Set(initialMutation.readFiles ?? []),
@@ -204,7 +210,17 @@ export async function createAgentChild(
         getProgress() {
             return {
                 output: tracker.progress.output,
+                ...(tracker.progress.lastAssistantMessage
+                    ? { lastAssistantMessage: tracker.progress.lastAssistantMessage }
+                    : {}),
                 recentActivity: [...tracker.progress.recentActivity],
+                ...(tracker.progress.phase ? { phase: tracker.progress.phase } : {}),
+                ...(tracker.progress.lastToolActivity
+                    ? { lastToolActivity: tracker.progress.lastToolActivity }
+                    : {}),
+                ...(tracker.progress.toolCounts
+                    ? { toolCounts: { ...tracker.progress.toolCounts } }
+                    : {}),
                 permissionPending: tracker.progress.permissionPending,
             };
         },

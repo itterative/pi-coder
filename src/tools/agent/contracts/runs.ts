@@ -25,7 +25,11 @@ export interface ParentQuestion {
 
 export interface ChildProgress {
     output: string;
+    lastAssistantMessage?: string;
     recentActivity: string[];
+    phase?: string;
+    lastToolActivity?: string;
+    toolCounts?: Record<string, number>;
     permissionPending?: boolean;
 }
 
@@ -79,6 +83,10 @@ export interface AgentRunDetails {
     output?: string;
     question?: ParentQuestion;
     recentActivity: string[];
+    phase?: string;
+    lastAssistantMessage?: string;
+    lastToolActivity?: string;
+    toolCounts?: Record<string, number>;
     usage: Usage;
     startedAt: number;
     updatedAt: number;
@@ -151,6 +159,10 @@ export interface AgentRunSummary {
     updatedAt: number;
     sessionFile?: string;
     activity?: string;
+    phase?: string;
+    lastAssistantMessage?: string;
+    lastToolActivity?: string;
+    toolCounts?: Record<string, number>;
     responsePreview?: string;
     question?: string;
     usage: Usage;
