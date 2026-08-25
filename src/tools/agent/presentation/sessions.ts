@@ -12,6 +12,7 @@ import type { AgentRunSummary } from "../contracts/runs";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
 import { listAgentRunCatalog } from "../storage/run-catalog";
 import type { AgentSessionBrowserItem } from "./browser-models";
+import { loadAgentSessionTranscript } from "./transcript";
 
 function currentItem(run: AgentRunSummary): AgentSessionBrowserItem {
     return {
@@ -61,7 +62,7 @@ function pastItem(
         messageCount: info.messageCount,
         firstMessage: info.firstMessage,
         allMessagesText: info.allMessagesText.slice(-4_000),
-        transcript: info.allMessagesText,
+        transcript: loadAgentSessionTranscript(info.path) ?? info.allMessagesText,
         mutating: metadata?.mutating,
         usage: metadata?.usageSnapshot,
         responsePreview: metadata?.responsePreview,
@@ -94,7 +95,9 @@ export async function loadAgentSessionTranscripts(
         const info = (await infosFor(directory)).find(
             (candidate) => path.resolve(candidate.path) === path.resolve(item.sessionFile!),
         );
-        return info ? { ...item, transcript: info.allMessagesText } : item;
+        return info
+            ? { ...item, transcript: loadAgentSessionTranscript(info.path) ?? info.allMessagesText }
+            : item;
     }));
 }
 

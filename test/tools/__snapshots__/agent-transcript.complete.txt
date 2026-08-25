@@ -1,0 +1,7 @@
+> Inspect the project
+
+I will inspect the entry point.
+
+● read src/index.ts
+
+The entry point is present.

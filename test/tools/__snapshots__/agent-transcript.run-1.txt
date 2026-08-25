@@ -1,0 +1,24 @@
+> Create a new file named workspace-validation-marker.txt containing exactly `workspace test` followed by a newline. Do not change any other file. Before writing, inspect git status, HEAD, and relevant files. After writing, verify the exact file content and report the workspace path, status, and HEAD. Follow the workspace validation fixture instructions.
+
+● bash git status --short --branch && printf '\nHEAD: ' && git rev-parse HEAD
+● ls .
+● find .
+● find .
+● read AGENTS.md
+● read WORKSPACE-MANUAL-VALIDATION.md
+● read WORKSPACE-VALIDATION-REPORT.md
+● read README.md
+● write workspace-validation-marker.txt
+● read workspace-validation-marker.txt
+● bash printf 'WORKSPACE: '; pwd; printf 'STATUS:\n'; git status --short; printf 'HEAD: '; git rev-parse HEAD; printf '\nBYTES:\n'; od -An -t x1 -c workspace-validation-marker.txt
+
+Created only:
+
+`/home/sd/Repos/pi-coder/.state/workspaces/zealous-summit-gtm/workspace-validation-marker.txt`
+
+Content verified exactly: `workspace test\n`
+
+Final status: `?? workspace-validation-marker.txt`  
+HEAD: `45b2f61dfb4296ae72e93aa13c4fc651453869ff`
+
+Inspected `AGENTS.md`, `WORKSPACE-MANUAL-VALIDATION.md`, `WORKSPACE-VALIDATION-REPORT.md`, and `README.md`.

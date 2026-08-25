@@ -1,0 +1,5 @@
+× edit src/index.ts
+  - const oldValue = true;
+  + const newValue = true;
+● bash npm test
+● read README.md

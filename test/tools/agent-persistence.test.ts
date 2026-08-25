@@ -108,6 +108,8 @@ describe("durable agent run persistence", () => {
             messageCount: 2,
             status: "interrupted",
         });
+        expect(sessions[0]?.transcript).toContain("> Review the persisted child session");
+        expect(sessions[0]?.transcript).toContain("I will review it.");
     });
 
     it("normalizes cwd paths with the pi session-directory format", () => {

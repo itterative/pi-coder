@@ -1,0 +1,61 @@
+> Review the most recent uncommitted changes that improve scout bash block messages and heuristic reason deduplication. Inspect the diff and relevant code/tests. Report only concrete correctness, security, API, or test-coverage issues, prioritized by severity, with file paths and concise rationale. Do not modify files.
+
+● bash git status --short && git diff --stat && git diff --check
+● bash git diff -- src test tests
+● grep src
+× bash git status --short && git diff --cached --stat && git diff --cached --check && git diff --cached
+● read src/tools/agent/child/extension.ts
+● read src/modules/sandbox/heuristics.ts
+● read src/modules/sandbox/heuristics.ts
+● find src
+● find src
+● find src
+● find test
+● ls .
+● ls src/modules/sandbox
+● read test/tools/agent-scout-bash.test.ts
+● find test
+● grep test
+● grep src/modules/sandbox/heuristics.ts
+● read test/modules/sandbox/heuristics.test.ts
+● read src/modules/sandbox/heuristics.ts
+● read src/modules/sandbox/heuristics.ts
+● read test/tools/agent.test.ts
+● bash git status --short
+● bash git diff --stat
+● bash git diff --check
+● bash git diff --cached --stat
+● bash git log --oneline -1
+● bash git diff --quiet
+● bash git diff --quiet --cached
+● read package.json
+● grep src
+● bash git diff --stat HEAD^ HEAD
+● bash git diff --check HEAD^ HEAD
+● bash git log --oneline -3
+● bash git rev-parse HEAD^
+● bash git diff --stat HEAD~2 HEAD
+● bash git log --oneline -10
+● grep src
+● grep test
+● read src/tools/agent/child.ts
+● read src/tools/agent/child/worker-permissions.ts
+● read src/tools/agent/definitions/discovery.ts
+● read test/tools/agent-discovery.test.ts
+● read src/tools/agent/README.md
+● read src/modules/sandbox/commands/vcs.ts
+● read src/modules/sandbox/commands/index.ts
+● read src/modules/sandbox/heuristics.ts
+● read test/modules/sandbox/path-heuristics.test.ts
+● grep src/modules/sandbox/commands/vcs.ts
+● grep test/modules/sandbox/heuristics.test.ts
+● grep src/tools/agent/child/extension.ts
+● grep test/tools/agent-scout-bash.test.ts
+● grep test/modules/sandbox/heuristics.test.ts
+● grep test/modules/sandbox/heuristics.test.ts
+● grep src/modules/sandbox/heuristics.ts
+● grep src/modules/sandbox/commands/vcs.ts
+
+- **High — `src/tools/agent/child/extension.ts:271-285`, `src/modules/sandbox/commands/vcs.ts:103,121`:** Scouts directly execute `git status` as `SAFE_READONLY`, but `git status` can refresh/write `.git/index` (explicitly acknowledged in the VCS spec) despite `.git` being sensitive. It may also invoke configured fsmonitor helpers. This violates the read-only/no-sensitive-access guarantee without a sandbox. `test/modules/sandbox/heuristics.test.ts:394-398` codifies the unsafe classification.
+
+- **Low — `test/modules/sandbox/heuristics.test.ts:44-48`:** The reason-deduplication test does not exercise duplicate collection: `allPaths.every(...)` in `src/modules/sandbox/heuristics.ts:1238` stops at the first outside path, so the second `/etc/...` path is never assessed. The test would pass even if diagnostic deduplication were removed.
