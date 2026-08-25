@@ -17,6 +17,13 @@ import {
 const FINAL_RESULT_COMMIT_MESSAGE = "pi-coder: finalize isolated worker result";
 const RESULT_REF_PREFIX = "refs/pi-coder/workspace-results";
 
+async function resetReusableWorkspace(workspace: AgentWorkspace, targetRevision?: string): Promise<string> {
+    const revision = targetRevision ?? await git(workspace.repositoryRoot, ["rev-parse", "HEAD"]);
+    await git(workspace.worktreePath, ["reset", "--hard", revision]);
+    await git(workspace.worktreePath, ["clean", "-fd"]);
+    return revision;
+}
+
 /** Finalize the isolated worker tree for an explicit apply request. */
 export async function prepareAgentWorkspaceApplication(
     workspace: AgentWorkspace,
@@ -168,8 +175,10 @@ export async function discardAgentWorkspaceResult(
         if (state.kind !== "available" || state.dirty || state.headRevision !== result.workerHead) {
             throw new Error(`Workspace ${workspaceId} changed after its result was prepared; inspect it before discarding.`);
         }
-        await git(workspace.worktreePath, ["reset", "--hard", result.baseRevision]);
-        await git(workspace.worktreePath, ["clean", "-fd"]);
+        // Rebase the reusable worktree to the current parent HEAD, not the
+        // discarded result's historical base. Otherwise a later isolated
+        // worker can run against stale source after the parent advances.
+        const targetRevision = await resetReusableWorkspace(workspace);
         if (result.durableRef) {
             await git(workspace.repositoryRoot, ["update-ref", "-d", result.durableRef]);
         }
@@ -181,7 +190,7 @@ export async function discardAgentWorkspaceResult(
                 lease_owner_session_id = NULL, lease_run_id = NULL, lease_kind = NULL,
                 lease_acquired_at = NULL, updated_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
-        `).run(result.baseRevision, updatedAt, workspaceId, ownerSessionId, leaseRunId);
+        `).run(targetRevision, updatedAt, workspaceId, ownerSessionId, leaseRunId);
     } finally {
         database.close();
     }
@@ -240,14 +249,18 @@ export async function releaseAgentWorkspaceAfterNoChanges(
         if (state.kind !== "available" || state.dirty || state.headRevision !== result.baseRevision) {
             throw new Error(`Workspace ${workspaceId} changed after its no-change result was prepared.`);
         }
+        const targetRevision = await resetReusableWorkspace(workspace);
         if (result.durableRef) {
             await git(workspace.worktreePath, ["update-ref", "-d", result.durableRef]);
         }
+        database.prepare("UPDATE workspace_results SET status = 'discarded', durable_ref = NULL WHERE id = ? AND workspace_id = ?")
+            .run(result.id, workspaceId);
         database.prepare(`
-            UPDATE workspaces SET workspace_status = 'available', lease_owner_session_id = NULL,
-                lease_run_id = NULL, lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
+            UPDATE workspaces SET workspace_status = 'available', base_revision = ?,
+                lease_owner_session_id = NULL, lease_run_id = NULL, lease_kind = NULL,
+                lease_acquired_at = NULL, updated_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
-        `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId);
+        `).run(targetRevision, Date.now(), workspaceId, ownerSessionId, leaseRunId);
     } finally {
         database.close();
     }

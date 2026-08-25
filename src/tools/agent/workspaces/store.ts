@@ -215,6 +215,7 @@ export async function inspectAgentWorkspaceGitState(workspace: AgentWorkspace): 
 export async function listAgentWorkspaces(
     cwd: string,
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    includeMissingWorktrees = false,
 ): Promise<AgentWorkspace[]> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -231,7 +232,7 @@ export async function listAgentWorkspaces(
             .map(rowToWorkspace)
             .filter((workspace): workspace is AgentWorkspace => workspace !== undefined)
             .map((workspace) => attachLatestWorkspaceResult(database, workspace)!)
-            .filter((workspace) => fs.existsSync(workspace.worktreePath));
+            .filter((workspace) => includeMissingWorktrees || fs.existsSync(workspace.worktreePath));
     } finally {
         database.close();
     }

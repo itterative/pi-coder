@@ -232,11 +232,19 @@ describe("agent workspaces", () => {
         expect(result.commits).toEqual([]);
         expect(result.durableRef).toBeUndefined();
 
+        await fs.writeFile(path.join(repository, "parent-advanced.txt"), "parent advanced\n");
+        await git(repository, "add", ".");
+        await git(repository, "commit", "--quiet", "-m", "advance parent");
+        const parentHead = await gitOutput(repository, "rev-parse", "HEAD");
+
         await releaseAgentWorkspaceAfterNoChanges(workspace.id, "session-1", "worker-1", state);
         await expect(findAvailableAgentWorkspace(repository, state)).resolves.toMatchObject({
             id: workspace.id,
             status: "available",
+            baseRevision: parentHead,
         });
+        expect(await gitOutput(workspace.worktreePath, "rev-parse", "HEAD")).toBe(parentHead);
+        expect((await listAgentWorkspaceResults(workspace.id, state))[0]).toMatchObject({ status: "discarded" });
     });
 
     it("does not reconcile an older no-change result from a newly claimed task lease", async () => {
@@ -437,12 +445,21 @@ describe("agent workspaces", () => {
         const { workspace } = await createClaimedWorkspace(repository, state);
         await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "worker\n");
         await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
+        await fs.writeFile(path.join(repository, "parent-advanced.txt"), "parent advanced\n");
+        await git(repository, "add", ".");
+        await git(repository, "commit", "--quiet", "-m", "advance parent");
+        const parentHead = await gitOutput(repository, "rev-parse", "HEAD");
         await fs.writeFile(path.join(repository, "parent-dirty.txt"), "leave me\n");
         await discardAgentWorkspaceResult(workspace.id, "session-1", "worker-1", state);
 
         expect(await fs.readFile(path.join(workspace.worktreePath, "tracked.txt"), "utf8")).toBe("base\n");
+        expect(await fs.readFile(path.join(workspace.worktreePath, "parent-advanced.txt"), "utf8")).toBe("parent advanced\n");
+        expect(await gitOutput(workspace.worktreePath, "rev-parse", "HEAD")).toBe(parentHead);
         expect(await fs.readFile(path.join(repository, "parent-dirty.txt"), "utf8")).toBe("leave me\n");
-        expect(await findAvailableAgentWorkspace(repository, state)).toMatchObject({ id: workspace.id });
+        expect(await findAvailableAgentWorkspace(repository, state)).toMatchObject({
+            id: workspace.id,
+            baseRevision: parentHead,
+        });
         expect((await listAgentWorkspaceResults(workspace.id, state))[0]).toMatchObject({ status: "discarded" });
     });
 
