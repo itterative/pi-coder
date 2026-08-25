@@ -18,7 +18,7 @@ keep_updated: true
 - Waiting children reopen paused. Uncollected retained background terminal outcomes restore from bounded parent metadata without reopening the child transcript.
 - Starting/running records left by shutdown or crash restore as `interrupted`; they never restart or replay. Resuming is user-driven and adds a safety instruction to inspect the current state first.
 - Before continuing a crash-interrupted transcript, unmatched tool calls receive synthetic uncertain-outcome errors. Worker mutations are never automatically replayed.
-- Current definitions and fingerprints are revalidated. Persisted metadata cannot grant mutation authority; only the current reserved built-in worker can restore as a mutating task worker.
+- Current definitions and fingerprints are revalidated. Legacy fingerprints from before context policies are accepted when all other definition identity fields still match. Persisted metadata cannot grant mutation authority; only the current reserved built-in worker can restore as a mutating task worker.
 - Collection, cancellation, and terminal-result eviction append tombstones but retain child files so `/agents` can browse past work. An explicit future prune policy should remove old transcripts and orphan directories.
 
 ## Browser

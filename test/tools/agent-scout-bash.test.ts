@@ -22,7 +22,11 @@ afterEach(() => {
 
 function setup(
     cwd: string,
-    { safeBash = true }: { safeBash?: boolean } = {},
+    {
+        safeBash = true,
+        background = true,
+        allowUserInteraction = true,
+    }: { safeBash?: boolean; background?: boolean; allowUserInteraction?: boolean } = {},
 ) {
     const handlers: Record<string, Handler[]> = {};
     const tools: Array<{ name: string }> = [];
@@ -46,12 +50,16 @@ function setup(
         { cwd, hasUI: false, mode: "print" } as any,
         cwd,
         "scout",
-        true,
+        background,
         false,
         safeBash,
         "scout-1",
         "Bash safety",
         () => {},
+        undefined,
+        undefined,
+        undefined,
+        allowUserInteraction,
     )(pi);
 
     return { handlers, ctx: { cwd }, tools };
@@ -118,5 +126,16 @@ describe("scout restricted bash", () => {
 
         expect(prompt).toContain("safe-bash permits only cwd-confined commands classified SAFE_READONLY");
         expect(prompt).toContain("do not retry variants hoping to bypass it");
+    });
+
+    it("omits direct user interaction when the child policy disables it", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
+        tempDirs.push(cwd);
+        const runtime = setup(cwd, { background: false, allowUserInteraction: false });
+        const prompt = childProtocolPrompt(false, false, true, false);
+
+        expect(runtime.tools.map((tool) => tool.name)).not.toContain("ask_user");
+        expect(prompt).toContain("Direct end-user dialogs are unavailable for this child");
+        expect(prompt).not.toContain("Use ask_user when");
     });
 });

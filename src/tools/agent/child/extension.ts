@@ -36,9 +36,10 @@ export function childProtocolPrompt(
     background: boolean,
     mutating: boolean,
     safeBash: boolean,
+    allowUserInteraction = true,
 ): string {
-    const interaction = background
-        ? "Direct end-user dialogs are unavailable while you run in the background. Use ask_parent when guidance is materially necessary; make reasonable progress first, include evidence and a recommendation, and call it alone in its tool batch."
+    const interaction = background || !allowUserInteraction
+        ? "Direct end-user dialogs are unavailable for this child. Use ask_parent when guidance is materially necessary; make reasonable progress first, include evidence and a recommendation, and call it alone in its tool batch."
         : "Use ask_user when you need a preference, clarification, or decision directly from the end user, and call it alone in its tool batch so later work can incorporate the answer. The answer returns in the same turn, so continue your work afterward. Use ask_parent instead when the parent can answer, investigate, or decide; make reasonable progress first, include evidence and a recommendation, and call ask_parent alone in its tool batch. Do not ask questions only in prose when either interaction tool applies.";
     const capability = mutating
         ? "You are a mutation-capable worker operating in the parent's current checkout or an isolated worktree. Every edit, write, and bash call opens an explicit parent-visible permission gate. Call mutation tools one at a time; same-checkout workers are single-flight, while isolated workers may run concurrently with other isolated work."
@@ -145,9 +146,10 @@ export function registerChildExtension(
     onFileChanged?: ChildAgentFactoryContext["onFileChanged"],
     onTrace?: ChildAgentFactoryContext["onTrace"],
     events?: EventBus,
+    allowUserInteraction = true,
 ) {
     return (pi: ExtensionAPI): void => {
-        if (!background) pi.registerTool({
+        if (!background && allowUserInteraction) pi.registerTool({
             name: "ask_user",
             label: "Ask User",
             description:
@@ -201,14 +203,14 @@ export function registerChildExtension(
             name: "ask_parent",
             label: "Ask Parent",
             description:
-                "Pause this scout and request guidance from the parent agent. "
+                "Pause and request guidance from the parent agent. "
                 + "Use only after making reasonable progress and include evidence and a recommendation.",
             promptSnippet: "Use ask_parent to pause and request guidance from the parent agent.",
             promptGuidelines: [
                 "Call ask_parent alone in a tool batch and only when parent guidance materially improves the result",
                 "Include relevant evidence, partial findings, and your recommended next step",
-                background
-                    ? "Direct end-user dialogs are unavailable in background runs"
+                background || !allowUserInteraction
+                    ? "Direct end-user dialogs are unavailable for this child"
                     : "Use ask_user instead when a decision genuinely requires direct end-user input",
             ],
             executionMode: "sequential",

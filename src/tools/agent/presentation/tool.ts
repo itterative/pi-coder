@@ -26,7 +26,7 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
         description:
             "Delegate codebase work when useful to a built-in or custom agent. The parent agent may also use its own active built-in tools directly, including read, edit, write, and bash; delegation is not required for file changes. "
             + "Scout, reviewer, advisor, and custom agents are read-only; the built-in worker can edit the selected checkout or isolated worktree and run bash only through explicit per-action user permission prompts. "
-            + "Run work in the foreground or background; optionally provide a short human-readable title; list, status, collect, resume, or cancel retained runs. In persisted "
+            + "Run work in the foreground or background; optionally provide a short human-readable title and bounded context sections; list, status, collect, resume, or cancel retained runs. In persisted "
             + "parent sessions, paused and interrupted child context survives reload, restart, and switching away and back. The parent can inspect, apply, discard, or revise isolated workspace results without opening the TUI.",
         promptSnippet:
             "Use agent for optional delegated work; the parent may edit directly with its own built-in tools, while worker handles permission-gated child implementation.",

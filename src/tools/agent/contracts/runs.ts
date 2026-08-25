@@ -1,6 +1,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 
+import type { AgentContext } from "./context";
 import type { AgentDefinition } from "../definitions/types";
 import type { WorkerMutationReport } from "./mutations";
 import type { AgentTraceData } from "./trace";
@@ -53,6 +54,8 @@ export interface ChildAgentFactoryContext {
     /** Parent project cwd used for browser/event scoping. */
     parentCwd?: string;
     definition: AgentDefinition;
+    /** Dynamic context rendered into the initial delegated task message. */
+    agentContext?: AgentContext;
     parentContext: unknown;
     events?: EventBus;
     background?: boolean;

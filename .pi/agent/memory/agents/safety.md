@@ -13,7 +13,7 @@ Delegated-agent restrictions are local permission and accident-prevention contro
 
 ## Read-only children
 
-The built-in `advisor` has the same read-only capability boundary as `scout` and `reviewer`; it is an explicit consultation agent and cannot mutate files.
+The built-in `advisor` has the same read-only capability boundary as `scout` and `reviewer`; it is an explicit consultation agent, cannot mutate files, and does not receive the direct end-user `ask_user` tool. It uses `ask_parent` for guidance.
 
 - All children receive cwd-confined `read`, `grep`, `find`, and `ls`; paths are checked for sensitive segments, symlink escapes, and outside traversal.
 - Custom `safe-bash` and built-in scout/reviewer/advisor Bash calls run only when the complete command is classified `SAFE_READONLY`. Unknown commands, mutating/network/interpreter commands, unsafe flags, and `SAFE_EDIT` classifications are blocked without an approval bypass.

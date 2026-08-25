@@ -20,7 +20,7 @@ Let the parent Pi session delegate focused exploration or implementation while p
   - `presentation/` and `observability/` — TUI projections, mailbox, traces, and events.
 - Top-level `lifecycle.ts`, `browser.ts`, and `action-dispatch.ts` connect extension events, `/agents`, and tool actions.
 
-Child sessions use `noExtensions: true` and one explicit child extension. They inherit the normal Pi prompt, with the selected definition appended, and receive a deliberately limited tool set.
+Child sessions use `noExtensions: true` and one explicit child extension. They inherit the normal Pi prompt, with the selected role and child protocol rendered inside `<delegated_agent_instructions>` XML blocks, and receive a deliberately limited tool set.
 
 ## User-facing contract
 
@@ -52,6 +52,8 @@ Custom definitions are read-only by default, may opt into `safe-bash`, and may s
 
 Custom Markdown definitions are loaded from `~/.pi/agent/agents` and the nearest trusted `.pi/agents`. Every custom agent gets `read`, `grep`, `find`, and `ls`; `capabilities: [safe-bash]` is the only additional capability. Built-in names `scout`, `reviewer`, `advisor`, and `worker` are reserved, paths are sorted, same-scope duplicates are first-wins, and trusted-project definitions override user definitions.
 
+Runtime context is passed as bounded `context.sections` on `start` and `spawn`. Built-in definitions select allowed sections through a context policy; the renderer places selected context in the initial task message rather than the system prompt so persisted child transcripts retain the exact context. Automatic parent-summary and recent-context collection remains future work.
+
 ### Actions and lifecycle
 
 The `agent` tool exposes:
@@ -69,7 +71,7 @@ inspect/apply/discard/revise — manage an isolated result
 
 Runs are bounded to four active or interrupted records. At most one may be a worker, and its mutation calls are serialized. Terminal background results are retained separately until collected or evicted.
 
-`ask_parent` pauses a child and requires explicit guidance. Foreground children may use restricted `ask_user`; background children never open parent dialogs. Cancellation and shutdown abort children and clean up handles. A waiting run is paused, not completed; an interrupted run is never restarted or replayed automatically and requires explicit user action with a safety check.
+`ask_parent` pauses a child and requires explicit guidance. Foreground children may use restricted `ask_user`, except the advisor, which always uses `ask_parent`; background children never open parent dialogs. Cancellation and shutdown abort children and clean up handles. A waiting run is paused, not completed; an interrupted run is never restarted or replayed automatically and requires explicit user action with a safety check.
 
 Background runs report progress in the above-editor widget. Parent-guidance waits and retained terminal outcomes send coalesced, non-interrupting mailbox notifications after parent work settles. The parent should not poll or sleep; it can use `list`, `status`, or `collect` when deliberate recovery is needed.
 

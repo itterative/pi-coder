@@ -9,6 +9,7 @@ import {
 import { agentTools, READ_ONLY_AGENT_TOOLS } from "./definitions/discovery";
 import { createChildModelRuntime, resolveChildModel } from "./child/model-runtime";
 import { childProtocolPrompt, registerChildExtension } from "./child/extension";
+import { renderAgentSystemPrompt } from "./prompts/renderer";
 import { materializePersistentSession, repairInterruptedToolCalls } from "./child/transcript";
 import {
     aggregateUsage,
@@ -65,6 +66,7 @@ export async function createAgentChild(
     };
     const cwd = context.cwd;
     const tools = agentTools(context.definition);
+    const allowUserInteraction = context.definition.allowUserInteraction !== false;
     const agentDir = getAgentDir();
     let sessionManager = context.childSessionFile
         ? SessionManager.open(context.childSessionFile, context.childSessionDir, cwd)
@@ -109,19 +111,23 @@ export async function createAgentChild(
                 context.onFileChanged,
                 context.onTrace,
                 context.events,
+                allowUserInteraction,
             ),
         }],
         appendSystemPrompt: [
-            context.definition.systemPrompt,
-            childProtocolPrompt(
-                context.background === true,
-                context.definition.mutating === true,
-                context.definition.capabilities.includes("safe-bash"),
+            renderAgentSystemPrompt(
+                context.definition,
+                childProtocolPrompt(
+                    context.background === true,
+                    context.definition.mutating === true,
+                    context.definition.capabilities.includes("safe-bash"),
+                    allowUserInteraction,
+                ),
             ),
-        ].filter(Boolean),
+        ],
     });
     await resourceLoader.reload();
-    const interactionToolCount = context.background ? 1 : 2;
+    const interactionToolCount = context.background || !allowUserInteraction ? 1 : 2;
     context.onTrace?.("resources.loaded", {
         readOnlyToolCount: context.definition.mutating ? READ_ONLY_AGENT_TOOLS.length : tools.length,
         directUserUI: !context.background && parentContext.hasUI && parentContext.mode === "tui",
@@ -161,7 +167,7 @@ export async function createAgentChild(
         sessionManager,
         tools: [
             ...tools,
-            ...(context.background ? [] : ["ask_user"]),
+            ...(context.background || !allowUserInteraction ? [] : ["ask_user"]),
             "ask_parent",
         ],
     });

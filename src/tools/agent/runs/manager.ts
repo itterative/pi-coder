@@ -1,6 +1,10 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
-import { fingerprintAgentDefinition, type AgentDefinition } from "../definitions/types";
+import {
+    fingerprintAgentDefinition,
+    isAgentDefinitionFingerprintCompatible,
+    type AgentDefinition,
+} from "../definitions/types";
 import { emitAgentEvent } from "../observability/events";
 import type { AgentEventPayload, AgentEventSink } from "../contracts/events";
 import type {
@@ -20,6 +24,7 @@ import type {
 } from "../contracts/runs";
 import type { WorkerMutationReport } from "../contracts/mutations";
 import type { AgentTraceData, AgentTraceSink } from "../contracts/trace";
+import { renderAgentTask } from "../prompts/renderer";
 import { cloneUsage, subtractUsage, ZERO_USAGE } from "./usage";
 
 export { ZERO_USAGE } from "./usage";
@@ -53,6 +58,7 @@ interface AgentRun {
     agentSource: string;
     agentFilePath?: string;
     task: string;
+    initialPrompt?: string;
     status: AgentRunStatus;
     background: boolean;
     handle?: ChildAgentHandle;
@@ -228,7 +234,10 @@ export class AgentRunManager {
                 || record.status === "aborted"
                 || record.status === "canceled";
             const definition = definitionByName.get(record.agent);
-            if (!persistedTerminal && (!definition || fingerprintAgentDefinition(definition) !== record.definitionFingerprint)) {
+            if (!persistedTerminal && (
+                !definition
+                || !isAgentDefinitionFingerprintCompatible(definition, record.definitionFingerprint)
+            )) {
                 diagnostics.push(`Could not restore ${record.runId}: its agent definition is missing or changed.`);
                 continue;
             }
@@ -365,7 +374,7 @@ export class AgentRunManager {
             onProgress,
         );
         if (setupOutcome) return setupOutcome;
-        return this.beginOperation(run, task, signal, onProgress);
+        return this.beginOperation(run, run.initialPrompt ?? task, signal, onProgress);
     }
 
     spawn(
@@ -591,6 +600,7 @@ export class AgentRunManager {
             agentSource: definition.source,
             agentFilePath: definition.filePath,
             task,
+            initialPrompt: renderAgentTask(task, context.agentContext, definition.contextPolicy),
             status: "starting",
             background,
             usageCheckpoint: cloneUsage(ZERO_USAGE),
@@ -716,7 +726,7 @@ export class AgentRunManager {
     ): Promise<AgentRunOutcome> {
         const setupOutcome = await this.setupRun(run, definition, context);
         if (setupOutcome) return setupOutcome;
-        return this.beginOperation(run, run.task);
+        return this.beginOperation(run, run.initialPrompt ?? run.task);
     }
 
     private requireRun(runId: string): AgentRun {

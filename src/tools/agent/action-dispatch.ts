@@ -78,6 +78,7 @@ export async function executeAgentAction(
                 parentCwd: ctx.cwd,
                 workspaceId: reservation?.workspace.id,
                 parentContext: ctx,
+                agentContext: params.context,
             };
             const background = lifecycle.backgroundUpdate(ctx);
             const workspaceBackground = (details: AgentRunDetails) => {

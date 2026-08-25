@@ -9,7 +9,12 @@ import {
     isChildPathAllowed,
     isScoutBashAllowed,
 } from "../../src/tools/agent/child";
-import { BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
+import {
+    BUILTIN_ADVISOR,
+    BUILTIN_SCOUT,
+    BUILTIN_WORKER,
+    fingerprintLegacyAgentDefinition,
+} from "../../src/tools/agent/definitions/discovery";
 import {
     AgentActionError,
     AgentRunManager,
@@ -182,6 +187,34 @@ describe("AgentRunManager", () => {
         const result = await manager.start("scout", "Inspect the persistence layer\nand report risks", context());
 
         expect(result.details.title).toBe("Inspect the persistence layer");
+    });
+
+    it("renders policy-selected runtime context into the initial task", async () => {
+        const child = new FakeChild([{ output: "The approach is sound." }]);
+        const manager = managerWith(child);
+
+        await manager.start(BUILTIN_ADVISOR, "Review the approach.", {
+            ...context(),
+            agentContext: {
+                sections: [
+                    {
+                        id: "parent_summary",
+                        title: "Parent summary",
+                        content: "The parent has implemented the first version.",
+                        source: "parent",
+                    },
+                    {
+                        id: "not_requested",
+                        title: "Unrequested context",
+                        content: "This must not be rendered.",
+                        source: "repository",
+                    },
+                ],
+            },
+        });
+
+        expect(child.prompts[0]).toContain("Parent summary [parent]");
+        expect(child.prompts[0]).not.toContain("Unrequested context");
     });
 
     it("completes a run and disposes its child", async () => {
@@ -653,6 +686,7 @@ describe("AgentRunManager", () => {
             status: "waiting_for_parent",
             childSessionFile: childFile,
         });
+        store.records.at(-1)!.definitionFingerprint = fingerprintLegacyAgentDefinition(BUILTIN_SCOUT);
 
         const restoredChild = new FakeChild([{ output: "Finished", usage: usage(3, 1) }], childFile);
         let restoredContext: any;

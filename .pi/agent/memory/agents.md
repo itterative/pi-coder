@@ -19,6 +19,7 @@ The feature is an in-process SDK implementation under `src/tools/agent/`, regist
 - `/agents` browses current/past child sessions, isolated workspaces, and built-in agent model settings. Durable restoration is limited to the exact parent session and active tree branch; interrupted runs never restart or replay automatically.
 - Read-only children are cwd-confined and `safe-bash` is heuristic `SAFE_READONLY`, not a security sandbox. Worker mutations require visible one-shot approval. Isolated workspaces keep changed results outside the parent checkout until explicit disposition.
 - Built-in model overrides are defined in `src/tools/agent/config.ts`, persisted in `~/.pi/agent-config.json` or an existing nearest project `.pi/agent-config.json`, and applied during `AgentLifecycle.discover()` without mutating the shared built-in definitions. Advisor availability is opt-in, persisted alongside those settings, and its runs require an explicit model override.
+- Delegated runtime context uses bounded `context.sections` filtered and deduplicated by definition policies, with the complete rendered context block character-bounded and placed in the initial task message; automatic parent-summary/recent-context collection remains future work.
 - Before release, restore the intended `PI_CODER_AGENT_TRACE=1` opt-in; tracing is currently forced on during development.
 
 ## Targeted references
