@@ -162,12 +162,18 @@ export interface PersistedAgentRun {
     mutationReport?: WorkerMutationReport;
 }
 
+export interface AgentContinuationLease {
+    release(): void;
+}
+
 export interface AgentRunPersistence {
     ownerSessionId: string;
     /** True when records are V2 marker/snapshot checkpoints. */
     usesSnapshotMarkers?: boolean;
     childSessionDir: string;
     save(record: PersistedAgentRun): boolean;
+    /** Acquires a renewable CAS lease for the physical run's active operation. */
+    acquireContinuationLease?: (runInstanceId: string, onLost?: () => void) => AgentContinuationLease;
     flush?: () => Promise<void>;
     close?: () => void;
     deleteChildSession(sessionFile: string): void;

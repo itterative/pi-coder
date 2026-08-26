@@ -833,6 +833,44 @@ describe("AgentRunManager", () => {
         expect(secondManager.listRuns()[0]?.status).toBe("completed");
     });
 
+    it("restores the prior waiting state when a V2 resume checkpoint cannot be persisted", async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-resume-failure-"));
+        tempDirs.push(directory);
+        const records: PersistedAgentRun[] = [];
+        let failSaves = false;
+        let releaseCount = 0;
+        const persistence: AgentRunPersistence = {
+            ownerSessionId: "parent-session",
+            usesSnapshotMarkers: true,
+            childSessionDir: directory,
+            save: (record) => {
+                if (failSaves) return false;
+                records.push(structuredClone(record));
+                return true;
+            },
+            acquireContinuationLease: () => ({ release: () => { releaseCount++; } }),
+            deleteChildSession: () => {},
+        };
+        const firstManager = new AgentRunManager(async () => new FakeChild(
+            [{ question: { question: "Continue?" }, leafId: "leaf-1" }],
+            path.join(directory, "child.jsonl"),
+        ));
+        firstManager.setPersistence(persistence);
+        const waiting = await firstManager.start(BUILTIN_SCOUT, "Inspect", context());
+        expect(waiting.details.status).toBe("waiting_for_parent");
+
+        const resumedChild = new FakeChild([], path.join(directory, "child.jsonl"));
+        const secondManager = new AgentRunManager(async () => resumedChild);
+        secondManager.setPersistence(persistence);
+        const restoration = await secondManager.restore(latestRecords(records), [BUILTIN_SCOUT], context());
+        expect(restoration.restored).toBe(1);
+        failSaves = true;
+        await expect(secondManager.resume("scout-1", "Continue")).rejects.toThrow("Could not persist");
+        expect(secondManager.listRuns()[0]).toMatchObject({ status: "waiting_for_parent" });
+        expect(resumedChild.prompts).toEqual([]);
+        expect(releaseCount).toBeGreaterThanOrEqual(2);
+    });
+
     it("rejects unknown and stale resume IDs", async () => {
         const manager = managerWith(new FakeChild([{ output: "Done" }]));
 

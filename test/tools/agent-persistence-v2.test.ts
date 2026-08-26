@@ -458,7 +458,10 @@ describe("delegated-agent V2 persistence", () => {
         const writer = createAgentRunStateWriter(
             process.cwd(),
             database,
-            (marker) => markers.push(marker),
+            (marker) => {
+                markers.push(marker);
+                return `marker-${markers.length}`;
+            },
         );
         const firstFailure = record("instance-snapshot-failure", "parent-1");
         database.exec(`
@@ -492,6 +495,91 @@ describe("delegated-agent V2 persistence", () => {
         expect((markerFailureDatabase.prepare("SELECT COUNT(*) AS count FROM agent_run_snapshots").get() as { count: number }).count).toBe(1);
         expect((markerFailureDatabase.prepare("SELECT COUNT(*) AS count FROM agent_runs").get() as { count: number }).count).toBe(0);
         markerFailureWriter.close();
+    });
+
+    it("keeps a committed snapshot when head projection commit fails after marker append", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-head-failure-"));
+        tempDirs.push(stateDir);
+        const database = await openAgentMetadataDatabase(path.join(stateDir, "workspaces"));
+        database.exec(`
+            CREATE TRIGGER fail_continuation_head_insert
+            BEFORE INSERT ON agent_run_continuation_heads
+            WHEN NEW.pending = 0
+            BEGIN SELECT RAISE(ABORT, 'head projection failure'); END;
+        `);
+        const markers: unknown[] = [];
+        const writer = createAgentRunStateWriter(
+            process.cwd(),
+            database,
+            (marker) => {
+                markers.push(marker);
+                return `marker-${markers.length}`;
+            },
+        );
+
+        expect(writer.save(record("instance-head-failure", "parent-1"))).toMatchObject({ ok: true });
+        expect(markers).toHaveLength(1);
+        expect((database.prepare("SELECT COUNT(*) AS count FROM agent_run_snapshots").get() as { count: number }).count).toBe(1);
+        expect((database.prepare("SELECT COUNT(*) AS count FROM agent_run_continuation_heads WHERE pending = 1").get() as { count: number }).count).toBe(1);
+        writer.close();
+    });
+
+    it("serializes continuation leases and rejects a stale writer after another process advances the head", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-contention-"));
+        tempDirs.push(stateDir);
+        const workspacesDir = path.join(stateDir, "workspaces");
+        const databaseA = await openAgentMetadataDatabase(workspacesDir);
+        const databaseB = await openAgentMetadataDatabase(workspacesDir);
+        databaseA.prepare(`
+            INSERT INTO agent_run_continuation_heads (
+                run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        `).run("instance-contention", "parent-1", "scout-1", "old-snapshot", 1, 1);
+        const markersA: unknown[] = [];
+        const markersB: unknown[] = [];
+        const initialHead = new Map([["instance-contention", "old-snapshot"]]);
+        const writerA = createAgentRunStateWriter(process.cwd(), databaseA, (marker) => {
+            markersA.push(marker);
+            return `marker-${markersA.length}`;
+        }, initialHead);
+        const writerB = createAgentRunStateWriter(process.cwd(), databaseB, (marker) => {
+            markersB.push(marker);
+            return `marker-${markersB.length}`;
+        }, initialHead);
+        const releaseA = writerA.acquireContinuationLease?.("instance-contention");
+        expect(() => writerB.acquireContinuationLease?.("instance-contention")).toThrow("already owned");
+        expect(writerB.save({ ...record("instance-contention", "parent-1"), updatedAt: 2 })).toMatchObject({ ok: false });
+        expect(markersB).toHaveLength(0);
+
+        expect(writerA.save({ ...record("instance-contention", "parent-1"), updatedAt: 2 })).toMatchObject({ ok: true });
+        releaseA?.release();
+        expect((databaseA.prepare("SELECT COUNT(*) AS count FROM agent_run_continuation_leases").get() as { count: number }).count).toBe(0);
+        expect(writerB.save({ ...record("instance-contention", "parent-1"), updatedAt: 3 })).toMatchObject({ ok: false });
+        expect(markersA).toHaveLength(1);
+        expect(markersB).toHaveLength(0);
+        expect((databaseA.prepare("SELECT COUNT(*) AS count FROM agent_run_snapshots").get() as { count: number }).count).toBe(1);
+        writerA.close();
+        writerB.close();
+    });
+
+    it("rejects a V2 checkpoint when the parent marker append is unavailable", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-no-marker-"));
+        tempDirs.push(stateDir);
+        const sessionsDir = path.join(stateDir, "agent-sessions");
+        const context = {
+            cwd: process.cwd(),
+            ui: { notify: vi.fn() },
+            sessionManager: {
+                getSessionFile: () => "/parent.jsonl",
+                getSessionId: () => "parent-1",
+                getEntries: () => [],
+                getBranch: () => [],
+                getLeafId: () => null,
+            },
+        } as any;
+        const loaded = await loadAgentRunPersistence(context, sessionsDir);
+        expect(loaded?.persistence.save(record("instance-no-marker", "parent-1"))).toBe(false);
+        loaded?.persistence.close?.();
     });
 
     it("reports a marker that references a missing snapshot without restoring it", async () => {

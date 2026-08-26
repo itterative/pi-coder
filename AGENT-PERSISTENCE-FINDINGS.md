@@ -31,7 +31,7 @@ In concise terms:
 
 This preserves unrestricted `/tree` navigation without supporting divergent continuations of one physical child, cloning child transcript files, or placing large run-state payloads in the parent JSONL. The system does not need to make every historical snapshot resumable: older snapshots exist for causality and inspection only; the session head is the sole continuation point.
 
-Current status: the core V2 design and its high-value persistence/browser tests are implemented. The active-branch-only historical-browser recommendation below is superseded by the intentional unified cwd-wide Agents view. Payload minimization and broader lifecycle integration coverage are deferred hardening work, not correctness blockers.
+Current status: the core V2 design and its high-value persistence/browser tests are implemented. The active-branch-only historical-browser recommendation below is superseded by the intentional unified cwd-wide Agents view. Payload minimization, garbage collection, and broader crash/restart matrices remain deferred hardening work, not correctness blockers.
 
 ## Compatibility decision
 
@@ -149,7 +149,7 @@ The run is actionable only when `branchHead.snapshotId === sessionHead.snapshotI
 
 A stale checkpoint remains available for transcript inspection, but it belongs in Past and must not be installed as a resumable manager run. The UI should describe it as “continued on another branch.” The user can navigate to the branch containing the session head or start a new physical agent; resuming the stale run is not allowed.
 
-The session head should be derived from valid parent markers in append order, not from the lossy catalog. A SQLite snapshot without a marker cannot become the continuation head. This rule assumes one active Pi runtime owns a parent session; concurrent processes would require an additional compare-and-swap continuation lease.
+The session head should be derived from valid parent markers in append order, not from the lossy catalog. A SQLite snapshot without a marker cannot become the continuation head. V2 now also maintains a SQLite continuation-head CAS row and short-lived lease: competing processes serialize the checkpoint transaction and a stale expected head is rejected before continuation.
 
 This policy prevents sibling parent branches from creating competing child continuations and substantially reduces child JSONL ambiguity. It also means restoration does not need to reconcile multiple valid resumable child leaves: it validates and selects the leaf only for the session head, while stale leaves are used solely for read-only transcript inspection.
 
@@ -248,19 +248,19 @@ The active `/agents` view should use the active manager and resolved parent mark
 
 ## Commit protocol and failure behavior
 
-Parent JSONL appends and SQLite transactions cannot be made atomic together. Correctness therefore depends on write ordering.
+Parent JSONL appends and SQLite transactions cannot be made physically atomic together. V2 therefore holds a renewable SQLite continuation lease across the active child operation and uses short transactions for each checkpoint. A competing process blocks or rejects as stale.
 
 For a checkpoint whose child state is already durable:
 
 ```text
-1. Ensure the referenced child transcript entry is durable.
-2. Insert the immutable run instance if this is its first snapshot.
-3. Insert the immutable SQLite snapshot in a transaction.
-4. Append the parent custom marker referencing that snapshot.
-5. Update the lossy catalog projection.
+1. Acquire/renew the physical-run continuation lease and compare the expected session head inside `BEGIN IMMEDIATE`.
+2. Insert the immutable run instance/snapshot and reserve the new continuation head as `pending`; commit that snapshot reservation.
+3. Begin another immediate transaction, renew/verify the lease, append the parent marker, clear `pending`, and update the head/catalog projection while the DB lock is held.
+4. If marker/head completion fails, retain the pending barrier until lease expiry; reload reconciles it from marker reachability.
+5. Continue holding the lease while the child is active; release it at waiting/terminal state.
 ```
 
-The parent marker is the commit record for branch restoration.
+The parent marker remains the branch restoration record; the SQLite head/lease prevents concurrent writers from producing competing continuations. A failed marker append leaves an unreachable committed snapshot, which is safe to prune later.
 
 ### Failure matrix
 
@@ -268,7 +268,8 @@ The parent marker is the commit record for branch restoration.
 |---|---|---|
 | Child append fails | No snapshot or marker | Report child failure |
 | Snapshot insert fails | No parent marker | Existing parent state remains authoritative |
-| Parent marker append fails | Unreachable SQLite snapshot | Ignore; later garbage collection may remove it |
+| Parent marker append fails | An unreachable committed snapshot and pending head reservation remain until lease expiry | Existing parent state remains authoritative; reload clears/reconciles the pending barrier; prune later |
+| Head/projection commit fails after marker append | Marker and snapshot remain valid; pending head barrier blocks stale writers until reconciliation | Reconcile from parent markers on next load |
 | Catalog update fails | Resumption remains valid | Warn and rebuild/reconcile projection later |
 | Snapshot referenced by marker is missing | Corrupt checkpoint | Reject with a diagnostic; never guess |
 | Child file or leaf is missing | Non-resumable checkpoint | Reject with a diagnostic; never use latest leaf |
@@ -511,7 +512,7 @@ for each branchHead:
 ### Commit protocol
 
 - SQLite insertion failure appends no parent marker.
-- Parent marker failure leaves an unreachable but harmless snapshot.
+- Parent marker failure leaves an unreachable committed snapshot but no committed parent marker/head update.
 - Catalog failure does not invalidate a committed marker/snapshot.
 - A marker referencing a missing snapshot produces a diagnostic.
 - State snapshots are immutable and cannot be overwritten by equal timestamps.
@@ -531,7 +532,7 @@ for each branchHead:
 1. Add internal `runInstanceId` to manager, persistence, catalog, workspace, and browser contracts.
 2. Add normalized `agent_run_instances` and immutable `agent_run_snapshots` migrations.
 3. Define and validate the new small parent marker payload.
-4. Replace branch-keyed state upserts with snapshot insertion followed by marker append.
+4. Replace branch-keyed state upserts with the expected-head continuation transaction: lease/CAS check, snapshot insertion, marker append, head update, and commit.
 5. Remove restoration authority from `agent_run_states` and eventually drop or leave the experimental table unused.
 6. Add `childSessionLeafId` to child factory/handle and snapshot contracts.
 7. Compute both active-branch and session-wide continuation heads for every physical run.

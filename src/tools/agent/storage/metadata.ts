@@ -229,6 +229,31 @@ export const AGENT_METADATA_MIGRATIONS = [{
                 ON workspace_results (run_instance_id);
         `);
     },
+}, {
+    version: 10,
+    apply(database: AgentMetadataDatabase): void {
+        database.exec(`
+            CREATE TABLE IF NOT EXISTS agent_run_continuation_heads (
+                run_instance_id TEXT PRIMARY KEY,
+                owner_session_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                created_sequence INTEGER NOT NULL,
+                pending INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS agent_run_continuation_heads_owner
+                ON agent_run_continuation_heads (owner_session_id, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS agent_run_continuation_leases (
+                run_instance_id TEXT PRIMARY KEY,
+                owner_session_id TEXT NOT NULL,
+                process_token TEXT NOT NULL,
+                lease_until INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS agent_run_continuation_leases_owner
+                ON agent_run_continuation_leases (owner_session_id, lease_until);
+        `);
+    },
 }] as const;
 
 export function agentWorkspacesRoot(workspacesDir = PI_CODER_WORKSPACES_DIR): string {
