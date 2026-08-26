@@ -78,6 +78,7 @@ Do not implement the requested feature, edit unrelated source files, or make unr
             background: false,
             runId: `workspace-setup-${workspace.slug}`,
             runTitle: `Setup ${workspace.slug}`,
+            isolated: true,
             onProgress: (progress) => {
                 emitAgentEvent(events, ctx.cwd, {
                     type: "workspace",
@@ -86,7 +87,7 @@ Do not implement the requested feature, edit unrelated source files, or make unr
                     reason: "setup_progress",
                 });
                 onUiUpdate?.(setupRunId, workspace, {
-                    status: "running",
+                    status: progress.permissionPending ? "waiting_for_permission" : "running",
                     activity: progress.recentActivity[progress.recentActivity.length - 1] ?? "Preparing workspace",
                     responsePreview: progress.output,
                 });

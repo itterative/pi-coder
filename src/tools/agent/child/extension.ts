@@ -19,6 +19,10 @@ import {
     Heuristic,
 } from "../../../modules/sandbox/heuristics";
 import { askUser } from "../../../tui/ask-user";
+import registerFileToolHook, {
+    isFileAccessApproved,
+} from "../../file-permissions";
+import { getPermissionState } from "../../../modules/sandbox/permission-state";
 import { guardSafeBashCommand } from "./safe-bash";
 import { registerWorkerMutationHooks } from "./worker-permissions";
 import type { ChildAgentFactoryContext } from "../contracts/runs";
@@ -42,7 +46,7 @@ export function childProtocolPrompt(
         ? "Direct end-user dialogs are unavailable for this child. Use ask_parent when guidance is materially necessary; make reasonable progress first, include evidence and a recommendation, and call it alone in its tool batch."
         : "Use ask_user when you need a preference, clarification, or decision directly from the end user, and call it alone in its tool batch so later work can incorporate the answer. The answer returns in the same turn, so continue your work afterward. Use ask_parent instead when the parent can answer, investigate, or decide; make reasonable progress first, include evidence and a recommendation, and call ask_parent alone in its tool batch. Do not ask questions only in prose when either interaction tool applies.";
     const capability = mutating
-        ? "You are a mutation-capable worker operating in the parent's current checkout or an isolated worktree. Every edit, write, and bash call opens an explicit parent-visible permission gate. Call mutation tools one at a time; same-checkout workers are single-flight, while isolated workers may run concurrently with other isolated work."
+        ? "You are a mutation-capable worker operating in the parent's current checkout or an isolated worktree. Same-checkout edits inside the working directory use the parent's existing access, while outside-cwd paths and unresolved bash commands use the parent-visible permission prompts. Isolated workspaces use their own mutation prompts. Call mutation tools one at a time; same-checkout workers are single-flight, while isolated workers may run concurrently with other isolated work."
         : [
             "You are a read-only subagent working for a parent coding agent.",
             `Enabled capabilities: codebase-read${safeBash ? ", safe-bash" : ""}.`,
@@ -147,8 +151,54 @@ export function registerChildExtension(
     onTrace?: ChildAgentFactoryContext["onTrace"],
     events?: EventBus,
     allowUserInteraction = true,
+    workspaceId?: string,
+    isolated = false,
 ) {
     return (pi: ExtensionAPI): void => {
+        const nonIsolated = !isolated && workspaceId === undefined;
+        const parentSessionManager = parentContext.sessionManager;
+        const permissionState = nonIsolated && parentSessionManager
+            ? getPermissionState(parentSessionManager)
+            : undefined;
+        const childRunLabel = runTitle ? `${runTitle} · ${runId}` : runId;
+        const reportPermissionPending = (pending: boolean, activity: string): void => {
+            tracker.progress.permissionPending = pending;
+            tracker.progress.recentActivity.push(activity);
+            tracker.progress.recentActivity = tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
+            onTrace?.("mutation.permission", { pending, activity });
+            onProgress({
+                output: tracker.progress.output,
+                ...(tracker.progress.lastAssistantMessage
+                    ? { lastAssistantMessage: tracker.progress.lastAssistantMessage }
+                    : {}),
+                recentActivity: [...tracker.progress.recentActivity],
+                ...(tracker.progress.phase ? { phase: tracker.progress.phase } : {}),
+                ...(tracker.progress.lastToolActivity ? { lastToolActivity: tracker.progress.lastToolActivity } : {}),
+                ...(tracker.progress.toolCounts ? { toolCounts: { ...tracker.progress.toolCounts } } : {}),
+                permissionPending: pending,
+            });
+        };
+
+        if (nonIsolated && mutating && permissionState !== undefined) {
+            const fileHookOptions = {
+                state: permissionState,
+                promptContext: parentContext,
+                restoreSession: false,
+                persistSession: false,
+                childAccess: true,
+                confinement: CHILD_CONFINEMENT,
+                permissionPending: reportPermissionPending,
+            };
+            registerFileToolHook(pi, "read", {
+                ...fileHookOptions,
+                promptTitle: `[${childRunLabel}] ${agentName}: allow read path?`,
+            });
+            registerFileToolHook(pi, "write", {
+                ...fileHookOptions,
+                promptTitle: `[${childRunLabel}] ${agentName}: allow write path?`,
+            });
+        }
+
         if (!background && allowUserInteraction) pi.registerTool({
             name: "ask_user",
             label: "Ask User",
@@ -254,23 +304,9 @@ export function registerChildExtension(
                 runId,
                 runTitle,
                 agentName,
-                permissionPending(pending, activity) {
-                    tracker.progress.permissionPending = pending;
-                    tracker.progress.recentActivity.push(activity);
-                    tracker.progress.recentActivity = tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
-                    onTrace?.("mutation.permission", { pending, activity });
-                    onProgress({
-                        output: tracker.progress.output,
-                        ...(tracker.progress.lastAssistantMessage
-                            ? { lastAssistantMessage: tracker.progress.lastAssistantMessage }
-                            : {}),
-                        recentActivity: [...tracker.progress.recentActivity],
-                        ...(tracker.progress.phase ? { phase: tracker.progress.phase } : {}),
-                        ...(tracker.progress.lastToolActivity ? { lastToolActivity: tracker.progress.lastToolActivity } : {}),
-                        ...(tracker.progress.toolCounts ? { toolCounts: { ...tracker.progress.toolCounts } } : {}),
-                        permissionPending: pending,
-                    });
-                },
+                nonIsolated,
+                permissionState,
+                permissionPending: reportPermissionPending,
                 fileChanged(filePath) {
                     const wasChanged = tracker.changedFiles.has(filePath);
                     tracker.changedFiles.add(filePath);
@@ -292,10 +328,12 @@ export function registerChildExtension(
             const filePath = readToolPath(event);
             if (filePath === undefined) return;
             if (!isChildPathAllowed(filePath, ctx.cwd)) {
-                return {
-                    block: true,
-                    reason: "Read-only scout access blocked: path is outside the allowed working directory or is sensitive.",
-                };
+                if (!isFileAccessApproved(event)) {
+                    return {
+                        block: true,
+                        reason: "Read-only child access blocked: path is outside the allowed working directory or is sensitive.",
+                    };
+                }
             }
             tracker.readFiles.add(relativeReadPath(filePath, ctx.cwd));
         });

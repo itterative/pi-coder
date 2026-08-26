@@ -23,6 +23,6 @@ The built-in `advisor` has the same read-only capability boundary as `scout` and
 ## Worker permissions
 
 - User-selectable mutation authority is limited to the built-in `worker`, which receives `edit`, `write`, and `bash`. An internal isolated-workspace setup worker is also permission-gated but is not a normal parent-model run.
-- Each worker mutation opens a parent-visible, run-labelled, one-shot prompt. Approval never becomes a parent/session rule. File paths remain confined and sensitive/symlink escapes are rejected before prompting.
-- Worker Bash honors configured denial and sandbox/direct mode, propagates user notes, and defaults unresolved commands to sandbox when available. A shared abort-aware FIFO dialog queue serializes parent and child permission dialogs; queued aborts must not let later dialogs overtake the active one.
+- Same-checkout worker edits inside the checkout use the parent's existing access without a second mutation prompt. Outside-cwd reads and edits use the existing parent file-access prompt, while sensitive/symlink escapes are rejected before prompting. Isolated workers and setup workers retain independent mutation prompts without parent-session inheritance.
+- Worker Bash honors configured and inherited session rules without prompting when already allowed; unresolved commands use the parent-visible, run-labelled prompt and can add a session rule. A shared abort-aware FIFO dialog queue serializes parent and child permission dialogs; queued aborts must not let later dialogs overtake the active one.
 - Mutation calls serialize through settlement. Successful edit/write paths are reported; approved Bash and concurrent parent activity can make attribution incomplete, so inspect the final diff.

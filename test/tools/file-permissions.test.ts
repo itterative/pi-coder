@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { ALLOWED_FILE_ENTRY_TYPE } from "../../src/common/audit";
 import registerFileToolHook from "../../src/tools/file-permissions";
+import { createPermissionState } from "../../src/modules/sandbox/permission-state";
 
 interface Handler {
     (event: any, ctx: any): Promise<unknown> | unknown;
@@ -94,6 +95,70 @@ describe("file permission session entries", () => {
         }, ctx);
 
         expect(result).toEqual({ block: false });
+    });
+
+    it("uses cwd when search tools omit their optional path", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-search-"));
+        temporaryDirectories.push(cwd);
+
+        const handlers: Record<string, Handler[]> = {};
+        const pi = {
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            appendEntry() {},
+        } as any;
+        registerFileToolHook(pi, "read");
+
+        const result = await handlers.tool_call[0]({
+            toolName: "grep",
+            input: { pattern: "needle" },
+        }, { cwd, hasUI: false });
+
+        expect(result).toEqual({ block: false });
+    });
+
+    it("shares a remembered outside folder with a child hook", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-session-"));
+        const folder = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-approved-"));
+        temporaryDirectories.push(cwd, folder);
+
+        const handlers: Record<string, Handler[]> = {};
+        let prompts = 0;
+        const state = createPermissionState();
+        const ctx = {
+            cwd,
+            hasUI: true,
+            ui: {
+                theme: { bold: (value: string) => value },
+                setWorkingVisible() {},
+                notify() {},
+                custom: async () => {
+                    prompts++;
+                    return {
+                        value: { kind: "remember", folder },
+                        displayText: "Yes, and always allow",
+                    };
+                },
+            },
+        } as any;
+        const pi = {
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            appendEntry() {},
+        } as any;
+        registerFileToolHook(pi, "read", {
+            state,
+            promptContext: ctx,
+            restoreSession: false,
+            persistSession: false,
+        });
+
+        const event = { toolName: "read", input: { path: path.join(folder, "notes.txt") } };
+        await expect(handlers.tool_call[0](event, ctx)).resolves.toEqual({ block: false });
+        await expect(handlers.tool_call[0](event, ctx)).resolves.toEqual({ block: false });
+        expect(prompts).toBe(1);
     });
 
     it.each(["read", "write"] as const)("includes a refusal message in blocked %s reasons", async (operation) => {

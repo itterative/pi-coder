@@ -4,9 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+    getPathConfinementAssessment,
     getPathConfinementPermission,
     Heuristic,
     isPathWithinDirectory,
+    UnsafeReason,
 } from "../../../src/modules/sandbox/heuristics";
 
 describe("file path confinement", () => {
@@ -24,6 +26,16 @@ describe("file path confinement", () => {
         expect(getPathConfinementPermission("../secrets.txt", "/project", {})).toBe(Heuristic.UNSAFE);
         expect(getPathConfinementPermission(".env", "/project", {})).toBe(Heuristic.UNSAFE);
         expect(getPathConfinementPermission("src/app.pem", "/project", {})).toBe(Heuristic.UNSAFE);
+    });
+
+    it("classifies sensitive paths outside cwd as sensitive before outside traversal", () => {
+        const assessment = getPathConfinementAssessment(
+            path.join(os.homedir(), ".ssh", "id_ed25519"),
+            "/project",
+            {},
+        );
+
+        expect(assessment.reasons).toEqual([UnsafeReason.SENSITIVE_PATH]);
     });
 
     it("honors the cwd heuristic configuration", () => {

@@ -73,6 +73,8 @@ export interface ChildAgentFactoryContext {
     /** Exact child transcript leaf to restore; null explicitly selects root. */
     childSessionLeafId?: string | null;
     workspaceId?: string;
+    /** Internal setup children are isolated even before a task lease exists. */
+    isolated?: boolean;
     repairInterrupted?: boolean;
     initialProgress?: ChildProgress;
     initialMutationReport?: WorkerMutationReport;

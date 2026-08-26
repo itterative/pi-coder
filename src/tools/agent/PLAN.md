@@ -86,7 +86,7 @@ Isolated workers use a persistent pool of up to three Git worktrees. Setup runs 
 - Delegated-agent controls reduce model-initiated accidents; they are not a hostile-environment security boundary.
 - Child paths are confined to the working directory and checked for sensitive paths and symlink escapes.
 - `safe-bash` runs only commands classified `SAFE_READONLY` by the shared cwd heuristic. Unknown, mutating, network, interpreter, and unsafe Git commands are rejected without an approval bypass.
-- User-selectable worker `edit`, `write`, and `bash` calls use a parent-visible one-shot approval, honor configured denial and sandbox/direct mode, and report attribution caveats for approved bash or concurrent parent activity. Isolated workspaces also use an internal, permission-gated setup worker.
+- Non-isolated worker edits inside the checkout use the parent's existing access; outside-cwd reads and edits use the shared file-access prompt, and unresolved worker Bash uses the shared sandbox/direct prompt with inherited session rules. Sensitive paths and symlink escapes remain blocked before prompting. Isolated workspaces and setup workers use independent mutation prompts without parent-session inheritance.
 - Persisted metadata cannot grant mutation authority to user-selectable agents; only the current reserved built-in `worker` may be restored as a mutating task worker.
 
 ## Persistence and diagnostics

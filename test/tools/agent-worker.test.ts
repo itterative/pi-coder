@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { registerWorkerMutationHooks } from "../../src/tools/agent/child/worker-permissions";
+import { createPermissionState } from "../../src/modules/sandbox/permission-state";
 import { KEY, mockTheme } from "../helpers";
 
 interface Handler {
@@ -23,7 +24,7 @@ describe("worker mutation gate", () => {
         tempDirs.length = 0;
     });
 
-    function setup(cwd: string) {
+    function setup(cwd: string, options: { nonIsolated?: boolean; permissionState?: ReturnType<typeof createPermissionState> } = {}) {
         const handlers: Record<string, Handler[]> = {};
         const dialogs: any[] = [];
         const changedFiles: string[] = [];
@@ -52,6 +53,8 @@ describe("worker mutation gate", () => {
         registerWorkerMutationHooks(pi, {
             parentContext,
             runId: "worker-7",
+            nonIsolated: options.nonIsolated,
+            permissionState: options.permissionState ?? createPermissionState(),
             agentName: "worker",
             permissionPending(value: boolean) { pending.push(value); },
             fileChanged(filePath: string) { changedFiles.push(filePath); },
@@ -116,6 +119,39 @@ describe("worker mutation gate", () => {
         });
         expect(runtime.changedFiles).toEqual(["src/example.ts"]);
         expect(runtime.pending).toEqual([true, false]);
+    });
+
+    it("allows same-checkout edits without a second mutation prompt", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
+        tempDirs.push(cwd);
+        const runtime = setup(cwd, { nonIsolated: true });
+        const event = editEvent("edit-1", "src/example.ts");
+
+        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toEqual({ block: false });
+        expect(runtime.dialogs).toHaveLength(0);
+        await runtime.handlers.tool_result[0]({
+            type: "tool_result",
+            toolName: "edit",
+            toolCallId: "edit-1",
+            input: event.input,
+            content: [],
+            isError: false,
+        });
+    });
+
+    it("uses inherited allow rules without prompting for bash", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
+        tempDirs.push(cwd);
+        const state = createPermissionState();
+        state.bashRules["echo *"] = "allow";
+        const runtime = setup(cwd, { nonIsolated: true, permissionState: state });
+
+        await expect(runtime.handlers.tool_call[0]({
+            type: "tool_call",
+            toolName: "bash",
+            toolCallId: "bash-1",
+            input: { command: "echo hello" },
+        }, runtime.ctx)).resolves.toEqual({ block: false });
     });
 
     it("closes an active permission gate when the child run is aborted", async () => {

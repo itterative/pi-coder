@@ -14,13 +14,24 @@ import { lookpath } from "lookpath";
 
 import sandboxConfig from "../../../common/config";
 import sandbox from "../../../modules/sandbox/bubblewrap";
-import { getPathConfinementPermission, Heuristic } from "../../../modules/sandbox/heuristics";
+import {
+    getPathConfinementAssessment,
+    getPathConfinementPermission,
+    Heuristic,
+    UnsafeReason,
+} from "../../../modules/sandbox/heuristics";
 import type { Permission } from "../../../modules/sandbox/permissions";
+import { suggestRule } from "../../../modules/sandbox/suggestions";
+import {
+    createPermissionState,
+    type PermissionState,
+} from "../../../modules/sandbox/permission-state";
 import { resolvePermissionDetails } from "../../../modules/sandbox/resolve";
 import {
     selectWithMessage,
     type SelectMessageItem,
 } from "../../../tui/select-with-message";
+import { isFileAccessApproved } from "../../file-permissions";
 
 interface WorkerMutationCallbacks {
     permissionPending(pending: boolean, activity: string): void;
@@ -34,6 +45,9 @@ interface WorkerMutationOptions extends WorkerMutationCallbacks {
     runId: string;
     runTitle?: string;
     agentName: string;
+    /** Same-checkout children inherit parent session permissions. */
+    nonIsolated?: boolean;
+    permissionState?: PermissionState;
 }
 
 type PromptChoice = { kind: "yes" } | { kind: "no" };
@@ -139,6 +153,68 @@ async function prompt(
     }
 }
 
+async function promptBash(
+    options: WorkerMutationOptions,
+    ctx: ExtensionContext,
+    command: string,
+    unresolved: string[][],
+    permissionState: PermissionState,
+    sandboxed: { value: boolean },
+    canToggle: boolean,
+): Promise<{ allowed: boolean; permission?: Permission; message?: string }> {
+    if (!options.parentContext.hasUI) return { allowed: false };
+
+    const suggestion = unresolved.length === 1 ? suggestRule(unresolved[0]) : null;
+    const items: SelectMessageItem<PromptChoice | { kind: "remember"; saveRule: string }>[] = [
+        { value: { kind: "yes" }, label: "Yes", description: "run once" },
+    ];
+    if (suggestion) {
+        const boldPattern = options.parentContext.ui.theme.bold(suggestion);
+        items.push({
+            value: { kind: "remember", saveRule: suggestion },
+            label: `Yes, and allow ${boldPattern}`,
+            description: "remember for this session",
+        });
+    }
+    items.push({
+        value: { kind: "no" },
+        label: "No",
+        placeholder: "e.g., too risky",
+    });
+
+    options.permissionPending(true, "Waiting for permission to run bash");
+    try {
+        const result = await selectWithMessage(
+            {
+                title: () => `[${runLabel(options)}] ${options.agentName}: allow bash? — mode: ${sandboxed.value ? "sandbox" : "direct"}${canToggle ? " (s)" : ""}`,
+                contentLines: command.split("\n"),
+                items,
+                borderTone: () => sandboxed.value ? "border" : "borderAccent",
+                handleSelectInput: canToggle
+                    ? (key) => {
+                        if (!matchesKey(key, "s")) return false;
+                        sandboxed.value = !sandboxed.value;
+                        return true;
+                    }
+                    : undefined,
+            },
+            { ...options.parentContext, events: options.events },
+            ctx.signal,
+        );
+        if (!result || result.value.kind === "no") {
+            return { allowed: false, message: result?.message };
+        }
+
+        const permission = sandboxed.value ? "allow:sandbox" : "allow";
+        if (result.value.kind === "remember") {
+            permissionState.bashRules[result.value.saveRule] = permission;
+        }
+        return { allowed: true, permission, message: result.message };
+    } finally {
+        options.permissionPending(false, "Working");
+    }
+}
+
 function relativePath(filePath: string, cwd: string): string {
     const resolved = path.resolve(cwd, filePath);
     const relative = path.relative(cwd, resolved);
@@ -176,6 +252,7 @@ export function registerWorkerMutationHooks(
 ): void {
     const mutationQueue = new MutationQueue();
     const releases = new Map<string, () => void>();
+    const permissionState = options.permissionState ?? createPermissionState();
 
     pi.on("tool_call", async (event, ctx) => {
         const isEdit = isToolCallEventType<"edit", EditToolInput>("edit", event);
@@ -190,11 +267,30 @@ export function registerWorkerMutationHooks(
             const action = isEdit ? "edit" : "write";
             const input = event.input as EditToolInput | WriteToolInput;
             if (!isWorkerPathAllowed(input.path, ctx.cwd)) {
+                const assessment = getPathConfinementAssessment(
+                    input.path,
+                    ctx.cwd,
+                    WORKER_CONFINEMENT,
+                    "write",
+                );
+                const outsideCwd = assessment.reasons.length === 1
+                    && assessment.reasons[0] === UnsafeReason.OUTSIDE_CWD;
+                // The shared file hook handles explicit outside-cwd access for
+                // non-isolated children. Sensitive paths and symlink escapes
+                // remain blocked before any prompt.
+                if (options.nonIsolated && outsideCwd && isFileAccessApproved(event)) {
+                    releases.set(event.toolCallId, release);
+                    return { block: false };
+                }
                 release();
                 return {
                     block: true,
                     reason: `Worker ${action} blocked: path is outside the working directory or is sensitive.`,
                 };
+            }
+            if (options.nonIsolated) {
+                releases.set(event.toolCallId, release);
+                return { block: false };
             }
             const contentLines = fileMutationPreview(event, isEdit);
             let result: { allowed: boolean; message?: string };
@@ -224,10 +320,16 @@ export function registerWorkerMutationHooks(
             input.timeout = SETUP_BASH_TIMEOUT_SECONDS;
         }
         let permission: Permission = "ask";
+        let unresolved: string[][] = [];
         try {
-            permission = resolvePermissionDetails(input.command, ctx.cwd, {
-                permissions: sandboxConfig.current?.permissions,
-            }).permission;
+            const details = resolvePermissionDetails(input.command, ctx.cwd, {
+                permissions: {
+                    ...sandboxConfig.current?.permissions,
+                    ...(options.nonIsolated ? permissionState.bashRules : {}),
+                },
+            });
+            permission = details.permission;
+            unresolved = details.unresolved;
         } catch {
             permission = "ask";
         }
@@ -245,32 +347,36 @@ export function registerWorkerMutationHooks(
             release();
             throw error;
         }
-        let sandboxed = permission === "allow:sandbox" && sandboxEnabled;
-        if (permission === "ask") sandboxed = sandboxEnabled && bwrap.length > 0;
+        let sandboxedModeValue = false;
+        if (permission === "allow:sandbox") {
+            sandboxedModeValue = sandboxEnabled;
+        } else if (permission === "ask") {
+            sandboxedModeValue = permissionState.bashSandboxed && sandboxEnabled && bwrap.length > 0;
+        }
+        const sandboxedMode = { value: sandboxedModeValue };
+        const sandboxed = sandboxedMode.value;
         if (sandboxed && !bwrap) {
             release();
             return { block: true, reason: "Worker bash requires sandboxing, but bubblewrap is unavailable." };
         }
-        const canToggle = permission === "ask" && sandboxEnabled && bwrap.length > 0;
-        let result: { allowed: boolean; message?: string };
+        const needsPrompt = permission === "ask";
+        const canToggle = needsPrompt && sandboxEnabled && bwrap.length > 0;
+        let result: { allowed: boolean; permission?: Permission; message?: string } = {
+            allowed: permission !== "ask",
+            permission,
+        };
         try {
-            result = await prompt(
-                options,
-                ctx,
-                () => `[${runLabel(options)}] ${options.agentName}: allow bash? — mode: ${sandboxed ? "sandbox" : "direct"}${canToggle ? " (s)" : ""}`,
-                input.command.split("\n"),
-                "Waiting for permission to run bash",
-                {
-                    borderTone: () => sandboxed ? "border" : "borderAccent",
-                    handleSelectInput: canToggle
-                        ? (key) => {
-                            if (!matchesKey(key, "s")) return false;
-                            sandboxed = !sandboxed;
-                            return true;
-                        }
-                        : undefined,
-                },
-            );
+            if (needsPrompt) {
+                result = await promptBash(
+                    options,
+                    ctx,
+                    input.command,
+                    unresolved,
+                    permissionState,
+                    sandboxedMode,
+                    canToggle,
+                );
+            }
         } catch (error) {
             release();
             throw error;
@@ -280,8 +386,12 @@ export function registerWorkerMutationHooks(
             release();
             return { block: true, reason: blockedReason("bash", event.input as Record<string, unknown>) };
         }
+        permission = result.permission ?? permission;
+        if (needsPrompt && canToggle) {
+            permissionState.bashSandboxed = sandboxedMode.value;
+        }
         options.bashApproved();
-        if (sandboxed) {
+        if (sandboxedMode.value) {
             try {
                 input.command = sandbox(bwrap, input.command, { cwd: ctx.cwd });
             } catch (error) {

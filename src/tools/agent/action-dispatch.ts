@@ -79,6 +79,7 @@ export async function executeAgentAction(
                 cwd: reservation?.workspace.worktreePath ?? ctx.cwd,
                 parentCwd: ctx.cwd,
                 workspaceId: reservation?.workspace.id,
+                isolated: reservation !== undefined,
                 parentContext: ctx,
                 agentContext: params.context,
             };

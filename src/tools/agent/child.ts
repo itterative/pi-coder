@@ -121,6 +121,8 @@ export async function createAgentChild(
                 context.onTrace,
                 context.events,
                 allowUserInteraction,
+                context.workspaceId,
+                context.isolated,
             ),
         }],
         appendSystemPrompt: [

@@ -4,7 +4,6 @@ import path from "node:path";
 
 import {
     isReadToolResult,
-    isToolCallEventType,
     isWriteToolResult,
     type ExtensionAPI,
     type ExtensionContext,
@@ -13,15 +12,22 @@ import {
     type WriteToolInput,
 } from "@earendil-works/pi-coding-agent";
 
-import sandboxConfig from "../common/config";
+import sandboxConfig, { type SandboxConfigCwdConfinement } from "../common/config";
+import {
+    createPermissionState,
+    getPermissionState,
+    type PermissionState,
+} from "../modules/sandbox/permission-state";
 import {
     ALLOWED_FILE_ENTRY_TYPE,
     type AllowedFileEntry,
 } from "../common/audit";
 import {
+    getPathConfinementAssessment,
     getPathConfinementPermission,
     isPathWithinDirectory,
     isSafeHeuristic,
+    UnsafeReason,
 } from "../modules/sandbox/heuristics";
 import {
     selectWithMessage,
@@ -34,6 +40,12 @@ type PromptChoice =
     | { kind: "remember"; folder: string }
     | { kind: "yes" }
     | { kind: "no" };
+
+const approvedToolCalls = new WeakSet<object>();
+
+export function isFileAccessApproved(event: object): boolean {
+    return approvedToolCalls.has(event);
+}
 
 function operationLabel(operation: FileOperation): string {
     return operation === "read" ? "read from" : "write to";
@@ -71,15 +83,15 @@ function restoreSessionFolders(
     }
 }
 
-function getApprovedFolder(
+export function getApprovedFileFolder(
     filePath: string,
     cwd: string,
     operation: FileOperation,
-    sessionFolders: Set<string>,
+    state: PermissionState,
+    confinement = sandboxConfig.current?.heuristics?.cwdConfinement,
 ): string | undefined {
-    const confinement = sandboxConfig.current?.heuristics?.cwdConfinement;
 
-    for (const folder of sessionFolders) {
+    for (const folder of state.fileFolders[operation]) {
         if (isPathWithinDirectory(filePath, folder, cwd, confinement)) {
             return folder;
         }
@@ -111,14 +123,16 @@ async function promptForFileAccess(
     operation: FileOperation,
     filePath: string,
     folder: string,
-    ctx: ExtensionContext,
+    uiContext: ExtensionContext,
+    signal: AbortSignal | undefined,
     events: ExtensionAPI["events"],
+    promptTitle?: string | (() => string),
 ): Promise<SelectWithMessageResult<PromptChoice> | undefined> {
-    if (!ctx.hasUI) {
+    if (!uiContext.hasUI) {
         return undefined;
     }
 
-    const boldFolder = ctx.ui.theme.bold(folder);
+    const boldFolder = uiContext.ui.theme.bold(folder);
     const items: SelectMessageItem<PromptChoice>[] = [
         {
             value: { kind: "yes" },
@@ -139,12 +153,12 @@ async function promptForFileAccess(
 
     const result = await selectWithMessage(
         {
-            title: `pi-${operation}-sandbox: allow ${operationLabel(operation)} path?`,
+            title: promptTitle ?? `pi-${operation}-sandbox: allow ${operationLabel(operation)} path?`,
             contentLines: [filePath],
             items,
         },
-        { ...ctx, events },
-        ctx.signal,
+        { ...uiContext, events },
+        signal,
     );
 
     return result;
@@ -155,43 +169,97 @@ async function promptForFileAccess(
  * same confinement policy used by the bash heuristic. Other paths require an
  * explicit one-shot or session-scoped approval.
  */
+export interface FilePermissionHookOptions {
+    /** Permission state shared with the parent runtime for non-isolated children. */
+    state?: PermissionState;
+    /** Use the parent UI when this is a child extension. */
+    promptContext?: ExtensionContext;
+    /** Child hooks must not restore/reset their own transcript's folder entries. */
+    restoreSession?: boolean;
+    /** Child approvals update shared state but must not append to the child transcript. */
+    persistSession?: boolean;
+    /** Preserve child confinement by refusing sensitive/symlink paths without prompting. */
+    childAccess?: boolean;
+    /** Child hooks use their fixed confinement rather than parent config defaults. */
+    confinement?: SandboxConfigCwdConfinement;
+    /** Worker hooks report dialogs through the child progress tracker. */
+    permissionPending?: (pending: boolean, activity: string) => void;
+    /** Optional run-labelled title for child permission dialogs. */
+    promptTitle?: string | (() => string);
+}
+
 export default function registerFileToolHook(
     pi: ExtensionAPI,
     operation: FileOperation,
+    options: FilePermissionHookOptions = {},
 ): void {
-    // Each registration belongs to one parent runtime and one operation. Keep
-    // remembered read/write approvals isolated from reloads and child runtimes.
-    const sessionFolders = new Set<string>();
+    const localState = createPermissionState();
+    const stateFor = (ctx: ExtensionContext): PermissionState => {
+        if (options.state) return options.state;
+        if (ctx.sessionManager) return getPermissionState(ctx.sessionManager);
+        return localState;
+    };
 
     pi.on("session_start", (_event, ctx) => {
-        restoreSessionFolders(ctx, operation, sessionFolders);
+        if (options.restoreSession !== false) {
+            restoreSessionFolders(ctx, operation, stateFor(ctx).fileFolders[operation]);
+        }
     });
 
     pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult> => {
+        let isReadLike = false;
         if (operation === "read") {
-            if (!isToolCallEventType<"read", ReadToolInput>("read", event)) {
-                return { block: false };
-            }
-        } else if (!isToolCallEventType<"write", WriteToolInput>("write", event)) {
-            return { block: false };
+            isReadLike = event.toolName === "read"
+                || event.toolName === "grep"
+                || event.toolName === "find"
+                || event.toolName === "ls";
+        } else {
+            isReadLike = event.toolName === "write" || event.toolName === "edit";
         }
+        if (!isReadLike) return { block: false };
 
         const input = event.input as ReadToolInput | WriteToolInput;
-        const filePath = input.path;
+        const filePath = input.path?.trim() || ".";
         const cwd = ctx.cwd ?? process.cwd();
-        const confinement = sandboxConfig.current?.heuristics?.cwdConfinement;
+        const state = stateFor(ctx);
+        const confinement = options.confinement ?? sandboxConfig.current?.heuristics?.cwdConfinement;
 
         if (isSafeHeuristic(getPathConfinementPermission(filePath, cwd, confinement, operation))) {
             return { block: false };
         }
 
-        const approvedFolder = getApprovedFolder(filePath, cwd, operation, sessionFolders);
+        if (options.childAccess) {
+            const assessment = getPathConfinementAssessment(filePath, cwd, confinement, operation);
+            if (assessment.reasons.length !== 1 || assessment.reasons[0] !== UnsafeReason.OUTSIDE_CWD) {
+                return {
+                    block: true,
+                    reason: `Child ${operation} access blocked: path is outside the working directory or is sensitive.`,
+                };
+            }
+        }
+
+        const approvedFolder = getApprovedFileFolder(filePath, cwd, operation, state, confinement);
         if (approvedFolder !== undefined) {
+            approvedToolCalls.add(event);
             return { block: false };
         }
 
         const folder = sessionFolderFor(filePath, cwd);
-        const result = await promptForFileAccess(operation, filePath, folder, ctx, pi.events);
+        options.permissionPending?.(true, `Waiting for permission to ${operation} ${filePath}`);
+        let result: SelectWithMessageResult<PromptChoice> | undefined;
+        try {
+            result = await promptForFileAccess(
+                operation,
+                filePath,
+                folder,
+                options.promptContext ?? ctx,
+                ctx.signal,
+                pi.events,
+                options.promptTitle,
+            );
+        } finally {
+            options.permissionPending?.(false, "Working");
+        }
         const choice = result?.value;
 
         if (result?.message) {
@@ -199,12 +267,15 @@ export default function registerFileToolHook(
         }
 
         if (choice?.kind === "remember") {
-            sessionFolders.add(choice.folder);
-            pi.appendEntry<AllowedFileEntry>(ALLOWED_FILE_ENTRY_TYPE, {
-                operation,
-                folder: choice.folder,
-            });
-            ctx.ui.notify(
+            approvedToolCalls.add(event);
+            state.fileFolders[operation].add(choice.folder);
+            if (options.persistSession !== false) {
+                pi.appendEntry<AllowedFileEntry>(ALLOWED_FILE_ENTRY_TYPE, {
+                    operation,
+                    folder: choice.folder,
+                });
+            }
+            (options.promptContext ?? ctx).ui.notify(
                 `pi-${operation}-sandbox: session folder allowed: "${choice.folder}" (this session only)`,
                 "info",
             );
@@ -212,6 +283,7 @@ export default function registerFileToolHook(
         }
 
         if (choice?.kind === "yes") {
+            approvedToolCalls.add(event);
             return { block: false };
         }
 

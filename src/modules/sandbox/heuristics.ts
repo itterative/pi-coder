@@ -1447,11 +1447,11 @@ export function getPathConfinementAssessment(
     const resolvedCwd = path.resolve(cwd);
     const home = os.homedir();
     const options = buildConfinementOptions(confinement, resolvedCwd);
-    if (!isLexicallyWithin(filePath, resolvedCwd, resolvedCwd, home)) {
-        return assessment(Heuristic.UNSAFE, [UnsafeReason.OUTSIDE_CWD]);
-    }
     if (isSensitivePath(filePath, resolvedCwd, home, options)) {
         return assessment(Heuristic.UNSAFE, [UnsafeReason.SENSITIVE_PATH]);
+    }
+    if (!isLexicallyWithin(filePath, resolvedCwd, resolvedCwd, home)) {
+        return assessment(Heuristic.UNSAFE, [UnsafeReason.OUTSIDE_CWD]);
     }
     return assessment(Heuristic.UNSAFE, [UnsafeReason.SYMLINK_ESCAPE]);
 }

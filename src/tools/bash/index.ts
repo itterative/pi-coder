@@ -14,6 +14,11 @@ import { Permission } from "../../modules/sandbox/permissions";
 import { resolvePermissionDetails } from "../../modules/sandbox/resolve";
 import { suggestRule } from "../../modules/sandbox/suggestions";
 import { selectWithMessage, type SelectMessageItem } from "../../tui/select-with-message";
+import {
+    createPermissionState,
+    getPermissionState,
+    resetBashPermissionState,
+} from "../../modules/sandbox/permission-state";
 
 // A prompt choice. The yes-actions are resolved at confirm time (the mode
 // can change while the dialog is open); "remember" additionally saves a
@@ -32,16 +37,16 @@ interface ToolCallEventResult {
 export default function registerBashToolHook(pi: ExtensionAPI) {
     // Runtime-local state must not leak into another parent or child extension
     // instance. Remembered rules are still cleared on each session start.
-    let sessionRules: Record<string, Permission> = {};
-    let defaultSandboxed = true;
     let hasSupport =
         process.platform === "linux" || process.platform === "freebsd";
 
     let bwrap: string = "";
+    const localPermissionState = createPermissionState();
+    const permissionStateFor = (ctx: { sessionManager?: object }) =>
+        ctx.sessionManager ? getPermissionState(ctx.sessionManager) : localPermissionState;
 
     pi.on("session_start", async (event, ctx) => {
-        sessionRules = {};
-        defaultSandboxed = true;
+        resetBashPermissionState(permissionStateFor(ctx));
 
         if (!hasSupport) {
             ctx.ui.notify(
@@ -147,13 +152,14 @@ Pay attention to these notes as they provide context about the user's preference
 
         let permission: Permission = "ask";
         let unresolved: string[][] = [];
+        const permissionState = permissionStateFor(ctx);
         try {
             const details = resolvePermissionDetails(
                 event.input.command,
                 ctx.cwd ?? process.cwd(),
                 // session rules come after config rules, so on identical
                 // patterns they win (last-match-wins semantics)
-                { permissions: { ...sandboxConfig.current?.permissions, ...sessionRules } },
+                { permissions: { ...sandboxConfig.current?.permissions, ...permissionState.bashRules } },
             );
             permission = details.permission;
             unresolved = details.unresolved;
@@ -201,7 +207,7 @@ Pay attention to these notes as they provide context about the user's preference
                     title: () => {
                         const mode = !sandboxEnabled
                             ? "direct (sandbox off)"
-                            : (defaultSandboxed ? "sandbox" : "direct");
+                            : (permissionState.bashSandboxed ? "sandbox" : "direct");
                         return `pi-bash-sandbox: allow command? — mode: ${mode} (s)`;
                     },
                     contentLines: event.input.command.split("\n"),
@@ -212,10 +218,10 @@ Pay attention to these notes as they provide context about the user's preference
                     // disabled by config). Re-evaluated per render, so
                     // "s" updates it live.
                     borderTone: () =>
-                        sandboxEnabled && defaultSandboxed ? "border" : "borderAccent",
+                        sandboxEnabled && permissionState.bashSandboxed ? "border" : "borderAccent",
                     handleSelectInput: (key) => {
                         if (matchesKey(key, "s")) {
-                            defaultSandboxed = !defaultSandboxed;
+                            permissionState.bashSandboxed = !permissionState.bashSandboxed;
                             return true;
                         }
 
@@ -230,9 +236,9 @@ Pay attention to these notes as they provide context about the user's preference
                 if (result.value.kind === "no") {
                     permission = "deny";
                 } else {
-                    permission = defaultSandboxed ? "allow:sandbox" : "allow";
+                    permission = permissionState.bashSandboxed ? "allow:sandbox" : "allow";
                     if (result.value.kind === "remember") {
-                        sessionRules[result.value.saveRule] = permission;
+                        permissionState.bashRules[result.value.saveRule] = permission;
                         ctx.ui.notify(
                             `pi-bash-sandbox: session rule saved: "${result.value.saveRule}" → ${permission} (this session only)`,
                             "info",

@@ -114,7 +114,9 @@ export class AgentLifecycle {
             const unsafe = this.manager.listRuns().some((run) => (
                 run.status === "starting" || run.status === "running" || run.status === "waiting_for_permission"
             )) || this.setupRunSummaries.some((run) => (
-                run.status === "starting" || run.status === "running"
+                run.status === "starting"
+                || run.status === "running"
+                || run.status === "waiting_for_permission"
             ));
             if (!unsafe) return;
             ctx.ui.notify("Pause, finish, or cancel running delegated agents before navigating the session tree.", "warning");
