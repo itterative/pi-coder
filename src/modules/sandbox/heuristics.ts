@@ -399,6 +399,12 @@ export function isPathWithinDirectory(
     return true;
 }
 
+function hasSymlinkComponent(p: string): boolean {
+    const resolved = path.resolve(p);
+    const real = canonicalizePath(resolved);
+    return real === null || real !== resolved;
+}
+
 /**
  * Check that a path stays within the canonical working directory after
  * resolving symlinks. The kernel resolves full symlink chains (including
@@ -1451,6 +1457,12 @@ export function getPathConfinementAssessment(
         return assessment(Heuristic.UNSAFE, [UnsafeReason.SENSITIVE_PATH]);
     }
     if (!isLexicallyWithin(filePath, resolvedCwd, resolvedCwd, home)) {
+        if (
+            (confinement?.resolveSymlinks ?? true)
+            && hasSymlinkComponent(resolvePath(filePath, resolvedCwd, home))
+        ) {
+            return assessment(Heuristic.UNSAFE, [UnsafeReason.SYMLINK_ESCAPE]);
+        }
         return assessment(Heuristic.UNSAFE, [UnsafeReason.OUTSIDE_CWD]);
     }
     return assessment(Heuristic.UNSAFE, [UnsafeReason.SYMLINK_ESCAPE]);

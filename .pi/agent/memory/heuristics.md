@@ -25,6 +25,7 @@ Important exclusions include normal `git diff`, `cat-file` (output-channel risk)
 ## Path and environment safety
 
 - Path arguments are checked lexically and, when enabled, through canonical realpaths.
+- Outside paths containing symlink components are classified as `SYMLINK_ESCAPE` before file-access approval, so child hooks cannot turn a one-shot outside approval into a symlink escape. `resolveSymlinks: false` retains the lexical outside-path behavior.
 - Nonexistent write targets use their nearest existing ancestor; dangling symlinks are rejected.
 - Symlink-following traversal flags are unsafe; symlinks inside a directory argument are not recursively walked.
 - Sensitive path segments include `.env*`, `.git`, credential directories/files, private-key extensions, `*.tfvars`, and `credentials`; `denyPaths` extends the list and `blockDotfiles` enables paranoid mode. Direct read/write paths use the same sensitive and symlink checks; explicit session folder approvals remain scoped to the selected operation and are restored from `pi-file-sandbox:allowed-file-folder` custom session entries.

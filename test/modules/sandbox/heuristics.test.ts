@@ -77,6 +77,31 @@ describe("heuristic assessments", () => {
             tags: [],
         });
     });
+
+    it("reports symlink escapes for outside paths before approval", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-assessment-cwd-"));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-assessment-outside-"));
+        const target = path.join(outside, "target.txt");
+        const link = path.join(outside, "link.txt");
+        fs.writeFileSync(target, "outside");
+        fs.symlinkSync(target, link);
+
+        try {
+            expect(getPathConfinementAssessment(target, cwd, {})).toEqual({
+                classification: Heuristic.UNSAFE,
+                reasons: [UnsafeReason.OUTSIDE_CWD],
+                tags: [],
+            });
+            expect(getPathConfinementAssessment(link, cwd, {})).toEqual({
+                classification: Heuristic.UNSAFE,
+                reasons: [UnsafeReason.SYMLINK_ESCAPE],
+                tags: [],
+            });
+        } finally {
+            fs.rmSync(cwd, { recursive: true, force: true });
+            fs.rmSync(outside, { recursive: true, force: true });
+        }
+    });
 });
 
 describe("getCwdConfinementPermission", () => {
