@@ -103,11 +103,9 @@ describe("agent extension registration", () => {
 
         expect(tool.name).toBe("agent");
         expect(tool.executionMode).toBe("sequential");
-        expect(prompt.systemPrompt).toContain("<delegated_agents>");
-        expect(prompt.systemPrompt).toContain("scout (builtin)");
-        expect(prompt.systemPrompt).toContain("worker (builtin): [mutation-capable; codebase-read]");
+        await expect(prompt.systemPrompt).toMatchFileSnapshot("__snapshots__/agent-tool.parent-system-prompt.txt");
         const repeatedPrompt = await handlers.before_agent_start[0](prompt, ctx) as any;
-        expect(repeatedPrompt.systemPrompt.match(/<delegated_agents>/g)).toHaveLength(1);
+        expect(repeatedPrompt).toEqual(prompt);
         expect(result.details).toMatchObject({ status: "completed", agent: "scout" });
         expect(events).toContainEqual({
             channel: AGENT_EVENT_CHANNEL,
@@ -426,8 +424,7 @@ describe("agent extension registration", () => {
         expect(status.details.status).toBe("completed");
         await expect(status.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-status.txt");
         const promptAfterSpawn = await handlers.before_agent_start[0]({ systemPrompt: "Parent prompt" }, ctx) as any;
-        expect(promptAfterSpawn.systemPrompt).not.toContain("scout-1");
-        expect(promptAfterSpawn.systemPrompt).not.toContain("Tracked background runs");
+        expect(promptAfterSpawn).toEqual(prompt);
         await expect(listed.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-list.txt");
         expect(collected.details.status).toBe("completed");
         await expect(collected.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-collect.txt");

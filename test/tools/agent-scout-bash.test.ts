@@ -5,10 +5,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-    childProtocolPrompt,
-    registerChildExtension,
-} from "../../src/tools/agent/child/extension";
+import { registerChildExtension } from "../../src/tools/agent/child/extension";
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -121,21 +118,11 @@ describe("scout restricted bash", () => {
             .resolves.toMatchObject({ block: true, reason: expect.stringContaining("safe-bash capability is not enabled") });
     });
 
-    it("explains SAFE_READONLY in the scout protocol", () => {
-        const prompt = childProtocolPrompt(false, false, true);
-
-        expect(prompt).toContain("safe-bash permits only cwd-confined commands classified SAFE_READONLY");
-        expect(prompt).toContain("do not retry variants hoping to bypass it");
-    });
-
     it("omits direct user interaction when the child policy disables it", () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
         tempDirs.push(cwd);
         const runtime = setup(cwd, { background: false, allowUserInteraction: false });
-        const prompt = childProtocolPrompt(false, false, true, false);
 
         expect(runtime.tools.map((tool) => tool.name)).not.toContain("ask_user");
-        expect(prompt).toContain("Direct end-user dialogs are unavailable for this child");
-        expect(prompt).not.toContain("Use ask_user when");
     });
 });

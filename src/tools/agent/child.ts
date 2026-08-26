@@ -133,6 +133,7 @@ export async function createAgentChild(
                     context.definition.mutating === true,
                     context.definition.capabilities.includes("safe-bash"),
                     allowUserInteraction,
+                    context.isolated === true || context.workspaceId !== undefined,
                 ),
             ),
         ],

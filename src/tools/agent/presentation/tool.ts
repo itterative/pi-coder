@@ -25,11 +25,11 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
         label: "Agent",
         description:
             "Delegate codebase work when useful to a built-in or custom agent. The parent agent may also use its own active built-in tools directly, including read, edit, write, and bash; delegation is not required for file changes. "
-            + "Scout, reviewer, advisor, and custom agents are read-only; the built-in worker can edit the selected checkout or isolated worktree and run bash only through explicit per-action user permission prompts. "
+            + "Scout, reviewer, advisor, and custom agents are read-only. A non-isolated worker edits the parent's current checkout using inherited in-cwd file access and session-approved bash rules; outside-cwd file access and unmatched bash use shared parent-visible prompts. An isolated worker edits a separate worktree with independent mutation prompts, and its changes reach the parent only after apply. "
             + "Run work in the foreground or background; optionally provide a short human-readable title and bounded context sections; list, status, collect, resume, or cancel retained runs. In persisted "
             + "parent sessions, paused and interrupted child context survives reload, restart, and switching away and back. The parent can inspect, apply, discard, or revise isolated workspace results without opening the TUI.",
         promptSnippet:
-            "Use agent for optional delegated work; the parent may edit directly with its own built-in tools, while worker handles permission-gated child implementation.",
+            "Use agent for optional delegated work; the parent may edit directly with its own built-in tools. The worker handles implementation in either the current checkout or an isolated worktree, with the permission model described by the selected mode.",
         promptGuidelines: [
             "Use agent with action=\"list\" to recover delegated run IDs and statuses after compaction or session restoration; use the returned IDs with agent actions status, resume, collect, or cancel",
             "Use agent with action=\"start\" when the result is needed immediately; use agent with action=\"spawn\" for independent work that can run concurrently; provide a short title when the run should be easy to identify later",

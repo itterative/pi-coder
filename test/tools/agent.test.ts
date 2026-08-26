@@ -220,8 +220,7 @@ describe("AgentRunManager", () => {
             },
         });
 
-        expect(child.prompts[0]).toContain("Parent summary [parent]");
-        expect(child.prompts[0]).not.toContain("Unrequested context");
+        await expect(child.prompts[0]).toMatchFileSnapshot("__snapshots__/agent-manager.advisor-initial-task.txt");
     });
 
     it("persists the final child leaf after the prompt settles", async () => {
@@ -726,7 +725,7 @@ describe("AgentRunManager", () => {
         expect(restoredContext).toMatchObject({ childSessionFile: childFile, repairInterrupted: false });
         const completed = await secondManager.resume("scout-1", "Use the simpler approach");
         expect(completed.details.status).toBe("completed");
-        expect(restoredChild.prompts[0]).toContain("Use the simpler approach");
+        await expect(restoredChild.prompts[0]).toMatchFileSnapshot("__snapshots__/agent-manager.resume-guidance.txt");
     });
 
     it("restores an uncollected terminal result without requiring the old definition", async () => {

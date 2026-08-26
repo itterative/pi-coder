@@ -49,6 +49,20 @@ Uncollected background terminal outcomes restore from bounded parent metadata wi
 
 A parked dry-run report script, `tools/report-agent-gc.mjs`, is available in git stash `0ccdbf040be633195333a0fb6c7c07dcb9190c0f` (restore with `git stash apply 0ccdbf040be633195333a0fb6c7c07dcb9190c0f`). When restored, run `node tools/report-agent-gc.mjs` to produce a read-only report for the current cwd. It scans parent-session markers and the extension metadata database, then reports marker-reachable/protected/unreachable snapshots, orphan child transcripts, total and potentially reclaimable transcript bytes, and database/catalog references to missing child JSONL files. It accepts `--cwd`, `--state-dir`, `--parent-session-dir`, and `--json`. The report does not delete files or database rows. Actual garbage collection remains intentionally unimplemented until a retention policy is established; the safest initial candidate is orphan JSONL files, while snapshots and referenced transcripts should remain retained.
 
+## Child prompt design
+
+Delegated child instructions are written for the child model, not as a description of extension internals. Describe behavior the child can observe and act on: a tool call runs immediately, may pause while the end user approves or denies it, or is blocked. Avoid UI-oriented phrases such as “opens another prompt” or “parent-visible prompt,” internal heuristic names, and lifecycle facts that do not change what the child should do.
+
+Use terminology consistently:
+
+- **parent** means the coding agent that delegated the task and receives the final report;
+- **end user** means the person who answers questions and approves eligible tool calls;
+- **current working directory** means the checkout or isolated worktree available to the child.
+
+The system prompt has two layers. The role in `definitions/discovery.ts` states the agent's purpose, investigation or implementation standards, and expected report. The operating protocol in `child/extension.ts` states the tools and restrictions of the particular run, including read-only versus mutating access, same-checkout versus isolated behavior, interaction availability, and approval outcomes. Keep capability mechanics out of role text so the two layers do not duplicate or contradict each other. Dynamic repository or parent context belongs in the initial task message rather than either system-prompt layer.
+
+Treat complete rendered prompts as the test contract. `test/tools/agent-prompt.test.ts` uses file snapshots for every built-in role and each distinct worker run mode, including same-checkout and isolated worktree. Prefer reviewing those snapshots over fragment assertions; when wording or a run mode changes, update and inspect the complete affected snapshots.
+
 ## Safety scope and trust boundary
 
 Delegated-agent restrictions are local permission and accident-prevention controls, **not a security sandbox**. Pi-coder trusts the machine and local development environment that started Pi: the Pi process environment (including `PATH` and `GIT_*`), installed executables, Git configuration, and the selected checkout. It does not attempt to defend against a user who has made those inputs hostile, nor verify that an allowlisted command cannot be replaced by that environment. A dedicated OS sandbox is the appropriate boundary when that threat model is required.

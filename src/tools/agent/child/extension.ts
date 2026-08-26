@@ -41,21 +41,46 @@ export function childProtocolPrompt(
     mutating: boolean,
     safeBash: boolean,
     allowUserInteraction = true,
+    isolated = false,
 ): string {
     const interaction = background || !allowUserInteraction
-        ? "Direct end-user dialogs are unavailable for this child. Use ask_parent when guidance is materially necessary; make reasonable progress first, include evidence and a recommendation, and call it alone in its tool batch."
-        : "Use ask_user when you need a preference, clarification, or decision directly from the end user, and call it alone in its tool batch so later work can incorporate the answer. The answer returns in the same turn, so continue your work afterward. Use ask_parent instead when the parent can answer, investigate, or decide; make reasonable progress first, include evidence and a recommendation, and call ask_parent alone in its tool batch. Do not ask questions only in prose when either interaction tool applies.";
-    const capability = mutating
-        ? "You are a mutation-capable worker operating in the parent's current checkout or an isolated worktree. Same-checkout edits inside the working directory use the parent's existing access, while outside-cwd paths and unresolved bash commands use the parent-visible permission prompts. Isolated workspaces use their own mutation prompts. Call mutation tools one at a time; same-checkout workers are single-flight, while isolated workers may run concurrently with other isolated work."
+        ? "If guidance from the parent is necessary, make reasonable progress first, then use `ask_parent` with the evidence you found and your recommended course. Call `ask_parent` by itself, not alongside other tools."
         : [
-            "You are a read-only subagent working for a parent coding agent.",
-            `Enabled capabilities: codebase-read${safeBash ? ", safe-bash" : ""}.`,
-            safeBash
-                ? "safe-bash permits only cwd-confined commands classified SAFE_READONLY by the safety heuristic. Every file access—including resolved symlinks—must stay inside the working directory and avoid sensitive paths. Unknown commands, project working-tree writes, unsafe flags or modes, and dynamic or unmodeled behavior are blocked. Use a block reason to choose a supported read/search tool or report the limit; do not retry variants hoping to bypass it."
-                : "safe-bash is not enabled, so you cannot run bash commands.",
-            "You cannot modify project working-tree files.",
+            "Use `ask_user` when you need a preference, clarification, or decision from the end user. Call it by itself, not alongside other tools, and continue after the answer is returned.",
+            "Use `ask_parent` instead when the parent can answer or make the decision. Before asking, make reasonable progress and include the evidence you found and your recommendation. Do not leave a blocking question only in prose when an interaction tool applies.",
         ].join(" ");
-    return `${capability}\n\n${interaction}\n\nWhen the task is complete, provide a self-contained final report to the parent. Mutation-capable workers must list changed files and validation performed.`;
+    let capability: string;
+    if (mutating && isolated) {
+        capability = [
+            "Run mode: mutation-capable worker in a separate Git worktree.",
+            "This worktree is your current working directory. Changes you make there do not affect the parent's checkout unless the parent later applies your result.",
+            "This run has its own permission state. A file mutation or Bash command that is not already allowed may pause while the end user decides whether to approve it; do not assume an approval granted to the parent also applies to you.",
+            "Run only one mutation tool at a time. Other isolated workers may run concurrently, so avoid destructive Git operations and keep changes narrow.",
+        ].join("\n\n");
+    } else if (mutating) {
+        capability = [
+            "Run mode: mutation-capable worker in the parent's current checkout. That checkout is your current working directory.",
+            "You may call `edit` and `write` directly for paths inside the current working directory; that access is already authorized and does not require an additional approval request. Eligible file access outside it may pause while the end user approves or denies the request. Sensitive paths and paths that escape through symlinks are always blocked.",
+            "A Bash command covered by an existing parent permission rule runs immediately. Any other eligible command may pause while the end user approves or denies it. A denied command or one rejected by the safety checks remains blocked.",
+            "Successful changes appear immediately in the parent's checkout. Inspect the latest file contents before editing, preserve unrelated changes, and run only one mutation tool at a time.",
+        ].join("\n\n");
+    } else {
+        const bashAccess = safeBash
+            ? "You may also use `bash`, but only for local inspection commands that the runtime recognizes as read-only. Commands that may write, use unsafe modes, access the network or sensitive paths, or cannot be classified safely are blocked. If a command is blocked, use the stated reason to choose a read/search tool or report the limitation; do not try alternate spellings to bypass the restriction."
+            : "The `bash` tool is unavailable in this run.";
+
+        capability = [
+            "Run mode: read-only delegated agent.",
+            "You may use `read`, `grep`, `find`, and `ls`. Every path, after resolving symlinks, must remain inside the current working directory and must not enter a sensitive location. You cannot modify files.",
+            bashAccess,
+        ].join("\n\n");
+    }
+
+    const reporting = mutating
+        ? "When finished, give the parent a self-contained report with a summary, every changed file, validation performed, and any unresolved concern."
+        : "When finished, give the parent a self-contained report with your findings, supporting evidence, limitations, and useful next steps.";
+
+    return `${capability}\n\n${interaction}\n\n${reporting}`;
 
 }
 

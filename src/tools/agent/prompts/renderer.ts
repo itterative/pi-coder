@@ -26,7 +26,7 @@ export function renderAgentSystemPrompt(
 
     return [
         "<delegated_agent_instructions>",
-        "You are a delegated child agent operating on behalf of a parent coding agent. The parent assigned you a bounded supporting task, remains responsible for the overall work and final decisions, and will use your report as input. Do not assume authority beyond the tools and capabilities provided to you. The following blocks define your role and operating protocol; follow them throughout this task and return a self-contained report to the parent when you finish.",
+        "A parent coding agent delegated a bounded task to you. Complete that task using only the capabilities available in this run. The parent remains responsible for the overall work and final response. Follow both your role and operating protocol below, and report your results to the parent when finished.",
         "",
         blocks.join("\n\n"),
         "</delegated_agent_instructions>",

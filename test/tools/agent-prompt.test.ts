@@ -27,12 +27,16 @@ describe("delegated-agent prompt rendering", () => {
             childProtocolPrompt(false, mutating, safeBash, allowUserInteraction),
         );
 
-        expect(rendered).toContain("<delegated_agent_instructions>");
-        expect(rendered).toContain("<delegated_agent_role>");
-        expect(rendered).toContain("<delegated_agent_protocol>");
-        expect(rendered).toContain("follow them throughout this task");
-        expect(rendered).toContain("return a self-contained report to the parent");
         await expect(rendered).toMatchFileSnapshot(`__snapshots__/agent-prompt.${name}.system.txt`);
+    });
+
+    it("renders the isolated worker child system prompt", async () => {
+        const rendered = renderAgentSystemPrompt(
+            BUILTIN_WORKER,
+            childProtocolPrompt(false, true, false, true, true),
+        );
+
+        await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.worker-isolated.system.txt");
     });
 
     it("renders only policy-selected context in the task message", async () => {
@@ -64,16 +68,15 @@ describe("delegated-agent prompt rendering", () => {
         );
 
         await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.advisor-context.txt");
-        expect(rendered).not.toContain("Not requested");
     });
 
-    it("advertises context sections in the parent agent catalog", () => {
+    it("advertises context sections in the parent agent catalog", async () => {
         const prompt = availableAgentsPrompt([BUILTIN_ADVISOR]);
 
-        expect(prompt).toContain("context sections: parent_summary, recent_context, implementation_state");
+        await expect(prompt).toMatchFileSnapshot("__snapshots__/agent-prompt.advisor-catalog.txt");
     });
 
-    it("deduplicates sections and bounds the complete rendered context block", () => {
+    it("deduplicates sections and bounds the complete rendered context block", async () => {
         const rendered = renderAgentTask(
             "Review the approach.",
             {
@@ -98,11 +101,10 @@ describe("delegated-agent prompt rendering", () => {
         const renderedContext = rendered.slice(contextStart);
 
         expect(renderedContext.length).toBeLessThanOrEqual(300);
-        expect(renderedContext).toContain("First section.");
-        expect(renderedContext).not.toContain("Duplicate summary");
+        await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.bounded-context.txt");
     });
 
-    it("preserves task-only behavior without a context policy", () => {
+    it("preserves task-only behavior without a context policy", async () => {
         const rendered = renderAgentTask(
             "Inspect the code.",
             {
@@ -116,6 +118,6 @@ describe("delegated-agent prompt rendering", () => {
             undefined,
         );
 
-        expect(rendered).toBe("Inspect the code.");
+        await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.task-only.txt");
     });
 });
