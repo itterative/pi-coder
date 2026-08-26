@@ -6,7 +6,13 @@ import {
     getAgentDir,
     type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { agentTools, READ_ONLY_AGENT_TOOLS } from "./definitions/discovery";
+import {
+    agentCanEdit,
+    agentCanRunCommands,
+    agentTools,
+    hasAgentCapability,
+    READ_ONLY_AGENT_TOOLS,
+} from "./definitions/discovery";
 import { createChildModelRuntime, resolveChildModel } from "./child/model-runtime";
 import { childProtocolPrompt, registerChildExtension } from "./child/extension";
 import { renderAgentSystemPrompt } from "./prompts/renderer";
@@ -74,6 +80,9 @@ export async function createAgentChild(
     };
     const cwd = context.cwd;
     const tools = agentTools(context.definition);
+    const canEdit = agentCanEdit(context.definition);
+    const canRunCommands = agentCanRunCommands(context.definition);
+    const safeBash = hasAgentCapability(context.definition, "safe-bash");
     const allowUserInteraction = context.definition.allowUserInteraction !== false;
     const agentDir = getAgentDir();
     let sessionManager = context.childSessionFile
@@ -102,9 +111,11 @@ export async function createAgentChild(
         noThemes: true,
         noContextFiles: false,
         extensionFactories: [{
-            name: context.definition.mutating
+            name: canEdit
                 ? "pi-coder-worker-child"
-                : "pi-coder-readonly-child",
+                : canRunCommands
+                    ? "pi-coder-command-child"
+                    : "pi-coder-readonly-child",
             hidden: true,
             factory: registerChildExtension(
                 tracker,
@@ -112,8 +123,8 @@ export async function createAgentChild(
                 cwd,
                 context.definition.name,
                 context.background === true,
-                context.definition.mutating === true,
-                context.definition.capabilities.includes("safe-bash"),
+                canEdit,
+                safeBash,
                 context.runId ?? context.definition.name,
                 context.runTitle ?? context.runId ?? context.definition.name,
                 context.onProgress,
@@ -123,6 +134,7 @@ export async function createAgentChild(
                 allowUserInteraction,
                 context.workspaceId,
                 context.isolated,
+                canRunCommands,
             ),
         }],
         appendSystemPrompt: [
@@ -130,10 +142,11 @@ export async function createAgentChild(
                 context.definition,
                 childProtocolPrompt(
                     context.background === true,
-                    context.definition.mutating === true,
-                    context.definition.capabilities.includes("safe-bash"),
+                    canEdit,
+                    safeBash,
                     allowUserInteraction,
                     context.isolated === true || context.workspaceId !== undefined,
+                    canRunCommands,
                 ),
             ),
         ],
@@ -141,10 +154,10 @@ export async function createAgentChild(
     await resourceLoader.reload();
     const interactionToolCount = context.background || !allowUserInteraction ? 1 : 2;
     context.onTrace?.("resources.loaded", {
-        readOnlyToolCount: context.definition.mutating ? READ_ONLY_AGENT_TOOLS.length : tools.length,
+        readOnlyToolCount: canEdit ? READ_ONLY_AGENT_TOOLS.length : tools.length,
         directUserUI: !context.background && parentContext.hasUI && parentContext.mode === "tui",
         background: context.background === true,
-        ...(context.definition.mutating
+        ...(canEdit
             ? { configuredToolCount: tools.length, mutating: true }
             : {}),
     });
@@ -190,7 +203,7 @@ export async function createAgentChild(
     // sequentially so each approval can reach execution and release its gate.
     // TODO(agent): Consider moving permission/queue handling into tool execution
     // wrappers so read-only worker calls can remain parallel.
-    if (context.definition.mutating) {
+    if (canEdit || canRunCommands) {
         session.agent.toolExecution = "sequential";
     }
 

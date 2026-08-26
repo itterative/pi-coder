@@ -32,7 +32,7 @@ Custom agents are Markdown files with YAML frontmatter and an instruction body:
 ---
 name: analyst
 description: Inspect architecture and identify risks
-capabilities: [safe-bash] # optional; currently the only extra capability
+capabilities: [safe-bash] # optional; read/search are baseline capabilities
 model: provider/model-id # optional; defaults to the parent model
 ---
 
@@ -44,13 +44,13 @@ Agent-specific instructions go here.
 Built-ins:
 
 - `scout` — read-only exploration with restricted safe-bash;
-- `reviewer` — read-only exploration including safe Git history inspection;
+- `reviewer` — code and history review with permission-gated command validation;
 - `advisor` — opt-in read-only senior advice on implementation decisions and tradeoffs, using a configured model;
-- `worker` — same-checkout or isolated implementation with permission-gated mutations.
+- `worker` — same-checkout or isolated implementation with permission-gated edits and commands.
 
-Custom definitions are read-only by default, may opt into `safe-bash`, and may select a model; otherwise they use the parent model.
+Custom definitions are read-only by default, may opt into `safe-bash` or `command-runner`, and may select a model; otherwise they use the parent model. `read` and `search` are baseline capabilities, `command-runner` implies `safe-bash`, and `edit` is reserved for the built-in worker.
 
-Custom Markdown definitions are loaded from `~/.pi/agent/agents` and the nearest trusted `.pi/agents`. Every custom agent gets `read`, `grep`, `find`, and `ls`; `capabilities: [safe-bash]` is the only additional capability. Built-in names `scout`, `reviewer`, `advisor`, and `worker` are reserved, paths are sorted, same-scope duplicates are first-wins, and trusted-project definitions override user definitions.
+Custom Markdown definitions are loaded from `~/.pi/agent/agents` and the nearest trusted `.pi/agents`. Every custom agent gets `read`, `grep`, `find`, and `ls`; optional capabilities include `safe-bash` and `command-runner`, while `edit` is reserved for the built-in worker. Built-in names `scout`, `reviewer`, `advisor`, and `worker` are reserved, paths are sorted, same-scope duplicates are first-wins, and trusted-project definitions override user definitions.
 
 Runtime context is passed as bounded `context.sections` on `start` and `spawn`. Built-in definitions select allowed sections through a context policy; the renderer places selected context in the initial task message rather than the system prompt so persisted child transcripts retain the exact context. Automatic parent-summary and recent-context collection remains future work.
 
@@ -69,7 +69,7 @@ cancel  — stop a waiting or active run
 inspect/apply/discard/revise — manage an isolated result
 ```
 
-Runs are bounded to four active or interrupted records. At most one may be a worker, and its mutation calls are serialized. Terminal background results are retained separately until collected or evicted.
+Runs are bounded to four active or interrupted records. At most one may be an edit-capable worker, and its permission-gated calls are serialized. Terminal background results are retained separately until collected or evicted.
 
 `ask_parent` pauses a child and requires explicit guidance. Foreground children may use restricted `ask_user`, except the advisor, which always uses `ask_parent`; background children never open parent dialogs. Cancellation and shutdown abort children and clean up handles. A waiting run is paused, not completed; an interrupted run is never restarted or replayed automatically and requires explicit user action with a safety check.
 
@@ -86,8 +86,9 @@ Isolated workers use a persistent pool of up to three Git worktrees. Setup runs 
 - Delegated-agent controls reduce model-initiated accidents; they are not a hostile-environment security boundary.
 - Child paths are confined to the working directory and checked for sensitive paths and symlink escapes.
 - `safe-bash` runs only commands classified `SAFE_READONLY` by the shared cwd heuristic. Unknown, mutating, network, interpreter, and unsafe Git commands are rejected without an approval bypass.
-- Non-isolated worker edits inside the checkout use the parent's existing access; outside-cwd reads and edits use the shared file-access prompt, and unresolved worker Bash uses the shared sandbox/direct prompt with inherited session rules. Sensitive paths and symlink escapes remain blocked before prompting. Isolated workspaces and setup workers use independent mutation prompts without parent-session inheritance.
-- Persisted metadata cannot grant mutation authority to user-selectable agents; only the current reserved built-in `worker` may be restored as a mutating task worker.
+- `command-runner` runs safe commands directly and routes other commands through the normal parent permission prompt. It may have project side effects; explicit approval, not command naming, is authoritative.
+- Non-isolated command-capable agents share the parent's session Bash rules; unresolved commands use the shared sandbox/direct prompt. Agents with `edit` also receive direct edit/write tools, with outside-cwd access using the shared file-access prompt. Sensitive paths and symlink escapes remain blocked before prompting. Isolated workspaces and setup workers use independent permission state without parent-session inheritance.
+- The `edit` capability is reserved for the built-in `worker`; persisted metadata cannot grant edit authority to user-selectable agents. The `command-runner` capability does not grant direct edit/write tools.
 
 ## Persistence and diagnostics
 

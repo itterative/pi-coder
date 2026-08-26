@@ -24,7 +24,7 @@ import registerFileToolHook, {
 } from "../../file-permissions";
 import { getPermissionState } from "../../../modules/sandbox/permission-state";
 import { guardSafeBashCommand } from "./safe-bash";
-import { registerWorkerMutationHooks } from "./worker-permissions";
+import { registerCommandPermissionHooks } from "./command-permissions";
 import type { ChildAgentFactoryContext } from "../contracts/runs";
 import type { ChildProgressTracker as ProgressTracker } from "./progress";
 
@@ -38,10 +38,11 @@ const CHILD_CONFINEMENT: SandboxConfigCwdConfinement = {
 
 export function childProtocolPrompt(
     background: boolean,
-    mutating: boolean,
+    canEdit: boolean,
     safeBash: boolean,
     allowUserInteraction = true,
     isolated = false,
+    commandRunner = false,
 ): string {
     const interaction = background || !allowUserInteraction
         ? "If guidance from the parent is necessary, make reasonable progress first, then use `ask_parent` with the evidence you found and your recommended course. Call `ask_parent` by itself, not alongside other tools."
@@ -50,19 +51,25 @@ export function childProtocolPrompt(
             "Use `ask_parent` instead when the parent can answer or make the decision. Before asking, make reasonable progress and include the evidence you found and your recommendation. Do not leave a blocking question only in prose when an interaction tool applies.",
         ].join(" ");
     let capability: string;
-    if (mutating && isolated) {
+    if (canEdit && isolated) {
         capability = [
             "Run mode: mutation-capable worker in a separate Git worktree.",
             "This worktree is your current working directory. Changes you make there do not affect the parent's checkout unless the parent later applies your result.",
             "This run has its own permission state. A file mutation or Bash command that is not already allowed may pause while the end user decides whether to approve it; do not assume an approval granted to the parent also applies to you.",
             "Run only one mutation tool at a time. Other isolated workers may run concurrently, so avoid destructive Git operations and keep changes narrow.",
         ].join("\n\n");
-    } else if (mutating) {
+    } else if (canEdit) {
         capability = [
             "Run mode: mutation-capable worker in the parent's current checkout. That checkout is your current working directory.",
             "You may call `edit` and `write` directly for paths inside the current working directory; that access is already authorized and does not require an additional approval request. Eligible file access outside it may pause while the end user approves or denies the request. Sensitive paths and paths that escape through symlinks are always blocked.",
             "A Bash command covered by an existing parent permission rule runs immediately. Any other eligible command may pause while the end user approves or denies it. A denied command or one rejected by the safety checks remains blocked.",
             "Successful changes appear immediately in the parent's checkout. Inspect the latest file contents before editing, preserve unrelated changes, and run only one mutation tool at a time.",
+        ].join("\n\n");
+    } else if (commandRunner) {
+        capability = [
+            "Run mode: delegated agent with permission-gated command execution.",
+            "You may use `read`, `grep`, `find`, and `ls`. Every direct file path, after resolving symlinks, must remain inside the current working directory and must not enter a sensitive location. You cannot use direct edit or write tools.",
+            "You may use `bash`. Commands recognized as local read-only inspection run directly; other eligible commands may pause while the end user approves or denies them. Approved commands can have project side effects, so keep them relevant to validation and do not assume a command is harmless because it has a test-like name.",
         ].join("\n\n");
     } else {
         const bashAccess = safeBash
@@ -76,7 +83,7 @@ export function childProtocolPrompt(
         ].join("\n\n");
     }
 
-    const reporting = mutating
+    const reporting = canEdit
         ? "When finished, give the parent a self-contained report with a summary, every changed file, validation performed, and any unresolved concern."
         : "When finished, give the parent a self-contained report with your findings, supporting evidence, limitations, and useful next steps.";
 
@@ -167,7 +174,7 @@ export function registerChildExtension(
     cwd: string,
     agentName: string,
     background: boolean,
-    mutating: boolean,
+    canEdit: boolean,
     safeBash: boolean,
     runId: string,
     runTitle: string,
@@ -178,6 +185,7 @@ export function registerChildExtension(
     allowUserInteraction = true,
     workspaceId?: string,
     isolated = false,
+    commandRunner = false,
 ) {
     return (pi: ExtensionAPI): void => {
         const nonIsolated = !isolated && workspaceId === undefined;
@@ -204,7 +212,7 @@ export function registerChildExtension(
             });
         };
 
-        if (nonIsolated && mutating && permissionState !== undefined) {
+        if (nonIsolated && canEdit && permissionState !== undefined) {
             const fileHookOptions = {
                 state: permissionState,
                 promptContext: parentContext,
@@ -322,8 +330,8 @@ export function registerChildExtension(
             },
         });
 
-        if (mutating) {
-            registerWorkerMutationHooks(pi, {
+        if (canEdit || commandRunner) {
+            registerCommandPermissionHooks(pi, {
                 parentContext,
                 events,
                 runId,
@@ -346,7 +354,7 @@ export function registerChildExtension(
         }
 
         pi.on("tool_call", (event, ctx) => {
-            if (!mutating && isToolCallEventType<"bash", BashToolInput>("bash", event)) {
+            if (!canEdit && !commandRunner && isToolCallEventType<"bash", BashToolInput>("bash", event)) {
                 return guardSafeBashCommand(event.input.command, ctx.cwd, safeBash, onTrace);
             }
 

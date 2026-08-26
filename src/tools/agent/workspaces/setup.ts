@@ -8,7 +8,7 @@ import type { AgentEventSink } from "../contracts/events";
 import { AgentActionError, AgentRunManager } from "../runs/manager";
 import type { AgentRunSummary, ChildAgentFactory } from "../contracts/runs";
 import type { AgentWorkspace } from "../contracts/workspaces";
-import type { AgentDefinition } from "../definitions/types";
+import { agentCanEdit, type AgentDefinition } from "../definitions/types";
 import {
     claimAgentWorkspace,
     findAvailableAgentWorkspace,
@@ -59,10 +59,9 @@ export async function runWorkspaceSetup(
     const setupDefinition: AgentDefinition = {
         name: "workspace-setup",
         description: "Prepare an isolated development workspace without implementing the task",
-        capabilities: [],
+        capabilities: ["read", "search", "command-runner"],
         model: definition.model,
         source: "builtin",
-        mutating: true,
         systemPrompt: `You are the isolated workspace setup specialist for a later implementation worker.
 
 Your job is to prepare the development environment inside this isolated worktree. You are allowed and expected to install dependencies, create project-local environments, update dependency lockfiles, configure setup files, and generate project-local setup artifacts when needed. Use bash commands only inside this worktree; every command requires explicit parent approval, must be non-interactive, and should use a suitable timeout. Run setup commands one at a time and report a missing prerequisite instead of waiting for interactive input.
@@ -167,7 +166,7 @@ export async function prepareIsolatedWorkspace(
     events?: AgentEventSink,
     dialogEvents?: EventBus,
 ): Promise<WorkspaceReservation> {
-    if (!definition.mutating) {
+    if (!agentCanEdit(definition)) {
         throw new AgentActionError("Worktree isolation is currently available only for the mutation-capable worker.");
     }
     if (manager.hasActiveNonIsolatedMutatingRun) {

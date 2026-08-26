@@ -31,5 +31,5 @@
 AGENT:
 The deadlock is real and follows directly from Pi 0.84.1’s execution order:
 - Parallel mode preflights calls sequentially, but executes them only after all preflights finish (`node_modules/.../pi-agent-core/dist/agent-loop.js:287-371`).
-- The first mutation acquires `MutationQueue` in `tool_call` and stores its release until `tool_result` (`src/tools/agent/child/worker-permissions.ts:181-216, 294-301`).
+- The first mutation acquires `MutationQueue` in `tool_call` and stores its release until `tool_result` (`src/tools/agent/child/command-permissions.ts:181-216, 294-301`).
 - A second mutation therefore waits during preflight for a result that cannot exist yet.

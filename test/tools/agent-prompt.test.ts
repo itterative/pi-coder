@@ -16,15 +16,15 @@ import {
 describe("delegated-agent prompt rendering", () => {
     const builtins = [
         { name: "scout", definition: BUILTIN_SCOUT, mutating: false, safeBash: true, allowUserInteraction: true },
-        { name: "reviewer", definition: BUILTIN_REVIEWER, mutating: false, safeBash: true, allowUserInteraction: true },
+        { name: "reviewer", definition: BUILTIN_REVIEWER, mutating: false, safeBash: true, commandRunner: true, allowUserInteraction: true },
         { name: "advisor", definition: BUILTIN_ADVISOR, mutating: false, safeBash: true, allowUserInteraction: false },
-        { name: "worker", definition: BUILTIN_WORKER, mutating: true, safeBash: false, allowUserInteraction: true },
+        { name: "worker", definition: BUILTIN_WORKER, mutating: true, safeBash: true, commandRunner: true, allowUserInteraction: true },
     ] as const;
 
-    it.each(builtins)("renders the $name child system prompt", async ({ name, definition, mutating, safeBash, allowUserInteraction }) => {
+    it.each(builtins)("renders the $name child system prompt", async ({ name, definition, mutating, safeBash, commandRunner = false, allowUserInteraction }) => {
         const rendered = renderAgentSystemPrompt(
             definition,
-            childProtocolPrompt(false, mutating, safeBash, allowUserInteraction),
+            childProtocolPrompt(false, mutating, safeBash, allowUserInteraction, false, commandRunner),
         );
 
         await expect(rendered).toMatchFileSnapshot(`__snapshots__/agent-prompt.${name}.system.txt`);
@@ -33,7 +33,7 @@ describe("delegated-agent prompt rendering", () => {
     it("renders the isolated worker child system prompt", async () => {
         const rendered = renderAgentSystemPrompt(
             BUILTIN_WORKER,
-            childProtocolPrompt(false, true, false, true, true),
+            childProtocolPrompt(false, true, true, true, true, true),
         );
 
         await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.worker-isolated.system.txt");

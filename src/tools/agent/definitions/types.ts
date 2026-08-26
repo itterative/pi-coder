@@ -4,34 +4,68 @@ import type { AgentContextPolicy } from "../contracts/context";
 
 export type AgentSource = "builtin" | "user" | "project";
 
-/** User-configurable capabilities for read-only delegated agents. */
-export const AGENT_CAPABILITIES = ["safe-bash"] as const;
+/** Capabilities available to delegated agents. */
+export const AGENT_CAPABILITIES = [
+    "read",
+    "search",
+    "safe-bash",
+    "command-runner",
+    "edit",
+] as const;
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
 
-/** Tools granted to every delegated agent for baseline codebase inspection. */
+/** Capabilities granted to every delegated agent for baseline inspection. */
+export const BASELINE_AGENT_CAPABILITIES = ["read", "search"] as const;
+
+/** Tools granted by the baseline read and search capabilities. */
 export const READ_ONLY_AGENT_TOOLS = ["read", "grep", "find", "ls"] as const;
 
 export interface AgentDefinition {
     name: string;
     description: string;
-    /** Explicit privileges beyond the baseline codebase-read tools. */
+    /** Explicit tool and execution capabilities for this agent. */
     capabilities: AgentCapability[];
     model?: string;
     systemPrompt: string;
     contextPolicy?: AgentContextPolicy;
     source: AgentSource;
     filePath?: string;
-    /** Built-ins only: grants mutation tools through the worker permission gate. */
-    mutating?: boolean;
     /** Whether a foreground child may ask the end user directly. Defaults to true. */
     allowUserInteraction?: boolean;
+}
+
+/** Returns the effective capability set, including the always-available baseline. */
+export function agentCapabilities(definition: AgentDefinition): AgentCapability[] {
+    const declared = new Set<AgentCapability>([
+        ...BASELINE_AGENT_CAPABILITIES,
+        ...definition.capabilities,
+    ]);
+    if (declared.has("command-runner")) declared.add("safe-bash");
+    return AGENT_CAPABILITIES.filter((capability) => declared.has(capability));
+}
+
+export function hasAgentCapability(
+    definition: AgentDefinition,
+    capability: AgentCapability,
+): boolean {
+    return agentCapabilities(definition).includes(capability);
+}
+
+/** Whether the definition can use direct edit/write tools. */
+export function agentCanEdit(definition: AgentDefinition): boolean {
+    return hasAgentCapability(definition, "edit");
+}
+
+/** Whether the definition can run Bash through the normal permission gate. */
+export function agentCanRunCommands(definition: AgentDefinition): boolean {
+    return hasAgentCapability(definition, "command-runner");
 }
 
 /** Maps the capability policy to the concrete SDK tools supplied to a child. */
 export function agentTools(definition: AgentDefinition): string[] {
     const tools: string[] = [...READ_ONLY_AGENT_TOOLS];
-    if (definition.mutating) return [...tools, "edit", "write", "bash"];
-    if (definition.capabilities.includes("safe-bash")) tools.push("bash");
+    if (agentCanEdit(definition)) tools.push("edit", "write");
+    if (agentCanRunCommands(definition) || hasAgentCapability(definition, "safe-bash")) tools.push("bash");
     return tools;
 }
 
@@ -73,7 +107,6 @@ function hashDefinition(definition: AgentDefinition, includeContextPolicy: boole
             : {}),
         source: definition.source,
         filePath: definition.filePath ?? null,
-        mutating: definition.mutating === true,
         ...(includeContextPolicy
             ? { allowUserInteraction: definition.allowUserInteraction !== false }
             : {}),

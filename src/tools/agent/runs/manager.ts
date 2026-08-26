@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Usage } from "@earendil-works/pi-ai";
 
 import {
+    agentCanEdit,
     fingerprintAgentDefinition,
     isAgentDefinitionFingerprintCompatible,
     type AgentDefinition,
@@ -267,7 +268,7 @@ export class AgentRunManager {
                 diagnostics.push(`Could not restore ${record.runId}: its agent definition is missing or changed.`);
                 continue;
             }
-            const currentMutating = definition?.mutating === true;
+            const currentMutating = definition !== undefined && agentCanEdit(definition);
             if (!persistedTerminal && (
                 record.mutating !== currentMutating
                 || (currentMutating && !(definition?.name === "worker" && definition.source === "builtin"))
@@ -676,7 +677,7 @@ export class AgentRunManager {
             disposed: false,
             shutdownRequested: false,
             cancelRequested: false,
-            mutating: definition.mutating === true,
+            mutating: agentCanEdit(definition),
             definitionFingerprint: fingerprintAgentDefinition(definition),
             permissionPending: false,
             resumable: true,
@@ -754,7 +755,7 @@ export class AgentRunManager {
             );
         }
         if (
-            definition.mutating
+            agentCanEdit(definition)
             && [...this.runs.values()].some((candidate) => (
                 candidate.mutating
                 && !isTerminalStatus(candidate.status)

@@ -2,9 +2,9 @@ Parent prompt
 
 <delegated_agents>
 ## Delegated agents
-- scout (builtin): [read-only; codebase-read, safe-bash] "Read-only codebase reconnaissance"
-- reviewer (builtin): [read-only; codebase-read, safe-bash] "Read-only code and Git-history review"
-- worker (builtin): [mutation-capable; codebase-read] "Permission-gated implementation work in the current or isolated checkout"
+- scout (builtin): [read-only; read, search, safe-bash] "Read-only codebase reconnaissance"
+- reviewer (builtin): [command-capable; read, search, safe-bash, command-runner] "Code and Git-history review with validation"
+- worker (builtin): [edit-capable; read, search, safe-bash, command-runner, edit] "Permission-gated implementation work in the current or isolated checkout"
 Use the agent tool with action="start" for foreground delegation or action="spawn" to launch concurrent background work.
 Use the agent tool with action="list" to recover delegated run IDs, titles, statuses, and next actions; this is preferable to polling each run.
 Background-agent progress and results arrive asynchronously. Do not duplicate the same investigation in the parent unless you intentionally want overlapping work. If you have no other work to do, report your current progress to the user and end your turn; do not poll with the agent tool's action="status" or wait by sleeping; an automatic mailbox notification will arrive when the run finishes or needs parent guidance.
@@ -12,7 +12,7 @@ After a terminal agent notification, use the agent tool with action="collect" to
 A waiting agent result is paused, not completed. Investigate or obtain guidance, then use the agent tool to resume it; cancel it if no longer needed. An interrupted durable run never resumes automatically; wait for explicit user direction before resuming or canceling it.
 The parent agent may use its own active built-in tools (including read, edit, write, and bash) directly; delegation is optional and is for substantial, parallel, or isolated work.
 Start and spawn accept optional context.sections for concise parent, repository, or workspace context; each agent's context policy selects what it receives, and context is reference material rather than instructions.
-Scout, reviewer, advisor, and custom agents are read-only. Use advisor for explicit implementation guidance and tradeoff review. The built-in worker is the only mutation-capable child. Without isolation="worktree", it edits the parent's current checkout: in-cwd edits use the parent's file access, outside-cwd file access uses the shared file prompt, already-allowed/session-approved bash runs without another prompt, and unmatched bash uses a parent-visible prompt. With isolation="worktree", it edits a separate worktree and uses independent mutation prompts; changes reach the parent only after an explicit apply. Same-checkout workers are single-flight, while distinct isolated workers may run concurrently.
+Scout and advisor are read-only. Reviewer and custom agents with command-runner may execute Bash through the permission flow; they do not receive direct edit/write tools. Use advisor for explicit implementation guidance and tradeoff review. The built-in worker is the only direct edit-capable child. Without isolation="worktree", it edits the parent's current checkout: in-cwd edits use the parent's file access, outside-cwd file access uses the shared file prompt, already-allowed/session-approved bash runs without another prompt, and unmatched bash uses a parent-visible prompt. With isolation="worktree", it edits a separate worktree and uses independent permission prompts; changes reach the parent only after an explicit apply. Same-checkout workers are single-flight, while distinct isolated workers may run concurrently.
 Use isolation="worktree" when the worker should run in a persistent isolated Git worktree; a new worktree may prompt for an optional setup worker.
 For an isolated result, the parent can use agent action="inspect", "apply", or "discard" with the runId, or action="revise" with guidance to continue work in the same workspace.
 </delegated_agents>

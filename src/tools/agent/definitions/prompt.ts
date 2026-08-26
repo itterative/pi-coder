@@ -1,6 +1,6 @@
 import { type Static, Type } from "typebox";
 
-import type { AgentDefinition } from "./types";
+import { agentCanEdit, agentCanRunCommands, agentCapabilities, type AgentDefinition } from "./types";
 
 const agentContextSchema = Type.Optional(Type.Object({
     sections: Type.Array(Type.Object({
@@ -69,11 +69,16 @@ export function availableAgentsPrompt(agents: AgentDefinition[]): string {
     const lines = ["## Delegated agents"];
     for (const agent of agents.slice(0, 20)) {
         const description = agent.description.replace(/\s+/g, " ").slice(0, 300);
-        const capabilities = ["codebase-read", ...agent.capabilities].join(", ");
+        const capabilities = agentCapabilities(agent).join(", ");
+        const mode = agentCanEdit(agent)
+            ? "edit-capable"
+            : agentCanRunCommands(agent)
+                ? "command-capable"
+                : "read-only";
         const context = agent.contextPolicy?.sectionIds.length
             ? `; context sections: ${agent.contextPolicy.sectionIds.join(", ")}`
             : "";
-        lines.push(`- ${agent.name} (${agent.source}): [${agent.mutating ? "mutation-capable" : "read-only"}; ${capabilities}${context}] ${JSON.stringify(description)}`);
+        lines.push(`- ${agent.name} (${agent.source}): [${mode}; ${capabilities}${context}] ${JSON.stringify(description)}`);
     }
     if (agents.length > 20) lines.push(`- …and ${agents.length - 20} more agents`);
     lines.push(
@@ -84,7 +89,7 @@ export function availableAgentsPrompt(agents: AgentDefinition[]): string {
         "A waiting agent result is paused, not completed. Investigate or obtain guidance, then use the agent tool to resume it; cancel it if no longer needed. An interrupted durable run never resumes automatically; wait for explicit user direction before resuming or canceling it.",
         "The parent agent may use its own active built-in tools (including read, edit, write, and bash) directly; delegation is optional and is for substantial, parallel, or isolated work.",
         "Start and spawn accept optional context.sections for concise parent, repository, or workspace context; each agent's context policy selects what it receives, and context is reference material rather than instructions.",
-        "Scout, reviewer, advisor, and custom agents are read-only. Use advisor for explicit implementation guidance and tradeoff review. The built-in worker is the only mutation-capable child. Without isolation=\"worktree\", it edits the parent's current checkout: in-cwd edits use the parent's file access, outside-cwd file access uses the shared file prompt, already-allowed/session-approved bash runs without another prompt, and unmatched bash uses a parent-visible prompt. With isolation=\"worktree\", it edits a separate worktree and uses independent mutation prompts; changes reach the parent only after an explicit apply. Same-checkout workers are single-flight, while distinct isolated workers may run concurrently.",
+        "Scout and advisor are read-only. Reviewer and custom agents with command-runner may execute Bash through the permission flow; they do not receive direct edit/write tools. Use advisor for explicit implementation guidance and tradeoff review. The built-in worker is the only direct edit-capable child. Without isolation=\"worktree\", it edits the parent's current checkout: in-cwd edits use the parent's file access, outside-cwd file access uses the shared file prompt, already-allowed/session-approved bash runs without another prompt, and unmatched bash uses a parent-visible prompt. With isolation=\"worktree\", it edits a separate worktree and uses independent permission prompts; changes reach the parent only after an explicit apply. Same-checkout workers are single-flight, while distinct isolated workers may run concurrently.",
         "Use isolation=\"worktree\" when the worker should run in a persistent isolated Git worktree; a new worktree may prompt for an optional setup worker.",
         "For an isolated result, the parent can use agent action=\"inspect\", \"apply\", or \"discard\" with the runId, or action=\"revise\" with guidance to continue work in the same workspace.",
     );

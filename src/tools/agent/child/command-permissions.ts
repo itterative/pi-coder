@@ -33,13 +33,13 @@ import {
 } from "../../../tui/select-with-message";
 import { isFileAccessApproved } from "../../file-permissions";
 
-interface WorkerMutationCallbacks {
+interface CommandPermissionCallbacks {
     permissionPending(pending: boolean, activity: string): void;
     fileChanged(filePath: string): void;
     bashApproved(): void;
 }
 
-interface WorkerMutationOptions extends WorkerMutationCallbacks {
+interface CommandPermissionOptions extends CommandPermissionCallbacks {
     parentContext: ExtensionContext;
     events?: EventBus;
     runId: string;
@@ -52,23 +52,23 @@ interface WorkerMutationOptions extends WorkerMutationCallbacks {
 
 type PromptChoice = { kind: "yes" } | { kind: "no" };
 
-function runLabel(options: WorkerMutationOptions): string {
+function runLabel(options: CommandPermissionOptions): string {
     return options.runTitle ? `${options.runTitle} · ${options.runId}` : options.runId;
 }
 
-const WORKER_CONFINEMENT = {
+const COMMAND_CONFINEMENT = {
     enabled: true,
     permission: "allow" as const,
     resolveSymlinks: true,
 };
 const SETUP_BASH_TIMEOUT_SECONDS = 10 * 60;
 
-function isWorkerPathAllowed(filePath: string | undefined, cwd: string): boolean {
+function isCommandPathAllowed(filePath: string | undefined, cwd: string): boolean {
     const target = filePath?.trim() || cwd;
-    return getPathConfinementPermission(target, cwd, WORKER_CONFINEMENT) === Heuristic.SAFE_READONLY;
+    return getPathConfinementPermission(target, cwd, COMMAND_CONFINEMENT) === Heuristic.SAFE_READONLY;
 }
 
-class MutationQueue {
+class PermissionQueue {
     private tail: Promise<void> = Promise.resolve();
 
     async acquire(signal?: AbortSignal): Promise<(() => void) | undefined> {
@@ -110,11 +110,11 @@ function userNote(input: Record<string, unknown>): string | undefined {
 
 function blockedReason(action: string, input: Record<string, unknown>): string {
     const note = userNote(input);
-    return `Worker ${action} blocked by user.${note ? ` User message: ${note}` : ""}`;
+    return `Agent ${action} blocked by user.${note ? ` User message: ${note}` : ""}`;
 }
 
 async function prompt(
-    options: WorkerMutationOptions,
+    options: CommandPermissionOptions,
     ctx: ExtensionContext,
     title: string | (() => string),
     contentLines: string[],
@@ -154,7 +154,7 @@ async function prompt(
 }
 
 async function promptBash(
-    options: WorkerMutationOptions,
+    options: CommandPermissionOptions,
     ctx: ExtensionContext,
     command: string,
     unresolved: string[][],
@@ -245,12 +245,12 @@ function fileMutationPreview(event: { input: EditToolInput | WriteToolInput }, i
         : joined).split("\n");
 }
 
-/** Register the mutation gate used only by the built-in worker child. */
-export function registerWorkerMutationHooks(
+/** Register the permission gate used by command-capable child sessions. */
+export function registerCommandPermissionHooks(
     pi: ExtensionAPI,
-    options: WorkerMutationOptions,
+    options: CommandPermissionOptions,
 ): void {
-    const mutationQueue = new MutationQueue();
+    const permissionQueue = new PermissionQueue();
     const releases = new Map<string, () => void>();
     const permissionState = options.permissionState ?? createPermissionState();
 
@@ -260,17 +260,17 @@ export function registerWorkerMutationHooks(
         const isBash = isToolCallEventType<"bash", BashToolInput>("bash", event);
         if (!isEdit && !isWrite && !isBash) return;
 
-        const release = await mutationQueue.acquire(ctx.signal);
-        if (!release) return { block: true, reason: "Worker mutation canceled before permission was granted." };
+        const release = await permissionQueue.acquire(ctx.signal);
+        if (!release) return { block: true, reason: "Agent mutation canceled before permission was granted." };
 
         if (isEdit || isWrite) {
             const action = isEdit ? "edit" : "write";
             const input = event.input as EditToolInput | WriteToolInput;
-            if (!isWorkerPathAllowed(input.path, ctx.cwd)) {
+            if (!isCommandPathAllowed(input.path, ctx.cwd)) {
                 const assessment = getPathConfinementAssessment(
                     input.path,
                     ctx.cwd,
-                    WORKER_CONFINEMENT,
+                    COMMAND_CONFINEMENT,
                     "write",
                 );
                 const outsideCwd = assessment.reasons.length === 1
@@ -285,7 +285,7 @@ export function registerWorkerMutationHooks(
                 release();
                 return {
                     block: true,
-                    reason: `Worker ${action} blocked: path is outside the working directory or is sensitive.`,
+                    reason: `Agent ${action} blocked: path is outside the working directory or is sensitive.`,
                 };
             }
             if (options.nonIsolated) {
@@ -335,7 +335,7 @@ export function registerWorkerMutationHooks(
         }
         if (permission === "deny") {
             release();
-            return { block: true, reason: "Worker bash blocked by configured permission policy." };
+            return { block: true, reason: "Agent bash blocked by configured permission policy." };
         }
 
         const sandboxEnabled = sandboxConfig.current?.sandbox.enabled !== false;
@@ -357,7 +357,7 @@ export function registerWorkerMutationHooks(
         const sandboxed = sandboxedMode.value;
         if (sandboxed && !bwrap) {
             release();
-            return { block: true, reason: "Worker bash requires sandboxing, but bubblewrap is unavailable." };
+            return { block: true, reason: "Agent bash requires sandboxing, but bubblewrap is unavailable." };
         }
         const needsPrompt = permission === "ask";
         const canToggle = needsPrompt && sandboxEnabled && bwrap.length > 0;

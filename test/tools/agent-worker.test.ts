@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import registerFileToolHook from "../../src/tools/file-permissions";
-import { registerWorkerMutationHooks } from "../../src/tools/agent/child/worker-permissions";
+import { registerCommandPermissionHooks } from "../../src/tools/agent/child/command-permissions";
 import { createPermissionState } from "../../src/modules/sandbox/permission-state";
 import { KEY, mockTheme } from "../helpers";
 
@@ -17,7 +17,7 @@ async function flush(): Promise<void> {
     for (let index = 0; index < 8; index++) await Promise.resolve();
 }
 
-describe("worker mutation gate", () => {
+describe("command and edit permission gate", () => {
     const tempDirs: string[] = [];
 
     afterEach(() => {
@@ -71,7 +71,7 @@ describe("worker mutation gate", () => {
                 },
             });
         }
-        registerWorkerMutationHooks(pi, {
+        registerCommandPermissionHooks(pi, {
             parentContext,
             runId: "worker-7",
             nonIsolated: options.nonIsolated,

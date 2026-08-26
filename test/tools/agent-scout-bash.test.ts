@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
+import { KEY, mockTheme } from "../helpers";
 
 type Handler = (event: any, ctx: any) => unknown;
 
@@ -21,12 +22,19 @@ function setup(
     cwd: string,
     {
         safeBash = true,
+        commandRunner = false,
         background = true,
         allowUserInteraction = true,
-    }: { safeBash?: boolean; background?: boolean; allowUserInteraction?: boolean } = {},
+    }: {
+        safeBash?: boolean;
+        commandRunner?: boolean;
+        background?: boolean;
+        allowUserInteraction?: boolean;
+    } = {},
 ) {
     const handlers: Record<string, Handler[]> = {};
     const tools: Array<{ name: string }> = [];
+    const dialogs: any[] = [];
     const pi = {
         on(event: string, handler: Handler) {
             (handlers[event] ??= []).push(handler);
@@ -42,9 +50,30 @@ function setup(
         interrupted: false,
     } as any;
 
+    const parentContext = {
+        cwd,
+        hasUI: commandRunner,
+        mode: commandRunner ? "tui" : "print",
+        ...(commandRunner
+            ? {
+                ui: {
+                    theme: mockTheme,
+                    setWorkingVisible() {},
+                    custom(factory: any) {
+                        return new Promise((resolve) => {
+                            const component = factory(undefined, mockTheme, undefined, resolve);
+                            component.focused = true;
+                            dialogs.push(component);
+                        });
+                    },
+                },
+            }
+            : {}),
+    } as any;
+
     registerChildExtension(
         tracker,
-        { cwd, hasUI: false, mode: "print" } as any,
+        parentContext,
         cwd,
         "scout",
         background,
@@ -57,12 +86,15 @@ function setup(
         undefined,
         undefined,
         allowUserInteraction,
+        undefined,
+        false,
+        commandRunner,
     )(pi);
 
-    return { handlers, ctx: { cwd }, tools };
+    return { handlers, ctx: { cwd }, tools, dialogs };
 }
 
-describe("scout restricted bash", () => {
+describe("child Bash permissions", () => {
     it("permits only heuristic-classified read-only commands", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
         tempDirs.push(cwd);
@@ -81,6 +113,27 @@ describe("scout restricted bash", () => {
             });
         await expect(check({ toolName: "bash", input: { command: "unrecognized-command" } }, runtime.ctx))
             .resolves.toMatchObject({ block: true, reason: expect.stringContaining("UNKNOWN_COMMAND") });
+    });
+
+    it("routes command-runner commands through the permission gate", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-command-runner-"));
+        tempDirs.push(cwd);
+        const runtime = setup(cwd, { commandRunner: true, background: false });
+        const check = runtime.handlers.tool_call[0]!;
+        const pending = check({
+            toolName: "bash",
+            toolCallId: "bash-1",
+            input: { command: "npm run test:run" },
+        }, runtime.ctx);
+
+        for (let index = 0; index < 8; index++) {
+            await Promise.resolve();
+            await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        expect(runtime.dialogs).toHaveLength(1);
+        runtime.dialogs[0].handleInput(KEY.enter);
+
+        await expect(pending).resolves.toEqual({ block: false });
     });
 
     it("permits built-in fsmonitor but blocks an external status hook", async () => {

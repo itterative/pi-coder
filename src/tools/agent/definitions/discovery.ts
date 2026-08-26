@@ -15,9 +15,13 @@ import {
 
 export type { AgentCapability, AgentDefinition, AgentSource } from "./types";
 export {
+    agentCanEdit,
+    agentCanRunCommands,
+    agentCapabilities,
     agentTools,
     fingerprintAgentDefinition,
     fingerprintLegacyAgentDefinition,
+    hasAgentCapability,
     isAgentDefinitionFingerprintCompatible,
     READ_ONLY_AGENT_TOOLS,
 } from "./types";
@@ -48,7 +52,7 @@ type AgentFrontmatter = {
 export const BUILTIN_SCOUT: AgentDefinition = {
     name: "scout",
     description: "Read-only codebase reconnaissance",
-    capabilities: ["safe-bash"],
+    capabilities: ["read", "search", "safe-bash"],
     systemPrompt: `You are the parent's read-only codebase scout.
 
 Investigate the assigned question thoroughly. Return concise, evidence-based findings with relevant file paths and symbols. Focus on facts the parent can act on, and identify uncertainty or missing evidence explicitly.`,
@@ -57,9 +61,9 @@ Investigate the assigned question thoroughly. Return concise, evidence-based fin
 
 export const BUILTIN_REVIEWER: AgentDefinition = {
     name: "reviewer",
-    description: "Read-only code and Git-history review",
-    capabilities: ["safe-bash"],
-    systemPrompt: `You are the parent's read-only code and Git-history reviewer.
+    description: "Code and Git-history review with validation",
+    capabilities: ["read", "search", "safe-bash", "command-runner"],
+    systemPrompt: `You are the parent's code and Git-history reviewer.
 
 Review the assigned changes for concrete correctness, security, API compatibility, regressions, and test-coverage issues. Inspect relevant current code and history before reaching conclusions. Report findings in severity order with concise evidence and file paths or symbols. If you find no issues, say so and identify any residual risks or validation gaps.`,
     source: "builtin",
@@ -68,18 +72,17 @@ Review the assigned changes for concrete correctness, security, API compatibilit
 export const BUILTIN_WORKER: AgentDefinition = {
     name: "worker",
     description: "Permission-gated implementation work in the current or isolated checkout",
-    capabilities: [],
+    capabilities: ["read", "search", "safe-bash", "command-runner", "edit"],
     systemPrompt: `You are the parent's implementation agent for a bounded coding task.
 
 Inspect the relevant code and latest working-tree state before editing. Implement the narrowest complete change, preserve unrelated work, follow repository conventions, and avoid destructive Git operations. Validate the result when feasible and disclose uncertainty or incomplete validation.`,
     source: "builtin",
-    mutating: true,
 };
 
 export const BUILTIN_ADVISOR: AgentDefinition = {
     name: "advisor",
     description: "Read-only senior advice on implementation decisions and tradeoffs",
-    capabilities: ["safe-bash"],
+    capabilities: ["read", "search", "safe-bash"],
     allowUserInteraction: false,
     systemPrompt: `You are the parent's read-only senior technical advisor.
 
@@ -190,6 +193,14 @@ function loadScope(
             diagnostics.push({
                 level: "warning",
                 message: `Agent capabilities must be an array containing only: ${AGENT_CAPABILITIES.join(", ")}.`,
+                paths: [filePath],
+            });
+            continue;
+        }
+        if (capabilities.includes("edit")) {
+            diagnostics.push({
+                level: "warning",
+                message: "The edit capability is reserved for the built-in worker.",
                 paths: [filePath],
             });
             continue;
