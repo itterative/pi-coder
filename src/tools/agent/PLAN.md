@@ -77,7 +77,7 @@ Background runs report progress in the above-editor widget. Parent-guidance wait
 
 ### Browser and workspaces
 
-`/agents` shows a unified Agents list containing active and historical sessions across the current cwd, plus Workspaces. Session details are read-only and display bounded conversation/tool summaries. Active interrupted runs can be resumed or canceled explicitly; historical and stale checkpoints remain read-only.
+`/agents` shows an Agents list scoped to the active parent session by default; `h` toggles cwd-wide historical sessions. Workspaces are available in the same browser. Session details are read-only and display bounded conversation/tool summaries. Active interrupted runs can be resumed or canceled explicitly; historical and stale checkpoints remain read-only.
 
 Isolated workers use a persistent pool of up to three Git worktrees. Setup runs internally with the same permission gate. A completed isolated run is finalized as a workspace result: no-change results release the workspace, while changed results remain leased and outside the parent checkout. Results can be inspected, applied, discarded, retained/reset, or revised explicitly. Workspaces are never merged, reset, or deleted implicitly.
 

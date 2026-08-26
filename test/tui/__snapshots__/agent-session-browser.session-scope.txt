@@ -3,9 +3,14 @@
 │                                                                                                  │
 │     ● Agents                                                                                     │
 │                                                                                                  │
-│     No delegated agents were found.                                                              │
+│   → Project structure audit · scout · active · running · Nov 14 2023 22:13                       │
+│     Task: Inspect the project structure · Reading files                                          │
+│     Result: I found the main entry points and summarized the current architecture.               │
 │                                                                                                  │
-│   0 sessions · this session · h: show historical                                                 │
+│     Current session checkpoint · delegated agent · historical · completed · Nov 14 2023 22:13    │
+│     Task: Review the previous implementation                                                     │
+│                                                                                                  │
+│   2 sessions · this session · h: show historical                                                 │
 │                                                                                                  │
 │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

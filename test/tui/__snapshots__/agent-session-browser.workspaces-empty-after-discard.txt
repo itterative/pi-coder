@@ -2,14 +2,14 @@
 │   Agents                                                                                         │
 │                                                                                                  │
 │     ○ Agents    ● Workspaces                                                                     │
-│     Agents combines active and historical sessions; Workspaces shows isolated worker             │
-│     checkouts.                                                                                   │
 │                                                                                                  │
 │     No isolated workspaces have been created for this cwd.                                       │
 │                                                                                                  │
 │   0 workspaces                                                                                   │
 │                                                                                                  │
 │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
+│                                                                                                  │
+│                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │

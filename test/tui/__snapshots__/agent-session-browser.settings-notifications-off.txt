@@ -2,8 +2,6 @@
 │   Delegated agent sessions                                                                       │
 │                                                                                                  │
 │     ○ Agents    ● Settings                                                                       │
-│     Agents combines active and historical sessions; Settings controls agent models and           │
-│     notifications.                                                                               │
 │                                                                                                  │
 │   → Busy worker change notifications · Off                                                       │
 │     Get an immediate update when a worker changes your files while the main assistant is still   │

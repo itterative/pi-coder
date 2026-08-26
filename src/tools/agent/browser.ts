@@ -124,19 +124,25 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                     ...lifecycle.setupRunSummaries,
                 ]),
             );
+            let sessionPast: AgentSessionBrowserItem[];
             let past: AgentSessionBrowserItem[];
             try {
                 const allPast = await listPastAgentSessions(ctx.cwd);
+                const sessionPastRecords = await listPastAgentSessions(ctx.cwd, undefined, {
+                    parentSessionId: currentSessionId,
+                });
                 const activeBranchPast = await listPastAgentSessions(ctx.cwd, undefined, {
                     parentSessionId: currentSessionId,
                     parentSessionFile: ctx.sessionManager.getSessionFile(),
                     parentSessionLeafId: ctx.sessionManager.getLeafId(),
                     activeBranchOnly: true,
                 });
+                sessionPast = mergeHistoricalAgentSessions(sessionPastRecords, activeBranchPast, current);
                 past = mergeHistoricalAgentSessions(allPast, activeBranchPast, current);
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 ctx.ui.notify(`Could not browse persisted delegated-agent sessions: ${message}`, "warning");
+                sessionPast = [];
                 past = [];
             }
             let workspaceRecords: AgentWorkspace[];
@@ -169,6 +175,7 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             )));
             return {
                 current,
+                sessionPast,
                 past,
                 workspaces,
                 settings: buildSettings(ctx.cwd),

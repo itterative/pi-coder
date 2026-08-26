@@ -467,14 +467,24 @@ describe("AgentSessionBrowserComponent", () => {
         );
     });
 
-    it("merges active and historical agents into one list", () => {
-        const value = component();
+    it("defaults to this session and toggles to cwd-wide history", async () => {
+        const sessionPast = { ...past, id: "same-session", title: "Current session checkpoint" };
+        const value = new AgentSessionBrowserComponent({
+            current: [current],
+            sessionPast: [sessionPast],
+            past: [past],
+        });
+        value.initialize(mockTheme);
         const ui = interact(value, 100);
 
-        expect(ui.render()).toContain("Project structure audit");
-        expect(ui.render()).toContain("Previous implementation review");
-        expect(ui.render()).toContain("active");
-        expect(ui.render()).toContain("historical");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.session-scope.txt",
+        );
+
+        ui.press("h");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.historical-scope.txt",
+        );
     });
 
     it("uses left and right for directional view selection", () => {

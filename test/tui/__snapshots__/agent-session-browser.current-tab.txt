@@ -2,7 +2,6 @@
 │   Delegated agent sessions                                                                       │
 │                                                                                                  │
 │     ● Agents                                                                                     │
-│     Agents combines active and historical delegated sessions.                                    │
 │                                                                                                  │
 │   → Project structure audit · scout · active · running · Nov 14 2023 22:13                       │
 │     Task: Inspect the project structure · Reading files                                          │
@@ -12,7 +11,7 @@
 │   22:13                                                                                          │
 │     Task: Review the previous implementation                                                     │
 │                                                                                                  │
-│   2 sessions                                                                                     │
+│   2 sessions · this session · h: show historical                                                 │
 │                                                                                                  │
 │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
