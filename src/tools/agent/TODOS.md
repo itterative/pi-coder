@@ -9,16 +9,6 @@
   * or, we make use of heuristics to give it restrained access to bash tool
   * if we do the second, we might want to extend the heuristics a bit to
     give more details on why certain bash commands are not allowed
-* big: persistence tests run against the actual database...
-
-* non-isolated agents workflow is kinda hard to use
-  * isolated workers are mostly fine atm (might want to use the same prompt gating as parent, but without inheritance)
-  * especially workers, but review and scouts might want to use the same ideas
-  * non-isolated workers should be allowed to edit files by default instead of prompting the user
-  * same read/write access prompts should also be used (i.e., asking if it can read or edit from folder outside the cwd)
-  * non-isolated agents should inherit the permissions of the parent
-  * that is, if I allowed for example "npm vitest *", it should also be able to do the same
-  * if I didn't allow "npm vitest *" before, and it runs one similar command, I should still be prompted to allow for this session
 
 * sometimes (isolated) workers get stuck
   * applies to more types of workers, also setup ones seem to get stuck
