@@ -11,7 +11,12 @@ import {
     getAgentCwdSessionDir,
     loadAgentRunPersistence,
 } from "../../src/tools/agent/runs/persistence";
-import { AgentRunManager, ZERO_USAGE, type PersistedAgentRun } from "../../src/tools/agent/runs/manager";
+import {
+    AgentRunManager,
+    ZERO_USAGE,
+    type ChildAgentHandle,
+    type PersistedAgentRun,
+} from "../../src/tools/agent/runs/manager";
 import { AGENT_RUN_SNAPSHOT_MARKER } from "../../src/tools/agent/storage/run-markers";
 import { openAgentMetadataDatabase } from "../../src/tools/agent/storage/metadata";
 import { upsertAgentRunCatalogRecord } from "../../src/tools/agent/storage/run-catalog";
@@ -175,6 +180,76 @@ describe("delegated-agent V2 persistence", () => {
             resumable: false,
             readOnlyReason: "continued on another branch",
         });
+    });
+
+    it("restores interrupted V2 runs without repairing an unmarked child tail", async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-repair-"));
+        tempDirs.push(directory);
+        const child = SessionManager.create(process.cwd(), directory);
+        child.appendMessage({ role: "user", content: "committed child point", timestamp: 1 });
+        const committedLeaf = child.appendMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "committed response" }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage: ZERO_USAGE,
+            stopReason: "stop",
+            timestamp: 2,
+        });
+        child.resetLeaf();
+        child.appendMessage({ role: "user", content: "unmarked crash tail", timestamp: 3 });
+        const childFile = child.getSessionFile();
+        expect(childFile).toBeDefined();
+
+        let repairCalls = 0;
+        let restoredContext: any;
+        const restoredChild: ChildAgentHandle = {
+            sessionFile: childFile,
+            prompt: async () => {},
+            abort: async () => {},
+            dispose: () => {},
+            takeParentQuestion: () => undefined,
+            getProgress: () => ({ output: "", recentActivity: [] }),
+            getFinalOutput: () => "",
+            getError: () => undefined,
+            getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
+            getSessionLeafId: () => committedLeaf,
+            repairInterrupted: () => {
+                repairCalls++;
+                return 1;
+            },
+        };
+        const manager = new AgentRunManager(async (context) => {
+            restoredContext = context;
+            return restoredChild;
+        });
+        manager.setPersistence({
+            ownerSessionId: "parent-1",
+            usesSnapshotMarkers: true,
+            childSessionDir: directory,
+            save: () => true,
+            deleteChildSession: () => {},
+        });
+        const restoration = await manager.restore([
+            {
+                ...record("instance-interrupted", "parent-1", childFile, committedLeaf),
+                status: "interrupted",
+            },
+        ], [BUILTIN_SCOUT], { cwd: process.cwd(), parentContext: {} });
+
+        expect(restoration).toEqual({ restored: 1, diagnostics: [] });
+        expect(restoredContext).toMatchObject({
+            childSessionFile: childFile,
+            childSessionLeafId: committedLeaf,
+            repairInterrupted: false,
+        });
+        expect(repairCalls).toBe(0);
+        expect(restoredChild.getSessionLeafId?.()).toBe(committedLeaf);
+        await expect(manager.resume("scout-1")).resolves.toMatchObject({
+            details: { status: "running" },
+        });
+        expect(repairCalls).toBe(1);
     });
 
     it("restores V2 branch checkpoints and browses their exact child leaves", async () => {

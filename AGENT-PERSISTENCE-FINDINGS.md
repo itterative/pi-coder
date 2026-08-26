@@ -31,6 +31,8 @@ In concise terms:
 
 This preserves unrestricted `/tree` navigation without supporting divergent continuations of one physical child, cloning child transcript files, or placing large run-state payloads in the parent JSONL. The system does not need to make every historical snapshot resumable: older snapshots exist for causality and inspection only; the session head is the sole continuation point.
 
+Current status: the core V2 design and its high-value persistence/browser tests are implemented. The active-branch-only historical-browser recommendation below is superseded by the intentional unified cwd-wide Agents view. Payload minimization and broader lifecycle integration coverage are deferred hardening work, not correctness blockers.
+
 ## Compatibility decision
 
 There is intentionally no migration requirement for either experimental predecessor:
@@ -42,7 +44,7 @@ There is intentionally no migration requirement for either experimental predeces
 
 The new marker type, snapshot schema, and payload version should therefore start cleanly.
 
-This does not remove the need for a future version policy. New snapshots should carry an explicit payload/schema version, and incompatible resumable snapshots must fail with a diagnostic rather than silently selecting another transcript state.
+A future schema migration/version policy remains optional hardening. The current snapshots carry an explicit payload version, and incompatible or invalid resumable snapshots fail with diagnostics rather than silently selecting another transcript state.
 
 ## What durable state is for
 
@@ -222,16 +224,9 @@ This provides useful schema migrations without normalizing every nested progress
 
 ### Snapshot variants and payload size
 
-Snapshots should be validated as status-aware variants so irrelevant data is not repeated:
+The current implementation validates bounded snapshot identity, paths, status, and child-leaf references. It stores the bounded `PersistedAgentRun` payload in each immutable snapshot for correctness and simpler recovery.
 
-- `starting` / `running` / `interrupted`: child reference, usage, bounded progress, mutation state;
-- `waiting_for_parent`: the above plus the pending question;
-- terminal statuses: final child leaf, bounded terminal outcome, usage, mutation report;
-- `removed`: identity and tombstone state only.
-
-Stable fields such as task text and definition identity belong in `agent_run_instances`, not every snapshot.
-
-Progress and terminal text remain bounded. Intermediate running checkpoints should not repeatedly include large terminal or question fields that are not applicable.
+Status-aware payload variants and moving stable fields entirely out of repeated payloads would reduce storage overhead, but are deferred optimization work. Progress and terminal text remain bounded, so payload growth does not affect branch correctness.
 
 ### Catalog projection
 
@@ -373,27 +368,22 @@ Every transcript reader must become leaf-aware.
 
 ### Default scope policy
 
-`/agents` should default to the active parent branch, not every delegated run found for the repository or even every run in the parent session.
-
-Recommended semantics:
+The implemented `/agents` view intentionally combines historical sessions across the current cwd. This supports unified browsing without making historical entries resumable.
 
 ```text
 Current
-  live, waiting, interrupted, or retained terminal runs reachable from the active parent leaf
+  live and restored runs from the active parent runtime
 
 Past
-  terminal, collected, removed, or otherwise historical runs reachable from the active parent leaf
+  cwd-wide historical child sessions from the durable catalog
+  with current-parent matching files replaced by marker-resolved checkpoints
 
-Optional archive scopes
-  all branches in this parent session
-  all parent sessions in this repository
+Active-parent checkpoint view
+  exact marker/snapshot/child-leaf selection
+  stale checkpoints remain read-only and are labeled continued elsewhere
 ```
 
-A parent session can contain sibling branches with different physical runs, duplicate display IDs, and divergent outcomes. Combining all session runs into the default Past view would therefore remain ambiguous even after filtering out other repository sessions.
-
-The normalized catalog can remain repository-wide for transcript discovery, workspace reconciliation, and optional archive views. Default Current/Past membership must instead be derived from markers reachable on the active parent branch.
-
-Agents that exist only on abandoned sibling branches should appear only in an explicit all-session-branches archive. Agents owned by other parent sessions should appear only in an explicit repository archive. Orphan child files or snapshots with no committed parent marker should not appear as normal branch history.
+The catalog remains a projection for cwd-wide discovery, while restoration authority remains with parent markers and validated snapshots. This is a deliberate product choice rather than the earlier active-branch-only archive policy. Orphan files may remain retained for inspection or future cleanup, but they never become resumable state without a valid marker and snapshot.
 
 ### Current runs
 
@@ -528,13 +518,12 @@ for each branchHead:
 
 ### Lifecycle and browser
 
-- Real `session_tree` restoration switches both parent snapshot and child leaf.
-- Shutdown does not write old-manager state at the new parent leaf.
 - Active browser entries use the active snapshot leaf.
-- Default Past entries include only history reachable from the active parent branch.
-- Sibling-branch runs require an explicit all-session-branches archive scope.
-- Other parent sessions require an explicit repository archive scope.
+- Unified cwd-wide Past entries retain historical sessions from other parent sessions.
+- Current-parent matching files are replaced by exact marker/snapshot/leaf checkpoints.
 - Past catalog entries are clearly distinguished from branch-resolved entries.
+- Historical entries remain read-only regardless of browser scope.
+- Real `session_tree` restoration and old-manager detachment are covered by the lifecycle persistence integration test.
 - Workspace lease reconciliation uses physical run-instance identity.
 
 ## Implementation outline
@@ -549,11 +538,11 @@ for each branchHead:
 8. Classify superseded branch checkpoints as read-only history and reject resume actions for them.
 9. Select the stored child leaf immediately after opening and before context construction.
 10. Defer interrupted repair until explicit resume.
-11. Add a reliable post-child-persistence checkpoint callback.
+11. Capture child leaves only after settled child operations and before terminal/disposal persistence; add an explicit SDK callback later if post-append timing requires it.
 12. Make current and historical transcript readers leaf-aware.
 13. Keep the unified Agents view marker-resolved for current-parent active-branch runs while showing durable historical sessions across the cwd without losing physical run and child-leaf identity.
 14. Change the catalog to physical `runInstanceId` identity and document it as a projection.
-15. Add stale-resume, sibling-parent, child-leaf, browser-scope, commit-failure, and real lifecycle tests.
+15. Add stale-resume, sibling-parent, child-leaf, browser-merge, commit-failure, interrupted-repair, and `session_tree` lifecycle tests. Broader crash/restart matrix coverage remains optional follow-up work.
 16. Update delegated-agent documentation and project memories after implementation.
 
 ## Final recommendation
