@@ -1,14 +1,18 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │   Delegated agent sessions                                                                       │
 │                                                                                                  │
-│     ● Current    ○ Past                                                                          │
-│     Current shows this parent session; Past shows durable child results for this cwd.            │
+│     ● Agents                                                                                     │
+│     Agents combines active and historical delegated sessions.                                    │
 │                                                                                                  │
-│   → Project structure audit · scout · running · Nov 14 2023 22:13                                │
+│   → Project structure audit · scout · active · running · Nov 14 2023 22:13                       │
 │     Task: Inspect the project structure · Reading files                                          │
 │     Result: I found the main entry points and summarized the current architecture.               │
 │                                                                                                  │
-│   1 session                                                                                      │
+│     Previous implementation review · delegated agent · historical · completed · Nov 14 2023      │
+│   22:13                                                                                          │
+│     Task: Review the previous implementation                                                     │
+│                                                                                                  │
+│   2 sessions                                                                                     │
 │                                                                                                  │
 │     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

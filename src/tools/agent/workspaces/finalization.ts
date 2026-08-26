@@ -12,7 +12,7 @@ import {
 } from "./results";
 
 export async function prepareCollectedWorkspaceResult(
-    details: Pick<AgentRunDetails, "workspaceId" | "runId">,
+    details: Pick<AgentRunDetails, "workspaceId" | "runId" | "runInstanceId">,
     ctx: ExtensionContext,
     events?: AgentEventSink,
 ): Promise<AgentWorkspaceResult | undefined> {
@@ -27,6 +27,8 @@ export async function prepareCollectedWorkspaceResult(
         workspace,
         ctx.sessionManager.getSessionId(),
         details.runId,
+        undefined,
+        details.runInstanceId,
     );
     emitAgentEvent(events, ctx.cwd, {
         type: "workspace",
@@ -60,6 +62,8 @@ export async function prepareForegroundWorkspaceResult(
             workspaceResult.workspaceId,
             ctx.sessionManager.getSessionId(),
             workspaceResult.runId,
+            undefined,
+            workspaceResult.runInstanceId,
         );
         emitAgentEvent(events, ctx.cwd, {
             type: "workspace",

@@ -197,8 +197,8 @@ export class AgentRunManager {
                 startedAt: run.startedAt,
                 updatedAt: run.updatedAt,
                 sessionFile: run.childSessionFile,
-                childSessionLeafId: run.childSessionLeafId,
-                sessionLeafId: run.childSessionLeafId,
+                childSessionLeafId: run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId,
+                sessionLeafId: run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId,
                 readOnlyReason: run.readOnlyReason,
                 activity: activity ? truncate(activity, 120) : undefined,
                 phase: progress.phase,
@@ -699,10 +699,11 @@ export class AgentRunManager {
                 repairInterrupted: context.repairInterrupted,
                 initialProgress: context.initialProgress ?? run.restoredProgress,
                 initialMutationReport: context.initialMutationReport ?? run.restoredMutationReport,
-                onSessionCreated: (sessionFile) => {
+                onSessionCreated: (sessionFile, childSessionLeafId) => {
                     run.childSessionFile = sessionFile;
+                    run.childSessionLeafId = childSessionLeafId;
                     this.persistRun(run);
-                    context.onSessionCreated?.(sessionFile);
+                    context.onSessionCreated?.(sessionFile, childSessionLeafId);
                 },
                 onFileChanged: () => {
                     run.updatedAt = Date.now();
@@ -714,6 +715,12 @@ export class AgentRunManager {
                 },
                 onProgress: (progress) => {
                     run.updatedAt = Date.now();
+                    const childSessionLeafId = run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId;
+                    const childLeafChanged = childSessionLeafId !== run.childSessionLeafId;
+                    run.childSessionLeafId = childSessionLeafId;
+                    if (childLeafChanged) {
+                        this.persistRun(run);
+                    }
                     const previousStatus = run.permissionPending ? "waiting_for_permission" : run.status;
                     run.permissionPending = progress.permissionPending === true;
                     this.record(run, "child.progress", {
@@ -1101,7 +1108,7 @@ export class AgentRunManager {
             background: run.background,
             task: truncate(run.task, 2_000),
             workspaceId: run.workspaceId,
-            childSessionLeafId: run.childSessionLeafId,
+            childSessionLeafId: run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId,
             output: progress.output ? truncate(progress.output, MAX_OUTPUT_CHARS) : undefined,
             question: run.question,
             recentActivity: progress.recentActivity.slice(-8),

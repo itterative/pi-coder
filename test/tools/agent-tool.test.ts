@@ -466,6 +466,7 @@ describe("agent extension registration", () => {
             id: "result-1",
             workspaceId: workspace.id,
             runId: "worker-1",
+            runInstanceId: "worker-instance-1",
             baseRevision: workspace.baseRevision,
             workerHead: "worker-head",
             commitRange: "base-revision..worker-head",
@@ -478,6 +479,7 @@ describe("agent extension registration", () => {
             workspace,
             ownerSessionId: "parent-session",
             provisionalLeaseRunId: "provisional-1",
+            provisionalLeaseRunInstanceId: "provisional-instance-1",
         });
         const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
         const getWorkspaceSpy = vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace);
@@ -527,9 +529,13 @@ describe("agent extension registration", () => {
             "parent-session",
             "provisional-1",
             "worker-1",
+            "task",
+            undefined,
+            "provisional-instance-1",
+            expect.any(String),
         );
         expect(getWorkspaceSpy).toHaveBeenCalledWith(workspace.id);
-        expect(prepareResultSpy).toHaveBeenCalledWith(workspace, "parent-session", "worker-1");
+        expect(prepareResultSpy).toHaveBeenCalledWith(workspace, "parent-session", "worker-1", undefined, expect.any(String));
         expect(collected.details.workspaceResult).toEqual(result);
         await expect(collected.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.isolated-collect.txt");
         await handlers.session_shutdown[0]({}, ctx);
@@ -563,6 +569,7 @@ describe("agent extension registration", () => {
             id: "result-foreground",
             workspaceId: workspace.id,
             runId: "worker-1",
+            runInstanceId: "worker-instance-foreground",
             baseRevision: workspace.baseRevision,
             workerHead: workspace.baseRevision,
             commitRange: `${workspace.baseRevision}..${workspace.baseRevision}`,
@@ -574,6 +581,7 @@ describe("agent extension registration", () => {
             workspace,
             ownerSessionId: "parent-session",
             provisionalLeaseRunId: "provisional-foreground",
+            provisionalLeaseRunInstanceId: "provisional-instance-foreground",
         });
         const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
         vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace);
@@ -615,9 +623,13 @@ describe("agent extension registration", () => {
             "parent-session",
             "provisional-foreground",
             "worker-1",
+            "task",
+            undefined,
+            "provisional-instance-foreground",
+            expect.any(String),
         );
-        expect(prepareResultSpy).toHaveBeenCalledWith(workspace, "parent-session", "worker-1");
-        expect(releaseSpy).toHaveBeenCalledWith(workspace.id, "parent-session", "worker-1");
+        expect(prepareResultSpy).toHaveBeenCalledWith(workspace, "parent-session", "worker-1", undefined, expect.any(String));
+        expect(releaseSpy).toHaveBeenCalledWith(workspace.id, "parent-session", "worker-1", undefined, expect.any(String));
         expect(completed.details.workspaceResult).toEqual(result);
         await expect(completed.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.isolated-foreground.txt");
         await handlers.session_shutdown[0]({}, ctx);

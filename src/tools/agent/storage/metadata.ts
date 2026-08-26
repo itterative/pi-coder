@@ -217,6 +217,18 @@ export const AGENT_METADATA_MIGRATIONS = [{
                 ON agent_runs (run_instance_id);
         `);
     },
+}, {
+    version: 9,
+    apply(database: AgentMetadataDatabase): void {
+        database.exec(`
+            ALTER TABLE workspaces ADD COLUMN lease_run_instance_id TEXT;
+            ALTER TABLE workspace_results ADD COLUMN run_instance_id TEXT;
+            CREATE INDEX IF NOT EXISTS workspaces_lease_instance
+                ON workspaces (lease_run_instance_id);
+            CREATE INDEX IF NOT EXISTS workspace_results_instance
+                ON workspace_results (run_instance_id);
+        `);
+    },
 }] as const;
 
 export function agentWorkspacesRoot(workspacesDir = PI_CODER_WORKSPACES_DIR): string {

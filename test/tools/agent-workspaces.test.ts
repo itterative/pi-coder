@@ -88,12 +88,21 @@ describe("agent workspaces", () => {
         });
 
         const prepared = await updateAgentWorkspace(workspace, { setupState: "skipped" }, state);
-        const provisional = await claimAgentWorkspace(prepared.id, "session-1", "setup-1", "setup", state);
+        const provisional = await claimAgentWorkspace(prepared.id, "session-1", "setup-1", "setup", state, "setup-instance");
         expect(await findAvailableAgentWorkspace(repository, state)).toBeUndefined();
-        await transferAgentWorkspaceLease(workspace.id, "session-1", provisional.leaseRunId!, "worker-1", "task", state);
-        await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
-        await applyAgentWorkspaceApplication(workspace, "session-1", "worker-1", state);
-        await releaseAgentWorkspaceAfterApplication(workspace.id, "session-1", "worker-1", state);
+        await transferAgentWorkspaceLease(
+            workspace.id,
+            "session-1",
+            provisional.leaseRunId!,
+            "worker-1",
+            "task",
+            state,
+            "setup-instance",
+            "worker-instance",
+        );
+        await prepareAgentWorkspaceApplication(workspace, "session-1", "worker-1", state, "worker-instance");
+        await applyAgentWorkspaceApplication(workspace, "session-1", "worker-1", state, "worker-instance");
+        await releaseAgentWorkspaceAfterApplication(workspace.id, "session-1", "worker-1", state, "worker-instance");
         expect(await findAvailableAgentWorkspace(repository, state)).toBeUndefined();
         expect(await listAgentWorkspaces(repository, state)).toMatchObject([
             { id: workspace.id, status: "review_required" },

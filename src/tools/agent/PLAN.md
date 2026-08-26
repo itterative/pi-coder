@@ -77,9 +77,7 @@ Background runs report progress in the above-editor widget. Parent-guidance wait
 
 ### Browser and workspaces
 
-`/agents` shows Current, Past, and Workspaces. Session details are read-only and display bounded conversation/tool summaries. Interrupted current runs can be resumed or canceled explicitly.
-
-Planned browser consolidation: merge Current and Past into one agent list rather than separate tabs. The unified list should include active and historical agents with clear status/scope labels, preserve read-only treatment for stale checkpoints, and support the broader historical view without silently limiting Past to the active parent session.
+`/agents` shows a unified Agents list containing active and historical sessions across the current cwd, plus Workspaces. Session details are read-only and display bounded conversation/tool summaries. Active interrupted runs can be resumed or canceled explicitly; historical and stale checkpoints remain read-only.
 
 Isolated workers use a persistent pool of up to three Git worktrees. Setup runs internally with the same permission gate. A completed isolated run is finalized as a workspace result: no-change results release the workspace, while changed results remain leased and outside the parent checkout. Results can be inspected, applied, discarded, retained/reset, or revised explicitly. Workspaces are never merged, reset, or deleted implicitly.
 
@@ -99,7 +97,6 @@ The event bus publishes bounded invalidation events; consumers reload authoritat
 
 ## Deferred work
 
-- Merge Current and Past into one unified agent browser list, including an explicit scope for broader historical runs.
 - Restore arbitrary continuation of completed child conversations.
 - Add explicit chain and batch workflows.
 - Add transcript/orphan pruning and browser run renaming.

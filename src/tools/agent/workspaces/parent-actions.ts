@@ -25,6 +25,7 @@ function parentWorkspaceOutcome(
         content,
         details: {
             runId: record.runId,
+            runInstanceId: record.runInstanceId,
             title: record.title,
             agent: record.agent,
             agentSource: record.agentSource,
@@ -51,15 +52,23 @@ async function resolveParentWorkspaceRun(
 ): Promise<{ record: Awaited<ReturnType<typeof listAgentRunCatalog>>[number]; workspace: AgentWorkspace }> {
     await manager.flushPersistence();
     const sessionId = ctx.sessionManager.getSessionId();
-    const record = (await listAgentRunCatalog(ctx.cwd)).find((candidate) => (
+    const matches = (await listAgentRunCatalog(ctx.cwd)).filter((candidate) => (
         candidate.ownerSessionId === sessionId && candidate.runId === runId
     ));
+    if (matches.length > 1) {
+        throw new AgentActionError(`Run ${runId} is ambiguous because multiple physical runs share this display ID.`);
+    }
+    const record = matches[0];
     if (!record?.workspaceId) {
         throw new AgentActionError(`Run ${runId} has no isolated workspace owned by this session.`);
     }
     const workspace = await getAgentWorkspace(record.workspaceId);
     if (!workspace) throw new AgentActionError(`Workspace ${record.workspaceId} is missing.`);
-    if (workspace.latestResult && workspace.latestResult.runId !== runId) {
+    if (
+        workspace.latestResult
+        && (workspace.latestResult.runId !== runId
+            || workspace.latestResult.runInstanceId !== record.runInstanceId)
+    ) {
         throw new AgentActionError(`Workspace ${workspace.id} has a newer result than run ${runId}.`);
     }
     return { record, workspace };
@@ -69,8 +78,13 @@ function requireParentWorkspaceLease(
     workspace: AgentWorkspace,
     sessionId: string,
     runId: string,
+    runInstanceId?: string,
 ): AgentWorkspaceResult {
-    if (workspace.leaseOwnerSessionId !== sessionId || workspace.leaseRunId !== runId) {
+    if (
+        workspace.leaseOwnerSessionId !== sessionId
+        || workspace.leaseRunId !== runId
+        || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== runInstanceId)
+    ) {
         throw new AgentActionError(`Workspace ${workspace.id} is not currently leased by run ${runId}.`);
     }
     if (workspace.leaseKind !== "task" || !workspace.latestResult || workspace.latestResult.status !== "prepared") {
@@ -101,6 +115,7 @@ export async function executeParentWorkspaceAction(
             workspace,
             ownerSessionId: sessionId,
             runId: params.runId,
+            runInstanceId: record.runInstanceId,
         });
         emitAgentEvent(events, ctx.cwd, {
             type: "workspace",
@@ -120,6 +135,7 @@ export async function executeParentWorkspaceAction(
             workspace,
             ownerSessionId: sessionId,
             runId: params.runId,
+            runInstanceId: record.runInstanceId,
         });
         emitAgentEvent(events, ctx.cwd, {
             type: "workspace",
@@ -135,7 +151,7 @@ export async function executeParentWorkspaceAction(
     }
 
     if (params.action !== "revise") throw new AgentActionError(`Unsupported parent workspace action: ${params.action}`);
-    requireParentWorkspaceLease(workspace, sessionId, params.runId);
+    requireParentWorkspaceLease(workspace, sessionId, params.runId, record.runInstanceId);
     const discovered = discoverAgents(ctx.cwd, ctx.isProjectTrusted());
     const definition = discovered.agents.find((agent) => agent.name === record.agent);
     if (!definition) throw new AgentActionError(`Unknown agent definition for ${record.agent}.`);
@@ -157,7 +173,16 @@ export async function executeParentWorkspaceAction(
         progress,
         `${record.title} revision`,
     );
-    await transferAgentWorkspaceLease(workspace.id, sessionId, params.runId, outcome.details.runId);
+    await transferAgentWorkspaceLease(
+        workspace.id,
+        sessionId,
+        params.runId,
+        outcome.details.runId,
+        "task",
+        undefined,
+        record.runInstanceId,
+        outcome.details.runInstanceId,
+    );
     const prepared = await prepareForegroundWorkspaceResult(outcome, ctx, events);
     prepared.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
     return prepared;

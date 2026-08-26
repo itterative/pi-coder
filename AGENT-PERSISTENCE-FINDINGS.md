@@ -4,7 +4,7 @@
 
 The current branch-keyed SQLite upsert design is not sufficient for correct `/tree` behavior.
 
-The selected replacement design is implemented in the current branch as V2 persistence. Workspace lease identity still uses display `runId` in several mutation paths and is a follow-up limitation; it does not affect parent-marker restoration.
+The selected replacement design is implemented in the current branch as V2 persistence. New workspace lease/result paths carry physical `runInstanceId` alongside display IDs, while older direct callers remain compatibility-tolerated. The `/agents` UI now combines active and historical sessions across the current cwd in one view, replacing current-parent entries with marker-resolved active-branch checkpoints where available.
 
 ```text
 Parent session tree
@@ -164,7 +164,7 @@ runInstanceId = globally unique physical run identity
 runId         = branch-local user-facing action ID
 ```
 
-SQLite primary and foreign keys should use `runInstanceId`. Parent actions can continue using the concise `runId` because only runs reachable on the active parent branch are installed in the active manager.
+SQLite primary and foreign keys should use `runInstanceId`. Parent actions may accept the concise `runId` at the user-facing boundary, but must reject ambiguity and authorize workspace leases/results with the resolved physical `runInstanceId`.
 
 This avoids collisions between sibling branches in snapshots, child transcript metadata, catalogs, and workspace records.
 
@@ -551,7 +551,7 @@ for each branchHead:
 10. Defer interrupted repair until explicit resume.
 11. Add a reliable post-child-persistence checkpoint callback.
 12. Make current and historical transcript readers leaf-aware.
-13. Make Current and Past default to marker-resolved active-branch runs; keep session/repository archives explicit.
+13. Keep the unified Agents view marker-resolved for current-parent active-branch runs while showing durable historical sessions across the cwd without losing physical run and child-leaf identity.
 14. Change the catalog to physical `runInstanceId` identity and document it as a projection.
 15. Add stale-resume, sibling-parent, child-leaf, browser-scope, commit-failure, and real lifecycle tests.
 16. Update delegated-agent documentation and project memories after implementation.

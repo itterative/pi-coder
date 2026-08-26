@@ -15,6 +15,7 @@ import { upsertAgentRunCatalogRecordInDatabase } from "../storage/run-catalog";
 import {
     AGENT_RUN_SNAPSHOT_MARKER,
     collectAgentRunSnapshotMarkers,
+    type AgentRunSnapshotMarker,
 } from "../storage/run-markers";
 import {
     listAgentRunStatesInDatabase,
@@ -23,6 +24,7 @@ import {
 import {
     insertAgentRunSnapshotInDatabase,
     listAgentRunSnapshotsInDatabase,
+    type AgentRunSnapshotRow,
 } from "../storage/run-snapshots";
 
 const RUN_ID = /^[a-z][a-z0-9_-]{0,63}-\d+$/;
@@ -311,6 +313,27 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
     };
 }
 
+export function validateAgentRunSnapshot(
+    snapshot: AgentRunSnapshotRow,
+    marker: AgentRunSnapshotMarker,
+    ownerSessionId: string,
+    childSessionDir: string,
+): PersistedAgentRun | undefined {
+    if (
+        snapshot.ownerSessionId !== ownerSessionId
+        || snapshot.payloadVersion !== 2
+        || snapshot.runInstanceId !== marker.runInstanceId
+        || snapshot.runId !== marker.runId
+    ) return undefined;
+    const parsed = parseRecord(snapshot.payload, ownerSessionId, childSessionDir);
+    if (!parsed || parsed.runInstanceId !== marker.runInstanceId || parsed.runId !== marker.runId) return undefined;
+    if (snapshot.childSessionFile !== undefined && parsed.childSessionLeafId === undefined) return undefined;
+    if ((parsed.childSessionLeafId ?? null) !== snapshot.childSessionLeafId) return undefined;
+    if ((snapshot.childSessionFile ? path.resolve(snapshot.childSessionFile) : undefined) !== parsed.childSessionFile) return undefined;
+    if (snapshot.status !== parsed.status || snapshot.updatedAt !== parsed.updatedAt) return undefined;
+    return parsed;
+}
+
 export interface LoadedAgentRunPersistence {
     persistence: AgentRunPersistence;
     records: PersistedAgentRun[];
@@ -343,21 +366,17 @@ export async function loadAgentRunPersistence(
     const validSnapshot = (
         entry: ReturnType<typeof collectAgentRunSnapshotMarkers>[number],
         snapshot: typeof snapshots[number] | undefined,
-    ): boolean => {
+    ): PersistedAgentRun | undefined => {
         if (!snapshot) {
             diagnostics.push(`Could not restore ${entry.marker.runId}: parent marker references a missing SQLite snapshot.`);
-            return false;
+            return undefined;
         }
-        if (
-            snapshot.ownerSessionId !== ownerSessionId
-            || snapshot.payloadVersion !== 2
-            || snapshot.runInstanceId !== entry.marker.runInstanceId
-            || snapshot.runId !== entry.marker.runId
-        ) {
+        const parsed = validateAgentRunSnapshot(snapshot, entry.marker, ownerSessionId, childSessionDir);
+        if (!parsed) {
             diagnostics.push(`Could not restore ${entry.marker.runId}: parent marker and SQLite snapshot identity do not match.`);
-            return false;
+            return undefined;
         }
-        return true;
+        return parsed;
     };
     const sessionHeads = new Map<string, string>();
     for (const entry of allMarkers) {
@@ -395,7 +414,8 @@ export async function loadAgentRunPersistence(
             diagnostics.push(`Could not restore ${runInstanceId}: parent marker references a missing SQLite snapshot.`);
             continue;
         }
-        const parsed = parseRecord(snapshot.payload, ownerSessionId, childSessionDir);
+        const marker = allMarkers.find((entry) => entry.marker.snapshotId === branchHead.snapshotId)?.marker;
+        const parsed = marker ? validateAgentRunSnapshot(snapshot, marker, ownerSessionId, childSessionDir) : undefined;
         if (!parsed) {
             diagnostics.push(`Could not restore ${snapshot.runId}: its SQLite snapshot is invalid.`);
             continue;

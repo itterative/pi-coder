@@ -1,8 +1,8 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │   Delegated agent sessions                                                                       │
 │                                                                                                  │
-│     ○ Current    ○ Past    ● Settings                                                            │
-│     Current and Past show delegated sessions; Settings controls agent models and                 │
+│     ○ Agents    ● Settings                                                                       │
+│     Agents combines active and historical sessions; Settings controls agent models and           │
 │     notifications.                                                                               │
 │                                                                                                  │
 │   → Busy worker change notifications · Off                                                       │

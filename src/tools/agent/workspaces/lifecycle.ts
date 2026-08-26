@@ -78,7 +78,7 @@ export async function releaseAgentWorkspaceLeaseForRecovery(
         const updatedAt = Date.now();
         database.prepare(`
             UPDATE workspaces SET workspace_status = 'available',
-                lease_owner_session_id = NULL, lease_run_id = NULL, lease_kind = NULL,
+                lease_owner_session_id = NULL, lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL,
                 lease_acquired_at = NULL, updated_at = ? WHERE id = ?
         `).run(updatedAt, workspaceId);
         return {
@@ -101,6 +101,7 @@ export async function resetAgentWorkspaceForReuse(
     ownerSessionId?: string,
     leaseRunId?: string,
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    leaseRunInstanceId?: string,
 ): Promise<AgentWorkspace> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -111,6 +112,7 @@ export async function resetAgentWorkspaceForReuse(
                 workspace.leaseKind !== "task"
                 || workspace.leaseOwnerSessionId !== ownerSessionId
                 || workspace.leaseRunId !== leaseRunId
+                || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== leaseRunInstanceId)
             ) throw new Error(`Workspace ${workspaceId} is actively leased and cannot be reset by this session.`);
             if (!workspace.latestResult || !["prepared", "applied"].includes(workspace.latestResult.status)) {
                 throw new Error(`Workspace ${workspaceId} has no completed task result to reset.`);
@@ -134,7 +136,7 @@ export async function resetAgentWorkspaceForReuse(
             .run(workspaceId);
         database.prepare(`
             UPDATE workspaces SET base_revision = ?, workspace_status = 'available',
-                lease_owner_session_id = NULL, lease_run_id = NULL, lease_kind = NULL,
+                lease_owner_session_id = NULL, lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL,
                 lease_acquired_at = NULL, updated_at = ? WHERE id = ?
         `).run(targetRevision, Date.now(), workspaceId);
         const reset = workspaceById(database, workspaceId);
@@ -151,6 +153,7 @@ export async function discardAgentWorkspace(
     ownerSessionId?: string,
     leaseRunId?: string,
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    leaseRunInstanceId?: string,
 ): Promise<void> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -165,6 +168,7 @@ export async function discardAgentWorkspace(
                 workspace.leaseKind !== "task"
                 || workspace.leaseOwnerSessionId !== ownerSessionId
                 || workspace.leaseRunId !== leaseRunId
+                || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== leaseRunInstanceId)
             )) throw new Error(`Workspace ${workspaceId} is actively leased by another session or run.`);
         } else if (workspace.leaseKind) {
             throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be discarded.`);
@@ -233,9 +237,9 @@ export async function createAgentWorkspace(
             INSERT INTO workspaces (
                 version, id, cwd, repository_root, worktree_path, slug,
                 base_revision, setup_state, setup_summary, workspace_status,
-                lease_owner_session_id, lease_run_id, lease_kind, lease_acquired_at,
+                lease_owner_session_id, lease_run_id, lease_run_instance_id, lease_kind, lease_acquired_at,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             workspace.version,
             workspace.id,
@@ -247,6 +251,7 @@ export async function createAgentWorkspace(
             workspace.setupState,
             null,
             workspace.status,
+            null,
             null,
             null,
             null,

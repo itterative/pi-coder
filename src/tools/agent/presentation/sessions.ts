@@ -6,9 +6,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { PI_CODER_AGENT_SESSIONS_DIR } from "../../../common/constants";
-import { getAgentCwdSessionDir } from "../runs/persistence";
+import {
+    getAgentCwdSessionDir,
+    validateAgentRunSnapshot,
+} from "../runs/persistence";
 import { deriveAgentTitle } from "../runs/manager";
-import type { AgentRunSummary } from "../contracts/runs";
+import type { AgentRunSummary, PersistedAgentRun } from "../contracts/runs";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
 import { listAgentRunCatalog } from "../storage/run-catalog";
 import { collectAgentRunSnapshotMarkers } from "../storage/run-markers";
@@ -50,6 +53,7 @@ function historicalStatus(status: string | undefined): string | undefined {
 
 interface ActiveBranchChildCheckpoint {
     childSessionLeafId: string | null;
+    record: PersistedAgentRun;
     readOnlyReason?: string;
 }
 
@@ -59,36 +63,56 @@ function pastItem(
     metadata: AgentRunCatalogRecord | undefined,
     checkpoint?: ActiveBranchChildCheckpoint,
 ): AgentSessionBrowserItem {
+    const catalogLeaf = metadata && (
+        metadata.latestSnapshotId !== undefined
+        || typeof metadata.childSessionLeafId === "string"
+    )
+        ? metadata.childSessionLeafId
+        : undefined;
     const childSessionLeafId = checkpoint
         ? checkpoint.childSessionLeafId
-        : metadata?.childSessionLeafId;
+        : catalogLeaf;
+    const exactLeafSelected = childSessionLeafId !== undefined;
     const transcript = loadAgentSessionTranscriptViews(info.path, childSessionLeafId);
-    const fallbackTranscript = info.firstMessage
-        ? `> ${info.firstMessage}${info.allMessagesText && info.allMessagesText !== info.firstMessage ? `\n\n${info.allMessagesText.slice(info.firstMessage.length).trimStart()}` : ""}`
-        : info.allMessagesText;
+    const fallbackTranscript = exactLeafSelected
+        ? undefined
+        : info.firstMessage
+            ? `> ${info.firstMessage}${info.allMessagesText && info.allMessagesText !== info.firstMessage ? `\n\n${info.allMessagesText.slice(info.firstMessage.length).trimStart()}` : ""}`
+            : info.allMessagesText;
+    const record = checkpoint?.record;
+    const displayMetadata = record ?? metadata;
+    const selectedTranscript = exactLeafSelected
+        ? transcript?.detailed ?? "Transcript unavailable for the selected child checkpoint."
+        : transcript?.detailed || fallbackTranscript;
+    const selectedCollapsedTranscript = exactLeafSelected
+        ? transcript?.collapsed ?? "Transcript unavailable for the selected child checkpoint."
+        : transcript?.collapsed || fallbackTranscript;
+    const responsePreview = displayMetadata && "responsePreview" in displayMetadata
+        ? displayMetadata.responsePreview
+        : record?.progress.output || record?.progress.lastAssistantMessage;
     return {
         kind: "past",
         id: info.id,
-        title: metadata?.title ?? deriveAgentTitle(info.firstMessage),
-        agent: metadata?.agent ?? "delegated agent",
-        status: historicalStatus(metadata?.status) ?? "historical",
-        task: metadata?.task ?? info.firstMessage,
-        startedAt: metadata?.startedAt,
-        updatedAt: metadata?.updatedAt ?? info.modified.getTime(),
+        title: displayMetadata?.title ?? deriveAgentTitle(info.firstMessage),
+        agent: displayMetadata?.agent ?? "delegated agent",
+        status: historicalStatus(displayMetadata?.status) ?? "historical",
+        task: displayMetadata?.task ?? info.firstMessage,
+        startedAt: displayMetadata?.startedAt,
+        updatedAt: displayMetadata?.updatedAt ?? info.modified.getTime(),
         sessionFile: info.path,
         ...(childSessionLeafId !== undefined ? { childSessionLeafId } : {}),
         parentSessionId,
         readOnlyReason: checkpoint?.readOnlyReason,
         messageCount: info.messageCount,
         firstMessage: info.firstMessage,
-        allMessagesText: info.allMessagesText.slice(-4_000),
-        transcript: transcript?.detailed || fallbackTranscript,
-        transcriptCollapsed: transcript?.collapsed || fallbackTranscript,
-        mutating: metadata?.mutating,
-        usage: metadata?.usageSnapshot,
-        responsePreview: metadata?.responsePreview,
-        changedFiles: metadata?.mutationReport?.changedFiles,
-        readFiles: metadata?.mutationReport?.readFiles,
+        ...(exactLeafSelected ? {} : { allMessagesText: info.allMessagesText.slice(-4_000) }),
+        transcript: selectedTranscript,
+        transcriptCollapsed: selectedCollapsedTranscript,
+        mutating: displayMetadata?.mutating,
+        usage: displayMetadata && "usageSnapshot" in displayMetadata ? displayMetadata.usageSnapshot : undefined,
+        responsePreview,
+        changedFiles: displayMetadata && "mutationReport" in displayMetadata ? displayMetadata.mutationReport?.changedFiles : undefined,
+        readFiles: displayMetadata && "mutationReport" in displayMetadata ? displayMetadata.mutationReport?.readFiles : undefined,
     };
 }
 
@@ -123,31 +147,46 @@ export async function loadAgentSessionTranscripts(
         }
 
         const transcript = loadAgentSessionTranscriptViews(info.path, item.childSessionLeafId);
-        return transcript
-            ? {
+        if (transcript) {
+            return {
                 ...item,
-                transcript: transcript.detailed || info.allMessagesText,
-                transcriptCollapsed: transcript.collapsed || info.allMessagesText,
-            }
-            : { ...item, transcript: info.allMessagesText };
+                transcript: transcript.detailed,
+                transcriptCollapsed: transcript.collapsed,
+            };
+        }
+        if (item.childSessionLeafId !== undefined) {
+            return {
+                ...item,
+                transcript: "Transcript unavailable for the selected child checkpoint.",
+                transcriptCollapsed: "Transcript unavailable for the selected child checkpoint.",
+            };
+        }
+        return { ...item, transcript: info.allMessagesText, transcriptCollapsed: info.allMessagesText };
     }));
 }
 
 export interface AgentSessionHistoryScope {
     parentSessionId?: string;
     parentSessionFile?: string;
+    parentSessionLeafId?: string | null;
     activeBranchOnly?: boolean;
 }
 
 async function activeBranchChildCheckpoints(
     parentSessionFile: string | undefined,
+    parentSessionLeafId: string | null | undefined,
+    ownerSessionId: string | undefined,
+    childSessionDir: string,
     workspacesDir: string,
 ): Promise<Map<string, ActiveBranchChildCheckpoint> | undefined> {
     if (!parentSessionFile) return undefined;
     try {
         const parent = SessionManager.open(parentSessionFile);
         const allMarkers = collectAgentRunSnapshotMarkers(parent.getEntries());
-        const activeMarkers = collectAgentRunSnapshotMarkers(parent.getBranch());
+        const activeEntries = parentSessionLeafId === null
+            ? []
+            : parent.getBranch(parentSessionLeafId);
+        const activeMarkers = collectAgentRunSnapshotMarkers(activeEntries);
         const database = await openAgentMetadataDatabase(workspacesDir);
         try {
             const snapshots = listAgentRunSnapshotsInDatabase(
@@ -156,20 +195,28 @@ async function activeBranchChildCheckpoints(
             );
             const snapshotsById = new Map(snapshots.map((snapshot) => [snapshot.snapshotId, snapshot]));
             const sessionHeads = new Map<string, string>();
+            const recordsBySnapshotId = new Map<string, PersistedAgentRun>();
             for (const entry of allMarkers) {
-                if (snapshotsById.has(entry.marker.snapshotId)) {
+                const snapshot = snapshotsById.get(entry.marker.snapshotId);
+                const record = snapshot && ownerSessionId
+                    ? validateAgentRunSnapshot(snapshot, entry.marker, ownerSessionId, childSessionDir)
+                    : undefined;
+                if (record) {
                     sessionHeads.set(entry.marker.runInstanceId, entry.marker.snapshotId);
+                    recordsBySnapshotId.set(entry.marker.snapshotId, record);
                 }
             }
             const checkpoints = new Map<string, ActiveBranchChildCheckpoint & { order: number }>();
             for (const entry of activeMarkers) {
                 const snapshot = snapshotsById.get(entry.marker.snapshotId);
-                if (!snapshot?.childSessionFile) continue;
+                const record = recordsBySnapshotId.get(entry.marker.snapshotId);
+                if (!snapshot?.childSessionFile || !record) continue;
                 const file = path.resolve(snapshot.childSessionFile);
                 const previous = checkpoints.get(file);
                 if (previous && previous.order > entry.order) continue;
                 checkpoints.set(file, {
-                    childSessionLeafId: snapshot.childSessionLeafId,
+                    childSessionLeafId: record.childSessionLeafId ?? null,
+                    record,
                     ...(sessionHeads.get(entry.marker.runInstanceId) !== entry.marker.snapshotId
                         ? { readOnlyReason: "continued on another branch" }
                         : {}),
@@ -179,6 +226,7 @@ async function activeBranchChildCheckpoints(
             return new Map(
                 [...checkpoints].map(([file, checkpoint]) => [file, {
                     childSessionLeafId: checkpoint.childSessionLeafId,
+                    record: checkpoint.record,
                     readOnlyReason: checkpoint.readOnlyReason,
                 }]),
             );
@@ -200,8 +248,18 @@ export async function listPastAgentSessions(
         path.dirname(path.resolve(agentSessionsDir ?? PI_CODER_AGENT_SESSIONS_DIR)),
         "workspaces",
     );
+    const parentSessionId = scope?.parentSessionId;
+    const childSessionDir = parentSessionId
+        ? path.join(cwdSessionDir, parentSessionId)
+        : cwdSessionDir;
     const scopedCheckpoints = scope?.activeBranchOnly
-        ? await activeBranchChildCheckpoints(scope.parentSessionFile, workspacesDir)
+        ? await activeBranchChildCheckpoints(
+            scope.parentSessionFile,
+            scope.parentSessionLeafId,
+            parentSessionId,
+            childSessionDir,
+            workspacesDir,
+        )
         : undefined;
     const scopedFiles = scopedCheckpoints
         ? new Set(scopedCheckpoints.keys())

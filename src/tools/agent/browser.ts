@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import agentConfig, {
@@ -105,12 +106,24 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             );
             let past: AgentSessionBrowserItem[];
             try {
+                const allPast = await listPastAgentSessions(ctx.cwd);
+                const activeBranchPast = await listPastAgentSessions(ctx.cwd, undefined, {
+                    parentSessionId: currentSessionId,
+                    parentSessionFile: ctx.sessionManager.getSessionFile(),
+                    parentSessionLeafId: ctx.sessionManager.getLeafId(),
+                    activeBranchOnly: true,
+                });
+                const activeByFile = new Map(
+                    activeBranchPast
+                        .filter((item) => item.sessionFile)
+                        .map((item) => [path.resolve(item.sessionFile!), item]),
+                );
                 past = removeCurrentAgentTranscripts(
-                    await listPastAgentSessions(ctx.cwd, undefined, {
-                        parentSessionId: currentSessionId,
-                        parentSessionFile: ctx.sessionManager.getSessionFile(),
-                        activeBranchOnly: true,
-                    }),
+                    allPast.map((item) => (
+                        item.sessionFile
+                            ? activeByFile.get(path.resolve(item.sessionFile)) ?? item
+                            : item
+                    )),
                     current,
                 );
             } catch (error) {

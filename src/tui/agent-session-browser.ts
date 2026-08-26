@@ -48,7 +48,7 @@ export interface AgentModelOption {
 
 type AgentSettingItem = AgentSetting & { kind: "setting" };
 type AgentBrowserItem = AgentSessionBrowserItem | AgentWorkspaceBrowserItem | AgentSettingItem;
-type AgentBrowserTab = "current" | "past" | "workspaces" | "settings";
+type AgentBrowserTab = "agents" | "workspaces" | "settings";
 
 interface AgentSessionBrowserState extends ListViewState<AgentBrowserItem> {
     tab: AgentBrowserTab;
@@ -77,23 +77,13 @@ export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
     onInvalidate?: () => void;
 }
 
-const EMPTY_CURRENT: AgentSessionBrowserItem = {
+const EMPTY_AGENTS: AgentSessionBrowserItem = {
     kind: "empty",
-    id: "empty-current",
+    id: "empty-agents",
     title: "",
     agent: "",
     status: "",
-    task: "No delegated agents are active in this parent session.",
-    updatedAt: 0,
-};
-
-const EMPTY_PAST: AgentSessionBrowserItem = {
-    kind: "empty",
-    id: "empty-past",
-    title: "",
-    agent: "",
-    status: "",
-    task: "No persisted child sessions were found for this cwd.",
+    task: "No delegated agents were found.",
     updatedAt: 0,
 };
 
@@ -185,13 +175,10 @@ function returnedText(item: AgentSessionBrowserItem): string | undefined {
 }
 
 function tabText(tab: AgentBrowserTab, theme: Theme, includeWorkspaces: boolean, includeSettings: boolean): string {
-    const current = tab === "current"
-        ? theme.fg("accent", theme.bold("● Current"))
-        : theme.fg("dim", "○ Current");
-    const past = tab === "past"
-        ? theme.fg("accent", theme.bold("● Past"))
-        : theme.fg("dim", "○ Past");
-    const tabs = [`${current}    ${past}`];
+    const agents = tab === "agents"
+        ? theme.fg("accent", theme.bold("● Agents"))
+        : theme.fg("dim", "○ Agents");
+    const tabs = [agents];
     if (includeWorkspaces) {
         tabs.push(tab === "workspaces"
             ? theme.fg("accent", theme.bold("● Workspaces"))
@@ -228,7 +215,8 @@ function itemText(
         : item.mutating ? "worker" : item.agent;
     const status = item.status.replaceAll("_", " ");
     const continuation = item.readOnlyReason ? ` · ${item.readOnlyReason}` : "";
-    const headline = `${item.title || "Untitled run"} · ${mode} · ${status}${continuation} · ${dateText(item.updatedAt)}`;
+    const scope = item.kind === "current" ? "active" : "historical";
+    const headline = `${item.title || "Untitled run"} · ${mode} · ${scope} · ${status}${continuation} · ${dateText(item.updatedAt)}`;
     const task = `Task: ${oneLine(item.task)}`;
     const returned = returnedText(item);
     const activity = item.activity ? ` · ${oneLine(item.activity, 120)}` : "";
@@ -274,13 +262,11 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
 
     private rebuildItems(): void {
         const selectedId = this.state.items[this.state.cursor ?? 0]?.value.id;
-        this.state.items = this.state.tab === "current"
-            ? asSessionListItems(this.current, EMPTY_CURRENT)
-            : this.state.tab === "past"
-                ? asSessionListItems(this.past, EMPTY_PAST)
-                : this.state.tab === "workspaces"
-                    ? asWorkspaceListItems(this.workspaces)
-                    : asSettingsListItems(this.settings);
+        this.state.items = this.state.tab === "agents"
+            ? asSessionListItems([...this.current, ...this.past], EMPTY_AGENTS)
+            : this.state.tab === "workspaces"
+                ? asWorkspaceListItems(this.workspaces)
+                : asSettingsListItems(this.settings);
         const selectedIndex = selectedId === undefined
             ? -1
             : this.state.items.findIndex((item) => item.value.id === selectedId);
@@ -349,20 +335,18 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
         const settings = options.settings ?? [];
         const includeWorkspaces = options.workspaces !== undefined;
         const includeSettings = options.settings !== undefined;
-        const tabs: AgentBrowserTab[] = ["current", "past"];
+        const tabs: AgentBrowserTab[] = ["agents"];
         if (includeWorkspaces) tabs.push("workspaces");
         if (includeSettings) tabs.push("settings");
-        let activeTab: AgentSessionBrowserState["tab"] = "current";
+        let activeTab: AgentSessionBrowserState["tab"] = "agents";
         let tabHeader: Text | undefined;
         let tabTheme: Theme | undefined;
         const itemsForTab = (tab: AgentBrowserTab): ListItem<AgentBrowserItem>[] => (
-            tab === "current"
-                ? asSessionListItems(current, EMPTY_CURRENT)
-                : tab === "past"
-                    ? asSessionListItems(past, EMPTY_PAST)
-                    : tab === "workspaces"
-                        ? asWorkspaceListItems(workspaces)
-                        : asSettingsListItems(settings)
+            tab === "agents"
+                ? asSessionListItems([...current, ...past], EMPTY_AGENTS)
+                : tab === "workspaces"
+                    ? asWorkspaceListItems(workspaces)
+                    : asSettingsListItems(settings)
         );
         const refreshTabHeader = () => {
             if (tabHeader && tabTheme) tabHeader.setText(tabText(activeTab, tabTheme, includeWorkspaces, includeSettings));
@@ -382,10 +366,10 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     container.addChild(tabHeader);
                     container.addChild(new Text(
                         theme.fg("muted", includeSettings
-                            ? "Current and Past show delegated sessions; Settings controls agent models and notifications."
+                            ? "Agents combines active and historical sessions; Settings controls agent models and notifications."
                             : includeWorkspaces
-                                ? "Current and Past show delegated sessions; Workspaces shows isolated worker checkouts."
-                                : "Current shows this parent session; Past shows durable child results for this cwd."),
+                                ? "Agents combines active and historical sessions; Workspaces shows isolated worker checkouts."
+                                : "Agents combines active and historical delegated sessions."),
                         5,
                         0,
                     ));
@@ -549,13 +533,11 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                     return false;
                 },
                 footerContent: (container, theme, state) => {
-                    const count = state.tab === "current"
-                        ? current.length
-                        : state.tab === "past"
-                            ? past.length
-                            : state.tab === "workspaces"
-                                ? workspaces.length
-                                : settings.length;
+                    const count = state.tab === "agents"
+                        ? current.length + past.length
+                        : state.tab === "workspaces"
+                            ? workspaces.length
+                            : settings.length;
                     const label = state.tab === "workspaces"
                         ? "workspace"
                         : state.tab === "settings"
@@ -570,11 +552,11 @@ export class AgentSessionBrowserComponent extends ListViewComponent<
                 },
             },
             {
-                items: itemsForTab("current"),
+                items: itemsForTab("agents"),
                 cursor: 0,
                 scrollOffset: 0,
                 maxVisibleLines: 12,
-                tab: "current",
+                tab: "agents",
             },
         );
         this.current = current;

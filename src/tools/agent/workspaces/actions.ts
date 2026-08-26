@@ -14,11 +14,11 @@ import {
 import { getAgentWorkspace } from "./store";
 
 export type WorkspaceActionRequest = (
-    | { action: "apply"; workspace: AgentWorkspace; ownerSessionId: string; runId: string }
-    | { action: "retain"; workspace: AgentWorkspace; ownerSessionId: string; runId: string }
-    | { action: "reset"; workspace: AgentWorkspace; ownerSessionId?: string; runId?: string }
-    | { action: "discard_result"; workspace: AgentWorkspace; ownerSessionId: string; runId: string }
-    | { action: "discard_workspace"; workspace: AgentWorkspace; ownerSessionId?: string; runId?: string; allowStaleLeaseWithoutResult?: boolean }
+    | { action: "apply"; workspace: AgentWorkspace; ownerSessionId: string; runId: string; runInstanceId?: string }
+    | { action: "retain"; workspace: AgentWorkspace; ownerSessionId: string; runId: string; runInstanceId?: string }
+    | { action: "reset"; workspace: AgentWorkspace; ownerSessionId?: string; runId?: string; runInstanceId?: string }
+    | { action: "discard_result"; workspace: AgentWorkspace; ownerSessionId: string; runId: string; runInstanceId?: string }
+    | { action: "discard_workspace"; workspace: AgentWorkspace; ownerSessionId?: string; runId?: string; runInstanceId?: string; allowStaleLeaseWithoutResult?: boolean }
     | { action: "recover"; workspace: AgentWorkspace; ownerSessionId: string }
     | { action: "release"; workspace: AgentWorkspace }
 ) & { workspacesDir?: string };
@@ -36,11 +36,22 @@ function requirePreparedResult(
     workspace: AgentWorkspace,
     ownerSessionId: string,
     runId: string,
+    runInstanceId?: string,
 ): AgentWorkspaceResult {
-    if (workspace.leaseOwnerSessionId !== ownerSessionId || workspace.leaseRunId !== runId) {
+    if (
+        workspace.leaseOwnerSessionId !== ownerSessionId
+        || workspace.leaseRunId !== runId
+        || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== runInstanceId)
+    ) {
         throw new Error(`Workspace ${workspace.id} is not currently leased by run ${runId}.`);
     }
-    if (workspace.leaseKind !== "task" || !workspace.latestResult || workspace.latestResult.status !== "prepared") {
+    if (
+        workspace.leaseKind !== "task"
+        || !workspace.latestResult
+        || workspace.latestResult.status !== "prepared"
+        || workspace.latestResult.runId !== runId
+        || (workspace.leaseRunInstanceId !== undefined && workspace.latestResult.runInstanceId !== runInstanceId)
+    ) {
         throw new Error(`Workspace ${workspace.id} has no prepared result for run ${runId}.`);
     }
     return workspace.latestResult;
@@ -61,18 +72,20 @@ export async function executeWorkspaceAction(
     const { workspace, workspacesDir } = request;
     switch (request.action) {
         case "apply": {
-            requirePreparedResult(workspace, request.ownerSessionId, request.runId);
+            requirePreparedResult(workspace, request.ownerSessionId, request.runId, request.runInstanceId);
             const result = await applyAgentWorkspaceApplication(
                 workspace,
                 request.ownerSessionId,
                 request.runId,
                 workspacesDir,
+                request.runInstanceId,
             );
             await releaseAgentWorkspaceAfterApplication(
                 workspace.id,
                 request.ownerSessionId,
                 request.runId,
                 workspacesDir,
+                request.runInstanceId,
             );
             return {
                 workspace: await refreshed(workspace, workspacesDir),
@@ -82,12 +95,13 @@ export async function executeWorkspaceAction(
             };
         }
         case "retain": {
-            const prepared = requirePreparedResult(workspace, request.ownerSessionId, request.runId);
+            const prepared = requirePreparedResult(workspace, request.ownerSessionId, request.runId, request.runInstanceId);
             await retainAgentWorkspaceResult(
                 workspace.id,
                 request.ownerSessionId,
                 request.runId,
                 workspacesDir,
+                request.runInstanceId,
             );
             return {
                 workspace: await refreshed(workspace, workspacesDir),
@@ -102,6 +116,7 @@ export async function executeWorkspaceAction(
                 request.ownerSessionId,
                 request.runId,
                 workspacesDir,
+                request.runInstanceId,
             );
             return {
                 workspace: reset,
@@ -111,12 +126,13 @@ export async function executeWorkspaceAction(
         }
         case "discard_result": {
             if (workspace.leaseRunId) {
-                const prepared = requirePreparedResult(workspace, request.ownerSessionId, request.runId);
+                const prepared = requirePreparedResult(workspace, request.ownerSessionId, request.runId, request.runInstanceId);
                 await discardAgentWorkspaceResult(
                     workspace.id,
                     request.ownerSessionId,
                     request.runId,
                     workspacesDir,
+                    request.runInstanceId,
                 );
                 return {
                     workspace: await refreshed(workspace, workspacesDir),
@@ -125,7 +141,11 @@ export async function executeWorkspaceAction(
                     disposition: "discarded_result",
                 };
             }
-            if (!workspace.latestResult || workspace.latestResult.runId !== request.runId) {
+            if (
+                !workspace.latestResult
+                || workspace.latestResult.runId !== request.runId
+                || (workspace.latestResult.runInstanceId !== undefined && workspace.latestResult.runInstanceId !== request.runInstanceId)
+            ) {
                 throw new Error(`Workspace ${workspace.id} has no result for run ${request.runId} to discard.`);
             }
             const result = workspace.latestResult;
@@ -151,6 +171,7 @@ export async function executeWorkspaceAction(
                     request.ownerSessionId,
                     request.runId,
                     workspacesDir,
+                    request.runInstanceId,
                 );
             }
             return {

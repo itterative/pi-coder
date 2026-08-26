@@ -467,23 +467,29 @@ describe("AgentSessionBrowserComponent", () => {
         );
     });
 
-    it("switches tabs and renders the past result entry", async () => {
+    it("merges active and historical agents into one list", () => {
         const value = component();
         const ui = interact(value, 100);
 
-        ui.press(KEY.tab);
-
-        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.past-tab.txt");
+        expect(ui.render()).toContain("Project structure audit");
+        expect(ui.render()).toContain("Previous implementation review");
+        expect(ui.render()).toContain("active");
+        expect(ui.render()).toContain("historical");
     });
 
-    it("uses left and right for directional tab selection", () => {
-        const value = component();
+    it("uses left and right for directional view selection", () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            workspaces: [],
+        });
+        value.initialize(mockTheme);
         const ui = interact(value, 100);
 
         ui.press(KEY.right);
-        expect(ui.render()).toContain("○ Current    ● Past");
+        expect(ui.render()).toContain("● Workspaces");
         ui.press(KEY.left);
-        expect(ui.render()).toContain("● Current    ○ Past");
+        expect(ui.render()).toContain("● Agents");
     });
 
     it("allows explicit cancellation of a running current agent", async () => {
@@ -524,8 +530,8 @@ describe("AgentSessionBrowserComponent", () => {
         value.initialize(mockTheme);
         const ui = interact(value, 100);
 
-        ui.press(KEY.tab, KEY.tab);
-        expect(ui.render()).toContain("○ Current    ○ Past    ● Workspaces");
+        ui.press(KEY.tab);
+        expect(ui.render()).toContain("● Workspaces");
         expect(ui.render()).toContain("quiet-lantern-7k3 · available");
         expect(ui.render()).toContain("Git: dirty · 2 changed files");
 
@@ -562,7 +568,7 @@ describe("AgentSessionBrowserComponent", () => {
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
-        ui.press(KEY.tab, KEY.tab, KEY.enter);
+        ui.press(KEY.tab, KEY.enter);
 
         eventBus.emit(AGENT_EVENT_CHANNEL, {
             cwd: workspace.cwd,
@@ -589,7 +595,7 @@ describe("AgentSessionBrowserComponent", () => {
         value.initialize(mockTheme);
         const ui = interact(value, 100);
 
-        ui.press(KEY.tab, KEY.tab, KEY.enter);
+        ui.press(KEY.tab, KEY.enter);
         await expect(snapshotText(ui.render())).toMatchFileSnapshot(
             "__snapshots__/sunlit-lantern-6tk.txt",
         );
@@ -612,7 +618,7 @@ describe("AgentSessionBrowserComponent", () => {
         value.initialize(mockTheme);
         const ui = interact(value, 100);
 
-        ui.press(KEY.tab, KEY.tab, KEY.enter);
+        ui.press(KEY.tab, KEY.enter);
         await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspace-detail.txt");
 
         ui.press("d");
@@ -637,8 +643,6 @@ describe("AgentSessionBrowserComponent", () => {
         const ui = interact(value, 100);
 
         await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.current-empty.txt");
-        ui.press(KEY.tab);
-        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.past-empty.txt");
     });
 
     it("toggles busy worker change notifications in settings", async () => {
@@ -688,7 +692,7 @@ describe("AgentSessionBrowserComponent", () => {
         value.initialize(mockTheme);
         const ui = interact(value, 100);
 
-        ui.press(KEY.tab, KEY.tab);
+        ui.press(KEY.tab);
         await expect(snapshotText(ui.render())).toMatchFileSnapshot(
             "__snapshots__/agent-session-browser.settings-notifications-on.txt",
         );
@@ -734,7 +738,7 @@ describe("AgentSessionBrowserComponent", () => {
         value.initialize(mockTheme);
         const ui = interact(value, 100);
 
-        ui.press(KEY.tab, KEY.tab);
+        ui.press(KEY.tab);
         expect(ui.render()).toContain("● Settings");
         expect(ui.render()).toContain("Value: Parent model");
         ui.press(KEY.enter);

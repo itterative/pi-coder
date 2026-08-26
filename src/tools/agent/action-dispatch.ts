@@ -107,6 +107,10 @@ export async function executeAgentAction(
                     reservation.ownerSessionId,
                     reservation.provisionalLeaseRunId,
                     outcome.details.runId,
+                    "task",
+                    undefined,
+                    reservation.provisionalLeaseRunInstanceId,
+                    outcome.details.runInstanceId,
                 );
                 lifecycle.emitWorkspaceEvent(
                     ctx,
@@ -166,6 +170,8 @@ export async function executeAgentAction(
                     workspaceResult.workspaceId,
                     ctx.sessionManager.getSessionId(),
                     workspaceResult.runId,
+                    undefined,
+                    workspaceResult.runInstanceId,
                 );
                 emitAgentEvent(lifecycle.events, ctx.cwd, {
                     type: "workspace",
@@ -185,6 +191,8 @@ export async function executeAgentAction(
                 reservation.workspace.id,
                 reservation.ownerSessionId,
                 reservation.provisionalLeaseRunId,
+                undefined,
+                reservation.provisionalLeaseRunInstanceId,
             ).catch(() => {});
         }
         outcome = failedOutcome(params, error);

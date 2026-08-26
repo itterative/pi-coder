@@ -90,7 +90,7 @@ export async function createAgentChild(
     if (context.childSessionFile && context.childSessionLeafId !== undefined) {
         selectChildSessionLeaf(sessionManager, context.childSessionLeafId);
     }
-    context.onSessionCreated?.(sessionManager.getSessionFile());
+    context.onSessionCreated?.(sessionManager.getSessionFile(), sessionManager.getLeafId());
     const settingsManager = SettingsManager.create(cwd, agentDir);
     const resourceLoader = new DefaultResourceLoader({
         cwd,

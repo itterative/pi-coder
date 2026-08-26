@@ -152,6 +152,7 @@ export interface WorkspaceReservation {
     workspace: AgentWorkspace;
     ownerSessionId: string;
     provisionalLeaseRunId: string;
+    provisionalLeaseRunInstanceId: string;
 }
 
 export async function prepareIsolatedWorkspace(
@@ -174,6 +175,7 @@ export async function prepareIsolatedWorkspace(
 
     const ownerSessionId = ctx.sessionManager.getSessionId();
     const provisionalLeaseRunId = `workspace-provision-${randomUUID()}`;
+    const provisionalLeaseRunInstanceId = randomUUID();
     const released = await reconcileNoChangeAgentWorkspaceLeases(cwd);
     if (released > 0) {
         emitAgentEvent(events, cwd, {
@@ -189,6 +191,8 @@ export async function prepareIsolatedWorkspace(
             ownerSessionId,
             provisionalLeaseRunId,
             "task",
+            undefined,
+            provisionalLeaseRunInstanceId,
         );
         emitAgentEvent(events, ctx.cwd, {
             type: "workspace",
@@ -196,7 +200,7 @@ export async function prepareIsolatedWorkspace(
             workspaceId: workspace.id,
             reason: "claimed",
         });
-        return { workspace, ownerSessionId, provisionalLeaseRunId };
+        return { workspace, ownerSessionId, provisionalLeaseRunId, provisionalLeaseRunInstanceId };
     }
 
     const existing = await findUnpreparedAgentWorkspace(cwd);
@@ -267,6 +271,8 @@ export async function prepareIsolatedWorkspace(
             ownerSessionId,
             provisionalLeaseRunId,
             leaseKind,
+            undefined,
+            provisionalLeaseRunInstanceId,
         );
         emitAgentEvent(events, ctx.cwd, {
             type: "workspace",
@@ -299,10 +305,17 @@ export async function prepareIsolatedWorkspace(
             workspace: claimed,
             ownerSessionId,
             provisionalLeaseRunId,
+            provisionalLeaseRunInstanceId,
         };
     } catch (error) {
         try {
-            await releaseAgentWorkspaceLease(workspace.id, ownerSessionId, provisionalLeaseRunId);
+            await releaseAgentWorkspaceLease(
+                workspace.id,
+                ownerSessionId,
+                provisionalLeaseRunId,
+                undefined,
+                provisionalLeaseRunInstanceId,
+            );
             emitAgentEvent(events, ctx.cwd, {
                 type: "workspace",
                 action: "lease_changed",

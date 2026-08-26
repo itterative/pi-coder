@@ -108,6 +108,8 @@ function workspaceActions(
 
     const currentResult = workspace.leaseRunId
         && workspace.latestResult?.runId === workspace.leaseRunId
+        && (workspace.leaseRunInstanceId === undefined
+            || workspace.latestResult.runInstanceId === workspace.leaseRunInstanceId)
         ? workspace.latestResult
         : undefined;
     const changed = Boolean(

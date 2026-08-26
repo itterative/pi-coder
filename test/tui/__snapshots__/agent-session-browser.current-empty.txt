@@ -1,10 +1,10 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │   Delegated agent sessions                                                                       │
 │                                                                                                  │
-│     ● Current    ○ Past                                                                          │
-│     Current shows this parent session; Past shows durable child results for this cwd.            │
+│     ● Agents                                                                                     │
+│     Agents combines active and historical delegated sessions.                                    │
 │                                                                                                  │
-│     No delegated agents are active in this parent session.                                       │
+│     No delegated agents were found.                                                              │
 │                                                                                                  │
 │   0 sessions                                                                                     │
 │                                                                                                  │

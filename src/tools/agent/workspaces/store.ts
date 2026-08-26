@@ -51,6 +51,7 @@ function rowToWorkspace(row: WorkspaceRow): AgentWorkspace | undefined {
         status: row.workspace_status as WorkspaceStatus,
         ...(typeof row.lease_owner_session_id === "string" ? { leaseOwnerSessionId: row.lease_owner_session_id } : {}),
         ...(typeof row.lease_run_id === "string" ? { leaseRunId: row.lease_run_id } : {}),
+        ...(typeof row.lease_run_instance_id === "string" ? { leaseRunInstanceId: row.lease_run_instance_id } : {}),
         ...(["setup", "task"].includes(row.lease_kind as string)
             ? { leaseKind: row.lease_kind as WorkspaceLeaseKind }
             : {}),
@@ -86,6 +87,7 @@ function rowToWorkspaceResult(row: WorkspaceRow): AgentWorkspaceResult | undefin
         id: row.id,
         workspaceId: row.workspace_id,
         runId: row.run_id,
+        ...(typeof row.run_instance_id === "string" ? { runInstanceId: row.run_instance_id } : {}),
         baseRevision: row.base_revision,
         workerHead: row.worker_head,
         commitRange: row.commit_range,
@@ -100,7 +102,7 @@ function rowToWorkspaceResult(row: WorkspaceRow): AgentWorkspaceResult | undefin
 
 function workspaceResultById(database: WorkspaceDatabase, resultId: string): AgentWorkspaceResult | undefined {
     const row = database.prepare(`
-        SELECT id, workspace_id, run_id, base_revision, worker_head, commit_range,
+        SELECT id, workspace_id, run_id, run_instance_id, base_revision, worker_head, commit_range,
                commits_json, durable_ref, prepared_at, status, parent_revision, applied_at
         FROM workspace_results
         WHERE id = ?
@@ -110,7 +112,7 @@ function workspaceResultById(database: WorkspaceDatabase, resultId: string): Age
 
 function latestWorkspaceResult(database: WorkspaceDatabase, workspaceId: string): AgentWorkspaceResult | undefined {
     const row = database.prepare(`
-        SELECT id, workspace_id, run_id, base_revision, worker_head, commit_range,
+        SELECT id, workspace_id, run_id, run_instance_id, base_revision, worker_head, commit_range,
                commits_json, durable_ref, prepared_at, status, parent_revision, applied_at
         FROM workspace_results
         WHERE workspace_id = ?
@@ -126,8 +128,11 @@ export function workspaceLeaseState(database: WorkspaceDatabase, workspace: Agen
     if (!workspace.leaseOwnerSessionId) return "unknown";
     const row = database.prepare(`
         SELECT status FROM agent_runs
-        WHERE owner_session_id = ? AND run_id = ?
-    `).get(workspace.leaseOwnerSessionId, workspace.leaseRunId) as WorkspaceRow | undefined;
+        WHERE owner_session_id = ? AND run_instance_id = ?
+    `).get(
+        workspace.leaseOwnerSessionId,
+        workspace.leaseRunInstanceId ?? `${workspace.leaseOwnerSessionId}:${workspace.leaseRunId}`,
+    ) as WorkspaceRow | undefined;
     if (!row || typeof row.status !== "string") return "orphaned";
     // A terminal run can still own a prepared result awaiting explicit
     // disposition. Presence in the catalog means the lease is known; only a
@@ -153,10 +158,16 @@ export async function workspaceForLease(
     ownerSessionId: string,
     leaseRunId: string,
     workspacesDir: string,
+    leaseRunInstanceId?: string,
 ): Promise<{ database: WorkspaceDatabase; workspace: AgentWorkspace }> {
     const database = await openDatabase(workspacesDir);
     const workspace = attachLatestWorkspaceResult(database, workspaceById(database, workspaceId));
-    if (!workspace || workspace.leaseOwnerSessionId !== ownerSessionId || workspace.leaseRunId !== leaseRunId) {
+    if (
+        !workspace
+        || workspace.leaseOwnerSessionId !== ownerSessionId
+        || workspace.leaseRunId !== leaseRunId
+        || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== leaseRunInstanceId)
+    ) {
         database.close();
         throw new Error(`Workspace ${workspaceId} is not leased by ${leaseRunId}.`);
     }
@@ -222,7 +233,7 @@ export async function listAgentWorkspaces(
         const rows = database.prepare(`
             SELECT version, id, cwd, repository_root, worktree_path, slug,
                    base_revision, setup_state, setup_summary, workspace_status,
-                   lease_owner_session_id, lease_run_id, lease_kind, lease_acquired_at,
+                   lease_owner_session_id, lease_run_id, lease_run_instance_id, lease_kind, lease_acquired_at,
                    created_at, updated_at
             FROM workspaces
             WHERE cwd = ?
@@ -268,7 +279,7 @@ export async function listAgentWorkspaceResults(
     const database = await openDatabase(workspacesDir);
     try {
         const rows = database.prepare(`
-            SELECT id, workspace_id, run_id, base_revision, worker_head, commit_range,
+            SELECT id, workspace_id, run_id, run_instance_id, base_revision, worker_head, commit_range,
                    commits_json, durable_ref, prepared_at, status, parent_revision, applied_at
             FROM workspace_results
             WHERE workspace_id = ?
@@ -286,7 +297,7 @@ export function workspaceById(database: WorkspaceDatabase, id: string): AgentWor
     const row = database.prepare(`
         SELECT version, id, cwd, repository_root, worktree_path, slug,
                base_revision, setup_state, setup_summary, workspace_status,
-               lease_owner_session_id, lease_run_id, lease_kind, lease_acquired_at,
+               lease_owner_session_id, lease_run_id, lease_run_instance_id, lease_kind, lease_acquired_at,
                created_at, updated_at
         FROM workspaces
         WHERE id = ?
@@ -308,15 +319,16 @@ export async function claimAgentWorkspace(
     leaseRunId: string,
     leaseKind: WorkspaceLeaseKind,
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    leaseRunInstanceId?: string,
 ): Promise<AgentWorkspace> {
     const database = await openDatabase(workspacesDir);
     try {
         database.exec("BEGIN IMMEDIATE");
         const result = database.prepare(`
             UPDATE workspaces
-            SET lease_owner_session_id = ?, lease_run_id = ?, lease_kind = ?, lease_acquired_at = ?
+            SET lease_owner_session_id = ?, lease_run_id = ?, lease_run_instance_id = ?, lease_kind = ?, lease_acquired_at = ?
             WHERE id = ? AND workspace_status = 'available' AND lease_run_id IS NULL
-        `).run(ownerSessionId, leaseRunId, leaseKind, Date.now(), workspaceId);
+        `).run(ownerSessionId, leaseRunId, leaseRunInstanceId ?? null, leaseKind, Date.now(), workspaceId);
         if (Number(result.changes) !== 1) {
             rollback(database);
             throw new Error(`Workspace ${workspaceId} is no longer available.`);
@@ -343,15 +355,18 @@ export async function transferAgentWorkspaceLease(
     toLeaseRunId: string,
     leaseKind: WorkspaceLeaseKind = "task",
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    fromLeaseRunInstanceId?: string,
+    toLeaseRunInstanceId?: string,
 ): Promise<void> {
     const database = await openDatabase(workspacesDir);
     try {
         database.exec("BEGIN IMMEDIATE");
         const result = database.prepare(`
             UPDATE workspaces
-            SET lease_run_id = ?, lease_kind = ?, lease_acquired_at = ?
+            SET lease_run_id = ?, lease_run_instance_id = ?, lease_kind = ?, lease_acquired_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
-        `).run(toLeaseRunId, leaseKind, Date.now(), workspaceId, ownerSessionId, fromLeaseRunId);
+              AND (? IS NULL OR lease_run_instance_id = ?)
+        `).run(toLeaseRunId, toLeaseRunInstanceId ?? null, leaseKind, Date.now(), workspaceId, ownerSessionId, fromLeaseRunId, fromLeaseRunInstanceId ?? null, fromLeaseRunInstanceId ?? null);
         if (Number(result.changes) !== 1) {
             rollback(database);
             throw new Error(`Workspace ${workspaceId} lease could not be transferred.`);
@@ -370,11 +385,16 @@ export async function releaseAgentWorkspaceLease(
     ownerSessionId: string,
     leaseRunId: string,
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    leaseRunInstanceId?: string,
 ): Promise<void> {
     const database = await openDatabase(workspacesDir);
     try {
         const workspace = workspaceById(database, workspaceId);
-        if (workspace?.leaseOwnerSessionId !== ownerSessionId || workspace.leaseRunId !== leaseRunId) {
+        if (
+            workspace?.leaseOwnerSessionId !== ownerSessionId
+            || workspace.leaseRunId !== leaseRunId
+            || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== leaseRunInstanceId)
+        ) {
             throw new Error(`Workspace ${workspaceId} is not leased by ${leaseRunId}.`);
         }
         if (workspace.leaseKind === "task" && workspace.latestResult?.status !== "applied") {
@@ -382,10 +402,11 @@ export async function releaseAgentWorkspaceLease(
         }
         database.prepare(`
             UPDATE workspaces
-            SET lease_owner_session_id = NULL, lease_run_id = NULL,
+            SET lease_owner_session_id = NULL, lease_run_id = NULL, lease_run_instance_id = NULL,
                 lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
-        `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId);
+              AND (? IS NULL OR lease_run_instance_id = ?)
+        `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId, leaseRunInstanceId ?? null, leaseRunInstanceId ?? null);
     } finally {
         database.close();
     }

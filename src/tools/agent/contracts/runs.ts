@@ -76,7 +76,7 @@ export interface ChildAgentFactoryContext {
     repairInterrupted?: boolean;
     initialProgress?: ChildProgress;
     initialMutationReport?: WorkerMutationReport;
-    onSessionCreated?: (sessionFile: string | undefined) => void;
+    onSessionCreated?: (sessionFile: string | undefined, childSessionLeafId: string | null) => void;
 }
 
 export type ChildAgentFactory = (

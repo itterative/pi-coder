@@ -22,6 +22,7 @@ export async function handleWorkspaceAction(
                 workspace,
                 ownerSessionId: sessionId,
                 runId: leaseRunId,
+                runInstanceId: workspace.leaseRunInstanceId,
             });
             ctx.ui.notify(`Applied and released workspace ${workspace.slug}.`, "info");
             return result.workspace;
@@ -33,6 +34,7 @@ export async function handleWorkspaceAction(
                 workspace,
                 ownerSessionId: sessionId,
                 runId: leaseRunId,
+                runInstanceId: workspace.leaseRunInstanceId,
             });
             ctx.ui.notify(`Retained workspace ${workspace.slug} for review.`, "info");
             return result.workspace;
@@ -43,6 +45,7 @@ export async function handleWorkspaceAction(
                 workspace,
                 ownerSessionId: sessionId,
                 runId: leaseRunId,
+                runInstanceId: workspace.leaseRunInstanceId,
             });
             ctx.ui.notify(`Reset workspace ${workspace.slug}; it is reusable.`, "info");
             return result.workspace;
@@ -50,6 +53,7 @@ export async function handleWorkspaceAction(
         const activeLeaseRun = workspace.leaseRunId
             ? manager.listRuns().find((run) => (
                 run.runId === workspace.leaseRunId
+                && (workspace.leaseRunInstanceId === undefined || run.runInstanceId === workspace.leaseRunInstanceId)
                 && !["completed", "failed", "aborted", "canceled"].includes(run.status)
             ))
             : undefined;
@@ -75,6 +79,7 @@ export async function handleWorkspaceAction(
             workspace,
             ownerSessionId: sessionId,
             runId: leaseRunId,
+            runInstanceId: workspace.leaseRunInstanceId,
             allowStaleLeaseWithoutResult: workspace.leaseRunId !== undefined && !workspace.latestResult,
         });
         ctx.ui.notify(`Discarded workspace ${workspace.slug}.`, "info");

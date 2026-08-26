@@ -17,6 +17,22 @@ import {
 const FINAL_RESULT_COMMIT_MESSAGE = "pi-coder: finalize isolated worker result";
 const RESULT_REF_PREFIX = "refs/pi-coder/workspace-results";
 
+function requireMatchingWorkspaceResult(
+    workspace: AgentWorkspace,
+    leaseRunId: string,
+    leaseRunInstanceId?: string,
+): AgentWorkspaceResult {
+    const result = workspace.latestResult;
+    if (
+        !result
+        || result.runId !== leaseRunId
+        || (workspace.leaseRunInstanceId !== undefined && result.runInstanceId !== leaseRunInstanceId)
+    ) {
+        throw new Error(`Workspace ${workspace.id} has no result for run ${leaseRunId}.`);
+    }
+    return result;
+}
+
 async function resetReusableWorkspace(workspace: AgentWorkspace, targetRevision?: string): Promise<string> {
     const revision = targetRevision ?? await git(workspace.repositoryRoot, ["rev-parse", "HEAD"]);
     await git(workspace.worktreePath, ["reset", "--hard", revision]);
@@ -30,8 +46,9 @@ export async function prepareAgentWorkspaceApplication(
     ownerSessionId: string,
     leaseRunId: string,
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    leaseRunInstanceId?: string,
 ): Promise<AgentWorkspaceResult> {
-    const { database, workspace: current } = await workspaceForLease(workspace.id, ownerSessionId, leaseRunId, workspacesDir);
+    const { database, workspace: current } = await workspaceForLease(workspace.id, ownerSessionId, leaseRunId, workspacesDir, leaseRunInstanceId);
     let durableRef: string | undefined;
     try {
         if (current.leaseKind !== "task") throw new Error(`Workspace ${workspace.id} does not have a task lease.`);
@@ -57,6 +74,9 @@ export async function prepareAgentWorkspaceApplication(
             id: resultId,
             workspaceId: current.id,
             runId: leaseRunId,
+            ...(current.leaseRunInstanceId ?? leaseRunInstanceId
+                ? { runInstanceId: current.leaseRunInstanceId ?? leaseRunInstanceId }
+                : {}),
             baseRevision: current.baseRevision,
             workerHead,
             commitRange: `${current.baseRevision}..${workerHead}`,
@@ -67,10 +87,10 @@ export async function prepareAgentWorkspaceApplication(
         };
         database.prepare(`
             INSERT INTO workspace_results (
-                id, workspace_id, run_id, base_revision, worker_head, commit_range,
+                id, workspace_id, run_id, run_instance_id, base_revision, worker_head, commit_range,
                 commits_json, durable_ref, prepared_at, status, parent_revision, applied_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-        `).run(result.id, result.workspaceId, result.runId, result.baseRevision, result.workerHead,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+        `).run(result.id, result.workspaceId, result.runId, result.runInstanceId ?? null, result.baseRevision, result.workerHead,
             result.commitRange, JSON.stringify(result.commits), result.durableRef ?? null, result.preparedAt, result.status);
         return result;
     } catch (error) {
@@ -87,12 +107,12 @@ export async function applyAgentWorkspaceApplication(
     ownerSessionId: string,
     leaseRunId: string,
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    leaseRunInstanceId?: string,
 ): Promise<AgentWorkspaceResult> {
-    const { database, workspace: current } = await workspaceForLease(workspace.id, ownerSessionId, leaseRunId, workspacesDir);
+    const { database, workspace: current } = await workspaceForLease(workspace.id, ownerSessionId, leaseRunId, workspacesDir, leaseRunInstanceId);
     try {
         if (current.leaseKind !== "task") throw new Error(`Workspace ${current.id} does not have a task lease.`);
-        const result = current.latestResult;
-        if (!result) throw new Error(`Workspace ${current.id} has not been prepared for application.`);
+        const result = requireMatchingWorkspaceResult(current, leaseRunId, leaseRunInstanceId);
         if (result.status === "applied") return result;
         const workerHead = await git(current.worktreePath, ["rev-parse", "HEAD"]);
         const workerState = await inspectAgentWorkspaceGitState(current);
@@ -136,10 +156,11 @@ export async function retainAgentWorkspaceResult(
     ownerSessionId: string,
     leaseRunId: string,
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    leaseRunInstanceId?: string,
 ): Promise<void> {
-    const { database, workspace } = await workspaceForLease(workspaceId, ownerSessionId, leaseRunId, workspacesDir);
+    const { database, workspace } = await workspaceForLease(workspaceId, ownerSessionId, leaseRunId, workspacesDir, leaseRunInstanceId);
     try {
-        const result = workspace.latestResult;
+        const result = workspace.latestResult && requireMatchingWorkspaceResult(workspace, leaseRunId, leaseRunInstanceId);
         if (workspace.leaseKind !== "task" || !result || result.status !== "prepared" || result.commits.length === 0) {
             throw new Error(`Workspace ${workspaceId} has no changed prepared result to retain.`);
         }
@@ -150,9 +171,10 @@ export async function retainAgentWorkspaceResult(
         }
         database.prepare(`
             UPDATE workspaces SET workspace_status = 'review_required', lease_owner_session_id = NULL,
-                lease_run_id = NULL, lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
+                lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
-        `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId);
+              AND (? IS NULL OR lease_run_instance_id = ?)
+        `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId, leaseRunInstanceId ?? null, leaseRunInstanceId ?? null);
     } finally {
         database.close();
     }
@@ -164,13 +186,17 @@ export async function discardAgentWorkspaceResult(
     ownerSessionId: string,
     leaseRunId: string,
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    leaseRunInstanceId?: string,
 ): Promise<void> {
-    const { database, workspace } = await workspaceForLease(workspaceId, ownerSessionId, leaseRunId, workspacesDir);
+    const { database, workspace } = await workspaceForLease(workspaceId, ownerSessionId, leaseRunId, workspacesDir, leaseRunInstanceId);
     try {
-        if (workspace.leaseKind !== "task" || !workspace.latestResult || workspace.latestResult.status !== "prepared") {
+        if (workspace.leaseKind !== "task") {
             throw new Error(`Workspace ${workspaceId} has no prepared result to discard.`);
         }
-        const result = workspace.latestResult;
+        const result = requireMatchingWorkspaceResult(workspace, leaseRunId, leaseRunInstanceId);
+        if (result.status !== "prepared") {
+            throw new Error(`Workspace ${workspaceId} has no prepared result to discard.`);
+        }
         const state = await inspectAgentWorkspaceGitState(workspace);
         if (state.kind !== "available" || state.dirty || state.headRevision !== result.workerHead) {
             throw new Error(`Workspace ${workspaceId} changed after its result was prepared; inspect it before discarding.`);
@@ -187,10 +213,11 @@ export async function discardAgentWorkspaceResult(
             .run(result.id, workspaceId);
         database.prepare(`
             UPDATE workspaces SET workspace_status = 'available', base_revision = ?,
-                lease_owner_session_id = NULL, lease_run_id = NULL, lease_kind = NULL,
+                lease_owner_session_id = NULL, lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL,
                 lease_acquired_at = NULL, updated_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
-        `).run(targetRevision, updatedAt, workspaceId, ownerSessionId, leaseRunId);
+              AND (? IS NULL OR lease_run_instance_id = ?)
+        `).run(targetRevision, updatedAt, workspaceId, ownerSessionId, leaseRunId, leaseRunInstanceId ?? null, leaseRunInstanceId ?? null);
     } finally {
         database.close();
     }
@@ -202,21 +229,28 @@ export async function releaseAgentWorkspaceAfterApplication(
     ownerSessionId: string,
     leaseRunId: string,
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    leaseRunInstanceId?: string,
 ): Promise<void> {
     const database = await openDatabase(workspacesDir);
     try {
         const workspace = workspaceById(database, workspaceId);
-        if (workspace?.leaseOwnerSessionId !== ownerSessionId || workspace.leaseRunId !== leaseRunId) {
+        if (
+            workspace?.leaseOwnerSessionId !== ownerSessionId
+            || workspace.leaseRunId !== leaseRunId
+            || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== leaseRunInstanceId)
+        ) {
             throw new Error(`Workspace ${workspaceId} is not leased by ${leaseRunId}.`);
         }
-        if (workspace.leaseKind !== "task" || workspace.latestResult?.status !== "applied") {
+        const result = requireMatchingWorkspaceResult(workspace, leaseRunId, leaseRunInstanceId);
+        if (workspace.leaseKind !== "task" || result.status !== "applied") {
             throw new Error(`Workspace ${workspaceId} can be released only after successful application.`);
         }
         database.prepare(`
             UPDATE workspaces SET workspace_status = 'review_required', lease_owner_session_id = NULL,
-                lease_run_id = NULL, lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
+                lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
-        `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId);
+              AND (? IS NULL OR lease_run_instance_id = ?)
+        `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId, leaseRunInstanceId ?? null, leaseRunInstanceId ?? null);
     } finally {
         database.close();
     }
@@ -228,17 +262,21 @@ export async function releaseAgentWorkspaceAfterNoChanges(
     ownerSessionId: string,
     leaseRunId: string,
     workspacesDir = PI_CODER_WORKSPACES_DIR,
+    leaseRunInstanceId?: string,
 ): Promise<void> {
     const database = await openDatabase(workspacesDir);
     try {
         const workspace = workspaceById(database, workspaceId);
-        if (workspace?.leaseOwnerSessionId !== ownerSessionId || workspace.leaseRunId !== leaseRunId) {
+        if (
+            workspace?.leaseOwnerSessionId !== ownerSessionId
+            || workspace.leaseRunId !== leaseRunId
+            || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== leaseRunInstanceId)
+        ) {
             throw new Error(`Workspace ${workspaceId} is not leased by ${leaseRunId}.`);
         }
-        const result = workspace.latestResult;
+        const result = requireMatchingWorkspaceResult(workspace, leaseRunId, leaseRunInstanceId);
         if (
             workspace.leaseKind !== "task"
-            || !result
             || result.status !== "prepared"
             || result.baseRevision !== result.workerHead
             || result.commits.length > 0
@@ -257,10 +295,11 @@ export async function releaseAgentWorkspaceAfterNoChanges(
             .run(result.id, workspaceId);
         database.prepare(`
             UPDATE workspaces SET workspace_status = 'available', base_revision = ?,
-                lease_owner_session_id = NULL, lease_run_id = NULL, lease_kind = NULL,
+                lease_owner_session_id = NULL, lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL,
                 lease_acquired_at = NULL, updated_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
-        `).run(targetRevision, Date.now(), workspaceId, ownerSessionId, leaseRunId);
+              AND (? IS NULL OR lease_run_instance_id = ?)
+        `).run(targetRevision, Date.now(), workspaceId, ownerSessionId, leaseRunId, leaseRunInstanceId ?? null, leaseRunInstanceId ?? null);
     } finally {
         database.close();
     }
@@ -300,6 +339,8 @@ export async function reconcileNoChangeAgentWorkspaceLeases(
             || !workspace.leaseRunId
             || workspace.latestResult?.status !== "prepared"
             || workspace.latestResult.runId !== workspace.leaseRunId
+            || (workspace.leaseRunInstanceId !== undefined
+                && workspace.latestResult.runInstanceId !== workspace.leaseRunInstanceId)
             || workspace.latestResult.baseRevision !== workspace.latestResult.workerHead
             || workspace.latestResult.commits.length > 0
         ) continue;
@@ -309,6 +350,7 @@ export async function reconcileNoChangeAgentWorkspaceLeases(
                 workspace.leaseOwnerSessionId,
                 workspace.leaseRunId,
                 workspacesDir,
+                workspace.leaseRunInstanceId,
             );
             released++;
         } catch {
