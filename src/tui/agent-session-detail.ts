@@ -67,15 +67,11 @@ function detailText(
     if (item.usage) {
         lines.push(`Usage: ${usageText(item.usage)}`);
     }
-    if (item.readFiles?.length) {
-        lines.push(`Read files (${item.readFiles.length}):`);
-        lines.push(...item.readFiles.map((file) => `  - ${file}`));
-    }
     if (item.changedFiles?.length) {
         lines.push(`Changed files (${item.changedFiles.length}):`);
         lines.push(...item.changedFiles.map((file) => `  - ${file}`));
     }
-    lines.push("", theme.fg("accent", `Transcript (${transcriptView}):`));
+    lines.push("", theme.fg("accent", "Transcript:"), "");
 
     if (transcript) {
         lines.push(...new Markdown(transcript, 0, 0, markdownTheme(theme)).render(width));

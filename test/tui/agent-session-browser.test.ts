@@ -413,19 +413,22 @@ describe("AgentSessionBrowserComponent", () => {
         const ui = interact(value, 100);
 
         ui.press(KEY.tab, KEY.enter);
-        expect(ui.render()).toContain("Transcript (collapsed):");
+        expect(ui.render()).toContain("Transcript:");
+        expect(ui.render()).not.toContain("Transcript (collapsed):");
         expect(ui.render()).toContain("▸ 2 tool calls: read src/index.ts; read README.md");
 
         ui.press(KEY.tab);
-        expect(ui.render()).toContain("Transcript (detailed):");
+        expect(ui.render()).toContain("Transcript:");
+        expect(ui.render()).not.toContain("Transcript (detailed):");
         expect(ui.render()).toContain("● read src/index.ts");
         expect(ui.render()).toContain("● read README.md");
 
         ui.press(KEY.tab);
-        expect(ui.render()).toContain("Transcript (collapsed):");
+        expect(ui.render()).toContain("Transcript:");
+        expect(ui.render()).not.toContain("Transcript (collapsed):");
     });
 
-    it("shows read and changed files in session details", () => {
+    it("shows changed files but omits read files in session details", () => {
         const value = new AgentSessionBrowserComponent({
             current: [{
                 ...current,
@@ -439,8 +442,8 @@ describe("AgentSessionBrowserComponent", () => {
 
         ui.press(KEY.enter);
 
-        expect(ui.render()).toContain("Read files (2):");
-        expect(ui.render()).toContain("  - src/index.ts");
+        expect(ui.render()).not.toContain("Read files (2):");
+        expect(ui.render()).not.toContain("  - src/index.ts");
         expect(ui.render()).toContain("Changed files (1):");
         expect(ui.render()).toContain("  - src/tools/agent/index.ts");
     });

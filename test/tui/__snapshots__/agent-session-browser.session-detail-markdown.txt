@@ -7,7 +7,8 @@
 │   Updated: Nov 14 2023 22:13                                                                     │
 │   Messages: 4                                                                                    │
 │                                                                                                  │
-│   Transcript (collapsed):                                                                        │
+│   Transcript:                                                                                    │
+│                                                                                                  │
 │   Findings                                                                                       │
 │                                                                                                  │
 │   The implementation is sound.                                                                   │
@@ -16,8 +17,7 @@
 │   - Renders replies as Markdown                                                                  │
 │                                                                                                  │
 │   ```ts                                                                                          │
-│     const ready = true;                                                                          │
 │                                                                                                  │
-│     Showing lines 1-16 of 17                                                                     │
+│     Showing lines 1-16 of 18                                                                     │
 │     ↑/↓ scroll · End follow · Tab toggle view · Esc back                                         │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

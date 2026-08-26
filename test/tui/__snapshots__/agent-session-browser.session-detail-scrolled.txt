@@ -1,6 +1,7 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │   [delegated agent] Previous implementation review · completed                                   │
 │                                                                                                  │
+│   Detailed transcript line 5                                                                     │
 │   Detailed transcript line 6                                                                     │
 │   Detailed transcript line 7                                                                     │
 │   Detailed transcript line 8                                                                     │
@@ -13,8 +14,7 @@
 │   Detailed transcript line 15                                                                    │
 │   Detailed transcript line 16                                                                    │
 │   Detailed transcript line 17                                                                    │
-│   Detailed transcript line 18                                                                    │
 │                                                                                                  │
-│     Showing lines 14-26 of 37                                                                    │
+│     Showing lines 14-26 of 38                                                                    │
 │     ↑/↓ scroll · End follow · Tab toggle view · Esc back                                         │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
