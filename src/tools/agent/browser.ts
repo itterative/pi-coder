@@ -31,6 +31,26 @@ import { inspectAgentWorkspaceResult, reconcileNoChangeAgentWorkspaceLeases } fr
 import { inspectAgentWorkspaceGitState, listAgentWorkspaces } from "./workspaces/store";
 import { handleWorkspaceAction } from "./workspaces/tui-actions";
 
+export function mergeHistoricalAgentSessions(
+    allPast: AgentSessionBrowserItem[],
+    activeBranchPast: AgentSessionBrowserItem[],
+    current: AgentSessionBrowserItem[],
+): AgentSessionBrowserItem[] {
+    const activeByFile = new Map(
+        activeBranchPast
+            .filter((item) => item.sessionFile)
+            .map((item) => [path.resolve(item.sessionFile!), item]),
+    );
+    return removeCurrentAgentTranscripts(
+        allPast.map((item) => (
+            item.sessionFile
+                ? activeByFile.get(path.resolve(item.sessionFile)) ?? item
+                : item
+        )),
+        current,
+    );
+}
+
 function settingLabel(name: BuiltinAgentName): string {
     return `${name[0]!.toUpperCase()}${name.slice(1)} model`;
 }
@@ -113,19 +133,7 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                     parentSessionLeafId: ctx.sessionManager.getLeafId(),
                     activeBranchOnly: true,
                 });
-                const activeByFile = new Map(
-                    activeBranchPast
-                        .filter((item) => item.sessionFile)
-                        .map((item) => [path.resolve(item.sessionFile!), item]),
-                );
-                past = removeCurrentAgentTranscripts(
-                    allPast.map((item) => (
-                        item.sessionFile
-                            ? activeByFile.get(path.resolve(item.sessionFile)) ?? item
-                            : item
-                    )),
-                    current,
-                );
+                past = mergeHistoricalAgentSessions(allPast, activeBranchPast, current);
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 ctx.ui.notify(`Could not browse persisted delegated-agent sessions: ${message}`, "warning");

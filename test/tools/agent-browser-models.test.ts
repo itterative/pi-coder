@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
+import type { AgentSessionBrowserItem } from "../../src/tools/agent/presentation/browser-models";
+import { mergeHistoricalAgentSessions } from "../../src/tools/agent/browser";
 import { workspaceBrowserItem } from "../../src/tools/agent/presentation/browser-models";
 
 function workspace(overrides: Partial<AgentWorkspace> = {}): AgentWorkspace {
@@ -20,7 +22,50 @@ function workspace(overrides: Partial<AgentWorkspace> = {}): AgentWorkspace {
     };
 }
 
+function sessionItem(overrides: Partial<AgentSessionBrowserItem>): AgentSessionBrowserItem {
+    return {
+        kind: "past",
+        id: "session-1",
+        title: "Session",
+        agent: "scout",
+        status: "completed",
+        task: "Inspect",
+        updatedAt: 1,
+        ...overrides,
+    };
+}
+
 describe("agent browser view models", () => {
+    it("merges cwd-wide history while replacing current-parent files with exact checkpoints", () => {
+        const allPast = [
+            sessionItem({ id: "active-file", sessionFile: "/state/current-child.jsonl", transcript: "catalog latest" }),
+            sessionItem({ id: "other-file", sessionFile: "/state/other-child.jsonl", transcript: "other parent history" }),
+            sessionItem({ id: "live-file", sessionFile: "/state/live-child.jsonl", transcript: "stale catalog" }),
+        ];
+        const activeBranchPast = [
+            sessionItem({
+                id: "active-file",
+                sessionFile: "/state/current-child.jsonl",
+                transcript: "active branch checkpoint",
+                readOnlyReason: "continued on another branch",
+            }),
+        ];
+        const current = [sessionItem({ kind: "current", id: "live-file", sessionFile: "/state/live-child.jsonl" })];
+
+        const merged = mergeHistoricalAgentSessions(allPast, activeBranchPast, current);
+
+        expect(merged).toHaveLength(2);
+        expect(merged).toContainEqual(expect.objectContaining({
+            id: "active-file",
+            transcript: "active branch checkpoint",
+            readOnlyReason: "continued on another branch",
+        }));
+        expect(merged).toContainEqual(expect.objectContaining({
+            id: "other-file",
+            transcript: "other parent history",
+        }));
+        expect(merged.find((item) => item.id === "live-file")).toBeUndefined();
+    });
     it("projects prepared workspace actions and Git state", () => {
         const item = workspaceBrowserItem(workspace({
             leaseOwnerSessionId: "session-1",
