@@ -32,6 +32,7 @@ export interface ChildProgress {
     phase?: string;
     lastToolActivity?: string;
     toolCounts?: Record<string, number>;
+    failedToolCalls?: number;
     permissionPending?: boolean;
 }
 
@@ -96,6 +97,8 @@ export interface AgentRunDetails {
     status: AgentRunStatus;
     background?: boolean;
     task: string;
+    /** Unwrapped action response retained for TUI rendering. */
+    response?: string;
     output?: string;
     question?: ParentQuestion;
     recentActivity: string[];
@@ -103,6 +106,7 @@ export interface AgentRunDetails {
     lastAssistantMessage?: string;
     lastToolActivity?: string;
     toolCounts?: Record<string, number>;
+    failedToolCalls?: number;
     usage: Usage;
     startedAt: number;
     updatedAt: number;
@@ -201,6 +205,7 @@ export interface AgentRunSummary {
     lastAssistantMessage?: string;
     lastToolActivity?: string;
     toolCounts?: Record<string, number>;
+    failedToolCalls?: number;
     responsePreview?: string;
     question?: string;
     usage: Usage;

@@ -217,6 +217,7 @@ export class AgentRunManager {
                     ? truncate(progress.lastToolActivity, 120)
                     : undefined,
                 toolCounts: progress.toolCounts ? { ...progress.toolCounts } : undefined,
+                failedToolCalls: progress.failedToolCalls,
                 responsePreview: response ? truncate(response, 120) : undefined,
                 question: run.question ? truncate(run.question.question, 500) : undefined,
                 usage: this.readUsage(run),
@@ -1257,7 +1258,7 @@ export class AgentRunManager {
             agentFilePath: run.agentFilePath,
             status: run.permissionPending ? "waiting_for_permission" : run.status,
             background: run.background,
-            task: truncate(run.task, 2_000),
+            task: truncate(run.task, MAX_TASK_CHARS),
             workspaceId: run.workspaceId,
             childSessionLeafId: run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId,
             output: progress.output ? truncate(progress.output, MAX_OUTPUT_CHARS) : undefined,
@@ -1267,6 +1268,7 @@ export class AgentRunManager {
             lastAssistantMessage: progress.lastAssistantMessage,
             lastToolActivity: progress.lastToolActivity,
             toolCounts: progress.toolCounts ? { ...progress.toolCounts } : undefined,
+            failedToolCalls: progress.failedToolCalls,
             usage: cloneUsage(cumulative),
             startedAt: run.startedAt,
             updatedAt: run.updatedAt,
@@ -1317,8 +1319,11 @@ export class AgentRunManager {
     private progressSnapshot(run: AgentRun): ChildProgress {
         if (run.handle) return run.handle.getProgress();
         if (run.restoredProgress) return {
-            output: run.restoredProgress.output,
+            ...run.restoredProgress,
             recentActivity: [...run.restoredProgress.recentActivity],
+            ...(run.restoredProgress.toolCounts
+                ? { toolCounts: { ...run.restoredProgress.toolCounts } }
+                : {}),
         };
         return {
             output: run.terminalOutcome?.details.output ?? "",

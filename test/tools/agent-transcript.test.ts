@@ -4,6 +4,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import {
     formatAgentSessionTranscript,
+    formatToolCallSummary,
     loadAgentSessionTranscript,
 } from "../../src/tools/agent/presentation/transcript";
 
@@ -21,6 +22,12 @@ const usage = {
 };
 
 describe("delegated-agent transcript formatting", () => {
+    it("formats tool call counts consistently", () => {
+        expect(formatToolCallSummary(3, 1)).toBe("3 tool calls (1 failed)");
+        expect(formatToolCallSummary(1, 0)).toBe("1 tool call (0 failed)");
+        expect(formatToolCallSummary(1, 0, false)).toBe("1 tool call");
+    });
+
     it("includes messages, tool calls, and tool results while omitting thinking", async () => {
         const session = SessionManager.inMemory("/project");
         session.appendMessage({

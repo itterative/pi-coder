@@ -254,6 +254,9 @@ export async function createAgentChild(
                 ...(tracker.progress.toolCounts
                     ? { toolCounts: { ...tracker.progress.toolCounts } }
                     : {}),
+                ...(tracker.progress.failedToolCalls !== undefined
+                    ? { failedToolCalls: tracker.progress.failedToolCalls }
+                    : {}),
                 permissionPending: tracker.progress.permissionPending,
             };
         },

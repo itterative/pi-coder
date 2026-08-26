@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import registerAgentTool, { clearCompletedWorkspaceSetupRun } from "../../src/tools/agent";
+import { registerAgentTool as registerAgentToolDefinition } from "../../src/tools/agent/presentation/tool";
 import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/observability/events";
 import { ZERO_USAGE, type AgentRunSummary, type ChildAgentHandle } from "../../src/tools/agent/runs/manager";
 import type {
@@ -121,6 +122,45 @@ describe("agent extension registration", () => {
         });
         expect(errorHook).toEqual({ isError: true });
         await handlers.session_shutdown[0]({}, ctx);
+    });
+
+    it("renders the full prompt and preserves response whitespace without metadata", async () => {
+        let tool: any;
+        const prompt = `Review the implementation.\n${"detail ".repeat(400)}`;
+        const response = "\n  leading spaces\ntrailing spaces  \n";
+        registerAgentToolDefinition({
+            registerTool(definition: any) {
+                tool = definition;
+            },
+        } as any, async () => ({
+            content: response,
+            details: {
+                title: "Natural validation run",
+                agent: "scout",
+                status: "completed",
+                task: prompt,
+                response,
+                toolCounts: { read: 2, grep: 1 },
+                failedToolCalls: 1,
+            },
+            usage: ZERO_USAGE,
+            isError: false,
+        } as any));
+
+        const result = await tool.execute(
+            "call-render",
+            { action: "start", agent: "scout", task: prompt },
+            undefined,
+            undefined,
+            {} as any,
+        );
+        result.content[0].text = `<metadata>generated metadata</metadata>\n\n${response}`;
+        const rendered = snapshotText(renderText(tool.renderResult(result, { expanded: true }, mockTheme), 10_000));
+
+        expect(rendered).toContain(`> ${"detail ".repeat(400).trimEnd()}`);
+        expect(rendered).toContain("  leading spaces\ntrailing spaces");
+        expect(rendered).not.toContain("<metadata>");
+        expect(rendered).toContain("3 tool calls (1 failed)");
     });
 
     it("applies a parent workspace result and verifies the lease is cleared", async () => {
@@ -258,7 +298,12 @@ describe("agent extension registration", () => {
                 question = undefined;
                 return pending;
             },
-            getProgress: () => ({ output, recentActivity: [] }),
+            getProgress: () => ({
+                output,
+                recentActivity: [],
+                toolCounts: { read: 2, grep: 1 },
+                failedToolCalls: 1,
+            }),
             getFinalOutput: () => output,
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),

@@ -10,7 +10,10 @@ import {
 } from "../definitions/prompt";
 import { updateResult } from "./outcomes";
 import type { AgentRunDetails, AgentRunOutcome } from "../contracts/runs";
-import { oneLinePreview } from "./widget";
+import {
+    formatToolCallSummary,
+    quoteText,
+} from "./transcript";
 
 export type AgentToolExecutor = (
     params: AgentParameters,
@@ -74,39 +77,26 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
                         : details.status === "canceled"
                             ? "muted"
                             : "error";
-            const content = result.content.find((part) => part.type === "text");
-            const source = details.agentSource ? ` (${details.agentSource})` : "";
-            let text = theme.fg(color, `${details.title} (${details.runId})${source}: ${details.status}`);
-            if (!expanded && details.status === "waiting_for_permission") {
-                text += theme.fg("warning", `\n${oneLinePreview(details.recentActivity[details.recentActivity.length - 1] ?? "Waiting for mutation permission")}`);
-            } else if (!expanded && details.status === "interrupted") {
-                text += theme.fg("warning", `\nResume with explicit guidance: ${details.runId}`);
-            } else if (!expanded && details.status === "waiting_for_parent") {
-                const question = oneLinePreview(details.question?.question ?? "");
-                if (question) text += `\n${theme.fg("warning", `Question: ${question}`)}`;
-                text += theme.fg("muted", `\nResume required: ${details.runId}`);
-            } else if (
-                !expanded
-                && (details.status === "completed" || details.status === "starting" || details.status === "running")
-                && content?.type === "text"
-            ) {
-                const preview = oneLinePreview(content.text);
-                if (preview) text += `\n${theme.fg("muted", `${details.status === "completed" ? "Result" : "Status"}: ${preview}`)}`;
-            } else if (expanded && content?.type === "text") {
-                text += theme.fg("muted", `\nTitle: ${details.title}\nTask: ${details.task}`);
-                text += `\n\n${content.text}`;
-                if (details.recentActivity.length) {
-                    text += theme.fg("muted", `\n\nActivity:\n- ${details.recentActivity.join("\n- ")}`);
-                }
-                if (details.discoveryDiagnostics?.length) {
-                    text += theme.fg("muted", `\n\nDiscovery diagnostics:\n- ${details.discoveryDiagnostics.join("\n- ")}`);
-                }
-                const usage = details.usage;
-                text += theme.fg(
-                    "muted",
-                    `\n\nUsage: ${usage.input} input, ${usage.output} output, ${usage.cacheRead} cache read, $${usage.cost.total.toFixed(4)}`,
-                );
+            const response = details.response
+                ?? result.content.find((part) => part.type === "text")?.text
+                ?? "";
+            const action = (details as AgentRunDetails & { action?: string }).action;
+            const header = `${action ? `agent ${action} ` : ""}${details.title} (${details.agent}) — ${details.status}`;
+            const toolCount = Object.values(details.toolCounts ?? {}).reduce(
+                (total, count) => total + count,
+                0,
+            );
+            const toolSummary = formatToolCallSummary(toolCount, details.failedToolCalls ?? 0);
+            let text = theme.fg(color, header);
+
+            if (expanded) {
+                text += `\n\n${theme.fg("muted", quoteText(details.task))}`;
             }
+            text += `\n\n${theme.fg("muted", toolSummary)}`;
+            if (expanded && response) {
+                text += `\n\n${response}`;
+            }
+
             return new Text(text, 0, 0);
         },
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -118,7 +108,7 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
             );
             return {
                 content: [{ type: "text", text: outcome.content }],
-                details: outcome.details,
+                details: { ...outcome.details, action: params.action },
                 usage: outcome.usage,
             };
         },

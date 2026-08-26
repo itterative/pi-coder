@@ -34,6 +34,7 @@ export default function registerAgentTool(
             ctx,
             lifecycle,
         );
+        outcome.details = { ...outcome.details, response: outcome.content };
         outcome.content = formatAgentToolContent(params.action, outcome);
         lifecycle.refreshAgentUi(ctx);
         lifecycle.reconcileMailbox();

@@ -256,6 +256,9 @@ function reportProgress(
         ...(tracker.progress.phase ? { phase: tracker.progress.phase } : {}),
         ...(tracker.progress.lastToolActivity ? { lastToolActivity: tracker.progress.lastToolActivity } : {}),
         ...(tracker.progress.toolCounts ? { toolCounts: { ...tracker.progress.toolCounts } } : {}),
+        ...(tracker.progress.failedToolCalls !== undefined
+            ? { failedToolCalls: tracker.progress.failedToolCalls }
+            : {}),
         permissionPending: tracker.progress.permissionPending,
     });
 }
@@ -301,6 +304,9 @@ export function updateTracker(
         tracker.progress.toolCounts[event.toolName] = (tracker.progress.toolCounts[event.toolName] ?? 0) + 1;
         tracker.progress.recentActivity.push(activity);
         tracker.progress.recentActivity = tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
+    } else if (event.type === "tool_execution_end" && event.isError) {
+        tracker.progress.failedToolCalls = (tracker.progress.failedToolCalls ?? 0) + 1;
+        forceUpdate = true;
     } else {
         return;
     }

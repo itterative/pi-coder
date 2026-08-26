@@ -33,7 +33,7 @@ function contentText(content: DisplayContent): string {
     )).join("\n");
 }
 
-function quoteText(text: string): string {
+export function quoteText(text: string): string {
     return text.split("\n").map((line) => `> ${line}`).join("\n");
 }
 
@@ -118,6 +118,15 @@ function toolCallDescription(call: ToolCallDisplay): string {
     }
 }
 
+export function formatToolCallSummary(
+    count: number,
+    failed: number,
+    includeZeroFailures = true,
+): string {
+    const failureText = failed > 0 || includeZeroFailures ? ` (${failed} failed)` : "";
+    return `${count} tool call${count === 1 ? "" : "s"}${failureText}`;
+}
+
 function collapsedToolCalls(calls: ToolCallDisplay[]): string {
     const count = calls.length;
     const failed = calls.filter((call) => call.failed).length;
@@ -126,8 +135,7 @@ function collapsedToolCalls(calls: ToolCallDisplay[]): string {
     const preview = descriptions.length <= previewLimit
         ? descriptions
         : [...descriptions.slice(0, previewLimit), `+${descriptions.length - previewLimit} more`];
-    const failureText = failed > 0 ? ` (${failed} failed)` : "";
-    return `▸ ${count} tool call${count === 1 ? "" : "s"}${failureText}: ${preview.join("; ")}`;
+    return `▸ ${formatToolCallSummary(count, failed, false)}: ${preview.join("; ")}`;
 }
 
 function messageParts(

@@ -187,6 +187,16 @@ describe("AgentRunManager", () => {
         expect(result.details.title).toBe("Persistence audit");
     });
 
+    it("keeps the full initial task in run details", async () => {
+        const child = new FakeChild([{ output: "Found it." }]);
+        const manager = managerWith(child);
+        const task = `Review the implementation.\n${"detail ".repeat(400)}`;
+
+        const result = await manager.start("scout", task, context());
+
+        expect(result.details.task).toBe(task);
+    });
+
     it("derives a title when none is supplied", async () => {
         const child = new FakeChild([{ output: "Found it." }]);
         const manager = managerWith(child);

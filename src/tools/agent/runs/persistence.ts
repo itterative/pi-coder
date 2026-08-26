@@ -567,6 +567,11 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
     const phase = boundedString(progressValue?.phase, 120);
     const lastAssistantMessage = boundedString(progressValue?.lastAssistantMessage, 32_000);
     const lastToolActivity = boundedString(progressValue?.lastToolActivity, 500);
+    const failedToolCalls = finite(progressValue?.failedToolCalls)
+        && Number.isSafeInteger(progressValue?.failedToolCalls)
+        && progressValue.failedToolCalls >= 0
+        ? progressValue.failedToolCalls
+        : undefined;
     const toolCounts = boundedToolCounts(progressValue?.toolCounts);
     const childSessionFile = boundedString(record.childSessionFile, 4_096);
     const resolvedChildFile = childSessionFile
@@ -605,6 +610,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
             ...(lastAssistantMessage ? { lastAssistantMessage } : {}),
             ...(lastToolActivity ? { lastToolActivity } : {}),
             ...(toolCounts ? { toolCounts } : {}),
+            ...(failedToolCalls !== undefined ? { failedToolCalls } : {}),
         },
         usageCheckpoint: cloneUsage(record.usageCheckpoint),
         usageSnapshot: cloneUsage(record.usageSnapshot),

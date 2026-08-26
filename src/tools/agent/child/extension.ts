@@ -208,6 +208,9 @@ export function registerChildExtension(
                 ...(tracker.progress.phase ? { phase: tracker.progress.phase } : {}),
                 ...(tracker.progress.lastToolActivity ? { lastToolActivity: tracker.progress.lastToolActivity } : {}),
                 ...(tracker.progress.toolCounts ? { toolCounts: { ...tracker.progress.toolCounts } } : {}),
+                ...(tracker.progress.failedToolCalls !== undefined
+                    ? { failedToolCalls: tracker.progress.failedToolCalls }
+                    : {}),
                 permissionPending: pending,
             });
         };

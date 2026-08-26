@@ -55,8 +55,15 @@ describe("child progress", () => {
             args: { path: "src", pattern: "widget" },
         } as any, state, () => {});
 
+        updateTracker({
+            type: "tool_execution_end",
+            toolName: "read",
+            isError: true,
+        } as any, state, () => {});
+
         expect(state.progress.output).toBe("I will inspect this.\nMore detail.");
         expect(state.progress.toolCounts).toEqual({ read: 1, grep: 1 });
+        expect(state.progress.failedToolCalls).toBe(1);
         expect(state.progress.lastToolActivity).toBe('Searching "widget" in src');
     });
 });
