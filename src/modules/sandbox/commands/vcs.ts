@@ -15,10 +15,9 @@ const LOG_SPEC: CommandSpec = {
 };
 
 /**
- * Keep the safe, metadata/checking modes of `git diff` deliberately small.
- * `--check` may echo an offending changed line, but is useful for validating
- * worktree changes; `--stat` only reports change metadata. Quiet mode emits no
- * diff contents. Other output and external-program options remain ineligible.
+ * `git diff` is read-only project inspection in the trusted local environment.
+ * Keep external-program and output-file options ineligible; ordinary patch,
+ * metadata, checking, quiet, and explicitly scoped path output are allowed.
  */
 const BRANCH_SPEC: CommandSpec = {
     // The default invocation lists branches. Creation, deletion, movement,
@@ -50,17 +49,9 @@ const TAG_SPEC: CommandSpec = {
 
 const DIFF_SPEC: CommandSpec = {
     validate: (args) => {
-        let hasCheck = false;
-        let hasStat = false;
-        let hasNameStatus = false;
-        let hasNameOnly = false;
-        let hasQuiet = false;
-        let separator = -1;
-
         for (let i = 1; i < args.length; i++) {
             const arg = args[i];
             if (arg === "--") {
-                separator = i;
                 break;
             }
 
@@ -76,27 +67,17 @@ const DIFF_SPEC: CommandSpec = {
                 arg !== "--cached" &&
                 arg !== "--staged" &&
                 arg !== "--relative" &&
+                arg !== "--no-renames" &&
                 arg !== "--no-ext-diff" &&
                 arg !== "--no-textconv"
             ) {
                 return false;
             }
-
-            if (arg === "--check") {
-                hasCheck = true;
-            } else if (arg === "--stat") {
-                hasStat = true;
-            } else if (arg === "--name-status") {
-                hasNameStatus = true;
-            } else if (arg === "--name-only") {
-                hasNameOnly = true;
-            } else if (arg === "--quiet") {
-                hasQuiet = true;
-            }
         }
 
-        const hasPathspec = separator !== -1 && separator < args.length - 1;
-        return hasCheck || hasStat || hasNameStatus || hasNameOnly || hasQuiet || hasPathspec;
+        // All remaining forms are read-only diff output. Path arguments after
+        // `--` are still checked by the normal path extractor.
+        return true;
     },
 };
 
