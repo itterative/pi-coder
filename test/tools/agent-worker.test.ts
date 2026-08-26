@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import registerFileToolHook from "../../src/tools/file-permissions";
 import { registerWorkerMutationHooks } from "../../src/tools/agent/child/worker-permissions";
 import { createPermissionState } from "../../src/modules/sandbox/permission-state";
 import { KEY, mockTheme } from "../helpers";
@@ -24,7 +25,11 @@ describe("worker mutation gate", () => {
         tempDirs.length = 0;
     });
 
-    function setup(cwd: string, options: { nonIsolated?: boolean; permissionState?: ReturnType<typeof createPermissionState> } = {}) {
+    function setup(cwd: string, options: {
+        nonIsolated?: boolean;
+        permissionState?: ReturnType<typeof createPermissionState>;
+        registerFileHook?: boolean;
+    } = {}) {
         const handlers: Record<string, Handler[]> = {};
         const dialogs: any[] = [];
         const changedFiles: string[] = [];
@@ -49,12 +54,28 @@ describe("worker mutation gate", () => {
             on(event: string, handler: Handler) {
                 (handlers[event] ??= []).push(handler);
             },
+            appendEntry() {},
         } as any;
+        const permissionState = options.permissionState ?? createPermissionState();
+        if (options.registerFileHook) {
+            registerFileToolHook(pi, "write", {
+                state: permissionState,
+                promptContext: parentContext,
+                restoreSession: false,
+                persistSession: false,
+                childAccess: true,
+                confinement: {
+                    enabled: true,
+                    permission: "allow",
+                    resolveSymlinks: true,
+                },
+            });
+        }
         registerWorkerMutationHooks(pi, {
             parentContext,
             runId: "worker-7",
             nonIsolated: options.nonIsolated,
-            permissionState: options.permissionState ?? createPermissionState(),
+            permissionState,
             agentName: "worker",
             permissionPending(value: boolean) { pending.push(value); },
             fileChanged(filePath: string) { changedFiles.push(filePath); },
@@ -137,6 +158,38 @@ describe("worker mutation gate", () => {
             content: [],
             isError: false,
         });
+    });
+
+    it("allows an approved outside write through the complete child hook chain", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-outside-"));
+        tempDirs.push(cwd, outside);
+        const runtime = setup(cwd, { nonIsolated: true, registerFileHook: true });
+        const event = editEvent("edit-1", path.join(outside, "file.ts"));
+
+        const filePermission = runtime.handlers.tool_call[0](event, runtime.ctx);
+        await flush();
+        expect(runtime.dialogs).toHaveLength(1);
+        runtime.dialogs[0].handleInput(KEY.enter);
+        await expect(filePermission).resolves.toEqual({ block: false });
+        await expect(runtime.handlers.tool_call[1](event, runtime.ctx)).resolves.toEqual({ block: false });
+        expect(runtime.dialogs).toHaveLength(1);
+    });
+
+    it("blocks an outside symlink before a one-shot approval can bypass child protection", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-outside-"));
+        const target = path.join(outside, "target.ts");
+        const link = path.join(outside, "link.ts");
+        fs.writeFileSync(target, "outside");
+        fs.symlinkSync(target, link);
+        tempDirs.push(cwd, outside);
+        const runtime = setup(cwd, { nonIsolated: true, registerFileHook: true });
+        const event = editEvent("edit-1", link);
+
+        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toMatchObject({ block: true });
+        await expect(runtime.handlers.tool_call[1](event, runtime.ctx)).resolves.toMatchObject({ block: true });
+        expect(runtime.dialogs).toHaveLength(0);
     });
 
     it("uses inherited allow rules without prompting for bash", async () => {

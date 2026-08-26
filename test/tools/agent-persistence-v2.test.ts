@@ -562,6 +562,34 @@ describe("delegated-agent V2 persistence", () => {
         writerB.close();
     });
 
+    it("reports lease loss when renewal can no longer update the database", async () => {
+        vi.useFakeTimers();
+        try {
+            const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-lease-loss-"));
+            tempDirs.push(stateDir);
+            const database = await openAgentMetadataDatabase(path.join(stateDir, "workspaces"));
+            let lost = 0;
+            const writer = createAgentRunStateWriter(
+                process.cwd(),
+                database,
+                () => "marker-1",
+            );
+            const lease = writer.acquireContinuationLease?.("instance-lease-loss", () => { lost++; });
+
+            database.prepare("DELETE FROM agent_run_continuation_leases WHERE run_instance_id = ?")
+                .run("instance-lease-loss");
+            await vi.advanceTimersByTimeAsync(10_000);
+
+            expect(lost).toBe(1);
+            expect(() => writer.acquireContinuationLease?.("instance-lease-loss"))
+                .toThrow("lease was lost");
+            lease?.release();
+            writer.close();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("rejects a V2 checkpoint when the parent marker append is unavailable", async () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-no-marker-"));
         tempDirs.push(stateDir);

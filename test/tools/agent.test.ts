@@ -316,6 +316,35 @@ describe("AgentRunManager", () => {
         expect(manager.activeCount).toBe(0);
     });
 
+    it("interrupts an active run when continuation ownership is lost", async () => {
+        const child = new FakeChild([{ waitForAbort: true }]);
+        let onLost: (() => void) | undefined;
+        const manager = managerWith(child);
+        manager.setPersistence({
+            ownerSessionId: "parent-session",
+            usesSnapshotMarkers: true,
+            childSessionDir: process.cwd(),
+            save: () => true,
+            acquireContinuationLease: (_runInstanceId, callback) => {
+                onLost = callback;
+                return { release() {} };
+            },
+            deleteChildSession() {},
+        });
+
+        const pending = manager.start("scout", "Investigate", context());
+        await flushBackground();
+        expect(onLost).toBeDefined();
+
+        onLost!();
+        const result = await pending;
+
+        expect(result.details.status).toBe("interrupted");
+        expect(result.isError).toBe(true);
+        expect(child.abortCount).toBe(1);
+        expect(manager.listRuns()[0]).toMatchObject({ status: "interrupted" });
+    });
+
     it("bounds retained runs", async () => {
         const children = Array.from({ length: 3 }, () => (
             new FakeChild([{ question: { question: "Continue?" } }])
