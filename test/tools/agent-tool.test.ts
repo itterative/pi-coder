@@ -404,6 +404,7 @@ describe("agent extension registration", () => {
             display: false,
         });
         await expect(sentMessages[0]?.message.content).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-mailbox-completion.txt");
+        const listWorkspaces = vi.spyOn(workspaceStore, "listAgentWorkspaces").mockResolvedValue([]);
         const listed = await tool.execute(
             "call-list",
             { action: "list" },
@@ -411,6 +412,7 @@ describe("agent extension registration", () => {
             undefined,
             ctx,
         );
+        expect(listWorkspaces).toHaveBeenCalledWith(process.cwd(), undefined, true);
         const collected = await tool.execute(
             "call-3",
             { action: "collect", runId: "scout-1" },
