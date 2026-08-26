@@ -19,7 +19,7 @@ keep_updated: true
 - Starting/running records left by shutdown or crash restore as `interrupted`; they never restart or replay. Resuming is user-driven and adds a safety instruction to inspect the current state first.
 - Before continuing a crash-interrupted transcript, unmatched tool calls receive synthetic uncertain-outcome errors. Worker mutations are never automatically replayed.
 - Current definitions and fingerprints are revalidated. Legacy fingerprints from before context policies are accepted when all other definition identity fields still match. Persisted metadata cannot grant mutation authority; only the current reserved built-in worker can restore as a mutating task worker.
-- Collection, cancellation, and terminal-result eviction append tombstones but retain child files so `/agents` can browse past work. An explicit future prune policy should remove old transcripts and orphan directories.
+- Collection, cancellation, and terminal-result eviction append tombstones but retain child files so `/agents` can browse past work. Garbage collection is currently limited to a read-only report; the parked script (`tools/report-agent-gc.mjs`) is in git stash `0ccdbf040be633195333a0fb6c7c07dcb9190c0f` and identifies orphan transcripts, missing transcript references, protected/unreachable snapshots, and reclaimable bytes without deleting anything. Any future prune policy should remove only conservatively verified orphan files first.
 
 ## Branch-correct persistence (V2)
 
