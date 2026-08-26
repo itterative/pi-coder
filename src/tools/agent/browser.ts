@@ -106,7 +106,11 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             let past: AgentSessionBrowserItem[];
             try {
                 past = removeCurrentAgentTranscripts(
-                    await listPastAgentSessions(ctx.cwd),
+                    await listPastAgentSessions(ctx.cwd, undefined, {
+                        parentSessionId: currentSessionId,
+                        parentSessionFile: ctx.sessionManager.getSessionFile(),
+                        activeBranchOnly: true,
+                    }),
                     current,
                 );
             } catch (error) {

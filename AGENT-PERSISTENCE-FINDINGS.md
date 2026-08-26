@@ -4,7 +4,7 @@
 
 The current branch-keyed SQLite upsert design is not sufficient for correct `/tree` behavior.
 
-The selected replacement design is:
+The selected replacement design is implemented in the current branch as V2 persistence. Workspace lease identity still uses display `runId` in several mutation paths and is a follow-up limitation; it does not affect parent-marker restoration.
 
 ```text
 Parent session tree
@@ -29,7 +29,7 @@ In concise terms:
 - older branch checkpoints remain inspectable but cannot be resumed after the run continued elsewhere;
 - the global run catalog remains a lossy query projection, not restoration authority.
 
-This preserves unrestricted `/tree` navigation without supporting divergent continuations of one physical child, cloning child transcript files, or placing large run-state payloads in the parent JSONL.
+This preserves unrestricted `/tree` navigation without supporting divergent continuations of one physical child, cloning child transcript files, or placing large run-state payloads in the parent JSONL. The system does not need to make every historical snapshot resumable: older snapshots exist for causality and inspection only; the session head is the sole continuation point.
 
 ## Compatibility decision
 
@@ -149,7 +149,7 @@ A stale checkpoint remains available for transcript inspection, but it belongs i
 
 The session head should be derived from valid parent markers in append order, not from the lossy catalog. A SQLite snapshot without a marker cannot become the continuation head. This rule assumes one active Pi runtime owns a parent session; concurrent processes would require an additional compare-and-swap continuation lease.
 
-This policy prevents sibling parent branches from creating competing child continuations and substantially reduces child JSONL ambiguity.
+This policy prevents sibling parent branches from creating competing child continuations and substantially reduces child JSONL ambiguity. It also means restoration does not need to reconcile multiple valid resumable child leaves: it validates and selects the leaf only for the session head, while stale leaves are used solely for read-only transcript inspection.
 
 ### Internal run-instance identity
 
@@ -282,13 +282,13 @@ A DB-first marker protocol is safe because incomplete writes produce unreachable
 
 Immutable snapshots eliminate stale snapshot overwrites. Parent marker order, not timestamps, determines branch state. A database insertion sequence can help diagnostics and global catalog ordering, while `updatedAt` remains display metadata.
 
-## Child transcript branching
+## Child transcript selection
 
-### The child JSONL is already a tree
+### The child JSONL remains append-only
 
-The child session format already preserves entries with `id` and `parentId`. The underlying format is suitable. The current bug is that reopening a file selects its latest appended leaf instead of the leaf associated with the parent snapshot.
+The child session format preserves entries with `id` and `parentId`, so an uncommitted crash tail or an old internal branch may remain on disk. That does not make divergent parent-agent continuations a supported feature. The important rule is that reopening a file must not select its latest physical leaf when restoring a specific committed checkpoint.
 
-Every resumable snapshot must store the transcript reference as one unit:
+The session-head snapshot must store the transcript reference as one unit:
 
 ```ts
 interface ChildTranscriptReference {
@@ -301,7 +301,7 @@ interface ChildTranscriptReference {
 
 ### Parent tree switching
 
-Suppose sibling parent branches reference two checkpoints of one physical run:
+Suppose sibling parent branches reference two checkpoints of one physical run. The older checkpoint is historical only:
 
 ```text
 Parent branch A -> snapshot SA -> child leaf L1
@@ -318,7 +318,7 @@ On `/tree` to A:
 
 On `/tree` to B, `branchHead` and `sessionHead` both identify `SB`. If its status is waiting or interrupted, it may be installed as resumable. Before building child context, validate `L2` and explicitly select it. If the stored leaf is `null`, call `resetLeaf()`.
 
-Normal resume therefore continues only from the committed child head. It never intentionally creates sibling continuations of one physical child. A child branch may still be created when discarding an uncommitted crash tail, but that is recovery from the last committed leaf rather than a competing parent-branch continuation.
+Normal resume therefore continues only from the session-head child leaf. It never intentionally creates a sibling continuation from an older parent checkpoint. If an uncommitted crash tail exists, recovery may append from the last committed leaf, but that is a repair of the one continuation head—not a continuation of the stale parent branch.
 
 ### Never use the latest child leaf as fallback
 
@@ -499,11 +499,11 @@ for each branchHead:
 - A branch checkpoint older than the session head is classified as historical and cannot resume.
 - Only the branch containing the physical run’s latest committed marker can resume it.
 
-### Child transcript branching
+### Child transcript selection
 
 - Two parent branches may reference different historical leaves in one child JSONL.
 - Each branch’s transcript inspection selects its referenced child leaf.
-- A stale parent checkpoint cannot create a sibling child continuation.
+- A stale parent checkpoint cannot be resumed or create a sibling child continuation.
 - Returning to the session-head branch permits continuation from its committed child leaf.
 - Explicit `null` resets the child leaf.
 - Missing and foreign child leaf IDs fail safely.

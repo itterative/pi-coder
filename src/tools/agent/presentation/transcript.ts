@@ -1,5 +1,6 @@
 import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import { selectChildSessionLeaf } from "../child/transcript";
 
 type DisplayContent = string | (TextContent | ImageContent)[];
 type ToolArguments = Record<string, unknown>;
@@ -293,15 +294,23 @@ export function formatAgentSessionTranscript(
 /** Returns both display transcripts for a persisted child session, if readable. */
 export function loadAgentSessionTranscriptViews(
     sessionFile: string,
+    childSessionLeafId?: string | null,
 ): AgentSessionTranscriptViews | undefined {
     try {
-        return formatAgentSessionTranscripts(SessionManager.open(sessionFile).getBranch());
+        const session = SessionManager.open(sessionFile);
+        if (childSessionLeafId !== undefined) {
+            selectChildSessionLeaf(session, childSessionLeafId);
+        }
+        return formatAgentSessionTranscripts(session.getBranch());
     } catch {
         return undefined;
     }
 }
 
 /** Returns the detailed display transcript for a persisted child session, if readable. */
-export function loadAgentSessionTranscript(sessionFile: string): string | undefined {
-    return loadAgentSessionTranscriptViews(sessionFile)?.detailed;
+export function loadAgentSessionTranscript(
+    sessionFile: string,
+    childSessionLeafId?: string | null,
+): string | undefined {
+    return loadAgentSessionTranscriptViews(sessionFile, childSessionLeafId)?.detailed;
 }

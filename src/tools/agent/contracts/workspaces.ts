@@ -14,6 +14,7 @@ export interface AgentWorkspaceResult {
     id: string;
     workspaceId: string;
     runId: string;
+    runInstanceId?: string;
     baseRevision: string;
     workerHead: string;
     commitRange: string;
@@ -49,6 +50,7 @@ export interface AgentWorkspace {
     status: WorkspaceStatus;
     leaseOwnerSessionId?: string;
     leaseRunId?: string;
+    leaseRunInstanceId?: string;
     leaseKind?: WorkspaceLeaseKind;
     leaseAcquiredAt?: number;
     leaseState?: WorkspaceLeaseState;
@@ -60,6 +62,7 @@ export interface AgentWorkspace {
 export interface AgentRunCatalogRecord {
     ownerSessionId: string;
     runId: string;
+    runInstanceId?: string;
     parentCwd: string;
     executionCwd?: string;
     title: string;
@@ -71,6 +74,8 @@ export interface AgentRunCatalogRecord {
     mutating: boolean;
     workspaceId?: string;
     childSessionFile?: string;
+    childSessionLeafId?: string | null;
+    latestSnapshotId?: string;
     startedAt: number;
     updatedAt: number;
     usageSnapshot: Usage;

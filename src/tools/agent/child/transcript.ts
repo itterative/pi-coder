@@ -21,6 +21,27 @@ export function materializePersistentSession(
     return SessionManager.open(path.resolve(sessionFile), sessionDir, cwd);
 }
 
+/** Select an exact persisted leaf before any context or model work occurs. */
+export function selectChildSessionLeaf(
+    sessionManager: SessionManager,
+    leafId: string | null | undefined,
+): void {
+    if (leafId === null) {
+        sessionManager.resetLeaf();
+        return;
+    }
+    if (leafId === undefined) {
+        throw new Error("Persisted child transcript leaf is missing.");
+    }
+    if (!sessionManager.getEntry(leafId)) {
+        throw new Error(`Persisted child transcript leaf ${leafId} is missing.`);
+    }
+    sessionManager.branch(leafId);
+    if (sessionManager.getLeafId() !== leafId) {
+        throw new Error(`Persisted child transcript leaf ${leafId} could not be selected.`);
+    }
+}
+
 export function repairInterruptedToolCalls(sessionManager: SessionManager): number {
     const pending = new Map<string, string>();
     for (const message of sessionManager.buildSessionContext().messages) {

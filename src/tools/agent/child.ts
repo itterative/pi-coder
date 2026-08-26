@@ -10,7 +10,11 @@ import { agentTools, READ_ONLY_AGENT_TOOLS } from "./definitions/discovery";
 import { createChildModelRuntime, resolveChildModel } from "./child/model-runtime";
 import { childProtocolPrompt, registerChildExtension } from "./child/extension";
 import { renderAgentSystemPrompt } from "./prompts/renderer";
-import { materializePersistentSession, repairInterruptedToolCalls } from "./child/transcript";
+import {
+    materializePersistentSession,
+    repairInterruptedToolCalls,
+    selectChildSessionLeaf,
+} from "./child/transcript";
 import {
     aggregateUsage,
     childError,
@@ -30,7 +34,11 @@ export {
     type ChildUserQuestion,
 } from "./child/extension";
 export { createChildModelRuntime, shouldCopyParentApiKey } from "./child/model-runtime";
-export { materializePersistentSession, repairInterruptedToolCalls } from "./child/transcript";
+export {
+    materializePersistentSession,
+    repairInterruptedToolCalls,
+    selectChildSessionLeaf,
+} from "./child/transcript";
 import type {
     ChildAgentFactoryContext,
     ChildAgentHandle,
@@ -77,9 +85,10 @@ export async function createAgentChild(
                 cwd,
             )
             : SessionManager.inMemory(cwd);
-    if (context.repairInterrupted) {
-        const repaired = repairInterruptedToolCalls(sessionManager);
-        context.onTrace?.("session.repaired", { unmatchedToolCalls: repaired });
+    // SessionManager.open() points at the latest physical leaf by default.
+    // Restoration must replace that unsafe default before building context.
+    if (context.childSessionFile && context.childSessionLeafId !== undefined) {
+        selectChildSessionLeaf(sessionManager, context.childSessionLeafId);
     }
     context.onSessionCreated?.(sessionManager.getSessionFile());
     const settingsManager = SettingsManager.create(cwd, agentDir);
@@ -240,6 +249,12 @@ export async function createAgentChild(
         },
         getError: () => childError(session),
         getUsage: () => aggregateUsage(session),
+        getSessionLeafId: () => sessionManager.getLeafId(),
+        repairInterrupted: () => {
+            const repaired = repairInterruptedToolCalls(sessionManager);
+            context.onTrace?.("session.repaired", { unmatchedToolCalls: repaired });
+            return repaired;
+        },
         getMutationReport: () => ({
             changedFiles: [...tracker.changedFiles].sort(),
             ...(tracker.readFiles.size ? { readFiles: [...tracker.readFiles].sort() } : {}),

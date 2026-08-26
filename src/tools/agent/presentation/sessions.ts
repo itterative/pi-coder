@@ -11,6 +11,9 @@ import { deriveAgentTitle } from "../runs/manager";
 import type { AgentRunSummary } from "../contracts/runs";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
 import { listAgentRunCatalog } from "../storage/run-catalog";
+import { collectAgentRunSnapshotMarkers } from "../storage/run-markers";
+import { listAgentRunSnapshotsInDatabase } from "../storage/run-snapshots";
+import { openAgentMetadataDatabase } from "../storage/metadata";
 import type { AgentSessionBrowserItem } from "./browser-models";
 import { loadAgentSessionTranscriptViews } from "./transcript";
 
@@ -25,6 +28,8 @@ function currentItem(run: AgentRunSummary): AgentSessionBrowserItem {
         startedAt: run.startedAt,
         updatedAt: run.updatedAt,
         sessionFile: run.sessionFile,
+        childSessionLeafId: run.childSessionLeafId ?? run.sessionLeafId,
+        readOnlyReason: run.readOnlyReason,
         activity: run.activity,
         responsePreview: run.responsePreview,
         mutating: run.mutating,
@@ -43,12 +48,24 @@ function historicalStatus(status: string | undefined): string | undefined {
         : status;
 }
 
+interface ActiveBranchChildCheckpoint {
+    childSessionLeafId: string | null;
+    readOnlyReason?: string;
+}
+
 function pastItem(
     info: SessionInfo,
     parentSessionId: string,
     metadata: AgentRunCatalogRecord | undefined,
+    checkpoint?: ActiveBranchChildCheckpoint,
 ): AgentSessionBrowserItem {
-    const transcript = loadAgentSessionTranscriptViews(info.path);
+    const childSessionLeafId = checkpoint
+        ? checkpoint.childSessionLeafId
+        : metadata?.childSessionLeafId;
+    const transcript = loadAgentSessionTranscriptViews(info.path, childSessionLeafId);
+    const fallbackTranscript = info.firstMessage
+        ? `> ${info.firstMessage}${info.allMessagesText && info.allMessagesText !== info.firstMessage ? `\n\n${info.allMessagesText.slice(info.firstMessage.length).trimStart()}` : ""}`
+        : info.allMessagesText;
     return {
         kind: "past",
         id: info.id,
@@ -59,12 +76,14 @@ function pastItem(
         startedAt: metadata?.startedAt,
         updatedAt: metadata?.updatedAt ?? info.modified.getTime(),
         sessionFile: info.path,
+        ...(childSessionLeafId !== undefined ? { childSessionLeafId } : {}),
         parentSessionId,
+        readOnlyReason: checkpoint?.readOnlyReason,
         messageCount: info.messageCount,
         firstMessage: info.firstMessage,
         allMessagesText: info.allMessagesText.slice(-4_000),
-        transcript: transcript?.detailed ?? info.allMessagesText,
-        transcriptCollapsed: transcript?.collapsed,
+        transcript: transcript?.detailed || fallbackTranscript,
+        transcriptCollapsed: transcript?.collapsed || fallbackTranscript,
         mutating: metadata?.mutating,
         usage: metadata?.usageSnapshot,
         responsePreview: metadata?.responsePreview,
@@ -103,22 +122,90 @@ export async function loadAgentSessionTranscripts(
             return item;
         }
 
-        const transcript = loadAgentSessionTranscriptViews(info.path);
+        const transcript = loadAgentSessionTranscriptViews(info.path, item.childSessionLeafId);
         return transcript
-            ? { ...item, transcript: transcript.detailed, transcriptCollapsed: transcript.collapsed }
+            ? {
+                ...item,
+                transcript: transcript.detailed || info.allMessagesText,
+                transcriptCollapsed: transcript.collapsed || info.allMessagesText,
+            }
             : { ...item, transcript: info.allMessagesText };
     }));
+}
+
+export interface AgentSessionHistoryScope {
+    parentSessionId?: string;
+    parentSessionFile?: string;
+    activeBranchOnly?: boolean;
+}
+
+async function activeBranchChildCheckpoints(
+    parentSessionFile: string | undefined,
+    workspacesDir: string,
+): Promise<Map<string, ActiveBranchChildCheckpoint> | undefined> {
+    if (!parentSessionFile) return undefined;
+    try {
+        const parent = SessionManager.open(parentSessionFile);
+        const allMarkers = collectAgentRunSnapshotMarkers(parent.getEntries());
+        const activeMarkers = collectAgentRunSnapshotMarkers(parent.getBranch());
+        const database = await openAgentMetadataDatabase(workspacesDir);
+        try {
+            const snapshots = listAgentRunSnapshotsInDatabase(
+                database,
+                allMarkers.map((entry) => entry.marker.snapshotId),
+            );
+            const snapshotsById = new Map(snapshots.map((snapshot) => [snapshot.snapshotId, snapshot]));
+            const sessionHeads = new Map<string, string>();
+            for (const entry of allMarkers) {
+                if (snapshotsById.has(entry.marker.snapshotId)) {
+                    sessionHeads.set(entry.marker.runInstanceId, entry.marker.snapshotId);
+                }
+            }
+            const checkpoints = new Map<string, ActiveBranchChildCheckpoint & { order: number }>();
+            for (const entry of activeMarkers) {
+                const snapshot = snapshotsById.get(entry.marker.snapshotId);
+                if (!snapshot?.childSessionFile) continue;
+                const file = path.resolve(snapshot.childSessionFile);
+                const previous = checkpoints.get(file);
+                if (previous && previous.order > entry.order) continue;
+                checkpoints.set(file, {
+                    childSessionLeafId: snapshot.childSessionLeafId,
+                    ...(sessionHeads.get(entry.marker.runInstanceId) !== entry.marker.snapshotId
+                        ? { readOnlyReason: "continued on another branch" }
+                        : {}),
+                    order: entry.order,
+                });
+            }
+            return new Map(
+                [...checkpoints].map(([file, checkpoint]) => [file, {
+                    childSessionLeafId: checkpoint.childSessionLeafId,
+                    readOnlyReason: checkpoint.readOnlyReason,
+                }]),
+            );
+        } finally {
+            database.close();
+        }
+    } catch {
+        return new Map();
+    }
 }
 
 export async function listPastAgentSessions(
     cwd: string,
     agentSessionsDir?: string,
+    scope?: AgentSessionHistoryScope,
 ): Promise<AgentSessionBrowserItem[]> {
     const cwdSessionDir = getAgentCwdSessionDir(cwd, agentSessionsDir);
     const workspacesDir = path.join(
         path.dirname(path.resolve(agentSessionsDir ?? PI_CODER_AGENT_SESSIONS_DIR)),
         "workspaces",
     );
+    const scopedCheckpoints = scope?.activeBranchOnly
+        ? await activeBranchChildCheckpoints(scope.parentSessionFile, workspacesDir)
+        : undefined;
+    const scopedFiles = scopedCheckpoints
+        ? new Set(scopedCheckpoints.keys())
+        : undefined;
     let entries;
     try {
         entries = await fs.readdir(cwdSessionDir, { withFileTypes: true });
@@ -128,6 +215,7 @@ export async function listPastAgentSessions(
 
     const parentDirectories = entries
         .filter((entry) => entry.isDirectory())
+        .filter((entry) => !scope?.parentSessionId || entry.name === scope.parentSessionId)
         .map((entry) => entry.name)
         .sort();
     const sessions: AgentSessionBrowserItem[] = [];
@@ -140,13 +228,17 @@ export async function listPastAgentSessions(
             continue;
         }
         const catalog = await listAgentRunCatalog(cwd, workspacesDir);
-        sessions.push(...infos.map((info) => {
+        const scopedInfos = scopedFiles
+            ? infos.filter((info) => scopedFiles.has(path.resolve(info.path)))
+            : infos;
+        sessions.push(...scopedInfos.map((info) => {
             const metadata = catalog.find((record) => (
                 record.ownerSessionId === parentSessionId
                 && record.childSessionFile !== undefined
                 && path.resolve(record.childSessionFile) === path.resolve(info.path)
             ));
-            return pastItem(info, parentSessionId, metadata);
+            const checkpoint = scopedCheckpoints?.get(path.resolve(info.path));
+            return pastItem(info, parentSessionId, metadata, checkpoint);
         }));
     }
 

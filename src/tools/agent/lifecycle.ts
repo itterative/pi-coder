@@ -313,6 +313,9 @@ export class AgentLifecycle {
         }
         this.manager.setPersistence(loaded?.persistence);
         if (!loaded) return;
+        for (const diagnostic of loaded.diagnostics ?? []) {
+            ctx.ui.notify(`pi-coder agents: ${diagnostic}`, "warning");
+        }
         const discovered = this.discover(ctx);
         const result = await this.manager.restore(
             loaded.records,

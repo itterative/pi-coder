@@ -61,6 +61,9 @@ function detailText(
     if (item.messageCount !== undefined) {
         lines.push(`Messages: ${item.messageCount}`);
     }
+    if (item.readOnlyReason) {
+        lines.push(`Continuation: ${item.readOnlyReason}`);
+    }
     if (item.usage) {
         lines.push(`Usage: ${usageText(item.usage)}`);
     }

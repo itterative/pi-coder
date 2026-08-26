@@ -13,9 +13,17 @@ import {
 } from "../storage/metadata";
 import { upsertAgentRunCatalogRecordInDatabase } from "../storage/run-catalog";
 import {
+    AGENT_RUN_SNAPSHOT_MARKER,
+    collectAgentRunSnapshotMarkers,
+} from "../storage/run-markers";
+import {
     listAgentRunStatesInDatabase,
     upsertAgentRunStateInDatabase,
 } from "../storage/run-state";
+import {
+    insertAgentRunSnapshotInDatabase,
+    listAgentRunSnapshotsInDatabase,
+} from "../storage/run-snapshots";
 
 const RUN_ID = /^[a-z][a-z0-9_-]{0,63}-\d+$/;
 const RESTORABLE_STATUSES = new Set<PersistedAgentRun["status"]>([
@@ -101,7 +109,7 @@ function responsePreview(record: PersistedAgentRun): string | undefined {
 
 
 export interface AgentRunStateWriter {
-    save(record: PersistedAgentRun, branchEntryId: string): { ok: true } | { ok: false; error: unknown };
+    save(record: PersistedAgentRun): { ok: true } | { ok: false; error: unknown };
     flush(): Promise<void>;
     close(): void;
 }
@@ -110,6 +118,7 @@ function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCa
     return {
         ownerSessionId: record.ownerSessionId,
         runId: record.runId,
+        runInstanceId: record.runInstanceId,
         parentCwd: record.parentCwd ?? parentCwd,
         executionCwd: record.cwd,
         title: record.title ?? "Delegated task",
@@ -121,6 +130,7 @@ function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCa
         mutating: record.mutating,
         workspaceId: record.workspaceId,
         childSessionFile: record.childSessionFile,
+        childSessionLeafId: record.childSessionLeafId,
         startedAt: record.startedAt,
         updatedAt: record.updatedAt,
         usageSnapshot: record.usageSnapshot,
@@ -132,20 +142,24 @@ function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCa
 export function createAgentRunStateWriter(
     parentCwd: string,
     database: AgentMetadataDatabase,
+    appendMarker: (marker: { version: 2; snapshotId: string; runInstanceId: string; runId: string }) => void,
 ): AgentRunStateWriter {
     let closed = false;
     return {
-        save(record, branchEntryId) {
+        save(record) {
             if (closed) {
                 return { ok: false, error: new Error("Agent run state storage is closed.") };
             }
+            if (!record.runInstanceId) {
+                return { ok: false, error: new Error("Delegated run is missing its physical run identity.") };
+            }
+            let snapshotId: string;
             try {
                 database.exec("BEGIN IMMEDIATE");
                 try {
-                    upsertAgentRunStateInDatabase(database, record, branchEntryId);
-                    upsertAgentRunCatalogRecordInDatabase(database, catalogRecord(record, parentCwd));
+                    const snapshot = insertAgentRunSnapshotInDatabase(database, record);
+                    snapshotId = snapshot.snapshotId;
                     database.exec("COMMIT");
-                    return { ok: true };
                 } catch (error) {
                     try {
                         database.exec("ROLLBACK");
@@ -154,6 +168,24 @@ export function createAgentRunStateWriter(
                     }
                     return { ok: false, error };
                 }
+                // The parent marker is the branch commit point. A failed append
+                // leaves an unreachable immutable snapshot, never a bad marker.
+                appendMarker({
+                    version: 2,
+                    snapshotId,
+                    runInstanceId: record.runInstanceId,
+                    runId: record.runId,
+                });
+                try {
+                    upsertAgentRunCatalogRecordInDatabase(database, {
+                        ...catalogRecord(record, parentCwd),
+                        latestSnapshotId: snapshotId,
+                    });
+                } catch {
+                    // Catalog is a lossy projection. The marker/snapshot remains
+                    // authoritative even when this best-effort update fails.
+                }
+                return { ok: true };
             } catch (error) {
                 return { ok: false, error };
             }
@@ -219,6 +251,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         version: 1,
         ownerSessionId,
         runId: record.runId,
+        ...(typeof record.runInstanceId === "string" ? { runInstanceId: record.runInstanceId } : {}),
         title: boundedString(record.title, 80),
         agent: record.agent.slice(0, 64),
         agentSource: record.agentSource.slice(0, 32),
@@ -252,6 +285,11 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         parentCwd: boundedString(record.parentCwd, 4_096),
         cwd: boundedString(record.cwd, 4_096),
         childSessionFile: resolvedChildFile,
+        ...(record.childSessionLeafId === null || typeof record.childSessionLeafId === "string"
+            ? { childSessionLeafId: record.childSessionLeafId }
+            : {}),
+        ...(record.resumable === false ? { resumable: false } : {}),
+        ...(typeof record.readOnlyReason === "string" ? { readOnlyReason: record.readOnlyReason.slice(0, 500) } : {}),
         terminalContent: boundedString(record.terminalContent, 48_000),
         terminalError: boundedString(record.terminalError, 4_000),
         terminalIsError: typeof record.terminalIsError === "boolean" ? record.terminalIsError : undefined,
@@ -277,6 +315,7 @@ export interface LoadedAgentRunPersistence {
     persistence: AgentRunPersistence;
     records: PersistedAgentRun[];
     catalog: AgentRunStateWriter;
+    diagnostics?: string[];
 }
 
 export async function loadAgentRunPersistence(
@@ -290,37 +329,115 @@ export async function loadAgentRunPersistence(
     fs.mkdirSync(childSessionDir, { recursive: true, mode: 0o700 });
     fs.chmodSync(childSessionDir, 0o700);
 
-    const branchEntryIds = ctx.sessionManager.getBranch()
-        .map((entry) => entry.id)
-        .filter((id): id is string => typeof id === "string");
-    const effectiveBranchEntryIds = ["root", ...branchEntryIds.filter((id) => id !== "root")];
+    const hasEntryIndex = typeof (ctx.sessionManager as unknown as { getEntries?: unknown }).getEntries === "function";
+    const allParentEntries = hasEntryIndex ? ctx.sessionManager.getEntries() : [];
+    const activeBranchIds = new Set(ctx.sessionManager.getBranch().map((entry) => entry.id));
+    const allMarkers = collectAgentRunSnapshotMarkers(allParentEntries);
+    const activeMarkers = allMarkers.filter((entry) => activeBranchIds.has(entry.entryId));
     const workspacesDir = path.join(path.dirname(path.resolve(agentSessionsDir)), "workspaces");
     const database = await openAgentMetadataDatabase(workspacesDir);
-    const storedStates = listAgentRunStatesInDatabase(database, ownerSessionId, effectiveBranchEntryIds);
-    const branchPositions = new Map(effectiveBranchEntryIds.map((id, index) => [id, index]));
-    const latest = new Map<string, { record: PersistedAgentRun; branchPosition: number; updatedAt: number }>();
-    for (const stored of storedStates) {
-        const parsed = parseRecord(stored.state, ownerSessionId, childSessionDir);
-        if (!parsed) continue;
-        const branchPosition = branchPositions.get(stored.branchEntryId) ?? -1;
-        const previous = latest.get(parsed.runId);
+    const snapshotIds = [...new Set(allMarkers.map((entry) => entry.marker.snapshotId))];
+    const snapshots = listAgentRunSnapshotsInDatabase(database, snapshotIds);
+    const snapshotsById = new Map(snapshots.map((snapshot) => [snapshot.snapshotId, snapshot]));
+    const diagnostics: string[] = [];
+    const validSnapshot = (
+        entry: ReturnType<typeof collectAgentRunSnapshotMarkers>[number],
+        snapshot: typeof snapshots[number] | undefined,
+    ): boolean => {
+        if (!snapshot) {
+            diagnostics.push(`Could not restore ${entry.marker.runId}: parent marker references a missing SQLite snapshot.`);
+            return false;
+        }
         if (
-            previous
-            && (previous.branchPosition > branchPosition
-                || (previous.branchPosition === branchPosition && previous.updatedAt >= stored.updatedAt))
-        ) continue;
-        latest.set(parsed.runId, { record: parsed, branchPosition, updatedAt: stored.updatedAt });
+            snapshot.ownerSessionId !== ownerSessionId
+            || snapshot.payloadVersion !== 2
+            || snapshot.runInstanceId !== entry.marker.runInstanceId
+            || snapshot.runId !== entry.marker.runId
+        ) {
+            diagnostics.push(`Could not restore ${entry.marker.runId}: parent marker and SQLite snapshot identity do not match.`);
+            return false;
+        }
+        return true;
+    };
+    const sessionHeads = new Map<string, string>();
+    for (const entry of allMarkers) {
+        const snapshot = snapshotsById.get(entry.marker.snapshotId);
+        if (!validSnapshot(entry, snapshot)) continue;
+        sessionHeads.set(entry.marker.runInstanceId, entry.marker.snapshotId);
+    }
+    const branchHeads = new Map<string, { snapshotId: string; order: number }>();
+    for (const entry of activeMarkers) {
+        const snapshot = snapshotsById.get(entry.marker.snapshotId);
+        if (!validSnapshot(entry, snapshot)) continue;
+        const previous = branchHeads.get(entry.marker.runInstanceId);
+        if (!previous || previous.order <= entry.order) {
+            branchHeads.set(entry.marker.runInstanceId, {
+                snapshotId: entry.marker.snapshotId,
+                order: entry.order,
+            });
+        }
+    }
+    const latest = new Map<string, PersistedAgentRun>();
+    // Read-only compatibility for the pre-V2 test/session facade. Real SDK
+    // sessions always expose getEntries(), so legacy rows never become restore
+    // authority in production.
+    if (!hasEntryIndex) {
+        const legacyIds = ["root", ...ctx.sessionManager.getBranch().map((entry) => entry.id)];
+        const legacy = listAgentRunStatesInDatabase(database, ownerSessionId, legacyIds);
+        for (const stored of legacy) {
+            const parsed = parseRecord(stored.state, ownerSessionId, childSessionDir);
+            if (parsed) latest.set(parsed.runId, parsed);
+        }
+    }
+    for (const [runInstanceId, branchHead] of branchHeads) {
+        const snapshot = snapshotsById.get(branchHead.snapshotId);
+        if (!snapshot) {
+            diagnostics.push(`Could not restore ${runInstanceId}: parent marker references a missing SQLite snapshot.`);
+            continue;
+        }
+        const parsed = parseRecord(snapshot.payload, ownerSessionId, childSessionDir);
+        if (!parsed) {
+            diagnostics.push(`Could not restore ${snapshot.runId}: its SQLite snapshot is invalid.`);
+            continue;
+        }
+        parsed.runInstanceId = runInstanceId;
+        if (sessionHeads.get(runInstanceId) !== branchHead.snapshotId) {
+            parsed.resumable = false;
+            parsed.readOnlyReason = "continued on another branch";
+        } else {
+            parsed.resumable = true;
+        }
+        latest.set(runInstanceId, parsed);
     }
 
-    const catalog = createAgentRunStateWriter(ctx.cwd, database);
+    const catalog = createAgentRunStateWriter(
+        ctx.cwd,
+        database,
+        (marker) => {
+            const sessionManager = ctx.sessionManager as unknown as {
+                appendCustomEntry?: (type: string, data: unknown) => string;
+            };
+            sessionManager.appendCustomEntry?.(AGENT_RUN_SNAPSHOT_MARKER, marker);
+        },
+    );
 
     let persistenceWarningShown = false;
     const persistence: AgentRunPersistence = {
         ownerSessionId,
+        usesSnapshotMarkers: hasEntryIndex,
         childSessionDir,
         save(record) {
-            const branchEntryId = ctx.sessionManager.getLeafId() ?? "root";
-            const result = catalog.save(record, branchEntryId);
+            const durableRecord = record.runInstanceId
+                ? record
+                : { ...record, runInstanceId: `legacy-${record.ownerSessionId}-${record.runId}` };
+            const result = catalog.save(durableRecord);
+            if (result.ok && !hasEntryIndex) {
+                upsertAgentRunStateInDatabase(
+                    database,
+                    durableRecord,
+                    ctx.sessionManager.getLeafId() ?? "root",
+                );
+            }
             if (result.ok) return true;
             if (!persistenceWarningShown) {
                 persistenceWarningShown = true;
@@ -341,5 +458,10 @@ export async function loadAgentRunPersistence(
             }
         },
     };
-    return { persistence, records: [...latest.values()].map((entry) => entry.record), catalog };
+    return {
+        persistence,
+        records: [...latest.values()],
+        catalog,
+        diagnostics,
+    };
 }

@@ -45,6 +45,10 @@ export interface ChildAgentHandle {
     getError(): string | undefined;
     getUsage(): Usage;
     getMutationReport?(): WorkerMutationReport;
+    /** The exact append-only transcript leaf selected for this run. */
+    getSessionLeafId?(): string | null;
+    /** Repair an interrupted transcript only after explicit user resume. */
+    repairInterrupted?(): number;
     sessionFile?: string;
 }
 
@@ -66,6 +70,8 @@ export interface ChildAgentFactoryContext {
     onTrace?: (type: string, data?: AgentTraceData) => void;
     childSessionDir?: string;
     childSessionFile?: string;
+    /** Exact child transcript leaf to restore; null explicitly selects root. */
+    childSessionLeafId?: string | null;
     workspaceId?: string;
     repairInterrupted?: boolean;
     initialProgress?: ChildProgress;
@@ -79,6 +85,8 @@ export type ChildAgentFactory = (
 
 export interface AgentRunDetails {
     runId: string;
+    /** Globally unique physical run identity. */
+    runInstanceId?: string;
     title: string;
     agent: string;
     agentSource?: string;
@@ -99,6 +107,7 @@ export interface AgentRunDetails {
     error?: string;
     discoveryDiagnostics?: string[];
     workspaceId?: string;
+    childSessionLeafId?: string | null;
     workspaceResult?: AgentWorkspaceResult;
     mutating?: boolean;
     mutationReport?: WorkerMutationReport;
@@ -118,6 +127,8 @@ export interface PersistedAgentRun {
     version: 1;
     ownerSessionId: string;
     runId: string;
+    /** Globally unique physical run identity. Required by V2 snapshots. */
+    runInstanceId?: string;
     /** Optional for backward compatibility with pre-title journals. */
     title?: string;
     agent: string;
@@ -140,6 +151,11 @@ export interface PersistedAgentRun {
     /** Execution cwd, which may be an isolated worktree. */
     cwd?: string;
     childSessionFile?: string;
+    /** null means the child root; undefined is incompatible with V2 resume. */
+    childSessionLeafId?: string | null;
+    /** False marks an inspectable checkpoint superseded on another parent branch. */
+    resumable?: boolean;
+    readOnlyReason?: string;
     terminalContent?: string;
     terminalError?: string;
     terminalIsError?: boolean;
@@ -148,6 +164,8 @@ export interface PersistedAgentRun {
 
 export interface AgentRunPersistence {
     ownerSessionId: string;
+    /** True when records are V2 marker/snapshot checkpoints. */
+    usesSnapshotMarkers?: boolean;
     childSessionDir: string;
     save(record: PersistedAgentRun): boolean;
     flush?: () => Promise<void>;
@@ -157,6 +175,7 @@ export interface AgentRunPersistence {
 
 export interface AgentRunSummary {
     runId: string;
+    runInstanceId?: string;
     title: string;
     agent: string;
     status: AgentRunStatus;
@@ -165,6 +184,10 @@ export interface AgentRunSummary {
     startedAt: number;
     updatedAt: number;
     sessionFile?: string;
+    childSessionLeafId?: string | null;
+    /** @deprecated Use childSessionLeafId. */
+    sessionLeafId?: string | null;
+    readOnlyReason?: string;
     activity?: string;
     phase?: string;
     lastAssistantMessage?: string;

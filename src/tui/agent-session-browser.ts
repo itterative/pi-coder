@@ -227,7 +227,8 @@ function itemText(
         ? "workspace setup"
         : item.mutating ? "worker" : item.agent;
     const status = item.status.replaceAll("_", " ");
-    const headline = `${item.title || "Untitled run"} · ${mode} · ${status} · ${dateText(item.updatedAt)}`;
+    const continuation = item.readOnlyReason ? ` · ${item.readOnlyReason}` : "";
+    const headline = `${item.title || "Untitled run"} · ${mode} · ${status}${continuation} · ${dateText(item.updatedAt)}`;
     const task = `Task: ${oneLine(item.task)}`;
     const returned = returnedText(item);
     const activity = item.activity ? ` · ${oneLine(item.activity, 120)}` : "";

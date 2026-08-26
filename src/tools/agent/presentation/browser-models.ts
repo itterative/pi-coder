@@ -18,6 +18,7 @@ export interface AgentSessionBrowserItem {
     startedAt?: number;
     updatedAt: number;
     sessionFile?: string;
+    childSessionLeafId?: string | null;
     parentSessionId?: string;
     messageCount?: number;
     firstMessage?: string;
@@ -30,6 +31,7 @@ export interface AgentSessionBrowserItem {
     usage?: Usage;
     changedFiles?: string[];
     readFiles?: string[];
+    readOnlyReason?: string;
 }
 
 export type WorkspaceDispositionAction = Exclude<AgentWorkspaceAction, "inspect">;
@@ -65,6 +67,7 @@ export interface AgentWorkspaceBrowserItem {
     setupText: string;
     setupSummary?: string;
     leaseRunId?: string;
+    leaseRunInstanceId?: string;
     leaseOwnerSessionId?: string;
     leaseAcquiredAt?: number;
     leaseText: string;
@@ -182,6 +185,7 @@ export function workspaceBrowserItem(
         setupText: workspace.setupState.replaceAll("_", " "),
         setupSummary: workspace.setupSummary,
         leaseRunId: workspace.leaseRunId,
+        leaseRunInstanceId: workspace.leaseRunInstanceId,
         leaseOwnerSessionId: workspace.leaseOwnerSessionId,
         leaseAcquiredAt: workspace.leaseAcquiredAt,
         leaseText: workspace.leaseRunId

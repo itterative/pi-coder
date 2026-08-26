@@ -38,6 +38,7 @@ function rowToAgentRunCatalogRecord(row: CatalogRow): AgentRunCatalogRecord | un
     return {
         ownerSessionId: row.owner_session_id,
         runId: row.run_id,
+        ...(typeof row.run_instance_id === "string" ? { runInstanceId: row.run_instance_id } : {}),
         parentCwd: row.parent_cwd,
         ...(typeof row.execution_cwd === "string" ? { executionCwd: row.execution_cwd } : {}),
         title: row.title,
@@ -49,6 +50,8 @@ function rowToAgentRunCatalogRecord(row: CatalogRow): AgentRunCatalogRecord | un
         mutating: row.mutating === 1,
         ...(typeof row.workspace_id === "string" ? { workspaceId: row.workspace_id } : {}),
         ...(typeof row.child_session_file === "string" ? { childSessionFile: row.child_session_file } : {}),
+        ...(typeof row.child_session_leaf_id === "string" ? { childSessionLeafId: row.child_session_leaf_id } : row.child_session_leaf_id === null ? { childSessionLeafId: null } : {}),
+        ...(typeof row.latest_snapshot_id === "string" ? { latestSnapshotId: row.latest_snapshot_id } : {}),
         startedAt: row.started_at,
         updatedAt: row.updated_at,
         usageSnapshot: usageSnapshot as Usage,
@@ -63,14 +66,16 @@ export function upsertAgentRunCatalogRecordInDatabase(
     database: AgentMetadataDatabase,
     record: AgentRunCatalogRecord,
 ): void {
+    const runInstanceId = record.runInstanceId ?? `${record.ownerSessionId}:${record.runId}`;
     database.prepare(`
             INSERT INTO agent_runs (
-                owner_session_id, run_id, parent_cwd, execution_cwd, title, agent,
+                owner_session_id, run_id, run_instance_id, parent_cwd, execution_cwd, title, agent,
                 agent_source, task, status, background, mutating, workspace_id,
-                child_session_file, started_at, updated_at, usage_json,
+                child_session_file, child_session_leaf_id, latest_snapshot_id, started_at, updated_at, usage_json,
                 response_preview, mutation_report_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (owner_session_id, run_id) DO UPDATE SET
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (run_instance_id) DO UPDATE SET
+                run_instance_id = COALESCE(excluded.run_instance_id, agent_runs.run_instance_id),
                 parent_cwd = excluded.parent_cwd,
                 execution_cwd = excluded.execution_cwd,
                 title = excluded.title,
@@ -82,6 +87,8 @@ export function upsertAgentRunCatalogRecordInDatabase(
                 mutating = excluded.mutating,
                 workspace_id = excluded.workspace_id,
                 child_session_file = excluded.child_session_file,
+                child_session_leaf_id = excluded.child_session_leaf_id,
+                latest_snapshot_id = excluded.latest_snapshot_id,
                 started_at = excluded.started_at,
                 updated_at = excluded.updated_at,
                 usage_json = excluded.usage_json,
@@ -91,6 +98,7 @@ export function upsertAgentRunCatalogRecordInDatabase(
         `).run(
         record.ownerSessionId,
         record.runId,
+        runInstanceId,
         path.resolve(record.parentCwd),
         record.executionCwd ?? null,
         record.title,
@@ -102,6 +110,8 @@ export function upsertAgentRunCatalogRecordInDatabase(
         record.mutating ? 1 : 0,
         record.workspaceId ?? null,
         record.childSessionFile ?? null,
+        record.childSessionLeafId ?? null,
+        record.latestSnapshotId ?? null,
         record.startedAt,
         record.updatedAt,
         JSON.stringify(record.usageSnapshot),
@@ -129,9 +139,9 @@ export async function listAgentRunCatalog(
     const database = await openAgentMetadataDatabase(workspacesDir);
     try {
         const rows = database.prepare(`
-            SELECT owner_session_id, run_id, parent_cwd, execution_cwd, title, agent,
+            SELECT owner_session_id, run_id, run_instance_id, parent_cwd, execution_cwd, title, agent,
                    agent_source, task, status, background, mutating, workspace_id,
-                   child_session_file, started_at, updated_at, usage_json,
+                   child_session_file, child_session_leaf_id, latest_snapshot_id, started_at, updated_at, usage_json,
                    response_preview, mutation_report_json
             FROM agent_runs
             WHERE parent_cwd = ?

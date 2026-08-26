@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Usage } from "@earendil-works/pi-ai";
 
 import {
@@ -53,6 +54,7 @@ type AgentStartContext = Omit<
 
 interface AgentRun {
     id: string;
+    runInstanceId: string;
     title: string;
     agent: string;
     agentSource: string;
@@ -78,6 +80,9 @@ interface AgentRun {
     definitionFingerprint: string;
     permissionPending: boolean;
     childSessionFile?: string;
+    childSessionLeafId?: string | null;
+    resumable?: boolean;
+    readOnlyReason?: string;
     restoredProgress?: ChildProgress;
     restoredMutationReport?: WorkerMutationReport;
     operation?: Promise<AgentRunOutcome>;
@@ -183,6 +188,7 @@ export class AgentRunManager {
             const response = progress.output.trim() || progress.lastAssistantMessage?.trim() || "";
             return {
                 runId: run.id,
+                runInstanceId: run.runInstanceId,
                 title: run.title,
                 agent: run.agent,
                 status: run.permissionPending ? "waiting_for_permission" : run.status,
@@ -191,6 +197,9 @@ export class AgentRunManager {
                 startedAt: run.startedAt,
                 updatedAt: run.updatedAt,
                 sessionFile: run.childSessionFile,
+                childSessionLeafId: run.childSessionLeafId,
+                sessionLeafId: run.childSessionLeafId,
+                readOnlyReason: run.readOnlyReason,
                 activity: activity ? truncate(activity, 120) : undefined,
                 phase: progress.phase,
                 lastAssistantMessage: progress.lastAssistantMessage,
@@ -233,6 +242,10 @@ export class AgentRunManager {
 
         for (const record of records.sort((a, b) => a.startedAt - b.startedAt)) {
             if (record.status === "removed" || record.ownerSessionId !== this.persistence?.ownerSessionId) continue;
+            if (record.resumable === false) {
+                diagnostics.push(`Could not restore ${record.runId}: this checkpoint is historical and was continued on another parent branch.`);
+                continue;
+            }
             const persistedTerminal = record.status === "completed"
                 || record.status === "failed"
                 || record.status === "aborted"
@@ -271,6 +284,7 @@ export class AgentRunManager {
                 : record.status;
             const run: AgentRun = {
                 id: record.runId,
+                runInstanceId: record.runInstanceId ?? randomUUID(),
                 title: deriveAgentTitle(record.task, record.title),
                 agent: record.agent,
                 agentSource: persistedTerminal ? record.agentSource : definition!.source,
@@ -293,6 +307,9 @@ export class AgentRunManager {
                 workspaceId: record.workspaceId,
                 permissionPending: false,
                 childSessionFile: record.childSessionFile,
+                childSessionLeafId: record.childSessionLeafId,
+                resumable: record.resumable,
+                readOnlyReason: record.readOnlyReason,
                 restoredProgress: record.progress,
                 restoredMutationReport: record.mutationReport,
             };
@@ -330,6 +347,13 @@ export class AgentRunManager {
                 this.runs.delete(run.id);
                 continue;
             }
+            if (this.persistence?.usesSnapshotMarkers === true
+                && record.resumable !== undefined
+                && record.childSessionLeafId === undefined) {
+                diagnostics.push(`Could not restore ${record.runId}: its checkpoint has no exact child transcript leaf.`);
+                this.runs.delete(run.id);
+                continue;
+            }
             this.trace?.start(run.id, run.agent, {
                 source: run.agentSource,
                 background: run.background,
@@ -343,7 +367,11 @@ export class AgentRunManager {
                     cwd: run.cwd,
                     workspaceId: run.workspaceId,
                     childSessionFile: record.childSessionFile,
-                    repairInterrupted: restoredStatus === "interrupted",
+                    childSessionLeafId: record.childSessionLeafId,
+                    // V2 records are never repaired during restore. The legacy
+                    // compatibility path retains its old factory contract only.
+                    repairInterrupted: restoredStatus === "interrupted"
+                        && this.persistence?.usesSnapshotMarkers !== true,
                     initialProgress: record.progress,
                     initialMutationReport: record.mutationReport,
                 }, undefined, undefined, true);
@@ -436,6 +464,12 @@ export class AgentRunManager {
 
         if (signal?.aborted) throw new AgentActionError("Agent resume was aborted before launch.");
         const resumeGuidance = normalizedGuidance ?? INTERRUPTED_RESUME_GUIDANCE;
+        if (run.status === "interrupted") {
+            const repaired = run.handle?.repairInterrupted?.() ?? 0;
+            run.childSessionLeafId = run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId;
+            this.record(run, "session.repaired", { unmatchedToolCalls: repaired });
+            this.persistRun(run);
+        }
         this.record(run, "resume.requested", { guidanceChars: resumeGuidance.length, userDriven: !normalizedGuidance });
         this.transitionStatus(run, "running");
         run.question = undefined;
@@ -599,6 +633,7 @@ export class AgentRunManager {
         const id = `${definition.name}-${this.nextRunNumber++}`;
         const run: AgentRun = {
             id,
+            runInstanceId: randomUUID(),
             title: deriveAgentTitle(task, requestedTitle),
             agent: definition.name,
             agentSource: definition.source,
@@ -620,6 +655,7 @@ export class AgentRunManager {
             mutating: definition.mutating === true,
             definitionFingerprint: fingerprintAgentDefinition(definition),
             permissionPending: false,
+            resumable: true,
         };
         this.runs.set(id, run);
         this.emitRunEvent(run, {
@@ -659,6 +695,7 @@ export class AgentRunManager {
                 runTitle: run.title,
                 childSessionDir: this.persistence?.childSessionDir,
                 childSessionFile: run.childSessionFile ?? context.childSessionFile,
+                childSessionLeafId: run.childSessionLeafId ?? context.childSessionLeafId,
                 repairInterrupted: context.repairInterrupted,
                 initialProgress: context.initialProgress ?? run.restoredProgress,
                 initialMutationReport: context.initialMutationReport ?? run.restoredMutationReport,
@@ -695,6 +732,7 @@ export class AgentRunManager {
             run.setup = setup;
             run.handle = await setup;
             run.childSessionFile = run.handle.sessionFile ?? run.childSessionFile;
+            run.childSessionLeafId = run.handle.getSessionLeafId?.() ?? run.childSessionLeafId;
             run.setup = undefined;
             this.persistRun(run);
             this.record(run, "setup.completed");
@@ -1054,6 +1092,7 @@ export class AgentRunManager {
         const cumulative = usage ?? this.readUsage(run);
         return {
             runId: run.id,
+            runInstanceId: run.runInstanceId,
             title: run.title,
             agent: run.agent,
             agentSource: run.agentSource,
@@ -1062,6 +1101,7 @@ export class AgentRunManager {
             background: run.background,
             task: truncate(run.task, 2_000),
             workspaceId: run.workspaceId,
+            childSessionLeafId: run.childSessionLeafId,
             output: progress.output ? truncate(progress.output, MAX_OUTPUT_CHARS) : undefined,
             question: run.question,
             recentActivity: progress.recentActivity.slice(-8),
@@ -1185,10 +1225,12 @@ export class AgentRunManager {
         const progress = this.progressSnapshot(run);
         const usageSnapshot = this.readUsage(run);
         const terminal = run.terminalOutcome;
+        run.childSessionLeafId = run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId;
         return this.persistence.save({
             version: 1,
             ownerSessionId: this.persistence.ownerSessionId,
             runId: run.id,
+            runInstanceId: run.runInstanceId,
             title: run.title,
             agent: run.agent,
             agentSource: run.agentSource,
@@ -1208,6 +1250,9 @@ export class AgentRunManager {
             parentCwd: run.parentCwd,
             cwd: run.cwd,
             childSessionFile: run.childSessionFile,
+            childSessionLeafId: run.childSessionLeafId,
+            resumable: run.resumable,
+            readOnlyReason: run.readOnlyReason,
             terminalContent: terminal?.content,
             terminalError: terminal?.details.error,
             terminalIsError: terminal?.isError,
