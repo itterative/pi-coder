@@ -2,7 +2,7 @@ import type {
     ExtensionAPI,
     ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 
 import {
     type AgentParameters,
@@ -14,6 +14,7 @@ import {
     formatToolCallSummary,
     quoteText,
 } from "./transcript";
+import { markdownTheme } from "../../../tui/markdown-theme";
 
 export type AgentToolExecutor = (
     params: AgentParameters,
@@ -87,17 +88,13 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
                 0,
             );
             const toolSummary = formatToolCallSummary(toolCount, details.failedToolCalls ?? 0);
-            let text = theme.fg(color, header);
-
-            if (expanded) {
-                text += `\n\n${theme.fg("muted", quoteText(details.task))}`;
-            }
-            text += `\n\n${theme.fg("muted", toolSummary)}`;
-            if (expanded && response) {
-                text += `\n\n${response}`;
-            }
-
-            return new Text(text, 0, 0);
+            const body = expanded
+                ? `${quoteText(details.task)}\n\n${toolSummary}${response ? `\n\n${response}` : ""}`
+                : toolSummary;
+            const container = new Container();
+            container.addChild(new Text(theme.fg(color, header), 0, 0));
+            container.addChild(new Markdown(body, 0, 0, markdownTheme(theme)));
+            return container;
         },
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const outcome = await executeAction(

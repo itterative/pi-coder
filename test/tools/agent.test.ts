@@ -189,8 +189,16 @@ describe("AgentRunManager", () => {
 
     it("keeps the full initial task in run details", async () => {
         const child = new FakeChild([{ output: "Found it." }]);
-        const manager = managerWith(child);
-        const task = `Review the implementation.\n${"detail ".repeat(400)}`;
+        const taskLimit = 120;
+        const manager = new AgentRunManager(
+            async () => child,
+            4,
+            undefined,
+            20,
+            undefined,
+            taskLimit,
+        );
+        const task = "x".repeat(taskLimit);
 
         const result = await manager.start("scout", task, context());
 

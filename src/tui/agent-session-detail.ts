@@ -1,9 +1,9 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKey } from "@earendil-works/pi-tui";
+import { Markdown, matchesKey } from "@earendil-works/pi-tui";
 import { PagerComponent } from "./pager";
 import type { AgentSessionBrowserItem } from "../tools/agent/presentation/browser-models";
 import { compactNumber } from "./agent-session-format";
-import { wrapPreservingSpaces } from "../common/text";
+import { markdownTheme } from "./markdown-theme";
 import type { AgentTranscriptView } from "../tools/agent/presentation/transcript";
 
 export interface AgentSessionDetailOptions {
@@ -78,9 +78,7 @@ function detailText(
     lines.push("", theme.fg("accent", `Transcript (${transcriptView}):`));
 
     if (transcript) {
-        for (const paragraph of transcript.split("\n")) {
-            lines.push(...wrapPreservingSpaces(paragraph, width));
-        }
+        lines.push(...new Markdown(transcript, 0, 0, markdownTheme(theme)).render(width));
     } else {
         lines.push(theme.fg("muted", "Transcript unavailable for this session."));
     }

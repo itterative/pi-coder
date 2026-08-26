@@ -382,6 +382,24 @@ describe("AgentSessionBrowserComponent", () => {
         await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.session-detail.txt");
     });
 
+    it("renders Markdown in the transcript detail view", async () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [{
+                ...past,
+                transcript: "# Findings\n\nThe **implementation** is sound.\n\n- Preserves the prompt\n- Renders replies as Markdown\n\n```ts\nconst ready = true;\n```",
+            }],
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.enter);
+
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.session-detail-markdown.txt",
+        );
+    });
+
     it("toggles between collapsed and detailed transcript views", () => {
         const value = new AgentSessionBrowserComponent({
             current: [],

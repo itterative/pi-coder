@@ -161,6 +161,7 @@ export class AgentRunManager {
         private readonly trace?: AgentTraceSink,
         private readonly maxRetainedResults = 20,
         private readonly events?: AgentEventSink,
+        private readonly maxTaskChars = MAX_TASK_CHARS,
     ) {}
 
     setPersistence(persistence: AgentRunPersistence | undefined): void {
@@ -747,8 +748,8 @@ export class AgentRunManager {
         context: AgentStartContext,
     ): void {
         if (!task.trim()) throw new AgentActionError("Agent task must not be empty.");
-        if (task.length > MAX_TASK_CHARS) {
-            throw new AgentActionError(`Agent task exceeds ${MAX_TASK_CHARS} characters.`);
+        if (task.length > this.maxTaskChars) {
+            throw new AgentActionError(`Agent task exceeds ${this.maxTaskChars} characters.`);
         }
         if (this.activeCount >= this.maxActiveRuns) {
             throw new AgentActionError(
@@ -1258,7 +1259,7 @@ export class AgentRunManager {
             agentFilePath: run.agentFilePath,
             status: run.permissionPending ? "waiting_for_permission" : run.status,
             background: run.background,
-            task: truncate(run.task, MAX_TASK_CHARS),
+            task: truncate(run.task, this.maxTaskChars),
             workspaceId: run.workspaceId,
             childSessionLeafId: run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId,
             output: progress.output ? truncate(progress.output, MAX_OUTPUT_CHARS) : undefined,
@@ -1409,7 +1410,7 @@ export class AgentRunManager {
             agentSource: run.agentSource,
             agentFilePath: run.agentFilePath,
             definitionFingerprint: run.definitionFingerprint,
-            task: truncate(run.task, MAX_TASK_CHARS),
+            task: truncate(run.task, this.maxTaskChars),
             status: durableStatus,
             background: run.background,
             mutating: run.mutating,

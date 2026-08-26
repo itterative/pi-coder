@@ -126,7 +126,7 @@ describe("agent extension registration", () => {
 
     it("renders the full prompt and preserves response whitespace without metadata", async () => {
         let tool: any;
-        const prompt = `Review the implementation.\n${"detail ".repeat(400)}`;
+        const prompt = "Review the implementation.\nPlease inspect the relevant modules and report any regressions.";
         const response = "\n  leading spaces\ntrailing spaces  \n";
         registerAgentToolDefinition({
             registerTool(definition: any) {
@@ -157,10 +157,7 @@ describe("agent extension registration", () => {
         result.content[0].text = `<metadata>generated metadata</metadata>\n\n${response}`;
         const rendered = snapshotText(renderText(tool.renderResult(result, { expanded: true }, mockTheme), 10_000));
 
-        expect(rendered).toContain(`> ${"detail ".repeat(400).trimEnd()}`);
-        expect(rendered).toContain("  leading spaces\ntrailing spaces");
-        expect(rendered).not.toContain("<metadata>");
-        expect(rendered).toContain("3 tool calls (1 failed)");
+        await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-tool.tui.markdown.txt");
     });
 
     it("applies a parent workspace result and verifies the lease is cleared", async () => {

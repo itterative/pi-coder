@@ -22,7 +22,7 @@ keep_updated: true
 - The above-editor widget is the sole persistent agent UI: do not add a footer `setStatus` entry. It shows running (`●`), waiting (`?`), ready (`✓`), failed (`!`), and permission-waiting states, sanitized current activity, a short assistant preview, and up to three recent terminal rows.
 - Agent tool results use a compact TUI form with only the action/title/agent/status and total tool/failure counts. Expanded results quote the initial task, repeat the counts, and show only the verbatim response; the generated `<metadata>` wrapper, activity, diagnostics, and usage are omitted. Tool failure counts are tracked from child tool-execution events and persisted with progress.
 - Terminal child sessions are disposed promptly while bounded results remain collectable. Full child output remains behind explicit `collect`; compact results show the question/run ID or a short final-result preview.
-- The `/agents` session detail view defaults to a collapsed transcript: consecutive tool calls between user/assistant messages become one human-readable summary. `c` selects collapsed and `d` selects detailed tool-call output; live detail refresh preserves the selected view.
+- The `/agents` session detail view defaults to a collapsed transcript: consecutive tool calls between user/assistant messages become one human-readable summary. Transcript content is rendered through pi-tui's Markdown component, so multiline prompts/replies, quotes, lists, emphasis, and code blocks receive normal Markdown styling. `c` selects collapsed and `d` selects detailed tool-call output; live detail refresh preserves the selected view.
 
 ## Mailbox and recovery
 

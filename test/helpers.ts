@@ -21,6 +21,9 @@ import { CURSOR_MARKER } from "@earendil-works/pi-tui";
 export const mockTheme = {
     fg: (_color: ThemeColor, text: string) => text,
     bold: (text: string) => text,
+    italic: (text: string) => text,
+    underline: (text: string) => text,
+    strikethrough: (text: string) => text,
 } as unknown as Theme;
 
 // Raw key sequences matching pi-tui's matchesKey

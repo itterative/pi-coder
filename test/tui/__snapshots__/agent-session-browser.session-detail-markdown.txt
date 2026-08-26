@@ -1,0 +1,23 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   [delegated agent] Previous implementation review · completed                                   │
+│                                                                                                  │
+│   Run ID: child-session-1                                                                        │
+│   Task: Review the previous implementation                                                       │
+│   Started: unknown time                                                                          │
+│   Updated: Nov 14 2023 22:13                                                                     │
+│   Messages: 4                                                                                    │
+│                                                                                                  │
+│   Transcript (collapsed):                                                                        │
+│   Findings                                                                                       │
+│                                                                                                  │
+│   The implementation is sound.                                                                   │
+│                                                                                                  │
+│   - Preserves the prompt                                                                         │
+│   - Renders replies as Markdown                                                                  │
+│                                                                                                  │
+│   ```ts                                                                                          │
+│     const ready = true;                                                                          │
+│                                                                                                  │
+│     Showing lines 1-16 of 17                                                                     │
+│     ↑/↓ scroll · End follow · Tab toggle view · Esc back                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
