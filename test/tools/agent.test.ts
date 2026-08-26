@@ -27,6 +27,7 @@ import {
 
 interface Step {
     output?: string;
+    leafId?: string | null;
     question?: ParentQuestion;
     error?: string;
     usage?: Usage;
@@ -43,6 +44,7 @@ class FakeChild implements ChildAgentHandle {
     private error?: string;
     private usage = usage();
     private releaseAbort?: () => void;
+    private sessionLeafId?: string | null;
 
     constructor(private readonly steps: Step[], sessionFile?: string) {
         this.sessionFile = sessionFile;
@@ -59,6 +61,7 @@ class FakeChild implements ChildAgentHandle {
             return;
         }
         this.output = step.output ?? "";
+        this.sessionLeafId = step.leafId;
         this.question = step.question;
         this.error = step.error;
         if (step.usage) this.usage = addUsage(this.usage, step.usage);
@@ -77,6 +80,10 @@ class FakeChild implements ChildAgentHandle {
         const result = this.question;
         this.question = undefined;
         return result;
+    }
+
+    getSessionLeafId(): string | null | undefined {
+        return this.sessionLeafId;
     }
 
     getProgress() {
@@ -215,6 +222,19 @@ describe("AgentRunManager", () => {
 
         expect(child.prompts[0]).toContain("Parent summary [parent]");
         expect(child.prompts[0]).not.toContain("Unrequested context");
+    });
+
+    it("persists the final child leaf after the prompt settles", async () => {
+        const child = new FakeChild([{ output: "Found the answer.", leafId: "leaf-final" }], "/tmp/child.jsonl");
+        const manager = managerWith(child);
+        const store = durableStore("/tmp");
+        manager.setPersistence(store.persistence);
+
+        await manager.start("scout", "Investigate", context());
+
+        expect(latestRecords(store.records)[0]).toMatchObject({
+            childSessionLeafId: "leaf-final",
+        });
     });
 
     it("completes a run and disposes its child", async () => {

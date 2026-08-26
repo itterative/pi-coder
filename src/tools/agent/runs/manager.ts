@@ -47,6 +47,11 @@ export type {
 } from "../contracts/runs";
 export type { WorkerMutationReport } from "../contracts/mutations";
 
+export interface AgentRunIdentity {
+    runId: string;
+    runInstanceId: string;
+}
+
 type AgentStartContext = Omit<
     ChildAgentFactoryContext,
     "definition" | "background" | "onProgress" | "onTrace"
@@ -389,6 +394,18 @@ export class AgentRunManager {
         return { restored: this.runs.size, diagnostics };
     }
 
+    /** Reserve the physical/display identity before an isolated workspace starts running. */
+    reserveRunIdentity(
+        definitionOrName: AgentDefinition | string,
+        task: string,
+        context: AgentStartContext,
+    ): AgentRunIdentity {
+        if (this.closing) throw new AgentActionError("Agent runtime is shutting down.");
+        const definition = this.resolveDefinition(definitionOrName);
+        this.validateRunStart(definition, task, context);
+        return this.allocateRunIdentity(definition);
+    }
+
     async start(
         definitionOrName: AgentDefinition | string,
         task: string,
@@ -396,8 +413,9 @@ export class AgentRunManager {
         signal?: AbortSignal,
         onProgress?: AgentProgressCallback,
         title?: string,
+        identity?: AgentRunIdentity,
     ): Promise<AgentRunOutcome> {
-        const { definition, run } = this.createRun(definitionOrName, task, context, false, title);
+        const { definition, run } = this.createRun(definitionOrName, task, context, false, title, identity);
         const setupOutcome = await this.setupRun(
             run,
             definition,
@@ -416,9 +434,10 @@ export class AgentRunManager {
         signal?: AbortSignal,
         onBackgroundUpdate?: AgentBackgroundCallback,
         title?: string,
+        identity?: AgentRunIdentity,
     ): AgentRunOutcome {
         if (signal?.aborted) throw new AgentActionError("Agent spawn was aborted before launch.");
-        const { definition, run } = this.createRun(definitionOrName, task, context, true, title);
+        const { definition, run } = this.createRun(definitionOrName, task, context, true, title, identity);
         run.backgroundCallback = onBackgroundUpdate;
         const taskPromise = this.launchBackground(run, definition, context).catch((error) => {
             if (isTerminalStatus(run.status)) return run.terminalOutcome!;
@@ -594,46 +613,20 @@ export class AgentRunManager {
         context: AgentStartContext,
         background: boolean,
         requestedTitle?: string,
+        requestedIdentity?: AgentRunIdentity,
     ): { definition: AgentDefinition; run: AgentRun } {
         if (this.closing) throw new AgentActionError("Agent runtime is shutting down.");
-        if (!task.trim()) throw new AgentActionError("Agent task must not be empty.");
-        if (task.length > MAX_TASK_CHARS) {
-            throw new AgentActionError(`Agent task exceeds ${MAX_TASK_CHARS} characters.`);
-        }
-        if (this.activeCount >= this.maxActiveRuns) {
-            throw new AgentActionError(
-                `Agent run limit reached (${this.maxActiveRuns}). Resume, collect, or cancel an existing run first.`,
-            );
-        }
-
-        const definition: AgentDefinition = typeof definitionOrName === "string"
-            ? {
-                name: definitionOrName,
-                description: "Test or built-in agent",
-                capabilities: [],
-                systemPrompt: "",
-                source: "builtin",
-            }
-            : definitionOrName;
-        if (
-            definition.mutating
-            && [...this.runs.values()].some((candidate) => (
-                candidate.mutating
-                && !isTerminalStatus(candidate.status)
-                && mutationRunsConflict(context.workspaceId, candidate.workspaceId)
-            ))
-        ) {
-            throw new AgentActionError(
-                context.workspaceId
-                    ? "A mutation-capable worker is already active in this workspace."
-                    : "A same-checkout mutation-capable worker is already active.",
-            );
+        const definition = this.resolveDefinition(definitionOrName);
+        this.validateRunStart(definition, task, context);
+        const identity = requestedIdentity ?? this.allocateRunIdentity(definition);
+        if (this.runs.has(identity.runId)) {
+            throw new AgentActionError(`Agent run ID ${identity.runId} is already in use.`);
         }
         const now = Date.now();
-        const id = `${definition.name}-${this.nextRunNumber++}`;
+        const id = identity.runId;
         const run: AgentRun = {
             id,
-            runInstanceId: randomUUID(),
+            runInstanceId: identity.runInstanceId,
             title: deriveAgentTitle(task, requestedTitle),
             agent: definition.name,
             agentSource: definition.source,
@@ -675,6 +668,55 @@ export class AgentRunManager {
             background,
         });
         return { definition, run };
+    }
+
+    private resolveDefinition(definitionOrName: AgentDefinition | string): AgentDefinition {
+        return typeof definitionOrName === "string"
+            ? {
+                name: definitionOrName,
+                description: "Test or built-in agent",
+                capabilities: [],
+                systemPrompt: "",
+                source: "builtin",
+            }
+            : definitionOrName;
+    }
+
+    private validateRunStart(
+        definition: AgentDefinition,
+        task: string,
+        context: AgentStartContext,
+    ): void {
+        if (!task.trim()) throw new AgentActionError("Agent task must not be empty.");
+        if (task.length > MAX_TASK_CHARS) {
+            throw new AgentActionError(`Agent task exceeds ${MAX_TASK_CHARS} characters.`);
+        }
+        if (this.activeCount >= this.maxActiveRuns) {
+            throw new AgentActionError(
+                `Agent run limit reached (${this.maxActiveRuns}). Resume, collect, or cancel an existing run first.`,
+            );
+        }
+        if (
+            definition.mutating
+            && [...this.runs.values()].some((candidate) => (
+                candidate.mutating
+                && !isTerminalStatus(candidate.status)
+                && mutationRunsConflict(context.workspaceId, candidate.workspaceId)
+            ))
+        ) {
+            throw new AgentActionError(
+                context.workspaceId
+                    ? "A mutation-capable worker is already active in this workspace."
+                    : "A same-checkout mutation-capable worker is already active.",
+            );
+        }
+    }
+
+    private allocateRunIdentity(definition: AgentDefinition): AgentRunIdentity {
+        return {
+            runId: `${definition.name}-${this.nextRunNumber++}`,
+            runInstanceId: randomUUID(),
+        };
     }
 
     private async setupRun(
@@ -902,6 +944,8 @@ export class AgentRunManager {
                 abort();
             } else {
                 await handle.prompt(prompt);
+                this.captureChildSessionLeaf(run);
+                this.persistRun(run);
                 this.record(run, "operation.prompt_settled");
             }
             await run.abortPromise?.catch(() => {});
@@ -1013,6 +1057,7 @@ export class AgentRunManager {
     }
 
     private finishInterrupted(run: AgentRun, content: string): AgentRunOutcome {
+        this.captureChildSessionLeaf(run);
         const progress = run.handle?.getProgress() ?? run.restoredProgress ?? { output: "", recentActivity: [] };
         this.transitionStatus(run, "interrupted");
         run.permissionPending = false;
@@ -1036,6 +1081,7 @@ export class AgentRunManager {
         progress: ChildProgress = run.handle?.getProgress() ?? { output: "", recentActivity: [] },
     ): AgentRunOutcome {
         if (isTerminalStatus(run.status) && run.terminalOutcome) return run.terminalOutcome;
+        this.captureChildSessionLeaf(run);
         this.transitionStatus(run, status);
         run.permissionPending = false;
         run.updatedAt = Date.now();
@@ -1220,6 +1266,13 @@ export class AgentRunManager {
             bashApproved: run.restoredMutationReport?.bashApproved === true || current?.bashApproved === true,
             ...(interrupted ? { interrupted: true } : {}),
         };
+    }
+
+    private captureChildSessionLeaf(run: AgentRun): boolean {
+        const childSessionLeafId = run.handle?.getSessionLeafId?.();
+        if (childSessionLeafId === undefined || childSessionLeafId === run.childSessionLeafId) return false;
+        run.childSessionLeafId = childSessionLeafId;
+        return true;
     }
 
     private persistRun(

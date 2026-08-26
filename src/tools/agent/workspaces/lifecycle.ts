@@ -114,8 +114,14 @@ export async function resetAgentWorkspaceForReuse(
                 || workspace.leaseRunId !== leaseRunId
                 || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== leaseRunInstanceId)
             ) throw new Error(`Workspace ${workspaceId} is actively leased and cannot be reset by this session.`);
-            if (!workspace.latestResult || !["prepared", "applied"].includes(workspace.latestResult.status)) {
-                throw new Error(`Workspace ${workspaceId} has no completed task result to reset.`);
+            if (
+                !workspace.latestResult
+                || workspace.latestResult.runId !== leaseRunId
+                || (workspace.leaseRunInstanceId !== undefined
+                    && workspace.latestResult.runInstanceId !== leaseRunInstanceId)
+                || !["prepared", "applied"].includes(workspace.latestResult.status)
+            ) {
+                throw new Error(`Workspace ${workspaceId} has no completed task result for this physical run to reset.`);
             }
         } else if (workspace.leaseKind) {
             throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be reset.`);

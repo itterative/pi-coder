@@ -73,20 +73,16 @@ function pastItem(
         ? checkpoint.childSessionLeafId
         : catalogLeaf;
     const exactLeafSelected = childSessionLeafId !== undefined;
-    const transcript = loadAgentSessionTranscriptViews(info.path, childSessionLeafId);
-    const fallbackTranscript = exactLeafSelected
-        ? undefined
-        : info.firstMessage
-            ? `> ${info.firstMessage}${info.allMessagesText && info.allMessagesText !== info.firstMessage ? `\n\n${info.allMessagesText.slice(info.firstMessage.length).trimStart()}` : ""}`
-            : info.allMessagesText;
+    const transcript = exactLeafSelected
+        ? loadAgentSessionTranscriptViews(info.path, childSessionLeafId)
+        : undefined;
     const record = checkpoint?.record;
     const displayMetadata = record ?? metadata;
-    const selectedTranscript = exactLeafSelected
-        ? transcript?.detailed ?? "Transcript unavailable for the selected child checkpoint."
-        : transcript?.detailed || fallbackTranscript;
-    const selectedCollapsedTranscript = exactLeafSelected
-        ? transcript?.collapsed ?? "Transcript unavailable for the selected child checkpoint."
-        : transcript?.collapsed || fallbackTranscript;
+    const unavailableTranscript = exactLeafSelected
+        ? "Transcript unavailable for the selected child checkpoint."
+        : "Transcript unavailable: no exact child transcript leaf is recorded.";
+    const selectedTranscript = transcript?.detailed ?? unavailableTranscript;
+    const selectedCollapsedTranscript = transcript?.collapsed ?? unavailableTranscript;
     const responsePreview = displayMetadata && "responsePreview" in displayMetadata
         ? displayMetadata.responsePreview
         : record?.progress.output || record?.progress.lastAssistantMessage;
@@ -105,7 +101,6 @@ function pastItem(
         readOnlyReason: checkpoint?.readOnlyReason,
         messageCount: info.messageCount,
         firstMessage: info.firstMessage,
-        ...(exactLeafSelected ? {} : { allMessagesText: info.allMessagesText.slice(-4_000) }),
         transcript: selectedTranscript,
         transcriptCollapsed: selectedCollapsedTranscript,
         mutating: displayMetadata?.mutating,
@@ -146,22 +141,25 @@ export async function loadAgentSessionTranscripts(
             return item;
         }
 
-        const transcript = loadAgentSessionTranscriptViews(info.path, item.childSessionLeafId);
-        if (transcript) {
+        if (item.childSessionLeafId === undefined) {
             return {
+                ...item,
+                transcript: "Transcript unavailable: no exact child transcript leaf is recorded.",
+                transcriptCollapsed: "Transcript unavailable: no exact child transcript leaf is recorded.",
+            };
+        }
+        const transcript = loadAgentSessionTranscriptViews(info.path, item.childSessionLeafId);
+        return transcript
+            ? {
                 ...item,
                 transcript: transcript.detailed,
                 transcriptCollapsed: transcript.collapsed,
-            };
-        }
-        if (item.childSessionLeafId !== undefined) {
-            return {
+            }
+            : {
                 ...item,
                 transcript: "Transcript unavailable for the selected child checkpoint.",
                 transcriptCollapsed: "Transcript unavailable for the selected child checkpoint.",
             };
-        }
-        return { ...item, transcript: info.allMessagesText, transcriptCollapsed: info.allMessagesText };
     }));
 }
 

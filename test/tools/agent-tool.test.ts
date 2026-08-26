@@ -583,12 +583,17 @@ describe("agent extension registration", () => {
             provisionalLeaseRunId: "provisional-foreground",
             provisionalLeaseRunInstanceId: "provisional-instance-foreground",
         });
-        const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
+        const order: string[] = [];
+        const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockImplementation(async () => {
+            order.push("transfer");
+        });
         vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace);
         const prepareResultSpy = vi.spyOn(workspaceResults, "prepareAgentWorkspaceApplication").mockResolvedValue(result);
         const releaseSpy = vi.spyOn(workspaceResults, "releaseAgentWorkspaceAfterNoChanges").mockResolvedValue();
         const child: ChildAgentHandle = {
-            prompt: async () => {},
+            prompt: async () => {
+                order.push("prompt");
+            },
             abort: async () => {},
             dispose: () => {},
             takeParentQuestion: () => undefined,
@@ -618,6 +623,8 @@ describe("agent extension registration", () => {
             ctx,
         );
 
+        expect(order.indexOf("transfer")).toBeGreaterThanOrEqual(0);
+        expect(order.indexOf("transfer")).toBeLessThan(order.indexOf("prompt"));
         expect(transferSpy).toHaveBeenCalledWith(
             workspace.id,
             "parent-session",

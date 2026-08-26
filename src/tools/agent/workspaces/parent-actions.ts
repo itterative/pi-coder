@@ -160,28 +160,31 @@ export async function executeParentWorkspaceAction(
         `Original task: ${record.task}`,
         `Parent feedback: ${params.guidance}`,
     ].join("\\n\\n");
-    const outcome = await manager.start(
-        definition,
-        revisionTask,
-        {
-            cwd: workspace.worktreePath,
-            parentCwd: ctx.cwd,
-            workspaceId: workspace.id,
-            parentContext: ctx,
-        },
-        signal,
-        progress,
-        `${record.title} revision`,
-    );
+    const revisionContext = {
+        cwd: workspace.worktreePath,
+        parentCwd: ctx.cwd,
+        workspaceId: workspace.id,
+        parentContext: ctx,
+    };
+    const runIdentity = manager.reserveRunIdentity(definition, revisionTask, revisionContext);
     await transferAgentWorkspaceLease(
         workspace.id,
         sessionId,
         params.runId,
-        outcome.details.runId,
+        runIdentity.runId,
         "task",
         undefined,
         record.runInstanceId,
-        outcome.details.runInstanceId,
+        runIdentity.runInstanceId,
+    );
+    const outcome = await manager.start(
+        definition,
+        revisionTask,
+        revisionContext,
+        signal,
+        progress,
+        `${record.title} revision`,
+        runIdentity,
     );
     const prepared = await prepareForegroundWorkspaceResult(outcome, ctx, events);
     prepared.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);

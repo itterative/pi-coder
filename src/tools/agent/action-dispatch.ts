@@ -5,6 +5,7 @@ import type { AgentParameters } from "./definitions/prompt";
 import {
     AgentActionError,
     type AgentRunDetails,
+    type AgentRunIdentity,
     type AgentRunOutcome,
 } from "./runs/manager";
 import { diagnosticText } from "./presentation/widget";
@@ -36,6 +37,7 @@ export async function executeAgentAction(
 ): Promise<AgentRunOutcome> {
     let outcome: AgentRunOutcome;
     let reservation: WorkspaceReservation | undefined;
+    let transferredLeaseIdentity: AgentRunIdentity | undefined;
     try {
         if (params.action === "list") {
             let workspaces: AgentWorkspace[] = [];
@@ -84,6 +86,28 @@ export async function executeAgentAction(
             const workspaceBackground = (details: AgentRunDetails) => {
                 background(details);
             };
+            const runIdentity = reservation
+                ? lifecycle.manager.reserveRunIdentity(definition, params.task, runContext)
+                : undefined;
+            if (reservation && runIdentity) {
+                await transferAgentWorkspaceLease(
+                    reservation.workspace.id,
+                    reservation.ownerSessionId,
+                    reservation.provisionalLeaseRunId,
+                    runIdentity.runId,
+                    "task",
+                    undefined,
+                    reservation.provisionalLeaseRunInstanceId,
+                    runIdentity.runInstanceId,
+                );
+                transferredLeaseIdentity = runIdentity;
+                lifecycle.emitWorkspaceEvent(
+                    ctx,
+                    reservation.workspace.id,
+                    "lease_changed",
+                    "transferred",
+                );
+            }
             outcome = params.action === "start"
                 ? await lifecycle.manager.start(
                     definition,
@@ -92,6 +116,7 @@ export async function executeAgentAction(
                     signal,
                     progress,
                     params.title,
+                    runIdentity,
                 )
                 : lifecycle.manager.spawn(
                     definition,
@@ -100,25 +125,8 @@ export async function executeAgentAction(
                     signal,
                     workspaceBackground,
                     params.title,
+                    runIdentity,
                 );
-            if (reservation) {
-                await transferAgentWorkspaceLease(
-                    reservation.workspace.id,
-                    reservation.ownerSessionId,
-                    reservation.provisionalLeaseRunId,
-                    outcome.details.runId,
-                    "task",
-                    undefined,
-                    reservation.provisionalLeaseRunInstanceId,
-                    outcome.details.runInstanceId,
-                );
-                lifecycle.emitWorkspaceEvent(
-                    ctx,
-                    reservation.workspace.id,
-                    "lease_changed",
-                    "transferred",
-                );
-            }
             if (params.action === "start") {
                 outcome = await prepareForegroundWorkspaceResult(outcome, ctx, lifecycle.events);
             }
@@ -186,7 +194,7 @@ export async function executeAgentAction(
             lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
         }
     } catch (error) {
-        if (reservation) {
+        if (reservation && !transferredLeaseIdentity) {
             await releaseAgentWorkspaceLease(
                 reservation.workspace.id,
                 reservation.ownerSessionId,
