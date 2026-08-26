@@ -252,6 +252,54 @@ describe("delegated-agent V2 persistence", () => {
         expect(repairCalls).toBe(1);
     });
 
+    it("restores starting and running checkpoints as interrupted without replaying them", async () => {
+        const restoredContexts: any[] = [];
+        const repairCalls = new Map<string, number>();
+        const manager = new AgentRunManager(async (context) => {
+            restoredContexts.push(context);
+            const runId = context.childSessionFile?.includes("running") ? "scout-2" : "scout-1";
+            return {
+                sessionFile: context.childSessionFile,
+                prompt: async () => {},
+                abort: async () => {},
+                dispose: () => {},
+                takeParentQuestion: () => undefined,
+                getProgress: () => ({ output: "", recentActivity: [] }),
+                getFinalOutput: () => "",
+                getError: () => undefined,
+                getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
+                getSessionLeafId: () => context.childSessionLeafId,
+                repairInterrupted: () => {
+                    repairCalls.set(runId, (repairCalls.get(runId) ?? 0) + 1);
+                    return 1;
+                },
+            };
+        });
+        manager.setPersistence({
+            ownerSessionId: "parent-1",
+            usesSnapshotMarkers: true,
+            childSessionDir: "/tmp/agent-child-sessions",
+            save: () => true,
+            deleteChildSession: () => {},
+        });
+
+        const restoration = await manager.restore([
+            { ...record("instance-starting", "parent-1", "/tmp/starting-child.jsonl", "starting-leaf"), status: "starting" },
+            { ...record("instance-running", "parent-1", "/tmp/running-child.jsonl", "running-leaf"), runId: "scout-2", status: "running" },
+        ], [BUILTIN_SCOUT], { cwd: process.cwd(), parentContext: {} });
+
+        expect(restoration).toEqual({ restored: 2, diagnostics: [] });
+        expect(manager.listRuns()).toEqual([
+            expect.objectContaining({ runId: "scout-1", status: "interrupted" }),
+            expect.objectContaining({ runId: "scout-2", status: "interrupted" }),
+        ]);
+        expect(restoredContexts).toEqual(expect.arrayContaining([
+            expect.objectContaining({ childSessionLeafId: "starting-leaf", repairInterrupted: false }),
+            expect.objectContaining({ childSessionLeafId: "running-leaf", repairInterrupted: false }),
+        ]));
+        expect(repairCalls).toEqual(new Map());
+    });
+
     it("restores V2 branch checkpoints and browses their exact child leaves", async () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-browser-"));
         tempDirs.push(stateDir);
