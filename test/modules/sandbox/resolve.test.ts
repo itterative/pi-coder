@@ -57,6 +57,15 @@ describe("resolvePermissionDetails: unresolved segments", () => {
                 additionalRoots: [scratchpad],
             },
         )).toBe("allow:sandbox");
+        expect(resolvePermission(
+            `touch ${scratchpad}/{ok,../outside/owned}`,
+            CWD,
+            {
+                permissions: {},
+                cwdConfinement: {},
+                additionalRoots: [scratchpad],
+            },
+        )).toBe("ask");
         expect(resolvePermission("rm -rf file.txt", CWD, {
             permissions: {},
             cwdConfinement: {},

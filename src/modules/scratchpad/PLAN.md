@@ -221,7 +221,7 @@ more unknown local commands, with network-capable commands separately denied.
 That is explicitly out of scope for this plan; the existing curated command
 heuristic and permission policy remain authoritative.
 
-### Scratchpad mutator hardening proposal
+### Scratchpad mutator hardening — implemented
 
 The initial mutator relaxation must remain conservative because the current
 bubblewrap profile mounts both `/tmp` and the project cwd read-write. Bubblewrap
@@ -236,12 +236,13 @@ all of these conditions hold:
 - every affected operand is a literal path; reject or conservatively fall back
   to the permission gate for parameter and command substitutions, brace
   expansion, globs, tilde expansion, and process substitutions;
-- heredoc bodies are rejected for auto-approved mutators unless the parser
-  preserves a quoted delimiter and validates that no expansion can occur;
+- heredocs fall back to the permission gate for every heuristic command because
+  the parser does not preserve body expansion or quoted-delimiter metadata;
 - lexical containment is checked against the scratchpad, then canonical
   containment is checked against that same scratchpad root, without normalizing
   away symlink components before inspection;
-- multiple lexical and canonical additional roots are paired, so a path under
+- additional-root inputs containing explicit `.` or `..` components are
+  rejected, and multiple lexical/canonical roots are paired so a path under
   root A cannot resolve through a symlink into root B;
 - flags and value-taking options are explicitly modeled. Reference options such
   as `touch -r` and `truncate -r` must be path-checked or rejected, and unknown
@@ -265,11 +266,17 @@ touch scratch/link/../outside
 touch -r/etc/passwd scratch/out
 ```
 
-The conservative first set may include `rm`, `mkdir`, `rmdir`, `touch`,
-`truncate`, and `tee` once these checks are enforced. Keep `cp`, `mv`,
-`find -delete`, `sed -i`, archive extraction, `ln`, `install`, and similar
-complex mutators behind the normal permission gate until they have dedicated
-argument and side-effect models.
+The conservative first set is `rm`, `mkdir`, `rmdir`, `touch`, `truncate`, and
+`tee`. Their specs reject unknown flags; `touch` and `truncate` model reference
+paths explicitly. Because the shell parser strips quote and escape provenance,
+literal filenames containing expansion metacharacters may conservatively fall
+back to a prompt. Canonical checks still have an unavoidable filesystem
+TOCTOU window, and bubblewrap remains defense in depth rather than the
+scratchpad boundary.
+
+Keep `cp`, `mv`, `find -delete`, `sed -i`, archive extraction, `ln`, `install`,
+and similar complex mutators behind the normal permission gate until they have
+dedicated argument and side-effect models.
 
 ## No explicit sharing in v1
 

@@ -86,19 +86,33 @@ describe("heuristic assessments", () => {
 
     it("allows conservative filesystem mutators only inside an additional root", () => {
         const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-mutator-root-"));
+        const targetDirectory = path.join(scratchpad, "target");
+        fs.mkdirSync(targetDirectory);
+        fs.symlinkSync(targetDirectory, path.join(scratchpad, "link"), "dir");
+
         try {
             for (const command of [
                 `rm -rf ${path.join(scratchpad, "old.txt")}`,
                 `mkdir -p ${path.join(scratchpad, "nested")}`,
                 `rmdir ${path.join(scratchpad, "empty")}`,
                 `touch ${path.join(scratchpad, "notes.txt")}`,
+                `touch ${path.join(scratchpad, "link", "linked.txt")}`,
+                `touch -r ${path.join(scratchpad, "reference.txt")} ${path.join(scratchpad, "notes.txt")}`,
                 `truncate -s 0 ${path.join(scratchpad, "notes.txt")}`,
+                `truncate --reference=${path.join(scratchpad, "reference.txt")} ${path.join(scratchpad, "notes.txt")}`,
+                `truncate -r${path.join(scratchpad, "reference.txt")} ${path.join(scratchpad, "notes.txt")}`,
                 `tee ${path.join(scratchpad, "notes.txt")}`,
             ]) {
                 expect(getCwdConfinementPermission(command, CWD, {}, [scratchpad]))
                     .toBe(Heuristic.SAFE_EDIT);
             }
 
+            expect(getCwdConfinementPermission(
+                `touch ${path.join(scratchpad, "without-realpath.txt")}`,
+                CWD,
+                { resolveSymlinks: false },
+                [scratchpad],
+            )).toBe(Heuristic.SAFE_EDIT);
             expect(getCwdConfinementPermission("rm -rf file.txt", CWD, {}))
                 .toBe(Heuristic.UNSAFE);
             expect(getCwdConfinementPermission(
@@ -109,6 +123,76 @@ describe("heuristic assessments", () => {
             )).toBe(Heuristic.UNSAFE);
         } finally {
             fs.rmSync(scratchpad, { recursive: true, force: true });
+        }
+    });
+
+    it("rejects dynamic syntax and unmodeled flags for scratchpad mutators", () => {
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-mutator-syntax-"));
+        const output = path.join(scratchpad, "output.txt");
+        try {
+            for (const command of [
+                `touch ${scratchpad}/{ok,../outside/owned}`,
+                `touch ${scratchpad}/$TARGET`,
+                `touch ${scratchpad}/*.txt`,
+                `touch $(echo ${output})`,
+                `truncate -s '$SIZE' ${output}`,
+                `tee ${output} <<EOF\n$(touch /tmp/outside/owned)\nEOF`,
+                `touch -r/etc/passwd ${output}`,
+                `truncate --reference=/etc/passwd ${output}`,
+                `touch --date yesterday ${output}`,
+                `touch ${output} > ${path.join(CWD, "outside.log")}`,
+                `touch -- ${output} > ${path.join(CWD, "outside-after-dash.log")}`,
+                `tee ${output} < <(touch ${path.join(scratchpad, "nested.txt")})`,
+                `touch ${output} && touch ${path.join(CWD, "outside.txt")}`,
+            ]) {
+                expect(getCwdConfinementPermission(command, CWD, {}, [scratchpad]))
+                    .toBe(Heuristic.UNSAFE);
+            }
+        } finally {
+            fs.rmSync(scratchpad, { recursive: true, force: true });
+        }
+    });
+
+    it("rejects symlink escapes for every scratchpad mutator", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-mutator-cwd-"));
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-mutator-links-"));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-mutator-outside-"));
+        const secondRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-mutator-second-"));
+        const target = path.join(outside, "target");
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, path.join(scratchpad, "link"), "dir");
+        fs.symlinkSync(path.join(outside, "missing"), path.join(scratchpad, "dangling"));
+        fs.symlinkSync(secondRoot, path.join(scratchpad, "cross-root"), "dir");
+
+        const commandsFor = (operand: string): string[] => [
+            `rm -f ${operand}`,
+            `mkdir -p ${operand}`,
+            `rmdir ${operand}`,
+            `touch ${operand}`,
+            `truncate -s 0 ${operand}`,
+            `tee ${operand}`,
+        ];
+
+        try {
+            for (const command of [
+                ...commandsFor(`${scratchpad}/link/../owned`),
+                ...commandsFor(path.join(scratchpad, "dangling")),
+            ]) {
+                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
+                    .toBe(Heuristic.UNSAFE);
+            }
+
+            expect(getCwdConfinementPermission(
+                `touch ${path.join(scratchpad, "cross-root", "owned")}`,
+                cwd,
+                {},
+                [scratchpad, secondRoot],
+            )).toBe(Heuristic.UNSAFE);
+        } finally {
+            fs.rmSync(cwd, { recursive: true, force: true });
+            fs.rmSync(scratchpad, { recursive: true, force: true });
+            fs.rmSync(outside, { recursive: true, force: true });
+            fs.rmSync(secondRoot, { recursive: true, force: true });
         }
     });
 
@@ -307,6 +391,7 @@ describe("getCwdConfinementPermission", () => {
         runTests([
             { desc: "write within cwd", command: "cat a.txt > b.txt", expected: Heuristic.SAFE_EDIT },
             { desc: "append within cwd", command: "echo hello >> log.txt", expected: Heuristic.SAFE_EDIT },
+            { desc: "redirection after double dash", command: "echo -- > log.txt", expected: Heuristic.SAFE_EDIT },
             { desc: "substitution output redirection within cwd", command: "echo hello > $(echo log.txt)", expected: Heuristic.SAFE_EDIT },
             { desc: "stderr to /dev/null", command: "ls src 2>/dev/null", expected: Heuristic.SAFE_READONLY },
             { desc: "read from within cwd", command: "wc -l < file.txt", expected: Heuristic.SAFE_READONLY },
@@ -641,6 +726,7 @@ describe("getCwdConfinementPermission", () => {
             { desc: "nested subshells", command: "cat $(echo $(echo file.txt))", expected: Heuristic.SAFE_READONLY },
             { desc: "edit in command substitution propagates", command: "grep $(echo pattern > nested.txt) file.txt", expected: Heuristic.SAFE_EDIT },
             { desc: "process substitution known", command: "cat <(echo hi)", expected: Heuristic.SAFE_READONLY },
+            { desc: "process substitution after double dash", command: "cat -- <(echo hi)", expected: Heuristic.SAFE_READONLY },
             { desc: "process substitution unknown", command: "cat <(curl example.com)", expected: Heuristic.UNSAFE },
             { desc: "redirection into process substitution", command: "echo hi > >(cat)", expected: Heuristic.SAFE_READONLY },
             { desc: "edit in process substitution propagates", command: "echo hi > >(cat > nested.txt)", expected: Heuristic.SAFE_EDIT },
@@ -650,8 +736,10 @@ describe("getCwdConfinementPermission", () => {
 
     describe("heredocs", () => {
         runTests([
-            { desc: "heredoc within cwd", command: "cat << EOF\nhello\nEOF", expected: Heuristic.SAFE_READONLY },
-            { desc: "heredoc with path arg", command: "grep foo << EOF\nhello\nEOF", expected: Heuristic.SAFE_READONLY },
+            { desc: "heredoc body is not modeled", command: "cat << EOF\nhello\nEOF", expected: Heuristic.UNSAFE },
+            { desc: "quoted heredoc is still unavailable after parsing", command: "cat << 'EOF'\nhello\nEOF", expected: Heuristic.UNSAFE },
+            { desc: "heredoc after double dash still falls back", command: "cat -- << EOF\nhello\nEOF", expected: Heuristic.UNSAFE },
+            { desc: "heredoc command substitution cannot hide an edit", command: "cat << EOF\n$(touch outside.txt)\nEOF", expected: Heuristic.UNSAFE },
         ]);
     });
 
@@ -789,7 +877,9 @@ describe("getCwdConfinementPermission", () => {
             { desc: "tfvars", command: "cat prod.tfvars", expected: Heuristic.UNSAFE },
             { desc: "credentials file", command: "cat credentials", expected: Heuristic.UNSAFE },
             { desc: "redirect into sensitive file", command: "echo x > .env", expected: Heuristic.UNSAFE },
-            { desc: "glob arg touching nothing sensitive", command: "cat src/*", expected: Heuristic.SAFE_READONLY },
+            { desc: "glob path expansion falls back", command: "cat src/*", expected: Heuristic.UNSAFE },
+            { desc: "parameter path expansion falls back", command: "cat $TARGET", expected: Heuristic.UNSAFE },
+            { desc: "brace path expansion falls back", command: "cat src/{one,two}", expected: Heuristic.UNSAFE },
             { desc: ".gitignore is not sensitive", command: "cat .gitignore", expected: Heuristic.SAFE_READONLY },
             { desc: ".github dir is not sensitive", command: "ls .github", expected: Heuristic.SAFE_READONLY },
             { desc: "regular config file is not sensitive", command: "cat config/database.yml", expected: Heuristic.SAFE_READONLY },

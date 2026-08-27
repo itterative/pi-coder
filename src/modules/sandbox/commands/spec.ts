@@ -44,6 +44,8 @@ export interface CommandSpec {
     writes?: boolean;
     /** Whether this mutator may only be auto-allowed inside additional roots. */
     additionalRootOnly?: boolean;
+    /** Reject flags not explicitly listed by this spec. */
+    rejectUnknownFlags?: boolean;
     /**
      * How to treat positional (non-flag) arguments:
      * - "paths" (default): every positional is a file path

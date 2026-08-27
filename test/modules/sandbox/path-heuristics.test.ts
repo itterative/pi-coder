@@ -103,6 +103,79 @@ describe("file path confinement", () => {
         )).toBe(Heuristic.UNSAFE);
     });
 
+    it("resolves symlinks before following parent components", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-cwd-"));
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-scratchpad-"));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-outside-"));
+        const target = path.join(outside, "target");
+        temporaryDirectories.push(cwd, scratchpad, outside);
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, path.join(scratchpad, "link"), "dir");
+
+        expect(getPathConfinementPermission(
+            `${scratchpad}/link/../owned.txt`,
+            cwd,
+            {},
+            "write",
+            [scratchpad],
+        )).toBe(Heuristic.UNSAFE);
+    });
+
+    it("does not let one additional root authorize another", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-cwd-"));
+        const first = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-first-"));
+        const second = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-second-"));
+        temporaryDirectories.push(cwd, first, second);
+        fs.symlinkSync(second, path.join(first, "link"), "dir");
+
+        expect(getPathConfinementPermission(
+            path.join(first, "link", "owned.txt"),
+            cwd,
+            {},
+            "write",
+            [first, second],
+        )).toBe(Heuristic.UNSAFE);
+    });
+
+    it("uses the most-specific nested additional root", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-cwd-"));
+        const outer = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-outer-"));
+        const nested = path.join(outer, "nested");
+        const sibling = path.join(outer, "sibling");
+        temporaryDirectories.push(cwd, outer);
+        fs.mkdirSync(nested);
+        fs.mkdirSync(sibling);
+        fs.symlinkSync(sibling, path.join(nested, "link"), "dir");
+
+        expect(getPathConfinementPermission(
+            path.join(nested, "link", "owned.txt"),
+            cwd,
+            {},
+            "write",
+            [outer, nested],
+        )).toBe(Heuristic.UNSAFE);
+    });
+
+    it("rejects additional-root inputs containing parent components", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-cwd-"));
+        const container = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-container-"));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-outside-"));
+        const target = path.join(outside, "target");
+        temporaryDirectories.push(cwd, container, outside);
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, path.join(container, "link"), "dir");
+
+        for (const config of [{}, { resolveSymlinks: false }]) {
+            expect(getPathConfinementPermission(
+                path.join(container, "owned.txt"),
+                cwd,
+                config,
+                "write",
+                [`${container}/link/..`],
+            )).toBe(Heuristic.UNSAFE);
+        }
+    });
+
     it("keeps an approved folder scoped to that folder", () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-"));
         const folder = path.join(cwd, "approved");

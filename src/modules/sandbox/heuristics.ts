@@ -203,16 +203,22 @@ function isDangerousEnvName(name: string): boolean {
     return name.startsWith("LD_") || name.startsWith("GIT_") || DANGEROUS_ENV_NAMES.has(name);
 }
 
+interface AdditionalRoot {
+    /** Absolute lexical root supplied by a runtime such as scratchpad. */
+    lexical: string;
+    /** Canonical form of this exact lexical root. */
+    real: string | null;
+}
+
 interface ConfinementOptions {
     allowedCommands: Set<string> | null;
     sensitivePatterns: RegExp[];
     blockDotfiles: boolean;
-    /** canonical cwd for symlink resolution; null disables the realpath check */
+    resolveSymlinks: boolean;
+    /** canonical cwd for symlink resolution; null when unavailable or disabled */
     realCwd: string | null;
-    /** lexical additional roots supplied by a runtime such as scratchpad */
-    additionalRoots: string[];
-    /** canonical additional roots supplied by a runtime such as scratchpad */
-    realAdditionalRoots: string[];
+    /** Paired lexical/canonical runtime roots such as scratchpads. */
+    additionalRoots: AdditionalRoot[];
 }
 
 /** Shell directory state while evaluating one command line. */
@@ -293,7 +299,7 @@ function isSensitivePath(
 ): boolean {
     const resolved = resolvePath(p, cwd, home);
     if (options.additionalRoots.some((root) =>
-        isLexicallyWithin(resolved, root, resolved, home))) {
+        isLexicallyWithin(resolved, root.lexical, resolved, home))) {
         return false;
     }
     return hasSensitiveSegment(resolved, options);
@@ -331,7 +337,49 @@ function isAllowedPath(
 
     return isLexicallyWithin(p, root, cwd, home)
         || options.additionalRoots.some((additionalRoot) =>
-            isLexicallyWithin(p, additionalRoot, cwd, home));
+            isLexicallyWithin(p, additionalRoot.lexical, cwd, home));
+}
+
+function findAdditionalRoot(
+    p: string,
+    cwd: string,
+    home: string,
+    options: ConfinementOptions,
+): AdditionalRoot | undefined {
+    const matches = options.additionalRoots.filter((root) =>
+        isLexicallyWithin(p, root.lexical, cwd, home));
+
+    return matches.reduce<AdditionalRoot | undefined>((mostSpecific, root) => {
+        if (!mostSpecific || root.lexical.length > mostSpecific.lexical.length) {
+            return root;
+        }
+        return mostSpecific;
+    }, undefined);
+}
+
+function makeAbsolutePath(p: string, cwd: string, home: string): string {
+    let expanded = p;
+    if (p === "~" || p.startsWith("~/")) {
+        expanded = home + p.slice(1);
+    }
+    if (path.isAbsolute(expanded)) {
+        return expanded;
+    }
+    return cwd.endsWith(path.sep) ? cwd + expanded : cwd + path.sep + expanded;
+}
+
+function isWithinRoot(candidate: string, root: string): boolean {
+    const relative = path.relative(root, candidate);
+    return relative === ""
+        || (!relative.startsWith(".." + path.sep)
+            && relative !== ".."
+            && !path.isAbsolute(relative));
+}
+
+function hasDotPathComponent(value: string): boolean {
+    const root = path.parse(value).root;
+    return value.slice(root.length).split(path.sep).some((component) =>
+        component === "." || component === "..");
 }
 
 function isPathWithinAdditionalRoot(
@@ -340,59 +388,79 @@ function isPathWithinAdditionalRoot(
     home: string,
     options: ConfinementOptions,
 ): boolean {
-    if (!options.additionalRoots.some((root) =>
-        isLexicallyWithin(p, root, cwd, home))) {
+    const root = findAdditionalRoot(p, cwd, home, options);
+    if (!root) {
         return false;
     }
 
-    if (options.realAdditionalRoots.length === 0) {
+    if (!options.resolveSymlinks) {
         return true;
     }
-
-    const realPath = canonicalizePath(resolvePath(p, cwd, home));
-    if (realPath === null) {
+    if (root.real === null) {
         return false;
     }
 
-    return options.realAdditionalRoots.some((root) =>
-        realPath === root || realPath.startsWith(root + path.sep));
+    const realPath = canonicalizePath(makeAbsolutePath(p, cwd, home));
+    return realPath !== null && isWithinRoot(realPath, root.real);
 }
 
 /**
- * Canonicalize a path while allowing nonexistent trailing components. This is
- * used for write targets as well as existing read targets. An existing
- * dangling symlink is deliberately rejected instead of being treated as a
- * nonexistent path.
+ * Canonicalize a path while allowing nonexistent trailing components. Path
+ * components are processed from left to right so a symlink is resolved before
+ * a following `..`, matching kernel lookup order. Existing dangling symlinks
+ * are rejected instead of being treated as nonexistent write targets.
  */
 function canonicalizePath(p: string): string | null {
-    let current = path.resolve(p);
-    const trailing: string[] = [];
+    if (!path.isAbsolute(p)) {
+        return null;
+    }
 
-    while (true) {
-        let stat: fs.Stats | undefined;
-        try {
-            stat = fs.lstatSync(current);
-        } catch {
-            stat = undefined;
+    const root = path.parse(p).root;
+    const components = p.slice(root.length).split(path.sep);
+    let current = root;
+    let missingAncestor = false;
+
+    for (const component of components) {
+        if (component === "" || component === ".") {
+            continue;
+        }
+        if (component === "..") {
+            current = path.dirname(current);
+            continue;
         }
 
-        if (stat) {
-            let real: string;
-            try {
-                real = fs.realpathSync(current);
-            } catch {
+        const candidate = path.join(current, component);
+        if (missingAncestor) {
+            current = candidate;
+            continue;
+        }
+
+        let stat: fs.Stats;
+        try {
+            stat = fs.lstatSync(candidate);
+        } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "ENOENT" && code !== "ENOTDIR") {
                 return null;
             }
-            return trailing.reduce((value, segment) => path.join(value, segment), real);
+            missingAncestor = true;
+            current = candidate;
+            continue;
         }
 
-        const parent = path.dirname(current);
-        if (parent === current) {
+        if (!stat.isSymbolicLink()) {
+            current = candidate;
+            continue;
+        }
+
+        try {
+            current = fs.realpathSync(candidate);
+        } catch {
             return null;
         }
-        trailing.unshift(path.basename(current));
-        current = parent;
     }
+
+    return current;
 }
 
 /**
@@ -420,10 +488,11 @@ export function isPathWithinDirectory(
     }
 
     if (confinement?.resolveSymlinks ?? true) {
-        const resolvedFile = resolvePath(filePath, resolvedCwd, home);
         const resolvedDirectory = resolvePath(directory, resolvedCwd, home);
-        const realFile = canonicalizePath(resolvedFile);
-        const realDirectory = canonicalizePath(resolvedDirectory);
+        const realFile = canonicalizePath(makeAbsolutePath(filePath, resolvedCwd, home));
+        const realDirectory = canonicalizePath(
+            makeAbsolutePath(directory, resolvedCwd, home),
+        );
 
         if (realFile === null || realDirectory === null) {
             return false;
@@ -459,62 +528,27 @@ function isRealPathConfined(
     home: string,
     options: ConfinementOptions,
 ): boolean {
-    if (p === "" || SPECIAL_ALLOWED_PATHS.has(p)) {
+    if (p === "" || SPECIAL_ALLOWED_PATHS.has(p) || !options.resolveSymlinks) {
         return true;
     }
 
-    // A path that is lexically inside an additional root must remain inside
-    // that same root after symlink resolution. Do not let one managed root
-    // authorize a symlink into another root.
-    const inAdditionalRoot = options.additionalRoots.some((root) =>
-        isLexicallyWithin(p, root, cwd, home));
-    const inCwd = isLexicallyWithin(p, cwd, cwd, home);
-    let realRoots: string[] = [];
-    if (inAdditionalRoot) {
-        realRoots = options.realAdditionalRoots;
-    } else if (inCwd && options.realCwd) {
-        realRoots = [options.realCwd];
-    }
-    if (realRoots.length === 0) {
-        return true;
+    const additionalRoot = findAdditionalRoot(p, cwd, home, options);
+    const expectedRoot = additionalRoot ? additionalRoot.real : options.realCwd;
+    if (expectedRoot === null) {
+        // Preserve the legacy lexical-only fallback for a synthetic/nonexistent
+        // cwd. Runtime-managed additional roots are expected to exist, so a
+        // selected root that cannot be canonicalized fails closed.
+        return additionalRoot === undefined;
     }
 
-    let current = resolvePath(p, cwd, home);
-
-    while (true) {
-        let stat: fs.Stats | undefined;
-        try {
-            stat = fs.lstatSync(current);
-        } catch {
-            stat = undefined;
-        }
-
-        if (stat) {
-            let real: string;
-            try {
-                real = fs.realpathSync(current);
-            } catch {
-                // dangling symlink or otherwise unresolvable path
-                return false;
-            }
-            const confined = realRoots.some((root) =>
-                real === root || real.startsWith(root + path.sep));
-            if (!confined) {
-                return false;
-            }
-            // A scratchpad may contain names such as `.env`, but a symlink
-            // from it into a sensitive project path must remain blocked.
-            const insideAdditionalRoot = options.realAdditionalRoots.some((root) =>
-                real === root || real.startsWith(root + path.sep));
-            return insideAdditionalRoot || !hasSensitiveSegment(real, options);
-        }
-
-        const parent = path.dirname(current);
-        if (parent === current) {
-            return false;
-        }
-        current = parent;
+    const realPath = canonicalizePath(makeAbsolutePath(p, cwd, home));
+    if (realPath === null || !isWithinRoot(realPath, expectedRoot)) {
+        return false;
     }
+
+    // A scratchpad may contain names such as `.env`, but a symlink from it
+    // into a sensitive project path must remain blocked.
+    return additionalRoot !== undefined || !hasSensitiveSegment(realPath, options);
 }
 
 /**
@@ -605,6 +639,14 @@ function handleShortCluster(
     const cluster = args[index].slice(1);
 
     const inspectValue = (value: string, pathContext: boolean): boolean => {
+        if (
+            (spec.additionalRootOnly && hasDynamicShellExpansion(value))
+            || (pathContext && hasUnmodeledPathExpansion(value))
+        ) {
+            addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+            return false;
+        }
+
         const substitution = inspectShellSubstitution(
             value,
             cwd,
@@ -626,6 +668,10 @@ function handleShortCluster(
         const flag = "-" + cluster[j];
         const flagSpec = spec.flags?.[flag];
 
+        if (!flagSpec && spec.rejectUnknownFlags) {
+            addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_FLAG);
+            return null;
+        }
         if (flagSpec?.unsafe) {
             addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_FLAG);
             return null;
@@ -674,6 +720,33 @@ function combineHeuristics(
 function hasShellSubstitution(value: string): boolean {
     return value.includes("$(") || value.includes("`") ||
         value.includes("<(") || value.includes(">(");
+}
+
+/**
+ * Shell syntax that can turn one parser token into different filesystem
+ * operands after confinement has been checked. parseBash intentionally strips
+ * quote/escape provenance, so rejecting these forms may produce safe false
+ * negatives; that is preferable to guessing at Bash expansion semantics.
+ */
+function hasDynamicShellExpansion(value: string): boolean {
+    return hasShellSubstitution(value)
+        || value.includes("$")
+        || value.includes("`")
+        || value.includes("{")
+        || value.includes("}")
+        || value.includes("*")
+        || value.includes("?")
+        || value.includes("[")
+        || value.includes("]")
+        || value.startsWith("~")
+        || /[@+!]\(/.test(value);
+}
+
+function hasUnmodeledPathExpansion(value: string): boolean {
+    if (isSubshell(value) || isProcessSubstitution(value)) {
+        return false;
+    }
+    return hasDynamicShellExpansion(value);
 }
 
 /**
@@ -806,6 +879,14 @@ function extractCommandPaths(
     };
 
     const inspectValue = (value: string, pathContext: boolean): boolean => {
+        if (
+            (activeSpec.additionalRootOnly && hasDynamicShellExpansion(value))
+            || (pathContext && hasUnmodeledPathExpansion(value))
+        ) {
+            addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+            return false;
+        }
+
         const substitution = inspectShellSubstitution(
             value,
             cwd,
@@ -826,41 +907,45 @@ function extractCommandPaths(
     for (let i = 1; i < args.length; i++) {
         const arg = args[i];
 
+        // Shell redirections and substitutions retain their meaning after a
+        // command's `--`; only command flag parsing stops there.
+        if (isHeredocOperator(arg)) {
+            // parseBash does not retain heredoc body expansion metadata.
+            // Falling back prevents hidden substitutions from executing
+            // under an otherwise safe outer command.
+            addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+            return null;
+        }
+
+        if (REDIRECTION_OPERATORS.has(arg)) {
+            const target = args[++i];
+            if (target === undefined) {
+                return null;
+            }
+
+            if (!inspectValue(target, true)) {
+                return null;
+            }
+            // File-descriptor duplication (for example 2>&1) is not
+            // a filesystem write. All other non-special redirection
+            // targets can create or overwrite a file.
+            if (!isProcessSubstitution(target) && arg !== "<" &&
+                !target.startsWith("&") && !SPECIAL_ALLOWED_PATHS.has(target)) {
+                writes = true;
+            }
+            continue;
+        }
+
+        if (isProcessSubstitution(arg)) {
+            if (!inspectValue(arg, false)) {
+                return null;
+            }
+            continue;
+        }
+
         if (!afterDoubleDash) {
             if (arg === "--") {
                 afterDoubleDash = true;
-                continue;
-            }
-
-            if (isHeredocOperator(arg)) {
-                // skip the delimiter
-                i++;
-                continue;
-            }
-
-            if (REDIRECTION_OPERATORS.has(arg)) {
-                const target = args[++i];
-                if (target === undefined) {
-                    return null;
-                }
-
-                if (!inspectValue(target, true)) {
-                    return null;
-                }
-                // File-descriptor duplication (for example 2>&1) is not
-                // a filesystem write. All other non-special redirection
-                // targets can create or overwrite a file.
-                if (!isProcessSubstitution(target) && arg !== "<" &&
-                    !target.startsWith("&") && !SPECIAL_ALLOWED_PATHS.has(target)) {
-                    writes = true;
-                }
-                continue;
-            }
-
-            if (isProcessSubstitution(arg)) {
-                if (!inspectValue(arg, false)) {
-                    return null;
-                }
                 continue;
             }
 
@@ -870,6 +955,10 @@ function extractCommandPaths(
                 const inline = eq === -1 ? undefined : arg.slice(eq + 1);
                 const flagSpec = activeSpec.flags?.[name];
 
+                if (!flagSpec && activeSpec.rejectUnknownFlags) {
+                    addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_FLAG);
+                    return null;
+                }
                 if (flagSpec?.unsafe) {
                     addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_FLAG);
                     return null;
@@ -1423,8 +1512,9 @@ function buildConfinementOptions(
     cwd: string,
     additionalRoots: readonly string[] = [],
 ): ConfinementOptions {
+    const resolveSymlinks = confinement?.resolveSymlinks ?? true;
     let realCwd: string | null = null;
-    if (confinement?.resolveSymlinks ?? true) {
+    if (resolveSymlinks) {
         try {
             realCwd = fs.realpathSync(cwd);
         } catch {
@@ -1432,26 +1522,35 @@ function buildConfinementOptions(
         }
     }
 
+    const home = os.homedir();
     const resolvedAdditionalRoots = additionalRoots
-        .map((root) => path.resolve(root))
-        .filter((root, index, roots) => roots.indexOf(root) === index);
-    const realAdditionalRoots = (confinement?.resolveSymlinks ?? true)
-        ? resolvedAdditionalRoots.flatMap((root) => {
-            try {
-                return [fs.realpathSync(root)];
-            } catch {
+        .flatMap((root) => {
+            const absolute = makeAbsolutePath(root, cwd, home);
+            if (hasDotPathComponent(absolute)) {
                 return [];
             }
+            return [path.resolve(absolute)];
         })
-        : [];
+        .filter((root, index, roots) => roots.indexOf(root) === index);
+    const pairedAdditionalRoots = resolvedAdditionalRoots.map((lexical): AdditionalRoot => {
+        if (!resolveSymlinks) {
+            return { lexical, real: null };
+        }
+
+        try {
+            return { lexical, real: fs.realpathSync(lexical) };
+        } catch {
+            return { lexical, real: null };
+        }
+    });
 
     return {
         allowedCommands: confinement?.commands ? new Set(confinement.commands) : null,
         sensitivePatterns: (confinement?.denyPaths ?? []).map(segmentGlobToRegex),
         blockDotfiles: confinement?.blockDotfiles ?? false,
+        resolveSymlinks,
         realCwd,
-        additionalRoots: resolvedAdditionalRoots,
-        realAdditionalRoots,
+        additionalRoots: pairedAdditionalRoots,
     };
 }
 
