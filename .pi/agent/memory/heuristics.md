@@ -26,7 +26,7 @@ Important exclusions include unsafe `git diff` modes, `cat-file` (output-channel
 
 - Path arguments are checked lexically and, when enabled, through canonical realpaths.
 - Outside paths containing symlink components are classified as `SYMLINK_ESCAPE` before file-access approval, so child hooks cannot turn a one-shot outside approval into a symlink escape. `resolveSymlinks: false` retains the lexical outside-path behavior.
-- Nonexistent write targets use their nearest existing ancestor; dangling symlinks are rejected.
+- Nonexistent write targets use their nearest existing ancestor; dangling symlinks are rejected. Scratchpad-only mutators (`rm`, `mkdir`, `rmdir`, `touch`, `truncate`, and `tee`) are eligible for `SAFE_EDIT` only when every affected path remains in an additional root; more complex mutators remain unresolved.
 - Symlink-following traversal flags are unsafe; symlinks inside a directory argument are not recursively walked.
 - Sensitive path segments include `.env*`, `.git`, credential directories/files, private-key extensions, `*.tfvars`, and `credentials`; `denyPaths` extends the list and `blockDotfiles` enables paranoid mode. Direct read/write paths use the same sensitive and symlink checks; explicit session folder approvals remain scoped to the selected operation and are restored from `pi-file-sandbox:allowed-file-folder` custom session entries.
 - Subshells, process substitutions, and redirection targets recurse through confinement checks. Process-substitution capability propagates nested `SAFE_EDIT`; command substitutions in data slots may recurse safely, while path-slot command substitutions require a statically modeled `pwd`/single-literal `echo`/`printf` output whose produced path still passes confinement.

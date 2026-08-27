@@ -211,7 +211,10 @@ The Bash hook should obtain the scratchpad path for the current runtime,
 provide it to permission resolution, and pass it as an explicit bind path when
 constructing sandboxed commands. The command heuristic must classify a command
 that only reads or writes within the scratchpad according to its existing
-read/write classification.
+read/write classification. A conservative set of filesystem mutators (`rm`,
+`mkdir`, `rmdir`, `touch`, `truncate`, and `tee`) may be auto-allowed only when
+every affected path is inside the scratchpad; more complex mutators remain
+gated.
 
 A future strict-scratchpad sandbox mode may mount only the scratchpad and allow
 more unknown local commands, with network-capable commands separately denied.
@@ -280,6 +283,8 @@ Add focused tests for:
 - paths outside the cwd and scratchpad retaining existing prompt/block behavior;
 - relative paths after `cd` into the scratchpad;
 - redirects, command substitutions, and shell chains crossing root boundaries;
+- scratchpad-local mutators such as `rm` being auto-allowed while the same
+  commands against the project cwd remain gated;
 - symlink and dangling-symlink escapes from the scratchpad;
 - sandboxed Bash including the scratchpad bind mount;
 - read-only children being unable to mutate through scratchpad access alone;

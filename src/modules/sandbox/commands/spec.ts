@@ -40,6 +40,10 @@ export interface FlagSpec {
  * positional modes (e.g. grep's pattern argument).
  */
 export interface CommandSpec {
+    /** Whether the command mutates files at its positional/path arguments. */
+    writes?: boolean;
+    /** Whether this mutator may only be auto-allowed inside additional roots. */
+    additionalRootOnly?: boolean;
     /**
      * How to treat positional (non-flag) arguments:
      * - "paths" (default): every positional is a file path

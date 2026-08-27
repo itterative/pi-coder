@@ -84,6 +84,34 @@ describe("heuristic assessments", () => {
         }
     });
 
+    it("allows conservative filesystem mutators only inside an additional root", () => {
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-mutator-root-"));
+        try {
+            for (const command of [
+                `rm -rf ${path.join(scratchpad, "old.txt")}`,
+                `mkdir -p ${path.join(scratchpad, "nested")}`,
+                `rmdir ${path.join(scratchpad, "empty")}`,
+                `touch ${path.join(scratchpad, "notes.txt")}`,
+                `truncate -s 0 ${path.join(scratchpad, "notes.txt")}`,
+                `tee ${path.join(scratchpad, "notes.txt")}`,
+            ]) {
+                expect(getCwdConfinementPermission(command, CWD, {}, [scratchpad]))
+                    .toBe(Heuristic.SAFE_EDIT);
+            }
+
+            expect(getCwdConfinementPermission("rm -rf file.txt", CWD, {}))
+                .toBe(Heuristic.UNSAFE);
+            expect(getCwdConfinementPermission(
+                `rm -rf ${path.join(CWD, "file.txt")}`,
+                CWD,
+                {},
+                [scratchpad],
+            )).toBe(Heuristic.UNSAFE);
+        } finally {
+            fs.rmSync(scratchpad, { recursive: true, force: true });
+        }
+    });
+
     it("reports no reasons for safe classifications", () => {
         expect(getCwdConfinementAssessment("cat file.txt", CWD, {})).toEqual({
             classification: Heuristic.SAFE_READONLY,

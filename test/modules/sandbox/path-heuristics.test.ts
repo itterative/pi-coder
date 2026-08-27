@@ -80,12 +80,22 @@ describe("file path confinement", () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-cwd-"));
         const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-scratchpad-"));
         const secret = path.join(cwd, ".env");
+        const ordinary = path.join(cwd, "ordinary.txt");
         temporaryDirectories.push(cwd, scratchpad);
         fs.writeFileSync(secret, "secret");
-        fs.symlinkSync(secret, path.join(scratchpad, "link"));
+        fs.writeFileSync(ordinary, "ordinary");
+        fs.symlinkSync(secret, path.join(scratchpad, "secret-link"));
+        fs.symlinkSync(ordinary, path.join(scratchpad, "ordinary-link"));
 
         expect(getPathConfinementPermission(
-            path.join(scratchpad, "link"),
+            path.join(scratchpad, "secret-link"),
+            cwd,
+            {},
+            "read",
+            [scratchpad],
+        )).toBe(Heuristic.UNSAFE);
+        expect(getPathConfinementPermission(
+            path.join(scratchpad, "ordinary-link"),
             cwd,
             {},
             "read",

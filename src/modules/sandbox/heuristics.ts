@@ -334,6 +334,30 @@ function isAllowedPath(
             isLexicallyWithin(p, additionalRoot, cwd, home));
 }
 
+function isPathWithinAdditionalRoot(
+    p: string,
+    cwd: string,
+    home: string,
+    options: ConfinementOptions,
+): boolean {
+    if (!options.additionalRoots.some((root) =>
+        isLexicallyWithin(p, root, cwd, home))) {
+        return false;
+    }
+
+    if (options.realAdditionalRoots.length === 0) {
+        return true;
+    }
+
+    const realPath = canonicalizePath(resolvePath(p, cwd, home));
+    if (realPath === null) {
+        return false;
+    }
+
+    return options.realAdditionalRoots.some((root) =>
+        realPath === root || realPath.startsWith(root + path.sep));
+}
+
 /**
  * Canonicalize a path while allowing nonexistent trailing components. This is
  * used for write targets as well as existing read targets. An existing
@@ -418,10 +442,10 @@ function hasSymlinkComponent(p: string): boolean {
 }
 
 /**
- * Check that a path stays within the canonical working directory after
- * resolving symlinks. The kernel resolves full symlink chains (including
- * intermediate directory components and loops), so a single realpath call
- * catches e.g. `link1 -> link2 -> /etc/passwd`.
+ * Check that a path stays within the canonical root that lexically authorized
+ * it after resolving symlinks. The kernel resolves full symlink chains
+ * (including intermediate directory components and loops), so a single
+ * realpath call catches e.g. `link1 -> link2 -> /etc/passwd`.
  *
  * Non-existent trailing components (e.g. write targets) are handled by
  * canonicalizing the nearest existing ancestor — anything below it does not
@@ -439,10 +463,18 @@ function isRealPathConfined(
         return true;
     }
 
-    const realRoots = [
-        ...(options.realCwd ? [options.realCwd] : []),
-        ...options.realAdditionalRoots,
-    ];
+    // A path that is lexically inside an additional root must remain inside
+    // that same root after symlink resolution. Do not let one managed root
+    // authorize a symlink into another root.
+    const inAdditionalRoot = options.additionalRoots.some((root) =>
+        isLexicallyWithin(p, root, cwd, home));
+    const inCwd = isLexicallyWithin(p, cwd, cwd, home);
+    let realRoots: string[] = [];
+    if (inAdditionalRoot) {
+        realRoots = options.realAdditionalRoots;
+    } else if (inCwd && options.realCwd) {
+        realRoots = [options.realCwd];
+    }
     if (realRoots.length === 0) {
         return true;
     }
@@ -748,7 +780,7 @@ function extractCommandPaths(
 ): ExtractedCommandAccess | null {
     const paths: string[] = [];
     const tags = new Set<CommandTag>(spec.tags);
-    let writes = false;
+    let writes = spec.writes === true;
     let afterDoubleDash = false;
     let positionalSeen = false;
 
@@ -1301,6 +1333,16 @@ function isCommandConfined(
     });
 
     if (!confined) return undefined;
+
+    if (spec.additionalRootOnly && (
+        options.additionalRoots.length === 0
+        || allPaths.length === 0
+        || !allPaths.every((p) => isPathWithinAdditionalRoot(p, cwd, home, options))
+    )) {
+        addUnsafeReason(diagnostics, UnsafeReason.OUTSIDE_CWD);
+        return undefined;
+    }
+
     addCommandTags(diagnostics, access.tags);
     return access.writes ? Heuristic.SAFE_EDIT : Heuristic.SAFE_READONLY;
 }

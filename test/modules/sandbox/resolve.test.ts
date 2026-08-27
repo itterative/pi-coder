@@ -48,6 +48,19 @@ describe("resolvePermissionDetails: unresolved segments", () => {
                 additionalRoots: [scratchpad],
             },
         )).toBe("allow:sandbox");
+        expect(resolvePermission(
+            `rm -rf ${path.join(scratchpad, "notes.txt")}`,
+            CWD,
+            {
+                permissions: {},
+                cwdConfinement: {},
+                additionalRoots: [scratchpad],
+            },
+        )).toBe("allow:sandbox");
+        expect(resolvePermission("rm -rf file.txt", CWD, {
+            permissions: {},
+            cwdConfinement: {},
+        })).toBe("ask");
     });
 
     const check = (
