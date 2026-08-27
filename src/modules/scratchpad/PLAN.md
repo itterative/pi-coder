@@ -221,6 +221,56 @@ more unknown local commands, with network-capable commands separately denied.
 That is explicitly out of scope for this plan; the existing curated command
 heuristic and permission policy remain authoritative.
 
+### Scratchpad mutator hardening proposal
+
+The initial mutator relaxation must remain conservative because the current
+bubblewrap profile mounts both `/tmp` and the project cwd read-write. Bubblewrap
+therefore provides defense in depth, but cannot by itself distinguish the
+scratchpad from every other writable path. Permission classification must be
+correct even when sandboxing is unavailable or disabled.
+
+Keep read-only confinement separate from scratchpad mutation classification.
+Commands marked `additionalRootOnly` may be classified as `SAFE_EDIT` only when
+all of these conditions hold:
+
+- every affected operand is a literal path; reject or conservatively fall back
+  to the permission gate for parameter and command substitutions, brace
+  expansion, globs, tilde expansion, and process substitutions;
+- heredoc bodies are rejected for auto-approved mutators unless the parser
+  preserves a quoted delimiter and validates that no expansion can occur;
+- lexical containment is checked against the scratchpad, then canonical
+  containment is checked against that same scratchpad root, without normalizing
+  away symlink components before inspection;
+- multiple lexical and canonical additional roots are paired, so a path under
+  root A cannot resolve through a symlink into root B;
+- flags and value-taking options are explicitly modeled. Reference options such
+  as `touch -r` and `truncate -r` must be path-checked or rejected, and unknown
+  options that may consume values must not be silently treated as booleans;
+- explicit permission denies and the existing sensitive/symlink policies remain
+  authoritative.
+
+The safest implementation strategy is to reject syntax that cannot be modeled
+rather than emulate Bash expansion. Do not attempt to enumerate globs or
+reconstruct shell variables: expansion semantics and time-of-check/time-of-use
+races make that unreliable. Add negative tests before broadening the set of
+scratchpad-only mutators, including:
+
+```bash
+touch scratch/{ok,../outside/owned}
+touch scratch/$TARGET
+tee scratch/output <<EOF
+$(touch /tmp/outside/owned)
+EOF
+touch scratch/link/../outside
+touch -r/etc/passwd scratch/out
+```
+
+The conservative first set may include `rm`, `mkdir`, `rmdir`, `touch`,
+`truncate`, and `tee` once these checks are enforced. Keep `cp`, `mv`,
+`find -delete`, `sed -i`, archive extraction, `ln`, `install`, and similar
+complex mutators behind the normal permission gate until they have dedicated
+argument and side-effect models.
+
 ## No explicit sharing in v1
 
 Do not add `scratchpadId`, scratchpad arguments to `agent`, sharing tools, or
