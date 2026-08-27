@@ -46,6 +46,8 @@ export interface PagerOptions<T> {
     helpText?: string;
     // Optional fixed total frame height, evaluated on each render
     fixedHeight?: () => number;
+    // Called after the visual-line cache is rebuilt.
+    onCacheBuilt?: (totalLines: number) => void;
     // Remove the blank rows around the help footer
     compactFooter?: boolean;
     // Hook to intercept keys. Return true to indicate key was handled, or { done: true } to close the pager.
@@ -86,6 +88,7 @@ export class PagerComponent<T> extends ListViewComponent<T, void, PagerState<T>>
                 paddingX: options.paddingX,
                 paddingY: options.paddingY,
                 fixedHeight: options.fixedHeight,
+                onCacheBuilt: options.onCacheBuilt,
                 compactFooter: options.compactFooter,
             },
             {

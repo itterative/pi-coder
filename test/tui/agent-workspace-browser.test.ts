@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
     AgentWorkspaceBrowserComponent,
     AgentWorkspaceDetailComponent,
-} from "../../src/tui/agent-workspace-browser";
+} from "../../src/tui/agents";
 import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
 import { workspaceBrowserItem } from "../../src/tools/agent/presentation/browser-models";
 import { KEY, interact, mockTheme, renderText } from "../helpers";

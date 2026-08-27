@@ -8,7 +8,7 @@ import {
     type AgentRunIdentity,
     type AgentRunOutcome,
 } from "./runs/manager";
-import { diagnosticText } from "./presentation/widget";
+import { diagnosticText } from "./presentation/text";
 import { failedOutcome, listOutcome } from "./presentation/outcomes";
 import {
     prepareIsolatedWorkspace,

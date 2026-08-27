@@ -88,6 +88,10 @@ export interface ListViewOptions<T, S extends ListViewState<T> = ListViewState<T
     itemSpacing?: number;
     // Custom render function for item content (prefix is added automatically)
     renderItem?: (item: ListItem<T>, options: ListViewRenderItemOptions<T, S>) => string;
+    // Optional prefix override for composed list views.
+    itemPrefix?: (index: number, isCursor: boolean, theme: Theme) => ItemPrefix;
+    // Called after the visual-line cache is rebuilt.
+    onCacheBuilt?: (totalLines: number) => void;
     // Optional header content rendered after title
     headerContent?: (container: Container, theme: Theme) => void;
     // Optional footer content rendered before help text
@@ -160,10 +164,21 @@ export class ListViewComponent<
     }
 
     /** Update the framed title after initialization. */
-    protected setTitle(title: string): void {
+    public updateTitle(title: string): void {
         if (!this.theme || !this.titleText) return;
         this.titleText.setText(this.theme.fg("accent", this.theme.bold(`  ${title}`)));
         this.invalidate();
+    }
+
+    /** Update the help footer after initialization. */
+    public updateHelpText(helpText: string): void {
+        this.listOptions.helpText = helpText;
+        this.invalidate();
+    }
+
+    /** Backward-compatible protected alias for existing subclasses. */
+    protected setTitle(title: string): void {
+        this.updateTitle(title);
     }
 
     /**
@@ -348,7 +363,8 @@ export class ListViewComponent<
             const renderItem = this.listOptions.renderItem ?? defaultRenderItem;
             const content = renderItem(item, renderOptions);
 
-            const prefix = this.getItemPrefix(i, isCursor);
+            const prefix = this.listOptions.itemPrefix?.(i, isCursor, this.theme)
+                ?? this.getItemPrefix(i, isCursor);
             const indented = indentLines(content, {
                 firstLinePrefix: prefix.first,
                 continuationPrefix: prefix.continuation,
@@ -369,6 +385,7 @@ export class ListViewComponent<
         }
 
         this.cachedTotalLines = totalLines;
+        this.listOptions.onCacheBuilt?.(totalLines);
         this.onCacheBuilt(totalLines);
         this.updateScrollOffset();
     }

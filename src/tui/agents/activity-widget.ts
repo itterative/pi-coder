@@ -1,12 +1,11 @@
 import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-
-import { Spinner } from "../../../tui/spinner";
-import type { AgentRunDetails, AgentRunSummary } from "../contracts/runs";
+import { Spinner } from "../spinner";
+import type { AgentRunDetails, AgentRunSummary } from "../../tools/agent/contracts/runs";
+export { diagnosticText } from "../../tools/agent/presentation/text";
 
 export const AGENT_WIDGET_ID = "pi-coder-agent-activity";
-
 const MAX_PREVIEW_CHARS = 72;
 const MAX_ACTIVITY_CHARS = 100;
 
@@ -20,11 +19,6 @@ const widgetStates = new WeakMap<object, AgentWidgetState>();
 
 function widgetOwner(ctx: ExtensionContext, events?: EventBus): object {
     return (events ?? ctx.ui) as object;
-}
-
-export function diagnosticText(diagnostic: { message: string; paths: string[] }): string {
-    const paths = diagnostic.paths.length ? ` [${diagnostic.paths.join(", ")}]` : "";
-    return `${diagnostic.message}${paths}`;
 }
 
 export function oneLinePreview(text: string, maxChars = 180): string {
@@ -57,14 +51,11 @@ const TOOL_GROUPS: Array<{ names: string[]; singular: string; plural: string }> 
 
 export function formatToolCounts(toolCounts: Record<string, number> | undefined): string {
     if (!toolCounts) return "";
-
     const parts: string[] = [];
     for (const group of TOOL_GROUPS) {
         const count = group.names.reduce((total, name) => total + (toolCounts[name] ?? 0), 0);
-        if (!count) continue;
-        parts.push(`${count} ${count === 1 ? group.singular : group.plural}`);
+        if (count) parts.push(`${count} ${count === 1 ? group.singular : group.plural}`);
     }
-
     return parts.join(" · ");
 }
 
@@ -82,62 +73,38 @@ function renderRunningRun(run: AgentRunSummary, spinnerFrame: string): string[] 
         ? firstLinePreview(run.responsePreview, MAX_PREVIEW_CHARS)
         : run.phase ?? "Thinking";
     const firstLine = `${spinnerFrame} ${label} · ${formatElapsed(run.startedAt)} · ${status}`;
-    const action = run.activity && run.activity !== "Thinking"
-        ? run.activity
-        : run.lastToolActivity;
-    const details = [
-        formatToolCounts(run.toolCounts),
-        action ? oneLinePreview(action, MAX_ACTIVITY_CHARS) : "",
-    ].filter(Boolean).join(" · ");
-
+    const action = run.activity && run.activity !== "Thinking" ? run.activity : run.lastToolActivity;
+    const details = [formatToolCounts(run.toolCounts), action ? oneLinePreview(action, MAX_ACTIVITY_CHARS) : ""]
+        .filter(Boolean)
+        .join(" · ");
     return details ? [firstLine, `  ${details}`] : [firstLine];
 }
 
 function renderRun(run: AgentRunSummary, spinnerFrame: string): string[] {
     const label = run.agent === "workspace-setup" ? run.title : run.runId;
     if (run.status === "running") return renderRunningRun(run, spinnerFrame);
-    if (run.status === "starting") {
-        return [`● ${label} · ${formatElapsed(run.startedAt)} · Starting: ${oneLinePreview(run.task, 90)}`];
-    }
-
-    const response = run.responsePreview
-        ? ` · “${firstLinePreview(run.responsePreview, MAX_PREVIEW_CHARS)}”`
-        : "";
-    if (run.status === "waiting_for_permission") {
-        return [`? ${label} — ${run.activity ?? "Waiting for mutation permission"}${response}`];
-    }
-    if (run.status === "waiting_for_parent") {
-        return [`? ${label} — Waiting: ${oneLinePreview(run.question ?? "parent guidance", MAX_ACTIVITY_CHARS)}${response}`];
-    }
-    if (run.status === "interrupted") {
-        return [`! ${label} — Interrupted; resume with explicit guidance${response}`];
-    }
-    if (run.status === "completed") {
-        return [run.agent === "workspace-setup"
-            ? `✓ ${label} — Setup complete${response}`
-            : `✓ ${label} — Ready to collect${response}`];
-    }
-    if (run.status === "failed") {
-        return [run.agent === "workspace-setup"
-            ? `! ${label} — Setup failed${response}`
-            : `! ${label} — Failed; result ready to collect${response}`];
-    }
+    if (run.status === "starting") return [`● ${label} · ${formatElapsed(run.startedAt)} · Starting: ${oneLinePreview(run.task, 90)}`];
+    const response = run.responsePreview ? ` · “${firstLinePreview(run.responsePreview, MAX_PREVIEW_CHARS)}”` : "";
+    if (run.status === "waiting_for_permission") return [`? ${label} — ${run.activity ?? "Waiting for mutation permission"}${response}`];
+    if (run.status === "waiting_for_parent") return [`? ${label} — Waiting: ${oneLinePreview(run.question ?? "parent guidance", MAX_ACTIVITY_CHARS)}${response}`];
+    if (run.status === "interrupted") return [`! ${label} — Interrupted; resume with explicit guidance${response}`];
+    if (run.status === "completed") return [run.agent === "workspace-setup" ? `✓ ${label} — Setup complete${response}` : `✓ ${label} — Ready to collect${response}`];
+    if (run.status === "failed") return [run.agent === "workspace-setup" ? `! ${label} — Setup failed${response}` : `! ${label} — Failed; result ready to collect${response}`];
     return [`× ${label} — ${run.status}`];
 }
 
+/** Activity widget composed with the reusable spinner. */
 export class AgentActivityWidget implements Component {
-    private readonly tui: TUI;
     private readonly spinner: Spinner;
     private runs: AgentRunSummary[];
     private hiddenCount: number;
 
     constructor(
-        tui: TUI,
+        private readonly tui: TUI,
         runs: AgentRunSummary[] = [],
         hiddenCount = 0,
         events?: EventBus,
     ) {
-        this.tui = tui;
         this.spinner = new Spinner(tui, { events });
         this.runs = runs;
         this.hiddenCount = hiddenCount;
@@ -153,13 +120,8 @@ export class AgentActivityWidget implements Component {
 
     render(width: number): string[] {
         const lines = this.runs.flatMap((run) => renderRun(run, this.spinner.getFrame()));
-        if (this.hiddenCount > 0) {
-            lines.push(`… ${this.hiddenCount} older result(s) hidden`);
-        }
-        if (width <= 2) {
-            return lines.map((line) => truncateToWidth(line, Math.max(1, width)));
-        }
-
+        if (this.hiddenCount > 0) lines.push(`… ${this.hiddenCount} older result(s) hidden`);
+        if (width <= 2) return lines.map((line) => truncateToWidth(line, Math.max(1, width)));
         const contentWidth = width - 2;
         return lines.map((line) => ` ${truncateToWidth(line, contentWidth)} `);
     }
@@ -201,18 +163,13 @@ export function updateAgentUi(
         clearAgentUi(ctx, events);
         return;
     }
-
     if (state) {
         state.runs = visible.runs;
         state.hiddenCount = visible.hiddenCount;
         state.component?.setRuns(visible.runs, visible.hiddenCount);
         return;
     }
-
-    const nextState: AgentWidgetState = {
-        runs: visible.runs,
-        hiddenCount: visible.hiddenCount,
-    };
+    const nextState: AgentWidgetState = { runs: visible.runs, hiddenCount: visible.hiddenCount };
     widgetStates.set(owner, nextState);
     ctx.ui.setWidget(
         AGENT_WIDGET_ID,

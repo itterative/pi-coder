@@ -7,7 +7,7 @@ import type { AgentEventSink } from "../contracts/events";
 import type { AgentRunDetails, AgentRunOutcome } from "../contracts/runs";
 import { AgentActionError, AgentRunManager } from "../runs/manager";
 import { ZERO_USAGE } from "../runs/usage";
-import { diagnosticText } from "../presentation/widget";
+import { diagnosticText } from "../presentation/text";
 import { prepareForegroundWorkspaceResult } from "./finalization";
 import type { AgentWorkspace, AgentWorkspaceResult } from "../contracts/workspaces";
 import { listAgentRunCatalog } from "../storage/run-catalog";

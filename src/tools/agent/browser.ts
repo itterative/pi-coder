@@ -24,7 +24,7 @@ import {
     type AgentModelOption,
     type AgentSessionBrowserData,
     type AgentSetting,
-} from "../../tui/agent-session-browser";
+} from "../../tui/agents";
 import type { AgentLifecycle } from "./lifecycle";
 import { prepareForegroundWorkspaceResult } from "./workspaces/finalization";
 import { inspectAgentWorkspaceResult, reconcileNoChangeAgentWorkspaceLeases } from "./workspaces/results";

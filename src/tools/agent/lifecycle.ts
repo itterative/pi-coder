@@ -28,9 +28,9 @@ import type { WorkspaceSetupUiUpdate } from "./workspaces/setup";
 import {
     clearAgentUi,
     clearCompletedWorkspaceSetupRun,
-    diagnosticText,
     updateAgentUi,
-} from "./presentation/widget";
+} from "../../tui/agents";
+import { diagnosticText } from "./presentation/text";
 
 export type WorkspaceEventAction = "created" | "updated" | "lease_changed" | "result_changed" | "removed";
 

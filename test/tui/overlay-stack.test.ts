@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TuiMainScreen } from "@earendil-works/pi-tui";
 import type { Component, OverlayHandle, Terminal, TUI } from "@earendil-works/pi-tui";
-import { AgentWorkspaceDetailComponent } from "../../src/tui/agent-workspace-browser";
+import { AgentWorkspaceDetailComponent } from "../../src/tui/agents";
 import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
 import { workspaceBrowserItem } from "../../src/tools/agent/presentation/browser-models";
 import { withOverlayStack } from "../../src/tui/overlay-stack";

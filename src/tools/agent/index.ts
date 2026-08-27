@@ -13,7 +13,7 @@ import {
 } from "./observability/trace";
 import { registerAgentTool as registerAgentToolDefinition } from "./presentation/tool";
 
-export { clearCompletedWorkspaceSetupRun } from "./presentation/widget";
+export { clearCompletedWorkspaceSetupRun } from "../../tui/agents";
 
 export default function registerAgentTool(
     pi: ExtensionAPI,

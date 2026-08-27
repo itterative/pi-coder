@@ -4,7 +4,7 @@ import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/observability/events";
 import {
     AgentSessionBrowserComponent,
-} from "../../src/tui/agent-session-browser";
+} from "../../src/tui/agents";
 import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
 import { workspaceBrowserItem } from "../../src/tools/agent/presentation/browser-models";
 import { KEY, interact, mockTheme, press, renderText, snapshotText } from "../helpers";
@@ -746,6 +746,27 @@ describe("AgentSessionBrowserComponent", () => {
         expect(ui.render()).not.toContain("Run ID: scout-1");
         ui.press(KEY.escape);
         expect(closed).toBe(true);
+    });
+
+    it("does not open an empty model selector", async () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            settings: [{
+                id: "scout",
+                label: "Scout model",
+                description: "Model used by scout",
+            }],
+            models: [],
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab, KEY.enter);
+
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.empty-model-selector.txt",
+        );
     });
 
     it("shows built-in model settings and edits a model in a nested selector", async () => {
