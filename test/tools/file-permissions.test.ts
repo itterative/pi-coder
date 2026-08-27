@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { ALLOWED_FILE_ENTRY_TYPE } from "../../src/common/audit";
+import registerScratchpadExtension, { getScratchpadPath } from "../../src/modules/scratchpad";
 import registerFileToolHook from "../../src/tools/file-permissions";
 import { createPermissionState } from "../../src/modules/sandbox/permission-state";
 
@@ -13,6 +14,34 @@ interface Handler {
 
 describe("file permission session entries", () => {
     let temporaryDirectories: string[] = [];
+
+    it.each(["read", "write"] as const)("allows scratchpad %s access without prompting", async (operation) => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-scratchpad-cwd-"));
+        temporaryDirectories.push(cwd);
+
+        const handlers: Record<string, Handler[]> = {};
+        const pi = {
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            appendEntry() {},
+        } as any;
+        registerScratchpadExtension(pi);
+        registerFileToolHook(pi, operation);
+
+        const sessionManager = {};
+        const ctx = { cwd, hasUI: false, sessionManager };
+        await handlers.session_start[0]({}, ctx);
+        const scratchpad = getScratchpadPath(sessionManager)!;
+        temporaryDirectories.push(scratchpad);
+
+        const result = await handlers.tool_call[0]({
+            toolName: operation,
+            input: { path: path.join(scratchpad, ".env") },
+        }, ctx);
+
+        expect(result).toEqual({ block: false });
+    });
 
     afterEach(() => {
         for (const directory of temporaryDirectories) {

@@ -124,9 +124,11 @@ to:
 cwd root + zero or more explicitly registered additional roots
 ```
 
-The normal sensitive-path policy should remain the default for both roots. If
-we later decide that a private temporary pad should allow names such as
-`.env`, that should be an explicit policy option—not an accidental bypass.
+The managed scratchpad root may contain any filenames, including names such
+as `.env`, without prompting. Canonical/symlink containment remains mandatory:
+a scratchpad symlink into a sensitive project path must still be rejected. The
+normal sensitive-path policy remains authoritative for the project cwd and for
+canonical targets outside the scratchpad.
 
 ### Parent tools
 
@@ -251,14 +253,14 @@ parent-owned attachment with read/write access modes and run-lifetime leases.
 - Register the same scratchpad factory in capable child resource loaders.
 - Update prompt/catalog expectations and focused capability tests.
 
-### Phase 3: multi-root confinement
+### Phase 3: multi-root confinement — implemented
 
 - Generalize path and command confinement to additional roots.
 - Integrate parent file and Bash hooks.
 - Integrate child read/write/command hooks.
 - Add explicit scratchpad bind handling to bubblewrap.
 
-### Phase 4: lifecycle hardening and documentation
+### Phase 4: lifecycle hardening and documentation — in progress
 
 - Verify runtime registry teardown during parent shutdown, child abort, and
   child disposal without deleting scratchpad directories.

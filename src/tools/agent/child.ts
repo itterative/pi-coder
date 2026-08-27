@@ -167,6 +167,7 @@ export async function createAgentChild(
                     allowUserInteraction,
                     context.isolated === true || context.workspaceId !== undefined,
                     canRunCommands,
+                    hasScratchpad,
                 ),
             ),
         ],

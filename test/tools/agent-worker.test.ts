@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import registerScratchpadExtension, { getScratchpadPath } from "../../src/modules/scratchpad";
 import registerFileToolHook from "../../src/tools/file-permissions";
 import { registerCommandPermissionHooks } from "../../src/tools/agent/child/command-permissions";
 import { createPermissionState } from "../../src/modules/sandbox/permission-state";
@@ -38,9 +39,11 @@ describe("command and edit permission gate", () => {
         const dialogs: any[] = [];
         const changedFiles: string[] = [];
         const pending: boolean[] = [];
+        const sessionManager = {};
         const parentContext = {
             cwd,
             hasUI: true,
+            sessionManager,
             mode: "tui",
             ui: {
                 theme: mockTheme,
@@ -86,11 +89,12 @@ describe("command and edit permission gate", () => {
             bashApproved() {},
         });
         return {
+            pi,
             handlers,
             dialogs,
             changedFiles,
             pending,
-            ctx: { cwd, signal: undefined },
+            ctx: { cwd, signal: undefined, sessionManager },
         };
     }
 
@@ -172,6 +176,20 @@ describe("command and edit permission gate", () => {
         await waitForPermissionInput();
         runtime.dialogs[0].handleInput(KEY.enter);
         await expect(permission).resolves.toEqual({ block: false });
+    });
+
+    it("allows isolated worker writes inside its scratchpad without prompting", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
+        tempDirs.push(cwd);
+        const runtime = setup(cwd);
+        registerScratchpadExtension(runtime.pi);
+        await runtime.handlers.session_start[0]({}, runtime.ctx);
+        const scratchpad = getScratchpadPath(runtime.ctx.sessionManager)!;
+        tempDirs.push(scratchpad);
+
+        const event = writeEvent("write-scratchpad-1", path.join(scratchpad, ".env"));
+        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toEqual({ block: false });
+        expect(runtime.dialogs).toHaveLength(0);
     });
 
     it("allows same-checkout edits and writes without a second mutation prompt", async () => {

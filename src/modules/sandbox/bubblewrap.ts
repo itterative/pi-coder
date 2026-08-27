@@ -7,6 +7,8 @@ export interface SandboxOptions {
     env?: NodeJS.ProcessEnv;
     cwd?: string;
     config?: SandboxConfig;
+    /** Runtime-managed roots that should be available inside the sandbox. */
+    additionalRoots?: readonly string[];
 }
 
 function escapeArg(arg: string): string {
@@ -208,6 +210,12 @@ export default function sandbox(bwrap: string, command: string, options?: Sandbo
     const sandboxConfig = options?.config ?? config.current ?? config.default;
 
     cmd.push("--bind", escapeArg(cwd), escapeArg(cwd));
+
+    for (const root of options?.additionalRoots ?? []) {
+        const resolvedRoot = path.resolve(root);
+        if (resolvedRoot === cwd) continue;
+        cmd.push("--bind", escapeArg(resolvedRoot), escapeArg(resolvedRoot));
+    }
 
     const envCmd = buildEnvCmd(sandboxConfig, { env, cwd });
     cmd.push(...envCmd);

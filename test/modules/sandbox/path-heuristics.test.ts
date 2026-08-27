@@ -38,6 +38,22 @@ describe("file path confinement", () => {
         expect(assessment.reasons).toEqual([UnsafeReason.SENSITIVE_PATH]);
     });
 
+    it("treats an additional managed root like cwd", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-cwd-"));
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-scratchpad-"));
+        temporaryDirectories.push(cwd, scratchpad);
+
+        const filePath = path.join(scratchpad, "notes.txt");
+        expect(getPathConfinementPermission(filePath, cwd, {}, "read", [scratchpad]))
+            .toBe(Heuristic.SAFE_READONLY);
+        expect(getPathConfinementPermission(filePath, cwd, {}, "write", [scratchpad]))
+            .toBe(Heuristic.SAFE_EDIT);
+        expect(getPathConfinementPermission(path.join(scratchpad, ".env"), cwd, {}, "read", [scratchpad]))
+            .toBe(Heuristic.SAFE_READONLY);
+        expect(getPathConfinementPermission(path.join(scratchpad, "..", "outside.txt"), cwd, {}, "read", [scratchpad]))
+            .toBe(Heuristic.UNSAFE);
+    });
+
     it("honors the cwd heuristic configuration", () => {
         expect(getPathConfinementPermission("file.txt", "/project", {
             permission: "allow",
@@ -58,6 +74,23 @@ describe("file path confinement", () => {
         expect(getPathConfinementPermission("dangling", cwd, {})).toBe(Heuristic.UNSAFE);
         expect(getPathConfinementPermission("new/file.txt", cwd, {})).toBe(Heuristic.SAFE_READONLY);
         expect(getPathConfinementPermission("new/file.txt", cwd, {}, "write")).toBe(Heuristic.SAFE_EDIT);
+    });
+
+    it("does not let a scratchpad symlink expose a sensitive project path", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-cwd-"));
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-paths-scratchpad-"));
+        const secret = path.join(cwd, ".env");
+        temporaryDirectories.push(cwd, scratchpad);
+        fs.writeFileSync(secret, "secret");
+        fs.symlinkSync(secret, path.join(scratchpad, "link"));
+
+        expect(getPathConfinementPermission(
+            path.join(scratchpad, "link"),
+            cwd,
+            {},
+            "read",
+            [scratchpad],
+        )).toBe(Heuristic.UNSAFE);
     });
 
     it("keeps an approved folder scoped to that folder", () => {

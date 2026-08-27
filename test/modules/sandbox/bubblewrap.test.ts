@@ -27,6 +27,22 @@ describe("bubblewrap", () => {
         return config.load(projectDir);
     }
 
+    it("binds runtime-managed additional roots", () => {
+        const scratchpad = path.join(tempDir, "scratchpad");
+        fs.mkdirSync(scratchpad);
+
+        const result = sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            additionalRoots: [scratchpad],
+            config: {
+                sandbox: { mounts: {} },
+                permissions: {},
+            },
+        });
+
+        expect(result).toContain(`--bind '${scratchpad}' '${scratchpad}'`);
+    });
+
     describe("buildEnvCmd - default environment variables", () => {
         it("should set HOME from env.HOME when available", () => {
             const testConfig = writeProjectConfig({

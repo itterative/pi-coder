@@ -38,12 +38,17 @@ export function scratchpadPrompt(pathname: string): string {
         "",
         `\`${pathname}\``,
         "",
-        "Use it for notes, intermediate artifacts, generated reports, and other work that should not modify the project checkout.",
-        "You may use the normal read, write, edit, and bash tools with this directory.",
-        "It is an additional confined root, equivalent to the current working directory for path safety.",
-        "Scratchpad contents are temporary and are not managed or deleted by pi-coder; the operating system owns eventual cleanup of the /tmp directory.",
+        "Use it for notes, intermediate artifacts, generated reports, and other "
+            + "work that should not modify the project checkout.",
+        "You may use the normal read, write, edit, and bash tools with this "
+            + "directory.",
+        "It is an additional confined root, equivalent to the current working "
+            + "directory for path safety.",
+        "Scratchpad contents are temporary and are not managed or deleted by "
+            + "pi-coder; the operating system owns eventual cleanup of the /tmp "
+            + "directory.",
         "Do not rely on the contents surviving process termination or a later session.",
-    ].join("\\n");
+    ].join("\n");
 }
 
 function appendScratchpadPrompt(systemPrompt: string, pathname: string): string {

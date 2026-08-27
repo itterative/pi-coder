@@ -39,6 +39,13 @@ describe("delegated-agent prompt rendering", () => {
         await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.worker-isolated.system.txt");
     });
 
+    it("describes the scratchpad as an additional path root", () => {
+        const prompt = childProtocolPrompt(false, false, true, true, false, false, true);
+
+        expect(prompt).toContain("current working directory or the temporary scratchpad");
+        expect(prompt).toContain("Sensitive-path restrictions apply outside the temporary scratchpad");
+    });
+
     it("renders only policy-selected context in the task message", async () => {
         const rendered = renderAgentTask(
             "Review the proposed approach.",

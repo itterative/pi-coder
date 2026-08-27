@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import sandboxConfig, { type SandboxConfigCwdConfinement } from "../common/config";
+import { getScratchpadPath } from "../modules/scratchpad";
 import {
     createPermissionState,
     getPermissionState,
@@ -223,13 +224,21 @@ export default function registerFileToolHook(
         const cwd = ctx.cwd ?? process.cwd();
         const state = stateFor(ctx);
         const confinement = options.confinement ?? sandboxConfig.current?.heuristics?.cwdConfinement;
+        const scratchpadPath = getScratchpadPath(ctx.sessionManager);
+        const additionalRoots = scratchpadPath ? [scratchpadPath] : [];
 
-        if (isSafeHeuristic(getPathConfinementPermission(filePath, cwd, confinement, operation))) {
+        if (isSafeHeuristic(getPathConfinementPermission(filePath, cwd, confinement, operation, additionalRoots))) {
             return { block: false };
         }
 
         if (options.childAccess) {
-            const assessment = getPathConfinementAssessment(filePath, cwd, confinement, operation);
+            const assessment = getPathConfinementAssessment(
+                filePath,
+                cwd,
+                confinement,
+                operation,
+                additionalRoots,
+            );
             if (assessment.reasons.length !== 1 || assessment.reasons[0] !== UnsafeReason.OUTSIDE_CWD) {
                 return {
                     block: true,

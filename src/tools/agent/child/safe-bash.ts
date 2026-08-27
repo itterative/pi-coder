@@ -21,15 +21,23 @@ export interface SafeBashBlock {
 }
 
 /** Assess whether a delegated agent's bash command is cwd-confined and safe. */
-export function getSafeBashAssessment(command: string, cwd: string): HeuristicAssessment {
-    return getCwdConfinementAssessment(command, cwd, CHILD_CONFINEMENT);
+export function getSafeBashAssessment(
+    command: string,
+    cwd: string,
+    additionalRoots: readonly string[] = [],
+): HeuristicAssessment {
+    return getCwdConfinementAssessment(command, cwd, CHILD_CONFINEMENT, additionalRoots);
 }
 
 /** @deprecated Use getSafeBashAssessment. */
 export const getScoutBashAssessment = getSafeBashAssessment;
 
-export function isSafeBashAllowed(command: string, cwd: string): boolean {
-    return getSafeBashAssessment(command, cwd).classification === Heuristic.SAFE_READONLY;
+export function isSafeBashAllowed(
+    command: string,
+    cwd: string,
+    additionalRoots: readonly string[] = [],
+): boolean {
+    return getSafeBashAssessment(command, cwd, additionalRoots).classification === Heuristic.SAFE_READONLY;
 }
 
 /** @deprecated Use isSafeBashAllowed. */
@@ -44,6 +52,7 @@ export async function guardSafeBashCommand(
     cwd: string,
     safeBash: boolean,
     onTrace?: ChildAgentFactoryContext["onTrace"],
+    additionalRoots: readonly string[] = [],
 ): Promise<SafeBashBlock | undefined> {
     if (!safeBash) {
         return {
@@ -52,7 +61,7 @@ export async function guardSafeBashCommand(
         };
     }
 
-    const assessment = getSafeBashAssessment(command, cwd);
+    const assessment = getSafeBashAssessment(command, cwd, additionalRoots);
     if (assessment.classification !== Heuristic.SAFE_READONLY) {
         const reasons = assessment.reasons
             .map((reason) => `${describeUnsafeReason(reason)} [${reason}]`)

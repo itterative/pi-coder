@@ -6,7 +6,7 @@ category: architecture
 
 # Cwd-confinement heuristic
 
-The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`. Direct read/write path checks are also implemented in `src/modules/sandbox/heuristics.ts` and used by `src/tools/file-permissions.ts`; path checks classify read access as `SAFE_READONLY`, write access as `SAFE_EDIT`, and rejected access as `UNSAFE`.
+The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`. Direct read/write path checks are also implemented in `src/modules/sandbox/heuristics.ts` and used by `src/tools/file-permissions.ts`; path checks classify read access as `SAFE_READONLY`, write access as `SAFE_EDIT`, and rejected access as `UNSAFE`. Runtime-managed temporary scratchpads are supplied as additional cwd-confinement roots; scratchpad filenames bypass sensitive-name filtering, but canonical/symlink containment remains enforced.
 
 ## Resolution order
 

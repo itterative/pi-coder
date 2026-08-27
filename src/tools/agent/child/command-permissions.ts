@@ -13,12 +13,14 @@ import { matchesKey } from "@earendil-works/pi-tui";
 import { lookpath } from "lookpath";
 
 import sandboxConfig from "../../../common/config";
+import { getScratchpadPath } from "../../../modules/scratchpad";
 import { PERMISSION_PROMPT_CONFIRMATION_DELAY_MS } from "../../../common/constants";
 import sandbox from "../../../modules/sandbox/bubblewrap";
 import {
     getPathConfinementAssessment,
     getPathConfinementPermission,
     Heuristic,
+    isPathWithinDirectory,
     isSafeHeuristic,
     UnsafeReason,
 } from "../../../modules/sandbox/heuristics";
@@ -65,10 +67,14 @@ const COMMAND_CONFINEMENT = {
 };
 const SETUP_BASH_TIMEOUT_SECONDS = 10 * 60;
 
-function isCommandPathAllowed(filePath: string | undefined, cwd: string): boolean {
+function isCommandPathAllowed(
+    filePath: string | undefined,
+    cwd: string,
+    additionalRoots: readonly string[] = [],
+): boolean {
     const target = filePath?.trim() || cwd;
     return isSafeHeuristic(
-        getPathConfinementPermission(target, cwd, COMMAND_CONFINEMENT, "write"),
+        getPathConfinementPermission(target, cwd, COMMAND_CONFINEMENT, "write", additionalRoots),
     );
 }
 
@@ -105,6 +111,11 @@ class PermissionQueue {
         }
         return release;
     }
+}
+
+function getScratchpadRoots(ctx: ExtensionContext): readonly string[] {
+    const scratchpadPath = getScratchpadPath(ctx.sessionManager);
+    return scratchpadPath ? [scratchpadPath] : [];
 }
 
 function userNote(input: Record<string, unknown>): string | undefined {
@@ -271,11 +282,16 @@ export function registerCommandPermissionHooks(
         if (isEdit || isWrite) {
             const action = isEdit ? "edit" : "write";
             const input = event.input as EditToolInput | WriteToolInput;
-            const cwdPathAllowed = isCommandPathAllowed(input.path, ctx.cwd);
-            if (options.nonIsolated && cwdPathAllowed) {
+            const additionalRoots = getScratchpadRoots(ctx);
+            const cwdPathAllowed = isCommandPathAllowed(input.path, ctx.cwd, additionalRoots);
+            const scratchpadPathAllowed = additionalRoots.some((root) =>
+                isPathWithinDirectory(input.path, root, ctx.cwd, COMMAND_CONFINEMENT));
+            if ((options.nonIsolated && cwdPathAllowed) || scratchpadPathAllowed) {
                 // Same-checkout workers are trusted to mutate ordinary files in
-                // their cwd. Keep the confinement check here so sensitive
-                // paths and symlink escapes still cannot be auto-approved.
+                // their cwd. Scratchpad files are also trusted because they are
+                // private runtime-owned temporary data. Keep the confinement
+                // checks so sensitive project paths and symlink escapes cannot
+                // be auto-approved accidentally.
                 releases.set(event.toolCallId, release);
                 return { block: false };
             }
@@ -285,6 +301,7 @@ export function registerCommandPermissionHooks(
                     ctx.cwd,
                     COMMAND_CONFINEMENT,
                     "write",
+                    additionalRoots,
                 );
                 const outsideCwd = assessment.reasons.length === 1
                     && assessment.reasons[0] === UnsafeReason.OUTSIDE_CWD;
@@ -330,12 +347,14 @@ export function registerCommandPermissionHooks(
         }
         let permission: Permission = "ask";
         let unresolved: string[][] = [];
+        const additionalRoots = getScratchpadRoots(ctx);
         try {
             const details = resolvePermissionDetails(input.command, ctx.cwd, {
                 permissions: {
                     ...sandboxConfig.current?.permissions,
                     ...(options.nonIsolated ? permissionState.bashRules : {}),
                 },
+                additionalRoots,
             });
             permission = details.permission;
             unresolved = details.unresolved;
@@ -402,7 +421,10 @@ export function registerCommandPermissionHooks(
         options.bashApproved();
         if (sandboxedMode.value) {
             try {
-                input.command = sandbox(bwrap, input.command, { cwd: ctx.cwd });
+                input.command = sandbox(bwrap, input.command, {
+                    cwd: ctx.cwd,
+                    additionalRoots,
+                });
             } catch (error) {
                 release();
                 throw error;

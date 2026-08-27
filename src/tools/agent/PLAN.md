@@ -84,10 +84,10 @@ Isolated workers use a persistent pool of up to three Git worktrees. Setup runs 
 ## Safety contract
 
 - Delegated-agent controls reduce model-initiated accidents; they are not a hostile-environment security boundary.
-- Child paths are confined to the working directory and checked for sensitive paths and symlink escapes.
+- Child paths are confined to the working directory plus the agent's private temporary scratchpad when that capability is enabled. Scratchpad paths may use any filename, while symlink escapes and sensitive targets outside the scratchpad remain blocked.
 - `safe-bash` runs only commands classified `SAFE_READONLY` by the shared cwd heuristic. Unknown, mutating, network, interpreter, and unsafe Git commands are rejected without an approval bypass.
 - `command-runner` runs safe commands directly and routes other commands through the normal parent permission prompt. It may have project side effects; explicit approval, not command naming, is authoritative.
-- Non-isolated command-capable agents share the parent's session Bash rules; unresolved commands use the shared sandbox/direct prompt. Agents with `edit` also receive direct edit/write tools, with outside-cwd access using the shared file-access prompt. Sensitive paths and symlink escapes remain blocked before prompting. Isolated workspaces and setup workers use independent permission state without parent-session inheritance.
+- Non-isolated command-capable agents share the parent's session Bash rules; unresolved commands use the shared sandbox/direct prompt. Agents with `edit` also receive direct edit/write tools, with ordinary project paths using same-checkout access and scratchpad paths using prompt-free temporary access. Sensitive project paths and symlink escapes remain blocked before prompting. Isolated workspaces and setup workers use independent permission state without parent-session inheritance.
 - The `edit` capability is reserved for the built-in `worker`; persisted metadata cannot grant edit authority to user-selectable agents. The `command-runner` capability does not grant direct edit/write tools.
 
 ## Persistence and diagnostics

@@ -20,6 +20,8 @@ import {
 export interface ResolvePermissionOptions {
     permissions?: SandboxConfigPermissions;
     cwdConfinement?: SandboxConfigCwdConfinement | null;
+    /** Runtime-managed roots treated as additional cwd-confinement roots. */
+    additionalRoots?: readonly string[];
 }
 
 type SegmentResult = {
@@ -169,6 +171,7 @@ function resolveLine(
             cwd,
             options?.cwdConfinement,
             segmentState,
+            options?.additionalRoots,
         );
         const match = getArgsPermissionMatch(segment, options?.permissions);
 

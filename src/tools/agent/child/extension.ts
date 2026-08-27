@@ -19,6 +19,7 @@ import {
     Heuristic,
 } from "../../../modules/sandbox/heuristics";
 import { askUser } from "../../../tui/ask-user";
+import { getScratchpadPath } from "../../../modules/scratchpad";
 import registerFileToolHook, {
     isFileAccessApproved,
 } from "../../file-permissions";
@@ -43,7 +44,17 @@ export function childProtocolPrompt(
     allowUserInteraction = true,
     isolated = false,
     commandRunner = false,
+    hasScratchpad = false,
 ): string {
+    const allowedPathScope = hasScratchpad
+        ? "the current working directory or the temporary scratchpad"
+        : "the current working directory";
+    const sensitivePathRule = hasScratchpad
+        ? "Sensitive-path restrictions apply outside the temporary scratchpad; paths that escape through symlinks are always blocked."
+        : "Sensitive paths and paths that escape through symlinks are always blocked.";
+    const readPathRule = hasScratchpad
+        ? sensitivePathRule
+        : "and must not enter a sensitive location.";
     const interaction = background || !allowUserInteraction
         ? "If guidance from the parent is necessary, make reasonable progress first, then use `ask_parent` with the evidence you found and your recommended course. Call `ask_parent` by itself, not alongside other tools."
         : [
@@ -61,14 +72,14 @@ export function childProtocolPrompt(
     } else if (canEdit) {
         capability = [
             "Run mode: mutation-capable worker in the parent's current checkout. That checkout is your current working directory.",
-            "You may call `edit` and `write` directly for paths inside the current working directory; that access is already authorized and does not require an additional approval request. Eligible file access outside it may pause while the end user approves or denies the request. Sensitive paths and paths that escape through symlinks are always blocked.",
+            `You may call \`edit\` and \`write\` directly for paths inside ${allowedPathScope}; that access is already authorized and does not require an additional approval request. Eligible file access outside it may pause while the end user approves or denies the request. ${sensitivePathRule}`,
             "A Bash command covered by an existing parent permission rule runs immediately. Any other eligible command may pause while the end user approves or denies it. A denied command or one rejected by the safety checks remains blocked.",
             "Successful changes appear immediately in the parent's checkout. Inspect the latest file contents before editing, preserve unrelated changes, and run only one mutation tool at a time.",
         ].join("\n\n");
     } else if (commandRunner) {
         capability = [
             "Run mode: delegated agent with permission-gated command execution.",
-            "You may use `read`, `grep`, `find`, and `ls`. Every direct file path, after resolving symlinks, must remain inside the current working directory and must not enter a sensitive location. You cannot use direct edit or write tools.",
+            `You may use \`read\`, \`grep\`, \`find\`, and \`ls\`. Every direct file path, after resolving symlinks, must remain inside ${allowedPathScope} ${readPathRule} You cannot use direct edit or write tools.`,
             "You may use `bash`. Commands recognized as local read-only inspection run directly; other eligible commands may pause while the end user approves or denies them. Approved commands can have project side effects, so keep them relevant to validation and do not assume a command is harmless because it has a test-like name.",
         ].join("\n\n");
     } else {
@@ -78,7 +89,7 @@ export function childProtocolPrompt(
 
         capability = [
             "Run mode: read-only delegated agent.",
-            "You may use `read`, `grep`, `find`, and `ls`. Every path, after resolving symlinks, must remain inside the current working directory and must not enter a sensitive location. You cannot modify files.",
+            `You may use \`read\`, \`grep\`, \`find\`, and \`ls\`. Every path, after resolving symlinks, must remain inside ${allowedPathScope} ${readPathRule} You cannot modify files.`,
             bashAccess,
         ].join("\n\n");
     }
@@ -91,9 +102,19 @@ export function childProtocolPrompt(
 
 }
 
-export function isChildPathAllowed(filePath: string | undefined, cwd: string): boolean {
+export function isChildPathAllowed(
+    filePath: string | undefined,
+    cwd: string,
+    additionalRoots: readonly string[] = [],
+): boolean {
     const effectivePath = filePath?.trim() || cwd;
-    return getPathConfinementPermission(effectivePath, cwd, CHILD_CONFINEMENT) === Heuristic.SAFE_READONLY;
+    return getPathConfinementPermission(
+        effectivePath,
+        cwd,
+        CHILD_CONFINEMENT,
+        "read",
+        additionalRoots,
+    ) === Heuristic.SAFE_READONLY;
 }
 
 export { getScoutBashAssessment, isScoutBashAllowed } from "./safe-bash";
@@ -358,12 +379,19 @@ export function registerChildExtension(
 
         pi.on("tool_call", (event, ctx) => {
             if (!canEdit && !commandRunner && isToolCallEventType<"bash", BashToolInput>("bash", event)) {
-                return guardSafeBashCommand(event.input.command, ctx.cwd, safeBash, onTrace);
+                return guardSafeBashCommand(
+                    event.input.command,
+                    ctx.cwd,
+                    safeBash,
+                    onTrace,
+                    getScratchpadRoots(ctx),
+                );
             }
 
             const filePath = readToolPath(event);
             if (filePath === undefined) return;
-            if (!isChildPathAllowed(filePath, ctx.cwd)) {
+            const additionalRoots = getScratchpadRoots(ctx);
+            if (!isChildPathAllowed(filePath, ctx.cwd, additionalRoots)) {
                 if (!isFileAccessApproved(event)) {
                     return {
                         block: true,
@@ -374,6 +402,11 @@ export function registerChildExtension(
             tracker.readFiles.add(relativeReadPath(filePath, ctx.cwd));
         });
     };
+}
+
+function getScratchpadRoots(ctx: ExtensionContext): readonly string[] {
+    const scratchpadPath = getScratchpadPath(ctx.sessionManager);
+    return scratchpadPath ? [scratchpadPath] : [];
 }
 
 function readToolPath(event: ToolCallEvent): string | undefined {

@@ -1,9 +1,19 @@
-import { describe, it, expect } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, it, expect } from "vitest";
 import resolvePermission, { resolvePermissionDetails } from "../../../src/modules/sandbox/resolve";
 import type { SandboxConfigCwdConfinement } from "../../../src/common/config";
 import type { Permission } from "../../../src/modules/sandbox/permissions";
 
 const CWD = "/project";
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+    for (const directory of temporaryDirectories.splice(0)) {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
 
 interface ResolveTest {
     desc: string;
@@ -25,6 +35,21 @@ const runTests = (tests: ResolveTest[]) => {
 };
 
 describe("resolvePermissionDetails: unresolved segments", () => {
+    it("passes additional roots to cwd confinement", () => {
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-resolve-root-"));
+        temporaryDirectories.push(scratchpad);
+
+        expect(resolvePermission(
+            `cat ${path.join(scratchpad, "notes.txt")}`,
+            CWD,
+            {
+                permissions: {},
+                cwdConfinement: {},
+                additionalRoots: [scratchpad],
+            },
+        )).toBe("allow:sandbox");
+    });
+
     const check = (
         command: string,
         permissions: Record<string, Permission> = {},

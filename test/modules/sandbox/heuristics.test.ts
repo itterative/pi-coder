@@ -54,6 +54,36 @@ describe("heuristic assessments", () => {
             .toBe("a path is outside the working directory");
     });
 
+    it("allows known commands to use an additional root", () => {
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-additional-root-"));
+        try {
+            expect(getCwdConfinementAssessment(
+                `cat ${path.join(scratchpad, "notes.txt")}`,
+                CWD,
+                {},
+                [scratchpad],
+            )).toEqual({
+                classification: Heuristic.SAFE_READONLY,
+                reasons: [],
+                tags: [],
+            });
+            expect(getCwdConfinementAssessment(
+                `cd ${scratchpad} && cat notes.txt`,
+                CWD,
+                {},
+                [scratchpad],
+            ).classification).toBe(Heuristic.SAFE_READONLY);
+            expect(getCwdConfinementAssessment(
+                `echo note > ${path.join(scratchpad, ".env")}`,
+                CWD,
+                {},
+                [scratchpad],
+            ).classification).toBe(Heuristic.SAFE_EDIT);
+        } finally {
+            fs.rmSync(scratchpad, { recursive: true, force: true });
+        }
+    });
+
     it("reports no reasons for safe classifications", () => {
         expect(getCwdConfinementAssessment("cat file.txt", CWD, {})).toEqual({
             classification: Heuristic.SAFE_READONLY,
