@@ -1,4 +1,4 @@
-agent start Natural validation run (scout) — completed
+
 │ Review the implementation.
 │ Please inspect the relevant modules and report any regressions.
 
