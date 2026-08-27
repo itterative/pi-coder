@@ -126,6 +126,143 @@ describe("heuristic assessments", () => {
         }
     });
 
+    it("allows constrained copy, move, and chmod scratchpad workflows", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-workflow-cwd-"));
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-workflow-root-"));
+        const source = path.join(cwd, "source.txt");
+        const scratchSource = path.join(scratchpad, "source.txt");
+        const moveTarget = path.join(scratchpad, "move-target.txt");
+        fs.writeFileSync(source, "source");
+        fs.writeFileSync(scratchSource, "scratch");
+        fs.writeFileSync(moveTarget, "target");
+
+        try {
+            for (const command of [
+                `cp ${source} ${path.join(scratchpad, "copied.txt")}`,
+                `cp -- ${source} ${path.join(scratchpad, "copied-with-dash.txt")}`,
+                `cp ${source} ${scratchSource}`,
+                `mv ${scratchSource} ${path.join(scratchpad, "renamed.txt")}`,
+                `mv ${scratchSource} ${moveTarget}`,
+                `chmod +x ${scratchSource}`,
+                `chmod 755 ${scratchSource}`,
+            ]) {
+                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
+                    .toBe(Heuristic.SAFE_EDIT);
+            }
+
+        } finally {
+            fs.rmSync(cwd, { recursive: true, force: true });
+            fs.rmSync(scratchpad, { recursive: true, force: true });
+        }
+    });
+
+    it("rejects unsafe copy, move, and chmod forms", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-workflow-cwd-"));
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-workflow-root-"));
+        const source = path.join(cwd, "source.txt");
+        const scratchSource = path.join(scratchpad, "source.txt");
+        const existingDirectory = path.join(scratchpad, "existing-directory");
+        fs.writeFileSync(source, "source");
+        fs.writeFileSync(scratchSource, "scratch");
+        const sourceDirectory = path.join(cwd, "source-directory");
+        fs.mkdirSync(existingDirectory);
+        fs.mkdirSync(sourceDirectory);
+        fs.writeFileSync(path.join(sourceDirectory, ".env"), "secret");
+
+        try {
+            for (const command of [
+                `cp ${source} ${path.join(cwd, "project-copy.txt")}`,
+                `cp ${source} ${existingDirectory}`,
+                `cp ${source} ${scratchSource} ${path.join(scratchpad, "multi.txt")}`,
+                `cp -L ${source} ${path.join(scratchpad, "dereferenced.txt")}`,
+                `cp -R ${sourceDirectory} ${path.join(scratchpad, "directory-copy")}`,
+                `cp ${source} ${path.join(scratchpad, "$TARGET")}`,
+                `mv ${source} ${path.join(scratchpad, "moved.txt")}`,
+                `mv ${scratchSource} ${path.join(cwd, "project-move.txt")}`,
+                `mv ${scratchSource} ${existingDirectory}`,
+                `chmod +x ${source}`,
+                `chmod -R +x ${scratchpad}`,
+                `chmod --reference=${source} ${scratchSource}`,
+            ]) {
+                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
+                    .toBe(Heuristic.UNSAFE);
+            }
+        } finally {
+            fs.rmSync(cwd, { recursive: true, force: true });
+            fs.rmSync(scratchpad, { recursive: true, force: true });
+        }
+    });
+
+    it("allows only plain audited sed in-place edits inside the scratchpad", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-sed-cwd-"));
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-sed-root-"));
+        const scratchFile = path.join(scratchpad, "input.txt");
+        const projectFile = path.join(cwd, "input.txt");
+        fs.writeFileSync(scratchFile, "before");
+        fs.writeFileSync(projectFile, "before");
+
+        try {
+            for (const command of [
+                `sed -i s/before/after/g ${scratchFile}`,
+                `sed --in-place -e s/before/after/ ${scratchFile}`,
+            ]) {
+                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
+                    .toBe(Heuristic.SAFE_EDIT);
+            }
+
+            for (const command of [
+                `sed -i s/before/after/ ${projectFile}`,
+                `sed -i.bak s/before/after/ ${scratchFile}`,
+                `sed --in-place=.bak s/before/after/ ${scratchFile}`,
+                `sed --in-pla s/before/after/ ${scratchFile}`,
+                `sed --in-pla=.bak s/before/after/ ${scratchFile}`,
+                `sed --fil p ${scratchFile}`,
+                `sed --fol -i s/before/after/ ${scratchFile}`,
+                `sed -i -e 's/before/after/w outside.txt' ${scratchFile}`,
+                `sed -i '$d' ${scratchFile}`,
+                `sed -i s/before/after/ --follow-symlinks ${scratchFile}`,
+            ]) {
+                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
+                    .toBe(Heuristic.UNSAFE);
+            }
+        } finally {
+            fs.rmSync(cwd, { recursive: true, force: true });
+            fs.rmSync(scratchpad, { recursive: true, force: true });
+        }
+    });
+
+    it("rejects scratchpad mutations through hard-linked project files", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-hardlink-cwd-"));
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-hardlink-root-"));
+        const projectFile = path.join(cwd, "shared.txt");
+        const scratchAlias = path.join(scratchpad, "shared.txt");
+        const source = path.join(cwd, "source.txt");
+        const scratchSource = path.join(scratchpad, "source.txt");
+        fs.writeFileSync(projectFile, "shared");
+        fs.writeFileSync(source, "source");
+        fs.writeFileSync(scratchSource, "scratch");
+        fs.linkSync(projectFile, scratchAlias);
+
+        try {
+            for (const command of [
+                `cp ${source} ${scratchAlias}`,
+                `cp ${scratchAlias} ${path.join(scratchpad, "copied-alias.txt")}`,
+                `mv ${scratchSource} ${scratchAlias}`,
+                `chmod +x ${scratchAlias}`,
+                `sed -i s/shared/changed/ ${scratchAlias}`,
+                `touch ${scratchAlias}`,
+                `truncate -s 0 ${scratchAlias}`,
+                `tee ${scratchAlias}`,
+            ]) {
+                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
+                    .toBe(Heuristic.UNSAFE);
+            }
+        } finally {
+            fs.rmSync(cwd, { recursive: true, force: true });
+            fs.rmSync(scratchpad, { recursive: true, force: true });
+        }
+    });
+
     it("rejects dynamic syntax and unmodeled flags for scratchpad mutators", () => {
         const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-mutator-syntax-"));
         const output = path.join(scratchpad, "output.txt");
@@ -422,6 +559,7 @@ describe("getCwdConfinementPermission", () => {
             { desc: "sed prints a line range", command: "sed -n '1,120p' file.txt", expected: Heuristic.SAFE_READONLY },
             { desc: "sed prints a regex range", command: "sed -n '/start/,/end/p' file.txt", expected: Heuristic.SAFE_READONLY },
             { desc: "sed with -e expression", command: "sed -e '1p' -e '5p' file.txt", expected: Heuristic.SAFE_READONLY },
+            { desc: "sed with explicit long quiet flag", command: "sed --quiet -e '1p' file.txt", expected: Heuristic.SAFE_READONLY },
             { desc: "sed substitution", command: "sed 's/foo/bar/g' file.txt", expected: Heuristic.SAFE_READONLY },
             { desc: "sed input outside cwd", command: "sed -n '1,10p' /etc/passwd", expected: Heuristic.UNSAFE },
             { desc: "sed execute command script falls back", command: "sed -n '1e id' file.txt", expected: Heuristic.UNSAFE },

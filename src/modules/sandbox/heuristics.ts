@@ -382,6 +382,25 @@ function hasDotPathComponent(value: string): boolean {
         component === "." || component === "..");
 }
 
+function isExistingDirectoryOperand(value: string, cwd: string, home: string): boolean {
+    try {
+        return fs.statSync(resolvePath(value, cwd, home)).isDirectory();
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        return code !== "ENOENT" && code !== "ENOTDIR";
+    }
+}
+
+function isHardLinkedFileOperand(value: string, cwd: string, home: string): boolean {
+    try {
+        const stat = fs.statSync(resolvePath(value, cwd, home));
+        return !stat.isDirectory() && stat.nlink > 1;
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        return code !== "ENOENT" && code !== "ENOTDIR";
+    }
+}
+
 function isPathWithinAdditionalRoot(
     p: string,
     cwd: string,
@@ -840,7 +859,9 @@ function inspectShellSubstitution(
  */
 interface ExtractedCommandAccess {
     paths: string[];
+    positionalPaths: string[];
     writes: boolean;
+    requiresAdditionalRoot: boolean;
     tags: CommandTag[];
 }
 
@@ -852,8 +873,10 @@ function extractCommandPaths(
     diagnostics?: ConfinementDiagnostics,
 ): ExtractedCommandAccess | null {
     const paths: string[] = [];
+    const positionalPaths: string[] = [];
     const tags = new Set<CommandTag>(spec.tags);
     let writes = spec.writes === true;
+    let requiresAdditionalRoot = false;
     let afterDoubleDash = false;
     let positionalSeen = false;
 
@@ -901,6 +924,15 @@ function extractCommandPaths(
         } else if (pathContext) {
             paths.push(value);
         }
+        return true;
+    };
+
+    const inspectPositionalPath = (value: string): boolean => {
+        const pathCount = paths.length;
+        if (!inspectValue(value, true)) {
+            return false;
+        }
+        positionalPaths.push(...paths.slice(pathCount));
         return true;
     };
 
@@ -966,6 +998,9 @@ function extractCommandPaths(
                 if (flagSpec?.writes) {
                     writes = true;
                 }
+                if (flagSpec?.requiresAdditionalRoot) {
+                    requiresAdditionalRoot = true;
+                }
 
                 const values = flagSpec?.values ?? 0;
                 if (values > 0) {
@@ -1011,11 +1046,14 @@ function extractCommandPaths(
 
                 const cluster = arg.slice(1);
                 for (let j = 0; j < cluster.length; j++) {
-                    if (activeSpec.flags?.[`-${cluster[j]}`]?.writes) {
+                    const flagSpec = activeSpec.flags?.[`-${cluster[j]}`];
+                    if (flagSpec?.writes) {
                         writes = true;
-                        break;
                     }
-                    if ((activeSpec.flags?.[`-${cluster[j]}`]?.values ?? 0) > 0) {
+                    if (flagSpec?.requiresAdditionalRoot) {
+                        requiresAdditionalRoot = true;
+                    }
+                    if ((flagSpec?.values ?? 0) > 0) {
                         break;
                     }
                 }
@@ -1069,14 +1107,14 @@ function extractCommandPaths(
                     }
                     continue;
                 }
-                if (!inspectValue(arg, true)) {
+                if (!inspectPositionalPath(arg)) {
                     return null;
                 }
                 continue;
             case "first-path":
                 if (!positionalSeen) {
                     positionalSeen = true;
-                    if (!inspectValue(arg, true)) {
+                    if (!inspectPositionalPath(arg)) {
                         return null;
                     }
                 } else if (!inspectValue(arg, false)) {
@@ -1108,7 +1146,7 @@ function extractCommandPaths(
                 continue;
             }
             default:
-                if (!inspectValue(arg, true)) {
+                if (!inspectPositionalPath(arg)) {
                     return null;
                 }
                 continue;
@@ -1136,7 +1174,13 @@ function extractCommandPaths(
         return null;
     }
 
-    return { paths, writes, tags: [...tags] };
+    return {
+        paths,
+        positionalPaths,
+        writes,
+        requiresAdditionalRoot,
+        tags: [...tags],
+    };
 }
 
 const CHAIN_OPERATORS = new Set(["&&", "||", "|", ";", "&"]);
@@ -1423,10 +1467,50 @@ function isCommandConfined(
 
     if (!confined) return undefined;
 
-    if (spec.additionalRootOnly && (
+    const hasAdditionalRootPolicy = spec.additionalRootOnly
+        || spec.additionalRootLastPositional
+        || access.requiresAdditionalRoot;
+    if (
+        hasAdditionalRootPolicy
+        && commandArgs.slice(1).some(hasDynamicShellExpansion)
+    ) {
+        addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+        return undefined;
+    }
+
+    const destination = access.positionalPaths[access.positionalPaths.length - 1];
+    if (
+        spec.rejectDirectoryDestination
+        && destination !== undefined
+        && isExistingDirectoryOperand(destination, cwd, home)
+    ) {
+        addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_MODE);
+        return undefined;
+    }
+
+    let hardLinkPaths: string[] = [];
+    if (spec.rejectHardLinkedPositionals) {
+        hardLinkPaths = access.positionalPaths;
+    } else if (spec.rejectHardLinkedDestination && destination !== undefined) {
+        hardLinkPaths = [destination];
+    }
+    if (hardLinkPaths.some((p) => isHardLinkedFileOperand(p, cwd, home))) {
+        addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_MODE);
+        return undefined;
+    }
+
+    let additionalRootPaths: string[] = [];
+    if (spec.additionalRootOnly || access.requiresAdditionalRoot) {
+        additionalRootPaths = allPaths;
+    } else if (spec.additionalRootLastPositional && destination !== undefined) {
+        additionalRootPaths = [destination];
+    }
+
+    if (hasAdditionalRootPolicy && (
         options.additionalRoots.length === 0
-        || allPaths.length === 0
-        || !allPaths.every((p) => isPathWithinAdditionalRoot(p, cwd, home, options))
+        || additionalRootPaths.length === 0
+        || !additionalRootPaths.every((p) =>
+            isPathWithinAdditionalRoot(p, cwd, home, options))
     )) {
         addUnsafeReason(diagnostics, UnsafeReason.OUTSIDE_CWD);
         return undefined;

@@ -57,6 +57,18 @@ describe("resolvePermissionDetails: unresolved segments", () => {
                 additionalRoots: [scratchpad],
             },
         )).toBe("allow:sandbox");
+        for (const command of [
+            `cp ${path.join(CWD, "source.txt")} ${path.join(scratchpad, "copied.txt")}`,
+            `mv ${path.join(scratchpad, "source.txt")} ${path.join(scratchpad, "moved.txt")}`,
+            `chmod +x ${path.join(scratchpad, "script.sh")}`,
+            `sed -i s/before/after/ ${path.join(scratchpad, "input.txt")}`,
+        ]) {
+            expect(resolvePermission(command, CWD, {
+                permissions: {},
+                cwdConfinement: {},
+                additionalRoots: [scratchpad],
+            })).toBe("allow:sandbox");
+        }
         expect(resolvePermission(
             `touch ${scratchpad}/{ok,../outside/owned}`,
             CWD,

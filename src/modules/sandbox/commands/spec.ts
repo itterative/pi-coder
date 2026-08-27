@@ -27,6 +27,8 @@ export interface FlagSpec {
     unsafe?: boolean;
     /** The flag writes to the supplied path without otherwise being unsafe. */
     writes?: boolean;
+    /** The flag makes the invocation eligible only inside an additional root. */
+    requiresAdditionalRoot?: boolean;
 }
 
 /**
@@ -46,6 +48,14 @@ export interface CommandSpec {
     additionalRootOnly?: boolean;
     /** Reject flags not explicitly listed by this spec. */
     rejectUnknownFlags?: boolean;
+    /** Require the last positional path to be inside an additional root. */
+    additionalRootLastPositional?: boolean;
+    /** Reject an existing directory as the final positional destination. */
+    rejectDirectoryDestination?: boolean;
+    /** Reject a hard-linked regular file as the final positional destination. */
+    rejectHardLinkedDestination?: boolean;
+    /** Reject hard-linked regular files among positional mutation targets. */
+    rejectHardLinkedPositionals?: boolean;
     /**
      * How to treat positional (non-flag) arguments:
      * - "paths" (default): every positional is a file path

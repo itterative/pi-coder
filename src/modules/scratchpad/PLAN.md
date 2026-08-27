@@ -212,9 +212,9 @@ provide it to permission resolution, and pass it as an explicit bind path when
 constructing sandboxed commands. The command heuristic must classify a command
 that only reads or writes within the scratchpad according to its existing
 read/write classification. A conservative set of filesystem mutators (`rm`,
-`mkdir`, `rmdir`, `touch`, `truncate`, and `tee`) may be auto-allowed only when
-every affected path is inside the scratchpad; more complex mutators remain
-gated.
+`mkdir`, `rmdir`, `touch`, `truncate`, `tee`, constrained `cp`/`mv`/`chmod`,
+and audited `sed -i`) may be auto-allowed only when their modeled write effects
+stay inside the scratchpad; more complex forms remain gated.
 
 A future strict-scratchpad sandbox mode may mount only the scratchpad and allow
 more unknown local commands, with network-capable commands separately denied.
@@ -230,8 +230,8 @@ scratchpad from every other writable path. Permission classification must be
 correct even when sandboxing is unavailable or disabled.
 
 Keep read-only confinement separate from scratchpad mutation classification.
-Commands marked `additionalRootOnly` may be classified as `SAFE_EDIT` only when
-all of these conditions hold:
+Root-scoped mutators may be classified as `SAFE_EDIT` only when all of these
+conditions hold:
 
 - every affected operand is a literal path; reject or conservatively fall back
   to the permission gate for parameter and command substitutions, brace
@@ -246,7 +246,9 @@ all of these conditions hold:
   root A cannot resolve through a symlink into root B;
 - flags and value-taking options are explicitly modeled. Reference options such
   as `touch -r` and `truncate -r` must be path-checked or rejected, and unknown
-  options that may consume values must not be silently treated as booleans;
+  or abbreviated options must not be silently accepted;
+- existing hard-linked regular-file mutation targets are rejected so a lexical
+  scratchpad path cannot modify an aliased project inode;
 - explicit permission denies and the existing sensitive/symlink policies remain
   authoritative.
 
@@ -266,17 +268,21 @@ touch scratch/link/../outside
 touch -r/etc/passwd scratch/out
 ```
 
-The conservative first set is `rm`, `mkdir`, `rmdir`, `touch`, `truncate`, and
-`tee`. Their specs reject unknown flags; `touch` and `truncate` model reference
-paths explicitly. Because the shell parser strips quote and escape provenance,
-literal filenames containing expansion metacharacters may conservatively fall
-back to a prompt. Canonical checks still have an unavoidable filesystem
-TOCTOU window, and bubblewrap remains defense in depth rather than the
-scratchpad boundary.
+The supported set is `rm`, `mkdir`, `rmdir`, `touch`, `truncate`, `tee`, plus
+narrow `cp`, `mv`, `chmod`, and `sed -i` forms. `cp` permits one confined source
+and one explicit scratch destination, but not recursion, multiple sources, or
+existing directory destinations. `mv` requires both operands in the same
+scratchpad. `chmod` is nonrecursive. `sed -i` reuses the audited safe-script
+model and rejects backup suffixes, option abbreviations, script files, and
+symlink-following mode.
 
-Keep `cp`, `mv`, `find -delete`, `sed -i`, archive extraction, `ln`, `install`,
-and similar complex mutators behind the normal permission gate until they have
-dedicated argument and side-effect models.
+Because the shell parser strips quote and escape provenance, literal filenames
+or sed scripts containing expansion metacharacters may conservatively fall back
+to a prompt. Canonical and inode checks still have an unavoidable filesystem
+TOCTOU window, and bubblewrap remains defense in depth rather than the
+scratchpad boundary. Keep `find -delete`, recursive/multi-source copy, archive
+extraction, `ln`, `install`, and similar complex mutators behind the normal
+permission gate until they have dedicated argument and side-effect models.
 
 ## No explicit sharing in v1
 

@@ -29,12 +29,12 @@ The built-in `advisor` has the same read-only capability boundary as `scout`; it
 
 ## Scratchpad-local mutator hardening
 
-`rm`, `mkdir`, `rmdir`, `touch`, `truncate`, and `tee` may be classified as
-`SAFE_EDIT` only when every modeled access remains in one managed additional
-root. The implementation uses `writes`, `additionalRootOnly`, and
-`rejectUnknownFlags` on `CommandSpec`, the registry in
-`src/modules/sandbox/commands/mutators.ts`, and confinement checks in
-`src/modules/sandbox/heuristics.ts`.
+`rm`, `mkdir`, `rmdir`, `touch`, `truncate`, `tee`, constrained `cp`/`mv`/
+`chmod`, and audited `sed -i` may be classified as `SAFE_EDIT` for scratchpad
+workflows. The implementation uses root-policy and strict-flag fields on
+`CommandSpec`/`FlagSpec`, the registry in
+`src/modules/sandbox/commands/mutators.ts`, sed validation in `commands/text.ts`,
+and confinement checks in `src/modules/sandbox/heuristics.ts`.
 
 The hardening invariants are:
 
@@ -59,14 +59,29 @@ The hardening invariants are:
   `truncate -r`/`--reference` are explicit path-valued options, so references
   outside the same scratchpad fall back while scratchpad-local references may
   pass.
+- `cp` accepts exactly one confined cwd/scratch source and one explicit
+  scratchpad destination. Recursive copies, multiple sources, existing
+  directory destinations, hard-linked operands, redirections, and risky flags
+  fall back. `mv` accepts exactly one source/destination pair in the same
+  scratchpad and rejects existing directory or hard-linked destinations.
+- `chmod` accepts audited numeric/symbolic modes and nonrecursive scratchpad
+  targets. `sed -i` reuses the safe-script audit, allows only plain `-i` or
+  `--in-place`, requires scratchpad input files, strictly rejects unknown/long
+  abbreviated options, backup suffixes, `--follow-symlinks`, script files, and
+  scripts containing `e`/`r`/`w` effects.
+- Write-through operations reject existing hard-linked regular files so a
+  scratchpad alias cannot mutate a project inode. This applies to copy
+  operands, move destinations, chmod/sed targets, and the existing
+  touch/truncate/tee targets.
 - Explicit permission rules remain authoritative. Read-only `safe-bash`
   continues to reject `SAFE_EDIT`, while permission-gated command runners may
   auto-run eligible scratchpad edits under the configured sandbox permission.
 
 Regression coverage includes brace/parameter/glob expansion, substitutions,
 heredocs, redirects and chains crossing roots, symlink-plus-`..`, dangling
-symlinks for all six mutators, cross-root symlinks, reference options, unknown
-flags, and resolver fallback.
+symlinks, cross-root symlinks, reference options, unknown and abbreviated
+flags, copy/move destination semantics, recursive-copy rejection, hard links,
+chmod modes, audited sed in-place forms, and resolver fallback.
 
 Residual limitations are deliberately fail-closed: because `parseBash()` strips
 quote and escape provenance, a literal filename containing expansion
@@ -74,5 +89,6 @@ metacharacters may prompt even when quoted. Filesystem checks also retain an
 unavoidable time-of-check/time-of-use race; bubblewrap is defense in depth and
 currently mounts broader writable locations than the scratchpad. Do not broaden
 the mutator list without dedicated argument/side-effect models and equivalent
-negative tests. Keep `cp`, `mv`, `find -delete`, `sed -i`, archive extraction,
-`ln`, `install`, and similar commands behind normal permission handling.
+negative tests. Keep `find -delete`, recursive/multi-source copy, archive
+extraction, `ln`, `install`, and similar complex commands behind normal
+permission handling.

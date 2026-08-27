@@ -132,6 +132,7 @@ function isSafeSedInvocation(args: readonly string[]): boolean {
     const scripts: string[] = [];
     const positionals: string[] = [];
     let expressionSeen = false;
+    let inPlace = false;
     let afterDoubleDash = false;
 
     for (let index = 1; index < args.length; index++) {
@@ -152,8 +153,15 @@ function isSafeSedInvocation(args: readonly string[]): boolean {
             const equals = arg.indexOf("=");
             const name = equals === -1 ? arg : arg.slice(0, equals);
             const inline = equals === -1 ? undefined : arg.slice(equals + 1);
-            if (name === "--in-place" || name === "--follow-symlinks" || name === "--file") {
+            if (name === "--follow-symlinks" || name === "--file") {
                 return false;
+            }
+            if (name === "--in-place") {
+                if (inline !== undefined) {
+                    return false;
+                }
+                inPlace = true;
+                continue;
             }
             if (name === "--expression") {
                 const script = inline ?? args[++index];
@@ -163,6 +171,10 @@ function isSafeSedInvocation(args: readonly string[]): boolean {
             } else if (name === "--line-length") {
                 if (inline === undefined) index++;
             }
+            continue;
+        }
+        if (arg === "-i") {
+            inPlace = true;
             continue;
         }
         if (arg.startsWith("-") && arg.length > 1) {
@@ -191,6 +203,10 @@ function isSafeSedInvocation(args: readonly string[]): boolean {
         const script = positionals.shift();
         if (script === undefined) return false;
         scripts.push(script);
+    }
+
+    if (inPlace && positionals.length === 0) {
+        return false;
     }
 
     return scripts.every(isSafeSedScript);
@@ -284,14 +300,23 @@ export const TEXT_COMMANDS: Record<string, CommandSpec> = {
     sed: {
         positionals: "first-pattern",
         patternBypassFlags: ["-e", "--expression", "-f", "--file"],
+        rejectUnknownFlags: true,
+        rejectHardLinkedPositionals: true,
         validate: isSafeSedInvocation,
         flags: {
+            "-n": {}, "--quiet": {}, "--silent": {},
+            "-E": {}, "-r": {}, "--regexp-extended": {},
+            "-s": {}, "--separate": {},
+            "-u": {}, "--unbuffered": {},
+            "-z": {}, "--null-data": {},
+            "--posix": {},
             "-e": VALUE, "--expression": VALUE,
             // Script files are rejected by the validator because their
             // contents are not available to this lexical check.
             "-f": PATH_VALUE, "--file": PATH_VALUE,
             "-l": VALUE, "--line-length": VALUE,
-            "-i": UNSAFE, "--in-place": UNSAFE,
+            "-i": { writes: true, requiresAdditionalRoot: true },
+            "--in-place": { writes: true, requiresAdditionalRoot: true },
             "--follow-symlinks": UNSAFE,
         },
     },
