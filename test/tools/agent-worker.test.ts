@@ -106,6 +106,18 @@ describe("command and edit permission gate", () => {
         };
     }
 
+    function writeEvent(id: string, filePath: string) {
+        return {
+            type: "tool_call",
+            toolName: "write",
+            toolCallId: id,
+            input: {
+                path: filePath,
+                content: "after",
+            },
+        };
+    }
+
     it("blocks paths outside cwd without opening a dialog", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-outside-"));
@@ -147,19 +159,46 @@ describe("command and edit permission gate", () => {
         expect(runtime.pending).toEqual([true, false]);
     });
 
-    it("allows same-checkout edits without a second mutation prompt", async () => {
+    it("prompts isolated writes while preserving the isolated permission gate", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
+        tempDirs.push(cwd);
+        const runtime = setup(cwd);
+        const event = writeEvent("write-1", "src/example.ts");
+
+        const permission = runtime.handlers.tool_call[0](event, runtime.ctx);
+        await flush();
+        expect(runtime.dialogs).toHaveLength(1);
+        expect(runtime.dialogs[0].render(100).join("\\n")).toContain("[worker-7] worker: allow write?");
+        await waitForPermissionInput();
+        runtime.dialogs[0].handleInput(KEY.enter);
+        await expect(permission).resolves.toEqual({ block: false });
+    });
+
+    it("allows same-checkout edits and writes without a second mutation prompt", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         tempDirs.push(cwd);
         const runtime = setup(cwd, { nonIsolated: true });
-        const event = editEvent("edit-1", "src/example.ts");
 
-        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toEqual({ block: false });
+        const edit = editEvent("edit-1", "src/example.ts");
+        await expect(runtime.handlers.tool_call[0](edit, runtime.ctx)).resolves.toEqual({ block: false });
         expect(runtime.dialogs).toHaveLength(0);
         await runtime.handlers.tool_result[0]({
             type: "tool_result",
             toolName: "edit",
             toolCallId: "edit-1",
-            input: event.input,
+            input: edit.input,
+            content: [],
+            isError: false,
+        });
+
+        const write = writeEvent("write-1", "src/example.ts");
+        await expect(runtime.handlers.tool_call[0](write, runtime.ctx)).resolves.toEqual({ block: false });
+        expect(runtime.dialogs).toHaveLength(0);
+        await runtime.handlers.tool_result[0]({
+            type: "tool_result",
+            toolName: "write",
+            toolCallId: "write-1",
+            input: write.input,
             content: [],
             isError: false,
         });
@@ -170,7 +209,7 @@ describe("command and edit permission gate", () => {
         const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-outside-"));
         tempDirs.push(cwd, outside);
         const runtime = setup(cwd, { nonIsolated: true, registerFileHook: true });
-        const event = editEvent("edit-1", path.join(outside, "file.ts"));
+        const event = writeEvent("write-1", path.join(outside, "file.ts"));
 
         const filePermission = runtime.handlers.tool_call[0](event, runtime.ctx);
         await flush();
@@ -191,7 +230,7 @@ describe("command and edit permission gate", () => {
         fs.symlinkSync(target, link);
         tempDirs.push(cwd, outside);
         const runtime = setup(cwd, { nonIsolated: true, registerFileHook: true });
-        const event = editEvent("edit-1", link);
+        const event = writeEvent("write-1", link);
 
         await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toMatchObject({ block: true });
         await expect(runtime.handlers.tool_call[1](event, runtime.ctx)).resolves.toMatchObject({ block: true });

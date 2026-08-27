@@ -19,6 +19,7 @@ import {
     getPathConfinementAssessment,
     getPathConfinementPermission,
     Heuristic,
+    isSafeHeuristic,
     UnsafeReason,
 } from "../../../modules/sandbox/heuristics";
 import type { Permission } from "../../../modules/sandbox/permissions";
@@ -66,7 +67,9 @@ const SETUP_BASH_TIMEOUT_SECONDS = 10 * 60;
 
 function isCommandPathAllowed(filePath: string | undefined, cwd: string): boolean {
     const target = filePath?.trim() || cwd;
-    return getPathConfinementPermission(target, cwd, COMMAND_CONFINEMENT) === Heuristic.SAFE_READONLY;
+    return isSafeHeuristic(
+        getPathConfinementPermission(target, cwd, COMMAND_CONFINEMENT, "write"),
+    );
 }
 
 class PermissionQueue {
@@ -268,7 +271,15 @@ export function registerCommandPermissionHooks(
         if (isEdit || isWrite) {
             const action = isEdit ? "edit" : "write";
             const input = event.input as EditToolInput | WriteToolInput;
-            if (!isCommandPathAllowed(input.path, ctx.cwd)) {
+            const cwdPathAllowed = isCommandPathAllowed(input.path, ctx.cwd);
+            if (options.nonIsolated && cwdPathAllowed) {
+                // Same-checkout workers are trusted to mutate ordinary files in
+                // their cwd. Keep the confinement check here so sensitive
+                // paths and symlink escapes still cannot be auto-approved.
+                releases.set(event.toolCallId, release);
+                return { block: false };
+            }
+            if (!cwdPathAllowed) {
                 const assessment = getPathConfinementAssessment(
                     input.path,
                     ctx.cwd,
@@ -289,10 +300,6 @@ export function registerCommandPermissionHooks(
                     block: true,
                     reason: `Agent ${action} blocked: path is outside the working directory or is sensitive.`,
                 };
-            }
-            if (options.nonIsolated) {
-                releases.set(event.toolCallId, release);
-                return { block: false };
             }
             const contentLines = fileMutationPreview(event, isEdit);
             let result: { allowed: boolean; message?: string };
