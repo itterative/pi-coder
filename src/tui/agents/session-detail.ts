@@ -50,10 +50,16 @@ function detailText(
         lines.push(`Changed files (${item.changedFiles.length}):`);
         lines.push(...item.changedFiles.map((file) => `  - ${file}`));
     }
+    const loadingTranscript = item.transcript === undefined && item.sessionFile !== undefined;
     lines.push("", theme.fg("accent", "Transcript:"), "");
 
     if (transcript) {
         lines.push(...new Markdown(transcript, 0, 0, markdownTheme(theme)).render(width));
+        if (loadingTranscript) {
+            lines.push("", theme.fg("muted", "Loading full transcript…"));
+        }
+    } else if (loadingTranscript) {
+        lines.push(theme.fg("muted", "Loading transcript…"));
     } else {
         lines.push(theme.fg("muted", "Transcript unavailable for this session."));
     }

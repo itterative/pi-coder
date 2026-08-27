@@ -1,0 +1,16 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   [delegated agent] Previous implementation review · completed                                   │
+│                                                                                                  │
+│   Run ID: child-session-1                                                                        │
+│   Task: Review the previous implementation                                                       │
+│   Started: unknown time                                                                          │
+│   Updated: Nov 14 2023 22:13                                                                     │
+│   Messages: 4                                                                                    │
+│                                                                                                  │
+│   Transcript:                                                                                    │
+│                                                                                                  │
+│   The previous implementation is persisted and can be browsed read-only.                         │
+│                                                                                                  │
+│   Loading full transcript…                                                                       │
+│     ↑/↓ scroll · End follow · Tab toggle view · Esc back                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

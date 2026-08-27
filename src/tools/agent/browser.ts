@@ -16,7 +16,8 @@ import {
 } from "./presentation/browser-models";
 import {
     currentAgentSessionItems,
-    listPastAgentSessions,
+    listAgentPastSessionLists,
+    loadAgentSessionTranscriptForItem,
     loadAgentSessionTranscripts,
     removeCurrentAgentTranscripts,
 } from "./presentation/sessions";
@@ -133,18 +134,18 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             let sessionPast: AgentSessionBrowserItem[];
             let past: AgentSessionBrowserItem[];
             try {
-                const allPast = await listPastAgentSessions(ctx.cwd);
-                const sessionPastRecords = await listPastAgentSessions(ctx.cwd, undefined, {
-                    parentSessionId: currentSessionId,
-                });
-                const activeBranchPast = await listPastAgentSessions(ctx.cwd, undefined, {
+                // One enumeration pass feeds all three views; re-listing per
+                // view would re-scan every child transcript each time.
+                const pastLists = await listAgentPastSessionLists(ctx.cwd, undefined, {
                     parentSessionId: currentSessionId,
                     parentSessionFile: ctx.sessionManager.getSessionFile(),
                     parentSessionLeafId: ctx.sessionManager.getLeafId(),
-                    activeBranchOnly: true,
                 });
-                sessionPast = mergeHistoricalAgentSessions(sessionPastRecords, activeBranchPast, current);
-                past = mergeHistoricalAgentSessions(allPast, activeBranchPast, current);
+                const sessionPastRecords = pastLists.all.filter(
+                    (item) => item.parentSessionId === currentSessionId,
+                );
+                sessionPast = mergeHistoricalAgentSessions(sessionPastRecords, pastLists.activeBranch, current);
+                past = mergeHistoricalAgentSessions(pastLists.all, pastLists.activeBranch, current);
             } catch (error) {
                 if (signal?.aborted) {
                     throw error;
@@ -250,6 +251,7 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                 }
             },
             onWorkspaceInspect: async (item) => inspectAgentWorkspaceResult(requireWorkspace(item.id)),
+            onLoadTranscript: (item) => loadAgentSessionTranscriptForItem(item),
             onModelChange: (agent, model) => {
                 agentConfig.setModel(agent, model, ctx.cwd);
             },

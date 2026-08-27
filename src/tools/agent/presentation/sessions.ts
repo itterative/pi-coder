@@ -1,5 +1,7 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Usage } from "@earendil-works/pi-ai";
 import {
     SessionManager,
     type SessionInfo,
@@ -18,7 +20,8 @@ import { collectAgentRunSnapshotMarkers } from "../storage/run-markers";
 import { listAgentRunSnapshotsInDatabase } from "../storage/run-snapshots";
 import { openAgentMetadataDatabase } from "../storage/metadata";
 import type { AgentSessionBrowserItem } from "./browser-models";
-import { loadAgentSessionTranscriptViews } from "./transcript";
+import { formatAgentSessionTranscripts, loadAgentSessionTranscriptViews } from "./transcript";
+import { selectChildSessionLeaf } from "../child/transcript";
 
 function currentItem(run: AgentRunSummary): AgentSessionBrowserItem {
     return {
@@ -57,58 +60,160 @@ interface ActiveBranchChildCheckpoint {
     readOnlyReason?: string;
 }
 
+const NO_LEAF_TRANSCRIPT = "Transcript unavailable: no exact child transcript leaf is recorded.";
+const UNAVAILABLE_TRANSCRIPT = "Transcript unavailable for the selected child checkpoint.";
+
+interface PastItemFields {
+    agent: string;
+    status: string;
+    task: string;
+    startedAt: number;
+    updatedAt: number;
+    mutating: boolean;
+    usage: Usage;
+    responsePreview?: string;
+    changedFiles?: string[];
+    readFiles?: string[];
+}
+
+function displayMetadataFields(
+    displayMetadata: AgentRunCatalogRecord | PersistedAgentRun,
+    checkpointRecord: PersistedAgentRun | undefined,
+): PastItemFields {
+    const mutationReport = displayMetadata.mutationReport;
+    return {
+        agent: displayMetadata.agent,
+        status: displayMetadata.status,
+        task: displayMetadata.task,
+        startedAt: displayMetadata.startedAt,
+        updatedAt: displayMetadata.updatedAt,
+        mutating: displayMetadata.mutating,
+        usage: displayMetadata.usageSnapshot,
+        responsePreview: "responsePreview" in displayMetadata
+            ? displayMetadata.responsePreview
+            : checkpointRecord?.progress.output || checkpointRecord?.progress.lastAssistantMessage,
+        changedFiles: mutationReport?.changedFiles,
+        readFiles: mutationReport?.readFiles,
+    };
+}
+
+interface PastItemSource {
+    id: string;
+    file: string;
+    parentSessionId: string;
+    title: string;
+    agent: string;
+    status?: string;
+    task: string;
+    startedAt?: number;
+    updatedAt: number;
+    childSessionLeafId?: string | null;
+    readOnlyReason?: string;
+    firstMessage?: string;
+    messageCount?: number;
+    mutating?: boolean;
+    usage?: Usage;
+    responsePreview?: string;
+    changedFiles?: string[];
+    readFiles?: string[];
+}
+
+/**
+ * Past items are displayed without transcript text: the full transcript is
+ * loaded when the detail view is opened (loadAgentSessionTranscriptForItem).
+ * Only the no-leaf case is known statically.
+ */
+function buildPastItem(source: PastItemSource): AgentSessionBrowserItem {
+    return {
+        kind: "past",
+        id: source.id,
+        title: source.title,
+        agent: source.agent,
+        status: historicalStatus(source.status) ?? "historical",
+        task: source.task,
+        startedAt: source.startedAt,
+        updatedAt: source.updatedAt,
+        sessionFile: source.file,
+        ...(source.childSessionLeafId !== undefined ? { childSessionLeafId: source.childSessionLeafId } : {}),
+        parentSessionId: source.parentSessionId,
+        readOnlyReason: source.readOnlyReason,
+        firstMessage: source.firstMessage,
+        messageCount: source.messageCount,
+        ...(source.childSessionLeafId === undefined
+            ? { transcript: NO_LEAF_TRANSCRIPT, transcriptCollapsed: NO_LEAF_TRANSCRIPT }
+            : {}),
+        mutating: source.mutating,
+        usage: source.usage,
+        responsePreview: source.responsePreview,
+        changedFiles: source.changedFiles,
+        readFiles: source.readFiles,
+    };
+}
+
 function pastItem(
     info: SessionInfo,
     parentSessionId: string,
     metadata: AgentRunCatalogRecord | undefined,
     checkpoint?: ActiveBranchChildCheckpoint,
 ): AgentSessionBrowserItem {
+    const record = checkpoint?.record;
+    const displayMetadata = record ?? metadata;
+    const fields = displayMetadata ? displayMetadataFields(displayMetadata, record) : undefined;
     const catalogLeaf = metadata && (
         metadata.latestSnapshotId !== undefined
         || typeof metadata.childSessionLeafId === "string"
     )
         ? metadata.childSessionLeafId
         : undefined;
-    const childSessionLeafId = checkpoint
-        ? checkpoint.childSessionLeafId
-        : catalogLeaf;
-    const exactLeafSelected = childSessionLeafId !== undefined;
-    const transcript = exactLeafSelected
-        ? loadAgentSessionTranscriptViews(info.path, childSessionLeafId)
-        : undefined;
-    const record = checkpoint?.record;
-    const displayMetadata = record ?? metadata;
-    const unavailableTranscript = exactLeafSelected
-        ? "Transcript unavailable for the selected child checkpoint."
-        : "Transcript unavailable: no exact child transcript leaf is recorded.";
-    const selectedTranscript = transcript?.detailed ?? unavailableTranscript;
-    const selectedCollapsedTranscript = transcript?.collapsed ?? unavailableTranscript;
-    const responsePreview = displayMetadata && "responsePreview" in displayMetadata
-        ? displayMetadata.responsePreview
-        : record?.progress.output || record?.progress.lastAssistantMessage;
-    return {
-        kind: "past",
+    return buildPastItem({
         id: info.id,
-        title: displayMetadata?.title ?? deriveAgentTitle(info.firstMessage),
-        agent: displayMetadata?.agent ?? "delegated agent",
-        status: historicalStatus(displayMetadata?.status) ?? "historical",
-        task: displayMetadata?.task ?? info.firstMessage,
-        startedAt: displayMetadata?.startedAt,
-        updatedAt: displayMetadata?.updatedAt ?? info.modified.getTime(),
-        sessionFile: info.path,
-        ...(childSessionLeafId !== undefined ? { childSessionLeafId } : {}),
+        file: info.path,
         parentSessionId,
+        title: displayMetadata?.title ?? deriveAgentTitle(info.firstMessage),
+        agent: fields?.agent ?? "delegated agent",
+        status: fields?.status,
+        task: fields?.task ?? info.firstMessage,
+        startedAt: fields?.startedAt,
+        updatedAt: fields?.updatedAt ?? info.modified.getTime(),
+        childSessionLeafId: checkpoint ? checkpoint.childSessionLeafId : catalogLeaf,
         readOnlyReason: checkpoint?.readOnlyReason,
-        messageCount: info.messageCount,
         firstMessage: info.firstMessage,
-        transcript: selectedTranscript,
-        transcriptCollapsed: selectedCollapsedTranscript,
-        mutating: displayMetadata?.mutating,
-        usage: displayMetadata && "usageSnapshot" in displayMetadata ? displayMetadata.usageSnapshot : undefined,
-        responsePreview,
-        changedFiles: displayMetadata && "mutationReport" in displayMetadata ? displayMetadata.mutationReport?.changedFiles : undefined,
-        readFiles: displayMetadata && "mutationReport" in displayMetadata ? displayMetadata.mutationReport?.readFiles : undefined,
-    };
+        messageCount: info.messageCount,
+        mutating: fields?.mutating,
+        usage: fields?.usage,
+        responsePreview: fields?.responsePreview,
+        changedFiles: fields?.changedFiles,
+        readFiles: fields?.readFiles,
+    });
+}
+
+function pastItemFromCatalog(
+    record: AgentRunCatalogRecord,
+    checkpoint?: ActiveBranchChildCheckpoint,
+): AgentSessionBrowserItem {
+    const displayRecord = checkpoint?.record ?? record;
+    const fields = displayMetadataFields(displayRecord, checkpoint?.record);
+    const catalogLeaf = record.latestSnapshotId !== undefined || typeof record.childSessionLeafId === "string"
+        ? record.childSessionLeafId
+        : undefined;
+    return buildPastItem({
+        id: record.runId,
+        file: path.resolve(record.childSessionFile!),
+        parentSessionId: record.ownerSessionId,
+        title: displayRecord.title ?? record.title,
+        agent: fields.agent,
+        status: fields.status,
+        task: fields.task,
+        startedAt: fields.startedAt,
+        updatedAt: fields.updatedAt,
+        childSessionLeafId: checkpoint ? checkpoint.childSessionLeafId : catalogLeaf,
+        readOnlyReason: checkpoint?.readOnlyReason,
+        mutating: fields.mutating,
+        usage: fields.usage,
+        responsePreview: fields.responsePreview,
+        changedFiles: fields.changedFiles,
+        readFiles: fields.readFiles,
+    });
 }
 
 export function currentAgentSessionItems(runs: AgentRunSummary[]): AgentSessionBrowserItem[] {
@@ -119,36 +224,31 @@ export function currentAgentSessionItems(runs: AgentRunSummary[]): AgentSessionB
 export async function loadAgentSessionTranscripts(
     items: AgentSessionBrowserItem[],
 ): Promise<AgentSessionBrowserItem[]> {
-    const directoryInfos = new Map<string, Promise<SessionInfo[]>>();
-    const infosFor = (directory: string): Promise<SessionInfo[]> => {
-        let promise = directoryInfos.get(directory);
-        if (!promise) {
-            promise = SessionManager.listAll(directory).catch(() => []);
-            directoryInfos.set(directory, promise);
-        }
-        return promise;
-    };
-
     return Promise.all(items.map(async (item) => {
         if (!item.sessionFile || item.transcript !== undefined) {
             return item;
         }
-        const directory = path.dirname(item.sessionFile);
-        const info = (await infosFor(directory)).find(
-            (candidate) => path.resolve(candidate.path) === path.resolve(item.sessionFile!),
-        );
-        if (!info) {
+        let sessionExists = true;
+        try {
+            await fs.access(item.sessionFile);
+        } catch {
+            sessionExists = false;
+        }
+        if (!sessionExists) {
             return item;
         }
 
         if (item.childSessionLeafId === undefined) {
             return {
                 ...item,
-                transcript: "Transcript unavailable: no exact child transcript leaf is recorded.",
-                transcriptCollapsed: "Transcript unavailable: no exact child transcript leaf is recorded.",
+                transcript: NO_LEAF_TRANSCRIPT,
+                transcriptCollapsed: NO_LEAF_TRANSCRIPT,
             };
         }
-        const transcript = loadAgentSessionTranscriptViews(info.path, item.childSessionLeafId);
+        // A plain existence check plus the transcript parse below is enough; the
+        // directory scan SessionManager.listAll would perform re-reads every
+        // sibling transcript in the same directory for no additional data.
+        const transcript = loadAgentSessionTranscriptViews(item.sessionFile, item.childSessionLeafId);
         return transcript
             ? {
                 ...item,
@@ -157,10 +257,49 @@ export async function loadAgentSessionTranscripts(
             }
             : {
                 ...item,
-                transcript: "Transcript unavailable for the selected child checkpoint.",
-                transcriptCollapsed: "Transcript unavailable for the selected child checkpoint.",
+                transcript: UNAVAILABLE_TRANSCRIPT,
+                transcriptCollapsed: UNAVAILABLE_TRANSCRIPT,
             };
     }));
+}
+
+/**
+ * Loads the transcript views for one session on demand, used when its detail
+ * view is opened. Past rows are enumerated from the run catalog and carry no
+ * transcript text until this runs; the message count is computed here as well
+ * so enumeration stays a single indexed catalog query.
+ */
+export async function loadAgentSessionTranscriptForItem(
+    item: AgentSessionBrowserItem,
+): Promise<AgentSessionBrowserItem | undefined> {
+    if (item.transcript !== undefined || !item.sessionFile) {
+        return item;
+    }
+    if (item.childSessionLeafId === undefined) {
+        return {
+            ...item,
+            transcript: NO_LEAF_TRANSCRIPT,
+            transcriptCollapsed: NO_LEAF_TRANSCRIPT,
+        };
+    }
+    try {
+        const session = SessionManager.open(item.sessionFile);
+        selectChildSessionLeaf(session, item.childSessionLeafId);
+        const branch = session.getBranch();
+        const views = formatAgentSessionTranscripts(branch);
+        return {
+            ...item,
+            transcript: views.detailed,
+            transcriptCollapsed: views.collapsed,
+            messageCount: branch.filter((entry) => entry.type === "message").length,
+        };
+    } catch {
+        return {
+            ...item,
+            transcript: UNAVAILABLE_TRANSCRIPT,
+            transcriptCollapsed: UNAVAILABLE_TRANSCRIPT,
+        };
+    }
 }
 
 export interface AgentSessionHistoryScope {
@@ -236,70 +375,170 @@ async function activeBranchChildCheckpoints(
     }
 }
 
-export async function listPastAgentSessions(
+export interface AgentPastSessionLists {
+    /** Every enumerated past session, newest first. */
+    all: AgentSessionBrowserItem[];
+    /** Checkpoint-resolved items for the active parent branch, newest first. */
+    activeBranch: AgentSessionBrowserItem[];
+}
+
+export interface AgentPastSessionActiveBranch {
+    parentSessionId: string;
+    parentSessionFile?: string;
+    parentSessionLeafId?: string | null;
+}
+
+/**
+ * Enumerates persisted child sessions from the run catalog: one indexed
+ * catalog query plus one active-branch checkpoint resolution. Transcripts
+ * that predate the catalog are only discovered by a directory scan when a
+ * parent-session directory actually contains files the catalog does not know
+ * about. Callers derive session-scoped and active-branch views from the
+ * returned lists instead of re-listing.
+ */
+export async function listAgentPastSessionLists(
     cwd: string,
     agentSessionsDir?: string,
-    scope?: AgentSessionHistoryScope,
-): Promise<AgentSessionBrowserItem[]> {
+    activeBranch?: AgentPastSessionActiveBranch,
+): Promise<AgentPastSessionLists> {
     const cwdSessionDir = getAgentCwdSessionDir(cwd, agentSessionsDir);
     const workspacesDir = path.join(
         path.dirname(path.resolve(agentSessionsDir ?? PI_CODER_AGENT_SESSIONS_DIR)),
         "workspaces",
     );
-    const parentSessionId = scope?.parentSessionId;
-    const childSessionDir = parentSessionId
-        ? path.join(cwdSessionDir, parentSessionId)
-        : cwdSessionDir;
-    const scopedCheckpoints = scope?.activeBranchOnly
+    const checkpoints = activeBranch
         ? await activeBranchChildCheckpoints(
-            scope.parentSessionFile,
-            scope.parentSessionLeafId,
-            parentSessionId,
-            childSessionDir,
+            activeBranch.parentSessionFile,
+            activeBranch.parentSessionLeafId,
+            activeBranch.parentSessionId,
+            path.join(cwdSessionDir, activeBranch.parentSessionId),
             workspacesDir,
         )
         : undefined;
-    const scopedFiles = scopedCheckpoints
-        ? new Set(scopedCheckpoints.keys())
-        : undefined;
-    let entries;
+    const catalog = await listAgentRunCatalog(cwd, workspacesDir);
+
+    const all: AgentSessionBrowserItem[] = [];
+    const activeBranchFiles = new Set<string>();
+    const catalogFiles = new Set<string>();
+    // The catalog is sorted newest first, so the first record per file is kept.
+    for (const record of catalog) {
+        if (!record.childSessionFile) {
+            continue;
+        }
+        const file = path.resolve(record.childSessionFile);
+        if (catalogFiles.has(file)) {
+            continue;
+        }
+        catalogFiles.add(file);
+        const checkpoint = record.ownerSessionId === activeBranch?.parentSessionId
+            ? checkpoints?.get(file)
+            : undefined;
+        all.push(pastItemFromCatalog(record, checkpoint));
+        if (checkpoint) {
+            activeBranchFiles.add(file);
+        }
+    }
+
+    const orphans = await listOrphanPastSessions(
+        cwdSessionDir,
+        catalogFiles,
+        activeBranch,
+        checkpoints,
+    );
+    for (const file of orphans.checkpointedFiles) {
+        activeBranchFiles.add(file);
+    }
+    all.push(...orphans.items);
+
+    all.sort((a, b) => b.updatedAt - a.updatedAt);
+    return {
+        all,
+        activeBranch: all.filter((item) =>
+            item.sessionFile !== undefined && activeBranchFiles.has(path.resolve(item.sessionFile)),
+        ),
+    };
+}
+
+/**
+ * Legacy fallback for transcripts written before the run catalog existed:
+ * scans parent-session directories, but only the ones that contain JSONL
+ * files the catalog does not reference, so the common case costs directory
+ * listings only.
+ */
+async function listOrphanPastSessions(
+    cwdSessionDir: string,
+    catalogFiles: ReadonlySet<string>,
+    activeBranch: AgentPastSessionActiveBranch | undefined,
+    checkpoints: Map<string, ActiveBranchChildCheckpoint> | undefined,
+): Promise<{ items: AgentSessionBrowserItem[]; checkpointedFiles: string[] }> {
+    const items: AgentSessionBrowserItem[] = [];
+    const checkpointedFiles: string[] = [];
+    let entries: Dirent[];
     try {
         entries = await fs.readdir(cwdSessionDir, { withFileTypes: true });
     } catch {
-        return [];
+        return { items, checkpointedFiles };
     }
-
-    const parentDirectories = entries
-        .filter((entry) => entry.isDirectory())
-        .filter((entry) => !scope?.parentSessionId || entry.name === scope.parentSessionId)
-        .map((entry) => entry.name)
-        .sort();
-    const sessions: AgentSessionBrowserItem[] = [];
-    for (const parentSessionId of parentDirectories) {
-        const directory = path.join(cwdSessionDir, parentSessionId);
+    for (const entry of entries
+        .filter((value) => value.isDirectory())
+        .map((value) => value.name)
+        .sort()) {
+        const directory = path.join(cwdSessionDir, entry);
+        let names: string[];
+        try {
+            names = (await fs.readdir(directory)).filter((name) => name.endsWith(".jsonl"));
+        } catch {
+            continue;
+        }
+        const hasUntracked = names.some(
+            (name) => !catalogFiles.has(path.resolve(path.join(directory, name))),
+        );
+        if (!hasUntracked) {
+            continue;
+        }
         let infos: SessionInfo[];
         try {
             infos = await SessionManager.listAll(directory);
         } catch {
             continue;
         }
-        const catalog = await listAgentRunCatalog(cwd, workspacesDir);
-        const scopedInfos = scopedFiles
-            ? infos.filter((info) => scopedFiles.has(path.resolve(info.path)))
-            : infos;
-        sessions.push(...scopedInfos.map((info) => {
-            const metadata = catalog.find((record) => (
-                record.ownerSessionId === parentSessionId
-                && record.childSessionFile !== undefined
-                && path.resolve(record.childSessionFile) === path.resolve(info.path)
-            ));
-            const checkpoint = scopedCheckpoints?.get(path.resolve(info.path));
-            return pastItem(info, parentSessionId, metadata, checkpoint);
-        }));
+        for (const info of infos) {
+            const file = path.resolve(info.path);
+            if (catalogFiles.has(file)) {
+                continue;
+            }
+            const checkpoint = entry === activeBranch?.parentSessionId
+                ? checkpoints?.get(file)
+                : undefined;
+            items.push(pastItem(info, entry, undefined, checkpoint));
+            if (checkpoint) {
+                checkpointedFiles.push(file);
+            }
+        }
     }
+    return { items, checkpointedFiles };
+}
 
-    sessions.sort((a, b) => b.updatedAt - a.updatedAt);
-    return sessions;
+export async function listPastAgentSessions(
+    cwd: string,
+    agentSessionsDir?: string,
+    scope?: AgentSessionHistoryScope,
+): Promise<AgentSessionBrowserItem[]> {
+    const activeBranch = scope?.activeBranchOnly && scope.parentSessionId
+        ? {
+            parentSessionId: scope.parentSessionId,
+            parentSessionFile: scope.parentSessionFile,
+            parentSessionLeafId: scope.parentSessionLeafId,
+        }
+        : undefined;
+    const lists = await listAgentPastSessionLists(cwd, agentSessionsDir, activeBranch);
+    if (scope?.activeBranchOnly) {
+        return lists.activeBranch;
+    }
+    if (scope?.parentSessionId) {
+        return lists.all.filter((item) => item.parentSessionId === scope.parentSessionId);
+    }
+    return lists.all;
 }
 
 export function removeCurrentAgentTranscripts(

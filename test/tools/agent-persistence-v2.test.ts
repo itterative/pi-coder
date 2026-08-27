@@ -20,7 +20,7 @@ import {
 import { AGENT_RUN_SNAPSHOT_MARKER } from "../../src/tools/agent/storage/run-markers";
 import { openAgentMetadataDatabase } from "../../src/tools/agent/storage/metadata";
 import { upsertAgentRunCatalogRecord } from "../../src/tools/agent/storage/run-catalog";
-import { listPastAgentSessions } from "../../src/tools/agent/presentation/sessions";
+import { listPastAgentSessions, loadAgentSessionTranscriptForItem } from "../../src/tools/agent/presentation/sessions";
 
 const tempDirs: string[] = [];
 
@@ -388,10 +388,10 @@ describe("delegated-agent V2 persistence", () => {
             activeBranchOnly: true,
         });
         expect(current).toHaveLength(1);
-        expect(current[0]).toMatchObject({
-            transcript: expect.stringContaining("second checkpoint response"),
-        });
-        expect(current[0]?.transcript).not.toContain("first checkpoint response");
+        expect(current[0]?.transcript).toBeUndefined();
+        const loadedCurrent = await loadAgentSessionTranscriptForItem(current[0]!);
+        expect(loadedCurrent?.transcript).toContain("second checkpoint response");
+        expect(loadedCurrent?.transcript).not.toContain("first checkpoint response");
 
         const historical = await listPastAgentSessions(process.cwd(), sessionsDir, {
             parentSessionId: ownerSessionId,
@@ -401,10 +401,11 @@ describe("delegated-agent V2 persistence", () => {
         });
         expect(historical).toHaveLength(1);
         expect(historical[0]).toMatchObject({
-            transcript: expect.stringContaining("first checkpoint response"),
             readOnlyReason: "continued on another branch",
         });
-        expect(historical[0]?.transcript).not.toContain("second checkpoint response");
+        const loadedHistorical = await loadAgentSessionTranscriptForItem(historical[0]!);
+        expect(loadedHistorical?.transcript).toContain("first checkpoint response");
+        expect(loadedHistorical?.transcript).not.toContain("second checkpoint response");
     });
 
     it("reports a selected checkpoint as unavailable when its leaf is missing", async () => {
@@ -447,7 +448,9 @@ describe("delegated-agent V2 persistence", () => {
         }, path.join(stateDir, "workspaces"));
 
         const sessions = await listPastAgentSessions(process.cwd(), sessionsDir);
-        expect(sessions[0]?.transcript).toBe("Transcript unavailable for the selected child checkpoint.");
+        expect(sessions[0]?.transcript).toBeUndefined();
+        const loaded = await loadAgentSessionTranscriptForItem(sessions[0]!);
+        expect(loaded?.transcript).toBe("Transcript unavailable for the selected child checkpoint.");
     });
 
     it("preserves commit ordering when snapshot, marker, or catalog writes fail", async () => {

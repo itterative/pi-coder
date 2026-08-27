@@ -354,6 +354,41 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
         this.sessionDetail = detail;
         detail.initialize(this.theme);
         detail.setDoneCallback(() => this.closeSessionDetail(detail));
+        this.loadTranscriptForDetail(selected, detail, options);
+    }
+
+    private loadTranscriptForDetail(
+        item: AgentSessionBrowserItem,
+        detail: AgentSessionDetailComponent,
+        options: AgentSessionBrowserOptions,
+    ): void {
+        // Past rows come from the run catalog without transcript text; the
+        // transcript is loaded once its detail view is open instead of being
+        // prebuilt for every enumerated session.
+        if (item.transcript !== undefined || !item.sessionFile || !options.onLoadTranscript) {
+            return;
+        }
+        void options.onLoadTranscript(item).then((updated) => {
+            if (!updated || this.sessionDetail !== detail) {
+                return;
+            }
+            this.replaceSessionItem(updated);
+            detail.updateItem(updated);
+        }).catch(() => {
+            // A transcript load failure keeps the preview already shown.
+        });
+    }
+
+    private replaceSessionItem(updated: AgentSessionBrowserItem): void {
+        for (const list of [this.current, this.sessionPast, this.past]) {
+            const index = list.findIndex((item) => sameSession(item, updated));
+            if (index >= 0) {
+                list[index] = updated;
+                break;
+            }
+        }
+        this.rebuildItems();
+        this.invalidate();
     }
 
     private openWorkspace(workspace: AgentWorkspaceBrowserItem, options: AgentSessionBrowserOptions): void {

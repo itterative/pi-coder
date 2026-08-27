@@ -41,6 +41,8 @@ export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
     fixedHeight?: () => number;
     onResume?: (item: AgentSessionBrowserItem) => void | Promise<void>;
     onCancel?: (item: AgentSessionBrowserItem) => void | Promise<void>;
+    /** Lazily loads a session transcript when its detail view is opened. */
+    onLoadTranscript?: (item: AgentSessionBrowserItem) => Promise<AgentSessionBrowserItem | undefined>;
     onWorkspaceAction?: (
         workspace: AgentWorkspaceBrowserItem,
         action: WorkspaceDispositionAction,

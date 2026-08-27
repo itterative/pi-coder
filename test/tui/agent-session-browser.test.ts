@@ -8,7 +8,7 @@ import {
     type AgentSessionBrowserData,
 } from "../../src/tui/agents";
 import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
-import { workspaceBrowserItem } from "../../src/tools/agent/presentation/browser-models";
+import { workspaceBrowserItem, type AgentSessionBrowserItem } from "../../src/tools/agent/presentation/browser-models";
 import { KEY, interact, mockTheme, press, renderText, snapshotText } from "../helpers";
 
 const current = {
@@ -545,6 +545,31 @@ describe("AgentSessionBrowserComponent", () => {
         await expect(snapshotText(ui.render())).toMatchFileSnapshot(
             "__snapshots__/agent-session-browser.session-detail-markdown.txt",
         );
+    });
+
+    it("loads a past transcript lazily when its detail view opens", async () => {
+        const loadedItems: AgentSessionBrowserItem[] = [];
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [past],
+            onLoadTranscript: async (item) => {
+                loadedItems.push(item);
+                return { ...item, transcript: "The implementation is sound.", messageCount: 4 };
+            },
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.enter);
+        // While the transcript is loading, the preview is shown with a hint.
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.session-detail-loading.txt",
+        );
+
+        await vi.waitFor(() => expect(loadedItems).toHaveLength(1));
+        expect(loadedItems[0]).toMatchObject({ id: "child-session-1", kind: "past" });
+        expect(ui.render()).toContain("The implementation is sound.");
+        expect(ui.render()).not.toContain("Loading full transcript…");
     });
 
     it("toggles between collapsed and detailed transcript views", () => {
