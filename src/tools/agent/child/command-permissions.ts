@@ -13,6 +13,7 @@ import { matchesKey } from "@earendil-works/pi-tui";
 import { lookpath } from "lookpath";
 
 import sandboxConfig from "../../../common/config";
+import { PERMISSION_PROMPT_CONFIRMATION_DELAY_MS } from "../../../common/constants";
 import sandbox from "../../../modules/sandbox/bubblewrap";
 import {
     getPathConfinementAssessment,
@@ -140,6 +141,7 @@ async function prompt(
                 borderTone: dialogOptions.borderTone,
                 handleSelectInput: dialogOptions.handleSelectInput,
                 selectHelpText: dialogOptions.selectHelpText,
+                confirmationDelayMs: PERMISSION_PROMPT_CONFIRMATION_DELAY_MS,
             },
             { ...options.parentContext, events: options.events },
             ctx.signal,

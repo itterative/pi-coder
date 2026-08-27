@@ -17,6 +17,10 @@ async function flush(): Promise<void> {
     for (let index = 0; index < 8; index++) await Promise.resolve();
 }
 
+async function waitForPermissionInput(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 260));
+}
+
 describe("command and edit permission gate", () => {
     const tempDirs: string[] = [];
 
@@ -127,6 +131,7 @@ describe("command and edit permission gate", () => {
         await flush();
         expect(runtime.dialogs).toHaveLength(1);
         expect(runtime.dialogs[0].render(100).join("\n")).toContain("[worker-7] worker: allow edit?");
+        await waitForPermissionInput();
         runtime.dialogs[0].handleInput(KEY.enter);
         await expect(permission).resolves.toEqual({ block: false });
 
@@ -170,6 +175,7 @@ describe("command and edit permission gate", () => {
         const filePermission = runtime.handlers.tool_call[0](event, runtime.ctx);
         await flush();
         expect(runtime.dialogs).toHaveLength(1);
+        await waitForPermissionInput();
         runtime.dialogs[0].handleInput(KEY.enter);
         await expect(filePermission).resolves.toEqual({ block: false });
         await expect(runtime.handlers.tool_call[1](event, runtime.ctx)).resolves.toEqual({ block: false });
@@ -237,6 +243,7 @@ describe("command and edit permission gate", () => {
         const second = runtime.handlers.tool_call[0](secondEvent, runtime.ctx);
         await flush();
         expect(runtime.dialogs).toHaveLength(1);
+        await waitForPermissionInput();
         runtime.dialogs[0].handleInput(KEY.enter);
         await expect(first).resolves.toEqual({ block: false });
         await flush();
@@ -252,6 +259,7 @@ describe("command and edit permission gate", () => {
         });
         await flush();
         expect(runtime.dialogs).toHaveLength(2);
+        await waitForPermissionInput();
         runtime.dialogs[1].handleInput(KEY.escape);
         await expect(second).resolves.toMatchObject({ block: true });
     });

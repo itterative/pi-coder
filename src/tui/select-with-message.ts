@@ -105,6 +105,8 @@ export interface SelectWithMessageOptions<T> {
     messageSeparator?: string;
     // Placeholder shown when editing and no message typed yet
     messagePlaceholder?: string;
+    // Ignore confirmation until this many milliseconds after the dialog opens
+    confirmationDelayMs?: number;
 }
 
 // Result of the selection
@@ -147,6 +149,7 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
     private readonly messageSeparator: string;
     private readonly messagePlaceholder: string;
     private readonly maxContentLines: number;
+    private readonly confirmationEnabledAt: number;
     private readonly borderTone?: "border" | "borderAccent" | (() => "border" | "borderAccent");
 
     // ── Selection state ──
@@ -174,6 +177,7 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
         this.messageSeparator = options.messageSeparator ?? ", ";
         this.messagePlaceholder = options.messagePlaceholder ?? "type a message...";
         this.maxContentLines = options.maxContentLines ?? 10;
+        this.confirmationEnabledAt = Date.now() + Math.max(0, options.confirmationDelayMs ?? 0);
         this.borderTone = options.borderTone;
         this.cursor = options.initialCursor ?? 0;
 
@@ -262,6 +266,10 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
     // ── Completion ──────────────────────────────────────────────────
 
     private confirmSelection(): void {
+        if (Date.now() < this.confirmationEnabledAt) {
+            return;
+        }
+
         const item = this.options.items[this.cursor];
         if (!item) {
             this.done(undefined);

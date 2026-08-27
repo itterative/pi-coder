@@ -131,6 +131,7 @@ describe("child Bash permissions", () => {
             await new Promise<void>((resolve) => setImmediate(resolve));
         }
         expect(runtime.dialogs).toHaveLength(1);
+        await new Promise((resolve) => setTimeout(resolve, 260));
         runtime.dialogs[0].handleInput(KEY.enter);
 
         await expect(pending).resolves.toEqual({ block: false });

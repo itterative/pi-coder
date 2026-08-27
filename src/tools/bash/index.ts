@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import sandboxConfig, { type SandboxConfig } from "../../common/config";
+import { PERMISSION_PROMPT_CONFIRMATION_DELAY_MS } from "../../common/constants";
 import { ALLOWED_COMMAND_ENTRY_TYPE, type AllowedCommandEntry } from "../../common/audit";
 import sandbox from "../../modules/sandbox/bubblewrap";
 import { Permission } from "../../modules/sandbox/permissions";
@@ -227,6 +228,9 @@ Pay attention to these notes as they provide context about the user's preference
 
                         return false;
                     },
+                    // Give the user a moment to notice and read the command
+                    // before buffered terminal input can approve it.
+                    confirmationDelayMs: PERMISSION_PROMPT_CONFIRMATION_DELAY_MS,
                 },
                 { ...ctx, events: pi.events },
                 ctx.signal,

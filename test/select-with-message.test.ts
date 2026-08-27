@@ -3,7 +3,7 @@
  * plus inline message editing through the composed InlineEditor.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
     SelectWithMessageComponent,
     selectWithMessage,
@@ -55,6 +55,29 @@ describe("SelectWithMessageComponent", () => {
         const { ui, result } = setup(baseOptions);
         ui.press(KEY.down, KEY.enter);
         expect(result()).toEqual({ value: "edit", message: undefined, displayText: "Edit" });
+    });
+
+    it("ignores Enter during the configured initial delay but accepts other input", () => {
+        vi.useFakeTimers();
+        try {
+            const { ui, result } = setup({ ...baseOptions, confirmationDelayMs: 250 });
+
+            ui.press(KEY.enter);
+            expect(result()).toBe("pending");
+
+            ui.press(KEY.down);
+            expect(ui.render()).toContain("→ Edit");
+
+            vi.advanceTimersByTime(249);
+            ui.press(KEY.enter);
+            expect(result()).toBe("pending");
+
+            vi.advanceTimersByTime(1);
+            ui.press(KEY.enter);
+            expect(result()).toEqual({ value: "edit", message: undefined, displayText: "Edit" });
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("Tab enters edit mode; typed message is included in the result", async () => {
