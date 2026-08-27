@@ -32,6 +32,11 @@ export interface AgentSessionBrowserData {
 export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
     cwd?: string;
     eventBus?: EventBus;
+    /** Render the Agents tab as loading until the initial async data arrives. */
+    loadingAgents?: boolean;
+    /** Render the Workspaces tab as loading until the initial async data arrives. */
+    loadingWorkspaces?: boolean;
+    onInitialLoad?: (signal: AbortSignal) => Promise<AgentSessionBrowserData>;
     onRefresh?: () => Promise<AgentSessionBrowserData>;
     fixedHeight?: () => number;
     onResume?: (item: AgentSessionBrowserItem) => void | Promise<void>;

@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { EventBus, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, Spacer, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { isAbortError } from "../../common/abort";
 import type { BuiltinAgentName } from "../../tools/agent/config";
 import type {
     AgentSessionBrowserItem,
@@ -133,6 +134,9 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
     private readonly list: ListViewComponent<BrowserItem, void, BrowserState>;
     private activeTab: BrowserTab = "agents";
     private agentScope: BrowserScope = "session";
+    private loadingAgents: boolean;
+    private loadingWorkspaces: boolean;
+    private refreshAfterInitialLoad = false;
     private sessionDetail: AgentSessionDetailComponent | null = null;
     private workspaceDetail: AgentWorkspaceDetailComponent | null = null;
     private modelSelector: SelectComponent<AgentModelOption> | null = null;
@@ -148,6 +152,8 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
         this.workspaces = [...(options.workspaces ?? [])];
         this.settings = [...(options.settings ?? [])];
         this.models = options.models?.slice();
+        this.loadingAgents = options.loadingAgents ?? false;
+        this.loadingWorkspaces = options.loadingWorkspaces ?? false;
         this.onInvalidate = options.onInvalidate;
         this.fixedHeight = options.fixedHeight;
         this.tabs = ["agents"];
@@ -162,7 +168,12 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
                 if (!isAgentEvent(data)) return;
                 const relevant = data.cwd === options.cwd
                     || (data.type === "run" && data.parentCwd === options.cwd);
-                if (relevant) this.refresh?.schedule();
+                if (!relevant) return;
+                if (this.loadingAgents || this.loadingWorkspaces) {
+                    this.refreshAfterInitialLoad = true;
+                    return;
+                }
+                this.refresh?.schedule();
             });
         }
     }
@@ -216,6 +227,9 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
     }
 
     apply(data: AgentSessionBrowserData): void {
+        const wasLoading = this.loadingAgents || this.loadingWorkspaces;
+        this.loadingAgents = false;
+        this.loadingWorkspaces = false;
         this.replace(this.current, data.current);
         this.replace(this.sessionPast, data.sessionPast ?? data.past);
         this.replace(this.past, data.past);
@@ -226,6 +240,10 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
         this.rebuildItems();
         this.invalidate();
         this.onInvalidate?.();
+        if (wasLoading && this.refreshAfterInitialLoad) {
+            this.refreshAfterInitialLoad = false;
+            this.refresh?.schedule();
+        }
     }
 
     private createList(options: AgentSessionBrowserOptions): ListViewComponent<BrowserItem, void, BrowserState> {
@@ -254,24 +272,28 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
                 },
                 onKey: (key, state) => this.handleListKey(key, state, options),
                 footerContent: (container, theme, state) => {
-                    const count = state.tab === "agents"
-                        ? this.agentItems().length
-                        : state.tab === "workspaces" ? this.workspaces.length : this.settings.length;
-                    let label = "session";
-                    if (state.tab === "workspaces") label = "workspace";
-                    if (state.tab === "settings") label = "setting";
-                    let scopeHint = "";
-                    if (state.tab === "agents") {
-                        scopeHint = this.agentScope === "session"
-                            ? " · this session · h: show historical"
-                            : " · historical · h: show this session";
+                    let footer = "";
+                    if (state.tab === "agents" && this.loadingAgents) {
+                        footer = "Loading…";
+                    } else if (state.tab === "workspaces" && this.loadingWorkspaces) {
+                        footer = "Loading…";
+                    } else {
+                        const count = state.tab === "agents"
+                            ? this.agentItems().length
+                            : state.tab === "workspaces" ? this.workspaces.length : this.settings.length;
+                        let label = "session";
+                        if (state.tab === "workspaces") label = "workspace";
+                        if (state.tab === "settings") label = "setting";
+                        let scopeHint = "";
+                        if (state.tab === "agents") {
+                            scopeHint = this.agentScope === "session"
+                                ? " · this session · h: show historical"
+                                : " · historical · h: show this session";
+                        }
+                        footer = `${count} ${label}${count === 1 ? "" : "s"}${scopeHint}`;
                     }
                     container.addChild(new Spacer(1));
-                    container.addChild(new Text(
-                        theme.fg("dim", `${count} ${label}${count === 1 ? "" : "s"}${scopeHint}`),
-                        1,
-                        0,
-                    ));
+                    container.addChild(new Text(theme.fg("dim", footer), 1, 0));
                 },
             },
             {
@@ -508,8 +530,12 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
     }
 
     private itemsForTab(tab: BrowserTab): ListItem<BrowserItem>[] {
-        if (tab === "agents") return asSessionListItems(this.agentItems()).map((item) => item as ListItem<BrowserItem>);
-        if (tab === "workspaces") return asWorkspaceListItems(this.workspaces).map((item) => item as ListItem<BrowserItem>);
+        if (tab === "agents") {
+            return asSessionListItems(this.agentItems(), this.loadingAgents).map((item) => item as ListItem<BrowserItem>);
+        }
+        if (tab === "workspaces") {
+            return asWorkspaceListItems(this.workspaces, this.loadingWorkspaces).map((item) => item as ListItem<BrowserItem>);
+        }
         return asSettingsListItems(this.settings).map((item) => item as ListItem<BrowserItem>);
     }
 
@@ -553,16 +579,41 @@ export async function showAgentSessionBrowser(
                 Math.max(2, tui.terminal.rows - 2),
             ),
         );
+        const initialLoadController = new AbortController();
         const component = new AgentSessionBrowserComponent({
             ...options,
             fixedHeight,
             onInvalidate: () => tui.requestRender(),
         });
         component.setDoneCallback(() => {
+            initialLoadController.abort();
             component.dispose();
             done();
         });
         component.initialize(theme);
+        if (options.onInitialLoad) {
+            void options.onInitialLoad(initialLoadController.signal)
+                .then((data) => {
+                    if (!component.isDisposed()) {
+                        component.apply(data);
+                    }
+                })
+                .catch((error: unknown) => {
+                    if (component.isDisposed()) {
+                        return;
+                    }
+                    component.apply({
+                        current: [],
+                        sessionPast: [],
+                        past: [],
+                        workspaces: [],
+                        settings: options.settings,
+                        models: options.models,
+                    });
+                    const message = error instanceof Error ? error.message : String(error);
+                    ctx.ui.notify(`Could not load delegated-agent sessions: ${message}`, "warning");
+                });
+        }
         return component;
     }, {
         overlay: true,

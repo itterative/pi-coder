@@ -17,6 +17,16 @@ export const EMPTY_AGENTS: AgentSessionBrowserItem = {
     updatedAt: 0,
 };
 
+const LOADING_AGENTS: AgentSessionBrowserItem = {
+    kind: "empty",
+    id: "loading-agents",
+    title: "",
+    agent: "",
+    status: "",
+    task: "Loading delegated agents…",
+    updatedAt: 0,
+};
+
 export interface EmptyWorkspaceItem {
     kind: "empty";
     id: string;
@@ -29,6 +39,12 @@ export const EMPTY_WORKSPACES: EmptyWorkspaceItem = {
     kind: "empty",
     id: "empty-workspaces",
     task: "No isolated workspaces have been created for this cwd.",
+};
+
+const LOADING_WORKSPACES: EmptyWorkspaceItem = {
+    kind: "empty",
+    id: "loading-workspaces",
+    task: "Loading isolated workspaces…",
 };
 
 export function oneLine(text: string, maxChars = 240): string {
@@ -66,8 +82,17 @@ export function returnedText(item: AgentSessionBrowserItem): string | undefined 
 
 export function asSessionListItems(
     items: AgentSessionBrowserItem[],
+    loading = false,
 ): ListItem<AgentSessionBrowserItem>[] {
-    return (items.length ? items : [EMPTY_AGENTS]).map((value) => ({
+    let values: AgentSessionBrowserItem[];
+    if (loading) {
+        values = [LOADING_AGENTS];
+    } else if (items.length) {
+        values = items;
+    } else {
+        values = [EMPTY_AGENTS];
+    }
+    return values.map((value) => ({
         value,
         label: value.kind === "empty" ? value.task : `${value.title} · ${value.agent}`,
         disabled: value.kind === "empty",
@@ -76,8 +101,17 @@ export function asSessionListItems(
 
 export function asWorkspaceListItems(
     workspaces: AgentWorkspaceBrowserItem[],
+    loading = false,
 ): ListItem<WorkspaceListItem>[] {
-    return (workspaces.length ? workspaces : [EMPTY_WORKSPACES]).map((value) => ({
+    let values: WorkspaceListItem[];
+    if (loading) {
+        values = [LOADING_WORKSPACES];
+    } else if (workspaces.length) {
+        values = workspaces;
+    } else {
+        values = [EMPTY_WORKSPACES];
+    }
+    return values.map((value) => ({
         value,
         label: value.kind === "workspace" ? value.slug : value.task,
         disabled: value.kind !== "workspace",

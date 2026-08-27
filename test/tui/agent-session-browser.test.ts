@@ -4,6 +4,8 @@ import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/observability/events";
 import {
     AgentSessionBrowserComponent,
+    showAgentSessionBrowser,
+    type AgentSessionBrowserData,
 } from "../../src/tui/agents";
 import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
 import { workspaceBrowserItem } from "../../src/tools/agent/presentation/browser-models";
@@ -293,6 +295,128 @@ describe("AgentSessionBrowserComponent", () => {
         ui.press(KEY.tab);
         ui.press(KEY.escape);
         expect(ui.render()).not.toContain("Run ID: child-session-1");
+        value.dispose();
+        eventBus.clear();
+    });
+
+    it("renders a loading state until the initial agent data arrives", async () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            loadingAgents: true,
+        });
+        value.initialize(mockTheme);
+
+        await expect(snapshotText(renderText(value, 100))).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.loading.txt",
+        );
+
+        value.apply({ current: [current], past: [] });
+
+        await expect(snapshotText(renderText(value, 100))).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.loading-complete.txt",
+        );
+    });
+
+    it("cancels an initial load when the browser closes", async () => {
+        let resolveInitial!: (data: AgentSessionBrowserData) => void;
+        let initialSignal: AbortSignal | undefined;
+        let browser: AgentSessionBrowserComponent | undefined;
+        let finish!: () => void;
+        const customPromise = new Promise<void>((resolve) => {
+            finish = resolve;
+        });
+        const tui = {
+            terminal: { rows: 40 },
+            addInputListener: () => () => {},
+            requestRender: () => {},
+        };
+        const notify = vi.fn();
+        const custom = (factory: any) => {
+            browser = factory(tui, mockTheme, {}, finish);
+            return customPromise;
+        };
+        const show = showAgentSessionBrowser({
+            current: [],
+            past: [],
+            loadingAgents: true,
+            onInitialLoad: (signal) => {
+                initialSignal = signal;
+                return new Promise<AgentSessionBrowserData>((resolve) => {
+                    resolveInitial = resolve;
+                });
+            },
+        }, {
+            hasUI: true,
+            mode: "tui",
+            ui: { custom, notify },
+        } as any);
+
+        await vi.waitFor(() => expect(browser).toBeDefined());
+        browser!.handleInput(KEY.escape);
+        await show;
+        expect(initialSignal?.aborted).toBe(true);
+
+        resolveInitial({ current: [current], past: [] });
+        await Promise.resolve();
+        expect(notify).not.toHaveBeenCalled();
+    });
+
+    it("shows a loading state for workspaces until the initial data arrives", async () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            workspaces: [],
+            loadingWorkspaces: true,
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.workspaces-loading.txt",
+        );
+    });
+
+    it("defers refresh events until the initial data has been applied", async () => {
+        const eventBus = createEventBus();
+        let refreshes = 0;
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            workspaces: [],
+            cwd: "/repo/project",
+            eventBus,
+            loadingAgents: true,
+            loadingWorkspaces: true,
+            onRefresh: async () => {
+                refreshes++;
+                return {
+                    current: [{ ...current, title: "Refreshed run" }],
+                    past: [],
+                    workspaces: [],
+                };
+            },
+        });
+        value.initialize(mockTheme);
+
+        eventBus.emit(AGENT_EVENT_CHANNEL, {
+            cwd: "/repo/project",
+            timestamp: Date.now(),
+            type: "run",
+            action: "progress",
+            runId: current.id,
+            status: "running",
+        });
+        await Promise.resolve();
+        expect(refreshes).toBe(0);
+
+        value.apply({ current: [current], past: [], workspaces: [] });
+        await vi.waitFor(() => expect(refreshes).toBe(1));
+        await expect(snapshotText(renderText(value, 100))).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.initial-refresh.txt",
+        );
+
         value.dispose();
         eventBus.clear();
     });

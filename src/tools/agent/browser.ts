@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
+import { throwIfAborted } from "../../common/abort";
 import agentConfig, {
     BUILTIN_AGENT_NAMES,
     isAdvisorEnabled,
@@ -113,17 +114,22 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
         let workspaceDomains = new Map<string, AgentWorkspace>();
         const requireWorkspace = (workspaceId: string): AgentWorkspace => {
             const workspace = workspaceDomains.get(workspaceId);
-            if (!workspace) throw new Error(`Workspace ${workspaceId} is no longer available.`);
+            if (!workspace) {
+                throw new Error(`Workspace ${workspaceId} is no longer available.`);
+            }
             return workspace;
         };
-        const loadBrowserData = async (): Promise<AgentSessionBrowserData> => {
+        const loadBrowserData = async (signal?: AbortSignal): Promise<AgentSessionBrowserData> => {
+            throwIfAborted(signal);
             await lifecycle.manager.flushPersistence();
+            throwIfAborted(signal);
             const current = await loadAgentSessionTranscripts(
                 currentAgentSessionItems([
                     ...lifecycle.manager.listRuns(),
                     ...lifecycle.setupRunSummaries,
                 ]),
             );
+            throwIfAborted(signal);
             let sessionPast: AgentSessionBrowserItem[];
             let past: AgentSessionBrowserItem[];
             try {
@@ -140,16 +146,21 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                 sessionPast = mergeHistoricalAgentSessions(sessionPastRecords, activeBranchPast, current);
                 past = mergeHistoricalAgentSessions(allPast, activeBranchPast, current);
             } catch (error) {
+                if (signal?.aborted) {
+                    throw error;
+                }
                 const message = error instanceof Error ? error.message : String(error);
                 ctx.ui.notify(`Could not browse persisted delegated-agent sessions: ${message}`, "warning");
                 sessionPast = [];
                 past = [];
             }
+            throwIfAborted(signal);
             let workspaceRecords: AgentWorkspace[];
             try {
                 // Reconcile only verified no-change results. Changed or otherwise
                 // uncertain leases remain protected until an explicit action.
                 const released = await reconcileNoChangeAgentWorkspaceLeases(ctx.cwd);
+                throwIfAborted(signal);
                 if (released > 0) {
                     ctx.ui.notify(
                         `Released ${released} verified no-change workspace lease${released === 1 ? "" : "s"}.`,
@@ -162,17 +173,23 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                     });
                 }
                 workspaceRecords = await listAgentWorkspaces(ctx.cwd);
+                throwIfAborted(signal);
             } catch (error) {
+                if (signal?.aborted) {
+                    throw error;
+                }
                 const message = error instanceof Error ? error.message : String(error);
                 ctx.ui.notify(`Could not browse agent workspaces: ${message}`, "warning");
                 workspaceRecords = [];
             }
+            throwIfAborted(signal);
             workspaceDomains = new Map(workspaceRecords.map((workspace) => [workspace.id, workspace]));
             const workspaces = await Promise.all(workspaceRecords.map(async (workspace) => workspaceBrowserItem(
                 workspace,
                 await inspectAgentWorkspaceGitState(workspace),
                 currentSessionId,
             )));
+            throwIfAborted(signal);
             return {
                 current,
                 sessionPast,
@@ -183,9 +200,19 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             };
         };
 
-        const initial = await loadBrowserData();
+        const initial: AgentSessionBrowserData = {
+            current: [],
+            sessionPast: [],
+            past: [],
+            workspaces: [],
+            settings: buildSettings(ctx.cwd),
+            models: buildModelOptions(ctx, ctx.cwd),
+        };
         await showAgentSessionBrowser({
             ...initial,
+            loadingAgents: true,
+            loadingWorkspaces: true,
+            onInitialLoad: loadBrowserData,
             cwd: ctx.cwd,
             eventBus: pi.events,
             onRefresh: loadBrowserData,
