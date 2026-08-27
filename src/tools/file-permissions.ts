@@ -183,6 +183,8 @@ export interface FilePermissionHookOptions {
     childAccess?: boolean;
     /** Child hooks use their fixed confinement rather than parent config defaults. */
     confinement?: SandboxConfigCwdConfinement;
+    /** Additional exact paths that are readable for this child runtime. */
+    additionalReadRoots?: (ctx: ExtensionContext) => readonly string[];
     /** Worker hooks report dialogs through the child progress tracker. */
     permissionPending?: (pending: boolean, activity: string) => void;
     /** Optional run-labelled title for child permission dialogs. */
@@ -225,7 +227,10 @@ export default function registerFileToolHook(
         const state = stateFor(ctx);
         const confinement = options.confinement ?? sandboxConfig.current?.heuristics?.cwdConfinement;
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
-        const additionalRoots = scratchpadPath ? [scratchpadPath] : [];
+        const additionalRoots = [
+            ...(scratchpadPath ? [scratchpadPath] : []),
+            ...(operation === "read" ? options.additionalReadRoots?.(ctx) ?? [] : []),
+        ];
 
         if (isSafeHeuristic(getPathConfinementPermission(filePath, cwd, confinement, operation, additionalRoots))) {
             return { block: false };

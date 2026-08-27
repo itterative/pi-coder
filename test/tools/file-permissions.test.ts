@@ -50,6 +50,43 @@ describe("file permission session entries", () => {
         temporaryDirectories = [];
     });
 
+    it("allows dynamic read roots only for read operations", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-session-"));
+        const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-output-"));
+        temporaryDirectories.push(cwd, outputDirectory);
+        const outputPath = path.join(outputDirectory, "bash-output.log");
+        fs.writeFileSync(outputPath, "full output");
+
+        const handlers: Record<string, Handler[]> = {};
+        const pi = {
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            appendEntry() {},
+        } as any;
+        const additionalReadRoots = () => [outputPath];
+        registerFileToolHook(pi, "read", { additionalReadRoots });
+        const ctx = { cwd, hasUI: false, sessionManager: {} };
+
+        await expect(handlers.tool_call[0]!({
+            toolName: "read",
+            input: { path: outputPath },
+        }, ctx)).resolves.toEqual({ block: false });
+
+        const writeHandlers: Record<string, Handler[]> = {};
+        const writePi = {
+            on(event: string, handler: Handler) {
+                (writeHandlers[event] ??= []).push(handler);
+            },
+            appendEntry() {},
+        } as any;
+        registerFileToolHook(writePi, "write", { additionalReadRoots });
+        await expect(writeHandlers.tool_call[0]!({
+            toolName: "write",
+            input: { path: outputPath },
+        }, ctx)).resolves.toMatchObject({ block: true });
+    });
+
     it("keeps remembered folders isolated between extension runtimes", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-session-"));
         const folder = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-approved-"));

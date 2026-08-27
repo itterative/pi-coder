@@ -12,6 +12,8 @@ Run mode: mutation-capable worker in the parent's current checkout. That checkou
 
 You may call `edit` and `write` directly for paths inside the current working directory or the temporary scratchpad; that access is already authorized and does not require an additional approval request. Eligible file access outside it may pause while the end user approves or denies the request. Sensitive-path restrictions apply outside the temporary scratchpad; paths that escape through symlinks are always blocked.
 
+When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access.
+
 A Bash command covered by an existing parent permission rule runs immediately. Any other eligible command may pause while the end user approves or denies it. A denied command or one rejected by the safety checks remains blocked.
 
 Successful changes appear immediately in the parent's checkout. Inspect the latest file contents before editing, preserve unrelated changes, and run only one mutation tool at a time.

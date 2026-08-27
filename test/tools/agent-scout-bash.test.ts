@@ -115,6 +115,123 @@ describe("child Bash permissions", () => {
             .resolves.toMatchObject({ block: true, reason: expect.stringContaining("UNKNOWN_COMMAND") });
     });
 
+    it("allows reading a current child Bash output file without allowing general temp access", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
+        const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-bash-output-"));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-bash-output-outside-"));
+        tempDirs.push(cwd, outputDirectory, outside);
+        const outputPath = path.join(outputDirectory, "bash-output.log");
+        const outsidePath = path.join(outside, "secret.txt");
+        fs.writeFileSync(outputPath, "full output");
+        fs.writeFileSync(outsidePath, "secret");
+        const runtime = setup(cwd);
+        const result = runtime.handlers.tool_result[0]!;
+        const check = runtime.handlers.tool_call[0]!;
+
+        await result({
+            type: "tool_result",
+            toolName: "bash",
+            toolCallId: "bash-1",
+            input: { command: "cat large.log" },
+            content: [],
+            isError: false,
+            details: { fullOutputPath: outputPath },
+        }, runtime.ctx);
+
+        expect(check({ toolName: "read", input: { path: outputPath } }, runtime.ctx))
+            .toBeUndefined();
+        expect(check({ toolName: "read", input: { path: outsidePath } }, runtime.ctx))
+            .toMatchObject({ block: true });
+        expect(check({ toolName: "read", input: { path: path.join(os.tmpdir(), "unrelated.log") } }, runtime.ctx))
+            .toMatchObject({ block: true });
+        await expect(check({ toolName: "bash", input: { command: `cat ${outputPath}` } }, runtime.ctx))
+            .resolves.toMatchObject({ block: true });
+    });
+
+    it("reconstructs readable Bash output paths from a resumed child transcript", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
+        const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-bash-output-"));
+        tempDirs.push(cwd, outputDirectory);
+        const outputPath = path.join(outputDirectory, "bash-output.log");
+        fs.writeFileSync(outputPath, "full output");
+        const runtime = setup(cwd);
+        const sessionManager = {
+            getBranch: () => [{
+                type: "message",
+                message: {
+                    role: "toolResult",
+                    toolName: "bash",
+                    details: { fullOutputPath: outputPath },
+                },
+            }],
+        };
+        await runtime.handlers.session_start[0]!({}, { cwd, sessionManager });
+
+        expect(runtime.handlers.tool_call[0]!({
+            toolName: "read",
+            input: { path: outputPath },
+        }, { cwd })).toBeUndefined();
+    });
+
+    it("retains all active truncated Bash output paths", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
+        const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-bash-output-"));
+        tempDirs.push(cwd, outputDirectory);
+        const outputPaths = Array.from({ length: 100 }, (_, index) => {
+            const outputPath = path.join(outputDirectory, `bash-output-${index}.log`);
+            fs.writeFileSync(outputPath, `full output ${index}`);
+            return outputPath;
+        });
+        const runtime = setup(cwd);
+        const result = runtime.handlers.tool_result[0]!;
+        const check = runtime.handlers.tool_call[0]!;
+
+        for (const outputPath of outputPaths) {
+            await result({
+                type: "tool_result",
+                toolName: "bash",
+                toolCallId: outputPath,
+                input: { command: "cat large.log" },
+                content: [],
+                isError: false,
+                details: { fullOutputPath: outputPath },
+            }, runtime.ctx);
+        }
+
+        expect(check({ toolName: "read", input: { path: outputPaths[0] } }, runtime.ctx))
+            .toBeUndefined();
+        expect(check({ toolName: "read", input: { path: outputPaths.at(-1) } }, runtime.ctx))
+            .toBeUndefined();
+    });
+
+    it("rejects a Bash output path after it is replaced by a symlink", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
+        const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-bash-output-"));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-bash-output-outside-"));
+        tempDirs.push(cwd, outputDirectory, outside);
+        const outputPath = path.join(outputDirectory, "bash-output.log");
+        const outsidePath = path.join(outside, "secret.txt");
+        fs.writeFileSync(outputPath, "full output");
+        fs.writeFileSync(outsidePath, "secret");
+        const runtime = setup(cwd);
+        await runtime.handlers.tool_result[0]!({
+            type: "tool_result",
+            toolName: "bash",
+            toolCallId: "bash-1",
+            input: { command: "cat large.log" },
+            content: [],
+            isError: false,
+            details: { fullOutputPath: outputPath },
+        }, runtime.ctx);
+        fs.rmSync(outputPath);
+        fs.symlinkSync(outsidePath, outputPath);
+
+        expect(runtime.handlers.tool_call[0]!({
+            toolName: "read",
+            input: { path: outputPath },
+        }, runtime.ctx)).toMatchObject({ block: true });
+    });
+
     it("routes command-runner commands through the permission gate", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-command-runner-"));
         tempDirs.push(cwd);

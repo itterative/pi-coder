@@ -18,6 +18,9 @@
   * see TODO in src/tools/agent/child.ts ("session.agent.toolExecution = "sequential";")
   * long termm would be to recreate the tools and the permission gate inside the tool call instead
 
+* edge case: bash tool results might be pruned and some agents might not be able to read that file
+  * [Showing lines 29-520 of 520 (50.0KB limit). Full output: /tmp/pi-bash-4f152853a59681bf.log]
+
 AGENT:
 The deadlock is real and follows directly from Pi 0.84.1’s execution order:
 - Parallel mode preflights calls sequentially, but executes them only after all preflights finish (`node_modules/.../pi-agent-core/dist/agent-loop.js:287-371`).

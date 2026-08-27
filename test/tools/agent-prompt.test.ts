@@ -15,16 +15,16 @@ import {
 
 describe("delegated-agent prompt rendering", () => {
     const builtins = [
-        { name: "scout", definition: BUILTIN_SCOUT, mutating: false, safeBash: true, allowUserInteraction: true, hasScratchpad: false },
-        { name: "reviewer", definition: BUILTIN_REVIEWER, mutating: false, safeBash: true, commandRunner: true, allowUserInteraction: true, hasScratchpad: true },
-        { name: "advisor", definition: BUILTIN_ADVISOR, mutating: false, safeBash: true, allowUserInteraction: false, hasScratchpad: false },
-        { name: "worker", definition: BUILTIN_WORKER, mutating: true, safeBash: true, commandRunner: true, allowUserInteraction: true, hasScratchpad: true },
+        { name: "scout", definition: BUILTIN_SCOUT, mutating: false, safeBash: true, allowUserInteraction: true, hasScratchpad: false, hasBashOutputAccess: true },
+        { name: "reviewer", definition: BUILTIN_REVIEWER, mutating: false, safeBash: true, commandRunner: true, allowUserInteraction: true, hasScratchpad: true, hasBashOutputAccess: true },
+        { name: "advisor", definition: BUILTIN_ADVISOR, mutating: false, safeBash: true, allowUserInteraction: false, hasScratchpad: false, hasBashOutputAccess: true },
+        { name: "worker", definition: BUILTIN_WORKER, mutating: true, safeBash: true, commandRunner: true, allowUserInteraction: true, hasScratchpad: true, hasBashOutputAccess: true },
     ] as const;
 
-    it.each(builtins)("renders the $name child system prompt", async ({ name, definition, mutating, safeBash, commandRunner = false, allowUserInteraction, hasScratchpad }) => {
+    it.each(builtins)("renders the $name child system prompt", async ({ name, definition, mutating, safeBash, commandRunner = false, allowUserInteraction, hasScratchpad, hasBashOutputAccess }) => {
         const rendered = renderAgentSystemPrompt(
             definition,
-            childProtocolPrompt(false, mutating, safeBash, allowUserInteraction, false, commandRunner, hasScratchpad),
+            childProtocolPrompt(false, mutating, safeBash, allowUserInteraction, false, commandRunner, hasScratchpad, hasBashOutputAccess),
         );
 
         await expect(rendered).toMatchFileSnapshot(`__snapshots__/agent-prompt.${name}.system.txt`);
@@ -33,7 +33,7 @@ describe("delegated-agent prompt rendering", () => {
     it("renders the isolated worker child system prompt", async () => {
         const rendered = renderAgentSystemPrompt(
             BUILTIN_WORKER,
-            childProtocolPrompt(false, true, true, true, true, true, true),
+            childProtocolPrompt(false, true, true, true, true, true, true, true),
         );
 
         await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.worker-isolated.system.txt");

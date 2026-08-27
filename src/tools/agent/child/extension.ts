@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
+    isBashToolResult,
     isToolCallEventType,
     type EventBus,
     type ExtensionAPI,
@@ -45,10 +48,17 @@ export function childProtocolPrompt(
     isolated = false,
     commandRunner = false,
     hasScratchpad = false,
+    hasBashOutputAccess = false,
 ): string {
-    const allowedPathScope = hasScratchpad
+    const mutationPathScope = hasScratchpad
         ? "the current working directory or the temporary scratchpad"
         : "the current working directory";
+    let allowedPathScope = mutationPathScope;
+    if (hasBashOutputAccess) {
+        allowedPathScope = hasScratchpad
+            ? "the current working directory, the temporary scratchpad, or an exact full-output file reported by Bash"
+            : "the current working directory or an exact full-output file reported by Bash";
+    }
     const sensitivePathRule = hasScratchpad
         ? "Sensitive-path restrictions apply outside the temporary scratchpad; paths that escape through symlinks are always blocked."
         : "Sensitive paths and paths that escape through symlinks are always blocked.";
@@ -69,13 +79,19 @@ export function childProtocolPrompt(
             ...(hasScratchpad
                 ? ["This run also has a private temporary scratchpad as an additional root. You may use `edit` and `write` there without an additional approval request."]
                 : []),
+            ...(hasBashOutputAccess
+                ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
+                : []),
             "This run has its own permission state. A file mutation or Bash command that is not already allowed may pause while the end user decides whether to approve it; do not assume an approval granted to the parent also applies to you.",
             "Run only one mutation tool at a time. Other isolated workers may run concurrently, so avoid destructive Git operations and keep changes narrow.",
         ].join("\n\n");
     } else if (canEdit) {
         capability = [
             "Run mode: mutation-capable worker in the parent's current checkout. That checkout is your current working directory.",
-            `You may call \`edit\` and \`write\` directly for paths inside ${allowedPathScope}; that access is already authorized and does not require an additional approval request. Eligible file access outside it may pause while the end user approves or denies the request. ${sensitivePathRule}`,
+            `You may call \`edit\` and \`write\` directly for paths inside ${mutationPathScope}; that access is already authorized and does not require an additional approval request. Eligible file access outside it may pause while the end user approves or denies the request. ${sensitivePathRule}`,
+            ...(hasBashOutputAccess
+                ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
+                : []),
             "A Bash command covered by an existing parent permission rule runs immediately. Any other eligible command may pause while the end user approves or denies it. A denied command or one rejected by the safety checks remains blocked.",
             "Successful changes appear immediately in the parent's checkout. Inspect the latest file contents before editing, preserve unrelated changes, and run only one mutation tool at a time.",
         ].join("\n\n");
@@ -83,6 +99,9 @@ export function childProtocolPrompt(
         capability = [
             "Run mode: delegated agent with permission-gated command execution.",
             `You may use \`read\`, \`grep\`, \`find\`, and \`ls\`. Every direct file path, after resolving symlinks, must remain inside ${allowedPathScope}. ${readPathRule} You cannot use direct edit or write tools.`,
+            ...(hasBashOutputAccess
+                ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
+                : []),
             "You may use `bash`. Commands recognized as local read-only inspection run directly; other eligible commands may pause while the end user approves or denies them. Approved commands can have project side effects, so keep them relevant to validation and do not assume a command is harmless because it has a test-like name.",
         ].join("\n\n");
     } else {
@@ -93,6 +112,9 @@ export function childProtocolPrompt(
         capability = [
             "Run mode: read-only delegated agent.",
             `You may use \`read\`, \`grep\`, \`find\`, and \`ls\`. Every path, after resolving symlinks, must remain inside ${allowedPathScope}. ${readPathRule} You cannot modify files.`,
+            ...(hasBashOutputAccess
+                ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
+                : []),
             bashAccess,
         ].join("\n\n");
     }
@@ -212,6 +234,29 @@ export function registerChildExtension(
     commandRunner = false,
 ) {
     return (pi: ExtensionAPI): void => {
+        const bashOutputPaths = new Map<string, BashOutputPath>();
+        const readRoots = (ctx: ExtensionContext): readonly string[] => [
+            ...getScratchpadRoots(ctx),
+            ...activeBashOutputPaths(bashOutputPaths),
+        ];
+        const rememberSessionBashOutputs = (ctx: ExtensionContext): void => {
+            for (const entry of ctx.sessionManager?.getBranch() ?? []) {
+                if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
+                if (entry.message.toolName !== "bash") continue;
+                rememberBashOutputPath(
+                    bashOutputPaths,
+                    (entry.message as { details?: unknown }).details,
+                );
+            }
+        };
+        pi.on("session_start", (_event, ctx) => {
+            rememberSessionBashOutputs(ctx);
+        });
+        pi.on("tool_result", (event) => {
+            if (!isBashToolResult(event)) return;
+            rememberBashOutputPath(bashOutputPaths, event.details);
+        });
+
         const nonIsolated = !isolated && workspaceId === undefined;
         const parentSessionManager = parentContext.sessionManager;
         const permissionState = nonIsolated && parentSessionManager
@@ -251,6 +296,7 @@ export function registerChildExtension(
             };
             registerFileToolHook(pi, "read", {
                 ...fileHookOptions,
+                additionalReadRoots: () => activeBashOutputPaths(bashOutputPaths),
                 promptTitle: `[${childRunLabel}] ${agentName}: allow read path?`,
             });
             registerFileToolHook(pi, "write", {
@@ -393,7 +439,7 @@ export function registerChildExtension(
 
             const filePath = readToolPath(event);
             if (filePath === undefined) return;
-            const additionalRoots = getScratchpadRoots(ctx);
+            const additionalRoots = readRoots(ctx);
             if (!isChildPathAllowed(filePath, ctx.cwd, additionalRoots)) {
                 if (!isFileAccessApproved(event)) {
                     return {
@@ -405,6 +451,82 @@ export function registerChildExtension(
             tracker.readFiles.add(relativeReadPath(filePath, ctx.cwd));
         });
     };
+}
+
+interface BashOutputPath {
+    lexical: string;
+    real: string;
+    device: number;
+    inode: number;
+}
+
+function isWithinDirectory(filePath: string, directory: string): boolean {
+    const relative = path.relative(directory, filePath);
+    return relative === "" || (
+        relative !== ".."
+        && !relative.startsWith(`..${path.sep}`)
+        && !path.isAbsolute(relative)
+    );
+}
+
+function bashOutputPath(value: unknown): BashOutputPath | undefined {
+    if (typeof value !== "string" || !path.isAbsolute(value)) return undefined;
+
+    const lexical = path.resolve(value);
+    const temporaryDirectory = path.resolve(os.tmpdir());
+    if (!isWithinDirectory(lexical, temporaryDirectory)) return undefined;
+
+    try {
+        const stat = fs.lstatSync(lexical);
+        if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
+
+        const real = fs.realpathSync(lexical);
+        const realTemporaryDirectory = fs.realpathSync(temporaryDirectory);
+        if (!isWithinDirectory(real, realTemporaryDirectory)) return undefined;
+
+        return {
+            lexical,
+            real,
+            device: stat.dev,
+            inode: stat.ino,
+        };
+    } catch {
+        return undefined;
+    }
+}
+
+function rememberBashOutputPath(
+    paths: Map<string, BashOutputPath>,
+    details: unknown,
+): void {
+    if (!details || typeof details !== "object") return;
+    const value = (details as { fullOutputPath?: unknown }).fullOutputPath;
+    const outputPath = bashOutputPath(value);
+    if (!outputPath) return;
+
+    // Keep every validated path: this retains only small path/stat metadata,
+    // not output contents or open handles, and truncated results are naturally
+    // bounded by the amount of work a child run performs.
+    paths.delete(outputPath.lexical);
+    paths.set(outputPath.lexical, outputPath);
+}
+
+function activeBashOutputPaths(paths: Map<string, BashOutputPath>): string[] {
+    const active: string[] = [];
+    for (const [lexical, expected] of paths) {
+        const current = bashOutputPath(lexical);
+        if (
+            !current
+            || current.real !== expected.real
+            || current.device !== expected.device
+            || current.inode !== expected.inode
+        ) {
+            paths.delete(lexical);
+            continue;
+        }
+        active.push(lexical);
+    }
+    return active;
 }
 
 function getScratchpadRoots(ctx: ExtensionContext): readonly string[] {
