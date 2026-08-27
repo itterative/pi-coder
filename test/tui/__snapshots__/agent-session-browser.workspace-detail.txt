@@ -19,9 +19,9 @@
 │   i inspect changes · r reset · d discard                                                        │
 │                                                                                                  │
 │   This workspace may be selected for an isolated worker.                                         │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
 │     ↑/↓ scroll · i inspect changes · r reset · d discard · Esc back                              │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
-│                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

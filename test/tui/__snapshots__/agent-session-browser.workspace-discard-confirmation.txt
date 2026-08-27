@@ -21,7 +21,7 @@
 │   This workspace may be selected for an isolated worker.                                         │
 │                                                                                                  │
 │   Confirm discard? y/Enter confirm · n/Esc cancel                                                │
+│                                                                                                  │
+│                                                                                                  │
 │     ↑/↓ scroll · i inspect changes · r reset · d discard · Esc back                              │
-│                                                                                                  │
-│                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

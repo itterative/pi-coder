@@ -1,0 +1,20 @@
+╭──────────────────────────────────────────────────────────────╮
+│   Delegated agent sessions                                   │
+│                                                              │
+│     ● Agents                                                 │
+│                                                              │
+│   → Project structure audit 1 · scout · active · running ·   │
+│   Nov 14 2023 22:13                                          │
+│     Task: Inspect the project structure · Reading files      │
+│     Result: I found the main entry points and summarized     │
+│   the current architecture.                                  │
+│                                                              │
+│     Project structure audit 2 · scout · active · running ·   │
+│                                                              │
+│     Showing lines 7-13 of 35                                 │
+│                                                              │
+│   6 sessions · this session · h: show historical             │
+│                                                              │
+│     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc     │
+│   close                                                      │
+╰──────────────────────────────────────────────────────────────╯

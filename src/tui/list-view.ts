@@ -137,6 +137,7 @@ export class ListViewComponent<
     protected theme: Theme | null = null;
     private readonly container: Container;
     private readonly contentContainer: Box;
+    private readonly footerSpacer = new Spacer(0);
     private borderedContainer: BorderBox | null = null;
     private titleText: Text | null = null;
     private done: ((result: R) => void) | null = null;
@@ -146,6 +147,8 @@ export class ListViewComponent<
     private cachedItemStartLines: number[] = [];
     private cachedTotalLines = 0;
     private itemContentWidth = Number.POSITIVE_INFINITY;
+    private configuredMaxVisibleLines: number;
+    private lastRenderedMaxVisibleLines: number;
 
     constructor(
         protected readonly listOptions: ListViewOptions<T, S>,
@@ -156,6 +159,8 @@ export class ListViewComponent<
             listOptions.paddingX ?? 2,
             listOptions.paddingY ?? 0,
         );
+        this.configuredMaxVisibleLines = state.maxVisibleLines;
+        this.lastRenderedMaxVisibleLines = state.maxVisibleLines;
     }
 
     /**
@@ -224,11 +229,13 @@ export class ListViewComponent<
         if (!this.theme || !this.borderedContainer) {
             throw new Error("ListViewComponent must be initialized with a theme before rendering");
         }
-        this.borderedContainer.setHeight(this.listOptions.fixedHeight?.());
+        const frameHeight = this.listOptions.fixedHeight?.();
+        this.borderedContainer.setHeight(frameHeight);
+        this.restoreConfiguredMaxVisibleLines();
         const paddingX = this.listOptions.paddingX ?? 2;
         this.itemContentWidth = Math.max(1, width - 2 - (paddingX * 2) - 2);
         this.buildCacheAndUpdateScroll();
-        this.updateContent();
+        this.fitToFrame(width, frameHeight);
         return this.borderedContainer.render(width);
     }
 
@@ -435,12 +442,55 @@ export class ListViewComponent<
             this.listOptions.footerContent(this.contentContainer, this.theme, this.state);
         }
 
+        this.footerSpacer.setLines(0);
         if (!this.listOptions.compactFooter) this.contentContainer.addChild(new Spacer(1));
+        this.contentContainer.addChild(this.footerSpacer);
 
         // Help text
         this.contentContainer.addChild(
             new Text(this.theme.fg("muted", `  ${this.listOptions.helpText}`), 1, 0),
         );
+    }
+
+    /** Fit the scrollable content and footer inside a fixed-height frame. */
+    private fitToFrame(width: number, frameHeight: number | undefined): void {
+        if (frameHeight === undefined) {
+            this.updateContent();
+            this.lastRenderedMaxVisibleLines = this.state.maxVisibleLines;
+            return;
+        }
+
+        const innerHeight = Math.max(0, frameHeight - 2);
+        const containerWidth = Math.max(1, width - 2);
+
+        for (;;) {
+            this.updateContent();
+            const currentHeight = this.container.render(containerWidth).length;
+            const overflow = currentHeight - innerHeight;
+            if (overflow <= 0) {
+                this.footerSpacer.setLines(-overflow);
+                this.lastRenderedMaxVisibleLines = this.state.maxVisibleLines;
+                return;
+            }
+
+            const nextMaxVisibleLines = Math.max(1, this.state.maxVisibleLines - overflow);
+            if (nextMaxVisibleLines === this.state.maxVisibleLines) {
+                this.lastRenderedMaxVisibleLines = this.state.maxVisibleLines;
+                return;
+            }
+
+            // The scroll indicator and wrapped footer are part of the frame;
+            // reserve space for them by shrinking the item viewport as needed.
+            this.state.maxVisibleLines = nextMaxVisibleLines;
+            this.buildCacheAndUpdateScroll();
+        }
+    }
+
+    private restoreConfiguredMaxVisibleLines(): void {
+        if (this.state.maxVisibleLines !== this.lastRenderedMaxVisibleLines) {
+            this.configuredMaxVisibleLines = this.state.maxVisibleLines;
+        }
+        this.state.maxVisibleLines = this.configuredMaxVisibleLines;
     }
 }
 

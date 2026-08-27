@@ -469,6 +469,29 @@ describe("AgentSessionBrowserComponent", () => {
         expect(ui.render()).toHaveLength(initialHeight);
     });
 
+    it("keeps the help footer visible at the bottom of a scrolling fixed-height list", async () => {
+        const value = new AgentSessionBrowserComponent({
+            current: Array.from({ length: 6 }, (_, index) => ({
+                ...current,
+                id: `scout-${index}`,
+                title: `Project structure audit ${index}`,
+            })),
+            past: [],
+            fixedHeight: () => 20,
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 64);
+
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.fixed-height-list-footer.txt",
+        );
+
+        ui.press(KEY.down);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.fixed-height-list-footer-after-scroll.txt",
+        );
+    });
+
     it("lets the user resume or cancel an interrupted run", async () => {
         const interrupted = { ...current, status: "interrupted" };
         let resumed = false;
