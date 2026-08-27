@@ -21,6 +21,7 @@ pi-coder is a pi extension providing coding-oriented memory, sandbox, TUI, and d
 
 - Run `npm run test:run` for the full suite and `npx tsc --noEmit` for type checking. To run a focused suite, use `npx vitest run <test-file>`.
 - Tests do not make provider calls. For agent lifecycle, provider, or rendering changes, follow the manual checklist in `src/tools/agent/README.md`.
+- TUI rendering tests must use file snapshots via `snapshotText(...)` and `toMatchFileSnapshot(...)`; update snapshots deliberately when rendering changes. Use direct assertions for state or interaction outcomes in addition to, not instead of, rendering snapshots.
 - Linux sandbox and worker behavior requires the `bwrap` executable. Sandbox config is project-local at `.pi/bash-sandbox-config.json` or global at `~/.pi/bash-sandbox-config.json`; `SANDBOX_CONFIG_PATH` and `SANDBOX_CONFIG_PATH_GLOBAL` can override those locations.
 - npm uses `.npmrc` with `ignore-scripts=true` and a 7-day package release age policy; do not bypass these casually.
 - `.state/` contains private runtime state and is not source code.
