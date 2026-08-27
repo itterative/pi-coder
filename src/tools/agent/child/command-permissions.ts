@@ -41,6 +41,8 @@ interface CommandPermissionCallbacks {
     permissionPending(pending: boolean, activity: string): void;
     fileChanged(filePath: string): void;
     bashApproved(): void;
+    /** Called only when the end user explicitly remembers a Bash rule. */
+    bashRuleRemembered?(pattern: string, permission: Permission): void;
 }
 
 interface CommandPermissionOptions extends CommandPermissionCallbacks {
@@ -224,6 +226,7 @@ async function promptBash(
         const permission = sandboxed.value ? "allow:sandbox" : "allow";
         if (result.value.kind === "remember") {
             permissionState.bashRules[result.value.saveRule] = permission;
+            options.bashRuleRemembered?.(result.value.saveRule, permission);
         }
         return { allowed: true, permission, message: result.message };
     } finally {

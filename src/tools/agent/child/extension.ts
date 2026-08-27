@@ -262,9 +262,10 @@ export function registerChildExtension(
         const isolatedChild = isolated || workspaceId !== undefined;
         const nonIsolated = !isolatedChild;
         const parentSessionManager = parentContext.sessionManager;
-        const permissionState = nonIsolated && parentSessionManager
+        const parentPermissionState = parentSessionManager && (canEdit || commandRunner)
             ? getPermissionState(parentSessionManager)
             : undefined;
+        const permissionState = nonIsolated ? parentPermissionState : undefined;
         const childRunLabel = runTitle ? `${runTitle} · ${runId}` : runId;
         const reportPermissionPending = (pending: boolean, activity: string): void => {
             tracker.progress.permissionPending = pending;
@@ -428,6 +429,13 @@ export function registerChildExtension(
                 bashApproved() {
                     tracker.bashApproved = true;
                     onTrace?.("mutation.bash_approved");
+                },
+                bashRuleRemembered(pattern, permission) {
+                    // Isolated children do not inherit parent rules, but an
+                    // explicit end-user remember choice is an instruction to
+                    // update the parent session for later parent calls.
+                    if (!isolatedChild || parentPermissionState === undefined) return;
+                    parentPermissionState.bashRules[pattern] = permission;
                 },
             });
         }

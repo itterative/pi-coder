@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
+import { getPermissionState } from "../../src/modules/sandbox/permission-state";
 import { KEY, mockTheme } from "../helpers";
 
 type Handler = (event: any, ctx: any) => unknown;
@@ -25,11 +26,15 @@ function setup(
         commandRunner = false,
         background = true,
         allowUserInteraction = true,
+        isolated = false,
+        sessionManager = {},
     }: {
         safeBash?: boolean;
         commandRunner?: boolean;
         background?: boolean;
         allowUserInteraction?: boolean;
+        isolated?: boolean;
+        sessionManager?: object;
     } = {},
 ) {
     const handlers: Record<string, Handler[]> = {};
@@ -52,6 +57,7 @@ function setup(
 
     const parentContext = {
         cwd,
+        sessionManager,
         hasUI: commandRunner,
         mode: commandRunner ? "tui" : "print",
         ...(commandRunner
@@ -87,11 +93,11 @@ function setup(
         undefined,
         allowUserInteraction,
         undefined,
-        false,
+        isolated,
         commandRunner,
     )(pi);
 
-    return { handlers, ctx: { cwd }, tools, dialogs };
+    return { handlers, ctx: { cwd, sessionManager }, tools, dialogs, sessionManager };
 }
 
 describe("child Bash permissions", () => {
@@ -248,6 +254,32 @@ describe("child Bash permissions", () => {
         runtime.dialogs[0].handleInput(KEY.enter);
 
         await expect(pending).resolves.toEqual({ block: false });
+    });
+
+    it("propagates an explicitly remembered isolated Bash rule to the parent session", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-isolated-bash-"));
+        tempDirs.push(cwd);
+        const sessionManager = {};
+        const runtime = setup(cwd, {
+            commandRunner: true,
+            background: false,
+            isolated: true,
+            sessionManager,
+        });
+        const pending = runtime.handlers.tool_call[0]!({
+            toolName: "bash",
+            toolCallId: "bash-remember-1",
+            input: { command: "npm run test:run" },
+        }, runtime.ctx);
+
+        await vi.waitFor(() => expect(runtime.dialogs).toHaveLength(1));
+        await new Promise((resolve) => setTimeout(resolve, 260));
+        runtime.dialogs[0].handleInput(KEY.down);
+        runtime.dialogs[0].handleInput(KEY.enter);
+
+        await expect(pending).resolves.toEqual({ block: false });
+        const parentRule = getPermissionState(sessionManager).bashRules["npm run test:run"];
+        expect(["allow", "allow:sandbox"]).toContain(parentRule);
     });
 
     it("permits built-in fsmonitor but blocks an external status hook", async () => {
