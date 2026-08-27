@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const memoryExtensionFactory = vi.hoisted(() => vi.fn());
+vi.mock("../../src/modules/memory", () => ({ default: memoryExtensionFactory }));
 import {
     ModelRegistry,
     ModelRuntime,
@@ -110,6 +113,67 @@ describe("in-process scout SDK session", () => {
         });
         expect(worker.getMutationReport?.()).toEqual({ changedFiles: [], bashApproved: false });
         worker.dispose();
+    });
+
+    it("loads the memory extension according to the memories capability", async () => {
+        memoryExtensionFactory.mockClear();
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-child-memory-"));
+        try {
+            const source = await ModelRuntime.create({
+                refreshOnCreate: false,
+                modelsPath: null,
+            });
+            const model = source.getModels()[0];
+            expect(model).toBeDefined();
+            if (!model) return;
+
+            const child = await createAgentChild({
+                cwd,
+                definition: {
+                    ...BUILTIN_SCOUT,
+                    capabilities: BUILTIN_SCOUT.capabilities.filter((capability) => capability !== "memories"),
+                },
+                parentContext: {
+                    model,
+                    thinkingLevel: "off",
+                    modelRegistry: {
+                        getRegisteredNativeProvider: () => undefined,
+                        getRegisteredProviderConfig: () => undefined,
+                        getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "smoke-test" }),
+                        isUsingOAuth: () => false,
+                        find: (provider: string, id: string) => source.getModel(provider, id),
+                        getAll: () => [...source.getModels()],
+                    },
+                },
+                onProgress: () => {},
+            });
+
+            expect(memoryExtensionFactory).not.toHaveBeenCalled();
+            child.dispose();
+
+            const memoryChild = await createAgentChild({
+                cwd,
+                definition: BUILTIN_SCOUT,
+                parentContext: {
+                    model,
+                    thinkingLevel: "off",
+                    modelRegistry: {
+                        getRegisteredNativeProvider: () => undefined,
+                        getRegisteredProviderConfig: () => undefined,
+                        getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "smoke-test" }),
+                        isUsingOAuth: () => false,
+                        find: (provider: string, id: string) => source.getModel(provider, id),
+                        getAll: () => [...source.getModels()],
+                    },
+                },
+                onProgress: () => {},
+            });
+
+            expect(memoryExtensionFactory).toHaveBeenCalledTimes(1);
+            memoryChild.dispose();
+        } finally {
+            fs.rmSync(cwd, { recursive: true, force: true });
+        }
     });
 
     it("reopens a persisted child transcript without a provider call", async () => {

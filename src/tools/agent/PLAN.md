@@ -32,7 +32,7 @@ Custom agents are Markdown files with YAML frontmatter and an instruction body:
 ---
 name: analyst
 description: Inspect architecture and identify risks
-capabilities: [safe-bash] # optional; read/search are baseline capabilities
+capabilities: [safe-bash, memories] # optional; read/search are baseline capabilities
 model: provider/model-id # optional; defaults to the parent model
 ---
 
@@ -43,14 +43,14 @@ Agent-specific instructions go here.
 
 Built-ins:
 
-- `scout` — read-only exploration with restricted safe-bash;
-- `reviewer` — code and history review with permission-gated command validation;
-- `advisor` — opt-in read-only senior advice on implementation decisions and tradeoffs, using a configured model;
-- `worker` — same-checkout or isolated implementation with permission-gated edits and commands.
+- `scout` — read-only exploration with restricted safe-bash and memory access;
+- `reviewer` — code and history review with permission-gated command validation and memory access;
+- `advisor` — opt-in read-only senior advice on implementation decisions and tradeoffs, using a configured model, with memory access;
+- `worker` — same-checkout or isolated implementation with permission-gated edits, commands, and memory access.
 
-Custom definitions are read-only by default, may opt into `safe-bash` or `command-runner`, and may select a model; otherwise they use the parent model. `read` and `search` are baseline capabilities, `command-runner` implies `safe-bash`, and `edit` is reserved for the built-in worker.
+Custom definitions are read-only by default, may opt into `memories`, `safe-bash`, or `command-runner`, and may select a model; otherwise they use the parent model. All built-in definitions include `memories`. `read` and `search` are baseline capabilities, `memories` loads pi-coder's memory extension in the child session, `command-runner` implies `safe-bash`, and `edit` is reserved for the built-in worker.
 
-Custom Markdown definitions are loaded from `~/.pi/agent/agents` and the nearest trusted `.pi/agents`. Every custom agent gets `read`, `grep`, `find`, and `ls`; optional capabilities include `safe-bash` and `command-runner`, while `edit` is reserved for the built-in worker. Built-in names `scout`, `reviewer`, `advisor`, and `worker` are reserved, paths are sorted, same-scope duplicates are first-wins, and trusted-project definitions override user definitions.
+Custom Markdown definitions are loaded from `~/.pi/agent/agents` and the nearest trusted `.pi/agents`. Every custom agent gets `read`, `grep`, `find`, and `ls`; optional capabilities include `memories`, `safe-bash`, and `command-runner`, while `edit` is reserved for the built-in worker. Built-in names `scout`, `reviewer`, `advisor`, and `worker` are reserved, paths are sorted, same-scope duplicates are first-wins, and trusted-project definitions override user definitions.
 
 Runtime context is passed as bounded `context.sections` on `start` and `spawn`. Built-in definitions select allowed sections through a context policy; the renderer places selected context in the initial task message rather than the system prompt so persisted child transcripts retain the exact context. Automatic parent-summary and recent-context collection remains future work.
 

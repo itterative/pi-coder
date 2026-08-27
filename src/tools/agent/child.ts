@@ -13,6 +13,7 @@ import {
     hasAgentCapability,
     READ_ONLY_AGENT_TOOLS,
 } from "./definitions/discovery";
+import registerMemoryExtension from "../../modules/memory";
 import { createChildModelRuntime, resolveChildModel } from "./child/model-runtime";
 import { childProtocolPrompt, registerChildExtension } from "./child/extension";
 import { renderAgentSystemPrompt } from "./prompts/renderer";
@@ -83,6 +84,7 @@ export async function createAgentChild(
     const canEdit = agentCanEdit(context.definition);
     const canRunCommands = agentCanRunCommands(context.definition);
     const safeBash = hasAgentCapability(context.definition, "safe-bash");
+    const hasMemories = hasAgentCapability(context.definition, "memories");
     const allowUserInteraction = context.definition.allowUserInteraction !== false;
     const agentDir = getAgentDir();
     let sessionManager = context.childSessionFile
@@ -110,33 +112,42 @@ export async function createAgentChild(
         noPromptTemplates: true,
         noThemes: true,
         noContextFiles: false,
-        extensionFactories: [{
-            name: canEdit
-                ? "pi-coder-worker-child"
-                : canRunCommands
-                    ? "pi-coder-command-child"
-                    : "pi-coder-readonly-child",
-            hidden: true,
-            factory: registerChildExtension(
-                tracker,
-                parentContext,
-                cwd,
-                context.definition.name,
-                context.background === true,
-                canEdit,
-                safeBash,
-                context.runId ?? context.definition.name,
-                context.runTitle ?? context.runId ?? context.definition.name,
-                context.onProgress,
-                context.onFileChanged,
-                context.onTrace,
-                context.events,
-                allowUserInteraction,
-                context.workspaceId,
-                context.isolated,
-                canRunCommands,
-            ),
-        }],
+        extensionFactories: [
+            {
+                name: canEdit
+                    ? "pi-coder-worker-child"
+                    : canRunCommands
+                        ? "pi-coder-command-child"
+                        : "pi-coder-readonly-child",
+                hidden: true,
+                factory: registerChildExtension(
+                    tracker,
+                    parentContext,
+                    cwd,
+                    context.definition.name,
+                    context.background === true,
+                    canEdit,
+                    safeBash,
+                    context.runId ?? context.definition.name,
+                    context.runTitle ?? context.runId ?? context.definition.name,
+                    context.onProgress,
+                    context.onFileChanged,
+                    context.onTrace,
+                    context.events,
+                    allowUserInteraction,
+                    context.workspaceId,
+                    context.isolated,
+                    canRunCommands,
+                ),
+            },
+            ...(hasMemories
+                ? [{
+                    name: "pi-coder-memory-child",
+                    hidden: true,
+                    factory: registerMemoryExtension,
+                }]
+                : []),
+        ],
         appendSystemPrompt: [
             renderAgentSystemPrompt(
                 context.definition,

@@ -90,7 +90,7 @@ describe("agent discovery", () => {
         writeAgent(userDir, "reviewer.md", "reviewer", "Override reviewer");
         writeAgent(userDir, "advisor.md", "advisor", "Override advisor");
         writeAgent(userDir, "worker.md", "worker", "Override worker");
-        writeAgent(userDir, "custom.md", "custom", "Custom", "capabilities: [command-runner]\n");
+        writeAgent(userDir, "custom.md", "custom", "Custom", "capabilities: [command-runner, memories]\n");
         writeAgent(userDir, "stale.md", "stale", "Stale", "tools: [read, bash]\n");
 
         const result = discoverAgentsInDirectories(userDir);
@@ -101,21 +101,25 @@ describe("agent discovery", () => {
         const custom = result.agents.find((agent) => agent.name === "custom");
         const stale = result.agents.find((agent) => agent.name === "stale");
 
-        expect(scout).toMatchObject({ source: "builtin", capabilities: ["read", "search", "safe-bash"] });
+        expect(scout).toMatchObject({ source: "builtin", capabilities: ["read", "search", "memories", "safe-bash"] });
         expect(reviewer).toMatchObject({
             source: "builtin",
-            capabilities: ["read", "search", "safe-bash", "command-runner"],
+            capabilities: ["read", "search", "memories", "safe-bash", "command-runner"],
         });
         expect(advisor).toBe(BUILTIN_ADVISOR);
+        expect(advisor).toMatchObject({
+            source: "builtin",
+            capabilities: ["read", "search", "memories", "safe-bash"],
+        });
         expect(agentTools(advisor!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(agentTools(scout!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(worker).toMatchObject({
             source: "builtin",
-            capabilities: ["read", "search", "safe-bash", "command-runner", "edit"],
+            capabilities: ["read", "search", "memories", "safe-bash", "command-runner", "edit"],
         });
         expect(agentTools(worker!)).toEqual(["read", "grep", "find", "ls", "edit", "write", "bash"]);
-        expect(custom).toMatchObject({ source: "user", capabilities: ["command-runner"] });
-        expect(agentCapabilities(custom!)).toEqual(["read", "search", "safe-bash", "command-runner"]);
+        expect(custom).toMatchObject({ source: "user", capabilities: ["command-runner", "memories"] });
+        expect(agentCapabilities(custom!)).toEqual(["read", "search", "memories", "safe-bash", "command-runner"]);
         expect(agentTools(custom!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(stale?.capabilities).toEqual([]);
         expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "warning"))

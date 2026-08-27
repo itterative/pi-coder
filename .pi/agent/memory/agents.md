@@ -13,7 +13,7 @@ The feature is an in-process SDK implementation under `src/tools/agent/`, regist
 
 ## High-value overview
 
-- Built-ins include read-only `scout` and opt-in `advisor`, command-capable `reviewer`, and the edit-capable permission-gated `worker`. Custom Markdown agents are loaded from `~/.pi/agent/agents` and trusted-project `.pi/agents`; they receive baseline read/search tools and may opt into `safe-bash` or permission-gated `command-runner`.
+- Built-ins include read-only `scout` and opt-in `advisor`, command-capable `reviewer`, and the edit-capable permission-gated `worker`; all built-ins load the memory extension. Custom Markdown agents are loaded from `~/.pi/agent/agents` and trusted-project `.pi/agents`; they receive baseline read/search tools and may opt into `memories`, `safe-bash`, or permission-gated `command-runner`. The `memories` capability loads pi-coder's memory extension in the child session.
 - The `agent` tool supports foreground `start`, background `spawn`, `list`, `status`, `collect`, `resume`, `cancel`, and isolated-result actions. Up to four runs may be active or interrupted; only one mutating worker may run at a time.
 - `ask_parent` pauses a child for guidance. Foreground children may use restricted `ask_user`; background children use mailbox notifications and never open unsolicited dialogs. Full background results remain explicit through `collect`.
 - `/agents` browses current/past child sessions, isolated workspaces, and built-in agent model settings. Durable restoration is limited to the exact parent session and active tree branch; interrupted runs never restart or replay automatically.

@@ -8,6 +8,7 @@ export type AgentSource = "builtin" | "user" | "project";
 export const AGENT_CAPABILITIES = [
     "read",
     "search",
+    "memories",
     "safe-bash",
     "command-runner",
     "edit",
