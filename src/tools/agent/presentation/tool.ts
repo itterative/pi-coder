@@ -54,8 +54,9 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
             if (args.action === "start" || args.action === "spawn") {
                 return new Text(
                     theme.fg("toolTitle", theme.bold(`agent ${args.action} `))
-                    + theme.fg("accent", args.title ?? args.agent)
-                    + theme.fg("muted", ` (${args.agent}) — ${args.task}`),
+                    + theme.fg("muted", `(${args.agent})`)
+                    + " — "
+                    + theme.fg("accent", args.title ?? args.agent),
                     0,
                     0,
                 );
@@ -68,21 +69,16 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
             );
         },
         renderResult(result, { expanded }, theme) {
+            const container = new Container();
+
+            if (!expanded) {
+                return container;
+            }
+
             const details = result.details as AgentRunDetails;
-            const color = details.status === "completed"
-                ? "success"
-                : details.status === "waiting_for_parent" || details.status === "waiting_for_permission" || details.status === "interrupted"
-                    ? "warning"
-                    : details.status === "starting" || details.status === "running"
-                        ? "accent"
-                        : details.status === "canceled"
-                            ? "muted"
-                            : "error";
             const response = details.response
                 ?? result.content.find((part) => part.type === "text")?.text
                 ?? "";
-            const action = (details as AgentRunDetails & { action?: string }).action;
-            const header = `${action ? `agent ${action} ` : ""}${details.title} (${details.agent}) — ${details.status}`;
             const toolCount = Object.values(details.toolCounts ?? {}).reduce(
                 (total, count) => total + count,
                 0,
@@ -91,9 +87,7 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
             const body = expanded
                 ? `${quoteText(details.task)}\n\n${toolSummary}${response ? `\n\n${response}` : ""}`
                 : toolSummary;
-            const container = new Container();
-            container.addChild(new Text(theme.fg(color, header), 0, 0));
-            container.addChild(new Markdown(body, 0, 0, markdownTheme(theme)));
+            container.addChild(new Markdown(body, 0, 1, markdownTheme(theme)));
             return container;
         },
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
