@@ -31,7 +31,8 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
             "Delegate codebase work when useful to a built-in or custom agent. The parent agent may also use its own active built-in tools directly, including read, edit, write, and bash; delegation is not required for file changes. "
             + "Scout, reviewer, advisor, and custom agents are read-only. A non-isolated worker edits the parent's current checkout using inherited in-cwd file access and session-approved bash rules; outside-cwd file access and unmatched bash use shared parent-visible prompts. An isolated worker edits a separate worktree with independent mutation prompts, and its changes reach the parent only after apply. "
             + "Run work in the foreground or background; provide a detailed, self-contained task that may be multiline, plus an optional short human-readable title and bounded supplemental context sections; list, status, collect, resume, or cancel retained runs. In persisted "
-            + "parent sessions, paused and interrupted child context survives reload, restart, and switching away and back. The parent can inspect, apply, discard, or revise isolated workspace results without opening the TUI.",
+            + "parent sessions, paused and interrupted child context survives reload, restart, and switching away and back. The parent can inspect, apply, discard, or revise isolated workspace results without opening the TUI. "
+            + "Parameters depend on action: start and spawn take agent, task, and optional title, isolation, and context; resume takes runId and optional guidance; cancel, inspect, apply, discard, status, and collect take runId; revise takes runId and guidance; list takes no parameters.",
         promptSnippet:
             "Use agent for optional delegated work; the parent may edit directly with its own built-in tools. The worker handles implementation in either the current checkout or an isolated worktree, with the permission model described by the selected mode.",
         promptGuidelines: [
@@ -56,16 +57,16 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
             if (args.action === "start" || args.action === "spawn") {
                 return new Text(
                     theme.fg("toolTitle", theme.bold(`agent ${args.action} `))
-                    + theme.fg("muted", `(${args.agent})`)
+                    + theme.fg("muted", `(${args.agent ?? "unknown"})`)
                     + " — "
-                    + theme.fg("accent", args.title ?? args.agent),
+                    + theme.fg("accent", args.title ?? args.agent ?? args.action),
                     0,
                     0,
                 );
             }
             return new Text(
                 theme.fg("toolTitle", theme.bold(`agent ${args.action} `))
-                + theme.fg("accent", args.runId),
+                + theme.fg("accent", args.runId ?? ""),
                 0,
                 0,
             );

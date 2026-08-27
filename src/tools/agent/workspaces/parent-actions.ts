@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { discoverAgents } from "../definitions/discovery";
-import type { AgentParameters } from "../definitions/prompt";
+import type { AgentRequest } from "../definitions/validate";
 import { emitAgentEvent } from "../observability/events";
 import type { AgentEventSink } from "../contracts/events";
 import type { AgentRunDetails, AgentRunOutcome } from "../contracts/runs";
@@ -94,7 +94,7 @@ function requireParentWorkspaceLease(
 }
 
 export async function executeParentWorkspaceAction(
-    params: Extract<AgentParameters, { action: "inspect" | "apply" | "discard" | "revise" }>,
+    params: Extract<AgentRequest, { action: "inspect" | "apply" | "discard" | "revise" }>,
     ctx: ExtensionContext,
     manager: AgentRunManager,
     signal: AbortSignal | undefined,
@@ -150,7 +150,7 @@ export async function executeParentWorkspaceAction(
         );
     }
 
-    if (params.action !== "revise") throw new AgentActionError(`Unsupported parent workspace action: ${params.action}`);
+    // Remaining action is "revise": inspect/discard/apply branches returned above.
     requireParentWorkspaceLease(workspace, sessionId, params.runId, record.runInstanceId);
     const discovered = discoverAgents(ctx.cwd, ctx.isProjectTrusted());
     const definition = discovered.agents.find((agent) => agent.name === record.agent);

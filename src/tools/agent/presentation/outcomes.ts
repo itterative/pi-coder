@@ -150,15 +150,18 @@ export function failedOutcome(params: AgentParameters, error: unknown): AgentRun
     const now = Date.now();
     const isNewRun = params.action === "start" || params.action === "spawn";
     const runId = isNewRun ? "unstarted" : "unknown";
+    // Params may be partial when validation rejects a malformed call, so keep
+    // every access optional.
+    const task = isNewRun ? (params.task ?? "") : "";
     return {
         content: `Agent action failed: ${message}`,
         details: {
             runId,
-            title: isNewRun ? deriveAgentTitle(params.task, params.title) : "Agent action",
-            agent: isNewRun ? params.agent : "unknown",
+            title: isNewRun ? deriveAgentTitle(task, params.title) : "Agent action",
+            agent: isNewRun ? (params.agent ?? "unknown") : "unknown",
             status: "failed",
             background: params.action === "spawn",
-            task: isNewRun ? params.task.slice(0, 2_000) : "",
+            task: task.slice(0, 2_000),
             recentActivity: [],
             usage: cloneUsage(),
             startedAt: now,

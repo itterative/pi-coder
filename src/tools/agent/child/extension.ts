@@ -323,7 +323,10 @@ export function registerChildExtension(
                 description: Type.Optional(Type.String({ maxLength: 4_000 })),
                 options: Type.Array(Type.Object({
                     label: Type.String({ minLength: 1, maxLength: 500 }),
-                    description: Type.Optional(Type.String({ maxLength: 2_000 })),
+                    // Keep bounded string repeats under llama.cpp's grammar
+                    // parser threshold (max repetition 2000): char{0,N} with
+                    // N >= 2000 fails grammar parsing and 400s the request.
+                    description: Type.Optional(Type.String({ maxLength: 1_000 })),
                 }, { additionalProperties: false }), { minItems: 2, maxItems: 8 }),
             }, { additionalProperties: false }),
             async execute(_toolCallId, params, signal) {

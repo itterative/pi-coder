@@ -7,61 +7,39 @@ const agentContextSchema = Type.Optional(Type.Object({
         id: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,63}$" }),
         title: Type.String({ minLength: 1, maxLength: 200 }),
         content: Type.String({ minLength: 1, maxLength: 12_000 }),
-        source: Type.Union([
-            Type.Literal("parent"),
-            Type.Literal("repository"),
-            Type.Literal("workspace"),
-        ]),
+        source: Type.String({ enum: ["parent", "repository", "workspace"] }),
     }, { additionalProperties: false }), { maxItems: 12 }),
 }, { additionalProperties: false }));
 
-export const parameters = Type.Union([
-    Type.Object({
-        action: Type.Literal("list"),
-    }, { additionalProperties: false }),
-    Type.Object({
-        action: Type.Literal("start"),
-        agent: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,63}$", maxLength: 64 }),
-        task: Type.String({ minLength: 1, maxLength: 16_000 }),
-        title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
-        isolation: Type.Optional(Type.Literal("worktree")),
-        context: agentContextSchema,
-    }, { additionalProperties: false }),
-    Type.Object({
-        action: Type.Literal("spawn"),
-        agent: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,63}$", maxLength: 64 }),
-        task: Type.String({ minLength: 1, maxLength: 16_000 }),
-        title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
-        isolation: Type.Optional(Type.Literal("worktree")),
-        context: agentContextSchema,
-    }, { additionalProperties: false }),
-    Type.Object({
-        action: Type.Literal("resume"),
-        runId: Type.String({ minLength: 1, maxLength: 100 }),
-        guidance: Type.Optional(Type.String({ minLength: 1, maxLength: 16_000 })),
-    }, { additionalProperties: false }),
-    Type.Object({
-        action: Type.Literal("cancel"),
-        runId: Type.String({ minLength: 1, maxLength: 100 }),
-    }, { additionalProperties: false }),
-    Type.Object({
-        action: Type.Union([
-            Type.Literal("inspect"),
-            Type.Literal("apply"),
-            Type.Literal("discard"),
-        ]),
-        runId: Type.String({ minLength: 1, maxLength: 100 }),
-    }, { additionalProperties: false }),
-    Type.Object({
-        action: Type.Literal("revise"),
-        runId: Type.String({ minLength: 1, maxLength: 100 }),
-        guidance: Type.String({ minLength: 1, maxLength: 16_000 }),
-    }, { additionalProperties: false }),
-    Type.Object({
-        action: Type.Union([Type.Literal("status"), Type.Literal("collect")]),
-        runId: Type.String({ minLength: 1, maxLength: 100 }),
-    }, { additionalProperties: false }),
-]);
+// Flat single-object schema: constrained-decoding engines (e.g. llama.cpp)
+// reliably support plain objects, required/optional properties, and enums,
+// but not anyOf/oneOf discriminated unions. Per-action requiredness is
+// enforced by validateAgentParameters (definitions/validate.ts), which
+// returns model-facing error messages for missing or misplaced fields.
+export const parameters = Type.Object({
+    action: Type.String({
+        enum: [
+            "list",
+            "start",
+            "spawn",
+            "resume",
+            "cancel",
+            "inspect",
+            "apply",
+            "discard",
+            "revise",
+            "status",
+            "collect",
+        ],
+    }),
+    agent: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9_-]{0,63}$", maxLength: 64 })),
+    task: Type.Optional(Type.String({ minLength: 1, maxLength: 16_000 })),
+    title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+    isolation: Type.Optional(Type.Literal("worktree")),
+    runId: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
+    guidance: Type.Optional(Type.String({ minLength: 1, maxLength: 16_000 })),
+    context: agentContextSchema,
+}, { additionalProperties: false });
 
 export type AgentParameters = Static<typeof parameters>;
 

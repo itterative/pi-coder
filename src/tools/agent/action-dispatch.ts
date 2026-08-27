@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { emitAgentEvent } from "./observability/events";
 import type { AgentParameters } from "./definitions/prompt";
+import { validateAgentParameters } from "./definitions/validate";
 import {
     AgentActionError,
     type AgentRunDetails,
@@ -39,7 +40,8 @@ export async function executeAgentAction(
     let reservation: WorkspaceReservation | undefined;
     let transferredLeaseIdentity: AgentRunIdentity | undefined;
     try {
-        if (params.action === "list") {
+        const request = validateAgentParameters(params);
+        if (request.action === "list") {
             let workspaces: AgentWorkspace[] = [];
             let catalogWarning: string | undefined;
             try {
@@ -51,18 +53,18 @@ export async function executeAgentAction(
             }
             outcome = listOutcome(lifecycle.manager, workspaces);
             if (catalogWarning) outcome.content += `\n\nWarning: ${catalogWarning}`;
-        } else if (params.action === "start" || params.action === "spawn") {
+        } else if (request.action === "start" || request.action === "spawn") {
             const discovered = lifecycle.discover(ctx);
-            const definition = discovered.agents.find((agent) => agent.name === params.agent);
+            const definition = discovered.agents.find((agent) => agent.name === request.agent);
             if (!definition) {
-                throw new AgentActionError(`Unknown agent: ${params.agent}`);
+                throw new AgentActionError(`Unknown agent: ${request.agent}`);
             }
             if (definition.name === "advisor" && !definition.model) {
                 throw new AgentActionError(
                     "The advisor is enabled but has no model configured. Select an advisor model in /agents first.",
                 );
             }
-            reservation = params.isolation === "worktree"
+            reservation = request.isolation === "worktree"
                 ? await prepareIsolatedWorkspace(
                     ctx.cwd,
                     definition,
@@ -81,14 +83,14 @@ export async function executeAgentAction(
                 workspaceId: reservation?.workspace.id,
                 isolated: reservation !== undefined,
                 parentContext: ctx,
-                agentContext: params.context,
+                agentContext: request.context,
             };
             const background = lifecycle.backgroundUpdate(ctx);
             const workspaceBackground = (details: AgentRunDetails) => {
                 background(details);
             };
             const runIdentity = reservation
-                ? lifecycle.manager.reserveRunIdentity(definition, params.task, runContext)
+                ? lifecycle.manager.reserveRunIdentity(definition, request.task, runContext)
                 : undefined;
             if (reservation && runIdentity) {
                 await transferAgentWorkspaceLease(
@@ -109,58 +111,58 @@ export async function executeAgentAction(
                     "transferred",
                 );
             }
-            outcome = params.action === "start"
+            outcome = request.action === "start"
                 ? await lifecycle.manager.start(
                     definition,
-                    params.task,
+                    request.task,
                     runContext,
                     signal,
                     progress,
-                    params.title,
+                    request.title,
                     runIdentity,
                 )
                 : lifecycle.manager.spawn(
                     definition,
-                    params.task,
+                    request.task,
                     runContext,
                     signal,
                     workspaceBackground,
-                    params.title,
+                    request.title,
                     runIdentity,
                 );
-            if (params.action === "start") {
+            if (request.action === "start") {
                 outcome = await prepareForegroundWorkspaceResult(outcome, ctx, lifecycle.events);
             }
             lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
             outcome.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
-        } else if (params.action === "resume") {
-            outcome = await lifecycle.manager.resume(params.runId, params.guidance, signal, progress);
+        } else if (request.action === "resume") {
+            outcome = await lifecycle.manager.resume(request.runId, request.guidance, signal, progress);
             outcome = await prepareForegroundWorkspaceResult(outcome, ctx, lifecycle.events);
             lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
-        } else if (params.action === "cancel") {
+        } else if (request.action === "cancel") {
             outcome = await prepareForegroundWorkspaceResult(
-                await lifecycle.manager.cancel(params.runId),
+                await lifecycle.manager.cancel(request.runId),
                 ctx,
                 lifecycle.events,
             );
         } else if (
-            params.action === "inspect"
-            || params.action === "apply"
-            || params.action === "discard"
-            || params.action === "revise"
+            request.action === "inspect"
+            || request.action === "apply"
+            || request.action === "discard"
+            || request.action === "revise"
         ) {
             outcome = await executeParentWorkspaceAction(
-                params,
+                request,
                 ctx,
                 lifecycle.manager,
                 signal,
                 progress,
                 lifecycle.events,
             );
-        } else if (params.action === "status") {
-            outcome = lifecycle.manager.status(params.runId);
+        } else if (request.action === "status") {
+            outcome = lifecycle.manager.status(request.runId);
         } else {
-            const pending = lifecycle.manager.status(params.runId);
+            const pending = lifecycle.manager.status(request.runId);
             const workspaceResult = await prepareCollectedWorkspaceResult(
                 pending.details,
                 ctx,
@@ -173,7 +175,7 @@ export async function executeAgentAction(
             // Keep a no-change lease held until the retained agent result has
             // actually been consumed. If collect rejects, the caller must be
             // able to retry and the lease must remain protected.
-            outcome = lifecycle.manager.collect(params.runId);
+            outcome = lifecycle.manager.collect(request.runId);
             if (workspaceResult && noWorkspaceChanges) {
                 await releaseAgentWorkspaceAfterNoChanges(
                     workspaceResult.workspaceId,
