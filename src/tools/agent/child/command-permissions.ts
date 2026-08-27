@@ -49,8 +49,8 @@ interface CommandPermissionOptions extends CommandPermissionCallbacks {
     runId: string;
     runTitle?: string;
     agentName: string;
-    /** Same-checkout children inherit parent session permissions. */
-    nonIsolated?: boolean;
+    /** Whether this child runs in a dedicated isolated worktree. */
+    isolated: boolean;
     permissionState?: PermissionState;
 }
 
@@ -269,6 +269,7 @@ export function registerCommandPermissionHooks(
     const permissionQueue = new PermissionQueue();
     const releases = new Map<string, () => void>();
     const permissionState = options.permissionState ?? createPermissionState();
+    const nonIsolated = options.isolated !== true;
 
     pi.on("tool_call", async (event, ctx) => {
         const isEdit = isToolCallEventType<"edit", EditToolInput>("edit", event);
@@ -286,12 +287,15 @@ export function registerCommandPermissionHooks(
             const cwdPathAllowed = isCommandPathAllowed(input.path, ctx.cwd, additionalRoots);
             const scratchpadPathAllowed = additionalRoots.some((root) =>
                 isPathWithinDirectory(input.path, root, ctx.cwd, COMMAND_CONFINEMENT));
-            if ((options.nonIsolated && cwdPathAllowed) || scratchpadPathAllowed) {
-                // Same-checkout workers are trusted to mutate ordinary files in
-                // their cwd. Scratchpad files are also trusted because they are
-                // private runtime-owned temporary data. Keep the confinement
-                // checks so sensitive project paths and symlink escapes cannot
-                // be auto-approved accidentally.
+            if (cwdPathAllowed || scratchpadPathAllowed) {
+                // This hook is installed only for children with mutation or
+                // command-runner capability. A confined cwd path is already
+                // the worker's authorized mutation root, whether it is the
+                // parent checkout or an isolated worktree. Scratchpad files
+                // are also trusted because they are private runtime-owned
+                // temporary data. Keep the confinement checks so sensitive
+                // project paths and symlink escapes cannot be auto-approved
+                // accidentally.
                 releases.set(event.toolCallId, release);
                 return { block: false };
             }
@@ -308,7 +312,7 @@ export function registerCommandPermissionHooks(
                 // The shared file hook handles explicit outside-cwd access for
                 // non-isolated children. Sensitive paths and symlink escapes
                 // remain blocked before any prompt.
-                if (options.nonIsolated && outsideCwd && isFileAccessApproved(event)) {
+                if (nonIsolated && outsideCwd && isFileAccessApproved(event)) {
                     releases.set(event.toolCallId, release);
                     return { block: false };
                 }
@@ -352,7 +356,7 @@ export function registerCommandPermissionHooks(
             const details = resolvePermissionDetails(input.command, ctx.cwd, {
                 permissions: {
                     ...sandboxConfig.current?.permissions,
-                    ...(options.nonIsolated ? permissionState.bashRules : {}),
+                    ...(nonIsolated ? permissionState.bashRules : {}),
                 },
                 additionalRoots,
             });

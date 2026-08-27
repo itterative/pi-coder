@@ -82,7 +82,7 @@ export function childProtocolPrompt(
             ...(hasBashOutputAccess
                 ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
                 : []),
-            "This run has its own permission state. A file mutation or Bash command that is not already allowed may pause while the end user decides whether to approve it; do not assume an approval granted to the parent also applies to you.",
+            "Direct edit/write calls inside this worktree are already authorized; sensitive paths and symlink escapes remain blocked. Bash commands use this run's own permission state and may pause while the end user decides whether to approve them; do not assume an approval granted to the parent also applies to you.",
             "Run only one mutation tool at a time. Other isolated workers may run concurrently, so avoid destructive Git operations and keep changes narrow.",
         ].join("\n\n");
     } else if (canEdit) {
@@ -257,7 +257,10 @@ export function registerChildExtension(
             rememberBashOutputPath(bashOutputPaths, event.details);
         });
 
-        const nonIsolated = !isolated && workspaceId === undefined;
+        // Restored isolated runs carry their workspace ID even when the
+        // transient `isolated` flag was not persisted in the run context.
+        const isolatedChild = isolated || workspaceId !== undefined;
+        const nonIsolated = !isolatedChild;
         const parentSessionManager = parentContext.sessionManager;
         const permissionState = nonIsolated && parentSessionManager
             ? getPermissionState(parentSessionManager)
@@ -413,7 +416,7 @@ export function registerChildExtension(
                 runId,
                 runTitle,
                 agentName,
-                nonIsolated,
+                isolated: isolatedChild,
                 permissionState,
                 permissionPending: reportPermissionPending,
                 fileChanged(filePath) {

@@ -2,12 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import registerScratchpadExtension, { getScratchpadPath } from "../../src/modules/scratchpad";
+import { registerChildExtension } from "../../src/tools/agent/child/extension";
 import registerFileToolHook from "../../src/tools/file-permissions";
 import { registerCommandPermissionHooks } from "../../src/tools/agent/child/command-permissions";
-import { createPermissionState } from "../../src/modules/sandbox/permission-state";
+import { createPermissionState, getPermissionState } from "../../src/modules/sandbox/permission-state";
 import { KEY, mockTheme } from "../helpers";
 
 interface Handler {
@@ -22,6 +23,12 @@ async function waitForPermissionInput(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 260));
 }
 
+async function waitForDialogs(dialogs: readonly unknown[], count: number): Promise<void> {
+    await vi.waitFor(() => {
+        expect(dialogs.length).toBeGreaterThanOrEqual(count);
+    });
+}
+
 describe("command and edit permission gate", () => {
     const tempDirs: string[] = [];
 
@@ -31,7 +38,7 @@ describe("command and edit permission gate", () => {
     });
 
     function setup(cwd: string, options: {
-        nonIsolated?: boolean;
+        isolated?: boolean;
         permissionState?: ReturnType<typeof createPermissionState>;
         registerFileHook?: boolean;
     } = {}) {
@@ -81,7 +88,7 @@ describe("command and edit permission gate", () => {
         registerCommandPermissionHooks(pi, {
             parentContext,
             runId: "worker-7",
-            nonIsolated: options.nonIsolated,
+            isolated: options.isolated ?? false,
             permissionState,
             agentName: "worker",
             permissionPending(value: boolean) { pending.push(value); },
@@ -122,6 +129,15 @@ describe("command and edit permission gate", () => {
         };
     }
 
+    function bashEvent(id: string, command: string) {
+        return {
+            type: "tool_call",
+            toolName: "bash",
+            toolCallId: id,
+            input: { command },
+        };
+    }
+
     it("blocks paths outside cwd without opening a dialog", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-outside-"));
@@ -137,20 +153,14 @@ describe("command and edit permission gate", () => {
         expect(runtime.dialogs).toHaveLength(0);
     });
 
-    it("labels prompts with the worker run and tracks successful file changes", async () => {
+    it("tracks successful cwd edits without a mutation prompt", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         tempDirs.push(cwd);
         const runtime = setup(cwd);
         const event = editEvent("edit-1", "src/example.ts");
 
-        const permission = runtime.handlers.tool_call[0](event, runtime.ctx);
-        await flush();
-        expect(runtime.dialogs).toHaveLength(1);
-        expect(runtime.dialogs[0].render(100).join("\n")).toContain("[worker-7] worker: allow edit?");
-        await waitForPermissionInput();
-        runtime.dialogs[0].handleInput(KEY.enter);
-        await expect(permission).resolves.toEqual({ block: false });
-
+        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toEqual({ block: false });
+        expect(runtime.dialogs).toHaveLength(0);
         await runtime.handlers.tool_result[0]({
             type: "tool_result",
             toolName: "edit",
@@ -160,28 +170,23 @@ describe("command and edit permission gate", () => {
             isError: false,
         });
         expect(runtime.changedFiles).toEqual(["src/example.ts"]);
-        expect(runtime.pending).toEqual([true, false]);
+        expect(runtime.pending).toEqual([]);
     });
 
-    it("prompts isolated writes while preserving the isolated permission gate", async () => {
+    it("allows cwd writes without prompting", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         tempDirs.push(cwd);
-        const runtime = setup(cwd);
+        const runtime = setup(cwd, { isolated: true });
         const event = writeEvent("write-1", "src/example.ts");
 
-        const permission = runtime.handlers.tool_call[0](event, runtime.ctx);
-        await flush();
-        expect(runtime.dialogs).toHaveLength(1);
-        expect(runtime.dialogs[0].render(100).join("\\n")).toContain("[worker-7] worker: allow write?");
-        await waitForPermissionInput();
-        runtime.dialogs[0].handleInput(KEY.enter);
-        await expect(permission).resolves.toEqual({ block: false });
+        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toEqual({ block: false });
+        expect(runtime.dialogs).toHaveLength(0);
     });
 
     it("allows isolated worker writes inside its scratchpad without prompting", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         tempDirs.push(cwd);
-        const runtime = setup(cwd);
+        const runtime = setup(cwd, { isolated: true });
         registerScratchpadExtension(runtime.pi);
         await runtime.handlers.session_start[0]({}, runtime.ctx);
         const scratchpad = getScratchpadPath(runtime.ctx.sessionManager)!;
@@ -192,10 +197,80 @@ describe("command and edit permission gate", () => {
         expect(runtime.dialogs).toHaveLength(0);
     });
 
+    it("treats a workspace id as isolated for restored worker permissions", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
+        tempDirs.push(cwd);
+        const sessionManager = {};
+        const parentState = getPermissionState(sessionManager);
+        parentState.bashRules["unrecognized-command"] = "allow";
+        const handlers: Record<string, Handler[]> = {};
+        const dialogs: any[] = [];
+        const parentContext = {
+            cwd,
+            hasUI: true,
+            mode: "tui",
+            sessionManager,
+            ui: {
+                theme: mockTheme,
+                setWorkingVisible() {},
+                custom(factory: any) {
+                    return new Promise((resolve) => {
+                        const component = factory(undefined, mockTheme, undefined, resolve);
+                        component.focused = true;
+                        dialogs.push(component);
+                    });
+                },
+            },
+        } as any;
+        const pi = {
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            registerTool() {},
+        } as any;
+        const tracker = {
+            progress: { output: "", recentActivity: [] },
+            lastUpdateAt: 0,
+            changedFiles: new Set<string>(),
+            readFiles: new Set<string>(),
+            bashApproved: false,
+            interrupted: false,
+        } as any;
+        registerChildExtension(
+            tracker,
+            parentContext,
+            cwd,
+            "worker",
+            false,
+            true,
+            true,
+            "worker-restored-1",
+            "Restored worker",
+            () => {},
+            undefined,
+            undefined,
+            undefined,
+            true,
+            "workspace-1",
+            false,
+            true,
+        )(pi);
+
+        const permission = handlers.tool_call[0](
+            bashEvent("bash-restored-1", "unrecognized-command"),
+            { cwd, signal: undefined, sessionManager },
+        );
+        await waitForDialogs(dialogs, 1);
+        expect(dialogs).toHaveLength(1);
+        await waitForPermissionInput();
+        dialogs[0].handleInput(KEY.escape);
+        await expect(permission).resolves.toMatchObject({ block: true });
+    });
+
     it("allows same-checkout edits and writes without a second mutation prompt", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         tempDirs.push(cwd);
-        const runtime = setup(cwd, { nonIsolated: true });
+        const runtime = setup(cwd, { isolated: false });
 
         const edit = editEvent("edit-1", "src/example.ts");
         await expect(runtime.handlers.tool_call[0](edit, runtime.ctx)).resolves.toEqual({ block: false });
@@ -226,7 +301,7 @@ describe("command and edit permission gate", () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-outside-"));
         tempDirs.push(cwd, outside);
-        const runtime = setup(cwd, { nonIsolated: true, registerFileHook: true });
+        const runtime = setup(cwd, { isolated: false, registerFileHook: true });
         const event = writeEvent("write-1", path.join(outside, "file.ts"));
 
         const filePermission = runtime.handlers.tool_call[0](event, runtime.ctx);
@@ -247,7 +322,7 @@ describe("command and edit permission gate", () => {
         fs.writeFileSync(target, "outside");
         fs.symlinkSync(target, link);
         tempDirs.push(cwd, outside);
-        const runtime = setup(cwd, { nonIsolated: true, registerFileHook: true });
+        const runtime = setup(cwd, { isolated: false, registerFileHook: true });
         const event = writeEvent("write-1", link);
 
         await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toMatchObject({ block: true });
@@ -260,7 +335,7 @@ describe("command and edit permission gate", () => {
         tempDirs.push(cwd);
         const state = createPermissionState();
         state.bashRules["echo *"] = "allow";
-        const runtime = setup(cwd, { nonIsolated: true, permissionState: state });
+        const runtime = setup(cwd, { isolated: false, permissionState: state });
 
         await expect(runtime.handlers.tool_call[0]({
             type: "tool_call",
@@ -270,18 +345,18 @@ describe("command and edit permission gate", () => {
         }, runtime.ctx)).resolves.toEqual({ block: false });
     });
 
-    it("closes an active permission gate when the child run is aborted", async () => {
+    it("closes an active Bash permission gate when the child run is aborted", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         tempDirs.push(cwd);
-        const runtime = setup(cwd);
+        const runtime = setup(cwd, { isolated: false });
         const controller = new AbortController();
         runtime.ctx.signal = controller.signal;
 
         const permission = runtime.handlers.tool_call[0](
-            editEvent("edit-1", "src/example.ts"),
+            bashEvent("bash-1", "unrecognized-command"),
             runtime.ctx,
         );
-        await flush();
+        await waitForDialogs(runtime.dialogs, 1);
         expect(runtime.dialogs).toHaveLength(1);
         controller.abort();
 
@@ -289,16 +364,16 @@ describe("command and edit permission gate", () => {
         expect(runtime.pending).toEqual([true, false]);
     });
 
-    it("holds the next mutation prompt until the previous tool settles", async () => {
+    it("holds the next Bash permission prompt until the previous command settles", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         tempDirs.push(cwd);
-        const runtime = setup(cwd);
-        const firstEvent = editEvent("edit-1", "src/one.ts");
-        const secondEvent = editEvent("edit-2", "src/two.ts");
+        const runtime = setup(cwd, { isolated: false });
+        const firstEvent = bashEvent("bash-1", "unrecognized-command");
+        const secondEvent = bashEvent("bash-2", "unrecognized-command");
 
         const first = runtime.handlers.tool_call[0](firstEvent, runtime.ctx);
         const second = runtime.handlers.tool_call[0](secondEvent, runtime.ctx);
-        await flush();
+        await waitForDialogs(runtime.dialogs, 1);
         expect(runtime.dialogs).toHaveLength(1);
         await waitForPermissionInput();
         runtime.dialogs[0].handleInput(KEY.enter);
@@ -308,16 +383,17 @@ describe("command and edit permission gate", () => {
 
         await runtime.handlers.tool_result[0]({
             type: "tool_result",
-            toolName: "edit",
-            toolCallId: "edit-1",
+            toolName: "bash",
+            toolCallId: firstEvent.toolCallId,
             input: firstEvent.input,
             content: [],
             isError: false,
         });
-        await flush();
+        await waitForDialogs(runtime.dialogs, 2);
         expect(runtime.dialogs).toHaveLength(2);
         await waitForPermissionInput();
         runtime.dialogs[1].handleInput(KEY.escape);
         await expect(second).resolves.toMatchObject({ block: true });
     });
+
 });

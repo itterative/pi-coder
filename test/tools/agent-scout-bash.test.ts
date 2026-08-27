@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
 import { KEY, mockTheme } from "../helpers";
@@ -243,11 +243,7 @@ describe("child Bash permissions", () => {
             input: { command: "npm run test:run" },
         }, runtime.ctx);
 
-        for (let index = 0; index < 8; index++) {
-            await Promise.resolve();
-            await new Promise<void>((resolve) => setImmediate(resolve));
-        }
-        expect(runtime.dialogs).toHaveLength(1);
+        await vi.waitFor(() => expect(runtime.dialogs).toHaveLength(1));
         await new Promise((resolve) => setTimeout(resolve, 260));
         runtime.dialogs[0].handleInput(KEY.enter);
 
