@@ -7,8 +7,7 @@
  */
 
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Container } from "@earendil-works/pi-tui";
-import { matchesKey } from "@earendil-works/pi-tui";
+import { matchesKey, Text, type Component, type Container } from "@earendil-works/pi-tui";
 import type { ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
 import type { PagerItem } from "./pager";
@@ -38,10 +37,14 @@ export interface SelectOptions<T> {
     ) => string;
     // Optional header content rendered after title
     headerContent?: (container: Container, theme: Theme) => void;
+    // Whether to add a blank row between the title and header content (default: true)
+    headerSpacing?: boolean;
     // Optional footer content rendered before help text
     footerContent?: (container: Container, theme: Theme, state: SelectState<T>) => void;
     // Custom help text (defaults to standard navigation help)
     helpText?: string;
+    // Allow printable input to filter items by label.
+    enableSearch?: boolean;
     // Hook to intercept keys before select handles them. Return true to indicate key was handled, or { done: true } to close.
     onKey?: (key: string, state: SelectState<T>) => boolean | { done: boolean };
 }
@@ -49,6 +52,27 @@ export interface SelectOptions<T> {
 // Internal state for the select
 export interface SelectState<T> extends ListViewState<T> {
     cursor: number;
+}
+
+class SearchIndicator implements Component {
+    private theme: Theme | null = null;
+    private query = "";
+
+    setTheme(theme: Theme): void {
+        this.theme = theme;
+    }
+
+    setQuery(query: string): void {
+        this.query = query;
+    }
+
+    render(width: number): string[] {
+        if (!this.theme || !this.query) return [];
+        const text = new Text(this.theme.fg("muted", `  > ${this.query}`), 1, 0);
+        return ["", ...text.render(width)];
+    }
+
+    invalidate(): void {}
 }
 
 /**
@@ -59,6 +83,9 @@ export interface SelectState<T> extends ListViewState<T> {
  */
 export class SelectComponent<T> extends ListViewComponent<T, T | undefined, SelectState<T>> {
     private confirmed = false;
+    private readonly allItems: PagerItem<T>[];
+    private readonly searchIndicator = new SearchIndicator();
+    private searchQuery = "";
 
     constructor(
         public readonly options: SelectOptions<T>,
@@ -68,8 +95,13 @@ export class SelectComponent<T> extends ListViewComponent<T, T | undefined, Sele
                 title: options.title,
                 renderItem: options.renderItem,
                 headerContent: options.headerContent,
+                headerSpacing: options.headerSpacing,
                 footerContent: options.footerContent,
-                helpText: options.helpText ?? "↑/↓ navigate | Enter confirm | Esc cancel",
+                helpText: options.helpText ?? (
+                    options.enableSearch
+                        ? "Type to search · ↑/↓ navigate · Enter confirm · Esc cancel"
+                        : "↑/↓ navigate · Enter confirm · Esc cancel"
+                ),
                 onKey: options.onKey,
             },
             {
@@ -79,6 +111,45 @@ export class SelectComponent<T> extends ListViewComponent<T, T | undefined, Sele
                 maxVisibleLines: options.maxVisible ?? 10,
             },
         );
+        this.allItems = [...options.items];
+        if (options.enableSearch) {
+            this.listOptions.headerContent = (container, theme) => {
+                options.headerContent?.(container, theme);
+                this.searchIndicator.setTheme(theme);
+                container.addChild(this.searchIndicator);
+            };
+        }
+    }
+
+    override handleInput(key: string): void {
+        if (this.handleSearchInput(key)) return;
+        super.handleInput(key);
+    }
+
+    private handleSearchInput(key: string): boolean {
+        if (!this.options.enableSearch) return false;
+
+        if (matchesKey(key, "backspace")) {
+            this.setSearchQuery(this.searchQuery.slice(0, -1));
+            return true;
+        }
+
+        const characters = [...key];
+        if (characters.length !== 1 || (characters[0]?.codePointAt(0) ?? 0) < 0x20) return false;
+        this.setSearchQuery(this.searchQuery + characters[0]);
+        return true;
+    }
+
+    private setSearchQuery(query: string): void {
+        this.searchQuery = query;
+        this.searchIndicator.setQuery(query);
+        const normalizedQuery = query.toLocaleLowerCase();
+        this.state.items = normalizedQuery
+            ? this.allItems.filter((item) => item.label.toLocaleLowerCase().includes(normalizedQuery))
+            : [...this.allItems];
+        this.state.cursor = 0;
+        this.state.scrollOffset = 0;
+        this.invalidate();
     }
 
     /**

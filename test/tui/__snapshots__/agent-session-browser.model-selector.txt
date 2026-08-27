@@ -1,0 +1,12 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   Scout model                                                                                    │
+│   Choose the AI model that should handle this agent's tasks.                                     │
+│                                                                                                  │
+│   → Parent model                                                                                 │
+│     Use the current pi model                                                                     │
+│     openai/gpt-4.1                                                                               │
+│     GPT-4.1                                                                                      │
+│                                                                                                  │
+│     Type to search · ↑/↓ navigate · Enter select · Esc back                                      │
+│                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

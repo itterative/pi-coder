@@ -359,11 +359,20 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
             .map((model) => ({ value: model, label: model.label }));
         if (modelItems.length === 0) return;
         const selector = new SelectComponent<AgentModelOption>({
-            title: `${setting.label} · model`,
+            title: setting.label,
             items: modelItems,
+            enableSearch: true,
+            headerSpacing: false,
+            headerContent: (container, theme) => {
+                container.addChild(new Text(
+                    theme.fg("muted", "  Choose the AI model that should handle this agent's tasks."),
+                    1,
+                    0,
+                ));
+            },
             initialCursor: Math.max(0, modelItems.findIndex((item) => item.value.id === setting.model)),
             maxVisible: 12,
-            helpText: "↑/↓ navigate · Enter select · Esc back",
+            helpText: "Type to search · ↑/↓ navigate · Enter select · Esc back",
             renderItem: (item, renderOptions) => item.value.description
                 ? `${item.value.label}\n${renderOptions.theme.fg("muted", item.value.description)}`
                 : item.value.label,

@@ -791,12 +791,21 @@ describe("AgentSessionBrowserComponent", () => {
         const ui = interact(value, 100);
 
         ui.press(KEY.tab);
-        expect(ui.render()).toContain("● Settings");
-        expect(ui.render()).toContain("Value: Parent model");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.settings-model-initial.txt",
+        );
         ui.press(KEY.enter);
-        expect(ui.render()).toContain("Scout model · model");
-        ui.press(KEY.down, KEY.enter);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.model-selector.txt",
+        );
+        ui.type("gpt");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.model-selector-filtered.txt",
+        );
+        ui.press(KEY.enter);
         await vi.waitFor(() => expect(changed).toEqual({ agent: "scout", model: "openai/gpt-4.1" }));
-        expect(ui.render()).toContain("Value: openai/gpt-4.1");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.settings-model-selected.txt",
+        );
     });
 });

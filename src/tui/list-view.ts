@@ -94,6 +94,8 @@ export interface ListViewOptions<T, S extends ListViewState<T> = ListViewState<T
     onCacheBuilt?: (totalLines: number) => void;
     // Optional header content rendered after title
     headerContent?: (container: Container, theme: Theme) => void;
+    // Whether to add a blank row between the title and header content (default: true)
+    headerSpacing?: boolean;
     // Optional footer content rendered before help text
     footerContent?: (container: Container, theme: Theme, state: S) => void;
     // Help text shown at the bottom
@@ -195,7 +197,9 @@ export class ListViewComponent<
             0,
         );
         this.container.addChild(this.titleText);
-        this.container.addChild(new Spacer(1));
+        if (!this.listOptions.headerContent || this.listOptions.headerSpacing !== false) {
+            this.container.addChild(new Spacer(1));
+        }
 
         // Custom header content if provided
         if (this.listOptions.headerContent) {

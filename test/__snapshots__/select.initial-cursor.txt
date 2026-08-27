@@ -5,7 +5,7 @@
 │     Item 1                                     │
 │     Item 2                                     │
 │                                                │
-│     ↑/↓ navigate | Enter confirm | Esc         │
+│     ↑/↓ navigate · Enter confirm · Esc         │
 │   cancel                                       │
 │                                                │
 ╰────────────────────────────────────────────────╯

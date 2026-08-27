@@ -1,11 +1,12 @@
 ╭────────────────────────────────────────────────╮
-│   Pick one                                     │
+│   Pick a model                                 │
 │                                                │
-│     Item 0                                     │
-│   → Item 1                                     │
-│     Item 2                                     │
 │                                                │
-│     ↑/↓ navigate · Enter confirm · Esc         │
-│   cancel                                       │
+│   > beta                                       │
+│                                                │
+│   → Beta model                                 │
+│                                                │
+│     Type to search · ↑/↓ navigate · Enter      │
+│   confirm · Esc cancel                         │
 │                                                │
 ╰────────────────────────────────────────────────╯

@@ -6,7 +6,7 @@
 import { Text } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { SelectComponent, type SelectOptions } from "../src/tui/select";
-import { KEY, mockTheme, press, renderText } from "./helpers";
+import { KEY, mockTheme, press, renderText, type as typeText } from "./helpers";
 
 function setup<T>(options: SelectOptions<T>) {
     let result: T | undefined | "pending" = "pending";
@@ -38,6 +38,23 @@ describe("SelectComponent", () => {
         await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/select.scroll-indicator-initial.txt");
         press(component, KEY.down, KEY.down, KEY.down, KEY.down, KEY.down);
         await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/select.scroll-indicator-after-down.txt");
+    });
+
+    it("filters items while typing and displays the search at the bottom", async () => {
+        const { component, result } = setup({
+            title: "Pick a model",
+            items: [
+                { value: "alpha", label: "Alpha model" },
+                { value: "beta", label: "Beta model" },
+                { value: "gamma", label: "Gamma model" },
+            ],
+            enableSearch: true,
+        });
+        typeText(component, "beta");
+
+        await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/select.search-filtered.txt");
+        press(component, KEY.enter);
+        expect(result()).toBe("beta");
     });
 
     it("confirms the cursor item on Enter", () => {

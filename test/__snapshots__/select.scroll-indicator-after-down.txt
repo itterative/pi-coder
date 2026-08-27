@@ -8,7 +8,7 @@
 │                                                │
 │     Showing lines 5-8 of 8                     │
 │                                                │
-│     ↑/↓ navigate | Enter confirm | Esc         │
+│     ↑/↓ navigate · Enter confirm · Esc         │
 │   cancel                                       │
 │                                                │
 ╰────────────────────────────────────────────────╯

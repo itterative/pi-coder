@@ -1,0 +1,13 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   Delegated agent sessions                                                                       │
+│                                                                                                  │
+│     ○ Agents    ● Settings                                                                       │
+│                                                                                                  │
+│   → Scout model                                                                                  │
+│     Model used by scout                                                                          │
+│     Value: Parent model (uses the current pi model)                                              │
+│                                                                                                  │
+│   1 setting                                                                                      │
+│                                                                                                  │
+│     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
