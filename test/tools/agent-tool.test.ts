@@ -104,6 +104,10 @@ describe("agent extension registration", () => {
 
         expect(tool.name).toBe("agent");
         expect(tool.executionMode).toBe("sequential");
+        await expect([
+            tool.description,
+            ...tool.promptGuidelines,
+        ].join("\n")).toMatchFileSnapshot("__snapshots__/agent-tool.delegation-guidance.txt");
         await expect(prompt.systemPrompt).toMatchFileSnapshot("__snapshots__/agent-tool.parent-system-prompt.txt");
         const repeatedPrompt = await handlers.before_agent_start[0](prompt, ctx) as any;
         expect(repeatedPrompt).toEqual(prompt);

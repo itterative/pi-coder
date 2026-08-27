@@ -15,7 +15,7 @@ agent(action="cancel", runId="scout-1")
 agent(action="spawn", agent="worker", task="Implement and validate the requested change")
 ```
 
-Each run has a short human-readable title. Supply `title` on `start` or `spawn`; when omitted, pi-coder derives one from the first task line. The stable run ID remains the authoritative identifier and is displayed alongside the title.
+Each run has a short human-readable title for display. Supply `title` on `start` or `spawn`; when omitted, pi-coder derives one from the task. The title does not constrain the task: delegation tasks may and should be multiline and as detailed as needed. The stable run ID remains the authoritative identifier and is displayed alongside the title.
 
 `list` returns the currently tracked run IDs, titles, statuses, tasks, and next actions. Use it after compaction or session restoration instead of relying on dynamic parent prompt state.
 
@@ -50,6 +50,10 @@ Uncollected background terminal outcomes restore from bounded parent metadata wi
 A parked dry-run report script, `tools/report-agent-gc.mjs`, is available in git stash `0ccdbf040be633195333a0fb6c7c07dcb9190c0f` (restore with `git stash apply 0ccdbf040be633195333a0fb6c7c07dcb9190c0f`). When restored, run `node tools/report-agent-gc.mjs` to produce a read-only report for the current cwd. It scans parent-session markers and the extension metadata database, then reports marker-reachable/protected/unreachable snapshots, orphan child transcripts, total and potentially reclaimable transcript bytes, and database/catalog references to missing child JSONL files. It accepts `--cwd`, `--state-dir`, `--parent-session-dir`, and `--json`. The report does not delete files or database rows. Actual garbage collection remains intentionally unimplemented until a retention policy is established; the safest initial candidate is orphan JSONL files, while snapshots and referenced transcripts should remain retained.
 
 ## Child prompt design
+
+Delegation tasks are the child's complete assignment. Write each task as a detailed, self-contained brief for a child that cannot see the parent's conversation, prior tool calls, or unstated working-tree context. Include the objective, relevant files and symbols, known current state, scope and non-goals, constraints, expected report or changes, validation steps, and any other facts needed to act correctly. Do not optimize delegation tasks for brevity or assume the child can infer missing details.
+
+Tasks may and should be multiline. A short `title` is only a display label; it is separate from the task and does not impose a one-line limit. Put required instructions and facts in `task`. Use `context.sections` for supplemental parent, repository, or workspace context when the selected agent's context policy supports those sections; context sections do not replace a complete task.
 
 Delegated child instructions are written for the child model, not as a description of extension internals. Describe behavior the child can observe and act on: a tool call runs immediately, may pause while the end user approves or denies it, or is blocked. Avoid UI-oriented phrases such as “opens another prompt” or “parent-visible prompt,” internal heuristic names, and lifecycle facts that do not change what the child should do.
 
