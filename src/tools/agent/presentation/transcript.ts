@@ -223,7 +223,9 @@ function transcriptParts(entries: SessionEntry[]): TranscriptPart[] {
     for (const entry of entries) {
         if (entry.type === "message") {
             parts.push(...messageParts(entry, failedToolCalls));
-        } else if (entry.type === "custom_message") {
+        } else if (entry.type === "custom_message" && entry.display) {
+            // Hidden custom messages (e.g. pi-memory reminders, mailbox notes)
+            // are injected for the model, not shown in the transcript.
             parts.push({ text: quoteText(contentText(entry.content)), toolOnly: false });
         } else if (entry.type === "compaction") {
             parts.push({ text: entry.summary, toolOnly: false });

@@ -73,6 +73,29 @@ describe("delegated-agent transcript formatting", () => {
         await expect(transcript).toMatchFileSnapshot("__snapshots__/agent-transcript.complete.txt");
     });
 
+    it("skips hidden custom messages and keeps visible ones", () => {
+        const session = SessionManager.inMemory("/project");
+        session.appendCustomMessageEntry(
+            "pi-memory",
+            "<memory_reminder>\nBefore starting work, consider whether any memories are relevant.\n</memory_reminder>",
+            false,
+        );
+        session.appendMessage({
+            role: "user",
+            content: "Inspect the project",
+            timestamp: 1,
+        });
+        session.appendCustomMessageEntry("pi-coder-agent-mailbox", "Background mailbox update for the parent agent.", false);
+        session.appendCustomMessageEntry("note", "A visible custom note.", true);
+
+        const transcript = formatAgentSessionTranscript(session.getBranch());
+
+        expect(transcript).not.toContain("memory_reminder");
+        expect(transcript).not.toContain("Background mailbox update");
+        expect(transcript).toContain("> A visible custom note.");
+        expect(transcript).toContain("> Inspect the project");
+    });
+
     it("marks failed calls and keeps consecutive calls together", async () => {
         const session = SessionManager.inMemory("/project");
         session.appendMessage({
