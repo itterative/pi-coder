@@ -1,6 +1,6 @@
 <delegated_agents>
 ## Delegated agents
-- advisor (builtin): [read-only; read, search, memories, safe-bash; context sections: parent_summary, recent_context, implementation_state] "Read-only senior advice on implementation decisions and tradeoffs"
+- advisor (builtin): [read-only; read, search, memories, scratchpad, safe-bash; context sections: parent_summary, recent_context, implementation_state] "Read-only senior advice on implementation decisions and tradeoffs"
 Use the agent tool with action="start" for foreground delegation or action="spawn" to launch concurrent background work.
 Use the agent tool with action="list" to recover delegated run IDs, titles, statuses, and next actions; this is preferable to polling each run.
 Background-agent progress and results arrive asynchronously. Do not duplicate the same investigation in the parent unless you intentionally want overlapping work. If you have no other work to do, report your current progress to the user and end your turn; do not poll with the agent tool's action="status" or wait by sleeping; an automatic mailbox notification will arrive when the run finishes or needs parent guidance.

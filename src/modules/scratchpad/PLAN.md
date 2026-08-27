@@ -2,8 +2,9 @@
 
 ## Status
 
-Proposed design and implementation plan. This document records the agreed
-shape before implementation; it is not a user-facing command reference.
+Foundational module and agent capability implemented. Multi-root confinement
+integration remains the next implementation phase. This document records the
+feature shape; it is not a user-facing command reference.
 
 ## Purpose
 
@@ -235,7 +236,7 @@ parent-owned attachment with read/write access modes and run-lifetime leases.
 
 ## Implementation phases
 
-### Phase 1: module and prompt
+### Phase 1: module and prompt — implemented
 
 - Add `src/modules/scratchpad/index.ts` and focused types/helpers.
 - Create the `0700` temporary directory per runtime; never delete it from
@@ -243,12 +244,12 @@ parent-owned attachment with read/write access modes and run-lifetime leases.
 - Add the prompt appendix and registration lifecycle.
 - Register the parent extension from `src/index.ts`.
 
-### Phase 2: capability and child registration
+### Phase 2: capability and child registration — implemented
 
 - Add the `scratchpad` capability and validation/fingerprinting support.
 - Add it to all built-in definitions.
 - Register the same scratchpad factory in capable child resource loaders.
-- Add prompt/catalog wording and child prompt snapshot coverage.
+- Update prompt/catalog expectations and focused capability tests.
 
 ### Phase 3: multi-root confinement
 

@@ -14,6 +14,7 @@ import {
     READ_ONLY_AGENT_TOOLS,
 } from "./definitions/discovery";
 import registerMemoryExtension from "../../modules/memory";
+import registerScratchpadExtension from "../../modules/scratchpad";
 import { createChildModelRuntime, resolveChildModel } from "./child/model-runtime";
 import { childProtocolPrompt, registerChildExtension } from "./child/extension";
 import { renderAgentSystemPrompt } from "./prompts/renderer";
@@ -85,6 +86,7 @@ export async function createAgentChild(
     const canRunCommands = agentCanRunCommands(context.definition);
     const safeBash = hasAgentCapability(context.definition, "safe-bash");
     const hasMemories = hasAgentCapability(context.definition, "memories");
+    const hasScratchpad = hasAgentCapability(context.definition, "scratchpad");
     const allowUserInteraction = context.definition.allowUserInteraction !== false;
     const agentDir = getAgentDir();
     let sessionManager = context.childSessionFile
@@ -145,6 +147,13 @@ export async function createAgentChild(
                     name: "pi-coder-memory-child",
                     hidden: true,
                     factory: registerMemoryExtension,
+                }]
+                : []),
+            ...(hasScratchpad
+                ? [{
+                    name: "pi-coder-scratchpad-child",
+                    hidden: true,
+                    factory: registerScratchpadExtension,
                 }]
                 : []),
         ],

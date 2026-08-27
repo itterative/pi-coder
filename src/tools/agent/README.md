@@ -91,13 +91,13 @@ The activity widget shows `waiting_for_permission` while a gate is queued or ope
 
 ## Agent definitions
 
-The built-in `scout`, `reviewer`, `advisor`, and `worker` require no definition files and all include the `memories` capability. The advisor is disabled by default and must be enabled and assigned a model in `/agents` before use. Custom definitions use Markdown with YAML frontmatter:
+The built-in `scout`, `reviewer`, `advisor`, and `worker` require no definition files and all include the `memories` and `scratchpad` capabilities. The advisor is disabled by default and must be enabled and assigned a model in `/agents` before use. Custom definitions use Markdown with YAML frontmatter:
 
 ```markdown
 ---
 name: analyst
 description: Inspect architecture and identify risks
-capabilities: [safe-bash, memories]
+capabilities: [safe-bash, memories, scratchpad]
 model: provider/model-id
 ---
 
@@ -113,7 +113,7 @@ Definitions are sorted by path. Within one scope, the first valid duplicate wins
 
 The `/agents` browser also has a Settings tab. It stores optional built-in model overrides and the busy-worker change-notification preference in `~/.pi/agent-config.json` (or the nearest trusted project `.pi/agent-config.json` when that file already exists). Omitting a model override makes ordinary built-ins use the parent session's model; the advisor must have an explicit model override before it can run. Busy-worker notifications are enabled by default. The model picker lists the currently available provider/model pairs.
 
-Every custom definition receives baseline `read` and `search` access (`read`, `grep`, `find`, and `ls`). Its optional `capabilities` may contain `memories`, `safe-bash`, or `command-runner`; `memories` loads pi-coder's memory extension in the child session, `edit` is reserved for the built-in worker, and unknown or malformed capability lists invalidate the definition. `safe-bash` grants only cwd-confined, heuristically `SAFE_READONLY` Bash, while `command-runner` implies `safe-bash` and routes other commands through the normal permission gate. Every baseline read/search path is confined to the working directory and sensitive paths remain blocked.
+Every custom definition receives baseline `read` and `search` access (`read`, `grep`, `find`, and `ls`). Its optional `capabilities` may contain `memories`, `scratchpad`, `safe-bash`, or `command-runner`; `memories` loads pi-coder's memory extension in the child session, `scratchpad` creates a private temporary `/tmp` workspace in the child session, `edit` is reserved for the built-in worker, and unknown or malformed capability lists invalidate the definition. `safe-bash` grants only cwd-confined, heuristically `SAFE_READONLY` Bash, while `command-runner` implies `safe-bash` and routes other commands through the normal permission gate. Every baseline read/search path is confined to the working directory and sensitive paths remain blocked.
 
 `agent` `start` and `spawn` actions may include bounded `context.sections` with `id`, `title`, `content`, and a source of `parent`, `repository`, or `workspace`. Built-in definitions can declare a context policy that selects sections and applies a character budget. The selected context is rendered into the initial task message, not the system prompt, and is retained by the child transcript for resumed runs. The built-in advisor currently accepts `parent_summary`, `recent_context`, and `implementation_state`; automatic collection of those sections is deferred.
 

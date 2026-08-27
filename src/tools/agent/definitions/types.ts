@@ -9,6 +9,7 @@ export const AGENT_CAPABILITIES = [
     "read",
     "search",
     "memories",
+    "scratchpad",
     "safe-bash",
     "command-runner",
     "edit",
