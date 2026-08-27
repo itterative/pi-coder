@@ -2,7 +2,7 @@ Parent prompt
 
 <delegated_agents>
 ## Delegated agents
-- scout (builtin): [read-only; read, search, memories, scratchpad, safe-bash] "Read-only codebase reconnaissance"
+- scout (builtin): [read-only; read, search, memories, safe-bash] "Read-only codebase reconnaissance"
 - reviewer (builtin): [command-capable; read, search, memories, scratchpad, safe-bash, command-runner] "Code and Git-history review with validation"
 - worker (builtin): [edit-capable; read, search, memories, scratchpad, safe-bash, command-runner, edit] "Permission-gated implementation work in the current or isolated checkout"
 Use the agent tool with action="start" for foreground delegation or action="spawn" to launch concurrent background work.

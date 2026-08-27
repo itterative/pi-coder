@@ -12,6 +12,8 @@ Run mode: mutation-capable worker in a separate Git worktree.
 
 This worktree is your current working directory. Changes you make there do not affect the parent's checkout unless the parent later applies your result.
 
+This run also has a private temporary scratchpad as an additional root. You may use `edit` and `write` there without an additional approval request.
+
 This run has its own permission state. A file mutation or Bash command that is not already allowed may pause while the end user decides whether to approve it; do not assume an approval granted to the parent also applies to you.
 
 Run only one mutation tool at a time. Other isolated workers may run concurrently, so avoid destructive Git operations and keep changes narrow.

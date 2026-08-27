@@ -40,8 +40,8 @@ export function scratchpadPrompt(pathname: string): string {
         "",
         "Use it for notes, intermediate artifacts, generated reports, and other "
             + "work that should not modify the project checkout.",
-        "You may use the normal read, write, edit, and bash tools with this "
-            + "directory.",
+        "Use this directory with the tools available in this runtime; access "
+            + "remains subject to the runtime's capability policy.",
         "It is an additional confined root, equivalent to the current working "
             + "directory for path safety.",
         "Scratchpad contents are temporary and are not managed or deleted by "
@@ -102,4 +102,3 @@ export default function registerScratchpadExtension(pi: ExtensionAPI): void {
         runtimes.delete(ctx.sessionManager);
     });
 }
-

@@ -54,7 +54,7 @@ export function childProtocolPrompt(
         : "Sensitive paths and paths that escape through symlinks are always blocked.";
     const readPathRule = hasScratchpad
         ? sensitivePathRule
-        : "and must not enter a sensitive location.";
+        : "Sensitive paths and paths that escape through symlinks are always blocked.";
     const interaction = background || !allowUserInteraction
         ? "If guidance from the parent is necessary, make reasonable progress first, then use `ask_parent` with the evidence you found and your recommended course. Call `ask_parent` by itself, not alongside other tools."
         : [
@@ -66,6 +66,9 @@ export function childProtocolPrompt(
         capability = [
             "Run mode: mutation-capable worker in a separate Git worktree.",
             "This worktree is your current working directory. Changes you make there do not affect the parent's checkout unless the parent later applies your result.",
+            ...(hasScratchpad
+                ? ["This run also has a private temporary scratchpad as an additional root. You may use `edit` and `write` there without an additional approval request."]
+                : []),
             "This run has its own permission state. A file mutation or Bash command that is not already allowed may pause while the end user decides whether to approve it; do not assume an approval granted to the parent also applies to you.",
             "Run only one mutation tool at a time. Other isolated workers may run concurrently, so avoid destructive Git operations and keep changes narrow.",
         ].join("\n\n");
@@ -79,7 +82,7 @@ export function childProtocolPrompt(
     } else if (commandRunner) {
         capability = [
             "Run mode: delegated agent with permission-gated command execution.",
-            `You may use \`read\`, \`grep\`, \`find\`, and \`ls\`. Every direct file path, after resolving symlinks, must remain inside ${allowedPathScope} ${readPathRule} You cannot use direct edit or write tools.`,
+            `You may use \`read\`, \`grep\`, \`find\`, and \`ls\`. Every direct file path, after resolving symlinks, must remain inside ${allowedPathScope}. ${readPathRule} You cannot use direct edit or write tools.`,
             "You may use `bash`. Commands recognized as local read-only inspection run directly; other eligible commands may pause while the end user approves or denies them. Approved commands can have project side effects, so keep them relevant to validation and do not assume a command is harmless because it has a test-like name.",
         ].join("\n\n");
     } else {
@@ -89,7 +92,7 @@ export function childProtocolPrompt(
 
         capability = [
             "Run mode: read-only delegated agent.",
-            `You may use \`read\`, \`grep\`, \`find\`, and \`ls\`. Every path, after resolving symlinks, must remain inside ${allowedPathScope} ${readPathRule} You cannot modify files.`,
+            `You may use \`read\`, \`grep\`, \`find\`, and \`ls\`. Every path, after resolving symlinks, must remain inside ${allowedPathScope}. ${readPathRule} You cannot modify files.`,
             bashAccess,
         ].join("\n\n");
     }

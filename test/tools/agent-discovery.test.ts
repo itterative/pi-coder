@@ -101,7 +101,7 @@ describe("agent discovery", () => {
         const custom = result.agents.find((agent) => agent.name === "custom");
         const stale = result.agents.find((agent) => agent.name === "stale");
 
-        expect(scout).toMatchObject({ source: "builtin", capabilities: ["read", "search", "memories", "scratchpad", "safe-bash"] });
+        expect(scout).toMatchObject({ source: "builtin", capabilities: ["read", "search", "memories", "safe-bash"] });
         expect(reviewer).toMatchObject({
             source: "builtin",
             capabilities: ["read", "search", "memories", "scratchpad", "safe-bash", "command-runner"],
@@ -109,7 +109,7 @@ describe("agent discovery", () => {
         expect(advisor).toBe(BUILTIN_ADVISOR);
         expect(advisor).toMatchObject({
             source: "builtin",
-            capabilities: ["read", "search", "memories", "scratchpad", "safe-bash"],
+            capabilities: ["read", "search", "memories", "safe-bash"],
         });
         expect(agentTools(advisor!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(agentTools(scout!)).toEqual(["read", "grep", "find", "ls", "bash"]);

@@ -211,12 +211,6 @@ export default function sandbox(bwrap: string, command: string, options?: Sandbo
 
     cmd.push("--bind", escapeArg(cwd), escapeArg(cwd));
 
-    for (const root of options?.additionalRoots ?? []) {
-        const resolvedRoot = path.resolve(root);
-        if (resolvedRoot === cwd) continue;
-        cmd.push("--bind", escapeArg(resolvedRoot), escapeArg(resolvedRoot));
-    }
-
     const envCmd = buildEnvCmd(sandboxConfig, { env, cwd });
     cmd.push(...envCmd);
 
@@ -237,6 +231,14 @@ export default function sandbox(bwrap: string, command: string, options?: Sandbo
     // Add system and home mounts
     const mountCmd = buildMountCmd(sandboxConfig, options);
     cmd.push(...mountCmd);
+
+    // Mount additional roots after broad mounts such as /tmp so nested roots
+    // remain visible if the broad mount is narrowed or reordered later.
+    for (const root of options?.additionalRoots ?? []) {
+        const resolvedRoot = path.resolve(root);
+        if (resolvedRoot === cwd) continue;
+        cmd.push("--bind", escapeArg(resolvedRoot), escapeArg(resolvedRoot));
+    }
 
     const shell = env.SHELL ?? "sh";
 

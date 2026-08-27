@@ -52,7 +52,7 @@ type AgentFrontmatter = {
 export const BUILTIN_SCOUT: AgentDefinition = {
     name: "scout",
     description: "Read-only codebase reconnaissance",
-    capabilities: ["read", "search", "memories", "scratchpad", "safe-bash"],
+    capabilities: ["read", "search", "memories", "safe-bash"],
     systemPrompt: `You are the parent's read-only codebase scout.
 
 Investigate the assigned question thoroughly. Return concise, evidence-based findings with relevant file paths and symbols. Focus on facts the parent can act on, and identify uncertainty or missing evidence explicitly.`,
@@ -82,7 +82,7 @@ Inspect the relevant code and latest working-tree state before editing. Implemen
 export const BUILTIN_ADVISOR: AgentDefinition = {
     name: "advisor",
     description: "Read-only senior advice on implementation decisions and tradeoffs",
-    capabilities: ["read", "search", "memories", "scratchpad", "safe-bash"],
+    capabilities: ["read", "search", "memories", "safe-bash"],
     allowUserInteraction: false,
     systemPrompt: `You are the parent's read-only senior technical advisor.
 

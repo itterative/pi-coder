@@ -54,8 +54,8 @@ At session startup, the parent receives a system-prompt appendix explaining:
   eventual `/tmp` cleanup;
 - that the scratchpad is confined like the current working directory.
 
-A child session receives the same appendix from the same registration factory,
-with its own scratchpad path. The child should not need a special tool or a
+A scratchpad-capable child session receives the same appendix from the same
+registration factory, with its own scratchpad path. The child should not need a special tool or a
 path-management protocol. The prompt should provide the absolute path because
 an extension cannot reliably inject a new environment variable into both
 sandboxed and direct Bash execution paths.
@@ -63,7 +63,7 @@ sandboxed and direct Bash execution paths.
 The first version creates one independent scratchpad per runtime session:
 
 - the parent owns one scratchpad;
-- each child owns a separate scratchpad;
+- each scratchpad-capable child owns a separate scratchpad;
 - children do not automatically see the parent's scratchpad;
 - explicit sharing can be added later if its lifecycle and concurrency rules
   justify the complexity.
@@ -74,8 +74,8 @@ Add `scratchpad` as an agent capability alongside `memories`.
 
 - The capability is represented in `AgentCapability` and included in the
   definition fingerprint.
-- All built-in agents (`scout`, `reviewer`, `advisor`, and `worker`) receive
-  the capability by default.
+- Built-in `reviewer` and `worker` agents receive the capability; read-only
+  `scout` and `advisor` agents do not need scratchpads.
 - Custom definitions may declare `scratchpad` in `capabilities`, following the
   existing memory-capability pattern. The capability must not grant edit or
   Bash authority by itself; it only makes the temporary root available to the
@@ -84,7 +84,7 @@ Add `scratchpad` as an agent capability alongside `memories`.
   just as it registers the memory extension. This avoids recursive loading
   while ensuring parent and child runtimes use the same registration factory.
 - The capability should be described in the agent catalog/prompt so the parent
-  knows that the agent has a temporary working area.
+  knows which agent has a temporary working area.
 
 If product intent is that every custom agent receives scratchpad without
 mentioning it in frontmatter, make it part of baseline capabilities in a later
@@ -144,9 +144,8 @@ restricted later.
 ### Child tools
 
 The child read-only and command/worker permission hooks must receive the
-scratchpad root through the same runtime registration state. A scout can read
-its own scratchpad, while only an agent that already has edit/write or approved
-Bash authority can mutate it. Scratchpad access must not be treated as an
+scratchpad root through the same runtime registration state. A scratchpad-capable child can read its own scratchpad, while only an agent that
+already has edit/write or approved Bash authority can mutate it. Scratchpad access must not be treated as an
 outside-cwd approval request.
 
 For this first version, child execution cwd remains the project/worktree cwd.
@@ -249,7 +248,7 @@ parent-owned attachment with read/write access modes and run-lifetime leases.
 ### Phase 2: capability and child registration — implemented
 
 - Add the `scratchpad` capability and validation/fingerprinting support.
-- Add it to all built-in definitions.
+- Add it to scratchpad-capable built-in definitions (`reviewer` and `worker`).
 - Register the same scratchpad factory in capable child resource loaders.
 - Update prompt/catalog expectations and focused capability tests.
 
@@ -302,8 +301,8 @@ npx tsc --noEmit
 2. Have the parent read, write, edit, and run a sandboxed Bash command against
    that path without a permission dialog.
 3. Confirm ordinary outside-cwd paths retain the existing permission behavior.
-4. Start a scout and verify it gets a distinct scratchpad and can read it but
-   cannot mutate it.
+4. Start a scratchpad-capable reviewer and verify it gets a distinct
+   scratchpad and can read it but cannot mutate it through read-only tools.
 5. Start a worker and verify it can write its own scratchpad without a prompt.
 6. Exercise symlink escapes from the scratchpad and confirm they remain
    blocked.

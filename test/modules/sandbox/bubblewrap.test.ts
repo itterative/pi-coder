@@ -41,6 +41,8 @@ describe("bubblewrap", () => {
         });
 
         expect(result).toContain(`--bind '${scratchpad}' '${scratchpad}'`);
+        expect(result.indexOf(`--bind '${scratchpad}' '${scratchpad}'`))
+            .toBeGreaterThan(result.indexOf("--bind '/tmp' '/tmp'"));
     });
 
     describe("buildEnvCmd - default environment variables", () => {
