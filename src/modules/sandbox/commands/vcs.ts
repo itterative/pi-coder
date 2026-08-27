@@ -17,7 +17,8 @@ const LOG_SPEC: CommandSpec = {
 /**
  * `git diff` is read-only project inspection in the trusted local environment.
  * Keep external-program and output-file options ineligible; ordinary patch,
- * metadata, checking, quiet, and explicitly scoped path output are allowed.
+ * metadata (including stat summaries), checking, quiet, and explicitly scoped
+ * path output are allowed.
  */
 const BRANCH_SPEC: CommandSpec = {
     // The default invocation lists branches. Creation, deletion, movement,
@@ -59,8 +60,15 @@ const DIFF_SPEC: CommandSpec = {
             // extractor. Only option-looking arguments need allowlisting.
             if (
                 arg.startsWith("-") &&
+                arg !== "-h" &&
                 arg !== "--check" &&
                 arg !== "--stat" &&
+                arg !== "--numstat" &&
+                arg !== "--shortstat" &&
+                arg !== "--summary" &&
+                arg !== "--compact-summary" &&
+                arg !== "--dirstat" &&
+                arg !== "--dirstat-by-file" &&
                 arg !== "--name-status" &&
                 arg !== "--name-only" &&
                 arg !== "--quiet" &&
@@ -119,8 +127,8 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
             // and bash defaults to sandboxed execution.
             // Positionals are pathspecs.
             status: { tags: [CommandTag.GIT_STATUS] },
-            // Keep only the explicitly modeled checking, stat, and quiet
-            // modes eligible; worktree diff content remains a prompt.
+            // Keep only explicitly modeled diff modes eligible; default patch
+            // output is allowed, while other output modes remain prompts.
             diff: DIFF_SPEC,
             show: SHOW_SPEC,
             log: LOG_SPEC,
