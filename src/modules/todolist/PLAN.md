@@ -299,6 +299,11 @@ above-editor registration with the existing agent activity section rather than
 stacking a second widget. The agent and TODO renderers remain separate
 components so their domain state and lifecycle rules stay independent.
 
+The agent browser also projects the latest TODO snapshot into each child
+transcript. Its collapsed view shows the complete TODO list in the compact
+widget style; its detailed view repeats that list and renders the freeform
+post-frontmatter body as Markdown.
+
 The status widget:
 
 - reads the parent runtime's parsed TODO model;

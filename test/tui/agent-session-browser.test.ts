@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { createEventBus, SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/observability/events";
 import {
@@ -9,6 +9,8 @@ import {
 } from "../../src/tui/agents";
 import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
 import { workspaceBrowserItem, type AgentSessionBrowserItem } from "../../src/tools/agent/presentation/browser-models";
+import { TODO_SNAPSHOT_TYPE } from "../../src/modules/todolist/persistence";
+import { formatAgentSessionTranscripts } from "../../src/tools/agent/presentation/transcript";
 import { KEY, interact, mockTheme, press, renderText, snapshotText } from "../helpers";
 
 const current = {
@@ -237,8 +239,6 @@ describe("AgentSessionBrowserComponent", () => {
             ...past,
             id: "child-session-1",
             sessionFile,
-            transcript: liveTranscript(90),
-            transcriptCollapsed: liveTranscript(90),
         };
         const value = new AgentSessionBrowserComponent({
             current: [liveWithoutFile],
@@ -252,6 +252,11 @@ describe("AgentSessionBrowserComponent", () => {
                     ? { current: [liveWithFile], past: [] }
                     : { current: [], past: [completed] };
             },
+            onLoadTranscript: async (item) => ({
+                ...item,
+                transcript: liveTranscript(90),
+                transcriptCollapsed: liveTranscript(90),
+            }),
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -547,14 +552,22 @@ describe("AgentSessionBrowserComponent", () => {
         );
     });
 
-    it("loads a past transcript lazily when its detail view opens", async () => {
+    it("loads a past transcript lazily and redraws the open detail", async () => {
         const loadedItems: AgentSessionBrowserItem[] = [];
+        let resolveTranscript!: (item: AgentSessionBrowserItem) => void;
+        const transcript = new Promise<AgentSessionBrowserItem>((resolve) => {
+            resolveTranscript = resolve;
+        });
+        let renderedOnInvalidate = "";
         const value = new AgentSessionBrowserComponent({
             current: [],
             past: [past],
-            onLoadTranscript: async (item) => {
+            onLoadTranscript: (item) => {
                 loadedItems.push(item);
-                return { ...item, transcript: "The implementation is sound.", messageCount: 4 };
+                return transcript;
+            },
+            onInvalidate: () => {
+                renderedOnInvalidate = renderText(value, 100);
             },
         });
         value.initialize(mockTheme);
@@ -566,10 +579,15 @@ describe("AgentSessionBrowserComponent", () => {
             "__snapshots__/agent-session-browser.session-detail-loading.txt",
         );
 
-        await vi.waitFor(() => expect(loadedItems).toHaveLength(1));
+        expect(loadedItems).toHaveLength(1);
         expect(loadedItems[0]).toMatchObject({ id: "child-session-1", kind: "past" });
-        expect(ui.render()).toContain("The implementation is sound.");
-        expect(ui.render()).not.toContain("Loading full transcript…");
+        resolveTranscript({
+            ...loadedItems[0]!,
+            transcript: "The implementation is sound.",
+            messageCount: 4,
+        });
+        await vi.waitFor(() => expect(renderedOnInvalidate).toContain("The implementation is sound."));
+        expect(renderedOnInvalidate).not.toContain("Loading full transcript…");
     });
 
     it("toggles between collapsed and detailed transcript views", () => {
@@ -650,6 +668,87 @@ describe("AgentSessionBrowserComponent", () => {
         await expect(snapshotText(ui.render())).toMatchFileSnapshot(
             "__snapshots__/agent-session-browser.tool-calls-detailed-scrolled.txt",
         );
+    });
+
+    it("renders all TODO items in collapsed and detailed transcript views", async () => {
+        const todoDocument = `---
+version: 1
+todos:
+  - id: inspect
+    title: Inspect the implementation
+    status: completed
+  - id: implement
+    title: Implement the feature
+    status: completed
+  - id: verify
+    title: Verify the result
+    status: in_progress
+  - id: document
+    title: Document the result
+    status: pending
+  - id: review
+    title: Review the result
+    status: pending
+---
+
+# Notes
+
+Keep the notes with the TODO list.
+`;
+        const session = SessionManager.inMemory("/project");
+        session.appendMessage({
+            role: "user",
+            content: "The agent is working.",
+            timestamp: 1,
+        });
+        session.appendMessage({
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-read", name: "read", arguments: { path: "src/index.ts" } }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 2,
+        });
+        session.appendCustomEntry(TODO_SNAPSHOT_TYPE, {
+            version: 1,
+            content: todoDocument,
+        });
+        const transcripts = formatAgentSessionTranscripts(session.getBranch());
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [{
+                ...past,
+                transcript: transcripts.detailed,
+                transcriptCollapsed: transcripts.collapsed,
+            }],
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.enter);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.todo-collapsed.txt",
+        );
+
+        ui.press(KEY.tab);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.todo-detailed.txt",
+        );
+
+        ui.press(KEY.pageDown);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.todo-detailed-scrolled.txt",
+        );
+
     });
 
     it("shows changed files but omits read files in session details", () => {

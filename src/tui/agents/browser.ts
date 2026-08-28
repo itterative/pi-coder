@@ -129,6 +129,7 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
     private readonly tabs: BrowserTab[];
     private readonly onInvalidate?: () => void;
     private readonly fixedHeight?: () => number;
+    private readonly onLoadTranscript?: AgentSessionBrowserOptions["onLoadTranscript"];
     private readonly refresh: RefreshCoordinator<AgentSessionBrowserData> | null;
     private readonly unsubscribeEvents?: () => void;
     private readonly list: ListViewComponent<BrowserItem, void, BrowserState>;
@@ -156,6 +157,7 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
         this.loadingWorkspaces = options.loadingWorkspaces ?? false;
         this.onInvalidate = options.onInvalidate;
         this.fixedHeight = options.fixedHeight;
+        this.onLoadTranscript = options.onLoadTranscript;
         this.tabs = ["agents"];
         if (options.workspaces !== undefined) this.tabs.push("workspaces");
         if (options.settings !== undefined) this.tabs.push("settings");
@@ -354,26 +356,25 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
         this.sessionDetail = detail;
         detail.initialize(this.theme);
         detail.setDoneCallback(() => this.closeSessionDetail(detail));
-        this.loadTranscriptForDetail(selected, detail, options);
+        this.loadTranscriptForDetail(selected, detail);
     }
 
     private loadTranscriptForDetail(
         item: AgentSessionBrowserItem,
         detail: AgentSessionDetailComponent,
-        options: AgentSessionBrowserOptions,
     ): void {
         // Past rows come from the run catalog without transcript text; the
         // transcript is loaded once its detail view is open instead of being
         // prebuilt for every enumerated session.
-        if (item.transcript !== undefined || !item.sessionFile || !options.onLoadTranscript) {
+        if (item.transcript !== undefined || !item.sessionFile || !this.onLoadTranscript) {
             return;
         }
-        void options.onLoadTranscript(item).then((updated) => {
+        void this.onLoadTranscript(item).then((updated) => {
             if (!updated || this.sessionDetail !== detail) {
                 return;
             }
-            this.replaceSessionItem(updated);
             detail.updateItem(updated);
+            this.replaceSessionItem(updated);
         }).catch(() => {
             // A transcript load failure keeps the preview already shown.
         });
@@ -389,6 +390,7 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
         }
         this.rebuildItems();
         this.invalidate();
+        this.onInvalidate?.();
     }
 
     private openWorkspace(workspace: AgentWorkspaceBrowserItem, options: AgentSessionBrowserOptions): void {
@@ -531,7 +533,10 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
         if (this.sessionDetail) {
             const selected = this.sessionDetail.sessionItem;
             const replacement = this.agentItems().find((item) => sameSession(item, selected));
-            if (replacement) this.sessionDetail.updateItem(replacement);
+            if (replacement) {
+                this.sessionDetail.updateItem(replacement);
+                this.loadTranscriptForDetail(replacement, this.sessionDetail);
+            }
         }
     }
 

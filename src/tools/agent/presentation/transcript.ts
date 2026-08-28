@@ -1,6 +1,8 @@
 import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { selectChildSessionLeaf } from "../child/transcript";
+import { getTodoSnapshotFromEntries } from "../../../modules/todolist/persistence";
+import { formatTodoTranscript } from "./todo-transcript";
 
 type DisplayContent = string | (TextContent | ImageContent)[];
 type ToolArguments = Record<string, unknown>;
@@ -18,10 +20,22 @@ interface ToolCallDisplay {
     failed: boolean;
 }
 
+type TranscriptPartKind = "user" | "assistant" | "custom" | "tool";
+
 interface TranscriptPart {
+    kind: TranscriptPartKind;
     text: string;
-    toolOnly: boolean;
     toolCalls?: ToolCallDisplay[];
+}
+
+interface TodoTranscriptEntry {
+    collapsed: string;
+    detailed: string;
+}
+
+interface CollectedTranscript {
+    conversation: TranscriptPart[];
+    todo?: TodoTranscriptEntry;
 }
 
 function contentText(content: DisplayContent): string {
@@ -145,7 +159,7 @@ function messageParts(
     const { message } = entry;
     switch (message.role) {
         case "user":
-            return [{ text: quoteText(contentText(message.content)), toolOnly: false }];
+            return [{ kind: "user", text: quoteText(contentText(message.content)) }];
         case "assistant": {
             const parts: TranscriptPart[] = [];
             let pendingToolCalls: ToolCallDisplay[] = [];
@@ -156,8 +170,8 @@ function messageParts(
                 const toolCalls = pendingToolCalls;
                 pendingToolCalls = [];
                 parts.push({
+                    kind: "tool",
                     text: toolCalls.map(toolCallText).join("\n"),
-                    toolOnly: true,
                     toolCalls,
                 });
             };
@@ -165,7 +179,7 @@ function messageParts(
                 if (block.type === "text") {
                     flushToolCalls();
                     if (block.text) {
-                        parts.push({ text: block.text, toolOnly: false });
+                        parts.push({ kind: "assistant", text: block.text });
                     }
                 } else if (block.type === "toolCall") {
                     pendingToolCalls.push({
@@ -186,12 +200,12 @@ function messageParts(
             return [];
         case "bashExecution":
             return [{
+                kind: "tool",
                 text: toolCallText({
                     name: "bash",
                     args: { command: message.command },
                     failed: message.exitCode !== undefined && message.exitCode !== 0,
                 }),
-                toolOnly: true,
                 toolCalls: [{
                     name: "bash",
                     args: { command: message.command },
@@ -199,11 +213,11 @@ function messageParts(
                 }],
             }];
         case "custom":
-            return [{ text: quoteText(contentText(message.content)), toolOnly: false }];
+            return [{ kind: "custom", text: quoteText(contentText(message.content)) }];
         case "branchSummary":
-            return [{ text: message.summary, toolOnly: false }];
+            return [{ kind: "assistant", text: message.summary }];
         case "compactionSummary":
-            return [{ text: message.summary, toolOnly: false }];
+            return [{ kind: "assistant", text: message.summary }];
     }
 }
 
@@ -217,76 +231,124 @@ function failedToolCallIds(entries: SessionEntry[]): Set<string> {
     return failed;
 }
 
-function transcriptParts(entries: SessionEntry[]): TranscriptPart[] {
-    const failedToolCalls = failedToolCallIds(entries);
-    const parts: TranscriptPart[] = [];
+function collectConversationParts(
+    entries: SessionEntry[],
+    failedToolCalls: ReadonlySet<string>,
+): TranscriptPart[] {
+    const conversation: TranscriptPart[] = [];
+
     for (const entry of entries) {
         if (entry.type === "message") {
-            parts.push(...messageParts(entry, failedToolCalls));
-        } else if (entry.type === "custom_message" && entry.display) {
+            conversation.push(...messageParts(entry, failedToolCalls));
+            continue;
+        }
+        if (entry.type === "custom_message" && entry.display) {
             // Hidden custom messages (e.g. pi-memory reminders, mailbox notes)
             // are injected for the model, not shown in the transcript.
-            parts.push({ text: quoteText(contentText(entry.content)), toolOnly: false });
-        } else if (entry.type === "compaction") {
-            parts.push({ text: entry.summary, toolOnly: false });
-        } else if (entry.type === "branch_summary") {
-            parts.push({ text: entry.summary, toolOnly: false });
+            conversation.push({ kind: "custom", text: quoteText(contentText(entry.content)) });
+            continue;
+        }
+        if (entry.type === "compaction" || entry.type === "branch_summary") {
+            conversation.push({ kind: "assistant", text: entry.summary });
         }
     }
-    return parts;
+
+    return conversation;
 }
 
-function joinParts(parts: TranscriptPart[]): string {
-    let transcript = "";
-    let previousWasToolOnly = false;
-    for (const part of parts) {
-        if (transcript) {
-            transcript += previousWasToolOnly && part.toolOnly ? "\n" : "\n\n";
-        }
-        transcript += part.text;
-        previousWasToolOnly = part.toolOnly;
+function collectTodoEntry(entries: SessionEntry[]): TodoTranscriptEntry | undefined {
+    const snapshot = getTodoSnapshotFromEntries(entries);
+    if (!snapshot) {
+        return undefined;
     }
-    return transcript;
+
+    const todo = formatTodoTranscript(snapshot.content);
+    if (!todo) {
+        return undefined;
+    }
+
+    const detailed = todo.body
+        ? `${todo.collapsed}\n\n${quoteText(todo.body)}`
+        : todo.collapsed;
+    return { collapsed: todo.collapsed, detailed };
 }
 
-function collapseParts(parts: TranscriptPart[]): TranscriptPart[] {
+function collectTranscript(entries: SessionEntry[]): CollectedTranscript {
+    return {
+        conversation: collectConversationParts(entries, failedToolCallIds(entries)),
+        todo: collectTodoEntry(entries),
+    };
+}
+
+function collapseToolCalls(parts: TranscriptPart[]): TranscriptPart[] {
     const collapsed: TranscriptPart[] = [];
     let pendingToolCalls: ToolCallDisplay[] = [];
-    const flushToolCalls = () => {
+
+    const flushToolCalls = (): void => {
         if (pendingToolCalls.length === 0) {
             return;
         }
-        const toolCalls = pendingToolCalls;
-        pendingToolCalls = [];
+
         collapsed.push({
-            text: collapsedToolCalls(toolCalls),
-            toolOnly: true,
-            toolCalls,
+            kind: "tool",
+            text: collapsedToolCalls(pendingToolCalls),
+            toolCalls: pendingToolCalls,
         });
+        pendingToolCalls = [];
     };
 
     for (const part of parts) {
-        if (part.toolOnly && part.toolCalls) {
+        if (part.kind === "tool" && part.toolCalls) {
             pendingToolCalls.push(...part.toolCalls);
             continue;
         }
+
         flushToolCalls();
         collapsed.push(part);
     }
+
     flushToolCalls();
     return collapsed;
 }
 
-function formatTranscriptParts(parts: TranscriptPart[]): AgentSessionTranscriptViews {
-    return {
-        detailed: joinParts(parts),
-        collapsed: joinParts(collapseParts(parts)),
-    };
+function joinTranscriptParts(parts: TranscriptPart[]): string {
+    let transcript = "";
+    let previousKind: TranscriptPartKind | undefined;
+
+    for (const part of parts) {
+        if (transcript) {
+            transcript += previousKind === "tool" && part.kind === "tool" ? "\n" : "\n\n";
+        }
+        transcript += part.text;
+        previousKind = part.kind;
+    }
+
+    return transcript;
+}
+
+function renderTranscript(transcript: CollectedTranscript, view: AgentTranscriptView): string {
+    const conversation = view === "collapsed"
+        ? collapseToolCalls(transcript.conversation)
+        : transcript.conversation;
+    if (!transcript.todo) {
+        return joinTranscriptParts(conversation);
+    }
+
+    const todoText = transcript.todo[view];
+    const firstUserIndex = conversation.findIndex((part) => part.kind === "user");
+    const todoIndex = firstUserIndex < 0 ? 0 : firstUserIndex + 1;
+    const renderedParts = [...conversation];
+    renderedParts.splice(todoIndex, 0, { kind: "assistant", text: todoText });
+    return joinTranscriptParts(renderedParts);
 }
 
 /** Formats an agent conversation in both compact and detailed forms. */
 export function formatAgentSessionTranscripts(entries: SessionEntry[]): AgentSessionTranscriptViews {
-    return formatTranscriptParts(transcriptParts(entries));
+    const transcript = collectTranscript(entries);
+    return {
+        detailed: renderTranscript(transcript, "detailed"),
+        collapsed: renderTranscript(transcript, "collapsed"),
+    };
 }
 
 /**
@@ -298,7 +360,7 @@ export function formatAgentSessionTranscript(
     entries: SessionEntry[],
     view: AgentTranscriptView = "detailed",
 ): string {
-    return formatAgentSessionTranscripts(entries)[view];
+    return renderTranscript(collectTranscript(entries), view);
 }
 
 /** Returns both display transcripts for a persisted child session, if readable. */

@@ -2,8 +2,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
+import { TODO_SNAPSHOT_TYPE } from "../../src/modules/todolist/persistence";
 import {
     formatAgentSessionTranscript,
+    formatAgentSessionTranscripts,
     formatToolCallSummary,
     loadAgentSessionTranscript,
 } from "../../src/tools/agent/presentation/transcript";
@@ -96,6 +98,26 @@ describe("delegated-agent transcript formatting", () => {
         expect(transcript).toContain("> Inspect the project");
     });
 
+    it("does not treat visible custom messages as user messages for TODO placement", () => {
+        const session = SessionManager.inMemory("/project");
+        session.appendCustomMessageEntry("note", "A visible custom note.", true);
+        session.appendCustomEntry(TODO_SNAPSHOT_TYPE, {
+            version: 1,
+            content: `---
+version: 1
+todos:
+  - id: inspect
+    title: Inspect the implementation
+    status: pending
+---
+`,
+        });
+
+        expect(formatAgentSessionTranscript(session.getBranch())).toBe(
+            "TODO 0/1 · Inspect the implementation\n  ○ Inspect the implementation\n\n> A visible custom note.",
+        );
+    });
+
     it("marks failed calls and keeps consecutive calls together", async () => {
         const session = SessionManager.inMemory("/project");
         session.appendMessage({
@@ -170,6 +192,74 @@ describe("delegated-agent transcript formatting", () => {
 
         expect(formatAgentSessionTranscript(session.getBranch(), "collapsed")).toBe(
             "▸ 2 tool calls (1 failed): edit src/index.ts; run npm test\n\nThe first checks are complete.\n\n▸ 1 tool call: read README.md",
+        );
+    });
+
+    it("renders the TODO entry after the initial user message and before tool calls", () => {
+        const session = SessionManager.inMemory("/project");
+        session.appendMessage({
+            role: "user",
+            content: "Inspect the project",
+            timestamp: 1,
+        });
+        session.appendMessage({
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-read", name: "read", arguments: { path: "src/index.ts" } }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage,
+            stopReason: "toolUse",
+            timestamp: 2,
+        });
+        session.appendCustomEntry(TODO_SNAPSHOT_TYPE, {
+            version: 1,
+            content: `---
+version: 1
+todos:
+  - id: inspect
+    title: Inspect the implementation
+    status: in_progress
+---
+`,
+        });
+
+        const transcripts = formatAgentSessionTranscripts(session.getBranch());
+
+        expect(transcripts.detailed).toBe(
+            "> Inspect the project\n\nTODO 0/1 · Inspect the implementation\n  ◐ Inspect the implementation\n\n● read src/index.ts",
+        );
+        expect(transcripts.collapsed).toBe(
+            "> Inspect the project\n\nTODO 0/1 · Inspect the implementation\n  ◐ Inspect the implementation\n\n▸ 1 tool call: read src/index.ts",
+        );
+    });
+
+    it("renders the TODO entry first when the conversation has no user message", () => {
+        const session = SessionManager.inMemory("/project");
+        session.appendMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "I will inspect the project." }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage,
+            stopReason: "stop",
+            timestamp: 1,
+        });
+        session.appendCustomEntry(TODO_SNAPSHOT_TYPE, {
+            version: 1,
+            content: `---
+version: 1
+todos:
+  - id: inspect
+    title: Inspect the implementation
+    status: pending
+---
+`,
+        });
+
+        expect(formatAgentSessionTranscript(session.getBranch())).toBe(
+            "TODO 0/1 · Inspect the implementation\n  ○ Inspect the implementation\n\nI will inspect the project.",
         );
     });
 

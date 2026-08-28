@@ -1,0 +1,23 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   [delegated agent] Previous implementation review · completed                                   │
+│                                                                                                  │
+│   Transcript:                                                                                    │
+│                                                                                                  │
+│   │ The agent is working.                                                                        │
+│                                                                                                  │
+│   TODO 2/5 · Verify the result                                                                   │
+│     ✓ Inspect the implementation                                                                 │
+│     ✓ Implement the feature                                                                      │
+│     ◐ Verify the result                                                                          │
+│     ○ Document the result                                                                        │
+│     ○ Review the result                                                                          │
+│                                                                                                  │
+│   │ Notes                                                                                        │
+│   │                                                                                              │
+│   │ Keep the notes with the TODO list.                                                           │
+│                                                                                                  │
+│   ● read src/index.ts                                                                            │
+│                                                                                                  │
+│     Showing lines 7-22 of 22                                                                     │
+│     ↑/↓ scroll · End follow · Tab toggle view · Esc back                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -30,15 +30,21 @@ function parseSnapshot(data: unknown): TodoSnapshot | undefined {
     }
 }
 
-/** Return the latest TODO snapshot reachable from the active session branch. */
-export function getTodoSnapshot(ctx: ExtensionContext): TodoSnapshot | undefined {
-    const branch = ctx.sessionManager?.getBranch?.() ?? [];
-    for (const entry of [...branch].reverse()) {
+/** Return the latest valid TODO snapshot in a session-entry branch. */
+export function getTodoSnapshotFromEntries(
+    entries: readonly SessionEntry[],
+): TodoSnapshot | undefined {
+    for (const entry of [...entries].reverse()) {
         if (!isTodoSnapshotEntry(entry)) continue;
         const snapshot = parseSnapshot(entry.data);
         if (snapshot) return snapshot;
     }
     return undefined;
+}
+
+/** Return the latest TODO snapshot reachable from the active session branch. */
+export function getTodoSnapshot(ctx: ExtensionContext): TodoSnapshot | undefined {
+    return getTodoSnapshotFromEntries(ctx.sessionManager?.getBranch?.() ?? []);
 }
 
 /** Persist the editable TODO document without recording its ephemeral path. */
