@@ -52,7 +52,7 @@ function appendTodoPrompt(systemPrompt: string, pathname: string): string {
         "## Temporary TODO list",
         "",
         `Your private runtime TODO list is at \`${pathname}\`.`,
-        "Read TODO.md before beginning substantive work. Keep its YAML frontmatter valid and update TODO statuses as work starts, completes, or becomes blocked.",
+        "Use TODO.md for substantive, multi-step, or longer-running work. Skip TODO tracking for trivial, single-step tasks that do not need progress tracking. Keep its YAML frontmatter valid and update TODO statuses as work starts, completes, or becomes blocked.",
         "When mutation tools are available, use the write or edit tool to change TODO.md and preserve the freeform Markdown body after the frontmatter.",
         "The TODO file is temporary and private to this runtime, not a project TODO file. Keep it current.",
         "Use this exact frontmatter shape: `version: 1` and a `todos` YAML sequence; each entry has a unique lowercase `id`, a non-empty `title`, and a `status`.",

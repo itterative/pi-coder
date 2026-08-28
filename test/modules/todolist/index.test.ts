@@ -101,6 +101,7 @@ describe("TODO runtime extension", () => {
         }, ctx) as { systemPrompt: string };
         expect(prompt.systemPrompt).toContain("<todolist_system>");
         expect(prompt.systemPrompt).toContain(todoPath);
+        expect(prompt.systemPrompt).toContain("Skip TODO tracking for trivial, single-step tasks");
 
         await expect(handler("tool_call")({
             toolName: "write",

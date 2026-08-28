@@ -119,7 +119,7 @@ scratchpad blocks. It includes:
 
 - the absolute TODO path;
 - the frontmatter schema and allowed statuses;
-- an instruction to read TODO.md before beginning substantive work;
+- guidance to use TODO.md for substantive, multi-step, or longer-running work while skipping trivial single-step tasks;
 - an instruction to update status as work starts, completes, or becomes blocked;
 - an instruction to use `write` or `edit` for TODO changes;
 - an instruction to preserve the freeform Markdown body;
