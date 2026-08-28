@@ -8,7 +8,7 @@
 ● read WORKSPACE-MANUAL-VALIDATION.md
 ● read WORKSPACE-VALIDATION-REPORT.md
 ● read README.md
-● write workspace-validation-marker.txt
+● write workspace-validation-marker.txt (+2 lines)
 ● read workspace-validation-marker.txt
 ● bash printf 'WORKSPACE: '; pwd; printf 'STATUS:\n'; git status --short; printf 'HEAD: '; git rev-parse HEAD; printf '\nBYTES:\n'; od -An -t x1 -c workspace-validation-marker.txt
 

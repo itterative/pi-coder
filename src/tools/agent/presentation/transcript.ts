@@ -8,6 +8,9 @@ type ToolArguments = Record<string, unknown>;
 
 export type AgentTranscriptView = "collapsed" | "detailed";
 
+/** Set true to show full edit/write content in detailed transcript tool lines. */
+const SHOW_TOOL_CALL_DIFFS = false;
+
 /** A transcript segment with tool calls kept outside the Markdown renderer. */
 export interface AgentTranscriptPart {
     kind: "markdown" | "plain";
@@ -74,26 +77,72 @@ function changeLines(prefix: "+" | "-", text: string): string[] {
     return text.split("\n").map((line) => `  ${prefix} ${line}`);
 }
 
+function lineCount(text: string): number {
+    return text.length === 0 ? 0 : text.split("\n").length;
+}
+
+interface EditChange {
+    oldText?: string;
+    newText?: string;
+}
+
+function editChanges(args: ToolArguments): EditChange[] {
+    if (!Array.isArray(args.edits)) {
+        return [];
+    }
+
+    return args.edits.flatMap((edit) => {
+        if (!edit || typeof edit !== "object") {
+            return [];
+        }
+        const { oldText, newText } = edit as { oldText?: unknown; newText?: unknown };
+        return [{
+            ...(typeof oldText === "string" ? { oldText } : {}),
+            ...(typeof newText === "string" ? { newText } : {}),
+        }];
+    });
+}
+
+function changedLineCount(changes: EditChange[], field: keyof EditChange): number {
+    return changes.reduce((total, change) => {
+        const text = change[field];
+        return total + (text === undefined ? 0 : lineCount(text));
+    }, 0);
+}
+
 function editCall(args: ToolArguments, prefix: string): string[] {
-    const lines = [`${prefix} edit ${stringArgument(args, "path") ?? ""}`.trimEnd()];
-    const edits = args.edits;
-    if (!Array.isArray(edits)) {
+    const path = stringArgument(args, "path") ?? "";
+    const changes = editChanges(args);
+    const removedLines = changedLineCount(changes, "oldText");
+    const addedLines = changedLineCount(changes, "newText");
+    const lines = [`${prefix} edit ${path}`.trimEnd()];
+    if (!SHOW_TOOL_CALL_DIFFS) {
+        lines[0] += ` (+${addedLines} -${removedLines})`;
         return lines;
     }
 
-    for (const edit of edits) {
-        if (!edit || typeof edit !== "object") {
-            continue;
+    for (const change of changes) {
+        if (change.oldText !== undefined) {
+            lines.push(...changeLines("-", change.oldText));
         }
-        const { oldText, newText } = edit as { oldText?: unknown; newText?: unknown };
-        if (typeof oldText === "string") {
-            lines.push(...changeLines("-", oldText));
-        }
-        if (typeof newText === "string") {
-            lines.push(...changeLines("+", newText));
+        if (change.newText !== undefined) {
+            lines.push(...changeLines("+", change.newText));
         }
     }
     return lines;
+}
+
+function writeCall(args: ToolArguments, prefix: string): string {
+    const path = stringArgument(args, "path") ?? "";
+    const content = stringArgument(args, "content");
+    const line = `${prefix} write ${path}`.trimEnd();
+    if (SHOW_TOOL_CALL_DIFFS && content !== undefined) {
+        return [line, ...changeLines("+", content)].join("\n");
+    }
+    if (content === undefined) {
+        return line;
+    }
+    return `${line} (+${lineCount(content)} lines)`;
 }
 
 function toolCallText(call: ToolCallDisplay): string {
@@ -102,6 +151,8 @@ function toolCallText(call: ToolCallDisplay): string {
     switch (call.name) {
         case "edit":
             return editCall(call.args, prefix).join("\n");
+        case "write":
+            return writeCall(call.args, prefix);
         case "bash":
             return `${prefix} bash ${stringArgument(call.args, "command") ?? ""}`.trimEnd();
         case "find":

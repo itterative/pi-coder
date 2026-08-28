@@ -1,6 +1,4 @@
-× edit src/index.ts
-  - const oldValue = true;
-  + const newValue = true;
+× edit src/index.ts (+1 -1)
 ● bash npm test
 
 The first checks are complete.

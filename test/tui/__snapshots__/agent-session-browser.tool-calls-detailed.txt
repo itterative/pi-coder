@@ -15,9 +15,9 @@
 │   ● find *.test.ts test                                                                          │
 │   ● grep AgentSession src/tui                                                                    │
 │   ● bash npm test                                                                                │
-│   × edit src/index.ts                                                                            │
-│     - const oldValue = **literal**;                                                              │
+│   × edit src/index.ts (+1 -1)                                                                    │
 │                                                                                                  │
-│     Showing lines 1-16 of 21                                                                     │
+│                                                                                                  │
+│     Showing lines 1-16 of 19                                                                     │
 │     ↑/↓ scroll · End follow · Tab toggle view · Esc back                                         │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

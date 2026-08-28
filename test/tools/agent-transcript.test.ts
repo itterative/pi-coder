@@ -199,6 +199,40 @@ todos:
         );
     });
 
+    it("summarizes edit and write line changes in detailed tool calls", () => {
+        const session = SessionManager.inMemory("/project");
+        session.appendMessage({
+            role: "assistant",
+            content: [
+                {
+                    type: "toolCall",
+                    id: "call-edit-summary",
+                    name: "edit",
+                    arguments: {
+                        path: "src/index.ts",
+                        edits: [{ oldText: "one\ntwo", newText: "one\nthree\nfour" }],
+                    },
+                },
+                {
+                    type: "toolCall",
+                    id: "call-write-summary",
+                    name: "write",
+                    arguments: { path: "README.md", content: "first\nsecond" },
+                },
+            ],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage,
+            stopReason: "toolUse",
+            timestamp: 1,
+        });
+
+        expect(formatAgentSessionTranscript(session.getBranch())).toBe(
+            "● edit src/index.ts (+3 -2)\n● write README.md (+2 lines)",
+        );
+    });
+
     it("renders the TODO entry after the initial user message and before tool calls", () => {
         const session = SessionManager.inMemory("/project");
         session.appendMessage({
