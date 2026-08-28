@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { ALLOWED_FILE_ENTRY_TYPE } from "../../src/common/audit";
+import { getUserMemoryDirectory } from "../../src/common/constants";
 import registerScratchpadExtension, { getScratchpadPath } from "../../src/modules/scratchpad";
 import registerFileToolHook from "../../src/tools/file-permissions";
+import registerReadToolHook from "../../src/tools/read";
 import { createPermissionState } from "../../src/modules/sandbox/permission-state";
 
 interface Handler {
@@ -84,6 +86,41 @@ describe("file permission session entries", () => {
         await expect(writeHandlers.tool_call[0]!({
             toolName: "write",
             input: { path: outputPath },
+        }, ctx)).resolves.toMatchObject({ block: true });
+    });
+
+    it("allows parent reads from user memories but not writes", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-memory-cwd-"));
+        temporaryDirectories.push(cwd);
+
+        const readHandlers: Record<string, Handler[]> = {};
+        const readPi = {
+            on(event: string, handler: Handler) {
+                (readHandlers[event] ??= []).push(handler);
+            },
+            appendEntry() {},
+        } as any;
+        registerReadToolHook(readPi);
+
+        const memoryPath = path.join(getUserMemoryDirectory(), "permission-test.md");
+        const ctx = { cwd, hasUI: false, sessionManager: {} };
+        await expect(readHandlers.tool_call[0]!({
+            toolName: "read",
+            input: { path: memoryPath },
+        }, ctx)).resolves.toEqual({ block: false });
+
+        const writeHandlers: Record<string, Handler[]> = {};
+        const writePi = {
+            on(event: string, handler: Handler) {
+                (writeHandlers[event] ??= []).push(handler);
+            },
+            appendEntry() {},
+        } as any;
+        registerFileToolHook(writePi, "write");
+
+        await expect(writeHandlers.tool_call[0]!({
+            toolName: "write",
+            input: { path: memoryPath },
         }, ctx)).resolves.toMatchObject({ block: true });
     });
 

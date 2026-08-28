@@ -8,8 +8,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import sandboxConfig, { type SandboxConfig } from "../../common/config";
+import { getUserMemoryDirectory, PERMISSION_PROMPT_CONFIRMATION_DELAY_MS } from "../../common/constants";
 import { getScratchpadPath } from "../../modules/scratchpad";
-import { PERMISSION_PROMPT_CONFIRMATION_DELAY_MS } from "../../common/constants";
 import { ALLOWED_COMMAND_ENTRY_TYPE, type AllowedCommandEntry } from "../../common/audit";
 import sandbox from "../../modules/sandbox/bubblewrap";
 import { Permission } from "../../modules/sandbox/permissions";
@@ -156,7 +156,12 @@ Pay attention to these notes as they provide context about the user's preference
         let unresolved: string[][] = [];
         const permissionState = permissionStateFor(ctx);
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
-        const additionalRoots = scratchpadPath ? [scratchpadPath] : [];
+        const userMemoryDirectory = getUserMemoryDirectory();
+        const additionalRoots = [
+            ...(scratchpadPath ? [scratchpadPath] : []),
+            userMemoryDirectory,
+        ];
+        const readOnlyAdditionalRoots = [userMemoryDirectory];
         try {
             const details = resolvePermissionDetails(
                 event.input.command,
@@ -166,6 +171,7 @@ Pay attention to these notes as they provide context about the user's preference
                 {
                     permissions: { ...sandboxConfig.current?.permissions, ...permissionState.bashRules },
                     additionalRoots,
+                    readOnlyAdditionalRoots,
                 },
             );
             permission = details.permission;
@@ -328,6 +334,7 @@ Pay attention to these notes as they provide context about the user's preference
             event.input.command = sandbox(bwrap, event.input.command, {
                 cwd: ctx.cwd,
                 additionalRoots,
+                readOnlyAdditionalRoots,
             });
         }
 
