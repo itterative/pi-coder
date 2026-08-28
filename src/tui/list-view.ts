@@ -147,6 +147,7 @@ export class ListViewComponent<
     private cachedItemStartLines: number[] = [];
     private cachedTotalLines = 0;
     private itemContentWidth = Number.POSITIVE_INFINITY;
+    private cacheDirty = true;
     private configuredMaxVisibleLines: number;
     private lastRenderedMaxVisibleLines: number;
 
@@ -233,13 +234,20 @@ export class ListViewComponent<
         this.borderedContainer.setHeight(frameHeight);
         this.restoreConfiguredMaxVisibleLines();
         const paddingX = this.listOptions.paddingX ?? 2;
-        this.itemContentWidth = Math.max(1, width - 2 - (paddingX * 2) - 2);
-        this.buildCacheAndUpdateScroll();
+        const itemContentWidth = Math.max(1, width - 2 - (paddingX * 2) - 2);
+        const widthChanged = itemContentWidth !== this.itemContentWidth;
+        this.itemContentWidth = itemContentWidth;
+        if (this.cacheDirty || widthChanged) {
+            this.buildCacheAndUpdateScroll();
+        }
         this.fitToFrame(width, frameHeight);
         return this.borderedContainer.render(width);
     }
 
-    invalidate(): void {
+    invalidate(cache = true): void {
+        if (cache) {
+            this.cacheDirty = true;
+        }
         this.container.invalidate();
     }
 
@@ -249,7 +257,9 @@ export class ListViewComponent<
             const result = this.listOptions.onKey(key, this.state);
             if (result === true) {
                 this.updateScrollOffset();
-                this.invalidate();
+                // Custom handlers commonly only change scrollOffset. They must
+                // explicitly call invalidate() when changing rendered content.
+                this.invalidate(false);
                 return;
             }
             if (typeof result === "object" && result.done) {
@@ -396,6 +406,7 @@ export class ListViewComponent<
         }
 
         this.cachedTotalLines = totalLines;
+        this.cacheDirty = false;
         this.listOptions.onCacheBuilt?.(totalLines);
         this.onCacheBuilt(totalLines);
         this.updateScrollOffset();

@@ -57,6 +57,32 @@ describe("PagerComponent", () => {
         await expect(renderText(component)).toMatchFileSnapshot("__snapshots__/pager.after-navigation-up.txt");
     });
 
+    it("reuses the rendered line cache while scrolling", () => {
+        let renderCount = 0;
+        const { component } = setup(scrollKeys({
+            title: "Large log",
+            items: items(100),
+            scrollOffset: 0,
+            maxVisibleLines: 4,
+            renderItem: (item) => {
+                renderCount++;
+                return item.label;
+            },
+        }));
+
+        renderText(component, 80);
+        expect(renderCount).toBe(100);
+
+        press(component, KEY.down, KEY.down);
+        renderText(component, 80);
+        expect(renderCount).toBe(100);
+
+        component.state.items[0] = { value: "updated", label: "Updated" };
+        component.invalidate();
+        renderText(component, 80);
+        expect(renderCount).toBe(200);
+    });
+
     it("closes on Escape and q", () => {
         const a = setup({ title: "Log", items: items(3), scrollOffset: 0 });
         press(a.component, KEY.escape);
