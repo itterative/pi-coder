@@ -1,6 +1,5 @@
-import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { selectChildSessionLeaf } from "../child/transcript";
 import { getTodoSnapshotFromEntries } from "../../../modules/todolist/persistence";
 import { formatTodoTranscript } from "./todo-transcript";
 
@@ -9,9 +8,17 @@ type ToolArguments = Record<string, unknown>;
 
 export type AgentTranscriptView = "collapsed" | "detailed";
 
+/** A transcript segment with tool calls kept outside the Markdown renderer. */
+export interface AgentTranscriptPart {
+    kind: "markdown" | "plain";
+    text: string;
+}
+
 export interface AgentSessionTranscriptViews {
     collapsed: string;
     detailed: string;
+    collapsedParts: AgentTranscriptPart[];
+    detailedParts: AgentTranscriptPart[];
 }
 
 interface ToolCallDisplay {
@@ -122,7 +129,7 @@ function toolCallDescription(call: ToolCallDisplay): string {
         case "grep": {
             const pattern = stringArgument(call.args, "pattern");
             const path = stringArgument(call.args, "path");
-            const subject = pattern === undefined ? "files" : `\`${oneLine(pattern)}\``;
+            const subject = pattern === undefined ? "files" : oneLine(pattern);
             return `${call.name === "grep" ? "search" : "find"} ${subject}${path ? ` in ${path}` : ""}`;
         }
         default: {
@@ -326,12 +333,12 @@ function joinTranscriptParts(parts: TranscriptPart[]): string {
     return transcript;
 }
 
-function renderTranscript(transcript: CollectedTranscript, view: AgentTranscriptView): string {
+function transcriptParts(transcript: CollectedTranscript, view: AgentTranscriptView): TranscriptPart[] {
     const conversation = view === "collapsed"
         ? collapseToolCalls(transcript.conversation)
         : transcript.conversation;
     if (!transcript.todo) {
-        return joinTranscriptParts(conversation);
+        return conversation;
     }
 
     const todoText = transcript.todo[view];
@@ -339,7 +346,21 @@ function renderTranscript(transcript: CollectedTranscript, view: AgentTranscript
     const todoIndex = firstUserIndex < 0 ? 0 : firstUserIndex + 1;
     const renderedParts = [...conversation];
     renderedParts.splice(todoIndex, 0, { kind: "assistant", text: todoText });
-    return joinTranscriptParts(renderedParts);
+    return renderedParts;
+}
+
+function renderTranscript(transcript: CollectedTranscript, view: AgentTranscriptView): string {
+    return joinTranscriptParts(transcriptParts(transcript, view));
+}
+
+function displayTranscriptParts(
+    transcript: CollectedTranscript,
+    view: AgentTranscriptView,
+): AgentTranscriptPart[] {
+    return transcriptParts(transcript, view).map((part) => ({
+        kind: part.kind === "tool" ? "plain" : "markdown",
+        text: part.text,
+    }));
 }
 
 /** Formats an agent conversation in both compact and detailed forms. */
@@ -348,6 +369,8 @@ export function formatAgentSessionTranscripts(entries: SessionEntry[]): AgentSes
     return {
         detailed: renderTranscript(transcript, "detailed"),
         collapsed: renderTranscript(transcript, "collapsed"),
+        detailedParts: displayTranscriptParts(transcript, "detailed"),
+        collapsedParts: displayTranscriptParts(transcript, "collapsed"),
     };
 }
 
@@ -361,28 +384,4 @@ export function formatAgentSessionTranscript(
     view: AgentTranscriptView = "detailed",
 ): string {
     return renderTranscript(collectTranscript(entries), view);
-}
-
-/** Returns both display transcripts for a persisted child session, if readable. */
-export function loadAgentSessionTranscriptViews(
-    sessionFile: string,
-    childSessionLeafId?: string | null,
-): AgentSessionTranscriptViews | undefined {
-    try {
-        const session = SessionManager.open(sessionFile);
-        if (childSessionLeafId !== undefined) {
-            selectChildSessionLeaf(session, childSessionLeafId);
-        }
-        return formatAgentSessionTranscripts(session.getBranch());
-    } catch {
-        return undefined;
-    }
-}
-
-/** Returns the detailed display transcript for a persisted child session, if readable. */
-export function loadAgentSessionTranscript(
-    sessionFile: string,
-    childSessionLeafId?: string | null,
-): string | undefined {
-    return loadAgentSessionTranscriptViews(sessionFile, childSessionLeafId)?.detailed;
 }

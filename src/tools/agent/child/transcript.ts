@@ -22,6 +22,17 @@ export function materializePersistentSession(
 }
 
 /** Select an exact persisted leaf before any context or model work occurs. */
+export function openPersistedChildSession(
+    sessionFile: string,
+    leafId?: string | null,
+): SessionManager {
+    const sessionManager = SessionManager.open(sessionFile);
+    if (leafId !== undefined) {
+        selectChildSessionLeaf(sessionManager, leafId);
+    }
+    return sessionManager;
+}
+
 export function selectChildSessionLeaf(
     sessionManager: SessionManager,
     leafId: string | null | undefined,

@@ -619,36 +619,96 @@ describe("AgentSessionBrowserComponent", () => {
     });
 
     it("snapshots representative tool-call rendering in both transcript views", async () => {
+        const session = SessionManager.inMemory("/repo/project");
+        session.appendMessage({
+            role: "user",
+            content: "Inspect the project and make the requested checks.",
+            timestamp: 1,
+        });
+        session.appendMessage({
+            role: "assistant",
+            content: [
+                { type: "toolCall", id: "call-read", name: "read", arguments: { path: "src/index.ts" } },
+                { type: "toolCall", id: "call-find", name: "find", arguments: { pattern: "*.test.ts", path: "test" } },
+                { type: "toolCall", id: "call-grep", name: "grep", arguments: { pattern: "AgentSession", path: "src/tui" } },
+                { type: "toolCall", id: "call-bash", name: "bash", arguments: { command: "npm test" } },
+                {
+                    type: "toolCall",
+                    id: "call-edit",
+                    name: "edit",
+                    arguments: {
+                        path: "src/index.ts",
+                        edits: [{ oldText: "const oldValue = **literal**;", newText: "const newValue = **literal**;" }],
+                    },
+                },
+            ],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 2,
+        });
+        session.appendMessage({
+            role: "toolResult",
+            toolCallId: "call-edit",
+            toolName: "edit",
+            content: [{ type: "text", text: "Edit failed" }],
+            isError: true,
+            timestamp: 3,
+        });
+        session.appendMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "The first checks are complete." }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 4,
+        });
+        session.appendMessage({
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-read-2", name: "read", arguments: { path: "README.md" } }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 5,
+        });
+        const transcript = formatAgentSessionTranscripts(session.getBranch());
         const value = new AgentSessionBrowserComponent({
             current: [],
             past: [{
                 ...past,
                 title: "Tool call rendering review",
                 task: "Inspect files, search for a symbol, run tests, and update the implementation",
-                transcript: [
-                    "> Inspect the project and make the requested checks.",
-                    "",
-                    "● read src/index.ts",
-                    "● find *.test.ts test",
-                    "● grep AgentSession src/tui",
-                    "● bash npm test",
-                    "× edit src/index.ts",
-                    "  - const oldValue = true;",
-                    "  + const newValue = true;",
-                    "",
-                    "The first checks are complete.",
-                    "",
-                    "● read README.md",
-                ].join("\n"),
-                transcriptCollapsed: [
-                    "> Inspect the project and make the requested checks.",
-                    "",
-                    "▸ 5 tool calls (1 failed): read src/index.ts; find `*.test.ts` in test; search `AgentSession` in src/tui; run npm test; edit src/index.ts",
-                    "",
-                    "The first checks are complete.",
-                    "",
-                    "▸ 1 tool call: read README.md",
-                ].join("\n"),
+                transcript: transcript.detailed,
+                transcriptCollapsed: transcript.collapsed,
+                transcriptParts: transcript.detailedParts,
+                transcriptCollapsedParts: transcript.collapsedParts,
             }],
         });
         value.initialize(mockTheme);

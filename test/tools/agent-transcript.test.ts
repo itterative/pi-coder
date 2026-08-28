@@ -7,11 +7,15 @@ import {
     formatAgentSessionTranscript,
     formatAgentSessionTranscripts,
     formatToolCallSummary,
-    loadAgentSessionTranscript,
 } from "../../src/tools/agent/presentation/transcript";
 
 function transcriptFixture(name: string): string {
     return fileURLToPath(new URL(`./fixtures/agent-transcripts/${name}.jsonl`, import.meta.url));
+}
+
+function formatSavedTranscript(name: string): string {
+    const session = SessionManager.open(transcriptFixture(name));
+    return formatAgentSessionTranscript(session.getBranch());
 }
 
 const usage = {
@@ -285,21 +289,21 @@ todos:
     });
 
     it("renders the saved delegated-agent transcript", async () => {
-        const transcript = loadAgentSessionTranscript(transcriptFixture("run-0"));
+        const transcript = formatSavedTranscript("run-0");
 
         expect(transcript).toBeDefined();
         await expect(transcript).toMatchFileSnapshot("__snapshots__/agent-transcript.run-0.txt");
     });
 
     it("renders the second saved delegated-agent transcript", async () => {
-        const transcript = loadAgentSessionTranscript(transcriptFixture("run-1"));
+        const transcript = formatSavedTranscript("run-1");
 
         expect(transcript).toBeDefined();
         await expect(transcript).toMatchFileSnapshot("__snapshots__/agent-transcript.run-1.txt");
     });
 
     it("renders the reviewer delegated-agent transcript", async () => {
-        const transcript = loadAgentSessionTranscript(transcriptFixture("run-2"));
+        const transcript = formatSavedTranscript("run-2");
 
         expect(transcript).toBeDefined();
         await expect(transcript).toMatchFileSnapshot("__snapshots__/agent-transcript.run-2.txt");

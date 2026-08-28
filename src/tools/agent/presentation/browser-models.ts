@@ -1,5 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
+import type { AgentTranscriptPart } from "./transcript";
 import type {
     AgentWorkspace,
     AgentWorkspaceAction,
@@ -25,6 +26,8 @@ export interface AgentSessionBrowserItem {
     allMessagesText?: string;
     transcript?: string;
     transcriptCollapsed?: string;
+    transcriptParts?: AgentTranscriptPart[];
+    transcriptCollapsedParts?: AgentTranscriptPart[];
     activity?: string;
     responsePreview?: string;
     mutating?: boolean;

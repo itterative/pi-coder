@@ -20,8 +20,8 @@ import { collectAgentRunSnapshotMarkers } from "../storage/run-markers";
 import { listAgentRunSnapshotsInDatabase } from "../storage/run-snapshots";
 import { openAgentMetadataDatabase } from "../storage/metadata";
 import type { AgentSessionBrowserItem } from "./browser-models";
-import { formatAgentSessionTranscripts, loadAgentSessionTranscriptViews } from "./transcript";
-import { selectChildSessionLeaf } from "../child/transcript";
+import { formatAgentSessionTranscripts } from "./transcript";
+import { openPersistedChildSession } from "../child/transcript";
 
 function currentItem(run: AgentRunSummary): AgentSessionBrowserItem {
     return {
@@ -248,12 +248,16 @@ export async function loadAgentSessionTranscripts(
         // A plain existence check plus the transcript parse below is enough; the
         // directory scan SessionManager.listAll would perform re-reads every
         // sibling transcript in the same directory for no additional data.
-        const transcript = loadAgentSessionTranscriptViews(item.sessionFile, item.childSessionLeafId);
+        const transcript = formatAgentSessionTranscripts(
+            openPersistedChildSession(item.sessionFile, item.childSessionLeafId).getBranch(),
+        );
         return transcript
             ? {
                 ...item,
                 transcript: transcript.detailed,
                 transcriptCollapsed: transcript.collapsed,
+                transcriptParts: transcript.detailedParts,
+                transcriptCollapsedParts: transcript.collapsedParts,
             }
             : {
                 ...item,
@@ -283,14 +287,15 @@ export async function loadAgentSessionTranscriptForItem(
         };
     }
     try {
-        const session = SessionManager.open(item.sessionFile);
-        selectChildSessionLeaf(session, item.childSessionLeafId);
+        const session = openPersistedChildSession(item.sessionFile, item.childSessionLeafId);
         const branch = session.getBranch();
         const views = formatAgentSessionTranscripts(branch);
         return {
             ...item,
             transcript: views.detailed,
             transcriptCollapsed: views.collapsed,
+            transcriptParts: views.detailedParts,
+            transcriptCollapsedParts: views.collapsedParts,
             messageCount: branch.filter((entry) => entry.type === "message").length,
         };
     } catch {

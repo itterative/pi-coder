@@ -11,8 +11,8 @@
 │   ● grep AgentSession src/tui                                                                    │
 │   ● bash npm test                                                                                │
 │   × edit src/index.ts                                                                            │
-│   - const oldValue = true;                                                                       │
-│   - const newValue = true;                                                                       │
+│     - const oldValue = **literal**;                                                              │
+│     + const newValue = **literal**;                                                              │
 │                                                                                                  │
 │   The first checks are complete.                                                                 │
 │                                                                                                  │

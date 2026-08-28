@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Markdown, matchesKey, type Component } from "@earendil-works/pi-tui";
 import type { AgentSessionBrowserItem } from "../../tools/agent/presentation/browser-models";
-import type { AgentTranscriptView } from "../../tools/agent/presentation/transcript";
+import type { AgentTranscriptPart, AgentTranscriptView } from "../../tools/agent/presentation/transcript";
 import { markdownTheme } from "../markdown-theme";
 import { PagerComponent } from "../pager";
 import { dateText, oneLine, usageText } from "./formatting";
@@ -26,6 +26,29 @@ function isLiveExecution(item: AgentSessionBrowserItem): boolean {
     );
 }
 
+function renderTranscriptParts(
+    parts: AgentTranscriptPart[],
+    theme: Theme,
+    width: number,
+): string[] {
+    const lines: string[] = [];
+    let previousKind: AgentTranscriptPart["kind"] | undefined;
+
+    for (const part of parts) {
+        if (lines.length > 0 && !(previousKind === "plain" && part.kind === "plain")) {
+            lines.push("");
+        }
+        if (part.kind === "plain") {
+            lines.push(...part.text.split("\n"));
+        } else {
+            lines.push(...new Markdown(part.text, 0, 0, markdownTheme(theme)).render(width));
+        }
+        previousKind = part.kind;
+    }
+
+    return lines;
+}
+
 function detailText(
     item: AgentSessionBrowserItem,
     theme: Theme,
@@ -37,6 +60,9 @@ function detailText(
     const transcript = transcriptView === "collapsed"
         ? item.transcriptCollapsed ?? item.transcript ?? item.allMessagesText ?? item.responsePreview
         : item.transcript ?? item.allMessagesText ?? item.responsePreview;
+    const transcriptParts = transcriptView === "collapsed"
+        ? item.transcriptCollapsedParts ?? item.transcriptParts
+        : item.transcriptParts;
     const lines = [
         `Run ID: ${item.id}`,
         `Task: ${oneLine(item.task)}`,
@@ -53,7 +79,12 @@ function detailText(
     const loadingTranscript = item.transcript === undefined && item.sessionFile !== undefined;
     lines.push("", theme.fg("accent", "Transcript:"), "");
 
-    if (transcript) {
+    if (transcriptParts !== undefined) {
+        lines.push(...renderTranscriptParts(transcriptParts, theme, width));
+        if (loadingTranscript) {
+            lines.push("", theme.fg("muted", "Loading full transcript…"));
+        }
+    } else if (transcript) {
         lines.push(...new Markdown(transcript, 0, 0, markdownTheme(theme)).render(width));
         if (loadingTranscript) {
             lines.push("", theme.fg("muted", "Loading full transcript…"));

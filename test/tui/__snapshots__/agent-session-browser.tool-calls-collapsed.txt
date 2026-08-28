@@ -12,7 +12,7 @@
 │   │ Inspect the project and make the requested checks.                                           │
 │                                                                                                  │
 │   ▸ 5 tool calls (1 failed): read src/index.ts; find *.test.ts in test; search AgentSession in   │
-│   src/tui; run npm test; edit src/index.ts                                                       │
+│   src/tui; run npm test; +1 more                                                                 │
 │                                                                                                  │
 │   The first checks are complete.                                                                 │
 │                                                                                                  │
