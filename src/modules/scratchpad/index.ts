@@ -1,11 +1,18 @@
-import { chmod, mkdtemp } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export interface ScratchpadRuntime {
     /** Private temporary directory for one parent or child runtime. */
+    path: string;
+}
+
+export const SCRATCHPAD_MARKER_TYPE = "pi-coder:scratchpad";
+
+interface ScratchpadMarker {
+    version: 1;
     path: string;
 }
 
@@ -13,8 +20,8 @@ const SCRATCHPAD_SYSTEM_TAG = "<scratchpad_system>";
 const SCRATCHPAD_SYSTEM_END_TAG = "</scratchpad_system>";
 const SCRATCHPAD_PREFIX = "pi-coder-scratchpad-";
 
-// SessionManager instances identify a parent or child runtime. A WeakMap keeps
-// parent and child scratchpads separate without introducing persistent state.
+// SessionManager instances identify a parent or child runtime. The marker in
+// the session transcript bridges reloads; the WeakMap holds only live handles.
 const runtimes = new WeakMap<object, ScratchpadRuntime>();
 
 export function getScratchpadRuntime(
@@ -47,7 +54,7 @@ export function scratchpadPrompt(pathname: string): string {
         "Scratchpad contents are temporary and are not managed or deleted by "
             + "pi-coder; the operating system owns eventual cleanup of the /tmp "
             + "directory.",
-        "Do not rely on the contents surviving process termination or a later session.",
+        "When returning to this session, the recorded scratchpad path is reused while the directory still exists; do not rely on contents surviving OS cleanup or manual deletion.",
     ].join("\n");
 }
 
@@ -76,16 +83,66 @@ async function createScratchpad(): Promise<ScratchpadRuntime> {
     return { path: pathname };
 }
 
+function markerFromSession(ctx: ExtensionContext): ScratchpadMarker | undefined {
+    const branch = ctx.sessionManager?.getBranch?.() ?? [];
+    for (const entry of [...branch].reverse()) {
+        if (!entry || typeof entry !== "object") continue;
+        const candidate = entry as { type?: unknown; customType?: unknown; data?: unknown };
+        if (candidate.type !== "custom" || candidate.customType !== SCRATCHPAD_MARKER_TYPE) continue;
+        if (!candidate.data || typeof candidate.data !== "object") return undefined;
+        const data = candidate.data as { version?: unknown; path?: unknown };
+        if (data.version !== 1 || typeof data.path !== "string" || !path.isAbsolute(data.path)) {
+            return undefined;
+        }
+        return { version: 1, path: data.path };
+    }
+    return undefined;
+}
+
+async function isReusableScratchpad(pathname: string): Promise<boolean> {
+    const lexicalPath = path.resolve(pathname);
+    const lexicalRoot = path.resolve(os.tmpdir());
+    if (!lexicalPath.startsWith(`${lexicalRoot}${path.sep}${SCRATCHPAD_PREFIX}`)) return false;
+
+    try {
+        const entry = await lstat(lexicalPath);
+        if (!entry.isDirectory() || entry.isSymbolicLink() || (entry.mode & 0o777) !== 0o700) return false;
+        const [realPath, realRoot] = await Promise.all([
+            realpath(lexicalPath),
+            realpath(lexicalRoot),
+        ]);
+        return path.dirname(realPath) === realRoot
+            && path.basename(realPath).startsWith(SCRATCHPAD_PREFIX);
+    } catch {
+        return false;
+    }
+}
+
+async function restoreOrCreateScratchpad(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+): Promise<ScratchpadRuntime> {
+    const marker = markerFromSession(ctx);
+    if (marker && await isReusableScratchpad(marker.path)) return { path: marker.path };
+
+    const runtime = await createScratchpad();
+    pi.appendEntry<ScratchpadMarker>(SCRATCHPAD_MARKER_TYPE, {
+        version: 1,
+        path: runtime.path,
+    });
+    return runtime;
+}
+
 /**
  * Register one temporary scratchpad for each parent or child runtime.
  *
- * The directory is intentionally never removed by this extension. Only the
- * in-process registry entry is released at shutdown; the host OS owns /tmp
- * cleanup according to its normal policy.
+ * A session marker lets the runtime reuse its directory across reloads and
+ * session switches. The directory is intentionally never removed by this
+ * extension; the host OS owns /tmp cleanup according to its normal policy.
  */
 export default function registerScratchpadExtension(pi: ExtensionAPI): void {
     pi.on("session_start", async (_event, ctx) => {
-        const runtime = await createScratchpad();
+        const runtime = await restoreOrCreateScratchpad(pi, ctx);
         runtimes.set(ctx.sessionManager, runtime);
     });
 

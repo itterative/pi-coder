@@ -1,4 +1,4 @@
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -21,6 +21,8 @@ import {
 } from "./parser";
 import { summarizeTodoList, type TodoProgress } from "./format";
 import { clearTodoWidget, updateTodoWidget } from "../../tui/todolist-widget";
+
+const EMPTY_TODO_DOCUMENT = "---\nversion: 1\ntodos: []\n---\n";
 
 const TODO_SYSTEM_TAG = "<todolist_system>";
 const TODO_SYSTEM_END_TAG = "</todolist_system>";
@@ -46,6 +48,19 @@ function appendTodoPrompt(systemPrompt: string, pathname: string): string {
         "Read TODO.md before beginning substantive work. Keep its YAML frontmatter valid and update TODO statuses as work starts, completes, or becomes blocked.",
         "When mutation tools are available, use the write or edit tool to change TODO.md and preserve the freeform Markdown body after the frontmatter.",
         "The TODO list is temporary and runtime-local; it is not a project TODO file and is not durable across sessions.",
+        "Use this exact frontmatter shape: `version: 1` and a `todos` YAML sequence; each entry has a unique lowercase `id`, a non-empty `title`, and a `status`.",
+        "For example:",
+        "```yaml",
+        "---",
+        "version: 1",
+        "todos:",
+        "  - id: inspect",
+        "    title: Inspect the implementation",
+        "    status: in_progress",
+        "---",
+        "```",
+        "The Markdown body after the closing `---` is freeform and must be preserved.",
+        "TODO.md is initialized for every runtime; deleting an existing TODO.md is treated as clearing it to `todos: []`, so use an empty list when no active tasks remain.",
         "Allowed statuses are `pending`, `in_progress`, `completed`, and `blocked`.",
         TODO_SYSTEM_END_TAG,
     ].join("\n");
@@ -155,6 +170,20 @@ function validationFailure(error: unknown): ToolCallEventResult {
     return { block: true, reason };
 }
 
+async function initializeTodoFile(ctx: ExtensionContext): Promise<void> {
+    const scratchpadPath = getScratchpadPath(ctx.sessionManager);
+    if (!scratchpadPath) return;
+
+    try {
+        await writeFile(path.join(scratchpadPath, "TODO.md"), EMPTY_TODO_DOCUMENT, {
+            encoding: "utf8",
+            flag: "wx",
+        });
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") return;
+    }
+}
+
 /** Register TODO prompt, validation, UI refresh, and Bash handling for one runtime. */
 export default function registerTodoListExtension(
     pi: ExtensionAPI,
@@ -197,7 +226,10 @@ export default function registerTodoListExtension(
         }
     };
 
-    pi.on("session_start", (_event, ctx) => refresh(ctx));
+    pi.on("session_start", async (_event, ctx) => {
+        await initializeTodoFile(ctx);
+        await refresh(ctx);
+    });
     pi.on("session_tree", (_event, ctx) => {
         options.onTodoProgress?.(undefined);
         clearTodoWidget(ctx);

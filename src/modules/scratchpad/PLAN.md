@@ -2,9 +2,9 @@
 
 ## Status
 
-Foundational module and agent capability implemented. Multi-root confinement
-integration remains the next implementation phase. This document records the
-feature shape; it is not a user-facing command reference.
+Foundational module, agent capability, multi-root confinement, and session-path
+marker are implemented. This document records the feature shape; it is not a
+user-facing command reference.
 
 ## Purpose
 
@@ -22,22 +22,27 @@ A scratchpad is deliberately **not**:
 
 ## Terminology and lifetime
 
-The first version has one kind of scratchpad: **ephemeral**.
+The first version has one kind of scratchpad: **session-scoped temporary**.
 
 - The directory is created with `fs.mkdtemp` below `os.tmpdir()` when the
-  runtime's `session_start` event runs.
+  runtime's `session_start` event runs, unless the session contains a valid
+  scratchpad path marker whose directory still exists.
+- The marker is a custom session entry and does not participate in LLM
+  context. It lets reloads and returning to the same session reuse the same
+  directory.
 - `os.tmpdir()` may be a RAM-backed `tmpfs` or ordinary disk-backed storage;
   pi-coder does not promise that the contents are held in RAM. The guarantee is
-  lifetime, not storage medium.
+  temporary session ownership, not storage medium.
 - The directory is mode `0700` and is never placed in the project checkout.
 - The extension does not remove the directory during `session_shutdown` or
   process exit.
-- There is no scratchpad database, persistent ID, manual release operation, or
-  pi-coder garbage collector in this version. The host OS's normal `/tmp`
-  cleanup policy is solely responsible for eventual removal.
-- Scratchpad contents are not assumed to survive session shutdown, process
-  restart, or a child-session resume. A later persistent form can be designed
-  separately if that need appears.
+- There is no scratchpad database, manual release operation, or pi-coder
+  garbage collector in this version. The host OS's normal `/tmp` cleanup policy
+  is solely responsible for eventual removal.
+- Scratchpad contents may survive session shutdown, process restart, or a
+  session switch while the marked directory remains available. They are not
+  guaranteed to survive OS cleanup or manual deletion; a missing marked
+  directory causes a new scratchpad and marker to be created.
 
 The implementation should call this `ephemeral` or `temporary` internally and
 in documentation rather than claiming it is truly "in-memory".
@@ -47,7 +52,8 @@ in documentation rather than claiming it is truly "in-memory".
 At session startup, the parent receives a system-prompt appendix explaining:
 
 - the absolute scratchpad path;
-- that it is private and temporary;
+- that it is private and temporary, and is reused when returning to this
+  session while the marked directory exists;
 - that it is intended for notes and intermediate artifacts;
 - that ordinary `read`, `write`, `edit`, and `bash` tools may use it;
 - that pi-coder does not remove it when the session ends and the OS owns
@@ -60,7 +66,8 @@ path-management protocol. The prompt should provide the absolute path because
 an extension cannot reliably inject a new environment variable into both
 sandboxed and direct Bash execution paths.
 
-The first version creates one independent scratchpad per runtime session:
+The first version creates one independent scratchpad per runtime session
+identity, recorded by a marker in that session's transcript:
 
 - the parent owns one scratchpad;
 - each scratchpad-capable child owns a separate scratchpad;
@@ -159,6 +166,7 @@ to the memory module. It should own:
 
 - temporary directory creation and runtime registry lifecycle;
 - per-runtime scratchpad state;
+- session marker creation and restoration;
 - prompt appendix generation;
 - registration of the runtime root for confinement consumers.
 

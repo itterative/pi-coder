@@ -25,6 +25,8 @@ import { parseTodoList } from "./parser";
 const MAX_SNAPSHOT_BYTES = 256_000;
 const MAX_OUTSTANDING_SNAPSHOTS = 32;
 
+const EMPTY_TODO_DOCUMENT = "---\nversion: 1\ntodos: []\n---\n";
+
 const RESTORED_WARNING =
     "TODO.md was changed by Bash but its frontmatter became invalid. The previous valid TODO.md was restored. Other Bash side effects may still have completed. Use write or edit to update TODO.md.";
 const REMOVED_WARNING =
@@ -122,7 +124,7 @@ async function atomicallyRestore(snapshot: TodoSnapshot): Promise<void> {
     }
 }
 
-type RollbackResult = "restored" | "removed";
+type RollbackResult = "restored" | "removed" | "cleared" | "concurrent";
 
 async function restoreIfSafe(
     snapshot: TodoSnapshot,
@@ -138,6 +140,21 @@ async function restoreIfSafe(
         if (!currentState.exists) return "removed";
         await unlink(snapshot.path);
         return "removed";
+    }
+
+    if (!currentState.exists) {
+        try {
+            await writeFile(snapshot.path, EMPTY_TODO_DOCUMENT, {
+                encoding: "utf8",
+                flag: "wx",
+                mode: snapshot.before.mode,
+            });
+            return "cleared";
+        } catch (error) {
+            if (isNotFound(error)) throw error;
+            if ((error as NodeJS.ErrnoException).code === "EEXIST") return "concurrent";
+            throw error;
+        }
     }
 
     await atomicallyRestore(snapshot);
@@ -213,6 +230,7 @@ export function registerTodoBashGuard(pi: ExtensionAPI): void {
                 const rollback = await restoreIfSafe(snapshot, after, hasCompetingMutation);
                 if (rollback === "restored") return prependWarning(event, RESTORED_WARNING);
                 if (rollback === "removed") return prependWarning(event, REMOVED_WARNING);
+                if (rollback === "cleared" || rollback === "concurrent") return;
                 return prependWarning(event, UNSAFE_ROLLBACK_WARNING);
             } catch {
                 return prependWarning(event, UNSAFE_ROLLBACK_WARNING);

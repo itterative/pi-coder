@@ -6,6 +6,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import registerScratchpadExtension, {
     getScratchpadPath,
+    SCRATCHPAD_MARKER_TYPE,
 } from "../../../src/modules/scratchpad";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
@@ -18,7 +19,7 @@ afterEach(() => {
     }
 });
 
-function harness(): {
+function harness(entries: unknown[] = []): {
     pi: ExtensionAPI;
     handler(name: string): Handler;
 } {
@@ -26,6 +27,9 @@ function harness(): {
     const pi = {
         on(name: string, callback: Handler) {
             handlers.set(name, callback);
+        },
+        appendEntry(customType: string, data: unknown) {
+            entries.push({ type: "custom", customType, data });
         },
     } as unknown as ExtensionAPI;
 
@@ -67,6 +71,31 @@ describe("temporary scratchpad extension", () => {
         expect(result.systemPrompt).toContain("<scratchpad_system>");
         expect(result.systemPrompt).toContain(scratchpadPath!);
         expect(result.systemPrompt).toContain("are not managed or deleted by pi-coder");
+    });
+
+    it("reuses a marked directory when the runtime registry is recreated", async () => {
+        const entries: unknown[] = [];
+        const sessionManager = {
+            getBranch: () => entries,
+        };
+        const first = harness(entries);
+        const runtimeContext = context(sessionManager);
+        registerScratchpadExtension(first.pi);
+        await first.handler("session_start")({}, runtimeContext);
+        const scratchpadPath = getScratchpadPath(sessionManager)!;
+        temporaryDirectories.push(scratchpadPath);
+        await first.handler("session_shutdown")({}, runtimeContext);
+
+        const second = harness(entries);
+        registerScratchpadExtension(second.pi);
+        await second.handler("session_start")({}, runtimeContext);
+
+        expect(getScratchpadPath(sessionManager)).toBe(scratchpadPath);
+        expect(entries).toEqual([{
+            type: "custom",
+            customType: SCRATCHPAD_MARKER_TYPE,
+            data: { version: 1, path: scratchpadPath },
+        }]);
     });
 
     it("keeps parent and child runtime scratchpads isolated", async () => {

@@ -32,6 +32,7 @@ function harness(): {
             registered.push(callback);
             handlers.set(name, registered);
         },
+        appendEntry() {},
     } as unknown as ExtensionAPI;
 
     return {
@@ -142,6 +143,41 @@ describe("TODO runtime extension", () => {
             toolName: "write",
             input: { path: path.join(process.cwd(), "TODO.md"), content: "not managed here" },
         }, ctx)).resolves.toEqual({ block: false });
+    });
+
+    it("initializes an empty TODO and recreates it when Bash deletes it", async () => {
+        const { pi, handler } = harness();
+        const sessionManager = {};
+        const ctx = runtimeContext(sessionManager);
+        registerScratchpadExtension(pi);
+        registerTodoListExtension(pi);
+        await handler("session_start")({ reason: "startup" }, ctx);
+
+        const scratchpadPath = getScratchpadPath(sessionManager)!;
+        temporaryDirectories.push(scratchpadPath);
+        const todoPath = path.join(scratchpadPath, "TODO.md");
+        expect(fs.readFileSync(todoPath, "utf8")).toBe("---\nversion: 1\ntodos: []\n---\n");
+        fs.writeFileSync(todoPath, validDocument);
+
+        await handler("tool_execution_start")({
+            type: "tool_execution_start",
+            toolCallId: "bash-delete",
+            toolName: "bash",
+            args: { command: "rm TODO.md" },
+        }, ctx);
+        fs.unlinkSync(todoPath);
+        const result = await handler("tool_result")({
+            type: "tool_result",
+            toolCallId: "bash-delete",
+            toolName: "bash",
+            input: { command: "rm TODO.md" },
+            content: [{ type: "text", text: "deleted" }],
+            isError: false,
+            details: undefined,
+        }, ctx) as { content: Array<{ type: "text"; text: string }> };
+
+        expect(fs.readFileSync(todoPath, "utf8")).toBe("---\nversion: 1\ntodos: []\n---\n");
+        expect(result.content).toEqual([{ type: "text", text: "deleted" }]);
     });
 
     it("guards Bash changes, restores invalid existing files, and removes invalid creations", async () => {
@@ -355,6 +391,7 @@ describe("TODO runtime extension", () => {
         temporaryDirectories.push(scratchpadPath);
         const todoPath = path.join(scratchpadPath, "TODO.md");
         const outsidePath = path.join(os.tmpdir(), `pi-coder-todo-outside-${Date.now()}.md`);
+        fs.unlinkSync(todoPath);
         fs.writeFileSync(outsidePath, validDocument);
         temporaryDirectories.push(outsidePath);
         fs.symlinkSync(outsidePath, todoPath);

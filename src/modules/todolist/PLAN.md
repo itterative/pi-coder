@@ -38,10 +38,13 @@ A delegated agent receives TODO support only when its definition has the
 do not need to declare both capabilities. The built-in `worker` receives
 `todolist`; read-only built-ins do not receive it by default.
 
-Each runtime has its own TODO file:
+Each runtime has its own TODO file. The TODO extension creates a valid empty
+`TODO.md` during initialization before the first refresh, so the managed path
+always exists while that runtime is active:
 
 - the parent and every child have separate files;
 - workers do not automatically see the parent's TODO file;
+- deleting an existing TODO.md is normalized to a valid empty list rather than leaving the managed path absent;
 - isolated workers keep their TODO outside the Git worktree;
 - no TODO contents are shared through `agent` arguments or run leases.
 
@@ -212,14 +215,19 @@ When the corresponding tool result arrives:
 1. read the current TODO file and compare its hash with the before snapshot;
 2. do nothing when it is unchanged;
 3. parse and accept it when it is valid;
-4. if it changed and is invalid, attempt a safe rollback to the previous
+4. if Bash deleted a previously valid TODO.md, safely recreate the canonical
+   valid empty document (`todos: []`) when the path is still absent;
+5. if it changed to invalid content, attempt a safe rollback to the previous
    snapshot;
-5. report the validation outcome to the agent and refresh the UI.
+6. report the validation outcome to the agent and refresh the UI.
 
-If the file existed before, rollback restores its previous contents. If it did
-not exist before and Bash created an invalid TODO.md, rollback removes that
-new invalid file. Restoration must use an atomic replacement where practical
-and preserve the prior file mode.
+If Bash deletes a previously valid file, the guard writes the canonical empty
+TODO document rather than leaving the managed path absent. If the file existed
+before and Bash writes invalid content, rollback restores its previous contents.
+If it did not exist before and Bash created an invalid TODO.md, rollback removes
+that new invalid file. Restoration and empty-file recreation must use a
+compare-and-swap check, an atomic replacement or exclusive create where
+practical, and preserve the prior file mode.
 
 Rollback is allowed only when the current file still matches the invalid
 post-command state and there is no known competing TODO mutation. This is a
