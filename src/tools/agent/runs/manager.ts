@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Usage } from "@earendil-works/pi-ai";
 
+import { sleep } from "../../../common/async";
 import {
     agentCanEdit,
     fingerprintAgentDefinition,
@@ -9,6 +10,7 @@ import {
 } from "../definitions/types";
 import { emitAgentEvent } from "../observability/events";
 import type { AgentEventPayload, AgentEventSink } from "../contracts/events";
+import { AgentContinuationLeaseBusyError } from "../contracts/runs";
 import type {
     AgentBackgroundCallback,
     AgentContinuationLease,
@@ -28,6 +30,7 @@ import type {
 import type { WorkerMutationReport } from "../contracts/mutations";
 import type { AgentTraceData, AgentTraceSink } from "../contracts/trace";
 import { renderAgentTask } from "../prompts/renderer";
+import { CONTINUATION_LEASE_RECOVERY_GRACE_MS } from "./persistence";
 import { cloneUsage, subtractUsage, ZERO_USAGE } from "./usage";
 
 export { ZERO_USAGE } from "./usage";
@@ -120,6 +123,7 @@ const MAX_TASK_CHARS = 16_000;
 const MAX_TITLE_CHARS = 80;
 const MAX_GUIDANCE_CHARS = 16_000;
 const MAX_OUTPUT_CHARS = 32_000;
+const CONTINUATION_LEASE_RECOVERY_TIMEOUT_MS = 35_000;
 
 export const INTERRUPTED_RESUME_GUIDANCE =
     "Continue from the persisted session. Inspect the current state before proceeding; do not assume interrupted tool calls completed.";
@@ -138,6 +142,11 @@ function isTerminalStatus(status: AgentRunStatus): boolean {
         || status === "canceled";
 }
 
+function continuationLeaseRetryAt(error: unknown): number | undefined {
+    if (!(error instanceof AgentContinuationLeaseBusyError)) return undefined;
+    return error.leaseUntil;
+}
+
 function mutationRunsConflict(candidateWorkspaceId: string | undefined, activeWorkspaceId: string | undefined): boolean {
     // Same-checkout workers share the parent's files and remain single-flight.
     // Isolated workers have separate worktrees and may mutate concurrently.
@@ -152,6 +161,7 @@ export class AgentRunManager {
     private nextRunNumber = 1;
     private closing = false;
     private preservingShutdown = false;
+    private readonly restoreAbortController = new AbortController();
     private shutdownPromise?: Promise<void>;
     private persistence?: AgentRunPersistence;
 
@@ -253,6 +263,7 @@ export class AgentRunManager {
         }
 
         for (const record of records.sort((a, b) => a.startedAt - b.startedAt)) {
+            if (this.closing || this.restoreAbortController.signal.aborted) break;
             if (record.status === "removed" || record.ownerSessionId !== this.persistence?.ownerSessionId) continue;
             if (record.resumable === false) {
                 diagnostics.push(`Could not restore ${record.runId}: this checkpoint is historical and was continued on another parent branch.`);
@@ -374,7 +385,11 @@ export class AgentRunManager {
             });
             run.backgroundCallback = record.background ? onBackgroundUpdate : undefined;
             try {
-                this.acquireRunContinuationLease(run);
+                const acquired = await this.acquireRunContinuationLeaseWithRecovery(run, this.restoreAbortController.signal);
+                if (!acquired || this.closing || this.restoreAbortController.signal.aborted) {
+                    this.runs.delete(run.id);
+                    continue;
+                }
                 await this.setupRun(run, definition!, {
                     ...context,
                     cwd: run.cwd,
@@ -500,7 +515,13 @@ export class AgentRunManager {
         const previousQuestion = run.question;
         const previousUpdatedAt = run.updatedAt;
         try {
-            this.acquireRunContinuationLease(run);
+            const acquired = await this.acquireRunContinuationLeaseWithRecovery(
+                run,
+                this.continuationLeaseRecoverySignal(signal),
+            );
+            if (!acquired) {
+                throw new AgentActionError("Agent resume was aborted before acquiring the continuation lease.");
+            }
             if (run.status === "interrupted") {
                 const repaired = run.handle?.repairInterrupted?.() ?? 0;
                 run.childSessionLeafId = run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId;
@@ -730,6 +751,38 @@ export class AgentRunManager {
         lease.release();
     }
 
+    private continuationLeaseRecoverySignal(signal?: AbortSignal): AbortSignal {
+        if (!signal) return this.restoreAbortController.signal;
+        return AbortSignal.any([this.restoreAbortController.signal, signal]);
+    }
+
+    private async acquireRunContinuationLeaseWithRecovery(
+        run: AgentRun,
+        signal: AbortSignal,
+    ): Promise<boolean> {
+        const deadline = Date.now() + CONTINUATION_LEASE_RECOVERY_TIMEOUT_MS;
+        while (true) {
+            if (this.closing || signal.aborted) return false;
+
+            try {
+                this.acquireRunContinuationLease(run);
+                return true;
+            } catch (error) {
+                const retryAt = continuationLeaseRetryAt(error);
+                if (retryAt === undefined || Date.now() >= deadline) throw error;
+
+                const remaining = deadline - Date.now();
+                const delay = Math.max(1, retryAt - Date.now() + CONTINUATION_LEASE_RECOVERY_GRACE_MS);
+                try {
+                    await sleep(Math.min(delay, remaining), signal);
+                } catch (sleepError) {
+                    if (signal.aborted || this.closing) return false;
+                    throw sleepError;
+                }
+            }
+        }
+    }
+
     private resolveDefinition(definitionOrName: AgentDefinition | string): AgentDefinition {
         return typeof definitionOrName === "string"
             ? {
@@ -895,6 +948,7 @@ export class AgentRunManager {
 
     private async performShutdown(): Promise<void> {
         this.closing = true;
+        this.restoreAbortController.abort();
         this.preservingShutdown = this.persistence !== undefined;
 
         const runs = [...this.runs.values()];

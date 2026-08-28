@@ -5,7 +5,12 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { PI_CODER_AGENT_SESSIONS_DIR } from "../../../common/constants";
 import { normalizeCwdForSessionDirectory } from "../../../common/paths";
-import type { AgentContinuationLease, AgentRunPersistence, PersistedAgentRun } from "../contracts/runs";
+import {
+    AgentContinuationLeaseBusyError,
+    type AgentContinuationLease,
+    type AgentRunPersistence,
+    type PersistedAgentRun,
+} from "../contracts/runs";
 import { ZERO_USAGE } from "./usage";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
 import {
@@ -119,6 +124,21 @@ export interface AgentRunStateWriter {
 }
 
 const CONTINUATION_LEASE_MS = 30_000;
+// Pi and its child-agent runtime share one process, so a dead owner PID is a
+// useful fast path for reclaiming a lease left by an abrupt process exit.
+export const ENABLE_PID_LEASE_RECOVERY = true;
+export const CONTINUATION_LEASE_RECOVERY_GRACE_MS = 250;
+
+function isProcessAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        // EPERM means the process exists but is not signalable. Unknown errors
+        // fail closed and fall back to normal lease expiry.
+        return error instanceof Error && (error as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+}
 
 type ContinuationHead = {
     ownerSessionId: string;
@@ -287,25 +307,37 @@ export function createAgentRunStateWriter(
                 throw new Error("Delegated run continuation is stale; another process has already continued it.");
             }
             const existingLease = database.prepare(`
-                SELECT process_token, lease_until
+                SELECT process_token, owner_pid, lease_until
                 FROM agent_run_continuation_leases
                 WHERE run_instance_id = ?
-            `).get(runInstanceId) as { process_token?: string; lease_until?: number } | undefined;
-            if (typeof existingLease?.lease_until === "number" && existingLease.lease_until > now) {
-                throw new Error("Delegated run continuation is already owned by another process.");
+            `).get(runInstanceId) as {
+                process_token?: string;
+                owner_pid?: number;
+                lease_until?: number;
+            } | undefined;
+            const activeLease = typeof existingLease?.lease_until === "number"
+                && existingLease.lease_until > now;
+            const ownerIsDead = ENABLE_PID_LEASE_RECOVERY
+                && activeLease
+                && typeof existingLease?.owner_pid === "number"
+                && !isProcessAlive(existingLease.owner_pid);
+            if (activeLease && !ownerIsDead) {
+                throw new AgentContinuationLeaseBusyError(existingLease.lease_until!);
             }
             database.prepare(`
                 INSERT INTO agent_run_continuation_leases (
-                    run_instance_id, owner_session_id, process_token, lease_until
-                ) VALUES (?, ?, ?, ?)
+                    run_instance_id, owner_session_id, process_token, owner_pid, lease_until
+                ) VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT (run_instance_id) DO UPDATE SET
                     owner_session_id = excluded.owner_session_id,
                     process_token = excluded.process_token,
+                    owner_pid = excluded.owner_pid,
                     lease_until = excluded.lease_until
             `).run(
                 runInstanceId,
                 typeof current?.owner_session_id === "string" ? current.owner_session_id : "",
                 leaseToken,
+                process.pid,
                 now + CONTINUATION_LEASE_MS,
             );
             database.exec("COMMIT");

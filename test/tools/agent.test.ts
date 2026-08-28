@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "@earendil-works/pi-ai";
 
+import { AgentContinuationLeaseBusyError } from "../../src/tools/agent/contracts/runs";
+import { CONTINUATION_LEASE_RECOVERY_GRACE_MS } from "../../src/tools/agent/runs/persistence";
 import {
     getScoutBashAssessment,
     isChildPathAllowed,
@@ -13,6 +15,7 @@ import {
     BUILTIN_ADVISOR,
     BUILTIN_SCOUT,
     BUILTIN_WORKER,
+    fingerprintAgentDefinition,
     fingerprintLegacyAgentDefinition,
 } from "../../src/tools/agent/definitions/discovery";
 import {
@@ -877,6 +880,124 @@ describe("AgentRunManager", () => {
         expect(resumed.details.status).toBe("running");
         await flushBackground();
         expect(secondManager.listRuns()[0]?.status).toBe("completed");
+    });
+
+    it("waits for a crashed continuation lease to expire while restoring", async () => {
+        const childFile = path.join(os.tmpdir(), "pi-agent-crashed-child.jsonl");
+        const record: PersistedAgentRun = {
+            version: 1,
+            ownerSessionId: "parent-session",
+            runId: "scout-1",
+            runInstanceId: "crashed-instance",
+            title: "Crashed run",
+            agent: "scout",
+            agentSource: "builtin",
+            definitionFingerprint: fingerprintAgentDefinition(BUILTIN_SCOUT),
+            task: "Inspect",
+            status: "interrupted",
+            background: false,
+            mutating: false,
+            progress: { output: "", recentActivity: [] },
+            usageCheckpoint: usage(),
+            usageSnapshot: usage(),
+            startedAt: 1,
+            updatedAt: 2,
+            childSessionFile: childFile,
+        };
+        let attempts = 0;
+        const persistence: AgentRunPersistence = {
+            ownerSessionId: "parent-session",
+            usesSnapshotMarkers: true,
+            childSessionDir: os.tmpdir(),
+            save: () => true,
+            acquireContinuationLease: () => {
+                attempts++;
+                if (attempts === 1) {
+                    throw new AgentContinuationLeaseBusyError(Date.now() + CONTINUATION_LEASE_RECOVERY_GRACE_MS);
+                }
+                return { release() {} };
+            },
+            deleteChildSession: () => {},
+        };
+        const manager = new AgentRunManager(async () => new FakeChild([], childFile));
+        manager.setPersistence(persistence);
+
+        vi.useFakeTimers();
+        try {
+            const restoration = manager.restore([record], [BUILTIN_SCOUT], context());
+            await vi.runAllTimersAsync();
+            await expect(restoration).resolves.toEqual({ restored: 1, diagnostics: [] });
+        } finally {
+            vi.useRealTimers();
+        }
+        expect(attempts).toBe(2);
+        expect(manager.listRuns()[0]).toMatchObject({ runId: "scout-1", status: "interrupted" });
+    });
+
+    it("cancels continuation-lease recovery during shutdown", async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-restore-cancel-"));
+        tempDirs.push(directory);
+        const store = durableStore(directory);
+        const childFile = path.join(directory, "child.jsonl");
+        const firstManager = new AgentRunManager(async () => new FakeChild([
+            { question: { question: "Continue?" } },
+        ], childFile));
+        firstManager.setPersistence(store.persistence);
+        await firstManager.start(BUILTIN_SCOUT, "Inspect", context());
+        await firstManager.shutdown();
+        store.records.at(-1)!.childSessionLeafId = "leaf-1";
+        store.records.at(-1)!.resumable = true;
+
+        const persistence: AgentRunPersistence = {
+            ...store.persistence,
+            usesSnapshotMarkers: true,
+            acquireContinuationLease: () => {
+                throw new AgentContinuationLeaseBusyError(Date.now() + 60_000);
+            },
+        };
+        const manager = new AgentRunManager(async () => new FakeChild([], childFile));
+        manager.setPersistence(persistence);
+        const restoration = manager.restore(latestRecords(store.records), [BUILTIN_SCOUT], context());
+
+        await manager.shutdown();
+        await expect(restoration).resolves.toEqual({ restored: 0, diagnostics: [] });
+    });
+
+    it("aborts a resume while waiting for continuation ownership", async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-resume-cancel-"));
+        tempDirs.push(directory);
+        const store = durableStore(directory);
+        const childFile = path.join(directory, "child.jsonl");
+        const firstManager = new AgentRunManager(async () => new FakeChild([
+            { question: { question: "Continue?" } },
+        ], childFile));
+        firstManager.setPersistence(store.persistence);
+        await firstManager.start(BUILTIN_SCOUT, "Inspect", context());
+        await firstManager.shutdown();
+        store.records.at(-1)!.childSessionLeafId = "leaf-1";
+        store.records.at(-1)!.resumable = true;
+
+        let attempts = 0;
+        const persistence: AgentRunPersistence = {
+            ...store.persistence,
+            usesSnapshotMarkers: true,
+            acquireContinuationLease: () => {
+                attempts++;
+                if (attempts === 1) return { release() {} };
+                throw new AgentContinuationLeaseBusyError(Date.now() + 60_000);
+            },
+        };
+        const manager = new AgentRunManager(async () => new FakeChild([], childFile));
+        manager.setPersistence(persistence);
+        await manager.restore(latestRecords(store.records), [BUILTIN_SCOUT], context());
+
+        const controller = new AbortController();
+        const resume = manager.resume("scout-1", "Continue", controller.signal);
+        await Promise.resolve();
+        controller.abort();
+        await expect(resume).rejects.toThrow("aborted before acquiring the continuation lease");
+        expect(attempts).toBe(2);
+        await manager.shutdown();
     });
 
     it("restores the prior waiting state when a V2 resume checkpoint cannot be persisted", async () => {

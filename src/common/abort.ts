@@ -8,8 +8,3 @@ export function isAbortError(error: unknown): boolean {
     }
     return "code" in error && error.code === "ABORT_ERR";
 }
-
-/** Raise the platform-standard abort reason when the signal has been stopped. */
-export function throwIfAborted(signal: AbortSignal | undefined): void {
-    signal?.throwIfAborted();
-}

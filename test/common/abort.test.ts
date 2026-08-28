@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isAbortError, throwIfAborted } from "../../src/common/abort";
+import { isAbortError } from "../../src/common/abort";
 
 describe("abort helpers", () => {
     it("uses the platform abort error from AbortSignal", () => {
@@ -9,7 +9,7 @@ describe("abort helpers", () => {
 
         let error: unknown;
         try {
-            throwIfAborted(controller.signal);
+            controller.signal.throwIfAborted();
         } catch (caught) {
             error = caught;
         }
@@ -19,9 +19,7 @@ describe("abort helpers", () => {
         expect(isAbortError(error)).toBe(true);
     });
 
-    it("does not throw for an active or missing signal", () => {
-        expect(() => throwIfAborted(undefined)).not.toThrow();
-        expect(() => throwIfAborted(new AbortController().signal)).not.toThrow();
+    it("recognizes only abort errors", () => {
         expect(isAbortError(new Error("not aborted"))).toBe(false);
     });
 });

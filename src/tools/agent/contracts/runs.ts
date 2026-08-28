@@ -172,6 +172,16 @@ export interface AgentContinuationLease {
     release(): void;
 }
 
+export class AgentContinuationLeaseBusyError extends Error {
+    readonly leaseUntil: number;
+
+    constructor(leaseUntil: number) {
+        super("Delegated run continuation is already owned by another process.");
+        this.name = "AgentContinuationLeaseBusyError";
+        this.leaseUntil = leaseUntil;
+    }
+}
+
 export interface AgentRunPersistence {
     ownerSessionId: string;
     /** True when records are V2 marker/snapshot checkpoints. */

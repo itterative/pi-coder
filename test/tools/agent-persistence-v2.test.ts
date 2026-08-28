@@ -565,6 +565,40 @@ describe("delegated-agent V2 persistence", () => {
         writerB.close();
     });
 
+    it("reclaims an active lease when its recorded owner PID is dead", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-pid-recovery-"));
+        tempDirs.push(stateDir);
+        const workspacesDir = path.join(stateDir, "workspaces");
+        const databaseA = await openAgentMetadataDatabase(workspacesDir);
+        const databaseB = await openAgentMetadataDatabase(workspacesDir);
+        databaseA.prepare(`
+            INSERT INTO agent_run_continuation_heads (
+                run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        `).run("instance-pid-recovery", "parent-1", "scout-1", "old-snapshot", 1, 1);
+        const initialHead = new Map([["instance-pid-recovery", "old-snapshot"]]);
+        const writerA = createAgentRunStateWriter(process.cwd(), databaseA, () => "marker-a", initialHead);
+        const writerB = createAgentRunStateWriter(process.cwd(), databaseB, () => "marker-b", initialHead);
+        const leaseA = writerA.acquireContinuationLease?.("instance-pid-recovery");
+        databaseA.prepare(`
+            UPDATE agent_run_continuation_leases SET owner_pid = ? WHERE run_instance_id = ?
+        `).run(424242, "instance-pid-recovery");
+
+        const kill = vi.spyOn(process, "kill").mockImplementation(((pid: number) => {
+            if (pid === 424242) throw Object.assign(new Error("process missing"), { code: "ESRCH" });
+        }) as typeof process.kill);
+        try {
+            const leaseB = writerB.acquireContinuationLease?.("instance-pid-recovery");
+            expect(leaseB).toBeDefined();
+            leaseB?.release();
+        } finally {
+            kill.mockRestore();
+            leaseA?.release();
+            writerA.close();
+            writerB.close();
+        }
+    });
+
     it("reports lease loss when renewal can no longer update the database", async () => {
         vi.useFakeTimers();
         try {
