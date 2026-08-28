@@ -26,6 +26,7 @@ export function getSafeBashAssessment(
     cwd: string,
     additionalRoots: readonly string[] = [],
     sensitiveAdditionalRoots?: readonly string[],
+    safeBashCommands: readonly string[] = [],
 ): HeuristicAssessment {
     return getCwdConfinementAssessment(
         command,
@@ -33,6 +34,8 @@ export function getSafeBashAssessment(
         CHILD_CONFINEMENT,
         additionalRoots,
         sensitiveAdditionalRoots,
+        [],
+        safeBashCommands,
     );
 }
 
@@ -44,12 +47,14 @@ export function isSafeBashAllowed(
     cwd: string,
     additionalRoots: readonly string[] = [],
     sensitiveAdditionalRoots?: readonly string[],
+    safeBashCommands: readonly string[] = [],
 ): boolean {
     return getSafeBashAssessment(
         command,
         cwd,
         additionalRoots,
         sensitiveAdditionalRoots,
+        safeBashCommands,
     ).classification === Heuristic.SAFE_READONLY;
 }
 
@@ -67,6 +72,7 @@ export async function guardSafeBashCommand(
     onTrace?: ChildAgentFactoryContext["onTrace"],
     additionalRoots: readonly string[] = [],
     sensitiveAdditionalRoots?: readonly string[],
+    safeBashCommands: readonly string[] = [],
 ): Promise<SafeBashBlock | undefined> {
     if (!safeBash) {
         return {
@@ -80,6 +86,7 @@ export async function guardSafeBashCommand(
         cwd,
         additionalRoots,
         sensitiveAdditionalRoots,
+        safeBashCommands,
     );
     if (assessment.classification !== Heuristic.SAFE_READONLY) {
         const reasons = assessment.reasons

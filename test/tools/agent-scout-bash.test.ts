@@ -29,6 +29,7 @@ function setup(
         isolated = false,
         sessionManager = {},
         additionalPaths = [],
+        safeBashCommands = [],
     }: {
         safeBash?: boolean;
         commandRunner?: boolean;
@@ -37,6 +38,7 @@ function setup(
         isolated?: boolean;
         sessionManager?: object;
         additionalPaths?: string[];
+        safeBashCommands?: string[];
     } = {},
 ) {
     const handlers: Record<string, Handler[]> = {};
@@ -98,6 +100,7 @@ function setup(
         isolated,
         commandRunner,
         additionalPaths,
+        safeBashCommands,
     )(pi);
 
     return { handlers, ctx: { cwd, sessionManager }, tools, dialogs, sessionManager };
@@ -122,6 +125,22 @@ describe("child Bash permissions", () => {
             });
         await expect(check({ toolName: "bash", input: { command: "unrecognized-command" } }, runtime.ctx))
             .resolves.toMatchObject({ block: true, reason: expect.stringContaining("UNKNOWN_COMMAND") });
+    });
+
+    it("allows exact custom safe-Bash patterns while retaining path checks", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-custom-bash-"));
+        tempDirs.push(cwd);
+        const runtime = setup(cwd, {
+            safeBashCommands: ["ast-outline digest *"],
+        });
+        const check = runtime.handlers.tool_call[0]!;
+
+        await expect(check({ toolName: "bash", input: { command: "ast-outline digest src" } }, runtime.ctx))
+            .resolves.toBeUndefined();
+        await expect(check({ toolName: "bash", input: { command: "ast-outline show src/index.ts" } }, runtime.ctx))
+            .resolves.toMatchObject({ block: true, reason: expect.stringContaining("UNKNOWN_COMMAND") });
+        await expect(check({ toolName: "bash", input: { command: "ast-outline digest /etc" } }, runtime.ctx))
+            .resolves.toMatchObject({ block: true, reason: expect.stringContaining("OUTSIDE_CWD") });
     });
 
     it("allows configured additional paths for direct reads and safe Bash", async () => {

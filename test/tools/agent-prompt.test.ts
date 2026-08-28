@@ -30,6 +30,26 @@ describe("delegated-agent prompt rendering", () => {
         await expect(rendered).toMatchFileSnapshot(`__snapshots__/agent-prompt.${name}.system.txt`);
     });
 
+    it("renders the scout system prompt with custom safe-Bash patterns", async () => {
+        const rendered = renderAgentSystemPrompt(
+            BUILTIN_SCOUT,
+            childProtocolPrompt(
+                false,
+                false,
+                true,
+                true,
+                false,
+                false,
+                false,
+                true,
+                [],
+                ["ast-outline digest *"],
+            ),
+        );
+
+        await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.scout.custom-safe-bash.system.txt");
+    });
+
     it("renders the isolated worker child system prompt", async () => {
         const rendered = renderAgentSystemPrompt(
             BUILTIN_WORKER,

@@ -50,6 +50,7 @@ export function childProtocolPrompt(
     hasScratchpad = false,
     hasBashOutputAccess = false,
     additionalPaths: readonly string[] = [],
+    safeBashCommands: readonly string[] = [],
 ): string {
     const mutationPathScope = hasScratchpad
         ? "the current working directory or the temporary scratchpad"
@@ -73,6 +74,9 @@ export function childProtocolPrompt(
     const readPathRule = hasScratchpad
         ? sensitivePathRule
         : "Sensitive paths and paths that escape through symlinks are always blocked.";
+    const customSafeBashPrompt = safeBashCommands.length > 0
+        ? `The definition also permits these exact safe-Bash command patterns: ${safeBashCommands.map((command) => JSON.stringify(command)).join(", ")}. These executables are trusted as read-only by the definition author. A trailing \`*\` matches one or more trailing arguments; matched commands still undergo path-confinement and sensitive-path checks.`
+        : undefined;
     const interaction = background || !allowUserInteraction
         ? "If guidance from the parent is necessary, make reasonable progress first, then use `ask_parent` with the evidence you found and your recommended course. Call `ask_parent` by itself, not alongside other tools."
         : [
@@ -91,6 +95,7 @@ export function childProtocolPrompt(
                 ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
                 : []),
             "Direct edit/write calls inside this worktree are already authorized; sensitive paths and symlink escapes remain blocked. Bash commands use this run's own permission state and may pause while the end user decides whether to approve them; do not assume an approval granted to the parent also applies to you.",
+            ...(customSafeBashPrompt ? [customSafeBashPrompt] : []),
             "Run only one mutation tool at a time. Other isolated workers may run concurrently, so avoid destructive Git operations and keep changes narrow.",
         ].join("\n\n");
     } else if (canEdit) {
@@ -101,6 +106,7 @@ export function childProtocolPrompt(
                 ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
                 : []),
             "A Bash command covered by an existing parent permission rule runs immediately. Any other eligible command may pause while the end user approves or denies it. A denied command or one rejected by the safety checks remains blocked.",
+            ...(customSafeBashPrompt ? [customSafeBashPrompt] : []),
             "Successful changes appear immediately in the parent's checkout. Inspect the latest file contents before editing, preserve unrelated changes, and run only one mutation tool at a time.",
         ].join("\n\n");
     } else if (commandRunner) {
@@ -111,6 +117,7 @@ export function childProtocolPrompt(
                 ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
                 : []),
             "You may use `bash`. Commands recognized as local read-only inspection run directly; other eligible commands may pause while the end user approves or denies them. Approved commands can have project side effects, so keep them relevant to validation and do not assume a command is harmless because it has a test-like name.",
+            ...(customSafeBashPrompt ? [customSafeBashPrompt] : []),
         ].join("\n\n");
     } else {
         const bashAccess = safeBash
@@ -124,6 +131,7 @@ export function childProtocolPrompt(
                 ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
                 : []),
             bashAccess,
+            ...(customSafeBashPrompt ? [customSafeBashPrompt] : []),
         ].join("\n\n");
     }
 
@@ -243,6 +251,7 @@ export function registerChildExtension(
     isolated = false,
     commandRunner = false,
     additionalPaths: readonly string[] = [],
+    safeBashCommands: readonly string[] = [],
 ) {
     return (pi: ExtensionAPI): void => {
         const bashOutputPaths = new Map<string, BashOutputPath>();
@@ -435,6 +444,7 @@ export function registerChildExtension(
                 agentName,
                 isolated: isolatedChild,
                 additionalReadRoots: additionalPaths,
+                safeBashCommands,
                 permissionState,
                 permissionPending: reportPermissionPending,
                 fileChanged(filePath) {
@@ -466,6 +476,7 @@ export function registerChildExtension(
                     onTrace,
                     [...additionalPaths, ...getScratchpadRoots(ctx)],
                     getScratchpadRoots(ctx),
+                    safeBashCommands,
                 );
             }
 

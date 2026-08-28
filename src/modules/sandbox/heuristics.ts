@@ -216,6 +216,7 @@ interface AdditionalRoot {
 
 interface ConfinementOptions {
     allowedCommands: Set<string> | null;
+    customSafeBashCommands: string[][];
     sensitivePatterns: RegExp[];
     blockDotfiles: boolean;
     resolveSymlinks: boolean;
@@ -1409,7 +1410,8 @@ function isCommandConfined(
         return undefined;
     }
 
-    const spec = KNOWN_COMMANDS[commandName];
+    const customCommand = matchesCustomSafeBashCommand(args, options);
+    const spec = KNOWN_COMMANDS[commandName] ?? (customCommand ? CUSTOM_SAFE_COMMAND_SPEC : undefined);
     if (!spec) {
         addUnsafeReason(diagnostics, UnsafeReason.UNKNOWN_COMMAND);
         return undefined;
@@ -1603,12 +1605,56 @@ function isConfined(
     return heuristic ?? undefined;
 }
 
+// User-declared commands are trusted to be read-only; the generic spec still
+// confines every invocation argument that could name a filesystem path.
+const CUSTOM_SAFE_COMMAND_SPEC: CommandSpec = {
+    positionals: "paths",
+};
+
+function matchesCustomSafeBashCommand(args: readonly string[], options: ConfinementOptions): boolean {
+    return options.customSafeBashCommands.some((pattern) => {
+        const wildcard = pattern[pattern.length - 1] === "*";
+        const fixedLength = wildcard ? pattern.length - 1 : pattern.length;
+        if ((!wildcard && args.length !== pattern.length) || (wildcard && args.length <= fixedLength)) {
+            return false;
+        }
+        for (let index = 0; index < fixedLength; index++) {
+            if (args[index] !== pattern[index]) return false;
+        }
+        return true;
+    });
+}
+
+function parseCustomSafeBashCommands(commands: readonly string[]): string[][] {
+    const patterns: string[][] = [];
+    for (const command of commands) {
+        try {
+            const lines = parseBash(command);
+            if (lines.length !== 1) continue;
+            const segments = splitAtChainOperatorsWithOperators(lines[0]);
+            if (segments.length !== 1 || segments[0].operatorAfter !== null) continue;
+            const args = segments[0].args;
+            if (args.length === 0 || args.some((arg) => REDIRECTION_OPERATORS.has(arg))) continue;
+            const wildcard = args[args.length - 1] === "*";
+            const fixedArgs = wildcard ? args.slice(0, -1) : args;
+            if (fixedArgs.includes("*")) continue;
+            if (args.some((arg) => arg !== "*" && hasDynamicShellExpansion(arg))) continue;
+            if (args[0].includes("/") || args[0].includes("\\")) continue;
+            patterns.push(args);
+        } catch {
+            // Invalid patterns are ignored and remain permission-gated.
+        }
+    }
+    return patterns;
+}
+
 function buildConfinementOptions(
     confinement: SandboxConfigCwdConfinement | undefined,
     cwd: string,
     additionalRoots: readonly string[] = [],
     sensitiveAdditionalRoots?: readonly string[],
     readOnlyAdditionalRoots: readonly string[] = [],
+    customSafeBashCommands: readonly string[] = [],
 ): ConfinementOptions {
     const resolveSymlinks = confinement?.resolveSymlinks ?? true;
     let realCwd: string | null = null;
@@ -1653,6 +1699,7 @@ function buildConfinementOptions(
 
     return {
         allowedCommands: confinement?.commands ? new Set(confinement.commands) : null,
+        customSafeBashCommands: parseCustomSafeBashCommands(customSafeBashCommands),
         sensitivePatterns: (confinement?.denyPaths ?? []).map(segmentGlobToRegex),
         blockDotfiles: confinement?.blockDotfiles ?? false,
         resolveSymlinks,
@@ -1776,8 +1823,10 @@ export function getPathConfinementAssessment(
 /**
  * Cwd-confinement heuristic: known, safe commands whose file accesses all
  * resolve inside the working directory or an additional managed root are
- * classified by capability. Read-only additional roots cannot be written by
- * heuristic-safe commands.
+ * classified by capability. Exact custom safe-Bash patterns may extend the
+ * command registry; a trailing `*` matches one or more arguments and custom
+ * command arguments are conservatively treated as paths. Read-only additional
+ * roots cannot be written by heuristic-safe commands.
  *
  * Returns UNSAFE for unknown commands, paths outside the working directory,
  * or unclassifiable usage. Callers should fall back to the permission system.
@@ -1789,6 +1838,7 @@ export function getCwdConfinementAssessment(
     additionalRoots: readonly string[] = [],
     sensitiveAdditionalRoots?: readonly string[],
     readOnlyAdditionalRoots: readonly string[] = [],
+    customSafeBashCommands: readonly string[] = [],
 ): HeuristicAssessment {
     const confinement = resolveConfinementConfig(config);
 
@@ -1811,6 +1861,7 @@ export function getCwdConfinementAssessment(
             additionalRoots,
             sensitiveAdditionalRoots,
             readOnlyAdditionalRoots,
+            customSafeBashCommands,
         ),
         diagnostics,
     ) ?? Heuristic.UNSAFE;
@@ -1832,6 +1883,7 @@ export function getCwdConfinementPermission(
     additionalRoots: readonly string[] = [],
     sensitiveAdditionalRoots?: readonly string[],
     readOnlyAdditionalRoots: readonly string[] = [],
+    customSafeBashCommands: readonly string[] = [],
 ): Heuristic {
     return getCwdConfinementAssessment(
         command,
@@ -1840,6 +1892,7 @@ export function getCwdConfinementPermission(
         additionalRoots,
         sensitiveAdditionalRoots,
         readOnlyAdditionalRoots,
+        customSafeBashCommands,
     ).classification;
 }
 
@@ -1857,6 +1910,7 @@ export function getArgsConfinementAssessment(
     additionalRoots: readonly string[] = [],
     sensitiveAdditionalRoots?: readonly string[],
     readOnlyAdditionalRoots: readonly string[] = [],
+    customSafeBashCommands: readonly string[] = [],
 ): HeuristicAssessment {
     const confinement = resolveConfinementConfig(config);
 
@@ -1880,6 +1934,7 @@ export function getArgsConfinementAssessment(
             additionalRoots,
             sensitiveAdditionalRoots,
             readOnlyAdditionalRoots,
+            customSafeBashCommands,
         ),
         confinementState,
         diagnostics,
@@ -1903,6 +1958,7 @@ export function getArgsConfinementPermission(
     additionalRoots: readonly string[] = [],
     sensitiveAdditionalRoots?: readonly string[],
     readOnlyAdditionalRoots: readonly string[] = [],
+    customSafeBashCommands: readonly string[] = [],
 ): Heuristic {
     return getArgsConfinementAssessment(
         args,
@@ -1912,5 +1968,6 @@ export function getArgsConfinementPermission(
         additionalRoots,
         sensitiveAdditionalRoots,
         readOnlyAdditionalRoots,
+        customSafeBashCommands,
     ).classification;
 }

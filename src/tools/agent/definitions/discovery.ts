@@ -45,6 +45,7 @@ type AgentFrontmatter = {
     description?: unknown;
     capabilities?: unknown;
     additionalPaths?: unknown;
+    safeBashCommands?: unknown;
     // Deliberately unsupported: retaining it here lets us diagnose a stale
     // WIP definition instead of silently ignoring a privilege request.
     tools?: unknown;
@@ -117,6 +118,16 @@ function parseCapabilities(value: unknown): AgentCapability[] | undefined {
     return capabilities as AgentCapability[];
 }
 
+function parseSafeBashCommands(value: unknown): string[] | undefined {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)
+        || value.some((command) => typeof command !== "string" || command.trim() === "")) {
+        return undefined;
+    }
+    const commands = value.map((command) => command.trim());
+    return [...new Set(commands)];
+}
+
 function parseAdditionalPaths(value: unknown): string[] | undefined {
     if (value === undefined) return [];
     if (!Array.isArray(value)
@@ -165,6 +176,7 @@ function loadScope(
             description,
             capabilities: requestedCapabilities,
             additionalPaths: requestedAdditionalPaths,
+            safeBashCommands: requestedSafeBashCommands,
             tools,
             model,
         } = parsed.frontmatter;
@@ -226,6 +238,15 @@ function loadScope(
             });
             continue;
         }
+        const safeBashCommands = parseSafeBashCommands(requestedSafeBashCommands);
+        if (!safeBashCommands) {
+            diagnostics.push({
+                level: "warning",
+                message: "Agent safeBashCommands must be an array containing only non-empty strings.",
+                paths: [filePath],
+            });
+            continue;
+        }
         if (capabilities.includes("edit")) {
             diagnostics.push({
                 level: "warning",
@@ -250,6 +271,7 @@ function loadScope(
             description: description.trim(),
             capabilities,
             ...(requestedAdditionalPaths !== undefined ? { additionalPaths } : {}),
+            ...(requestedSafeBashCommands !== undefined ? { safeBashCommands } : {}),
             model: typeof model === "string" && model.trim() ? model.trim() : undefined,
             systemPrompt: parsed.body.trim(),
             source,

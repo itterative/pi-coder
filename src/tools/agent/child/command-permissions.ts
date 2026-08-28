@@ -55,6 +55,8 @@ interface CommandPermissionOptions extends CommandPermissionCallbacks {
     isolated: boolean;
     /** Additional read-only paths from the agent definition. */
     additionalReadRoots?: readonly string[];
+    /** Exact command patterns that extend the safe-Bash heuristic. */
+    safeBashCommands?: readonly string[];
     permissionState?: PermissionState;
 }
 
@@ -374,6 +376,7 @@ export function registerCommandPermissionHooks(
                 additionalRoots,
                 sensitiveAdditionalRoots: scratchpadRoots,
                 readOnlyAdditionalRoots: options.additionalReadRoots,
+                safeBashCommands: options.safeBashCommands,
             });
             permission = details.permission;
             unresolved = details.unresolved;

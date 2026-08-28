@@ -100,7 +100,7 @@ describe("agent discovery", () => {
             "custom.md",
             "custom",
             "Custom",
-            "capabilities: [command-runner, memories]\nadditionalPaths: [\"/tmp/shared-notes\"]\n",
+            "capabilities: [command-runner, memories]\nadditionalPaths: [\"/tmp/shared-notes\"]\nsafeBashCommands: [\"ast-outline digest *\"]\n",
         );
         writeAgent(userDir, "todo.md", "todo", "TODO", "capabilities: [todolist]\n");
         writeAgent(userDir, "stale.md", "stale", "Stale", "tools: [read, bash]\n");
@@ -135,6 +135,7 @@ describe("agent discovery", () => {
             source: "user",
             capabilities: ["command-runner", "memories"],
             additionalPaths: ["/tmp/shared-notes"],
+            safeBashCommands: ["ast-outline digest *"],
         });
         expect(agentAdditionalPaths(custom!)).toEqual([
             "/tmp/shared-notes",
@@ -159,12 +160,16 @@ describe("agent discovery", () => {
             description: "Snapshot agent",
             capabilities: [],
             additionalPaths: ["/tmp/notes"],
+            safeBashCommands: ["ast-outline digest *"],
             systemPrompt: "Inspect notes",
             source: "user" as const,
         };
 
         expect(parseAgentDefinitionSnapshot(snapshotAgentDefinition(definition)))
-            .toMatchObject({ additionalPaths: ["/tmp/notes"] });
+            .toMatchObject({
+                additionalPaths: ["/tmp/notes"],
+                safeBashCommands: ["ast-outline digest *"],
+            });
     });
 
     it("rejects malformed or unknown capability lists", () => {

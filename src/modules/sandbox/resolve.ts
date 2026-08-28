@@ -26,6 +26,8 @@ export interface ResolvePermissionOptions {
     readOnlyAdditionalRoots?: readonly string[];
     /** Additional roots whose sensitive path names are explicitly trusted. */
     sensitiveAdditionalRoots?: readonly string[];
+    /** Exact command patterns that extend the safe-Bash heuristic. */
+    safeBashCommands?: readonly string[];
 }
 
 type SegmentResult = {
@@ -178,6 +180,7 @@ function resolveLine(
             options?.additionalRoots,
             options?.sensitiveAdditionalRoots,
             options?.readOnlyAdditionalRoots,
+            options?.safeBashCommands,
         );
         const match = getArgsPermissionMatch(segment, options?.permissions);
 

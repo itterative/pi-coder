@@ -31,6 +31,8 @@ export interface AgentDefinition {
     capabilities: AgentCapability[];
     /** Additional paths that are readable by the child, beyond its cwd. */
     additionalPaths?: string[];
+    /** Exact shell command patterns eligible for direct safe-Bash inspection. */
+    safeBashCommands?: string[];
     model?: string;
     systemPrompt: string;
     contextPolicy?: AgentContextPolicy;
@@ -48,6 +50,9 @@ export function snapshotAgentDefinition(definition: AgentDefinition): AgentDefin
         capabilities: [...definition.capabilities],
         ...(definition.additionalPaths !== undefined
             ? { additionalPaths: [...definition.additionalPaths] }
+            : {}),
+        ...(definition.safeBashCommands !== undefined
+            ? { safeBashCommands: [...definition.safeBashCommands] }
             : {}),
         ...(definition.model !== undefined ? { model: definition.model } : {}),
         systemPrompt: definition.systemPrompt,
@@ -82,6 +87,10 @@ export function parseAgentDefinitionSnapshot(value: unknown): AgentDefinition | 
             && (!Array.isArray(candidate.additionalPaths)
                 || candidate.additionalPaths.some((additionalPath) =>
                     typeof additionalPath !== "string" || additionalPath.trim() === "")))
+        || (candidate.safeBashCommands !== undefined
+            && (!Array.isArray(candidate.safeBashCommands)
+                || candidate.safeBashCommands.some((command) =>
+                    typeof command !== "string" || command.trim() === "")))
         || (candidate.model !== undefined && typeof candidate.model !== "string")
         || !["builtin", "user", "project"].includes(candidate.source as string)
         || (candidate.filePath !== undefined && typeof candidate.filePath !== "string")
@@ -174,6 +183,9 @@ function hashDefinition(definition: AgentDefinition, includeContextPolicy: boole
         capabilities: [...definition.capabilities].sort(),
         ...(includeContextPolicy
             ? { additionalPaths: [...definition.additionalPaths ?? []].sort() }
+            : {}),
+        ...(includeContextPolicy
+            ? { safeBashCommands: [...definition.safeBashCommands ?? []].sort() }
             : {}),
         model: definition.model ?? null,
         systemPrompt: definition.systemPrompt,

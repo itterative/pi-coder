@@ -96,6 +96,7 @@ export async function createAgentChild(
     const hasScratchpad = hasAgentCapability(context.definition, "scratchpad");
     const hasTodolist = hasAgentCapability(context.definition, "todolist");
     const additionalPaths = agentAdditionalPaths(context.definition);
+    const safeBashCommands = context.definition.safeBashCommands ?? [];
     const allowUserInteraction = context.definition.allowUserInteraction !== false;
     const agentDir = getAgentDir();
     let sessionManager = context.childSessionFile
@@ -150,6 +151,7 @@ export async function createAgentChild(
                     context.isolated,
                     canRunCommands,
                     additionalPaths,
+                    safeBashCommands,
                 ),
             },
             ...(hasMemories
@@ -192,6 +194,7 @@ export async function createAgentChild(
                     hasScratchpad,
                     safeBash || canRunCommands,
                     additionalPaths,
+                    safeBashCommands,
                 ),
             ),
         ],

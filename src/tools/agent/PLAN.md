@@ -34,13 +34,14 @@ name: analyst
 description: Inspect architecture and identify risks
 capabilities: [safe-bash, memories, scratchpad] # optional; read/search are baseline capabilities
 additionalPaths: ["~/.cache/project-notes"] # optional read-only paths beyond the child cwd
+safeBashCommands: ["ast-outline digest *"] # optional exact safe-Bash patterns
 model: provider/model-id # optional; defaults to the parent model
 ---
 
 Agent-specific instructions go here.
 ```
 
-`name` must match the lowercase agent-name format and `description` must be non-empty. Omit `capabilities` for read-only codebase access. `additionalPaths` is an optional list of paths that the child may read in addition to its working directory; paths may be absolute, `~`-prefixed, or relative to the child cwd. The `memories` capability automatically adds the user memory directory (`~/.pi/agent/memory`) to this read scope. The old `tools` field is unsupported; use `capabilities` instead.
+`name` must match the lowercase agent-name format and `description` must be non-empty. Omit `capabilities` for read-only codebase access. `additionalPaths` is an optional list of paths that the child may read in addition to its working directory; paths may be absolute, `~`-prefixed, or relative to the child cwd. The `memories` capability automatically adds the user memory directory (`~/.pi/agent/memory`) to this read scope. `safeBashCommands` is an optional list of exact tokenized command patterns that extend the curated read-only Bash heuristic. The listed executable is a user trust declaration and must itself be read-only. A trailing `*` matches one or more trailing arguments, so `ast-outline digest *` permits that form while still applying cwd/additional-root, sensitive-path, symlink, and shell-safety checks. Patterns cannot contain shell operators or substitutions. The old `tools` field is unsupported; use `capabilities` instead.
 
 Built-ins:
 
@@ -86,7 +87,7 @@ Isolated workers use a persistent pool of up to three Git worktrees. Setup runs 
 
 - Delegated-agent controls reduce model-initiated accidents; they are not a hostile-environment security boundary.
 - Child paths are confined to the working directory plus the definition's configured additional read paths and the agent's private temporary scratchpad when that capability is enabled. The `memories` capability adds `~/.pi/agent/memory` by default. Agents with Bash access may additionally read only exact runtime-created full-output files reported in their own truncated Bash result details; unrelated temporary paths and symlink replacements remain blocked. Scratchpad paths may use any filename, while symlink escapes and sensitive targets outside the scratchpad remain blocked.
-- `safe-bash` runs only commands classified `SAFE_READONLY` by the shared cwd heuristic. Unknown, mutating, network, interpreter, and unsafe Git commands are rejected without an approval bypass.
+- `safe-bash` runs only commands classified `SAFE_READONLY` by the shared cwd heuristic. Definitions may extend the curated command set with exact `safeBashCommands` patterns; the definition author is responsible for the executable's read-only behavior, while matched invocations still undergo confinement, sensitive-path, symlink, and shell-syntax checks. Unknown, mutating, network, interpreter, and unsafe Git commands are rejected without an approval bypass.
 - `command-runner` runs safe commands directly and routes other commands through the normal parent permission prompt. It may have project side effects; explicit approval, not command naming, is authoritative.
 - Non-isolated command-capable agents share the parent's session Bash rules; unresolved commands use the shared sandbox/direct prompt. Agents with `edit` also receive direct edit/write tools, with ordinary project paths using same-checkout access, isolated worker paths using their dedicated worktree access, and scratchpad paths using prompt-free temporary access. Sensitive project paths and symlink escapes remain blocked before prompting. Isolated workspaces and setup workers use independent permission state without inheriting parent-session rules; an explicit end-user choice to remember a Bash rule is propagated to the parent session state for later parent or non-isolated child calls.
 - The `edit` capability is reserved for the built-in `worker`; persisted metadata cannot grant edit authority to user-selectable agents. The `command-runner` capability does not grant direct edit/write tools.
