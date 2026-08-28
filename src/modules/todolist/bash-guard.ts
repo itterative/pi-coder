@@ -28,11 +28,11 @@ const MAX_OUTSTANDING_SNAPSHOTS = 32;
 const EMPTY_TODO_DOCUMENT = "---\nversion: 1\ntodos: []\n---\n";
 
 const RESTORED_WARNING =
-    "TODO.md was changed by Bash but its frontmatter became invalid. The previous valid TODO.md was restored. Other Bash side effects may still have completed. Use write or edit to update TODO.md.";
+    "The TODO guard detected that Bash changed TODO.md to invalid frontmatter. The previous valid TODO.md was restored. The Bash command itself was not treated as failed; other Bash side effects may still have completed. Use write or edit to update TODO.md.";
 const REMOVED_WARNING =
-    "TODO.md was created by Bash with invalid frontmatter and was removed. Other Bash side effects may still have completed. Use write or edit to create TODO.md.";
+    "The TODO guard detected that Bash created TODO.md with invalid frontmatter. The invalid TODO.md was removed. The Bash command itself was not treated as failed; other Bash side effects may still have completed. Use write or edit to create TODO.md.";
 const UNSAFE_ROLLBACK_WARNING =
-    "TODO.md was changed by Bash but its frontmatter became invalid. The previous valid TODO.md could not be safely restored, so the file was left unchanged. Other Bash side effects may still have completed. Use write or edit to update TODO.md.";
+    "The TODO guard detected that Bash changed TODO.md to invalid frontmatter, but the previous valid TODO.md could not be safely restored. The file was left unchanged. The Bash command itself was not treated as failed; other Bash side effects may still have completed. Use write or edit to update TODO.md.";
 
 interface TodoFileState {
     exists: boolean;
@@ -169,7 +169,15 @@ interface ToolResultUpdate {
 function prependWarning(event: BashResultEvent, warning: string): ToolResultUpdate {
     return {
         content: [
-            { type: "text", text: warning },
+            {
+                type: "text",
+                text: [
+                    "<todo-guard-warning>",
+                    warning,
+                    "The actual Bash output follows after this message.",
+                    "</todo-guard-warning>",
+                ].join("\n"),
+            },
             ...event.content,
         ],
     };
