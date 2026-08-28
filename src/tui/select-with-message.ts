@@ -9,7 +9,7 @@
  *   │  Title (fixed, always visible)           │
  *   │                                          │
  *   │  ┌─ contentBox (scrollable) ───────────┐ │
- *   │  │  Content lines (PgUp/PgDn to scroll)│ │
+ *   │  │  Content lines (j/k to scroll)      │ │
  *   │  │  ...                                │ │
  *   │  │  Showing lines X-Y of Z             │ │
  *   │  └─────────────────────────────────────┘ │
@@ -27,7 +27,7 @@
  * - Tab switches to inline edit mode: "Option, |" where cursor types
  * - In edit mode: Enter confirms with message, Escape returns to selection
  * - In edit mode: ←/→ move cursor, ↑/↓ navigate visual lines
- * - PageUp/PageDown scrolls the content area
+ * - j/k scrolls the content area by one page
  *
  * The inline editing engine (segment buffer, paste handling, cursor/word
  * movement, windowed rendering) lives in the composable InlineEditor —
@@ -172,7 +172,7 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
         private readonly options: SelectWithMessageOptions<T>,
     ) {
         this.selectHelpText = options.selectHelpText
-            ?? "↑/↓ navigate | Enter select | Tab add message | PgUp/PgDn scroll | Esc cancel";
+            ?? "↑/↓ navigate | Enter select | Tab add message | j/k scroll | Esc cancel";
         this.editHelpText = options.editHelpText ?? "Enter confirm | Esc back";
         this.messageSeparator = options.messageSeparator ?? ", ";
         this.messagePlaceholder = options.messagePlaceholder ?? "type a message...";
@@ -376,7 +376,7 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
                 this.contentBox.addChild(new Spacer(1));
                 this.contentBox.addChild(
                     new Text(
-                        this.theme!.fg("dim", `  Showing lines ${firstLogical}-${lastLogical} of ${totalLogicalLines} (PgUp/PgDn to scroll)`),
+                        this.theme!.fg("dim", `  Showing lines ${firstLogical}-${lastLogical} of ${totalLogicalLines} (j/k to scroll)`),
                         1,
                         0,
                     ),
@@ -477,13 +477,13 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
             return;
         }
 
-        if (matchesKey(key, "pageUp")) {
+        if (key === "k") {
             this.scrollOffset = Math.max(0, this.scrollOffset - this.maxContentLines);
             this.invalidate();
             return;
         }
 
-        if (matchesKey(key, "pageDown")) {
+        if (key === "j") {
             const flatIndex = this.flatIndex;
             const currentEnd = Math.min(flatIndex.length, this.scrollOffset + this.maxContentLines);
 

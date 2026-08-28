@@ -38,16 +38,16 @@ describe("SelectWithMessageComponent", () => {
         await expect(ui.render()).toMatchFileSnapshot("__snapshots__/select-with-message.initial-content.txt");
     });
 
-    it("scrolls the content area with PageUp/PageDown", async () => {
+    it("scrolls the content area with j/k", async () => {
         const { ui } = setup({
             ...baseOptions,
             contentLines: Array.from({ length: 8 }, (_, i) => `content line ${i + 1}`),
             maxContentLines: 3,
         });
         await expect(ui.render()).toMatchFileSnapshot("__snapshots__/select-with-message.content-page-down.txt");
-        ui.press(KEY.pageDown);
+        ui.press("j");
         await expect(ui.render()).toMatchFileSnapshot("__snapshots__/select-with-message.content-page-up.txt");
-        ui.press(KEY.pageUp);
+        ui.press("k");
         await expect(ui.render()).toMatchFileSnapshot("__snapshots__/select-with-message.content-page-up-restored.txt");
     });
 

@@ -9,6 +9,6 @@
     Cancel                                        
                                                   
     ↑/↓ navigate | Enter select | Tab add         
-  message | PgUp/PgDn scroll | Esc cancel         
+  message | j/k scroll | Esc cancel               
 
 ──────────────────────────────────────────────────
