@@ -33,7 +33,7 @@ Relevant files:
 - `src/tools/agent/definitions/discovery.ts`
 - `src/tools/agent/lifecycle.ts`
 
-Focused regression coverage now verifies the manager continuation prompt/session metadata and the parent workspace action's delegation. There is still no end-to-end temporary-Git test covering the complete `spawn`/`collect`/`revise`/finalize lifecycle.
+Regression coverage now includes an end-to-end temporary-Git/SQLite test in `test/tools/agent-revise-e2e.test.ts` covering the registered `spawn`/`collect`/`revise` lifecycle. Focused manager and parent-action tests remain useful for failure-specific cases not covered by that scenario.
 
 ## Confirmed findings
 
@@ -181,7 +181,7 @@ The first implementation pass addressed the prompt/session continuation and part
 
 ### Phase 1: Expand observability and regression coverage
 
-The current pass added focused manager and parent-action tests. Add an end-to-end test around the real registered tool/action path using a fake child and temporary Git repository/workspace metadata. Cover:
+The current pass added focused manager and parent-action tests plus an end-to-end registered-tool test with a fake child, real child transcript, temporary Git repository, and SQLite workspace metadata. Extend that coverage with failure and disposition cases. Cover:
 
 1. changed isolated `spawn` -> `collect` -> `revise`;
 2. capture the exact revision prompt and assert real paragraph newlines;
