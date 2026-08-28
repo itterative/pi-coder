@@ -9,8 +9,8 @@ import {
     type AgentStatusEvent,
     isAgentStatusEvent,
 } from "../../tools/agent/observability/events";
-import { AgentActivityWidget } from "../agents/activity-widget";
-import { TodoListWidget } from "../todolist-widget";
+import { AgentActivityWidget } from "./agent-activity-widget";
+import { TodoListWidget } from "./todolist-widget";
 
 export const STATUS_WIDGET_ID = "pi-coder-status";
 
@@ -66,7 +66,10 @@ export class PiCoderStatusWidget implements Component {
 
     render(width: number): string[] {
         const lines = this.hasAgentContent ? this.activity.render(width) : [];
-        if (this.todoWidget) lines.push(...this.todoWidget.render(width));
+        if (this.todoWidget) {
+            if (lines.length > 0) lines.push("");
+            lines.push(...this.todoWidget.render(width));
+        }
         return lines;
     }
 

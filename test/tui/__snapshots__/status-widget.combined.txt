@@ -1,0 +1,7 @@
+ ⠋ worker-1 · 00:00 · Thinking
+
+ TODO 1/4 · Implement the feature with careful validation
+   ✓ Inspect the implementation
+   ◐ Implement the feature with careful validation
+   ○ Verify the result
+   ! Release the change

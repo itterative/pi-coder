@@ -3,7 +3,7 @@ import {
     AgentActivityWidget,
     firstLinePreview,
     formatToolCounts,
-} from "../../src/tui/agents";
+} from "../../src/tui/status";
 
 const runningRun = {
     runId: "scout-1",

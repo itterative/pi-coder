@@ -1,8 +1,8 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
-import type { TodoList } from "../modules/todolist/parser";
-import { formatTodoList } from "../modules/todolist/format";
+import type { TodoList } from "../../modules/todolist/parser";
+import { formatTodoList } from "./format";
 
 export class TodoListWidget implements Component {
     constructor(

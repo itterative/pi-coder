@@ -182,15 +182,3 @@ export function workspaceDetailHelpText(workspace: AgentWorkspaceBrowserItem): s
     const actions = workspace.actions.map(({ key, label }) => `${key} ${label}`);
     return ["↑/↓ scroll", ...actions, "Esc back"].join(" · ");
 }
-
-export function oneLinePreview(text: string, maxChars = 180): string {
-    const normalized = text.replace(/\s+/g, " ").trim();
-    return normalized.length <= maxChars
-        ? normalized
-        : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
-export function firstLinePreview(text: string, maxChars = 180): string {
-    const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
-    return oneLinePreview(firstLine, maxChars);
-}

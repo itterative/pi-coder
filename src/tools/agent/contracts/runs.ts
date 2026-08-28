@@ -5,7 +5,7 @@ import type { AgentContext } from "./context";
 import type { AgentDefinition } from "../definitions/types";
 import type { WorkerMutationReport } from "./mutations";
 import type { AgentTraceData } from "./trace";
-import type { TodoProgress } from "../../../modules/todolist/format";
+import type { TodoProgress } from "../../../modules/todolist/progress";
 import type { AgentWorkspaceResult } from "./workspaces";
 
 export type AgentRunStatus =

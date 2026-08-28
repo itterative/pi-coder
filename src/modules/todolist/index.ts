@@ -19,7 +19,7 @@ import {
     type TodoList,
     type TodoStatus,
 } from "./parser";
-import { summarizeTodoList, type TodoProgress } from "./format";
+import { summarizeTodoList, type TodoProgress } from "./progress";
 import { emitTodoStatus } from "./events";
 
 const EMPTY_TODO_DOCUMENT = "---\nversion: 1\ntodos: []\n---\n";
@@ -300,9 +300,7 @@ export {
     type TodoStatus,
 } from "./parser";
 export {
-    formatTodoList,
-    formatTodoProgress,
     summarizeTodoList,
     type TodoProgress,
-} from "./format";
+} from "./progress";
 export { FrontmatterParseError } from "./parser";

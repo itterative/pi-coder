@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createEventBus, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { snapshotText, renderText } from "../helpers";
-import { TodoListWidget } from "../../src/tui/todolist-widget";
+import { TodoListWidget } from "../../src/tui/status";
 import {
     PiCoderStatusWidget,
     registerStatusWidget,
@@ -23,6 +23,25 @@ const todo = {
     body: "",
 };
 
+const largeTodo = {
+    path: "/tmp/TODO.md",
+    version: 1 as const,
+    items: Array.from({ length: 20 }, (_, index) => {
+        let status: "completed" | "in_progress" | "pending" = "pending";
+        if (index === 6) {
+            status = "in_progress";
+        } else if (index < 6) {
+            status = "completed";
+        }
+        return {
+            id: `todo-${index + 1}`,
+            title: `Task ${index + 1}`,
+            status,
+        };
+    }),
+    body: "",
+};
+
 function registerStatusForContext(ctx: ExtensionContext, events: ReturnType<typeof createEventBus>): (name: string, nextContext?: ExtensionContext) => void {
     const handlers = new Map<string, Array<(event: unknown, context: ExtensionContext) => unknown>>();
     registerStatusWidget({
@@ -39,11 +58,20 @@ function registerStatusForContext(ctx: ExtensionContext, events: ReturnType<type
 }
 
 describe("TODO widget", () => {
-    it("renders bounded progress and status-marked titles", () => {
+    it("renders bounded progress and status-marked titles", async () => {
         const widget = new TodoListWidget({ requestRender() {} } as any, todo);
 
-        expect(snapshotText(renderText(widget, 42))).toMatchFileSnapshot(
+        await expect(snapshotText(renderText(widget, 42))).toMatchFileSnapshot(
             "./__snapshots__/todolist-widget.render.txt",
+        );
+        widget.dispose();
+    });
+
+    it("scrolls a large list to the first in-progress item", async () => {
+        const widget = new TodoListWidget({ requestRender() {} } as any, largeTodo);
+
+        await expect(snapshotText(renderText(widget, 60))).toMatchFileSnapshot(
+            "./__snapshots__/todolist-widget.large.txt",
         );
         widget.dispose();
     });
@@ -77,14 +105,14 @@ describe("TODO widget", () => {
         component.dispose();
     });
 
-    it("combines agent activity and TODO progress in one widget", () => {
-        const registrations: Array<{ key: string; content: unknown }> = [];
+    it("combines agent activity and TODO progress in one widget", async () => {
+        const registrations: Array<{ key: string; content: unknown; options?: { placement?: string } }> = [];
         const ctx = {
             mode: "tui",
             hasUI: true,
             ui: {
-                setWidget(key: string, content: unknown) {
-                    registrations.push({ key, content });
+                setWidget(key: string, content: unknown, options?: { placement?: string }) {
+                    registrations.push({ key, content, options });
                 },
             },
         } as unknown as ExtensionContext;
@@ -107,11 +135,17 @@ describe("TODO widget", () => {
 
         expect(registrations).toHaveLength(1);
         expect(registrations[0]?.key).toBe(STATUS_WIDGET_ID);
+        expect(registrations[0]?.options?.placement).toBe("aboveEditor");
         const widget = (registrations[0]?.content as (tui: unknown) => PiCoderStatusWidget)({
             requestRender() {},
         });
         const rendered = renderText(widget, 100);
+        await expect(snapshotText(rendered)).toMatchFileSnapshot(
+            "./__snapshots__/status-widget.combined.txt",
+        );
         expect(rendered).toContain("worker-1");
+        expect(rendered.indexOf("worker-1")).toBeLessThan(rendered.indexOf("TODO 1/4"));
+        expect(rendered).toContain("\n\n");
         expect(rendered).toContain("TODO 1/4");
 
         emitAgentStatus(events, [], 0);
