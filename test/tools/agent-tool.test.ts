@@ -14,8 +14,10 @@ import type {
 import * as runCatalog from "../../src/tools/agent/storage/run-catalog";
 import * as workspaceActions from "../../src/tools/agent/workspaces/actions";
 import * as workspaceResults from "../../src/tools/agent/workspaces/results";
+import * as workspaceFinalization from "../../src/tools/agent/workspaces/finalization";
 import * as workspaceSetup from "../../src/tools/agent/workspaces/setup";
 import * as workspaceStore from "../../src/tools/agent/workspaces/store";
+import { executeParentWorkspaceAction } from "../../src/tools/agent/workspaces/parent-actions";
 import { AGENT_TRACE_ENV } from "../../src/tools/agent/observability/trace";
 import { mockTheme, renderText, snapshotText } from "../helpers";
 
@@ -584,6 +586,133 @@ describe("agent extension registration", () => {
         expect(collected.details.workspaceResult).toEqual(result);
         await expect(collected.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.isolated-collect.txt");
         await handlers.session_shutdown[0]({}, ctx);
+    });
+
+    it("revises an isolated result by continuing its persisted child session", async () => {
+        const childSessionFile = "/tmp/agent-child.jsonl";
+        const record = {
+            ownerSessionId: "parent-session",
+            runId: "worker-1",
+            runInstanceId: "worker-instance-1",
+            parentCwd: process.cwd(),
+            title: "Implement fix",
+            agent: "worker",
+            agentSource: "builtin",
+            task: "Original task",
+            status: "removed",
+            background: true,
+            mutating: true,
+            workspaceId: "workspace-1",
+            childSessionFile,
+            childSessionLeafId: "leaf-1",
+            startedAt: 1,
+            updatedAt: 2,
+            usageSnapshot: ZERO_USAGE,
+        };
+        const workspace = {
+            id: "workspace-1",
+            cwd: process.cwd(),
+            repositoryRoot: process.cwd(),
+            worktreePath: "/tmp/workspace-1",
+            slug: "workspace-1",
+            baseRevision: "base-revision",
+            setupState: "ready",
+            status: "review_required",
+            leaseOwnerSessionId: "parent-session",
+            leaseRunId: "worker-1",
+            leaseRunInstanceId: "worker-instance-1",
+            leaseKind: "task",
+            latestResult: {
+                id: "result-1",
+                workspaceId: "workspace-1",
+                runId: "worker-1",
+                runInstanceId: "worker-instance-1",
+                baseRevision: "base-revision",
+                workerHead: "worker-head",
+                commitRange: "base-revision..worker-head",
+                commits: ["worker-head"],
+                preparedAt: 3,
+                status: "prepared",
+            },
+            createdAt: 1,
+            updatedAt: 2,
+        };
+        const definition = { name: "worker", source: "builtin", capabilities: ["edit"] };
+        const continuationOutcome = {
+            content: "Revised result",
+            details: {
+                runId: "worker-2",
+                runInstanceId: "worker-instance-2",
+                title: "Implement fix revision",
+                agent: "worker",
+                status: "completed",
+                background: false,
+                task: "Original task",
+                workspaceId: "workspace-1",
+                recentActivity: [],
+                usage: ZERO_USAGE,
+                startedAt: 4,
+                updatedAt: 5,
+            },
+            usage: ZERO_USAGE,
+            isError: false,
+        };
+        const manager = {
+            flushPersistence: vi.fn(async () => {}),
+            reserveRunIdentity: vi.fn(() => ({ runId: "worker-2", runInstanceId: "worker-instance-2" })),
+            startContinuation: vi.fn(async () => continuationOutcome),
+        };
+        const ctx = {
+            cwd: process.cwd(),
+            isProjectTrusted: () => true,
+            sessionManager: { getSessionId: () => "parent-session" },
+            ui: { notify: () => {} },
+        };
+        const progress = vi.fn();
+        const events = {} as any;
+        const discover = vi.fn(() => ({ agents: [definition], diagnostics: [] }));
+        vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record] as any);
+        vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace as any);
+        const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
+        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockResolvedValue(continuationOutcome as any);
+
+        const result = await executeParentWorkspaceAction(
+            { action: "revise", runId: "worker-1", guidance: "Apply feedback" },
+            ctx as any,
+            manager as any,
+            undefined,
+            progress,
+            events,
+            discover,
+        );
+
+        expect(result).toBe(continuationOutcome);
+        expect(discover).toHaveBeenCalledWith(ctx);
+        expect(manager.startContinuation).toHaveBeenCalledWith(
+            definition,
+            "Original task",
+            "Apply feedback",
+            expect.objectContaining({
+                cwd: "/tmp/workspace-1",
+                workspaceId: "workspace-1",
+                childSessionFile,
+                childSessionLeafId: "leaf-1",
+            }),
+            undefined,
+            progress,
+            "Implement fix revision",
+            { runId: "worker-2", runInstanceId: "worker-instance-2" },
+        );
+        expect(transferSpy).toHaveBeenCalledWith(
+            "workspace-1",
+            "parent-session",
+            "worker-1",
+            "worker-2",
+            "task",
+            undefined,
+            "worker-instance-1",
+            "worker-instance-2",
+        );
     });
 
     it("prepares and releases a no-change isolated foreground result", async () => {

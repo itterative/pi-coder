@@ -192,7 +192,7 @@ export async function createAgentChild(
         : undefined;
     const requestedModel = resolveChildModel(
         parentContext,
-        context.definition.model ?? restoredModelSpec,
+        restoredModelSpec ?? context.definition.model,
     );
     context.onTrace?.("model.resolved", {
         provider: requestedModel.provider,

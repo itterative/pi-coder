@@ -100,6 +100,9 @@ export async function executeParentWorkspaceAction(
     signal: AbortSignal | undefined,
     progress: (details: AgentRunDetails) => void,
     events: AgentEventSink,
+    discover: (ctx: ExtensionContext) => ReturnType<typeof discoverAgents> = (context) => (
+        discoverAgents(context.cwd, context.isProjectTrusted())
+    ),
 ): Promise<AgentRunOutcome> {
     const resolved = await resolveParentWorkspaceRun(params.runId, ctx, manager);
     const { record, workspace } = resolved;
@@ -152,41 +155,65 @@ export async function executeParentWorkspaceAction(
 
     // Remaining action is "revise": inspect/discard/apply branches returned above.
     requireParentWorkspaceLease(workspace, sessionId, params.runId, record.runInstanceId);
-    const discovered = discoverAgents(ctx.cwd, ctx.isProjectTrusted());
+    const discovered = discover(ctx);
     const definition = discovered.agents.find((agent) => agent.name === record.agent);
     if (!definition) throw new AgentActionError(`Unknown agent definition for ${record.agent}.`);
-    const revisionTask = [
-        "Continue the delegated task in the existing isolated workspace. Inspect the current worktree and the previous result before making changes.",
-        `Original task: ${record.task}`,
-        `Parent feedback: ${params.guidance}`,
-    ].join("\\n\\n");
+    if (!record.childSessionFile) {
+        throw new AgentActionError(`Run ${params.runId} has no persisted child session to revise.`);
+    }
+
     const revisionContext = {
         cwd: workspace.worktreePath,
         parentCwd: ctx.cwd,
         workspaceId: workspace.id,
         parentContext: ctx,
+        childSessionFile: record.childSessionFile,
+        ...(record.childSessionLeafId !== undefined
+            ? { childSessionLeafId: record.childSessionLeafId }
+            : {}),
     };
-    const runIdentity = manager.reserveRunIdentity(definition, revisionTask, revisionContext);
-    await transferAgentWorkspaceLease(
-        workspace.id,
-        sessionId,
-        params.runId,
-        runIdentity.runId,
-        "task",
-        undefined,
-        record.runInstanceId,
-        runIdentity.runInstanceId,
-    );
-    const outcome = await manager.start(
+    const runIdentity = manager.reserveRunIdentity(definition, record.task, revisionContext);
+    const revisionPrompt = params.guidance;
+    const outcome = await manager.startContinuation(
         definition,
-        revisionTask,
+        record.task,
+        revisionPrompt,
         revisionContext,
         signal,
         progress,
         `${record.title} revision`,
         runIdentity,
     );
-    const prepared = await prepareForegroundWorkspaceResult(outcome, ctx, events);
-    prepared.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
-    return prepared;
+
+    let leaseTransferred = false;
+    try {
+        await transferAgentWorkspaceLease(
+            workspace.id,
+            sessionId,
+            params.runId,
+            runIdentity.runId,
+            "task",
+            undefined,
+            record.runInstanceId,
+            runIdentity.runInstanceId,
+        );
+        leaseTransferred = true;
+        const prepared = await prepareForegroundWorkspaceResult(outcome, ctx, events);
+        prepared.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
+        return prepared;
+    } catch (error) {
+        if (leaseTransferred) {
+            await transferAgentWorkspaceLease(
+                workspace.id,
+                sessionId,
+                runIdentity.runId,
+                params.runId,
+                "task",
+                undefined,
+                runIdentity.runInstanceId,
+                record.runInstanceId,
+            ).catch(() => {});
+        }
+        throw error;
+    }
 }

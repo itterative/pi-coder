@@ -225,6 +225,62 @@ describe("in-process scout SDK session", () => {
         }
     });
 
+    it("uses the persisted child model when the current definition selects another model", async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-child-model-"));
+        try {
+            const source = await ModelRuntime.create({ refreshOnCreate: false, modelsPath: null });
+            const models = source.getModels();
+            const originalModel = models[0];
+            const currentModel = models[1];
+            expect(originalModel).toBeDefined();
+            expect(currentModel).toBeDefined();
+            if (!originalModel || !currentModel) return;
+
+            const sessionManager = SessionManager.create(process.cwd(), directory);
+            sessionManager.appendMessage({
+                role: "assistant",
+                content: [{ type: "text", text: "Original model response" }],
+                api: originalModel.api,
+                provider: originalModel.provider,
+                model: originalModel.id,
+                usage: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
+                stopReason: "stop",
+                timestamp: Date.now(),
+            });
+            const sessionFile = sessionManager.getSessionFile();
+            const resolvedModels: string[] = [];
+            const child = await createAgentChild({
+                cwd: process.cwd(),
+                definition: {
+                    ...BUILTIN_SCOUT,
+                    model: `${currentModel.provider}/${currentModel.id}`,
+                },
+                parentContext: {
+                    model: currentModel,
+                    modelRegistry: {
+                        getRegisteredNativeProvider: () => undefined,
+                        getRegisteredProviderConfig: () => undefined,
+                        getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "smoke-test" }),
+                        isUsingOAuth: () => false,
+                        find: (provider: string, id: string) => source.getModel(provider, id),
+                        getAll: () => [...source.getModels()],
+                    },
+                },
+                childSessionDir: directory,
+                childSessionFile: sessionFile,
+                onProgress: () => {},
+                onTrace: (type, data) => {
+                    if (type === "model.resolved") resolvedModels.push(`${data?.provider}/${data?.model}`);
+                },
+            });
+
+            expect(resolvedModels).toContain(`${originalModel.provider}/${originalModel.id}`);
+            child.dispose();
+        } finally {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+
     it("preserves persisted OpenAI Codex OAuth when available", async () => {
         const parentRuntime = await ModelRuntime.create({ refreshOnCreate: false });
         const model = parentRuntime.getModels("openai-codex")[0];

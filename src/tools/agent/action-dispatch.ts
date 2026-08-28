@@ -158,6 +158,7 @@ export async function executeAgentAction(
                 signal,
                 progress,
                 lifecycle.events,
+                lifecycle.discover.bind(lifecycle),
             );
         } else if (request.action === "status") {
             outcome = lifecycle.manager.status(request.runId);

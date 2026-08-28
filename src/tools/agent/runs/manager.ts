@@ -483,6 +483,28 @@ export class AgentRunManager {
         );
     }
 
+    async startContinuation(
+        definitionOrName: AgentDefinition | string,
+        task: string,
+        prompt: string,
+        context: AgentStartContext,
+        signal?: AbortSignal,
+        onProgress?: AgentProgressCallback,
+        title?: string,
+        identity?: AgentRunIdentity,
+    ): Promise<AgentRunOutcome> {
+        const { definition, run } = this.createRun(definitionOrName, task, context, false, title, identity);
+        const setupOutcome = await this.setupRun(
+            run,
+            definition,
+            context,
+            signal,
+            onProgress,
+        );
+        if (setupOutcome) return setupOutcome;
+        return this.beginOperation(run, prompt, signal, onProgress);
+    }
+
     async resume(
         runId: string,
         guidance?: string,

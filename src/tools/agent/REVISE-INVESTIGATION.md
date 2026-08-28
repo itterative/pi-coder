@@ -1,8 +1,8 @@
 # `revise` Investigation
 
-Status: investigation only; no implementation changes have been made.
+Status: investigation plus first implementation pass. The continuation/session flow, original-model selection, lifecycle discovery, and basic lease rollback changes are now implemented; ancestry policy and broader recovery coverage remain open.
 
-This note records the current findings so the `revise` workflow can be fixed across multiple sessions. Do not modify `src/tools/agent/TODOS.md`; it is user-managed.
+This note records the findings and remaining work so the `revise` workflow can be fixed across multiple sessions. Do not modify `src/tools/agent/TODOS.md`; it is user-managed.
 
 ## Scope
 
@@ -17,8 +17,8 @@ agent(action="revise", runId, guidance)
   -> resolve catalog run/workspace
   -> validate lease and prepared result
   -> reserve a new run identity
-  -> transfer the workspace lease
-  -> start a new foreground worker
+  -> start a foreground continuation using the original child session
+  -> transfer the workspace lease to the new logical run
   -> prepare the revised workspace result
 ```
 
@@ -33,11 +33,11 @@ Relevant files:
 - `src/tools/agent/definitions/discovery.ts`
 - `src/tools/agent/lifecycle.ts`
 
-There is currently no execution-level regression test for `revise`. Existing tests cover parameter validation, rendering, isolated `spawn`/`collect`, and foreground finalization, but not the complete parent action.
+Focused regression coverage now verifies the manager continuation prompt/session metadata and the parent workspace action's delegation. There is still no end-to-end temporary-Git test covering the complete `spawn`/`collect`/`revise`/finalize lifecycle.
 
 ## Confirmed findings
 
-### 1. The revision prompt contains literal escape sequences
+### 1. The revision prompt contained literal escape sequences (resolved)
 
 `src/tools/agent/workspaces/parent-actions.ts:158-162` currently builds the prompt with:
 
@@ -51,7 +51,7 @@ const revisionTask = [
 
 The JavaScript string evaluates to literal backslash-`n` characters, not paragraph breaks. The child therefore receives a poorly formatted single prompt. Other prompt construction in this codebase uses `.join("\n\n")` and produces real newlines.
 
-This matches the existing TODO note that the revise prompt is probably bad.
+This matches the existing TODO note that the revise prompt is probably bad. The current implementation no longer constructs this synthetic task/context prompt; it sends only the revision guidance as the next child message.
 
 ### 2. The reported ancestry error comes from an explicit safety guard
 
@@ -77,7 +77,7 @@ The earlier result `16dff4f` was based on `2a25160`. The worktree was subsequent
 
 The guard may be correct as a safety policy, but the workflow must either preserve ancestry or explicitly support/reject divergent worktrees before starting a revision. It must not discover the problem only after the child has run.
 
-### 3. A failed revision can strand the workspace lease
+### 3. A failed revision could strand the workspace lease (partially resolved)
 
 `parent-actions.ts:169-179` transfers the old lease to the new run before calling `manager.start()`:
 
@@ -104,7 +104,9 @@ This is the highest-risk lifecycle defect. The same issue can occur for other fa
 
 The transfer-before-start ordering was introduced when run-instance identity reservation was added. Earlier code started the worker first and transferred the lease afterward; that avoided this particular stranded-transfer window but had different concurrency/ownership tradeoffs.
 
-### 4. `revise` creates a new child session rather than continuing the old transcript
+The current implementation starts the continuation while the old lease still protects the workspace, then transfers the lease before finalization. If transfer or finalization fails, it attempts a compare-and-swap-style reverse transfer to restore the old owner. This makes the failure recoverable in normal cases, but the rollback failure path and divergent worktree behavior still need dedicated tests.
+
+### 4. `revise` created a new child session rather than continuing the old transcript (resolved)
 
 `resume` reuses the existing child handle or reopens the persisted child session and exact transcript leaf. `revise` instead calls `manager.start()` with a new run identity and no `childSessionFile` or `childSessionLeafId`.
 
@@ -115,7 +117,7 @@ The new worker receives only:
 - parent feedback;
 - the existing worktree as its current directory.
 
-It does not receive the previous child transcript, assistant findings, tool history, or explicit prior workspace revision metadata. This is potentially intentional—`revise` is a fresh worker pass in the same worktree—but it does not literally continue the child conversation and should be described/tested accordingly.
+It did not receive the previous child transcript, assistant findings, tool history, or explicit prior workspace revision metadata. The current implementation passes the original `childSessionFile` and exact persisted leaf to `startContinuation()`, so the child runtime reopens that transcript and appends only the revision guidance. The logical run receives a new run ID because workspace-result ownership still needs to advance without reusing a stale result identity.
 
 ### 5. `revise` is only available while the original task lease remains held
 
@@ -137,7 +139,7 @@ This may be correct, but the user-facing contract should make it explicit. If re
 
 ## Secondary inconsistencies
 
-### Model configuration is bypassed
+### Model configuration was bypassed (resolved)
 
 `parent-actions.ts` calls:
 
@@ -147,7 +149,7 @@ const discovered = discoverAgents(ctx.cwd, ctx.isProjectTrusted());
 
 Initial `start`/`spawn` goes through `lifecycle.discover(ctx)`, which applies persisted built-in model configuration and advisor availability. `revise` bypasses that lifecycle method, so a revised built-in worker may lose its configured model override and use the parent model instead.
 
-This is not the direct cause of the ancestry error, but it makes revise behavior inconsistent with initial execution.
+This is not the direct cause of the ancestry error, but it made revise behavior inconsistent with initial execution. The current path uses the lifecycle discovery callback, and reopened child sessions prefer the model recorded in their transcript over the current definition's model override.
 
 ### Definition/capability validation is weaker than resume
 
@@ -175,11 +177,11 @@ This affects isolated workers generally, including revised workers, but it is no
 
 ## Recommended repair sequence
 
-These are investigation conclusions, not implemented changes.
+The first implementation pass addressed the prompt/session continuation and partial lease-handling work described above. The following items remain investigation/fix work.
 
-### Phase 1: Add observability and regression coverage
+### Phase 1: Expand observability and regression coverage
 
-Add an execution-level test around the real registered tool/action path using a fake child and temporary Git repository/workspace metadata. Cover:
+The current pass added focused manager and parent-action tests. Add an end-to-end test around the real registered tool/action path using a fake child and temporary Git repository/workspace metadata. Cover:
 
 1. changed isolated `spawn` -> `collect` -> `revise`;
 2. capture the exact revision prompt and assert real paragraph newlines;
@@ -197,8 +199,8 @@ Also add a focused prompt-rendering assertion so the escaped-newline regression 
 ### Phase 2: Fix prompt and definition resolution
 
 - Change the revision task join to real newlines.
-- Decide whether revision should use `lifecycle.discover(ctx)` or a shared definition-resolution helper that applies the same configuration and validation policy as initial start.
-- Decide whether the new child session is intentionally fresh. If yes, document that revise continues the workspace task, not the prior transcript. If no, define how transcript/session continuation and branch identity should work.
+- The current path uses the lifecycle discovery callback and reopens the child transcript. Continue testing that it applies the same configuration and validation policy as initial start.
+- The current implementation deliberately uses a new logical run identity while continuing the old child session. Preserve and document this distinction in future changes.
 
 ### Phase 3: Make lease handoff failure-safe
 
@@ -235,7 +237,7 @@ Use a disposable repository and the manual workspace checklist. Add a dedicated 
 
 ## Current conclusion
 
-The issue is not one isolated rendering or parameter bug. The strongest confirmed chain is:
+The issue is not one isolated rendering or parameter bug. Before the first implementation pass, the strongest confirmed chain was:
 
 ```text
 rebased/divergent worktree
@@ -245,4 +247,4 @@ rebased/divergent worktree
   -> revise becomes unrecoverable through normal run IDs
 ```
 
-Independently, every revision currently receives a malformed prompt because of the escaped-newline join. These should be addressed first, followed by a deliberate decision about whether divergent worktree histories are supported or must be rejected before starting the child.
+The prompt/session portion is now corrected: revise reopens the original child transcript, preserves its recorded model, and sends only the revision guidance. Lease transfer now happens after the continuation starts and has compensating rollback around transfer/finalization. The remaining central design decision is whether divergent worktree histories should be supported or must be rejected before starting the child, with tests proving that every failure path remains recoverable.

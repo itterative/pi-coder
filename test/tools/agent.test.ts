@@ -270,6 +270,46 @@ describe("AgentRunManager", () => {
         expect(child.disposed).toBe(true);
     });
 
+    it("continues a persisted terminal child session with only the revision message", async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-sessions-"));
+        tempDirs.push(directory);
+        const childFile = path.join(directory, "child.jsonl");
+        const firstChild = new FakeChild(
+            [{ output: "Initial findings", leafId: "leaf-final" }],
+            childFile,
+        );
+        const continuedChild = new FakeChild([{ output: "Revised findings" }], childFile);
+        const children = [firstChild, continuedChild];
+        const factoryContexts: unknown[] = [];
+        const manager = new AgentRunManager(async (factoryContext) => {
+            factoryContexts.push(factoryContext);
+            return children.shift()!;
+        });
+        const store = durableStore(directory);
+        manager.setPersistence(store.persistence);
+
+        await manager.start("scout", "Investigate", context());
+        const revised = await manager.startContinuation(
+            "scout",
+            "Investigate",
+            "Please revise the findings.",
+            {
+                ...context(),
+                childSessionFile: childFile,
+                childSessionLeafId: "leaf-final",
+            },
+        );
+
+        expect(firstChild.disposed).toBe(true);
+        expect(continuedChild.prompts).toEqual(["Please revise the findings."]);
+        expect(factoryContexts[1]).toMatchObject({
+            childSessionFile: childFile,
+            childSessionLeafId: "leaf-final",
+        });
+        expect(revised.details.task).toBe("Investigate");
+        expect(revised.details.runId).toBe("scout-2");
+    });
+
     it("retains context across repeated parent-guidance cycles and reports usage deltas", async () => {
         const child = new FakeChild([
             {
