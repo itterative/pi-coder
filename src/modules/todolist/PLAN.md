@@ -44,6 +44,8 @@ always exists while that runtime is active:
 
 - the parent and every child have separate files;
 - workers do not automatically see the parent's TODO file;
+- branched-session TODO sharing is a deferred behavior decision; see
+  **Deferred cache and fork review**;
 - deleting an existing TODO.md is normalized to a valid empty list rather than leaving the managed path absent;
 - isolated workers keep their TODO outside the Git worktree;
 - no TODO contents are shared through `agent` arguments or run leases.
@@ -126,6 +128,18 @@ advertises the TODO capability in the normal agent catalog/definition flow.
 
 The prompt must not tell the agent that Bash TODO writes are transactionally
 safe. It should explicitly prefer `write` and `edit` for TODO.md.
+
+## Deferred cache and fork review
+
+The absolute scratchpad path and absolute TODO path are both included in system
+prompt blocks. The scratchpad session marker is custom metadata excluded from
+LLM context, so it does not directly affect cache keys; changing runtime paths
+still changes the prompt text and can reduce exact prefix-cache hits. Scratchpad
+sharing across forked sessions is intentional and accepted. TODO behavior in
+forks should be reviewed separately: because a fork can inherit the scratchpad
+marker, its TODO path may also resolve to the parent's `TODO.md`, and it is not
+yet decided whether that sharing is desirable. Do not broaden this feature until
+that tradeoff is revisited.
 
 ## Parser and validation ownership
 
