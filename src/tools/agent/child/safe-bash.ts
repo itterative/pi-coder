@@ -28,15 +28,13 @@ export function getSafeBashAssessment(
     sensitiveAdditionalRoots?: readonly string[],
     safeBashCommands: readonly string[] = [],
 ): HeuristicAssessment {
-    return getCwdConfinementAssessment(
-        command,
+    return getCwdConfinementAssessment(command, {
         cwd,
-        CHILD_CONFINEMENT,
+        config: CHILD_CONFINEMENT,
         additionalRoots,
         sensitiveAdditionalRoots,
-        [],
-        safeBashCommands,
-    );
+        customSafeBashCommands: safeBashCommands,
+    });
 }
 
 /** @deprecated Use getSafeBashAssessment. */

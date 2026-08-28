@@ -7,6 +7,7 @@ import {
     Heuristic, UnsafeReason, HeuristicAssessment,
     assessment, isSafeHeuristic, createCwdConfinementState,
     type FileAccess, type CwdConfinementState, type ConfinementDiagnostics,
+    type PathConfinementOptions, type CwdConfinementOptions, type ArgsConfinementOptions,
 } from "./types";
 import {
     buildConfinementOptions, isAllowedPath, isSensitivePath, isRealPathConfined,
@@ -16,7 +17,14 @@ import { isCommandConfined, isConfined } from "./evaluator";
 
 export { Heuristic, UnsafeReason, describeUnsafeReason, isSafeHeuristic,
     createCwdConfinementState, cloneCwdConfinementState, restoreCwdConfinementState } from "./types";
-export type { FileAccess, HeuristicAssessment, CwdConfinementState } from "./types";
+export type {
+    FileAccess,
+    HeuristicAssessment,
+    CwdConfinementState,
+    PathConfinementOptions,
+    CwdConfinementOptions,
+    ArgsConfinementOptions,
+} from "./types";
 export { ChainSegment, splitAtChainOperatorsWithOperators, splitAtChainOperators, isNonPersistentChainOperator } from "./evaluator";
 export { isPathWithinDirectory } from "./path-policy";
 export { CommandTag, KNOWN_COMMANDS } from "../commands";
@@ -44,15 +52,21 @@ export function getConfiguredCwdConfinementPermission(
  * handles nonexistent write targets. Read access returns
  * SAFE_READONLY; write access returns SAFE_EDIT. Rejected accesses return
  * UNSAFE so callers can distinguish them from a successful classification.
+ *
+ * @param filePath The path to classify.
+ * @param options The cwd and ancillary confinement controls.
  */
 export function getPathConfinementPermission(
     filePath: string,
-    cwd: string,
-    config?: SandboxConfigCwdConfinement | null,
-    access: FileAccess = "read",
-    additionalRoots: readonly string[] = [],
-    sensitiveAdditionalRoots?: readonly string[],
+    options: PathConfinementOptions,
 ): Heuristic {
+    const {
+        cwd,
+        config,
+        access = "read",
+        additionalRoots = [],
+        sensitiveAdditionalRoots,
+    } = options;
     const confinement = resolveConfinementConfig(config);
 
     if (confinement?.enabled === false || filePath.trim() === "") {
@@ -61,23 +75,23 @@ export function getPathConfinementPermission(
 
     const resolvedCwd = path.resolve(cwd);
     const home = os.homedir();
-    const options = buildConfinementOptions(
+    const confinementOptions = buildConfinementOptions(
         confinement,
         resolvedCwd,
         additionalRoots,
         sensitiveAdditionalRoots,
     );
 
-    if (!isAllowedPath(filePath, resolvedCwd, home, options, resolvedCwd)) {
+    if (!isAllowedPath(filePath, resolvedCwd, home, confinementOptions, resolvedCwd)) {
         return Heuristic.UNSAFE;
     }
 
-    if (isSensitivePath(filePath, resolvedCwd, home, options)) {
+    if (isSensitivePath(filePath, resolvedCwd, home, confinementOptions)) {
         return Heuristic.UNSAFE;
     }
 
     if ((confinement?.resolveSymlinks ?? true) &&
-        !isRealPathConfined(filePath, resolvedCwd, home, options)) {
+        !isRealPathConfined(filePath, resolvedCwd, home, confinementOptions)) {
         return Heuristic.UNSAFE;
     }
 
@@ -86,21 +100,19 @@ export function getPathConfinementPermission(
 
 export function getPathConfinementAssessment(
     filePath: string,
-    cwd: string,
-    config?: SandboxConfigCwdConfinement | null,
-    access: FileAccess = "read",
-    additionalRoots: readonly string[] = [],
-    sensitiveAdditionalRoots?: readonly string[],
+    options: PathConfinementOptions,
 ): HeuristicAssessment {
-    const classification = getPathConfinementPermission(
-        filePath,
+    const {
         cwd,
         config,
-        access,
-        additionalRoots,
+        access = "read",
+        additionalRoots = [],
         sensitiveAdditionalRoots,
-    );
-    if (isSafeHeuristic(classification)) return assessment(classification);
+    } = options;
+    const classification = getPathConfinementPermission(filePath, options);
+    if (isSafeHeuristic(classification)) {
+        return assessment(classification);
+    }
 
     const confinement = resolveConfinementConfig(config);
     if (confinement?.enabled === false || filePath.trim() === "") {
@@ -113,16 +125,16 @@ export function getPathConfinementAssessment(
 
     const resolvedCwd = path.resolve(cwd);
     const home = os.homedir();
-    const options = buildConfinementOptions(
+    const confinementOptions = buildConfinementOptions(
         confinement,
         resolvedCwd,
         additionalRoots,
         sensitiveAdditionalRoots,
     );
-    if (isSensitivePath(filePath, resolvedCwd, home, options)) {
+    if (isSensitivePath(filePath, resolvedCwd, home, confinementOptions)) {
         return assessment(Heuristic.UNSAFE, [UnsafeReason.SENSITIVE_PATH]);
     }
-    if (!isAllowedPath(filePath, resolvedCwd, home, options, resolvedCwd)) {
+    if (!isAllowedPath(filePath, resolvedCwd, home, confinementOptions, resolvedCwd)) {
         if (
             (confinement?.resolveSymlinks ?? true)
             && hasSymlinkComponent(resolvePath(filePath, resolvedCwd, home))
@@ -141,16 +153,22 @@ export function getPathConfinementAssessment(
  *
  * Returns UNSAFE for unknown commands, paths outside the working directory,
  * or unclassifiable usage. Callers should fall back to the permission system.
+ *
+ * @param command The command string to classify.
+ * @param options The cwd and ancillary confinement controls.
  */
 export function getCwdConfinementAssessment(
     command: string,
-    cwd: string,
-    config?: SandboxConfigCwdConfinement | null,
-    additionalRoots: readonly string[] = [],
-    sensitiveAdditionalRoots?: readonly string[],
-    readOnlyAdditionalRoots: readonly string[] = [],
-    customSafeBashCommands: readonly string[] = [],
+    options: CwdConfinementOptions,
 ): HeuristicAssessment {
+    const {
+        cwd,
+        config,
+        additionalRoots = [],
+        sensitiveAdditionalRoots,
+        readOnlyAdditionalRoots = [],
+        customSafeBashCommands = [],
+    } = options;
     const confinement = resolveConfinementConfig(config);
 
     if (confinement?.enabled === false) {
@@ -176,7 +194,9 @@ export function getCwdConfinementAssessment(
         ),
         diagnostics,
     ) ?? Heuristic.UNSAFE;
-    if (isSafeHeuristic(classification)) return assessment(classification, [], diagnostics.tags);
+    if (isSafeHeuristic(classification)) {
+        return assessment(classification, [], diagnostics.tags);
+    }
 
     return assessment(
         Heuristic.UNSAFE,
@@ -189,22 +209,9 @@ export function getCwdConfinementAssessment(
 
 export function getCwdConfinementPermission(
     command: string,
-    cwd: string,
-    config?: SandboxConfigCwdConfinement | null,
-    additionalRoots: readonly string[] = [],
-    sensitiveAdditionalRoots?: readonly string[],
-    readOnlyAdditionalRoots: readonly string[] = [],
-    customSafeBashCommands: readonly string[] = [],
+    options: CwdConfinementOptions,
 ): Heuristic {
-    return getCwdConfinementAssessment(
-        command,
-        cwd,
-        config,
-        additionalRoots,
-        sensitiveAdditionalRoots,
-        readOnlyAdditionalRoots,
-        customSafeBashCommands,
-    ).classification;
+    return getCwdConfinementAssessment(command, options).classification;
 }
 
 /**
@@ -212,17 +219,23 @@ export function getCwdConfinementPermission(
  * already-parsed command (list of arguments, no chain operators).
  *
  * Returns UNSAFE when the heuristic does not apply.
+ *
+ * @param args The parsed command arguments to classify.
+ * @param options The cwd and ancillary confinement controls.
  */
 export function getArgsConfinementAssessment(
     args: string[],
-    cwd: string,
-    config?: SandboxConfigCwdConfinement | null,
-    state?: CwdConfinementState,
-    additionalRoots: readonly string[] = [],
-    sensitiveAdditionalRoots?: readonly string[],
-    readOnlyAdditionalRoots: readonly string[] = [],
-    customSafeBashCommands: readonly string[] = [],
+    options: ArgsConfinementOptions,
 ): HeuristicAssessment {
+    const {
+        cwd,
+        config,
+        state,
+        additionalRoots = [],
+        sensitiveAdditionalRoots,
+        readOnlyAdditionalRoots = [],
+        customSafeBashCommands = [],
+    } = options;
     const confinement = resolveConfinementConfig(config);
 
     if (confinement?.enabled === false) {
@@ -250,7 +263,9 @@ export function getArgsConfinementAssessment(
         confinementState,
         diagnostics,
     ) ?? Heuristic.UNSAFE;
-    if (isSafeHeuristic(classification)) return assessment(classification, [], diagnostics.tags);
+    if (isSafeHeuristic(classification)) {
+        return assessment(classification, [], diagnostics.tags);
+    }
 
     return assessment(
         Heuristic.UNSAFE,
@@ -263,22 +278,7 @@ export function getArgsConfinementAssessment(
 
 export function getArgsConfinementPermission(
     args: string[],
-    cwd: string,
-    config?: SandboxConfigCwdConfinement | null,
-    state?: CwdConfinementState,
-    additionalRoots: readonly string[] = [],
-    sensitiveAdditionalRoots?: readonly string[],
-    readOnlyAdditionalRoots: readonly string[] = [],
-    customSafeBashCommands: readonly string[] = [],
+    options: ArgsConfinementOptions,
 ): Heuristic {
-    return getArgsConfinementAssessment(
-        args,
-        cwd,
-        config,
-        state,
-        additionalRoots,
-        sensitiveAdditionalRoots,
-        readOnlyAdditionalRoots,
-        customSafeBashCommands,
-    ).classification;
+    return getArgsConfinementAssessment(args, options).classification;
 }

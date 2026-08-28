@@ -172,16 +172,15 @@ function resolveLine(
         // Advance modeled shell-directory state even when an explicit policy
         // handles this segment; later heuristic segments still need the
         // correct current directory.
-        const grant = getArgsConfinementPermission(
-            segment,
+        const grant = getArgsConfinementPermission(segment, {
             cwd,
-            options?.cwdConfinement,
-            segmentState,
-            options?.additionalRoots,
-            options?.sensitiveAdditionalRoots,
-            options?.readOnlyAdditionalRoots,
-            options?.safeBashCommands,
-        );
+            config: options?.cwdConfinement,
+            state: segmentState,
+            additionalRoots: options?.additionalRoots,
+            sensitiveAdditionalRoots: options?.sensitiveAdditionalRoots,
+            readOnlyAdditionalRoots: options?.readOnlyAdditionalRoots,
+            customSafeBashCommands: options?.safeBashCommands,
+        });
         const match = getArgsPermissionMatch(segment, options?.permissions);
 
         if (match.matched) {

@@ -150,14 +150,13 @@ export function isChildPathAllowed(
     sensitiveAdditionalRoots: readonly string[] = [],
 ): boolean {
     const effectivePath = filePath?.trim() || cwd;
-    return getPathConfinementPermission(
-        effectivePath,
+    return getPathConfinementPermission(effectivePath, {
         cwd,
-        CHILD_CONFINEMENT,
-        "read",
+        config: CHILD_CONFINEMENT,
+        access: "read",
         additionalRoots,
         sensitiveAdditionalRoots,
-    ) === Heuristic.SAFE_READONLY;
+    }) === Heuristic.SAFE_READONLY;
 }
 
 export { getScoutBashAssessment, isScoutBashAllowed } from "./safe-bash";

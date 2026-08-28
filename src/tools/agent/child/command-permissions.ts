@@ -80,7 +80,12 @@ function isCommandPathAllowed(
 ): boolean {
     const target = filePath?.trim() || cwd;
     return isSafeHeuristic(
-        getPathConfinementPermission(target, cwd, COMMAND_CONFINEMENT, "write", additionalRoots),
+        getPathConfinementPermission(target, {
+            cwd,
+            config: COMMAND_CONFINEMENT,
+            access: "write",
+            additionalRoots,
+        }),
     );
 }
 
@@ -314,13 +319,12 @@ export function registerCommandPermissionHooks(
                 return { block: false };
             }
             if (!cwdPathAllowed) {
-                const assessment = getPathConfinementAssessment(
-                    input.path,
-                    ctx.cwd,
-                    COMMAND_CONFINEMENT,
-                    "write",
+                const assessment = getPathConfinementAssessment(input.path, {
+                    cwd: ctx.cwd,
+                    config: COMMAND_CONFINEMENT,
+                    access: "write",
                     additionalRoots,
-                );
+                });
                 const outsideCwd = assessment.reasons.length === 1
                     && assessment.reasons[0] === UnsafeReason.OUTSIDE_CWD;
                 // The shared file hook handles explicit outside-cwd access for

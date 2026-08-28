@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import type { SandboxConfigCwdConfinement } from "../../../common/config";
 import type { CommandTag } from "../commands";
 
 /**
@@ -15,6 +16,36 @@ export enum Heuristic {
 }
 
 export type FileAccess = "read" | "write";
+
+/** Named options for direct file-path confinement checks. */
+export interface PathConfinementOptions {
+    cwd: string;
+    config?: SandboxConfigCwdConfinement | null;
+    access?: FileAccess;
+    additionalRoots?: readonly string[];
+    sensitiveAdditionalRoots?: readonly string[];
+}
+
+/** Named options for parsed command-string confinement checks. */
+export interface CwdConfinementOptions {
+    cwd: string;
+    config?: SandboxConfigCwdConfinement | null;
+    additionalRoots?: readonly string[];
+    sensitiveAdditionalRoots?: readonly string[];
+    readOnlyAdditionalRoots?: readonly string[];
+    customSafeBashCommands?: readonly string[];
+}
+
+/** Named options for already-parsed command-argument confinement checks. */
+export interface ArgsConfinementOptions {
+    cwd: string;
+    config?: SandboxConfigCwdConfinement | null;
+    state?: CwdConfinementState;
+    additionalRoots?: readonly string[];
+    sensitiveAdditionalRoots?: readonly string[];
+    readOnlyAdditionalRoots?: readonly string[];
+    customSafeBashCommands?: readonly string[];
+}
 
 export enum UnsafeReason {
     HEURISTIC_DISABLED = "HEURISTIC_DISABLED",

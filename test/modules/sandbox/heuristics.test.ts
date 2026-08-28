@@ -5,6 +5,9 @@ import path from "node:path";
 import {
     CommandTag,
     describeUnsafeReason,
+    getArgsConfinementAssessment,
+    getArgsConfinementPermission,
+    createCwdConfinementState,
     getCwdConfinementAssessment,
     getCwdConfinementPermission,
     getPathConfinementAssessment,
@@ -24,20 +27,46 @@ interface HeuristicTest {
 
 const runTests = (tests: HeuristicTest[]) => {
     it.each(tests)("$desc", (test) => {
-        expect(getCwdConfinementPermission(test.command, CWD, test.config ?? {})).toBe(
-            test.expected,
-        );
+        expect(getCwdConfinementPermission(test.command, {
+            cwd: CWD,
+            config: test.config ?? {},
+        })).toBe(test.expected);
     });
 };
 
 describe("heuristic assessments", () => {
+    it("honors named options for parsed-args confinement", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-args-cwd-"));
+        const additionalRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-args-root-"));
+        try {
+            const state = createCwdConfinementState(cwd);
+            state.currentCwd = additionalRoot;
+            const args = ["inspect", "notes.txt"];
+            const options = {
+                cwd,
+                config: {},
+                state,
+                additionalRoots: [additionalRoot],
+                sensitiveAdditionalRoots: [additionalRoot],
+                readOnlyAdditionalRoots: [additionalRoot],
+                customSafeBashCommands: ["inspect *"],
+            };
+            expect(getArgsConfinementAssessment(args, options).classification)
+                .toBe(Heuristic.SAFE_READONLY);
+            expect(getArgsConfinementPermission(args, options)).toBe(Heuristic.SAFE_READONLY);
+        } finally {
+            fs.rmSync(cwd, { recursive: true, force: true });
+            fs.rmSync(additionalRoot, { recursive: true, force: true });
+        }
+    });
+
     it("reports a useful reason for unsafe commands", () => {
-        expect(getCwdConfinementAssessment("cat /etc/passwd", CWD, {})).toEqual({
+        expect(getCwdConfinementAssessment("cat /etc/passwd", { cwd: CWD, config: {} })).toEqual({
             classification: Heuristic.UNSAFE,
             reasons: [UnsafeReason.OUTSIDE_CWD],
             tags: [],
         });
-        expect(getCwdConfinementAssessment("cat $(echo /etc/passwd)", CWD, {})).toEqual({
+        expect(getCwdConfinementAssessment("cat $(echo /etc/passwd)", { cwd: CWD, config: {} })).toEqual({
             classification: Heuristic.UNSAFE,
             reasons: [UnsafeReason.OUTSIDE_CWD],
             tags: [],
@@ -45,7 +74,7 @@ describe("heuristic assessments", () => {
     });
 
     it("deduplicates reasons and gives each a short description", () => {
-        expect(getCwdConfinementAssessment("cat /etc/passwd && cat /etc/hosts", CWD, {})).toEqual({
+        expect(getCwdConfinementAssessment("cat /etc/passwd && cat /etc/hosts", { cwd: CWD, config: {} })).toEqual({
             classification: Heuristic.UNSAFE,
             reasons: [UnsafeReason.OUTSIDE_CWD],
             tags: [],
@@ -54,31 +83,48 @@ describe("heuristic assessments", () => {
             .toBe("a path is outside the working directory");
     });
 
+    it("honors named options for command-string confinement", () => {
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-command-options-"));
+        try {
+            const command = `inspect ${path.join(scratchpad, "notes.txt")}`;
+            const options = {
+                cwd: CWD,
+                config: {},
+                additionalRoots: [scratchpad],
+                sensitiveAdditionalRoots: [scratchpad],
+                readOnlyAdditionalRoots: [scratchpad],
+                customSafeBashCommands: ["inspect *"],
+            };
+            expect(getCwdConfinementAssessment(command, options).classification)
+                .toBe(Heuristic.SAFE_READONLY);
+            expect(getCwdConfinementPermission(command, options)).toBe(Heuristic.SAFE_READONLY);
+        } finally {
+            fs.rmSync(scratchpad, { recursive: true, force: true });
+        }
+    });
+
     it("allows known commands to use an additional root", () => {
         const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-additional-root-"));
         try {
-            expect(getCwdConfinementAssessment(
-                `cat ${path.join(scratchpad, "notes.txt")}`,
-                CWD,
-                {},
-                [scratchpad],
-            )).toEqual({
+            expect(getCwdConfinementAssessment(`cat ${path.join(scratchpad, "notes.txt")}`, {
+                cwd: CWD,
+                config: {},
+                additionalRoots: [scratchpad],
+            })).toEqual({
                 classification: Heuristic.SAFE_READONLY,
                 reasons: [],
                 tags: [],
             });
-            expect(getCwdConfinementAssessment(
-                `cd ${scratchpad} && cat notes.txt`,
-                CWD,
-                {},
-                [scratchpad],
-            ).classification).toBe(Heuristic.SAFE_READONLY);
-            expect(getCwdConfinementAssessment(
-                `echo note > ${path.join(scratchpad, ".env")}`,
-                CWD,
-                {},
-                [scratchpad],
-            ).classification).toBe(Heuristic.SAFE_EDIT);
+            expect(getCwdConfinementAssessment(`cd ${scratchpad} && cat notes.txt`, {
+                cwd: CWD,
+                config: {},
+                additionalRoots: [scratchpad],
+            }).classification).toBe(Heuristic.SAFE_READONLY);
+            expect(getCwdConfinementAssessment(`echo note > ${path.join(scratchpad, ".env")}`, {
+                cwd: CWD,
+                config: {},
+                additionalRoots: [scratchpad],
+            }).classification).toBe(Heuristic.SAFE_EDIT);
         } finally {
             fs.rmSync(scratchpad, { recursive: true, force: true });
         }
@@ -103,24 +149,25 @@ describe("heuristic assessments", () => {
                 `truncate -r${path.join(scratchpad, "reference.txt")} ${path.join(scratchpad, "notes.txt")}`,
                 `tee ${path.join(scratchpad, "notes.txt")}`,
             ]) {
-                expect(getCwdConfinementPermission(command, CWD, {}, [scratchpad]))
-                    .toBe(Heuristic.SAFE_EDIT);
+                expect(getCwdConfinementPermission(command, {
+                    cwd: CWD,
+                    config: {},
+                    additionalRoots: [scratchpad],
+                })).toBe(Heuristic.SAFE_EDIT);
             }
 
-            expect(getCwdConfinementPermission(
-                `touch ${path.join(scratchpad, "without-realpath.txt")}`,
-                CWD,
-                { resolveSymlinks: false },
-                [scratchpad],
-            )).toBe(Heuristic.SAFE_EDIT);
-            expect(getCwdConfinementPermission("rm -rf file.txt", CWD, {}))
+            expect(getCwdConfinementPermission(`touch ${path.join(scratchpad, "without-realpath.txt")}`, {
+                cwd: CWD,
+                config: { resolveSymlinks: false },
+                additionalRoots: [scratchpad],
+            })).toBe(Heuristic.SAFE_EDIT);
+            expect(getCwdConfinementPermission("rm -rf file.txt", { cwd: CWD, config: {} }))
                 .toBe(Heuristic.UNSAFE);
-            expect(getCwdConfinementPermission(
-                `rm -rf ${path.join(CWD, "file.txt")}`,
-                CWD,
-                {},
-                [scratchpad],
-            )).toBe(Heuristic.UNSAFE);
+            expect(getCwdConfinementPermission(`rm -rf ${path.join(CWD, "file.txt")}`, {
+                cwd: CWD,
+                config: {},
+                additionalRoots: [scratchpad],
+            })).toBe(Heuristic.UNSAFE);
         } finally {
             fs.rmSync(scratchpad, { recursive: true, force: true });
         }
@@ -146,8 +193,11 @@ describe("heuristic assessments", () => {
                 `chmod +x ${scratchSource}`,
                 `chmod 755 ${scratchSource}`,
             ]) {
-                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
-                    .toBe(Heuristic.SAFE_EDIT);
+                expect(getCwdConfinementPermission(command, {
+                    cwd,
+                    config: {},
+                    additionalRoots: [scratchpad],
+                })).toBe(Heuristic.SAFE_EDIT);
             }
 
         } finally {
@@ -184,8 +234,11 @@ describe("heuristic assessments", () => {
                 `chmod -R +x ${scratchpad}`,
                 `chmod --reference=${source} ${scratchSource}`,
             ]) {
-                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
-                    .toBe(Heuristic.UNSAFE);
+                expect(getCwdConfinementPermission(command, {
+                    cwd,
+                    config: {},
+                    additionalRoots: [scratchpad],
+                })).toBe(Heuristic.UNSAFE);
             }
         } finally {
             fs.rmSync(cwd, { recursive: true, force: true });
@@ -206,8 +259,11 @@ describe("heuristic assessments", () => {
                 `sed -i s/before/after/g ${scratchFile}`,
                 `sed --in-place -e s/before/after/ ${scratchFile}`,
             ]) {
-                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
-                    .toBe(Heuristic.SAFE_EDIT);
+                expect(getCwdConfinementPermission(command, {
+                    cwd,
+                    config: {},
+                    additionalRoots: [scratchpad],
+                })).toBe(Heuristic.SAFE_EDIT);
             }
 
             for (const command of [
@@ -222,8 +278,11 @@ describe("heuristic assessments", () => {
                 `sed -i '$d' ${scratchFile}`,
                 `sed -i s/before/after/ --follow-symlinks ${scratchFile}`,
             ]) {
-                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
-                    .toBe(Heuristic.UNSAFE);
+                expect(getCwdConfinementPermission(command, {
+                    cwd,
+                    config: {},
+                    additionalRoots: [scratchpad],
+                })).toBe(Heuristic.UNSAFE);
             }
         } finally {
             fs.rmSync(cwd, { recursive: true, force: true });
@@ -254,8 +313,11 @@ describe("heuristic assessments", () => {
                 `truncate -s 0 ${scratchAlias}`,
                 `tee ${scratchAlias}`,
             ]) {
-                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
-                    .toBe(Heuristic.UNSAFE);
+                expect(getCwdConfinementPermission(command, {
+                    cwd,
+                    config: {},
+                    additionalRoots: [scratchpad],
+                })).toBe(Heuristic.UNSAFE);
             }
         } finally {
             fs.rmSync(cwd, { recursive: true, force: true });
@@ -282,8 +344,11 @@ describe("heuristic assessments", () => {
                 `tee ${output} < <(touch ${path.join(scratchpad, "nested.txt")})`,
                 `touch ${output} && touch ${path.join(CWD, "outside.txt")}`,
             ]) {
-                expect(getCwdConfinementPermission(command, CWD, {}, [scratchpad]))
-                    .toBe(Heuristic.UNSAFE);
+                expect(getCwdConfinementPermission(command, {
+                    cwd: CWD,
+                    config: {},
+                    additionalRoots: [scratchpad],
+                })).toBe(Heuristic.UNSAFE);
             }
         } finally {
             fs.rmSync(scratchpad, { recursive: true, force: true });
@@ -315,16 +380,18 @@ describe("heuristic assessments", () => {
                 ...commandsFor(`${scratchpad}/link/../owned`),
                 ...commandsFor(path.join(scratchpad, "dangling")),
             ]) {
-                expect(getCwdConfinementPermission(command, cwd, {}, [scratchpad]))
-                    .toBe(Heuristic.UNSAFE);
+                expect(getCwdConfinementPermission(command, {
+                    cwd,
+                    config: {},
+                    additionalRoots: [scratchpad],
+                })).toBe(Heuristic.UNSAFE);
             }
 
-            expect(getCwdConfinementPermission(
-                `touch ${path.join(scratchpad, "cross-root", "owned")}`,
+            expect(getCwdConfinementPermission(`touch ${path.join(scratchpad, "cross-root", "owned")}`, {
                 cwd,
-                {},
-                [scratchpad, secondRoot],
-            )).toBe(Heuristic.UNSAFE);
+                config: {},
+                additionalRoots: [scratchpad, secondRoot],
+            })).toBe(Heuristic.UNSAFE);
         } finally {
             fs.rmSync(cwd, { recursive: true, force: true });
             fs.rmSync(scratchpad, { recursive: true, force: true });
@@ -334,7 +401,7 @@ describe("heuristic assessments", () => {
     });
 
     it("reports no reasons for safe classifications", () => {
-        expect(getCwdConfinementAssessment("cat file.txt", CWD, {})).toEqual({
+        expect(getCwdConfinementAssessment("cat file.txt", { cwd: CWD, config: {} })).toEqual({
             classification: Heuristic.SAFE_READONLY,
             reasons: [],
             tags: [],
@@ -342,7 +409,7 @@ describe("heuristic assessments", () => {
     });
 
     it("tags successful git status operations across a chain", () => {
-        expect(getCwdConfinementAssessment("git status --short && git log --oneline -1", CWD, {})).toEqual({
+        expect(getCwdConfinementAssessment("git status --short && git log --oneline -1", { cwd: CWD, config: {} })).toEqual({
             classification: Heuristic.SAFE_READONLY,
             reasons: [],
             tags: [CommandTag.GIT_STATUS],
@@ -350,7 +417,7 @@ describe("heuristic assessments", () => {
     });
 
     it("reports path-specific reasons", () => {
-        expect(getPathConfinementAssessment(".env", CWD, {})).toEqual({
+        expect(getPathConfinementAssessment(".env", { cwd: CWD, config: {} })).toEqual({
             classification: Heuristic.UNSAFE,
             reasons: [UnsafeReason.SENSITIVE_PATH],
             tags: [],
@@ -366,12 +433,12 @@ describe("heuristic assessments", () => {
         fs.symlinkSync(target, link);
 
         try {
-            expect(getPathConfinementAssessment(target, cwd, {})).toEqual({
+            expect(getPathConfinementAssessment(target, { cwd, config: {} })).toEqual({
                 classification: Heuristic.UNSAFE,
                 reasons: [UnsafeReason.OUTSIDE_CWD],
                 tags: [],
             });
-            expect(getPathConfinementAssessment(link, cwd, {})).toEqual({
+            expect(getPathConfinementAssessment(link, { cwd, config: {} })).toEqual({
                 classification: Heuristic.UNSAFE,
                 reasons: [UnsafeReason.SYMLINK_ESCAPE],
                 tags: [],
@@ -1097,9 +1164,10 @@ describe("getCwdConfinementPermission", () => {
 
         const runFsTests = (tests: HeuristicTest[]) => {
             it.each(tests)("$desc", (test) => {
-                expect(
-                    getCwdConfinementPermission(test.command, dir, test.config ?? {}),
-                ).toBe(test.expected);
+                expect(getCwdConfinementPermission(test.command, {
+                    cwd: dir,
+                    config: test.config ?? {},
+                })).toBe(test.expected);
             });
         };
 
@@ -1137,8 +1205,8 @@ describe("getCwdConfinementPermission", () => {
         ]);
 
         it("cwd reached through a symlink still works", () => {
-            expect(getCwdConfinementPermission("cat plain.txt", aliasDir, {})).toBe(Heuristic.SAFE_READONLY);
-            expect(getCwdConfinementPermission("cat /etc/hostname", aliasDir, {})).toBe(Heuristic.UNSAFE);
+            expect(getCwdConfinementPermission("cat plain.txt", { cwd: aliasDir, config: {} })).toBe(Heuristic.SAFE_READONLY);
+            expect(getCwdConfinementPermission("cat /etc/hostname", { cwd: aliasDir, config: {} })).toBe(Heuristic.UNSAFE);
         });
     });
 

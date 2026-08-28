@@ -233,26 +233,24 @@ export default function registerFileToolHook(
             ...(operation === "read" ? options.additionalReadRoots?.(ctx) ?? [] : []),
         ];
 
-        if (isSafeHeuristic(getPathConfinementPermission(
-            filePath,
+        if (isSafeHeuristic(getPathConfinementPermission(filePath, {
             cwd,
-            confinement,
-            operation,
+            config: confinement,
+            access: operation,
             additionalRoots,
-            scratchpadRoots,
-        ))) {
+            sensitiveAdditionalRoots: scratchpadRoots,
+        }))) {
             return { block: false };
         }
 
         if (options.childAccess) {
-            const assessment = getPathConfinementAssessment(
-                filePath,
+            const assessment = getPathConfinementAssessment(filePath, {
                 cwd,
-                confinement,
-                operation,
+                config: confinement,
+                access: operation,
                 additionalRoots,
-                scratchpadRoots,
-            );
+                sensitiveAdditionalRoots: scratchpadRoots,
+            });
             if (assessment.reasons.length !== 1 || assessment.reasons[0] !== UnsafeReason.OUTSIDE_CWD) {
                 return {
                     block: true,
