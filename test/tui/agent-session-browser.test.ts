@@ -600,6 +600,58 @@ describe("AgentSessionBrowserComponent", () => {
         expect(ui.render()).not.toContain("Transcript (collapsed):");
     });
 
+    it("snapshots representative tool-call rendering in both transcript views", async () => {
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [{
+                ...past,
+                title: "Tool call rendering review",
+                task: "Inspect files, search for a symbol, run tests, and update the implementation",
+                transcript: [
+                    "> Inspect the project and make the requested checks.",
+                    "",
+                    "● read src/index.ts",
+                    "● find *.test.ts test",
+                    "● grep AgentSession src/tui",
+                    "● bash npm test",
+                    "× edit src/index.ts",
+                    "  - const oldValue = true;",
+                    "  + const newValue = true;",
+                    "",
+                    "The first checks are complete.",
+                    "",
+                    "● read README.md",
+                ].join("\n"),
+                transcriptCollapsed: [
+                    "> Inspect the project and make the requested checks.",
+                    "",
+                    "▸ 5 tool calls (1 failed): read src/index.ts; find `*.test.ts` in test; search `AgentSession` in src/tui; run npm test; edit src/index.ts",
+                    "",
+                    "The first checks are complete.",
+                    "",
+                    "▸ 1 tool call: read README.md",
+                ].join("\n"),
+            }],
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab, KEY.enter);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.tool-calls-collapsed.txt",
+        );
+
+        ui.press(KEY.tab);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.tool-calls-detailed.txt",
+        );
+
+        ui.press(KEY.pageDown);
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.tool-calls-detailed-scrolled.txt",
+        );
+    });
+
     it("shows changed files but omits read files in session details", () => {
         const value = new AgentSessionBrowserComponent({
             current: [{

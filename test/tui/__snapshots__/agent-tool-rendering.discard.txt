@@ -1,0 +1,7 @@
+[simple]
+agent discard worker-1
+
+[detailed]
+agent discard worker-1
+
+Discarded workspace result result-1; the isolated workspace is reusable.

@@ -1,0 +1,7 @@
+[simple]
+agent cancel worker-1
+
+[detailed]
+agent cancel worker-1
+
+Agent run worker-1 canceled.

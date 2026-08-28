@@ -1,0 +1,11 @@
+[simple]
+agent start (scout) — Project audit
+
+[detailed]
+agent start (scout) — Project audit
+
+│ Inspect the project structure.
+
+4 tool calls (0 failed)
+
+Finished inspecting the project. The main entry point is src/index.ts.

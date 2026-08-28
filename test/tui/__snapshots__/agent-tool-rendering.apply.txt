@@ -1,0 +1,7 @@
+[simple]
+agent apply worker-1
+
+[detailed]
+agent apply worker-1
+
+Applied workspace result result-1 to the parent checkout.

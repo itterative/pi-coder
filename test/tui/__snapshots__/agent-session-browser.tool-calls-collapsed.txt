@@ -1,0 +1,21 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   [delegated agent] Tool call rendering review · completed                                       │
+│                                                                                                  │
+│   Run ID: child-session-1                                                                        │
+│   Task: Inspect files, search for a symbol, run tests, and update the implementation             │
+│   Started: unknown time                                                                          │
+│   Updated: Nov 14 2023 22:13                                                                     │
+│   Messages: 4                                                                                    │
+│                                                                                                  │
+│   Transcript:                                                                                    │
+│                                                                                                  │
+│   │ Inspect the project and make the requested checks.                                           │
+│                                                                                                  │
+│   ▸ 5 tool calls (1 failed): read src/index.ts; find *.test.ts in test; search AgentSession in   │
+│   src/tui; run npm test; edit src/index.ts                                                       │
+│                                                                                                  │
+│   The first checks are complete.                                                                 │
+│                                                                                                  │
+│   ▸ 1 tool call: read README.md                                                                  │
+│     ↑/↓ scroll · End follow · Tab toggle view · Esc back                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

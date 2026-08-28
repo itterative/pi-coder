@@ -1,0 +1,13 @@
+[simple]
+agent collect worker-1
+
+[detailed]
+agent collect worker-1
+
+│ Implement the requested fix.
+
+7 tool calls (1 failed)
+
+The implementation is complete.
+
+All focused tests pass.

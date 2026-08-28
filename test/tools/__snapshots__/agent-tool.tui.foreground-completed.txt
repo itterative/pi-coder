@@ -1,6 +1,2 @@
 
-│ Compare implementations
-
-3 tool calls (1 failed)
-
 Implementation A is preferred because it preserves the existing contract.

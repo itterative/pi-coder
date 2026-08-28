@@ -1,0 +1,15 @@
+[simple]
+agent inspect worker-1
+
+[detailed]
+agent inspect worker-1
+
+Workspace: quiet-lantern-7k3
+Base revision: abc123
+Worker revision: def456
+Commit range: abc123..def456
+Commits: worker-fix
+Durable ref: refs/pi-coder/results/worker-1
+
+Changed files:
+ src/index.ts | 2 +-

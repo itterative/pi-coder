@@ -23,6 +23,65 @@ export type AgentToolExecutor = (
     ctx: ExtensionContext,
 ) => Promise<AgentRunOutcome>;
 
+type AgentToolDetails = AgentRunDetails & { action?: AgentParameters["action"] };
+type AgentToolResult = {
+    content: Array<{ type: string; text?: string }>;
+    details: AgentToolDetails;
+};
+function resultResponse(result: AgentToolResult): string {
+    return result.details.response
+        ?? result.content.find((part) => part.type === "text")?.text
+        ?? "";
+}
+
+function toolSummary(details: AgentToolDetails): string {
+    const toolCount = Object.values(details.toolCounts ?? {}).reduce(
+        (total, count) => total + count,
+        0,
+    );
+    return formatToolCallSummary(toolCount, details.failedToolCalls ?? 0);
+}
+
+function markdownResult(body: string, expanded: boolean, theme: Parameters<typeof markdownTheme>[0]): Container {
+    const container = new Container();
+    if (!expanded) {
+        return container;
+    }
+
+    container.addChild(new Markdown(body, 0, 1, markdownTheme(theme)));
+    return container;
+}
+
+function taskResult(result: AgentToolResult, expanded: boolean, theme: Parameters<typeof markdownTheme>[0]): Container {
+    const sections = [
+        result.details.task ? quoteText(result.details.task) : undefined,
+        toolSummary(result.details),
+        resultResponse(result) || undefined,
+    ].filter((section): section is string => section !== undefined);
+    return markdownResult(sections.join("\n\n"), expanded, theme);
+}
+
+function responseResult(result: AgentToolResult, expanded: boolean, theme: Parameters<typeof markdownTheme>[0]): Container {
+    return markdownResult(resultResponse(result), expanded, theme);
+}
+
+function renderAgentResult(result: AgentToolResult, expanded: boolean, theme: Parameters<typeof markdownTheme>[0]): Container {
+    switch (result.details.action) {
+        case "list": return responseResult(result, expanded, theme);
+        case "start": return taskResult(result, expanded, theme);
+        case "spawn": return responseResult(result, expanded, theme);
+        case "resume": return responseResult(result, expanded, theme);
+        case "cancel": return responseResult(result, expanded, theme);
+        case "inspect": return responseResult(result, expanded, theme);
+        case "apply": return responseResult(result, expanded, theme);
+        case "discard": return responseResult(result, expanded, theme);
+        case "revise": return taskResult(result, expanded, theme);
+        case "status": return responseResult(result, expanded, theme);
+        case "collect": return taskResult(result, expanded, theme);
+        default: return taskResult(result, expanded, theme);
+    }
+}
+
 export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExecutor): void {
     pi.registerTool({
         name: "agent",
@@ -72,32 +131,13 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
             );
         },
         renderResult(result, { expanded }, theme) {
-            const container = new Container();
-
-            if (!expanded) {
-                return container;
-            }
-
-            const details = result.details as AgentRunDetails;
-            const response = details.response
-                ?? result.content.find((part) => part.type === "text")?.text
-                ?? "";
-            const toolCount = Object.values(details.toolCounts ?? {}).reduce(
-                (total, count) => total + count,
-                0,
-            );
-            const toolSummary = formatToolCallSummary(toolCount, details.failedToolCalls ?? 0);
-            const body = expanded
-                ? `${quoteText(details.task)}\n\n${toolSummary}${response ? `\n\n${response}` : ""}`
-                : toolSummary;
-            container.addChild(new Markdown(body, 0, 1, markdownTheme(theme)));
-            return container;
+            return renderAgentResult(result as AgentToolResult, expanded, theme);
         },
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const outcome = await executeAction(
                 params,
                 signal,
-                (details) => onUpdate?.(updateResult(details)),
+                (details) => onUpdate?.(updateResult({ ...details, action: params.action } as AgentRunDetails)),
                 ctx,
             );
             return {
