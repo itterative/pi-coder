@@ -1,13 +1,13 @@
 ──────────────────────────────────────────────────
-   Apply command?                                 
+   Apply command?
 
-  1 │ git rebase -i HEAD~3                        
-  2 │ # pick abc123 fix typo                      
-                                                  
-  → Apply, [ ]type a message...                     
-    Edit                                          
-    Cancel                                        
-                                                  
-    Enter confirm | Esc back                      
+  1 │ git rebase -i HEAD~3
+  2 │ # pick abc123 fix typo
+
+  → Apply, [ ]type a message...
+    Edit
+    Cancel
+
+    Enter confirm | Esc back
 
 ──────────────────────────────────────────────────

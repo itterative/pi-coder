@@ -461,7 +461,7 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
             return;
         }
 
-        if (matchesKey(key, "up") || key === "k") {
+        if (matchesKey(key, "up")) {
             if (this.cursor > 0) {
                 this.cursor--;
                 this.invalidate();
@@ -469,7 +469,7 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
             return;
         }
 
-        if (matchesKey(key, "down") || key === "j") {
+        if (matchesKey(key, "down")) {
             if (this.cursor < this.options.items.length - 1) {
                 this.cursor++;
                 this.invalidate();
