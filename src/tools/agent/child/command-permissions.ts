@@ -1,7 +1,9 @@
 import path from "node:path";
 
 import {
+    generateDiffString,
     isToolCallEventType,
+    renderDiff,
     type EventBus,
     type BashToolInput,
     type EditToolInput,
@@ -256,28 +258,41 @@ function relativePath(filePath: string, cwd: string): string {
     return relative || ".";
 }
 
-function boundedPreview(label: string, text: string, maxChars = 6_000): string[] {
-    const clipped = text.length > maxChars
-        ? `${text.slice(0, maxChars)}\n… (${text.length - maxChars} characters omitted)`
-        : text;
-    return [label, ...clipped.split("\n")];
+const MAX_MUTATION_PREVIEW_CHARS = 12_000;
+
+function boundedDiff(diff: string): string {
+    if (diff.length <= MAX_MUTATION_PREVIEW_CHARS) {
+        return diff;
+    }
+    return `${diff.slice(0, MAX_MUTATION_PREVIEW_CHARS)}\n… (${diff.length - MAX_MUTATION_PREVIEW_CHARS} characters omitted)`;
+}
+
+function renderedDiffLines(diff: string): string[] {
+    return renderDiff(boundedDiff(diff)).split("\n");
+}
+
+// Build previews only from the proposed payload; permission checks must not read
+// an unapproved target path just to add context to the dialog.
+function editMutationPreview(input: EditToolInput): string[] {
+    const diff = input.edits.flatMap((edit, index) => [
+        `Replacement ${index + 1}`,
+        generateDiffString(edit.oldText, edit.newText).diff,
+    ]).join("\n");
+    return [input.path, ...renderedDiffLines(diff)];
+}
+
+function writeMutationPreview(input: WriteToolInput): string[] {
+    const diff = [
+        "New content",
+        generateDiffString("", input.content).diff,
+    ].join("\n");
+    return [input.path, ...renderedDiffLines(diff)];
 }
 
 function fileMutationPreview(event: { input: EditToolInput | WriteToolInput }, isEdit: boolean): string[] {
-    if (!isEdit) {
-        const input = event.input as WriteToolInput;
-        return [input.path, ...boundedPreview(`Write ${input.content.length} characters:`, input.content)];
-    }
-    const input = event.input as EditToolInput;
-    const lines = [input.path, `${input.edits.length} targeted replacement(s):`];
-    for (const [index, edit] of input.edits.entries()) {
-        lines.push(...boundedPreview(`Replacement ${index + 1} — old text:`, edit.oldText, 3_000));
-        lines.push(...boundedPreview(`Replacement ${index + 1} — new text:`, edit.newText, 3_000));
-    }
-    const joined = lines.join("\n");
-    return (joined.length > 12_000
-        ? `${joined.slice(0, 12_000)}\n… (additional replacement content omitted)`
-        : joined).split("\n");
+    return isEdit
+        ? editMutationPreview(event.input as EditToolInput)
+        : writeMutationPreview(event.input as WriteToolInput);
 }
 
 /** Register the permission gate used by command-capable child sessions. */
