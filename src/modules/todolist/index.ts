@@ -21,11 +21,18 @@ import {
 } from "./parser";
 import { summarizeTodoList, type TodoProgress } from "./progress";
 import { emitTodoStatus } from "./events";
+import { appendTodoSnapshot, getTodoSnapshot } from "./persistence";
 
 const EMPTY_TODO_DOCUMENT = "---\nversion: 1\ntodos: []\n---\n";
 
 const TODO_SYSTEM_TAG = "<todolist_system>";
 const TODO_SYSTEM_END_TAG = "</todolist_system>";
+
+interface TodoRuntimeState {
+    persistedContent: string | undefined;
+}
+
+const todoRuntimeStates = new WeakMap<object, TodoRuntimeState>();
 
 type TodoEdit = Pick<EditToolInput["edits"][number], "oldText" | "newText">;
 
@@ -47,7 +54,7 @@ function appendTodoPrompt(systemPrompt: string, pathname: string): string {
         `Your private runtime TODO list is at \`${pathname}\`.`,
         "Read TODO.md before beginning substantive work. Keep its YAML frontmatter valid and update TODO statuses as work starts, completes, or becomes blocked.",
         "When mutation tools are available, use the write or edit tool to change TODO.md and preserve the freeform Markdown body after the frontmatter.",
-        "The TODO list is temporary and runtime-local; it is not a project TODO file and is not durable across sessions.",
+        "The TODO file is temporary and private to this runtime, not a project TODO file. Keep it current.",
         "Use this exact frontmatter shape: `version: 1` and a `todos` YAML sequence; each entry has a unique lowercase `id`, a non-empty `title`, and a `status`.",
         "For example:",
         "```yaml",
@@ -184,6 +191,43 @@ async function initializeTodoFile(ctx: ExtensionContext): Promise<void> {
     }
 }
 
+async function restoreTodoDocument(
+    ctx: ExtensionContext,
+    content: string,
+): Promise<boolean> {
+    const scratchpadPath = getScratchpadPath(ctx.sessionManager);
+    if (!scratchpadPath) return false;
+
+    const todoPath = path.join(scratchpadPath, "TODO.md");
+    try {
+        parseTodoList(content, todoPath);
+        await writeFile(todoPath, content, "utf8");
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function persistTodoIfChanged(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    content: string,
+): void {
+    const sessionManager = ctx.sessionManager;
+    if (!sessionManager) return;
+
+    const state = todoRuntimeStates.get(sessionManager);
+    if (!state || state.persistedContent === content) return;
+
+    try {
+        appendTodoSnapshot(pi, content);
+        state.persistedContent = content;
+    } catch {
+        // A session persistence failure must not turn a completed file
+        // mutation into a failed tool result. The next refresh retries it.
+    }
+}
+
 /** Register TODO prompt, validation, UI refresh, and Bash handling for one runtime. */
 export default function registerTodoListExtension(
     pi: ExtensionAPI,
@@ -191,7 +235,7 @@ export default function registerTodoListExtension(
 ): void {
     registerTodoBashGuard(pi);
 
-    const refresh = async (ctx: ExtensionContext): Promise<void> => {
+    const refresh = async (ctx: ExtensionContext, persist = false): Promise<void> => {
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
         if (!scratchpadPath) {
             options.onTodoProgress?.(undefined);
@@ -213,6 +257,8 @@ export default function registerTodoListExtension(
 
         try {
             const todo = parseTodoList(content, todoPath);
+            if (persist) persistTodoIfChanged(pi, ctx, content);
+
             const progress = summarizeTodoList(todo);
             options.onTodoProgress?.(progress);
             emitTodoStatus(pi.events, progress ? todo : undefined);
@@ -224,13 +270,31 @@ export default function registerTodoListExtension(
 
     pi.on("session_start", async (_event, ctx) => {
         await initializeTodoFile(ctx);
+
+        const snapshot = getTodoSnapshot(ctx);
+        const restored = snapshot
+            ? await restoreTodoDocument(ctx, snapshot.content)
+            : false;
+        if (ctx.sessionManager) {
+            todoRuntimeStates.set(ctx.sessionManager, {
+                persistedContent: restored ? snapshot?.content : undefined,
+            });
+        }
+        await refresh(ctx, !restored);
+    });
+    pi.on("session_tree", async (_event, ctx) => {
+        const snapshot = getTodoSnapshot(ctx);
+        const content = snapshot?.content ?? EMPTY_TODO_DOCUMENT;
+        const restored = await restoreTodoDocument(ctx, content);
+        if (ctx.sessionManager) {
+            todoRuntimeStates.set(ctx.sessionManager, {
+                persistedContent: restored ? content : EMPTY_TODO_DOCUMENT,
+            });
+        }
         await refresh(ctx);
     });
-    pi.on("session_tree", () => {
-        options.onTodoProgress?.(undefined);
-        emitTodoStatus(pi.events, undefined);
-    });
-    pi.on("session_shutdown", () => {
+    pi.on("session_shutdown", (_event, ctx) => {
+        if (ctx.sessionManager) todoRuntimeStates.delete(ctx.sessionManager);
         options.onTodoProgress?.(undefined);
         emitTodoStatus(pi.events, undefined);
     });
@@ -284,7 +348,7 @@ export default function registerTodoListExtension(
 
     pi.on("tool_result", async (event, ctx) => {
         if (event.toolName !== "write" && event.toolName !== "edit" && event.toolName !== "bash") return;
-        await refresh(ctx);
+        await refresh(ctx, true);
     });
 }
 
@@ -303,4 +367,10 @@ export {
     summarizeTodoList,
     type TodoProgress,
 } from "./progress";
+export {
+    TODO_SNAPSHOT_TYPE,
+    appendTodoSnapshot,
+    getTodoSnapshot,
+    type TodoSnapshot,
+} from "./persistence";
 export { FrontmatterParseError } from "./parser";

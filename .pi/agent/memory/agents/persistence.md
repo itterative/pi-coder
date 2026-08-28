@@ -12,6 +12,7 @@ keep_updated: true
 - Persisted parents use SDK `SessionManager.create/open` for child JSONL under `<pi-coder-install>/.state/agent-sessions/--<encoded-cwd>--/<parent-session-id>/`. The install root comes from `import.meta.url`; cwd normalization is centralized; private directories use mode `0700`; `.state/` is gitignored.
 - Full parent run-state snapshots are stored in the extension-local SQLite metadata database, keyed by owner parent session, run ID, and active-branch entry. Saves use a session-scoped synchronous `DatabaseSync` transaction for the state and catalog projections; stale timestamps are rejected. Child transcripts do not contain the parent run ID, task/status, pending question, usage checkpoint, or retention state.
 - Records are bound to the exact parent session UUID and active branch. Reload/restart and switching away/back restore that session; `/new`, `/fork`, `/clone`, and ephemeral parents do not inherit children. `/tree` navigation is blocked during active streaming or permission waits and rebuilds state at the new branch afterward.
+- TODO-capable parent and child runtimes append their latest valid TODO document as `pi-coder:todo-snapshot` custom session entries. The entry is excluded from LLM context and stores no ephemeral path; the TODO extension restores the snapshot reachable from the active branch into that runtime's scratchpad. Forks inherit the snapshot at the fork point, while parent/child session streams remain separate.
 
 ## Restoration rules
 

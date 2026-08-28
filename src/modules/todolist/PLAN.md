@@ -3,9 +3,10 @@
 ## Status
 
 Parser, prompt, capability wiring, write/edit validation hooks, Bash change
-guarding, parent UI, and live worker progress are implemented. Documentation
-and hardening remain for later phases. This document records the implementation
-shape for a `todolist` capability built on the existing temporary scratchpad.
+guarding, parent UI, live worker progress, and session-entry persistence are
+implemented. Documentation and hardening remain for later phases. This
+document records the implementation shape for a `todolist` capability built on
+the existing temporary scratchpad.
 It is not a user-facing command reference.
 
 ## Purpose
@@ -50,12 +51,15 @@ always exists while that runtime is active:
 - isolated workers keep their TODO outside the Git worktree;
 - no TODO contents are shared through `agent` arguments or run leases.
 
-The TODO file follows the scratchpad's ephemeral lifetime. It is not persisted
-in the agent SQLite snapshots and is not expected to survive process restart,
-child resume, session replacement, or scratchpad recreation. A retained
-in-memory worker result may expose its last TODO state until that result is
-collected, but restored runs start without a live TODO state until the child
-recreates the file.
+The editable TODO file follows the scratchpad's ephemeral lifetime, but each
+runtime appends its latest valid document as a non-LLM-visible custom session
+entry. On reload or session-tree changes, the latest snapshot reachable from
+the active branch recreates the file. The snapshot includes the structured
+frontmatter and freeform Markdown body, but never the ephemeral absolute path.
+Parent and child sessions persist their snapshots in their own session streams;
+there is no cross-runtime synchronization. A fork naturally starts from the
+snapshot reachable at its fork point and subsequent updates remain branch
+local.
 
 ## Document format
 
@@ -129,17 +133,15 @@ advertises the TODO capability in the normal agent catalog/definition flow.
 The prompt must not tell the agent that Bash TODO writes are transactionally
 safe. It should explicitly prefer `write` and `edit` for TODO.md.
 
-## Deferred cache and fork review
+## Cache and fork behavior
 
 The absolute scratchpad path and absolute TODO path are both included in system
-prompt blocks. The scratchpad session marker is custom metadata excluded from
-LLM context, so it does not directly affect cache keys; changing runtime paths
-still changes the prompt text and can reduce exact prefix-cache hits. Scratchpad
-sharing across forked sessions is intentional and accepted. TODO behavior in
-forks should be reviewed separately: because a fork can inherit the scratchpad
-marker, its TODO path may also resolve to the parent's `TODO.md`, and it is not
-yet decided whether that sharing is desirable. Do not broaden this feature until
-that tradeoff is revisited.
+prompt blocks. The scratchpad session marker and TODO snapshot are custom
+metadata excluded from LLM context, so they do not directly affect cache keys;
+changing runtime paths still changes the prompt text and can reduce exact
+prefix-cache hits. A fork naturally inherits the latest reachable TODO snapshot
+and scratchpad marker at its fork point. Its later TODO snapshots are branch
+local; parent and child agent sessions remain separate session streams.
 
 ## Parser and validation ownership
 
@@ -338,9 +340,10 @@ item, but should not expand every TODO entry for every worker. This keeps the
 existing above-editor widget within its height budget when several runs are
 active.
 
-TODO state used only for live UI must remain volatile. If it is carried through
-`ChildProgress`, persistence must explicitly strip it before writing a durable
-run snapshot, and restoration must not recreate it from stale persisted data.
+The live worker TODO projection remains volatile in `ChildProgress` and durable
+agent-run snapshots. TODO document persistence is separate: it uses the child
+session's own non-LLM-visible custom session entries and is restored only by the
+TODO extension for that child runtime.
 
 ## Capability and runtime integration
 
@@ -418,7 +421,8 @@ Add focused coverage for:
   capability, and child registration;
 - parent widget visibility, status styling, truncation, clearing, and refresh;
 - worker activity-widget TODO summaries;
-- volatile TODO state not being restored from durable run snapshots;
+- TODO document snapshots restoring across session reload and active-branch
+  changes without appearing in LLM context;
 - print/non-TUI mode receiving validation warnings without requiring UI.
 
 Run:
@@ -430,8 +434,7 @@ npx tsc --noEmit
 
 ## Non-goals and future refinements
 
-- persistent TODO state across restart or child resume;
-- explicit parent/child TODO sharing;
+- synchronizing TODO state between parent and child sessions;
 - a new TODO-specific LLM tool;
 - automatic task extraction from user prompts or assistant prose;
 - validation or formatting of the freeform Markdown body;

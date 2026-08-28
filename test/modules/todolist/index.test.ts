@@ -7,6 +7,7 @@ import { createEventBus, type ExtensionAPI, type ExtensionContext } from "@earen
 import { renderText } from "../../helpers";
 
 import registerTodoListExtension from "../../../src/modules/todolist";
+import { TODO_SNAPSHOT_TYPE } from "../../../src/modules/todolist/persistence";
 import registerScratchpadExtension, { getScratchpadPath } from "../../../src/modules/scratchpad";
 import { PiCoderStatusWidget, registerStatusWidget, STATUS_WIDGET_ID } from "../../../src/tui/status";
 
@@ -21,7 +22,7 @@ afterEach(() => {
     }
 });
 
-function harness(): {
+function harness(entries: unknown[] = []): {
     pi: ExtensionAPI;
     handler(name: string): Handler;
 } {
@@ -34,7 +35,9 @@ function harness(): {
             registered.push(callback);
             handlers.set(name, registered);
         },
-        appendEntry() {},
+        appendEntry(customType: string, data: unknown) {
+            entries.push({ type: "custom", customType, data });
+        },
     } as unknown as ExtensionAPI;
 
     return {
@@ -63,6 +66,10 @@ function runtimeContext(sessionManager: object): ExtensionContext {
         cwd: process.cwd(),
         sessionManager,
     } as ExtensionContext;
+}
+
+function sessionManagerFor(entries: unknown[]): object {
+    return { getBranch: () => entries };
 }
 
 const validDocument = `---
@@ -107,6 +114,77 @@ describe("TODO runtime extension", () => {
             block: true,
             reason: expect.stringContaining("todos"),
         });
+    });
+
+    it("persists and restores the latest valid document through session entries", async () => {
+        const entries: unknown[] = [];
+        const sessionManager = sessionManagerFor(entries);
+        const first = harness(entries);
+        const ctx = runtimeContext(sessionManager);
+        registerScratchpadExtension(first.pi);
+        registerTodoListExtension(first.pi);
+        await first.handler("session_start")({ reason: "startup" }, ctx);
+
+        const scratchpadPath = getScratchpadPath(sessionManager)!;
+        temporaryDirectories.push(scratchpadPath);
+        const todoPath = path.join(scratchpadPath, "TODO.md");
+        fs.writeFileSync(todoPath, validDocument);
+        await first.handler("tool_result")({ toolName: "write" }, ctx);
+
+        expect(entries).toContainEqual(expect.objectContaining({
+            customType: TODO_SNAPSHOT_TYPE,
+            data: { version: 1, content: validDocument },
+        }));
+
+        await first.handler("session_shutdown")({}, ctx);
+        fs.rmSync(scratchpadPath, { recursive: true, force: true });
+
+        const second = harness(entries);
+        registerScratchpadExtension(second.pi);
+        registerTodoListExtension(second.pi);
+        await second.handler("session_start")({ reason: "reload" }, ctx);
+
+        const restoredScratchpadPath = getScratchpadPath(sessionManager)!;
+        temporaryDirectories.push(restoredScratchpadPath);
+        expect(restoredScratchpadPath).not.toBe(scratchpadPath);
+        expect(fs.readFileSync(path.join(restoredScratchpadPath, "TODO.md"), "utf8")).toBe(validDocument);
+    });
+
+    it("restores the TODO snapshot belonging to the active session branch", async () => {
+        const branches: unknown[][] = [[]];
+        const sessionManager = { getBranch: () => branches[0] };
+        const { pi, handler } = harness(branches[0]);
+        const ctx = runtimeContext(sessionManager);
+        registerScratchpadExtension(pi);
+        registerTodoListExtension(pi);
+        await handler("session_start")({ reason: "startup" }, ctx);
+
+        const scratchpadPath = getScratchpadPath(sessionManager)!;
+        temporaryDirectories.push(scratchpadPath);
+        const todoPath = path.join(scratchpadPath, "TODO.md");
+        fs.writeFileSync(todoPath, validDocument);
+        await handler("tool_result")({ toolName: "write" }, ctx);
+        const todoBranch = [...branches[0]];
+
+        branches[0] = [];
+        await handler("session_tree")({}, ctx);
+        expect(fs.readFileSync(todoPath, "utf8")).toBe("---\nversion: 1\ntodos: []\n---\n");
+
+        branches[0] = todoBranch;
+        await handler("session_tree")({}, ctx);
+        expect(fs.readFileSync(todoPath, "utf8")).toBe(validDocument);
+
+        branches[0] = [
+            ...todoBranch,
+            {
+                type: "custom",
+                customType: TODO_SNAPSHOT_TYPE,
+                data: { version: 1, content: "invalid TODO snapshot" },
+            },
+        ];
+        fs.writeFileSync(todoPath, "stale branch contents");
+        await handler("session_tree")({}, ctx);
+        expect(fs.readFileSync(todoPath, "utf8")).toBe(validDocument);
     });
 
     it("validates prospective edits but ignores unrelated TODO.md files", async () => {
