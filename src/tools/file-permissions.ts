@@ -227,12 +227,20 @@ export default function registerFileToolHook(
         const state = stateFor(ctx);
         const confinement = options.confinement ?? sandboxConfig.current?.heuristics?.cwdConfinement;
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
+        const scratchpadRoots = scratchpadPath ? [scratchpadPath] : [];
         const additionalRoots = [
-            ...(scratchpadPath ? [scratchpadPath] : []),
+            ...scratchpadRoots,
             ...(operation === "read" ? options.additionalReadRoots?.(ctx) ?? [] : []),
         ];
 
-        if (isSafeHeuristic(getPathConfinementPermission(filePath, cwd, confinement, operation, additionalRoots))) {
+        if (isSafeHeuristic(getPathConfinementPermission(
+            filePath,
+            cwd,
+            confinement,
+            operation,
+            additionalRoots,
+            scratchpadRoots,
+        ))) {
             return { block: false };
         }
 
@@ -243,6 +251,7 @@ export default function registerFileToolHook(
                 confinement,
                 operation,
                 additionalRoots,
+                scratchpadRoots,
             );
             if (assessment.reasons.length !== 1 || assessment.reasons[0] !== UnsafeReason.OUTSIDE_CWD) {
                 return {

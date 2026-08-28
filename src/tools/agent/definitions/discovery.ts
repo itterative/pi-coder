@@ -16,6 +16,7 @@ import {
 export type { AgentCapability, AgentDefinition, AgentSource } from "./types";
 export {
     agentCanEdit,
+    agentAdditionalPaths,
     agentCanRunCommands,
     agentCapabilities,
     agentTools,
@@ -43,6 +44,7 @@ type AgentFrontmatter = {
     name?: unknown;
     description?: unknown;
     capabilities?: unknown;
+    additionalPaths?: unknown;
     // Deliberately unsupported: retaining it here lets us diagnose a stale
     // WIP definition instead of silently ignoring a privilege request.
     tools?: unknown;
@@ -115,6 +117,17 @@ function parseCapabilities(value: unknown): AgentCapability[] | undefined {
     return capabilities as AgentCapability[];
 }
 
+function parseAdditionalPaths(value: unknown): string[] | undefined {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)
+        || value.some((additionalPath) =>
+            typeof additionalPath !== "string" || additionalPath.trim() === "")) {
+        return undefined;
+    }
+    const paths = value.map((additionalPath) => additionalPath.trim());
+    return [...new Set(paths)];
+}
+
 function loadScope(
     dir: string,
     source: "user" | "project",
@@ -147,7 +160,14 @@ function loadScope(
             continue;
         }
 
-        const { name, description, capabilities: requestedCapabilities, tools, model } = parsed.frontmatter;
+        const {
+            name,
+            description,
+            capabilities: requestedCapabilities,
+            additionalPaths: requestedAdditionalPaths,
+            tools,
+            model,
+        } = parsed.frontmatter;
         if (typeof name !== "string" || !AGENT_NAME.test(name)) {
             diagnostics.push({
                 level: "warning",
@@ -197,6 +217,15 @@ function loadScope(
             });
             continue;
         }
+        const additionalPaths = parseAdditionalPaths(requestedAdditionalPaths);
+        if (!additionalPaths) {
+            diagnostics.push({
+                level: "warning",
+                message: "Agent additionalPaths must be an array containing only non-empty strings.",
+                paths: [filePath],
+            });
+            continue;
+        }
         if (capabilities.includes("edit")) {
             diagnostics.push({
                 level: "warning",
@@ -220,6 +249,7 @@ function loadScope(
             name,
             description: description.trim(),
             capabilities,
+            ...(requestedAdditionalPaths !== undefined ? { additionalPaths } : {}),
             model: typeof model === "string" && model.trim() ? model.trim() : undefined,
             systemPrompt: parsed.body.trim(),
             source,

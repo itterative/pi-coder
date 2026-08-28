@@ -4,12 +4,17 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+    agentAdditionalPaths,
     agentCapabilities,
     agentTools,
     BUILTIN_ADVISOR,
     BUILTIN_REVIEWER,
     discoverAgentsInDirectories,
 } from "../../src/tools/agent/definitions/discovery";
+import {
+    parseAgentDefinitionSnapshot,
+    snapshotAgentDefinition,
+} from "../../src/tools/agent/definitions/types";
 
 const tempDirs: string[] = [];
 
@@ -90,7 +95,13 @@ describe("agent discovery", () => {
         writeAgent(userDir, "reviewer.md", "reviewer", "Override reviewer");
         writeAgent(userDir, "advisor.md", "advisor", "Override advisor");
         writeAgent(userDir, "worker.md", "worker", "Override worker");
-        writeAgent(userDir, "custom.md", "custom", "Custom", "capabilities: [command-runner, memories]\n");
+        writeAgent(
+            userDir,
+            "custom.md",
+            "custom",
+            "Custom",
+            "capabilities: [command-runner, memories]\nadditionalPaths: [\"/tmp/shared-notes\"]\n",
+        );
         writeAgent(userDir, "todo.md", "todo", "TODO", "capabilities: [todolist]\n");
         writeAgent(userDir, "stale.md", "stale", "Stale", "tools: [read, bash]\n");
 
@@ -120,7 +131,15 @@ describe("agent discovery", () => {
             capabilities: ["read", "search", "memories", "scratchpad", "todolist", "safe-bash", "command-runner", "edit"],
         });
         expect(agentTools(worker!)).toEqual(["read", "grep", "find", "ls", "edit", "write", "bash"]);
-        expect(custom).toMatchObject({ source: "user", capabilities: ["command-runner", "memories"] });
+        expect(custom).toMatchObject({
+            source: "user",
+            capabilities: ["command-runner", "memories"],
+            additionalPaths: ["/tmp/shared-notes"],
+        });
+        expect(agentAdditionalPaths(custom!)).toEqual([
+            "/tmp/shared-notes",
+            path.join(os.homedir(), ".pi", "agent", "memory"),
+        ]);
         expect(agentCapabilities(custom!)).toEqual(["read", "search", "memories", "safe-bash", "command-runner"]);
         expect(agentTools(custom!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(todo).toMatchObject({ source: "user", capabilities: ["todolist"] });
@@ -134,17 +153,33 @@ describe("agent discovery", () => {
             ]));
     });
 
+    it("preserves additional paths in durable definition snapshots", () => {
+        const definition = {
+            name: "snapshot-agent",
+            description: "Snapshot agent",
+            capabilities: [],
+            additionalPaths: ["/tmp/notes"],
+            systemPrompt: "Inspect notes",
+            source: "user" as const,
+        };
+
+        expect(parseAgentDefinitionSnapshot(snapshotAgentDefinition(definition)))
+            .toMatchObject({ additionalPaths: ["/tmp/notes"] });
+    });
+
     it("rejects malformed or unknown capability lists", () => {
         const userDir = tempScope();
         writeAgent(userDir, "not-a-list.md", "not-a-list", "Bad", "capabilities: safe-bash\n");
         writeAgent(userDir, "unknown.md", "unknown", "Bad", "capabilities: [unsafe-bash]\n");
         writeAgent(userDir, "edit.md", "edit-agent", "Bad", "capabilities: [edit]\n");
+        writeAgent(userDir, "paths.md", "bad-paths", "Bad", "additionalPaths: [\"\"]\n");
 
         const result = discoverAgentsInDirectories(userDir);
 
         expect(result.agents.map((agent) => agent.name)).not.toContain("not-a-list");
         expect(result.agents.map((agent) => agent.name)).not.toContain("unknown");
         expect(result.agents.map((agent) => agent.name)).not.toContain("edit-agent");
+        expect(result.agents.map((agent) => agent.name)).not.toContain("bad-paths");
         expect(result.diagnostics).toEqual(expect.arrayContaining([
             expect.objectContaining({ message: expect.stringContaining("capabilities must be an array") }),
         ]));

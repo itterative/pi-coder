@@ -49,15 +49,23 @@ export function childProtocolPrompt(
     commandRunner = false,
     hasScratchpad = false,
     hasBashOutputAccess = false,
+    additionalPaths: readonly string[] = [],
 ): string {
     const mutationPathScope = hasScratchpad
         ? "the current working directory or the temporary scratchpad"
         : "the current working directory";
     let allowedPathScope = mutationPathScope;
+    if (additionalPaths.length > 0) {
+        allowedPathScope += ", or configured additional paths";
+    }
     if (hasBashOutputAccess) {
-        allowedPathScope = hasScratchpad
-            ? "the current working directory, the temporary scratchpad, or an exact full-output file reported by Bash"
-            : "the current working directory or an exact full-output file reported by Bash";
+        if (additionalPaths.length > 0) {
+            allowedPathScope += ", or an exact full-output file reported by Bash";
+        } else if (hasScratchpad) {
+            allowedPathScope = "the current working directory, the temporary scratchpad, or an exact full-output file reported by Bash";
+        } else {
+            allowedPathScope = "the current working directory or an exact full-output file reported by Bash";
+        }
     }
     const sensitivePathRule = hasScratchpad
         ? "Sensitive-path restrictions apply outside the temporary scratchpad; paths that escape through symlinks are always blocked."
@@ -131,6 +139,7 @@ export function isChildPathAllowed(
     filePath: string | undefined,
     cwd: string,
     additionalRoots: readonly string[] = [],
+    sensitiveAdditionalRoots: readonly string[] = [],
 ): boolean {
     const effectivePath = filePath?.trim() || cwd;
     return getPathConfinementPermission(
@@ -139,6 +148,7 @@ export function isChildPathAllowed(
         CHILD_CONFINEMENT,
         "read",
         additionalRoots,
+        sensitiveAdditionalRoots,
     ) === Heuristic.SAFE_READONLY;
 }
 
@@ -232,10 +242,12 @@ export function registerChildExtension(
     workspaceId?: string,
     isolated = false,
     commandRunner = false,
+    additionalPaths: readonly string[] = [],
 ) {
     return (pi: ExtensionAPI): void => {
         const bashOutputPaths = new Map<string, BashOutputPath>();
         const readRoots = (ctx: ExtensionContext): readonly string[] => [
+            ...additionalPaths,
             ...getScratchpadRoots(ctx),
             ...activeBashOutputPaths(bashOutputPaths),
         ];
@@ -301,7 +313,10 @@ export function registerChildExtension(
             };
             registerFileToolHook(pi, "read", {
                 ...fileHookOptions,
-                additionalReadRoots: () => activeBashOutputPaths(bashOutputPaths),
+                additionalReadRoots: () => [
+                    ...additionalPaths,
+                    ...activeBashOutputPaths(bashOutputPaths),
+                ],
                 promptTitle: `[${childRunLabel}] ${agentName}: allow read path?`,
             });
             registerFileToolHook(pi, "write", {
@@ -419,6 +434,7 @@ export function registerChildExtension(
                 runTitle,
                 agentName,
                 isolated: isolatedChild,
+                additionalReadRoots: additionalPaths,
                 permissionState,
                 permissionPending: reportPermissionPending,
                 fileChanged(filePath) {
@@ -448,6 +464,7 @@ export function registerChildExtension(
                     ctx.cwd,
                     safeBash,
                     onTrace,
+                    [...additionalPaths, ...getScratchpadRoots(ctx)],
                     getScratchpadRoots(ctx),
                 );
             }
@@ -455,7 +472,12 @@ export function registerChildExtension(
             const filePath = readToolPath(event);
             if (filePath === undefined) return;
             const additionalRoots = readRoots(ctx);
-            if (!isChildPathAllowed(filePath, ctx.cwd, additionalRoots)) {
+            if (!isChildPathAllowed(
+                filePath,
+                ctx.cwd,
+                additionalRoots,
+                getScratchpadRoots(ctx),
+            )) {
                 if (!isFileAccessApproved(event)) {
                     return {
                         block: true,

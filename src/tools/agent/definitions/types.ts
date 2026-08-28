@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { getUserMemoryDirectory } from "../../../common/constants";
 import type { AgentContextPolicy } from "../contracts/context";
 
 export type AgentSource = "builtin" | "user" | "project";
@@ -28,6 +29,8 @@ export interface AgentDefinition {
     description: string;
     /** Explicit tool and execution capabilities for this agent. */
     capabilities: AgentCapability[];
+    /** Additional paths that are readable by the child, beyond its cwd. */
+    additionalPaths?: string[];
     model?: string;
     systemPrompt: string;
     contextPolicy?: AgentContextPolicy;
@@ -43,6 +46,9 @@ export function snapshotAgentDefinition(definition: AgentDefinition): AgentDefin
         name: definition.name,
         description: definition.description,
         capabilities: [...definition.capabilities],
+        ...(definition.additionalPaths !== undefined
+            ? { additionalPaths: [...definition.additionalPaths] }
+            : {}),
         ...(definition.model !== undefined ? { model: definition.model } : {}),
         systemPrompt: definition.systemPrompt,
         ...(definition.contextPolicy
@@ -72,6 +78,10 @@ export function parseAgentDefinitionSnapshot(value: unknown): AgentDefinition | 
         || typeof candidate.systemPrompt !== "string"
         || !Array.isArray(candidate.capabilities)
         || candidate.capabilities.some((capability) => !AGENT_CAPABILITIES.includes(capability as AgentCapability))
+        || (candidate.additionalPaths !== undefined
+            && (!Array.isArray(candidate.additionalPaths)
+                || candidate.additionalPaths.some((additionalPath) =>
+                    typeof additionalPath !== "string" || additionalPath.trim() === "")))
         || (candidate.model !== undefined && typeof candidate.model !== "string")
         || !["builtin", "user", "project"].includes(candidate.source as string)
         || (candidate.filePath !== undefined && typeof candidate.filePath !== "string")
@@ -86,6 +96,20 @@ export function parseAgentDefinitionSnapshot(value: unknown): AgentDefinition | 
         || !Number.isFinite(contextPolicy.maxChars)
     )) return undefined;
     return snapshotAgentDefinition(candidate as AgentDefinition);
+}
+
+/**
+ * Returns the read roots granted by an agent definition.
+ *
+ * The memory capability includes the user memory directory so delegated
+ * agents can read the memories listed in their memory-system appendix.
+ */
+export function agentAdditionalPaths(definition: AgentDefinition): string[] {
+    const paths = [...definition.additionalPaths ?? []];
+    if (hasAgentCapability(definition, "memories")) {
+        paths.push(getUserMemoryDirectory());
+    }
+    return [...new Set(paths)];
 }
 
 /** Returns the effective capability set, including the always-available baseline. */
@@ -148,6 +172,9 @@ function hashDefinition(definition: AgentDefinition, includeContextPolicy: boole
         name: definition.name,
         description: definition.description,
         capabilities: [...definition.capabilities].sort(),
+        ...(includeContextPolicy
+            ? { additionalPaths: [...definition.additionalPaths ?? []].sort() }
+            : {}),
         model: definition.model ?? null,
         systemPrompt: definition.systemPrompt,
         ...(includeContextPolicy

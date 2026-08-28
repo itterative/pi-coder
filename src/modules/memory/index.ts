@@ -1,9 +1,9 @@
 import { mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { getUserMemoryDirectory } from "../../common/constants";
 import { scanMemories, type MemoryMeta } from "./memories";
 import { FrontmatterParseError } from "./frontmatter";
 
@@ -132,7 +132,7 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
 
     pi.on("session_start", async (event, ctx) => {
         const projectDir = join(ctx.cwd, ".pi", "agent", "memory");
-        const userDir = join(homedir(), ".pi", "agent", "memory");
+        const userDir = getUserMemoryDirectory();
 
         // Ensure directories exist
         await mkdir(projectDir, { recursive: true });

@@ -33,13 +33,14 @@ Custom agents are Markdown files with YAML frontmatter and an instruction body:
 name: analyst
 description: Inspect architecture and identify risks
 capabilities: [safe-bash, memories, scratchpad] # optional; read/search are baseline capabilities
+additionalPaths: ["~/.cache/project-notes"] # optional read-only paths beyond the child cwd
 model: provider/model-id # optional; defaults to the parent model
 ---
 
 Agent-specific instructions go here.
 ```
 
-`name` must match the lowercase agent-name format and `description` must be non-empty. Omit `capabilities` for read-only codebase access. The old `tools` field is unsupported; use `capabilities` instead.
+`name` must match the lowercase agent-name format and `description` must be non-empty. Omit `capabilities` for read-only codebase access. `additionalPaths` is an optional list of paths that the child may read in addition to its working directory; paths may be absolute, `~`-prefixed, or relative to the child cwd. The `memories` capability automatically adds the user memory directory (`~/.pi/agent/memory`) to this read scope. The old `tools` field is unsupported; use `capabilities` instead.
 
 Built-ins:
 
@@ -48,7 +49,7 @@ Built-ins:
 - `advisor` — opt-in read-only senior advice on implementation decisions and tradeoffs, using a configured model, with memory access;
 - `worker` — same-checkout or isolated implementation with permission-gated edits, commands, and memory access.
 
-Custom definitions are read-only by default, may opt into `memories`, `scratchpad`, `safe-bash`, or `command-runner`, and may select a model; otherwise they use the parent model. Built-in reviewer and worker definitions include `memories` and `scratchpad`; read-only scout and advisor definitions include `memories` but do not need scratchpads. `read` and `search` are baseline capabilities, `memories` loads pi-coder's memory extension in the child session, `scratchpad` creates a private temporary `/tmp` workspace in the child session, `command-runner` implies `safe-bash`, and `edit` is reserved for the built-in worker.
+Custom definitions are read-only by default, may opt into `memories`, `scratchpad`, `safe-bash`, or `command-runner`, and may select a model; otherwise they use the parent model. Built-in reviewer and worker definitions include `memories` and `scratchpad`; read-only scout and advisor definitions include `memories` but do not need scratchpads. `read` and `search` are baseline capabilities, `memories` loads pi-coder's memory extension in the child session and adds the user memory directory as a read root, `scratchpad` creates a private temporary `/tmp` workspace in the child session, `command-runner` implies `safe-bash`, and `edit` is reserved for the built-in worker.
 
 Custom Markdown definitions are loaded from `~/.pi/agent/agents` and the nearest trusted `.pi/agents`. Every custom agent gets `read`, `grep`, `find`, and `ls`; optional capabilities include `memories`, `scratchpad`, `safe-bash`, and `command-runner`, while `edit` is reserved for the built-in worker. Built-in names `scout`, `reviewer`, `advisor`, and `worker` are reserved, paths are sorted, same-scope duplicates are first-wins, and trusted-project definitions override user definitions.
 
@@ -84,7 +85,7 @@ Isolated workers use a persistent pool of up to three Git worktrees. Setup runs 
 ## Safety contract
 
 - Delegated-agent controls reduce model-initiated accidents; they are not a hostile-environment security boundary.
-- Child paths are confined to the working directory plus the agent's private temporary scratchpad when that capability is enabled. Agents with Bash access may additionally read only exact runtime-created full-output files reported in their own truncated Bash result details; unrelated temporary paths and symlink replacements remain blocked. Scratchpad paths may use any filename, while symlink escapes and sensitive targets outside the scratchpad remain blocked.
+- Child paths are confined to the working directory plus the definition's configured additional read paths and the agent's private temporary scratchpad when that capability is enabled. The `memories` capability adds `~/.pi/agent/memory` by default. Agents with Bash access may additionally read only exact runtime-created full-output files reported in their own truncated Bash result details; unrelated temporary paths and symlink replacements remain blocked. Scratchpad paths may use any filename, while symlink escapes and sensitive targets outside the scratchpad remain blocked.
 - `safe-bash` runs only commands classified `SAFE_READONLY` by the shared cwd heuristic. Unknown, mutating, network, interpreter, and unsafe Git commands are rejected without an approval bypass.
 - `command-runner` runs safe commands directly and routes other commands through the normal parent permission prompt. It may have project side effects; explicit approval, not command naming, is authoritative.
 - Non-isolated command-capable agents share the parent's session Bash rules; unresolved commands use the shared sandbox/direct prompt. Agents with `edit` also receive direct edit/write tools, with ordinary project paths using same-checkout access, isolated worker paths using their dedicated worktree access, and scratchpad paths using prompt-free temporary access. Sensitive project paths and symlink escapes remain blocked before prompting. Isolated workspaces and setup workers use independent permission state without inheriting parent-session rules; an explicit end-user choice to remember a Bash rule is propagated to the parent session state for later parent or non-isolated child calls.

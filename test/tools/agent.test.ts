@@ -12,6 +12,7 @@ import {
     isScoutBashAllowed,
 } from "../../src/tools/agent/child";
 import {
+    agentAdditionalPaths,
     BUILTIN_ADVISOR,
     BUILTIN_SCOUT,
     BUILTIN_WORKER,
@@ -1161,6 +1162,14 @@ describe("scout confinement", () => {
         expect(isChildPathAllowed(path.join(cwd, ".env"), cwd)).toBe(false);
         expect(isChildPathAllowed(path.join("..", "outside.txt"), cwd)).toBe(false);
         expect(isChildPathAllowed(path.dirname(cwd), cwd)).toBe(false);
+
+        const additional = fs.mkdtempSync(path.join(os.tmpdir(), "pi-coder-agent-additional-"));
+        tempDirs.push(additional);
+        expect(isChildPathAllowed(path.join(additional, "notes.md"), cwd)).toBe(false);
+        expect(isChildPathAllowed(path.join(additional, "notes.md"), cwd, [additional])).toBe(true);
+        expect(agentAdditionalPaths(BUILTIN_SCOUT)).toContain(
+            path.join(os.homedir(), ".pi", "agent", "memory"),
+        );
     });
 
     it("blocks symlinks that escape cwd", () => {

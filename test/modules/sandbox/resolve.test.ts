@@ -84,6 +84,22 @@ describe("resolvePermissionDetails: unresolved segments", () => {
         })).toBe("ask");
     });
 
+    it("keeps read-only additional roots writable only through explicit permission", () => {
+        const memory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-resolve-memory-"));
+        temporaryDirectories.push(memory);
+
+        const options = {
+            permissions: {},
+            cwdConfinement: {},
+            additionalRoots: [memory],
+            readOnlyAdditionalRoots: [memory],
+        };
+        expect(resolvePermission(`cat ${path.join(memory, "notes.md")}`, CWD, options))
+            .toBe("allow:sandbox");
+        expect(resolvePermission(`echo changed > ${path.join(memory, "notes.md")}`, CWD, options))
+            .toBe("ask");
+    });
+
     const check = (
         command: string,
         permissions: Record<string, Permission> = {},

@@ -25,8 +25,15 @@ export function getSafeBashAssessment(
     command: string,
     cwd: string,
     additionalRoots: readonly string[] = [],
+    sensitiveAdditionalRoots?: readonly string[],
 ): HeuristicAssessment {
-    return getCwdConfinementAssessment(command, cwd, CHILD_CONFINEMENT, additionalRoots);
+    return getCwdConfinementAssessment(
+        command,
+        cwd,
+        CHILD_CONFINEMENT,
+        additionalRoots,
+        sensitiveAdditionalRoots,
+    );
 }
 
 /** @deprecated Use getSafeBashAssessment. */
@@ -36,8 +43,14 @@ export function isSafeBashAllowed(
     command: string,
     cwd: string,
     additionalRoots: readonly string[] = [],
+    sensitiveAdditionalRoots?: readonly string[],
 ): boolean {
-    return getSafeBashAssessment(command, cwd, additionalRoots).classification === Heuristic.SAFE_READONLY;
+    return getSafeBashAssessment(
+        command,
+        cwd,
+        additionalRoots,
+        sensitiveAdditionalRoots,
+    ).classification === Heuristic.SAFE_READONLY;
 }
 
 /** @deprecated Use isSafeBashAllowed. */
@@ -53,6 +66,7 @@ export async function guardSafeBashCommand(
     safeBash: boolean,
     onTrace?: ChildAgentFactoryContext["onTrace"],
     additionalRoots: readonly string[] = [],
+    sensitiveAdditionalRoots?: readonly string[],
 ): Promise<SafeBashBlock | undefined> {
     if (!safeBash) {
         return {
@@ -61,7 +75,12 @@ export async function guardSafeBashCommand(
         };
     }
 
-    const assessment = getSafeBashAssessment(command, cwd, additionalRoots);
+    const assessment = getSafeBashAssessment(
+        command,
+        cwd,
+        additionalRoots,
+        sensitiveAdditionalRoots,
+    );
     if (assessment.classification !== Heuristic.SAFE_READONLY) {
         const reasons = assessment.reasons
             .map((reason) => `${describeUnsafeReason(reason)} [${reason}]`)

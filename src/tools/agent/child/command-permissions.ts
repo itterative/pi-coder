@@ -53,6 +53,8 @@ interface CommandPermissionOptions extends CommandPermissionCallbacks {
     agentName: string;
     /** Whether this child runs in a dedicated isolated worktree. */
     isolated: boolean;
+    /** Additional read-only paths from the agent definition. */
+    additionalReadRoots?: readonly string[];
     permissionState?: PermissionState;
 }
 
@@ -118,6 +120,13 @@ class PermissionQueue {
 function getScratchpadRoots(ctx: ExtensionContext): readonly string[] {
     const scratchpadPath = getScratchpadPath(ctx.sessionManager);
     return scratchpadPath ? [scratchpadPath] : [];
+}
+
+function getCommandReadRoots(
+    ctx: ExtensionContext,
+    additionalReadRoots: readonly string[],
+): readonly string[] {
+    return [...additionalReadRoots, ...getScratchpadRoots(ctx)];
 }
 
 function userNote(input: Record<string, unknown>): string | undefined {
@@ -354,7 +363,8 @@ export function registerCommandPermissionHooks(
         }
         let permission: Permission = "ask";
         let unresolved: string[][] = [];
-        const additionalRoots = getScratchpadRoots(ctx);
+        const scratchpadRoots = getScratchpadRoots(ctx);
+        const additionalRoots = getCommandReadRoots(ctx, options.additionalReadRoots ?? []);
         try {
             const details = resolvePermissionDetails(input.command, ctx.cwd, {
                 permissions: {
@@ -362,6 +372,8 @@ export function registerCommandPermissionHooks(
                     ...(nonIsolated ? permissionState.bashRules : {}),
                 },
                 additionalRoots,
+                sensitiveAdditionalRoots: scratchpadRoots,
+                readOnlyAdditionalRoots: options.additionalReadRoots,
             });
             permission = details.permission;
             unresolved = details.unresolved;
@@ -431,6 +443,7 @@ export function registerCommandPermissionHooks(
                 input.command = sandbox(bwrap, input.command, {
                     cwd: ctx.cwd,
                     additionalRoots,
+                    readOnlyAdditionalRoots: options.additionalReadRoots,
                 });
             } catch (error) {
                 release();

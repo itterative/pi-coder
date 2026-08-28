@@ -27,6 +27,24 @@ describe("bubblewrap", () => {
         return config.load(projectDir);
     }
 
+    it("binds read-only additional roots read-only", () => {
+        const memory = path.join(tempDir, "memory");
+        fs.mkdirSync(memory);
+
+        const result = sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            additionalRoots: [memory],
+            readOnlyAdditionalRoots: [memory],
+            config: {
+                sandbox: { mounts: {} },
+                permissions: {},
+            },
+        });
+
+        expect(result).toContain(`--ro-bind '${memory}' '${memory}'`);
+        expect(result).not.toContain(`--bind '${memory}' '${memory}'`);
+    });
+
     it("binds runtime-managed additional roots", () => {
         const scratchpad = path.join(tempDir, "scratchpad");
         fs.mkdirSync(scratchpad);

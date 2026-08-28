@@ -9,6 +9,8 @@ export interface SandboxOptions {
     config?: SandboxConfig;
     /** Runtime-managed roots that should be available inside the sandbox. */
     additionalRoots?: readonly string[];
+    /** Additional roots that must be mounted read-only. */
+    readOnlyAdditionalRoots?: readonly string[];
 }
 
 function escapeArg(arg: string): string {
@@ -234,10 +236,13 @@ export default function sandbox(bwrap: string, command: string, options?: Sandbo
 
     // Mount additional roots after broad mounts such as /tmp so nested roots
     // remain visible if the broad mount is narrowed or reordered later.
+    const readOnlyRoots = new Set((options?.readOnlyAdditionalRoots ?? []).map((root) =>
+        path.resolve(root.replace(/^~/, homeDir))));
     for (const root of options?.additionalRoots ?? []) {
-        const resolvedRoot = path.resolve(root);
+        const resolvedRoot = path.resolve(root.replace(/^~/, homeDir));
         if (resolvedRoot === cwd) continue;
-        cmd.push("--bind", escapeArg(resolvedRoot), escapeArg(resolvedRoot));
+        const mount = readOnlyRoots.has(resolvedRoot) ? "--ro-bind" : "--bind";
+        cmd.push(mount, escapeArg(resolvedRoot), escapeArg(resolvedRoot));
     }
 
     const shell = env.SHELL ?? "sh";

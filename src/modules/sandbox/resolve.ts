@@ -22,6 +22,10 @@ export interface ResolvePermissionOptions {
     cwdConfinement?: SandboxConfigCwdConfinement | null;
     /** Runtime-managed roots treated as additional cwd-confinement roots. */
     additionalRoots?: readonly string[];
+    /** Additional roots that may be read but never written by heuristic-safe commands. */
+    readOnlyAdditionalRoots?: readonly string[];
+    /** Additional roots whose sensitive path names are explicitly trusted. */
+    sensitiveAdditionalRoots?: readonly string[];
 }
 
 type SegmentResult = {
@@ -172,6 +176,8 @@ function resolveLine(
             options?.cwdConfinement,
             segmentState,
             options?.additionalRoots,
+            options?.sensitiveAdditionalRoots,
+            options?.readOnlyAdditionalRoots,
         );
         const match = getArgsPermissionMatch(segment, options?.permissions);
 

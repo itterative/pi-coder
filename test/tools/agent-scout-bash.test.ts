@@ -28,6 +28,7 @@ function setup(
         allowUserInteraction = true,
         isolated = false,
         sessionManager = {},
+        additionalPaths = [],
     }: {
         safeBash?: boolean;
         commandRunner?: boolean;
@@ -35,6 +36,7 @@ function setup(
         allowUserInteraction?: boolean;
         isolated?: boolean;
         sessionManager?: object;
+        additionalPaths?: string[];
     } = {},
 ) {
     const handlers: Record<string, Handler[]> = {};
@@ -95,6 +97,7 @@ function setup(
         undefined,
         isolated,
         commandRunner,
+        additionalPaths,
     )(pi);
 
     return { handlers, ctx: { cwd, sessionManager }, tools, dialogs, sessionManager };
@@ -119,6 +122,36 @@ describe("child Bash permissions", () => {
             });
         await expect(check({ toolName: "bash", input: { command: "unrecognized-command" } }, runtime.ctx))
             .resolves.toMatchObject({ block: true, reason: expect.stringContaining("UNKNOWN_COMMAND") });
+    });
+
+    it("allows configured additional paths for direct reads and safe Bash", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
+        const additionalDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-additional-"));
+        tempDirs.push(cwd, additionalDirectory);
+        const additionalPath = path.join(additionalDirectory, "memory.md");
+        const sensitivePath = path.join(additionalDirectory, ".env");
+        fs.writeFileSync(additionalPath, "memory");
+        fs.writeFileSync(sensitivePath, "secret");
+        const runtime = setup(cwd, { additionalPaths: [additionalDirectory] });
+        const check = runtime.handlers.tool_call[0]!;
+
+        expect(check({ toolName: "read", input: { path: additionalPath } }, runtime.ctx)).toBeUndefined();
+        await expect(check({ toolName: "bash", input: { command: `cat ${additionalPath}` } }, runtime.ctx))
+            .resolves.toBeUndefined();
+        expect(check({ toolName: "read", input: { path: sensitivePath } }, runtime.ctx))
+            .toMatchObject({ block: true });
+        await expect(check({ toolName: "bash", input: { command: `cat ${sensitivePath}` } }, runtime.ctx))
+            .resolves.toMatchObject({ block: true });
+
+        const commandRunner = setup(cwd, {
+            commandRunner: true,
+            background: false,
+            additionalPaths: [additionalDirectory],
+        });
+        await expect(commandRunner.handlers.tool_call[0]!(
+            { toolName: "bash", input: { command: `cat ${additionalPath}` } },
+            commandRunner.ctx,
+        )).resolves.toEqual({ block: false });
     });
 
     it("allows reading a current child Bash output file without allowing general temp access", async () => {

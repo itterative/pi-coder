@@ -8,6 +8,7 @@ import {
     type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
+    agentAdditionalPaths,
     agentCanEdit,
     agentCanRunCommands,
     agentTools,
@@ -94,6 +95,7 @@ export async function createAgentChild(
     const hasMemories = hasAgentCapability(context.definition, "memories");
     const hasScratchpad = hasAgentCapability(context.definition, "scratchpad");
     const hasTodolist = hasAgentCapability(context.definition, "todolist");
+    const additionalPaths = agentAdditionalPaths(context.definition);
     const allowUserInteraction = context.definition.allowUserInteraction !== false;
     const agentDir = getAgentDir();
     let sessionManager = context.childSessionFile
@@ -147,6 +149,7 @@ export async function createAgentChild(
                     context.workspaceId,
                     context.isolated,
                     canRunCommands,
+                    additionalPaths,
                 ),
             },
             ...(hasMemories
@@ -188,6 +191,7 @@ export async function createAgentChild(
                     canRunCommands,
                     hasScratchpad,
                     safeBash || canRunCommands,
+                    additionalPaths,
                 ),
             ),
         ],
