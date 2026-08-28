@@ -9,6 +9,7 @@ import {
     agentTools,
     BUILTIN_ADVISOR,
     BUILTIN_REVIEWER,
+    BUILTIN_SCOUT,
     discoverAgentsInDirectories,
 } from "../../src/tools/agent/definitions/discovery";
 import {
@@ -89,12 +90,51 @@ describe("agent discovery", () => {
         expect(trusted.agents.map((agent) => agent.name)).toEqual(["scout", "reviewer", "advisor", "worker", "project-only"]);
     });
 
-    it("protects reserved names and grants only declared capabilities", () => {
+    it("keeps built-in capabilities while applying scout overlays", () => {
         const userDir = tempScope();
-        writeAgent(userDir, "scout.md", "scout", "Override built-in");
-        writeAgent(userDir, "reviewer.md", "reviewer", "Override reviewer");
-        writeAgent(userDir, "advisor.md", "advisor", "Override advisor");
-        writeAgent(userDir, "worker.md", "worker", "Override worker");
+        fs.writeFileSync(
+            path.join(userDir, "scout.md"),
+            "---\nname: scout\nsafeBashCommands: [\"ast-outline digest *\"]\n---\n\n",
+        );
+
+        const result = discoverAgentsInDirectories(userDir);
+        const scout = result.agents.find((agent) => agent.name === "scout");
+
+        expect(scout).toMatchObject({
+            source: "builtin",
+            description: BUILTIN_SCOUT.description,
+            capabilities: BUILTIN_SCOUT.capabilities,
+            systemPrompt: BUILTIN_SCOUT.systemPrompt,
+            safeBashCommands: ["ast-outline digest *"],
+        });
+    });
+
+    it("overrides scout metadata but ignores capability changes", () => {
+        const userDir = tempScope();
+        fs.writeFileSync(
+            path.join(userDir, "scout.md"),
+            "---\nname: scout\ndescription: Custom scout\ncapabilities: [edit]\nadditionalPaths: [\"/tmp/notes\"]\nsafeBashCommands: [\"ast-outline digest *\"]\nmodel: provider/model\n---\n\nCustom scout role\n",
+        );
+
+        const result = discoverAgentsInDirectories(userDir);
+        const scout = result.agents.find((agent) => agent.name === "scout");
+
+        expect(scout).toMatchObject({
+            source: "builtin",
+            description: "Custom scout",
+            capabilities: BUILTIN_SCOUT.capabilities,
+            additionalPaths: ["/tmp/notes"],
+            safeBashCommands: ["ast-outline digest *"],
+            model: "provider/model",
+            systemPrompt: "Custom scout role",
+        });
+        expect(result.diagnostics).toEqual(expect.arrayContaining([
+            expect.objectContaining({ message: expect.stringContaining("capabilities cannot be overridden") }),
+        ]));
+    });
+
+    it("grants only declared capabilities", () => {
+        const userDir = tempScope();
         writeAgent(
             userDir,
             "custom.md",
@@ -149,7 +189,6 @@ describe("agent discovery", () => {
         expect(stale?.capabilities).toEqual([]);
         expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "warning"))
             .toEqual(expect.arrayContaining([
-                expect.objectContaining({ message: expect.stringContaining("reserved") }),
                 expect.objectContaining({ message: expect.stringContaining("field \"tools\" is unsupported") }),
             ]));
     });

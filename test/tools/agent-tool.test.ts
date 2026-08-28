@@ -1105,7 +1105,7 @@ describe("agent extension registration", () => {
         await handlers.session_shutdown[0]({}, ctx);
     });
 
-    it("deduplicates discovery warning notifications", async () => {
+    it("deduplicates discovery warning notifications for invalid overlays", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-coder-agent-tool-"));
         tempDirs.push(cwd);
         const agentsDir = path.join(cwd, ".pi", "agents");
@@ -1113,7 +1113,8 @@ describe("agent extension registration", () => {
         fs.writeFileSync(path.join(agentsDir, "reserved.md"), [
             "---",
             "name: scout",
-            "description: Invalid reserved override",
+            "description: Invalid capability override",
+            "capabilities: [edit]",
             "---",
             "Instructions",
         ].join("\n"));
@@ -1140,9 +1141,9 @@ describe("agent extension registration", () => {
         await handlers.before_agent_start[0]({ systemPrompt: "Parent" }, ctx);
         await handlers.before_agent_start[0]({ systemPrompt: "Parent" }, ctx);
 
-        const reservedNotifications = notifications.filter((message) => message.includes("reserved"));
-        expect(reservedNotifications).toHaveLength(1);
-        const normalizedNotifications = reservedNotifications.map((message) => message.replaceAll(cwd, "<fixture-cwd>"));
+        const invalidOverlayNotifications = notifications.filter((message) => message.includes("capabilities cannot be overridden"));
+        expect(invalidOverlayNotifications).toHaveLength(1);
+        const normalizedNotifications = invalidOverlayNotifications.map((message) => message.replaceAll(cwd, "<fixture-cwd>"));
         await expect(normalizedNotifications.join("\n")).toMatchFileSnapshot("__snapshots__/agent-tool.tui.discovery-warning.txt");
         await handlers.session_shutdown[0]({}, ctx);
     });

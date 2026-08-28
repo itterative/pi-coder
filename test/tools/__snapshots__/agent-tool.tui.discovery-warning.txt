@@ -1,1 +1,1 @@
-pi-coder agents: Agent name "scout" is reserved; the markdown definition was ignored. [<fixture-cwd>/.pi/agents/reserved.md]
+pi-coder agents: Built-in agent "scout" capabilities cannot be overridden; the declaration was ignored. [<fixture-cwd>/.pi/agents/reserved.md]

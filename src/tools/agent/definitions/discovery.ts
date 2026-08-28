@@ -26,7 +26,6 @@ export {
     isAgentDefinitionFingerprintCompatible,
     READ_ONLY_AGENT_TOOLS,
 } from "./types";
-const RESERVED_AGENT_NAMES = new Set(["scout", "reviewer", "advisor", "worker"]);
 const AGENT_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
 
 export interface AgentDiagnostic {
@@ -96,6 +95,13 @@ Help the parent make a sound implementation decision. Investigate relevant code 
     },
     source: "builtin",
 };
+
+const BUILTIN_DEFINITIONS = new Map<string, AgentDefinition>([
+    [BUILTIN_SCOUT.name, BUILTIN_SCOUT],
+    [BUILTIN_REVIEWER.name, BUILTIN_REVIEWER],
+    [BUILTIN_ADVISOR.name, BUILTIN_ADVISOR],
+    [BUILTIN_WORKER.name, BUILTIN_WORKER],
+]);
 
 function sortedMarkdownFiles(dir: string): string[] {
     try {
@@ -188,7 +194,9 @@ function loadScope(
             });
             continue;
         }
-        if (typeof description !== "string" || !description.trim()) {
+        const builtin = BUILTIN_DEFINITIONS.get(name);
+        const isBuiltinOverlay = builtin !== undefined;
+        if (description === undefined && !isBuiltinOverlay) {
             diagnostics.push({
                 level: "warning",
                 message: "Agent description must be a non-empty string.",
@@ -196,10 +204,10 @@ function loadScope(
             });
             continue;
         }
-        if (RESERVED_AGENT_NAMES.has(name)) {
+        if (description !== undefined && (typeof description !== "string" || !description.trim())) {
             diagnostics.push({
                 level: "warning",
-                message: `Agent name "${name}" is reserved; the markdown definition was ignored.`,
+                message: "Agent description must be a non-empty string when provided.",
                 paths: [filePath],
             });
             continue;
@@ -220,7 +228,16 @@ function loadScope(
                 paths: [filePath],
             });
         }
-        const capabilities = parseCapabilities(requestedCapabilities);
+        if (isBuiltinOverlay && requestedCapabilities !== undefined) {
+            diagnostics.push({
+                level: "warning",
+                message: `Built-in agent "${name}" capabilities cannot be overridden; the declaration was ignored.`,
+                paths: [filePath],
+            });
+        }
+        const capabilities = isBuiltinOverlay
+            ? [...builtin.capabilities]
+            : parseCapabilities(requestedCapabilities);
         if (!capabilities) {
             diagnostics.push({
                 level: "warning",
@@ -247,7 +264,7 @@ function loadScope(
             });
             continue;
         }
-        if (capabilities.includes("edit")) {
+        if (!isBuiltinOverlay && capabilities.includes("edit")) {
             diagnostics.push({
                 level: "warning",
                 message: "The edit capability is reserved for the built-in worker.",
@@ -266,17 +283,30 @@ function loadScope(
             continue;
         }
 
-        selected.set(name, {
-            name,
-            description: description.trim(),
-            capabilities,
-            ...(requestedAdditionalPaths !== undefined ? { additionalPaths } : {}),
-            ...(requestedSafeBashCommands !== undefined ? { safeBashCommands } : {}),
-            model: typeof model === "string" && model.trim() ? model.trim() : undefined,
-            systemPrompt: parsed.body.trim(),
-            source,
-            filePath,
-        });
+        const definition = builtin
+            ? {
+                ...builtin,
+                ...(typeof description === "string" ? { description: description.trim() } : {}),
+                capabilities: [...builtin.capabilities],
+                ...(requestedAdditionalPaths !== undefined ? { additionalPaths } : {}),
+                ...(requestedSafeBashCommands !== undefined ? { safeBashCommands } : {}),
+                ...(model !== undefined ? { model: model.trim() || undefined } : {}),
+                systemPrompt: parsed.body.trim() || builtin.systemPrompt,
+                source: builtin.source,
+                filePath,
+            }
+            : {
+                name,
+                description: (description as string).trim(),
+                capabilities,
+                ...(requestedAdditionalPaths !== undefined ? { additionalPaths } : {}),
+                ...(requestedSafeBashCommands !== undefined ? { safeBashCommands } : {}),
+                model: typeof model === "string" && model.trim() ? model.trim() : undefined,
+                systemPrompt: parsed.body.trim(),
+                source,
+                filePath,
+            };
+        selected.set(name, definition);
     }
 
     return [...selected.values()];
