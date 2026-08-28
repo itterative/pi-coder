@@ -104,7 +104,7 @@ This is the highest-risk lifecycle defect. The same issue can occur for other fa
 
 The transfer-before-start ordering was introduced when run-instance identity reservation was added. Earlier code started the worker first and transferred the lease afterward; that avoided this particular stranded-transfer window but had different concurrency/ownership tradeoffs.
 
-The current implementation starts the continuation while the old lease still protects the workspace, then transfers the lease before finalization. If transfer or finalization fails, it attempts a compare-and-swap-style reverse transfer to restore the old owner. This makes the failure recoverable in normal cases, but the rollback failure path and divergent worktree behavior still need dedicated tests.
+The current implementation starts the continuation while the old lease still protects the workspace, then transfers the lease before finalization. If transfer or finalization fails, it attempts a compare-and-swap-style reverse transfer to restore the old owner. This makes the failure recoverable in normal cases. Focused action-level tests now cover continuation failure, transfer failure, finalization failure with rollback, and rollback failure; real temporary-Git state assertions for those failures and divergent worktree behavior remain.
 
 ### 4. `revise` created a new child session rather than continuing the old transcript (resolved)
 
@@ -181,7 +181,7 @@ The first implementation pass addressed the prompt/session continuation and part
 
 ### Phase 1: Expand observability and regression coverage
 
-The current pass added focused manager and parent-action tests plus an end-to-end registered-tool test with a fake child, real child transcript, temporary Git repository, and SQLite workspace metadata. Extend that coverage with failure and disposition cases. Cover:
+The current pass added focused manager and parent-action tests plus an end-to-end registered-tool test with a fake child, real child transcript, temporary Git repository, and SQLite workspace metadata. Extend that coverage with real failure-state and disposition cases. Cover:
 
 1. changed isolated `spawn` -> `collect` -> `revise`;
 2. capture the exact revision prompt and assert real paragraph newlines;
@@ -198,13 +198,13 @@ Also add a focused prompt-rendering assertion so the escaped-newline regression 
 
 ### Phase 2: Fix prompt and definition resolution
 
-- Change the revision task join to real newlines.
+- The revision prompt/session continuation fix is complete.
 - The current path uses the lifecycle discovery callback and reopens the child transcript. Continue testing that it applies the same configuration and validation policy as initial start.
 - The current implementation deliberately uses a new logical run identity while continuing the old child session. Preserve and document this distinction in future changes.
 
 ### Phase 3: Make lease handoff failure-safe
 
-Choose and test one ownership strategy:
+Focused parent-action tests now cover the current compensating-rollback strategy. Add real workspace-state assertions around the same failure cases, then choose whether the strategy is sufficient or needs a first-class reservation/state:
 
 - transfer only after the new run has been successfully created and is ready to execute; or
 - retain transfer-before-start but provide an atomic/compensating rollback that restores the old lease when no new result was prepared; or

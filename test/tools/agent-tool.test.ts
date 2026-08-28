@@ -31,6 +31,116 @@ afterEach(() => {
     for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+function revisionActionFixture() {
+    const record = {
+        ownerSessionId: "parent-session",
+        runId: "worker-1",
+        runInstanceId: "worker-instance-1",
+        parentCwd: process.cwd(),
+        title: "Implement fix",
+        agent: "worker",
+        agentSource: "builtin",
+        task: "Original task",
+        status: "removed",
+        background: true,
+        mutating: true,
+        workspaceId: "workspace-1",
+        childSessionFile: "/tmp/agent-child.jsonl",
+        childSessionLeafId: "leaf-1",
+        startedAt: 1,
+        updatedAt: 2,
+        usageSnapshot: ZERO_USAGE,
+    };
+    const workspace = {
+        id: "workspace-1",
+        cwd: process.cwd(),
+        repositoryRoot: process.cwd(),
+        worktreePath: "/tmp/workspace-1",
+        slug: "workspace-1",
+        baseRevision: "base-revision",
+        setupState: "ready",
+        status: "review_required",
+        leaseOwnerSessionId: "parent-session",
+        leaseRunId: "worker-1",
+        leaseRunInstanceId: "worker-instance-1",
+        leaseKind: "task",
+        latestResult: {
+            id: "result-1",
+            workspaceId: "workspace-1",
+            runId: "worker-1",
+            runInstanceId: "worker-instance-1",
+            baseRevision: "base-revision",
+            workerHead: "worker-head",
+            commitRange: "base-revision..worker-head",
+            commits: ["worker-head"],
+            preparedAt: 3,
+            status: "prepared",
+        },
+        createdAt: 1,
+        updatedAt: 2,
+    };
+    const definition = { name: "worker", source: "builtin", capabilities: ["edit"] };
+    const continuationOutcome = {
+        content: "Revised result",
+        details: {
+            runId: "worker-2",
+            runInstanceId: "worker-instance-2",
+            title: "Implement fix revision",
+            agent: "worker",
+            status: "completed",
+            background: false,
+            task: "Original task",
+            workspaceId: "workspace-1",
+            recentActivity: [],
+            usage: ZERO_USAGE,
+            startedAt: 4,
+            updatedAt: 5,
+        },
+        usage: ZERO_USAGE,
+        isError: false,
+    };
+    const manager = {
+        flushPersistence: vi.fn(async () => {}),
+        reserveRunIdentity: vi.fn(() => ({ runId: "worker-2", runInstanceId: "worker-instance-2" })),
+        startContinuation: vi.fn(async () => continuationOutcome),
+    };
+    const ctx = {
+        cwd: process.cwd(),
+        isProjectTrusted: () => true,
+        sessionManager: { getSessionId: () => "parent-session" },
+        ui: { notify: () => {} },
+    };
+    return {
+        record,
+        workspace,
+        definition,
+        continuationOutcome,
+        manager,
+        ctx,
+        progress: vi.fn(),
+        events: {} as any,
+        discover: vi.fn(() => ({ agents: [definition], diagnostics: [] })),
+    };
+}
+
+function configureRevisionAction(fixture: ReturnType<typeof revisionActionFixture>) {
+    vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([fixture.record] as any);
+    vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(fixture.workspace as any);
+    return vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
+}
+
+async function executeRevisionAction(fixture: ReturnType<typeof revisionActionFixture>): Promise<unknown> {
+    return executeParentWorkspaceAction(
+        { action: "revise", runId: fixture.record.runId, guidance: "Apply feedback" },
+        fixture.ctx as any,
+        fixture.manager as any,
+        undefined,
+        fixture.progress,
+        fixture.events,
+        fixture.discover,
+    );
+}
+
 describe("agent extension registration", () => {
     it("keeps setup status for non-completed task outcomes", () => {
         const setupRuns = new Map<string, AgentRunSummary>([
@@ -713,6 +823,72 @@ describe("agent extension registration", () => {
             "worker-instance-1",
             "worker-instance-2",
         );
+    });
+
+    it("does not transfer the workspace when continuation setup fails", async () => {
+        const fixture = revisionActionFixture();
+        const transferSpy = configureRevisionAction(fixture);
+        const startError = new Error("child session could not be reopened");
+        fixture.manager.startContinuation.mockRejectedValue(startError);
+
+        await expect(executeRevisionAction(fixture)).rejects.toBe(startError);
+        expect(transferSpy).not.toHaveBeenCalled();
+    });
+
+    it("leaves the original lease when revision lease transfer fails", async () => {
+        const fixture = revisionActionFixture();
+        const transferError = new Error("lease transfer failed");
+        const transferSpy = configureRevisionAction(fixture);
+        transferSpy.mockRejectedValue(transferError);
+
+        await expect(executeRevisionAction(fixture)).rejects.toBe(transferError);
+        expect(fixture.manager.startContinuation).toHaveBeenCalledOnce();
+        expect(transferSpy).toHaveBeenCalledOnce();
+        expect(transferSpy).toHaveBeenCalledWith(
+            "workspace-1",
+            "parent-session",
+            "worker-1",
+            "worker-2",
+            "task",
+            undefined,
+            "worker-instance-1",
+            "worker-instance-2",
+        );
+    });
+
+    it("restores the original lease when revised result finalization fails", async () => {
+        const fixture = revisionActionFixture();
+        const transferSpy = configureRevisionAction(fixture);
+        const finalizationError = new Error("result finalization failed");
+        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockRejectedValue(finalizationError);
+
+        await expect(executeRevisionAction(fixture)).rejects.toBe(finalizationError);
+        expect(transferSpy).toHaveBeenCalledTimes(2);
+        expect(transferSpy).toHaveBeenNthCalledWith(
+            2,
+            "workspace-1",
+            "parent-session",
+            "worker-2",
+            "worker-1",
+            "task",
+            undefined,
+            "worker-instance-2",
+            "worker-instance-1",
+        );
+    });
+
+    it("preserves the finalization error when lease rollback fails", async () => {
+        const fixture = revisionActionFixture();
+        const finalizationError = new Error("result finalization failed");
+        const rollbackError = new Error("lease rollback failed");
+        const transferSpy = configureRevisionAction(fixture);
+        transferSpy
+            .mockResolvedValueOnce()
+            .mockRejectedValueOnce(rollbackError);
+        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockRejectedValue(finalizationError);
+
+        await expect(executeRevisionAction(fixture)).rejects.toBe(finalizationError);
+        expect(transferSpy).toHaveBeenCalledTimes(2);
     });
 
     it("prepares and releases a no-change isolated foreground result", async () => {
