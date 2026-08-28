@@ -6,7 +6,7 @@ category: architecture
 
 # Cwd-confinement heuristic
 
-The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`. Direct read/write path checks are also implemented in `src/modules/sandbox/heuristics.ts` and used by `src/tools/file-permissions.ts`; path checks classify read access as `SAFE_READONLY`, write access as `SAFE_EDIT`, and rejected access as `UNSAFE`. Runtime-managed temporary scratchpads are supplied as additional cwd-confinement roots; scratchpad filenames bypass sensitive-name filtering, but canonical/symlink containment remains enforced.
+The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`. Direct read/write path checks are implemented in `src/modules/sandbox/heuristics/` and used by `src/tools/file-permissions.ts`; callers still import through the public `src/modules/sandbox/heuristics/index.ts` facade (formerly a single file). path checks classify read access as `SAFE_READONLY`, write access as `SAFE_EDIT`, and rejected access as `UNSAFE`. Runtime-managed temporary scratchpads are supplied as additional cwd-confinement roots; scratchpad filenames bypass sensitive-name filtering, but canonical/symlink containment remains enforced.
 
 ## Resolution order
 
@@ -15,6 +15,17 @@ The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` a
 - A non-`ask` `**` default is authoritative: heuristics do not relax `deny` or downgrade `allow`.
 - `deny` dominates; unresolved segments force `ask`; policy permissions combine most-restrictively; heuristic-only chains resolve to the configured heuristic permission (normally `allow:sandbox`). The heuristic classifiers return `Heuristic.SAFE_READONLY`, `Heuristic.SAFE_EDIT`, or `Heuristic.UNSAFE`; the resolver only treats the two SAFE variants as grants and maps them to the configured execution permission. `getCwdConfinementAssessment()`, `getArgsConfinementAssessment()`, and `getPathConfinementAssessment()` additionally return structured `UnsafeReason` codes and deduplicated semantic `CommandTag`s for future scout/review agents. Tags are emitted only by successfully classified command specs and let runtime policy apply contextual safeguards without reparsing shell text; `CommandTag.GIT_STATUS` currently drives the child fsmonitor check.
 - Chain operators remain parser arguments and must be present in whole-command patterns.
+
+## Module layout
+
+`src/modules/sandbox/heuristics/index.ts` is the public facade; it re-exports classifications, assessments, state helpers, chain utilities, and command-registry types, and implements the config-resolving entrypoints. The implementation is split into internals with clear responsibilities, all kept private to callers outside the module:
+
+- `heuristics/types.ts` — public classifications, unsafe reasons, assessment/diagnostics helpers, and cwd-state contracts.
+- `heuristics/path-policy.ts` — lexical/canonical path checks, sensitive patterns, additional-root pairing, symlink containment, directory/hard-link checks, and `buildConfinementOptions`.
+- `heuristics/command-access.ts` — `CommandSpec` flag/positional interpretation, shell substitution handling (via an injected evaluator callback to avoid cycles), redirections, and custom safe-Bash parsing.
+- `heuristics/evaluator.ts` — shell parsing, chain splitting, modeled `cd`/`pushd`/`popd` state, leading environment checks, and command-confinement evaluation.
+
+Existing callers import from `./heuristics` and receive the same public API. No other module should depend on the internal split files directly.
 
 ## Command registry
 
