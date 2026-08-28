@@ -1,6 +1,7 @@
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 
 import type { AgentEvent, AgentEventPayload, AgentEventSink } from "../contracts/events";
+import type { AgentRunSummary } from "../contracts/runs";
 
 export type {
     AgentEvent,
@@ -13,6 +14,28 @@ export type {
 
 /** Shared pi event channel for delegated-agent runtime changes. */
 export const AGENT_EVENT_CHANNEL = "pi-coder:agent-event";
+
+/** Agent progress snapshot consumed by the parent status widget. */
+export const AGENT_STATUS_EVENT = "pi-coder:agent-status";
+
+export interface AgentStatusEvent {
+    runs: AgentRunSummary[];
+    hiddenCount: number;
+}
+
+export function emitAgentStatus(
+    events: EventBus | undefined,
+    runs: AgentRunSummary[],
+    hiddenCount: number,
+): void {
+    events?.emit(AGENT_STATUS_EVENT, { runs, hiddenCount } satisfies AgentStatusEvent);
+}
+
+export function isAgentStatusEvent(value: unknown): value is AgentStatusEvent {
+    if (!value || typeof value !== "object") return false;
+    const event = value as Partial<AgentStatusEvent>;
+    return Array.isArray(event.runs) && typeof event.hiddenCount === "number";
+}
 
 /** Bridges typed pi-coder events onto pi's shared event bus. */
 export function createAgentEventSink(events: EventBus | undefined): AgentEventSink {

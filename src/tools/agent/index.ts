@@ -13,7 +13,7 @@ import {
 } from "./observability/trace";
 import { registerAgentTool as registerAgentToolDefinition } from "./presentation/tool";
 
-export { clearCompletedWorkspaceSetupRun } from "../../tui/agents";
+export { clearCompletedWorkspaceSetupRun } from "./presentation/status";
 
 export default function registerAgentTool(
     pi: ExtensionAPI,
@@ -36,7 +36,7 @@ export default function registerAgentTool(
         );
         outcome.details = { ...outcome.details, response: outcome.content };
         outcome.content = formatAgentToolContent(params.action, outcome);
-        lifecycle.refreshAgentUi(ctx);
+        lifecycle.publishAgentStatus();
         lifecycle.reconcileMailbox();
         return outcome;
     });

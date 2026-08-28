@@ -9,14 +9,10 @@ export {
 } from "./workspace";
 export { AgentSessionDetailComponent } from "./session-detail";
 export {
-    AGENT_WIDGET_ID,
     AgentActivityWidget,
-    clearAgentUi,
-    clearCompletedWorkspaceSetupRun,
     firstLinePreview,
     formatToolCounts,
     oneLinePreview,
-    updateAgentUi,
 } from "./activity-widget";
 export { diagnosticText } from "../../tools/agent/presentation/text";
 export type {

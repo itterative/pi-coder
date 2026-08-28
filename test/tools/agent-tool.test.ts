@@ -2,7 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 
+import { registerStatusWidget } from "../../src/tui/status";
 import registerAgentTool, { clearCompletedWorkspaceSetupRun } from "../../src/tools/agent";
 import { registerAgentTool as registerAgentToolDefinition } from "../../src/tools/agent/presentation/tool";
 import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/observability/events";
@@ -486,6 +488,7 @@ describe("agent extension registration", () => {
                 tool = definition;
             },
             registerCommand() {},
+            events: createEventBus(),
             sendMessage(message: any, options: any) {
                 sentMessages.push({ message, options });
             },
@@ -524,6 +527,8 @@ describe("agent extension registration", () => {
         };
         const ctx = {
             cwd: process.cwd(),
+            mode: "tui",
+            hasUI: true,
             isProjectTrusted: () => false,
             isIdle: () => false,
             ui: {
@@ -544,6 +549,8 @@ describe("agent extension registration", () => {
                 },
             },
         };
+        registerStatusWidget(pi);
+        await handlers.session_start.at(-1)?.({}, ctx);
 
         const spawned = await tool.execute(
             "call-1",

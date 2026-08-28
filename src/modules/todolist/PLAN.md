@@ -289,13 +289,15 @@ Instead:
 Cleanup must happen for successful, blocked, failed, canceled, and aborted
 calls whenever a matching result or lifecycle cleanup is available.
 
-## Parent TODO widget
+## Parent TODO status section
 
-Add a separate parent widget, likely under `src/tui/`, with a distinct key such
-as `pi-coder-todolist`. It must coexist with the existing agent activity widget
-rather than replacing it.
+The parent TODO display is composed into the shared status widget under
+`src/tui/status/`, with the distinct status key `pi-coder-status`. It shares one
+above-editor registration with the existing agent activity section rather than
+stacking a second widget. The agent and TODO renderers remain separate
+components so their domain state and lifecycle rules stay independent.
 
-The widget:
+The status widget:
 
 - reads the parent runtime's parsed TODO model;
 - appears only when a valid TODO file has at least one entry;
@@ -313,9 +315,10 @@ external edits become visible on the next pi event that requests a refresh.
 The widget should use shared TODO formatting helpers rather than embedding a
 second parser or status interpretation.
 
-## Worker activity widget
+## Worker activity section
 
-Do not add a second worker widget. Extend the existing agent activity path:
+Do not add a second worker widget. Extend the existing agent activity section in
+the shared status widget:
 
 ```text
 child TODO state
@@ -382,7 +385,7 @@ that authority.
 
 ### Phase 4: UI and live progress
 
-- Add the parent TODO widget and lifecycle refresh behavior.
+- Add the parent TODO status section and shared-widget lifecycle refresh behavior.
 - Thread volatile worker TODO state through child progress and run summaries.
 - Extend the existing activity widget with a compact TODO summary.
 - Add file snapshots for parent and worker rendering changes.

@@ -26,10 +26,10 @@ import type { AgentTraceStore } from "./observability/trace";
 import type { AgentWorkspace } from "./contracts/workspaces";
 import type { WorkspaceSetupUiUpdate } from "./workspaces/setup";
 import {
-    clearAgentUi,
     clearCompletedWorkspaceSetupRun,
-    updateAgentUi,
-} from "../../tui/agents";
+    visibleAgentRuns,
+} from "./presentation/status";
+import { emitAgentStatus } from "./observability/events";
 import { diagnosticText } from "./presentation/text";
 
 export type WorkspaceEventAction = "created" | "updated" | "lease_changed" | "result_changed" | "removed";
@@ -60,8 +60,9 @@ export class AgentLifecycle {
         this.managerValue = this.createManager();
         this.mailbox = new AgentMailbox(pi);
         this.unsubscribeAgentUiEvents = subscribeAgentEvents(pi.events, (event) => {
-            if (!this.activeContext || this.activeContext.cwd !== event.cwd) return;
-            this.refreshAgentUi(this.activeContext);
+            const eventCwd = event.type === "run" ? event.parentCwd ?? event.cwd : event.cwd;
+            if (!this.activeContext || this.activeContext.cwd !== eventCwd) return;
+            this.publishAgentStatus();
         });
     }
 
@@ -127,6 +128,7 @@ export class AgentLifecycle {
             this.activeContext = ctx;
             this.mailbox.clear();
             this.notifiedMutationFiles.clear();
+            this.setupRuns.clear();
             // Drain old-branch writes before detaching persistence. Shutdown must not
             // append records at the newly selected branch leaf.
             await this.manager.flushPersistence();
@@ -134,9 +136,8 @@ export class AgentLifecycle {
             this.manager.setPersistence(undefined);
             await this.manager.shutdown();
             emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "reset" });
-            this.setupRuns.clear();
-            clearAgentUi(ctx, this.pi.events);
             this.managerValue = this.createManager();
+            this.publishAgentStatus();
             const discovered = this.discover(ctx);
             this.cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
             await this.restoreManager(ctx);
@@ -146,7 +147,6 @@ export class AgentLifecycle {
             this.mailbox.close();
             this.notifiedMutationFiles.clear();
             this.setupRuns.clear();
-            clearAgentUi(ctx, this.pi.events);
             await this.manager.shutdown();
             await this.manager.flushPersistence();
             this.manager.closePersistence();
@@ -182,8 +182,9 @@ export class AgentLifecycle {
         this.cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
     }
 
-    refreshAgentUi(ctx: ExtensionContext): void {
-        updateAgentUi(ctx, this.manager, this.setupRunSummaries, this.pi.events);
+    publishAgentStatus(): void {
+        const visible = visibleAgentRuns(this.manager, this.setupRunSummaries);
+        emitAgentStatus(this.pi.events, visible.runs, visible.hiddenCount);
     }
 
     emitWorkspaceEvent(
@@ -223,12 +224,12 @@ export class AgentLifecycle {
             mutating: true,
             workspaceId: workspace.id,
         });
-        this.refreshAgentUi(ctx);
+        this.publishAgentStatus();
     }
 
     clearCompletedWorkspaceSetup(ctx: ExtensionContext, details: AgentRunDetails): void {
         if (clearCompletedWorkspaceSetupRun(this.setupRuns, details)) {
-            this.refreshAgentUi(ctx);
+            this.publishAgentStatus();
         }
     }
 
@@ -242,7 +243,7 @@ export class AgentLifecycle {
             ) {
                 this.clearCompletedWorkspaceSetup(ctx, details);
             }
-            this.refreshAgentUi(ctx);
+            this.publishAgentStatus();
             if (
                 details.background
                 && details.mutating
@@ -334,7 +335,7 @@ export class AgentLifecycle {
                 "info",
             );
         }
-        this.refreshAgentUi(ctx);
+        this.publishAgentStatus();
         emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "restored" });
         this.reconcileMailbox();
         await this.manager.flushPersistence();

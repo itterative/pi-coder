@@ -2,13 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createEventBus, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { renderText } from "../../helpers";
 
 import registerTodoListExtension from "../../../src/modules/todolist";
 import registerScratchpadExtension, { getScratchpadPath } from "../../../src/modules/scratchpad";
-import { TodoListWidget } from "../../../src/tui/todolist-widget";
+import { PiCoderStatusWidget, registerStatusWidget, STATUS_WIDGET_ID } from "../../../src/tui/status";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
@@ -26,7 +26,9 @@ function harness(): {
     handler(name: string): Handler;
 } {
     const handlers = new Map<string, Handler[]>();
+    const events = createEventBus();
     const pi = {
+        events,
         on(name: string, callback: Handler) {
             const registered = handlers.get(name) ?? [];
             registered.push(callback);
@@ -340,6 +342,7 @@ describe("TODO runtime extension", () => {
 
     it("refreshes and clears the parent widget around valid and invalid updates", async () => {
         const { pi, handler } = harness();
+        registerStatusWidget(pi);
         const registrations: Array<{ key: string; content: unknown }> = [];
         const sessionManager = {};
         const ctx = {
@@ -363,8 +366,8 @@ describe("TODO runtime extension", () => {
         await handler("tool_result")({ toolName: "write" }, ctx);
 
         const widgetRegistration = registrations.findLast((entry) => entry.content !== undefined);
-        expect(widgetRegistration?.key).toBe("pi-coder-todolist");
-        const widget = (widgetRegistration?.content as (tui: unknown) => TodoListWidget)({
+        expect(widgetRegistration?.key).toBe(STATUS_WIDGET_ID);
+        const widget = (widgetRegistration?.content as (tui: unknown) => PiCoderStatusWidget)({
             requestRender() {},
         });
         expect(renderText(widget, 80)).toContain("TODO 0/1 · Inspect the implementation");

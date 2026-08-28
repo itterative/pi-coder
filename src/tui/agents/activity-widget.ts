@@ -1,26 +1,13 @@
-import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { EventBus } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Spinner } from "../spinner";
-import type { AgentRunDetails, AgentRunSummary } from "../../tools/agent/contracts/runs";
+import type { AgentRunSummary } from "../../tools/agent/contracts/runs";
 import { formatTodoProgress } from "../../modules/todolist/format";
 export { diagnosticText } from "../../tools/agent/presentation/text";
 
-export const AGENT_WIDGET_ID = "pi-coder-agent-activity";
 const MAX_PREVIEW_CHARS = 72;
 const MAX_ACTIVITY_CHARS = 100;
-
-interface AgentWidgetState {
-    runs: AgentRunSummary[];
-    hiddenCount: number;
-    component?: AgentActivityWidget;
-}
-
-const widgetStates = new WeakMap<object, AgentWidgetState>();
-
-function widgetOwner(ctx: ExtensionContext, events?: EventBus): object {
-    return (events ?? ctx.ui) as object;
-}
 
 export function oneLinePreview(text: string, maxChars = 180): string {
     const normalized = text.replace(/\s+/g, " ").trim();
@@ -58,14 +45,6 @@ export function formatToolCounts(toolCounts: Record<string, number> | undefined)
         if (count) parts.push(`${count} ${count === 1 ? group.singular : group.plural}`);
     }
     return parts.join(" · ");
-}
-
-function isActive(run: AgentRunSummary): boolean {
-    return run.status === "starting"
-        || run.status === "running"
-        || run.status === "waiting_for_permission"
-        || run.status === "waiting_for_parent"
-        || run.status === "interrupted";
 }
 
 function renderRunningRun(run: AgentRunSummary, spinnerFrame: string): string[] {
@@ -144,66 +123,4 @@ export class AgentActivityWidget implements Component {
     private updateSpinner(): void {
         this.spinner.setActive(this.runs.some((run) => run.status === "running"));
     }
-}
-
-function visibleRuns(
-    manager: { listRuns(): AgentRunSummary[] },
-    extraRuns: AgentRunSummary[],
-): { runs: AgentRunSummary[]; hiddenCount: number } {
-    const runs = [...manager.listRuns(), ...extraRuns];
-    const activeRuns = runs.filter(isActive);
-    const terminalRuns = runs.filter((run) => !activeRuns.includes(run)).slice(-3);
-    const visible = [...activeRuns, ...terminalRuns];
-    return { runs: visible, hiddenCount: runs.length - visible.length };
-}
-
-export function updateAgentUi(
-    ctx: ExtensionContext,
-    manager: { listRuns(): AgentRunSummary[] },
-    extraRuns: AgentRunSummary[] = [],
-    events?: EventBus,
-): void {
-    const visible = visibleRuns(manager, extraRuns);
-    const owner = widgetOwner(ctx, events);
-    const state = widgetStates.get(owner);
-    if (!visible.runs.length) {
-        clearAgentUi(ctx, events);
-        return;
-    }
-    if (state) {
-        state.runs = visible.runs;
-        state.hiddenCount = visible.hiddenCount;
-        state.component?.setRuns(visible.runs, visible.hiddenCount);
-        return;
-    }
-    const nextState: AgentWidgetState = { runs: visible.runs, hiddenCount: visible.hiddenCount };
-    widgetStates.set(owner, nextState);
-    ctx.ui.setWidget(
-        AGENT_WIDGET_ID,
-        (tui) => {
-            const component = new AgentActivityWidget(tui, nextState.runs, nextState.hiddenCount, events);
-            nextState.component = component;
-            return component;
-        },
-        { placement: "aboveEditor" },
-    );
-}
-
-export function clearAgentUi(ctx: ExtensionContext, events?: EventBus): void {
-    ctx.ui.setWidget(AGENT_WIDGET_ID, undefined);
-    widgetStates.delete(widgetOwner(ctx, events));
-}
-
-export function clearCompletedWorkspaceSetupRun(
-    setupRuns: Map<string, AgentRunSummary>,
-    details: Pick<AgentRunDetails, "agent" | "status" | "workspaceId">,
-): boolean {
-    if (details.status !== "completed" || !details.workspaceId || details.agent === "workspace-setup") return false;
-    let removed = false;
-    for (const [setupRunId, setupRun] of setupRuns) {
-        if (setupRun.workspaceId !== details.workspaceId) continue;
-        setupRuns.delete(setupRunId);
-        removed = true;
-    }
-    return removed;
 }

@@ -229,7 +229,7 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                         lifecycle.events,
                     );
                     lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
-                    lifecycle.refreshAgentUi(ctx);
+                    lifecycle.publishAgentStatus();
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
                     ctx.ui.notify(`Could not resume ${item.id}: ${message}`, "warning");
@@ -243,7 +243,7 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                         lifecycle.events,
                     );
                     lifecycle.notifyUserCanceled(outcome.details);
-                    lifecycle.refreshAgentUi(ctx);
+                    lifecycle.publishAgentStatus();
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
                     ctx.ui.notify(`Could not cancel ${item.id}: ${message}`, "warning");

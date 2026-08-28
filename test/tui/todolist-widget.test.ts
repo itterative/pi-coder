@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createEventBus, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { snapshotText, renderText } from "../helpers";
+import { TodoListWidget } from "../../src/tui/todolist-widget";
 import {
-    clearTodoWidget,
-    TODO_WIDGET_ID,
-    TodoListWidget,
-    updateTodoWidget,
-} from "../../src/tui/todolist-widget";
+    PiCoderStatusWidget,
+    registerStatusWidget,
+    STATUS_WIDGET_ID,
+} from "../../src/tui/status";
+import { emitTodoStatus } from "../../src/modules/todolist/events";
+import { emitAgentStatus } from "../../src/tools/agent/observability/events";
 
 const todo = {
     path: "/tmp/TODO.md",
@@ -20,6 +22,21 @@ const todo = {
     ],
     body: "",
 };
+
+function registerStatusForContext(ctx: ExtensionContext, events: ReturnType<typeof createEventBus>): (name: string, nextContext?: ExtensionContext) => void {
+    const handlers = new Map<string, Array<(event: unknown, context: ExtensionContext) => unknown>>();
+    registerStatusWidget({
+        events,
+        on(name: string, handler: (event: unknown, context: ExtensionContext) => unknown) {
+            const registered = handlers.get(name) ?? [];
+            registered.push(handler);
+            handlers.set(name, registered);
+        },
+    } as any);
+    return (name, nextContext = ctx) => {
+        for (const handler of handlers.get(name) ?? []) handler({}, nextContext);
+    };
+}
 
 describe("TODO widget", () => {
     it("renders bounded progress and status-marked titles", () => {
@@ -42,18 +59,93 @@ describe("TODO widget", () => {
                 },
             },
         } as unknown as ExtensionContext;
+        const events = createEventBus();
+        const trigger = registerStatusForContext(ctx, events);
+        trigger("session_start");
 
-        updateTodoWidget(ctx, todo);
+        emitTodoStatus(events, todo);
         expect(registrations).toHaveLength(1);
-        expect(registrations[0]?.key).toBe(TODO_WIDGET_ID);
-        const factory = registrations[0]?.content as (tui: unknown) => TodoListWidget;
+        expect(registrations[0]?.key).toBe(STATUS_WIDGET_ID);
+        const factory = registrations[0]?.content as (tui: unknown) => PiCoderStatusWidget;
         const component = factory({ requestRender() {} });
         const updated = { ...todo, items: todo.items.slice(0, 2) };
-        updateTodoWidget(ctx, updated);
+        emitTodoStatus(events, updated);
         expect(registrations).toHaveLength(1);
         expect(renderText(component, 80)).toContain("TODO 1/2 · Implement the feature with careful validation");
-        clearTodoWidget(ctx);
+        emitTodoStatus(events, undefined);
         expect(registrations.at(-1)?.content).toBeUndefined();
+        component.dispose();
+    });
+
+    it("combines agent activity and TODO progress in one widget", () => {
+        const registrations: Array<{ key: string; content: unknown }> = [];
+        const ctx = {
+            mode: "tui",
+            hasUI: true,
+            ui: {
+                setWidget(key: string, content: unknown) {
+                    registrations.push({ key, content });
+                },
+            },
+        } as unknown as ExtensionContext;
+        const events = createEventBus();
+        const trigger = registerStatusForContext(ctx, events);
+        trigger("session_start");
+        const run = {
+            runId: "worker-1",
+            title: "Implement the feature",
+            agent: "worker",
+            status: "running",
+            task: "Implement the feature",
+            startedAt: Date.now(),
+            phase: "Thinking",
+            toolCounts: {},
+        } as any;
+
+        emitAgentStatus(events, [run], 0);
+        emitTodoStatus(events, todo);
+
+        expect(registrations).toHaveLength(1);
+        expect(registrations[0]?.key).toBe(STATUS_WIDGET_ID);
+        const widget = (registrations[0]?.content as (tui: unknown) => PiCoderStatusWidget)({
+            requestRender() {},
+        });
+        const rendered = renderText(widget, 100);
+        expect(rendered).toContain("worker-1");
+        expect(rendered).toContain("TODO 1/4");
+
+        emitAgentStatus(events, [], 0);
+        expect(renderText(widget, 100)).toContain("TODO 1/4");
+        emitTodoStatus(events, undefined);
+        expect(registrations.at(-1)?.content).toBeUndefined();
+        widget.dispose();
+    });
+
+    it("cleans event-bus state when clearing from a non-TUI lifecycle", () => {
+        const registrations: Array<{ key: string; content: unknown }> = [];
+        const ctx = {
+            mode: "tui",
+            hasUI: true,
+            ui: {
+                setWidget(key: string, content: unknown) {
+                    registrations.push({ key, content });
+                },
+            },
+        } as unknown as ExtensionContext;
+        const events = createEventBus();
+        const trigger = registerStatusForContext(ctx, events);
+        trigger("session_start");
+
+        emitTodoStatus(events, todo);
+        const component = (registrations[0]?.content as (tui: unknown) => PiCoderStatusWidget)({
+            requestRender() {},
+        });
+        trigger("session_shutdown", { ...ctx, mode: "print", hasUI: false } as ExtensionContext);
+        trigger("session_start");
+        emitTodoStatus(events, todo);
+
+        expect(registrations).toHaveLength(2);
+        expect(registrations[1]?.key).toBe(STATUS_WIDGET_ID);
         component.dispose();
     });
 

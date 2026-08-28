@@ -9,8 +9,10 @@ import registerAskUserTool from "./tools/ask_user";
 import registerBashToolHook from "./tools/bash";
 import registerReadToolHook from "./tools/read";
 import registerWriteToolHook from "./tools/write";
+import { registerStatusWidget } from "./tui/status";
 
 export default function (pi: ExtensionAPI) {
+    registerStatusWidget(pi);
     registerMemoryExtension(pi);
     registerScratchpadExtension(pi);
     registerTodoListExtension(pi);

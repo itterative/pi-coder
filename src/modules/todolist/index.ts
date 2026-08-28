@@ -20,7 +20,7 @@ import {
     type TodoStatus,
 } from "./parser";
 import { summarizeTodoList, type TodoProgress } from "./format";
-import { clearTodoWidget, updateTodoWidget } from "../../tui/todolist-widget";
+import { emitTodoStatus } from "./events";
 
 const EMPTY_TODO_DOCUMENT = "---\nversion: 1\ntodos: []\n---\n";
 
@@ -195,7 +195,7 @@ export default function registerTodoListExtension(
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
         if (!scratchpadPath) {
             options.onTodoProgress?.(undefined);
-            clearTodoWidget(ctx);
+            emitTodoStatus(pi.events, undefined);
             return;
         }
 
@@ -206,7 +206,7 @@ export default function registerTodoListExtension(
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code === "ENOENT") {
                 options.onTodoProgress?.(undefined);
-                clearTodoWidget(ctx);
+                emitTodoStatus(pi.events, undefined);
             }
             return;
         }
@@ -215,11 +215,7 @@ export default function registerTodoListExtension(
             const todo = parseTodoList(content, todoPath);
             const progress = summarizeTodoList(todo);
             options.onTodoProgress?.(progress);
-            if (progress) {
-                updateTodoWidget(ctx, todo);
-            } else {
-                clearTodoWidget(ctx);
-            }
+            emitTodoStatus(pi.events, progress ? todo : undefined);
         } catch {
             // Preserve the last valid progress/widget while the validation
             // hook reports the malformed update to the agent.
@@ -230,13 +226,13 @@ export default function registerTodoListExtension(
         await initializeTodoFile(ctx);
         await refresh(ctx);
     });
-    pi.on("session_tree", (_event, ctx) => {
+    pi.on("session_tree", () => {
         options.onTodoProgress?.(undefined);
-        clearTodoWidget(ctx);
+        emitTodoStatus(pi.events, undefined);
     });
-    pi.on("session_shutdown", (_event, ctx) => {
+    pi.on("session_shutdown", () => {
         options.onTodoProgress?.(undefined);
-        clearTodoWidget(ctx);
+        emitTodoStatus(pi.events, undefined);
     });
 
     pi.on("before_agent_start", (event, ctx) => {

@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 
 import { BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
+import {
+    AGENT_EVENT_CHANNEL,
+    AGENT_STATUS_EVENT,
+} from "../../src/tools/agent/observability/events";
 import type { ChildAgentHandle } from "../../src/tools/agent/contracts/runs";
 import type { WorkerMutationReport } from "../../src/tools/agent/contracts/mutations";
 import { AgentLifecycle } from "../../src/tools/agent/lifecycle";
@@ -141,6 +145,69 @@ afterEach(async () => {
 });
 
 describe("agent lifecycle worker-change notifications", () => {
+    it("publishes status for isolated run events using the parent cwd", async () => {
+        const events = createEventBus();
+        const statusSnapshots: unknown[] = [];
+        events.on(AGENT_STATUS_EVENT, (data) => {
+            statusSnapshots.push(data);
+        });
+        const lifecycle = new AgentLifecycle({ events, sendMessage: vi.fn() } as any);
+        (lifecycle as any).activeContext = { cwd: "/repo/project" };
+
+        events.emit(AGENT_EVENT_CHANNEL, {
+            type: "run",
+            action: "created",
+            cwd: "/tmp/worktree",
+            parentCwd: "/repo/project",
+            timestamp: Date.now(),
+            runId: "worker-1",
+            agent: "worker",
+            background: false,
+            status: "starting",
+        });
+
+        expect(statusSnapshots).toHaveLength(1);
+        await lifecycle.manager.shutdown();
+    });
+
+    it("publishes an empty status after clearing setup rows during a tree change", async () => {
+        const events = createEventBus();
+        const handlers = new Map<string, Array<(event: unknown, ctx: any) => unknown>>();
+        const statusSnapshots: Array<{ runs: unknown[]; hiddenCount: number }> = [];
+        events.on(AGENT_STATUS_EVENT, (data) => {
+            statusSnapshots.push(data as { runs: unknown[]; hiddenCount: number });
+        });
+        const pi = {
+            events,
+            on(event: string, handler: (event: unknown, ctx: any) => unknown) {
+                const registered = handlers.get(event) ?? [];
+                registered.push(handler);
+                handlers.set(event, registered);
+            },
+            sendMessage: vi.fn(),
+        } as any;
+        const lifecycle = new AgentLifecycle(pi, async () => new BlockingChild());
+        lifecycle.register();
+        const ctx = {
+            cwd: process.cwd(),
+            isProjectTrusted: () => false,
+            isIdle: () => true,
+            ui: { notify: vi.fn(), setWidget: vi.fn() },
+        } as any;
+        lifecycle.updateSetupRun(ctx, "workspace-setup-1", { id: "workspace-1", slug: "workspace" } as any, {
+            status: "completed",
+            activity: "Setup complete",
+        });
+        expect(statusSnapshots.at(-1)?.runs).toHaveLength(1);
+
+        await handlers.get("session_tree")?.[0]?.({}, ctx);
+
+        expect(statusSnapshots.at(-1)).toEqual({ runs: [], hiddenCount: 0 });
+        await lifecycle.manager.shutdown();
+        events.clear();
+    });
+
+
     it("notifies a busy parent once per newly changed path", async () => {
         const value = await fixture(true, false);
 
