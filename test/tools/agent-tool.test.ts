@@ -15,6 +15,7 @@ import * as runCatalog from "../../src/tools/agent/storage/run-catalog";
 import * as workspaceActions from "../../src/tools/agent/workspaces/actions";
 import * as workspaceResults from "../../src/tools/agent/workspaces/results";
 import * as workspaceFinalization from "../../src/tools/agent/workspaces/finalization";
+import * as workspaceGit from "../../src/tools/agent/workspaces/git";
 import * as workspaceSetup from "../../src/tools/agent/workspaces/setup";
 import * as workspaceStore from "../../src/tools/agent/workspaces/store";
 import { executeParentWorkspaceAction } from "../../src/tools/agent/workspaces/parent-actions";
@@ -124,6 +125,8 @@ function revisionActionFixture() {
 }
 
 function configureRevisionAction(fixture: ReturnType<typeof revisionActionFixture>) {
+    vi.spyOn(workspaceGit, "git").mockResolvedValue("worker-head");
+    vi.spyOn(workspaceGit, "hasAncestor").mockResolvedValue(true);
     vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([fixture.record] as any);
     vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(fixture.workspace as any);
     return vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
@@ -781,6 +784,8 @@ describe("agent extension registration", () => {
         const progress = vi.fn();
         const events = {} as any;
         const discover = vi.fn(() => ({ agents: [definition], diagnostics: [] }));
+        vi.spyOn(workspaceGit, "git").mockResolvedValue("worker-head");
+        vi.spyOn(workspaceGit, "hasAncestor").mockResolvedValue(true);
         vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record] as any);
         vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace as any);
         const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
@@ -823,6 +828,20 @@ describe("agent extension registration", () => {
             "worker-instance-1",
             "worker-instance-2",
         );
+    });
+
+    it("rejects a divergent workspace before starting a revision", async () => {
+        const fixture = revisionActionFixture();
+        const transferSpy = configureRevisionAction(fixture);
+        vi.mocked(workspaceGit.git).mockResolvedValue("divergent-head");
+        vi.mocked(workspaceGit.hasAncestor).mockResolvedValue(false);
+
+        await expect(executeRevisionAction(fixture)).rejects.toThrow(
+            "is not based on workspace base base-revision",
+        );
+        expect(fixture.manager.reserveRunIdentity).not.toHaveBeenCalled();
+        expect(fixture.manager.startContinuation).not.toHaveBeenCalled();
+        expect(transferSpy).not.toHaveBeenCalled();
     });
 
     it("does not transfer the workspace when continuation setup fails", async () => {

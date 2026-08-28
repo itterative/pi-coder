@@ -1,6 +1,6 @@
 # `revise` Investigation
 
-Status: investigation plus first implementation pass. The continuation/session flow, original-model selection, lifecycle discovery, and basic lease rollback changes are now implemented; ancestry policy and broader recovery coverage remain open.
+Status: investigation plus implementation passes. The continuation/session flow, original-model selection, lifecycle discovery, early divergent-history rejection, and basic lease rollback changes are implemented; broader recovery coverage remains open.
 
 This note records the findings and remaining work so the `revise` workflow can be fixed across multiple sessions. Do not modify `src/tools/agent/TODOS.md`; it is user-managed.
 
@@ -75,7 +75,7 @@ The historical workspace state associated with the TODO confirms the condition:
 
 The earlier result `16dff4f` was based on `2a25160`. The worktree was subsequently rebased onto a different history, leaving the persisted workspace base stale. This explains the observed error exactly.
 
-The guard may be correct as a safety policy, but the workflow must either preserve ancestry or explicitly support/reject divergent worktrees before starting a revision. It must not discover the problem only after the child has run.
+The guard is correct as a safety policy. The current `revise` path now performs this ancestry check before run identity reservation or child startup, rejects divergence, and preserves the existing result and lease. It does not silently normalize or accept divergent worktrees.
 
 ### 3. A failed revision could strand the workspace lease (partially resolved)
 
@@ -212,9 +212,9 @@ Focused parent-action tests now cover the current compensating-rollback strategy
 
 The chosen approach must preserve stale-run protections and must not allow another worker to claim the workspace during the handoff.
 
-### Phase 4: Decide divergent-history policy
+### Phase 4: Decide divergent-history policy — chosen
 
-There are three broad options:
+The implementation chooses **fail early and preserve state**. `revise` checks the current worktree HEAD against the recorded base before starting a child or transferring the lease. A divergent worktree is rejected with an explicit reconciliation/reset message, while the existing result and lease remain intact. The alternatives considered were:
 
 1. **Fail early and preserve state:** preflight the workspace ancestry before lease transfer and tell the parent to reset/reconcile explicitly.
 2. **Normalize before revision:** explicitly rebase/reset the workspace and update persisted base/result metadata only through a safe, user-visible operation.
@@ -247,4 +247,4 @@ rebased/divergent worktree
   -> revise becomes unrecoverable through normal run IDs
 ```
 
-The prompt/session portion is now corrected: revise reopens the original child transcript, preserves its recorded model, and sends only the revision guidance. Lease transfer now happens after the continuation starts and has compensating rollback around transfer/finalization. The remaining central design decision is whether divergent worktree histories should be supported or must be rejected before starting the child, with tests proving that every failure path remains recoverable.
+The prompt/session portion is now corrected: revise reopens the original child transcript, preserves its recorded model, and sends only the revision guidance. Lease transfer now happens after the continuation starts and has compensating rollback around transfer/finalization. The divergent-history decision is now settled: revisions fail before child startup when ancestry is broken. Remaining work is broader real-state failure coverage, explicit disposition behavior, definition validation, legacy compatibility, and manual lifecycle validation.

@@ -14,6 +14,7 @@ import { listAgentRunCatalog } from "../storage/run-catalog";
 import { executeWorkspaceAction } from "./actions";
 import { inspectAgentWorkspaceResult } from "./results";
 import { getAgentWorkspace, transferAgentWorkspaceLease } from "./store";
+import { git, hasAncestor } from "./git";
 
 function parentWorkspaceOutcome(
     record: Awaited<ReturnType<typeof listAgentRunCatalog>>[number],
@@ -155,6 +156,18 @@ export async function executeParentWorkspaceAction(
 
     // Remaining action is "revise": inspect/discard/apply branches returned above.
     requireParentWorkspaceLease(workspace, sessionId, params.runId, record.runInstanceId);
+    let workerHead: string;
+    try {
+        workerHead = await git(workspace.worktreePath, ["rev-parse", "HEAD"]);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new AgentActionError(`Could not inspect isolated workspace ${workspace.id} before revision: ${message}`);
+    }
+    if (!(await hasAncestor(workspace.worktreePath, workspace.baseRevision, workerHead))) {
+        throw new AgentActionError(
+            `Cannot revise workspace ${workspace.id}: worker revision ${workerHead} is not based on workspace base ${workspace.baseRevision}. Reconcile or reset the workspace explicitly before revising; the existing result was preserved.`,
+        );
+    }
     const discovered = discover(ctx);
     const definition = discovered.agents.find((agent) => agent.name === record.agent);
     if (!definition) throw new AgentActionError(`Unknown agent definition for ${record.agent}.`);

@@ -37,6 +37,69 @@ Use `/agents` to open the unified delegated-agent and workspace browser. The **A
 
 Use `/agents` to open the unified agent browser. Its Agents view shows delegated sessions (including internal workspace-setup agents), while Workspaces lists isolated workspaces for the current cwd, including setup state, lease state, Git clean/dirty state, changed-file counts, worktree path, and whether the workspace is available, leased, or requires review. Each project is limited to three persistent workspaces; reaching capacity reports the existing workspace leases instead of silently creating another worktree. Enter opens read-only session or workspace metadata. The workspace details view directly exposes `i` inspect changes, `a` apply, `t` retain, `r` reset for reuse, `d` discard, and `l` release a stale clean task lease; the result inspection stays in that same overlay and destructive or recovery actions require confirmation. While `/agents` is open, its visible overlay retains keyboard focus over nested non-overlay components. Workspaces marked `review_required` or holding a task lease are deliberately excluded from automatic reuse until explicitly dispositioned.
 
+## Revise flow
+
+`revise` is an explicit feedback cycle for a changed isolated result. It is available only while the current parent session still owns the workspace's `task` lease, the lease run and physical run instance match the requested run, and the latest workspace result is `prepared`. Results that were retained, applied, discarded, or released because they had no changes are not normally revisable.
+
+A revision continues the existing child conversation rather than recreating it:
+
+- The original child JSONL session and exact persisted leaf are reopened.
+- The parent's `guidance` is the only new child prompt. The original task and context are not sent again as a synthetic prompt.
+- The model recorded in the child session is preserved.
+- A new logical run ID and physical run instance identify the new workspace result. Use that returned ID for later `inspect`, `apply`, `discard`, or another `revise` action; the old result/run ID is stale for disposition.
+
+Before starting the child, `revise` reads the isolated worktree `HEAD` and checks that the recorded workspace `baseRevision` is an ancestor. A divergent history—such as a worktree rebased onto another branch—is rejected before child startup, lease transfer, or workspace mutation. The existing result and lease remain preserved; reconciliation or reset must be explicit.
+
+The old lease remains in place while the continuation is being created and run. Only after the continuation succeeds is the lease transferred to the new logical run, after which the revised worktree is finalized as a new prepared result. If transfer or finalization fails, pi-coder attempts to transfer the lease back to the old run. No workspace is silently reset, rebased, normalized, or applied.
+
+Expected lifecycle:
+
+```text
+┌──────────────────────────────────────────────────────────────────────┐
+│ agent(action="revise", runId=old, guidance=feedback)                 │
+└──────────────────────────────────┬───────────────────────────────────┘
+                                   │
+                                   v
+                 ┌────────────────────────────────┐
+                 │ Resolve parent-owned run and   │
+                 │ prepared task lease/result     │
+                 └───────────────┬────────────────┘
+                                 │ invalid
+                                 v
+                         [Reject; preserve state]
+                                 │ valid
+                                 v
+                 ┌────────────────────────────────┐
+                 │ Read worktree HEAD and verify  │
+                 │ baseRevision is its ancestor  │
+                 └───────────────┬────────────────┘
+                    divergent    │ descendant
+                       v          v
+              [Reject before   ┌──────────────────────────────┐
+               child/transfer; │ Reserve new logical identity │
+               preserve old]   └──────────────┬───────────────┘
+                                              v
+                 ┌────────────────────────────────────────────┐
+                 │ Reopen original child session + exact leaf │
+                 │ and send guidance as the sole next prompt  │
+                 └─────────────────────┬──────────────────────┘
+                                       │ setup/start failure
+                                       v
+                              [Reject; old lease remains]
+                                       │ success
+                                       v
+                 ┌────────────────────────────────────────────┐
+                 │ Transfer lease old → new, then finalize    │
+                 │ the revised worktree as a prepared result  │
+                 └─────────────────────┬──────────────────────┘
+                                       │ transfer/finalize failure
+                                       v
+                 [Attempt new → old lease rollback; preserve error]
+                                       │ success
+                                       v
+                 [Return new run/result ID; old ID is stale]
+```
+
 ## Durable child sessions
 
 When the parent has a persisted pi session, child transcripts are stored relative to this installed extension at `<pi-coder-install>/.state/agent-sessions/--<encoded-cwd>--/<parent-session-id>/`; the parent-session directory uses mode `0700`. The cwd layer mirrors pi's `--<encoded-cwd>--` session-directory format, while the extension-local root isolates multiple installed copies and avoids collisions with pi or other extensions. The install and storage locations are exported from `src/common/constants.ts`, cwd encoding is centralized in `normalizeCwdForSessionDirectory()`, and `.state/` is gitignored. The extension directory must be writable, and uninstalling or replacing that directory may remove its durable child transcripts. Full run-state snapshots are stored in the extension's SQLite metadata database and scoped to parent-session branch entries without entering LLM context. Reload, restart/continue, and switching away from and back to the exact parent session restore its active runs; after an abrupt process stop, restoration uses the recorded Pi-process PID to reclaim a conclusively dead continuation lease immediately; otherwise it waits for lease expiry while protecting a still-live competing process. New, forked, and cloned parent sessions have different IDs and do not inherit those children. In-place `/tree` navigation rebuilds runs from the newly selected branch; navigation is blocked while a child is actively streaming or waiting for mutation permission, so first let it pause/finish or cancel it.

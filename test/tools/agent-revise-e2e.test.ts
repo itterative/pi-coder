@@ -231,5 +231,30 @@ describe("registered revise lifecycle", () => {
                 status: "prepared",
             },
         });
+
+        runGit(provisional.worktreePath, ["checkout", "--orphan", "divergent"]);
+        runGit(provisional.worktreePath, ["commit", "--quiet", "--allow-empty", "-m", "divergent history"]);
+        const rejected = await tool.execute(
+            "e2e-divergent-revise",
+            { action: "revise", runId: revised.details.runId, guidance: "Try again" },
+            undefined,
+            undefined,
+            ctx,
+        );
+        expect(rejected.details.status).toBe("failed");
+        expect(rejected.content[0].text).toContain("is not based on workspace base");
+        expect(invocation).toBe(2);
+        const preservedWorkspace = await getAgentWorkspace(provisional.id);
+        expect(preservedWorkspace).toMatchObject({
+            leaseOwnerSessionId: parentSession.getSessionId(),
+            leaseRunId: revised.details.runId,
+            leaseRunInstanceId: revised.details.runInstanceId,
+            leaseKind: "task",
+            latestResult: {
+                runId: revised.details.runId,
+                runInstanceId: revised.details.runInstanceId,
+                status: "prepared",
+            },
+        });
     });
 });
