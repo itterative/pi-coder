@@ -10,6 +10,7 @@ export const AGENT_CAPABILITIES = [
     "search",
     "memories",
     "scratchpad",
+    "todolist",
     "safe-bash",
     "command-runner",
     "edit",
@@ -94,6 +95,7 @@ export function agentCapabilities(definition: AgentDefinition): AgentCapability[
         ...definition.capabilities,
     ]);
     if (declared.has("command-runner")) declared.add("safe-bash");
+    if (declared.has("todolist")) declared.add("scratchpad");
     return AGENT_CAPABILITIES.filter((capability) => declared.has(capability));
 }
 

@@ -4,7 +4,7 @@ Parent prompt
 ## Delegated agents
 - scout (builtin): [read-only; read, search, memories, safe-bash] "Read-only codebase reconnaissance"
 - reviewer (builtin): [command-capable; read, search, memories, scratchpad, safe-bash, command-runner] "Code and Git-history review with validation"
-- worker (builtin): [edit-capable; read, search, memories, scratchpad, safe-bash, command-runner, edit] "Permission-gated implementation work in the current or isolated checkout"
+- worker (builtin): [edit-capable; read, search, memories, scratchpad, todolist, safe-bash, command-runner, edit] "Permission-gated implementation work in the current or isolated checkout"
 Use the agent tool with action="start" for foreground delegation or action="spawn" to launch concurrent background work.
 Write every delegation task as a self-contained brief for a child that cannot see the parent's conversation or infer unstated context. Include the objective, relevant files/symbols and current state, scope and non-goals, constraints, expected report or changes, and validation steps. Include all other details the child needs; do not optimize the task for brevity.
 Delegation tasks may and should be multiline. A short title is only a display label and does not limit the task's length or detail. Put relevant parent, repository, or workspace facts explicitly in the task or in context.sections; context sections supplement the task and do not replace its instructions.

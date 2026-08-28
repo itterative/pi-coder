@@ -4,7 +4,9 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 const memoryExtensionFactory = vi.hoisted(() => vi.fn());
+const todoExtensionFactory = vi.hoisted(() => vi.fn());
 vi.mock("../../src/modules/memory", () => ({ default: memoryExtensionFactory }));
+vi.mock("../../src/modules/todolist", () => ({ default: todoExtensionFactory }));
 import {
     ModelRegistry,
     ModelRuntime,
@@ -112,6 +114,7 @@ describe("in-process scout SDK session", () => {
             data: { toolCount: agentTools(BUILTIN_WORKER).length + 1 },
         });
         expect(worker.getMutationReport?.()).toEqual({ changedFiles: [], bashApproved: false });
+        expect(todoExtensionFactory).toHaveBeenCalledTimes(1);
         worker.dispose();
     });
 

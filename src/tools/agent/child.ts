@@ -15,6 +15,7 @@ import {
 } from "./definitions/discovery";
 import registerMemoryExtension from "../../modules/memory";
 import registerScratchpadExtension from "../../modules/scratchpad";
+import registerTodoListExtension from "../../modules/todolist";
 import { createChildModelRuntime, resolveChildModel } from "./child/model-runtime";
 import { childProtocolPrompt, registerChildExtension } from "./child/extension";
 import { renderAgentSystemPrompt } from "./prompts/renderer";
@@ -87,6 +88,7 @@ export async function createAgentChild(
     const safeBash = hasAgentCapability(context.definition, "safe-bash");
     const hasMemories = hasAgentCapability(context.definition, "memories");
     const hasScratchpad = hasAgentCapability(context.definition, "scratchpad");
+    const hasTodolist = hasAgentCapability(context.definition, "todolist");
     const allowUserInteraction = context.definition.allowUserInteraction !== false;
     const agentDir = getAgentDir();
     let sessionManager = context.childSessionFile
@@ -154,6 +156,13 @@ export async function createAgentChild(
                     name: "pi-coder-scratchpad-child",
                     hidden: true,
                     factory: registerScratchpadExtension,
+                }]
+                : []),
+            ...(hasTodolist
+                ? [{
+                    name: "pi-coder-todolist-child",
+                    hidden: true,
+                    factory: registerTodoListExtension,
                 }]
                 : []),
         ],

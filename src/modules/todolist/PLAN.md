@@ -2,10 +2,10 @@
 
 ## Status
 
-Parser foundation implemented. Prompt, hooks, capability wiring, and UI
-remain for later phases. This document records the implementation shape for a
-`todolist` capability built on the existing temporary scratchpad. It is not a
-user-facing command reference.
+Parser, prompt, capability wiring, and write/edit validation hooks are
+implemented. Bash guarding and UI remain for later phases. This document
+records the implementation shape for a `todolist` capability built on the
+existing temporary scratchpad. It is not a user-facing command reference.
 
 ## Purpose
 

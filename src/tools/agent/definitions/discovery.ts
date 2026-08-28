@@ -72,7 +72,7 @@ Review the assigned changes for concrete correctness, security, API compatibilit
 export const BUILTIN_WORKER: AgentDefinition = {
     name: "worker",
     description: "Permission-gated implementation work in the current or isolated checkout",
-    capabilities: ["read", "search", "memories", "scratchpad", "safe-bash", "command-runner", "edit"],
+    capabilities: ["read", "search", "memories", "scratchpad", "todolist", "safe-bash", "command-runner", "edit"],
     systemPrompt: `You are the parent's implementation agent for a bounded coding task.
 
 Inspect the relevant code and latest working-tree state before editing. Implement the narrowest complete change, preserve unrelated work, follow repository conventions, and avoid destructive Git operations. Validate the result when feasible and disclose uncertainty or incomplete validation.`,

@@ -91,6 +91,7 @@ describe("agent discovery", () => {
         writeAgent(userDir, "advisor.md", "advisor", "Override advisor");
         writeAgent(userDir, "worker.md", "worker", "Override worker");
         writeAgent(userDir, "custom.md", "custom", "Custom", "capabilities: [command-runner, memories]\n");
+        writeAgent(userDir, "todo.md", "todo", "TODO", "capabilities: [todolist]\n");
         writeAgent(userDir, "stale.md", "stale", "Stale", "tools: [read, bash]\n");
 
         const result = discoverAgentsInDirectories(userDir);
@@ -99,6 +100,7 @@ describe("agent discovery", () => {
         const advisor = result.agents.find((agent) => agent.name === "advisor");
         const worker = result.agents.find((agent) => agent.name === "worker");
         const custom = result.agents.find((agent) => agent.name === "custom");
+        const todo = result.agents.find((agent) => agent.name === "todo");
         const stale = result.agents.find((agent) => agent.name === "stale");
 
         expect(scout).toMatchObject({ source: "builtin", capabilities: ["read", "search", "memories", "safe-bash"] });
@@ -115,12 +117,15 @@ describe("agent discovery", () => {
         expect(agentTools(scout!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(worker).toMatchObject({
             source: "builtin",
-            capabilities: ["read", "search", "memories", "scratchpad", "safe-bash", "command-runner", "edit"],
+            capabilities: ["read", "search", "memories", "scratchpad", "todolist", "safe-bash", "command-runner", "edit"],
         });
         expect(agentTools(worker!)).toEqual(["read", "grep", "find", "ls", "edit", "write", "bash"]);
         expect(custom).toMatchObject({ source: "user", capabilities: ["command-runner", "memories"] });
         expect(agentCapabilities(custom!)).toEqual(["read", "search", "memories", "safe-bash", "command-runner"]);
         expect(agentTools(custom!)).toEqual(["read", "grep", "find", "ls", "bash"]);
+        expect(todo).toMatchObject({ source: "user", capabilities: ["todolist"] });
+        expect(agentCapabilities(todo!)).toEqual(["read", "search", "scratchpad", "todolist"]);
+        expect(agentTools(todo!)).toEqual(["read", "grep", "find", "ls"]);
         expect(stale?.capabilities).toEqual([]);
         expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "warning"))
             .toEqual(expect.arrayContaining([
