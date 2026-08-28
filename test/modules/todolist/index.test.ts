@@ -220,6 +220,14 @@ describe("TODO runtime extension", () => {
         });
 
         await expect(handler("tool_call")({
+            toolName: "edit",
+            input: {
+                path: todoPath,
+                edits: [{ oldText: "not present", newText: "replacement" }],
+            },
+        }, ctx)).resolves.toEqual({ block: false });
+
+        await expect(handler("tool_call")({
             toolName: "write",
             input: { path: path.join(process.cwd(), "TODO.md"), content: "not managed here" },
         }, ctx)).resolves.toEqual({ block: false });
@@ -448,6 +456,10 @@ describe("TODO runtime extension", () => {
         const widget = (widgetRegistration?.content as (tui: unknown) => PiCoderStatusWidget)({
             requestRender() {},
         });
+        expect(renderText(widget, 80)).toContain("TODO 0/1 · Inspect the implementation");
+
+        fs.writeFileSync(todoPath, validDocument.replace("status: pending", "status: completed"));
+        await handler("tool_result")({ toolName: "edit", isError: true }, ctx);
         expect(renderText(widget, 80)).toContain("TODO 0/1 · Inspect the implementation");
 
         fs.writeFileSync(todoPath, "---\nversion: 1\ntodos: invalid\n---\n");

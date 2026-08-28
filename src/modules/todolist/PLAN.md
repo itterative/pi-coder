@@ -196,11 +196,14 @@ For `edit`:
 2. reconstruct the prospective document from all requested replacements;
 3. use the same matching/normalization assumptions as the built-in edit tool;
 4. validate the complete prospective document;
-5. block before execution if it is invalid.
+5. block before execution if the reconstructed document is invalid.
 
-An edit that changes only the freeform body must pass as long as the existing
-frontmatter remains valid. Creating a new TODO file requires valid frontmatter;
-`# TODO` alone is not a valid document once TODO support is active.
+If the current document cannot be read or the requested replacements cannot be
+applied, allow the built-in edit tool to report that ordinary edit failure
+rather than producing a duplicate extension error. An edit that changes only
+the freeform body must pass as long as the existing frontmatter remains valid.
+Creating a new TODO file requires valid frontmatter; `# TODO` alone is not a
+valid document once TODO support is active.
 
 The hook should not rewrite valid agent formatting or normalize the freeform
 body. Validation is a gate, not a formatter.

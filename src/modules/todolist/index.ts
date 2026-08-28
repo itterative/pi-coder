@@ -332,12 +332,18 @@ export default function registerTodoListExtension(
             if (isToolCallEventType("write", event)) {
                 content = (event.input as WriteToolInput).content;
             } else {
-                content = await readFile(todoPath, "utf8");
-                content = applyTodoEdits(
-                    content,
-                    (event.input as EditToolInput).edits,
-                    todoPath,
-                );
+                try {
+                    content = await readFile(todoPath, "utf8");
+                    content = applyTodoEdits(
+                        content,
+                        (event.input as EditToolInput).edits,
+                        todoPath,
+                    );
+                } catch {
+                    // The edit tool owns file reads and edit matching. Do not
+                    // turn its ordinary failure into a second extension error.
+                    return { block: false };
+                }
             }
             parseTodoList(content, todoPath);
             return { block: false };
@@ -348,6 +354,12 @@ export default function registerTodoListExtension(
 
     pi.on("tool_result", async (event, ctx) => {
         if (event.toolName !== "write" && event.toolName !== "edit" && event.toolName !== "bash") return;
+
+        // A failed write/edit did not complete a TODO mutation. Leave the
+        // existing widget and persisted snapshot alone; the tool owns its
+        // failure reporting. Bash still needs its defensive result handling.
+        if (event.isError && (event.toolName === "write" || event.toolName === "edit")) return;
+
         await refresh(ctx, true);
     });
 }
