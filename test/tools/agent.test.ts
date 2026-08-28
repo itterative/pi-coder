@@ -292,6 +292,10 @@ describe("AgentRunManager", () => {
         expect(latestRecords(store.records)[0]).toMatchObject({
             childSessionLeafId: "leaf-final",
         });
+        expect(manager.getPersistedRun("scout-1")).toMatchObject({
+            status: "removed",
+            childSessionLeafId: "leaf-final",
+        });
     });
 
     it("completes a run and disposes its child", async () => {

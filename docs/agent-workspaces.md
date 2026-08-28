@@ -26,12 +26,12 @@ Applying uses the complete base-to-worker tree diff without creating a parent co
 
 ## Revise
 
-`revise` is available only for a prepared changed result whose task lease is still owned by the current parent session. It is not normally available after `retain`, `apply`, `discard`, or no-change release.
+For isolated workers, `revise` is available only for a prepared changed result whose task lease is still owned by the current parent session. It is not normally available after `retain`, `apply`, `discard`, or no-change release. Collected non-mutating runs such as `reviewer` can be revised without a workspace; revision is restricted to the exact parent session and active parent-tree branch.
 
 A revision has two identities:
 
 - The **child session** continues: the original JSONL transcript and exact leaf are reopened, the original recorded model is used, and only the parent's guidance is sent as the next prompt.
-- The **workspace result run** advances: a new logical run ID and physical run instance own the revised result. The returned new run ID is required for later actions; the old ID is stale for result disposition.
+- The **workspace result run** advances: a new logical run ID and physical run instance own the revised result. The returned new run ID is required for later isolated actions; the old ID is stale for isolated result disposition. For non-mutating runs, the old ID remains addressable as a deliberate fork point from its original child leaf.
 
 Revision does not invalidate a result because its definition fingerprint or capabilities changed after the original run. It uses the complete definition snapshot persisted with the run; the child session remains authoritative for the conversation and recorded model. The current definition is informational only, while a missing or malformed persisted snapshot fails clearly because the original execution contract cannot be reconstructed.
 

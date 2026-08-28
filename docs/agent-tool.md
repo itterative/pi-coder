@@ -18,9 +18,9 @@ This document contains the detailed reference for pi-coder's delegated-agent too
 | `retain` | Keep a result for review while releasing its task lease. |
 | `reset` | Explicitly reset a workspace for reuse. |
 | `discard` | Discard an isolated result or workspace. |
-| `revise` | Continue a prepared isolated result with parent guidance. |
+| `revise` | Continue a collected terminal child run with parent guidance; isolated workers retain their workspace, while non-mutating runs do not need one. |
 
-There can be up to four active or interrupted runs, and up to three persistent isolated workspaces per project. Terminal background results are retained separately until collected or evicted. Run IDs are authoritative and become stale after collection, cancellation, replacement, or eviction.
+There can be up to four active or interrupted runs, and up to three persistent isolated workspaces per project. Terminal background results are retained separately until collected or evicted. Revision lookup is bound to the exact parent session and active parent-tree branch. Non-mutating source run IDs remain addressable as intentional fork points; isolated result IDs follow workspace ownership and become stale after revision.
 
 ### Background behavior
 

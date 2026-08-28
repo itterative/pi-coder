@@ -4,20 +4,26 @@ import { agentCanEdit, discoverAgents } from "../definitions/discovery";
 import type { AgentRequest } from "../definitions/validate";
 import { emitAgentEvent } from "../observability/events";
 import type { AgentEventSink } from "../contracts/events";
-import type { AgentRunDetails, AgentRunOutcome } from "../contracts/runs";
+import type { AgentRunDetails, AgentRunOutcome, PersistedAgentRun } from "../contracts/runs";
 import { AgentActionError, AgentRunManager } from "../runs/manager";
 import { ZERO_USAGE } from "../runs/usage";
 import { diagnosticText } from "../presentation/text";
 import { prepareForegroundWorkspaceResult } from "./finalization";
-import type { AgentWorkspace, AgentWorkspaceResult } from "../contracts/workspaces";
+import type {
+    AgentRunCatalogRecord,
+    AgentWorkspace,
+    AgentWorkspaceResult,
+} from "../contracts/workspaces";
 import { listAgentRunCatalog } from "../storage/run-catalog";
 import { executeWorkspaceAction } from "./actions";
 import { inspectAgentWorkspaceResult } from "./results";
 import { getAgentWorkspace, transferAgentWorkspaceLease } from "./store";
 import { git, hasAncestor } from "./git";
 
+type ParentCatalogRecord = AgentRunCatalogRecord;
+
 function parentWorkspaceOutcome(
-    record: Awaited<ReturnType<typeof listAgentRunCatalog>>[number],
+    record: ParentCatalogRecord,
     workspace: AgentWorkspace,
     content: string,
 ): AgentRunOutcome {
@@ -46,12 +52,53 @@ function parentWorkspaceOutcome(
     };
 }
 
-async function resolveParentWorkspaceRun(
+function catalogRecordFromPersisted(
+    record: PersistedAgentRun,
+    fallbackCwd: string,
+): ParentCatalogRecord {
+    return {
+        ownerSessionId: record.ownerSessionId,
+        runId: record.runId,
+        runInstanceId: record.runInstanceId,
+        parentCwd: record.parentCwd ?? fallbackCwd,
+        executionCwd: record.cwd,
+        title: record.title ?? "Delegated task",
+        agent: record.agent,
+        agentSource: record.agentSource,
+        definitionSnapshot: record.definitionSnapshot,
+        task: record.task,
+        status: record.status,
+        background: record.background,
+        mutating: record.mutating,
+        workspaceId: record.workspaceId,
+        childSessionFile: record.childSessionFile,
+        childSessionLeafId: record.childSessionLeafId,
+        startedAt: record.startedAt,
+        updatedAt: record.updatedAt,
+        usageSnapshot: record.usageSnapshot,
+        mutationReport: record.mutationReport,
+    };
+}
+
+async function resolveParentRunRecord(
     runId: string,
     ctx: ExtensionContext,
     manager: AgentRunManager,
-): Promise<{ record: Awaited<ReturnType<typeof listAgentRunCatalog>>[number]; workspace: AgentWorkspace }> {
+): Promise<ParentCatalogRecord> {
     await manager.flushPersistence();
+    const record = manager.getPersistedRun(runId);
+    if (record) {
+        if (record.ownerSessionId !== ctx.sessionManager.getSessionId()) {
+            throw new AgentActionError(`Unknown or stale agent run ID: ${runId}`);
+        }
+        return catalogRecordFromPersisted(record, ctx.cwd);
+    }
+    if (manager.hasPersistence) {
+        throw new AgentActionError(`Unknown or stale agent run ID: ${runId}`);
+    }
+
+    // Ephemeral/test runtimes have no active-branch persistence authority.
+    // Keep the legacy catalog fallback only for those runtimes.
     const sessionId = ctx.sessionManager.getSessionId();
     const matches = (await listAgentRunCatalog(ctx.cwd)).filter((candidate) => (
         candidate.ownerSessionId === sessionId && candidate.runId === runId
@@ -59,20 +106,27 @@ async function resolveParentWorkspaceRun(
     if (matches.length > 1) {
         throw new AgentActionError(`Run ${runId} is ambiguous because multiple physical runs share this display ID.`);
     }
-    const record = matches[0];
-    if (!record?.workspaceId) {
-        throw new AgentActionError(`Run ${runId} has no isolated workspace owned by this session.`);
+    const catalogRecord = matches[0];
+    if (!catalogRecord) throw new AgentActionError(`Unknown or stale agent run ID: ${runId}`);
+    return catalogRecord;
+}
+
+async function resolveParentWorkspaceRun(
+    record: ParentCatalogRecord,
+): Promise<AgentWorkspace> {
+    if (!record.workspaceId) {
+        throw new AgentActionError(`Run ${record.runId} has no isolated workspace owned by this session.`);
     }
     const workspace = await getAgentWorkspace(record.workspaceId);
     if (!workspace) throw new AgentActionError(`Workspace ${record.workspaceId} is missing.`);
     if (
         workspace.latestResult
-        && (workspace.latestResult.runId !== runId
+        && (workspace.latestResult.runId !== record.runId
             || workspace.latestResult.runInstanceId !== record.runInstanceId)
     ) {
-        throw new AgentActionError(`Workspace ${workspace.id} has a newer result than run ${runId}.`);
+        throw new AgentActionError(`Workspace ${workspace.id} has a newer result than run ${record.runId}.`);
     }
-    return { record, workspace };
+    return workspace;
 }
 
 function requireParentWorkspaceLease(
@@ -104,6 +158,70 @@ export interface ExecuteParentWorkspaceActionOptions {
     discover?: (ctx: ExtensionContext) => ReturnType<typeof discoverAgents>;
 }
 
+// Non-mutating runs have no workspace lease to transfer. Keep the source
+// checkpoint addressable so revising it intentionally forks the child
+// transcript from that exact leaf.
+async function reviseNonIsolatedRun(
+    record: ParentCatalogRecord,
+    params: Extract<AgentRequest, { action: "revise" }>,
+    {
+        ctx,
+        manager,
+        signal,
+        progress,
+        discover = (context) => discoverAgents(context.cwd, context.isProjectTrusted()),
+    }: ExecuteParentWorkspaceActionOptions,
+): Promise<AgentRunOutcome> {
+    if (record.status !== "removed") {
+        throw new AgentActionError(`Run ${params.runId} must be collected before it can be revised.`);
+    }
+    if (record.mutating) {
+        throw new AgentActionError(
+            `Run ${params.runId} is mutation-capable but has no isolated workspace; it cannot be revised safely.`,
+        );
+    }
+    const definition = record.definitionSnapshot;
+    if (!definition) {
+        throw new AgentActionError(
+            `Run ${params.runId} has no persisted agent definition snapshot; it cannot be revised. Start a new run instead.`,
+        );
+    }
+    if (agentCanEdit(definition)) {
+        throw new AgentActionError(
+            `Run ${params.runId} has an unauthorized persisted mutation capability; it cannot be revised.`,
+        );
+    }
+    if (!record.childSessionFile) {
+        throw new AgentActionError(`Run ${params.runId} has no persisted child session to revise.`);
+    }
+
+    const discovered = discover(ctx);
+    const revisionContext = {
+        cwd: record.executionCwd ?? record.parentCwd ?? ctx.cwd,
+        parentCwd: ctx.cwd,
+        parentContext: ctx,
+        childSessionFile: record.childSessionFile,
+        ...(record.childSessionLeafId !== undefined
+            ? { childSessionLeafId: record.childSessionLeafId }
+            : {}),
+    };
+    const runIdentity = manager.reserveRunIdentity(definition, record.task, revisionContext);
+    const outcome = await manager.startContinuation(
+        definition,
+        record.task,
+        params.guidance,
+        revisionContext,
+        {
+            signal,
+            onProgress: progress,
+            title: `${record.title} revision`,
+            identity: runIdentity,
+        },
+    );
+    outcome.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
+    return outcome;
+}
+
 export async function executeParentWorkspaceAction(
     params: Extract<AgentRequest, { action: "inspect" | "apply" | "discard" | "revise" }>,
     {
@@ -115,8 +233,18 @@ export async function executeParentWorkspaceAction(
         discover = (context) => discoverAgents(context.cwd, context.isProjectTrusted()),
     }: ExecuteParentWorkspaceActionOptions,
 ): Promise<AgentRunOutcome> {
-    const resolved = await resolveParentWorkspaceRun(params.runId, ctx, manager);
-    const { record, workspace } = resolved;
+    const record = await resolveParentRunRecord(params.runId, ctx, manager);
+    if (params.action === "revise" && !record.workspaceId) {
+        return reviseNonIsolatedRun(record, params, {
+            ctx,
+            manager,
+            signal,
+            progress,
+            events,
+            discover,
+        });
+    }
+    const workspace = await resolveParentWorkspaceRun(record);
     if (params.action === "inspect") {
         return parentWorkspaceOutcome(record, workspace, await inspectAgentWorkspaceResult(workspace));
     }

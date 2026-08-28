@@ -114,6 +114,7 @@ function revisionActionFixture() {
     };
     const manager = {
         flushPersistence: vi.fn(async () => {}),
+        getPersistedRun: vi.fn(() => record),
         reserveRunIdentity: vi.fn(() => ({ runId: "worker-2", runInstanceId: "worker-instance-2" })),
         startContinuation: vi.fn(async () => continuationOutcome),
     };
@@ -814,6 +815,7 @@ describe("agent extension registration", () => {
         };
         const manager = {
             flushPersistence: vi.fn(async () => {}),
+            getPersistedRun: vi.fn(() => record),
             reserveRunIdentity: vi.fn(() => ({ runId: "worker-2", runInstanceId: "worker-instance-2" })),
             startContinuation: vi.fn(async () => continuationOutcome),
         };
@@ -875,6 +877,126 @@ describe("agent extension registration", () => {
                 toLeaseRunInstanceId: "worker-instance-2",
             },
         );
+    });
+
+    it("revises a collected reviewer result by continuing its persisted child session", async () => {
+        const childSessionFile = "/tmp/reviewer-child.jsonl";
+        const definition = {
+            name: "reviewer",
+            source: "builtin",
+            capabilities: ["read", "search", "memories", "scratchpad", "safe-bash", "command-runner"],
+            description: "Code and Git-history review with validation",
+            systemPrompt: "Reviewer prompt",
+        };
+        const record = {
+            ownerSessionId: "parent-session",
+            runId: "reviewer-1",
+            runInstanceId: "reviewer-instance-1",
+            parentCwd: process.cwd(),
+            executionCwd: process.cwd(),
+            title: "Review changes",
+            agent: "reviewer",
+            agentSource: "builtin",
+            definitionFingerprint: "reviewer-definition",
+            definitionSnapshot: definition,
+            task: "Review the current changes",
+            status: "removed",
+            background: true,
+            mutating: false,
+            childSessionFile,
+            childSessionLeafId: "leaf-1",
+            startedAt: 1,
+            updatedAt: 2,
+            usageSnapshot: ZERO_USAGE,
+        };
+        const continuationOutcome = {
+            content: "The revised review found no additional issues.",
+            details: {
+                runId: "reviewer-2",
+                runInstanceId: "reviewer-instance-2",
+                title: "Review changes revision",
+                agent: "reviewer",
+                status: "completed",
+                background: false,
+                task: "Review the current changes",
+                recentActivity: [],
+                usage: ZERO_USAGE,
+                startedAt: 4,
+                updatedAt: 5,
+            },
+            usage: ZERO_USAGE,
+            isError: false,
+        };
+        const manager = {
+            flushPersistence: vi.fn(async () => {}),
+            getPersistedRun: vi.fn(() => record),
+            reserveRunIdentity: vi.fn(() => ({ runId: "reviewer-2", runInstanceId: "reviewer-instance-2" })),
+            startContinuation: vi.fn(async () => continuationOutcome),
+        };
+        const ctx = {
+            cwd: process.cwd(),
+            isProjectTrusted: () => true,
+            sessionManager: { getSessionId: () => "parent-session" },
+            ui: { notify: () => {} },
+        };
+        const progress = vi.fn();
+        const discover = vi.fn(() => ({ agents: [definition], diagnostics: [] }));
+        vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record] as any);
+
+        const result = await executeParentWorkspaceAction(
+            { action: "revise", runId: "reviewer-1", guidance: "Please re-check the API compatibility findings." },
+            {
+                ctx: ctx as any,
+                manager: manager as any,
+                signal: undefined,
+                progress,
+                events: {} as any,
+                discover,
+            },
+        );
+
+        expect(result).toBe(continuationOutcome);
+        expect(manager.reserveRunIdentity).toHaveBeenCalledWith(
+            definition,
+            "Review the current changes",
+            expect.objectContaining({
+                cwd: process.cwd(),
+                parentCwd: process.cwd(),
+                childSessionFile,
+                childSessionLeafId: "leaf-1",
+            }),
+        );
+        expect(manager.startContinuation).toHaveBeenCalledWith(
+            definition,
+            "Review the current changes",
+            "Please re-check the API compatibility findings.",
+            expect.objectContaining({
+                cwd: process.cwd(),
+                parentCwd: process.cwd(),
+                childSessionFile,
+                childSessionLeafId: "leaf-1",
+            }),
+            {
+                signal: undefined,
+                onProgress: progress,
+                title: "Review changes revision",
+                identity: { runId: "reviewer-2", runInstanceId: "reviewer-instance-2" },
+            },
+        );
+        expect(discover).toHaveBeenCalledWith(ctx);
+        expect(result.details.discoveryDiagnostics).toEqual([]);
+    });
+
+    it("does not fall back to catalog-only runs when branch persistence is active", async () => {
+        const fixture = revisionActionFixture();
+        configureRevisionAction(fixture);
+        fixture.manager.getPersistedRun.mockReturnValue(undefined as any);
+        (fixture.manager as any).hasPersistence = true;
+
+        await expect(executeRevisionAction(fixture)).rejects.toThrow(
+            "Unknown or stale agent run ID: worker-1",
+        );
+        expect(fixture.manager.startContinuation).not.toHaveBeenCalled();
     });
 
     it("rejects a divergent workspace before starting a revision", async () => {

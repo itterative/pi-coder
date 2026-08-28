@@ -68,7 +68,7 @@ status  — inspect a deliberate snapshot
 collect — consume a terminal background result
 resume  — provide guidance to a waiting/interrupted run
 cancel  — stop a waiting or active run
-inspect/apply/discard/revise — manage an isolated result
+inspect/apply/discard — manage an isolated result; revise — continue a collected terminal child run, reusing its persisted session (isolated workers keep the same workspace)
 ```
 
 Runs are bounded to four active or interrupted records. At most one may be an edit-capable worker, and its permission-gated calls are serialized. Terminal background results are retained separately until collected or evicted.
@@ -81,7 +81,7 @@ Background runs report progress in the above-editor widget. Parent-guidance wait
 
 `/agents` shows an Agents list scoped to the active parent session by default; `h` toggles cwd-wide historical sessions. Workspaces are available in the same browser. Session details are read-only and display bounded conversation/tool summaries. Active interrupted runs can be resumed or canceled explicitly; historical and stale checkpoints remain read-only.
 
-Isolated workers use a persistent pool of up to three Git worktrees. Setup runs internally with the same permission gate. A completed isolated run is finalized as a workspace result: no-change results release the workspace, while changed results remain leased and outside the parent checkout. Results can be inspected, applied, discarded, retained/reset, or revised explicitly. Revision reopens the original child session with its original model and sends only parent guidance as the next child message; before startup it verifies that the worktree HEAD descends from the recorded base and rejects divergence without changing state; it creates a new logical run identity for workspace-result ownership and rolls lease ownership back if transfer/finalization fails. Workspaces are never merged, reset, or deleted implicitly.
+Isolated workers use a persistent pool of up to three Git worktrees. Setup runs internally with the same permission gate. A completed isolated run is finalized as a workspace result: no-change results release the workspace, while changed results remain leased and outside the parent checkout. Results can be inspected, applied, discarded, retained/reset, or revised explicitly. Revision reopens the original child session with its original model and sends only parent guidance as the next child message; isolated revisions keep the same workspace, while collected non-mutating runs such as reviewer can be revised without a workspace. Revision lookup is authoritative to the exact parent session and active parent-tree branch; non-mutating source checkpoints remain addressable so revision can intentionally fork from an earlier child leaf. Before an isolated revision it verifies that the worktree HEAD descends from the recorded base and rejects divergence without changing state; isolated revisions create a new logical run identity for workspace-result ownership and roll lease ownership back if transfer/finalization fails. Workspaces are never merged, reset, or deleted implicitly.
 
 ## Safety contract
 

@@ -197,6 +197,8 @@ export class AgentRunManager {
     private readonly restoreAbortController = new AbortController();
     private shutdownPromise?: Promise<void>;
     private persistence?: AgentRunPersistence;
+    /** Latest checkpoints loaded from or written to the active parent branch. */
+    private readonly persistedRuns = new Map<string, PersistedAgentRun>();
 
     constructor(
         private readonly factory: ChildAgentFactory,
@@ -209,6 +211,12 @@ export class AgentRunManager {
 
     setPersistence(persistence: AgentRunPersistence | undefined): void {
         this.persistence = persistence;
+        this.persistedRuns.clear();
+    }
+
+    /** Return the checkpoint authoritative for this manager's active parent branch. */
+    getPersistedRun(runId: string): PersistedAgentRun | undefined {
+        return this.persistedRuns.get(runId);
     }
 
     async flushPersistence(): Promise<void> {
@@ -217,6 +225,10 @@ export class AgentRunManager {
 
     closePersistence(): void {
         this.persistence?.close?.();
+    }
+
+    get hasPersistence(): boolean {
+        return this.persistence !== undefined;
     }
 
     get activeCount(): number {
@@ -290,6 +302,8 @@ export class AgentRunManager {
         onBackgroundUpdate?: AgentBackgroundCallback,
     ): Promise<{ restored: number; diagnostics: string[] }> {
         const diagnostics: string[] = [];
+        this.persistedRuns.clear();
+        for (const record of records) this.persistedRuns.set(record.runId, record);
         const definitionByName = new Map(definitions.map((definition) => [definition.name, definition]));
         for (const record of records) {
             const suffix = /-(\d+)$/.exec(record.runId)?.[1];
@@ -1539,7 +1553,7 @@ export class AgentRunManager {
         const usageSnapshot = this.readUsage(run);
         const terminal = run.terminalOutcome;
         run.childSessionLeafId = run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId;
-        return this.persistence.save({
+        const persisted: PersistedAgentRun = {
             version: 1,
             ownerSessionId: this.persistence.ownerSessionId,
             runId: run.id,
@@ -1571,7 +1585,10 @@ export class AgentRunManager {
             terminalError: terminal?.details.error,
             terminalIsError: terminal?.isError,
             mutationReport: this.mutationReport(run),
-        });
+        };
+        const saved = this.persistence.save(persisted);
+        if (saved) this.persistedRuns.set(run.id, persisted);
+        return saved;
     }
 
     private deleteChildSession(run: AgentRun): void {

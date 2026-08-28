@@ -45,17 +45,17 @@ Checkpoint writes use SQLite continuation leases, expected-head compare-and-swap
 
 `resume` and `revise` use the persisted definition snapshot as the runtime contract. The current definition is compared only for an informational drift diagnostic.
 
-`revise` advances workspace-result ownership without creating a separate child conversation:
+`revise` continues a collected terminal child without creating a separate child conversation. For isolated workers it also advances workspace-result ownership:
 
-1. Resolve the parent-session catalog record and prepared task lease.
-2. Confirm worktree ancestry before starting anything.
+1. Resolve the checkpoint authoritative for the exact parent session and active parent-tree branch.
+2. For an isolated worker, confirm worktree ancestry before starting anything and require its prepared task lease.
 3. Reserve a new logical run identity.
 4. Reopen the original child transcript at its persisted leaf.
 5. Send only revision guidance as the next child message, using the model recorded in that session.
-6. Transfer the workspace lease from the old run to the new run.
-7. Finalize and persist a new prepared workspace result.
+6. For an isolated worker, transfer the workspace lease from the old run to the new run.
+7. For an isolated worker, finalize and persist a new prepared workspace result.
 
-The old run ID is intentionally stale for later result disposition after successful revision. The new run ID and physical run instance are authoritative for inspect/apply/discard/revise. Definition drift does not reject a prepared result: the persisted definition snapshot supplies capabilities and the child session supplies transcript/model continuity.
+Non-mutating source checkpoints remain addressable after revision so a later action can intentionally fork from the original child leaf. Isolated result ownership still advances to the new run ID. Definition drift does not reject a prepared result: the persisted definition snapshot supplies capabilities and the child session supplies transcript/model continuity.
 
 ## Failure and recovery semantics
 

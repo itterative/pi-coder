@@ -1,12 +1,12 @@
 # `revise` Investigation
 
-Status: investigation plus implementation passes. The continuation/session flow, original-model selection, lifecycle discovery, early divergent-history rejection, and basic lease rollback changes are implemented; broader recovery coverage remains open.
+Status: investigation plus implementation passes. The continuation/session flow, original-model selection, lifecycle discovery, early divergent-history rejection, non-isolated read-only continuation, and basic lease rollback changes are implemented; broader recovery coverage remains open.
 
 This note records the findings and remaining work so the `revise` workflow can be fixed across multiple sessions. Do not modify `src/tools/agent/TODOS.md`; it is user-managed.
 
 ## Scope
 
-The `revise` action is intended to continue work on an isolated worker result in the same persistent workspace after the parent provides feedback.
+The `revise` action continues a collected terminal child run after the parent provides feedback. Isolated worker results continue in the same persistent workspace; collected non-mutating runs such as reviewer continue in their original execution cwd without a workspace.
 
 The main path is:
 
@@ -14,7 +14,7 @@ The main path is:
 agent(action="revise", runId, guidance)
   -> executeAgentAction()
   -> executeParentWorkspaceAction()
-  -> resolve catalog run/workspace
+  -> resolve the active-branch run checkpoint (and workspace when isolated)
   -> validate lease and prepared result
   -> reserve a new run identity
   -> start a foreground continuation using the original child session
@@ -119,9 +119,9 @@ The new worker receives only:
 
 It did not receive the previous child transcript, assistant findings, tool history, or explicit prior workspace revision metadata. The current implementation passes the original `childSessionFile` and exact persisted leaf to `startContinuation()`, so the child runtime reopens that transcript and appends only the revision guidance. The logical run receives a new run ID because workspace-result ownership still needs to advance without reusing a stale result identity.
 
-### 5. `revise` is only available while the original task lease remains held
+### 5. Isolated `revise` is only available while the original task lease remains held
 
-`requireParentWorkspaceLease()` requires all of the following:
+For isolated worker results, `requireParentWorkspaceLease()` requires all of the following:
 
 - the current parent session owns the lease;
 - the lease still points to the requested run ID and instance;
@@ -136,6 +136,10 @@ Therefore revise works directly after a changed isolated `spawn` is collected or
 - no-change release.
 
 This may be correct, but the user-facing contract should make it explicit. If retained/review-required results should also be revisable, the lease/result model needs a separate path.
+
+## 6. Non-isolated revision uses active-branch authority
+
+Non-mutating revisions now resolve through the manager's checkpoints loaded from or written to the active parent branch, rather than the cross-branch catalog. The exact parent session is still required. The original non-mutating checkpoint remains addressable so revising it intentionally forks the child transcript from its exact leaf; isolated workers continue to use workspace lease/result ownership.
 
 ## Secondary inconsistencies
 
@@ -247,4 +251,4 @@ rebased/divergent worktree
   -> revise becomes unrecoverable through normal run IDs
 ```
 
-The prompt/session portion is now corrected: revise reopens the original child transcript, preserves its recorded model, and sends only the revision guidance. Lease transfer now happens after the continuation starts and has compensating rollback around transfer/finalization. The divergent-history decision is now settled: revisions fail before child startup when ancestry is broken. Remaining work is broader real-state failure coverage, explicit disposition behavior, definition validation, legacy compatibility, and manual lifecycle validation.
+The prompt/session portion is now corrected: revise reopens the original child transcript, preserves its recorded model, and sends only the revision guidance. Collected non-mutating runs now resolve through active-branch manager checkpoints and can intentionally fork from an earlier child leaf without a workspace. Isolated lease transfer happens after the continuation starts and has compensating rollback around transfer/finalization. The divergent-history decision is now settled: isolated revisions fail before child startup when ancestry is broken. Remaining work is broader real-state failure coverage, explicit disposition behavior, definition validation, legacy compatibility, and manual lifecycle validation.
