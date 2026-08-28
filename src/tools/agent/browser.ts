@@ -135,10 +135,12 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             try {
                 // One enumeration pass feeds all three views; re-listing per
                 // view would re-scan every child transcript each time.
-                const pastLists = await listAgentPastSessionLists(ctx.cwd, undefined, {
-                    parentSessionId: currentSessionId,
-                    parentSessionFile: ctx.sessionManager.getSessionFile(),
-                    parentSessionLeafId: ctx.sessionManager.getLeafId(),
+                const pastLists = await listAgentPastSessionLists(ctx.cwd, {
+                    activeBranch: {
+                        parentSessionId: currentSessionId,
+                        parentSessionFile: ctx.sessionManager.getSessionFile(),
+                        parentSessionLeafId: ctx.sessionManager.getLeafId(),
+                    },
                 });
                 const sessionPastRecords = pastLists.all.filter(
                     (item) => item.parentSessionId === currentSessionId,
@@ -166,11 +168,11 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                         `Released ${released} verified no-change workspace lease${released === 1 ? "" : "s"}.`,
                         "info",
                     );
-                    emitAgentEvent(lifecycle.events, ctx.cwd, {
+                    emitAgentEvent({
                         type: "runtime",
                         action: "reconciled",
                         released,
-                    });
+                    }, { sink: lifecycle.events, cwd: ctx.cwd });
                 }
                 workspaceRecords = await listAgentWorkspaces(ctx.cwd);
                 signal?.throwIfAborted();
@@ -186,8 +188,10 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             workspaceDomains = new Map(workspaceRecords.map((workspace) => [workspace.id, workspace]));
             const workspaces = await Promise.all(workspaceRecords.map(async (workspace) => workspaceBrowserItem(
                 workspace,
-                await inspectAgentWorkspaceGitState(workspace),
-                currentSessionId,
+                {
+                    gitState: await inspectAgentWorkspaceGitState(workspace),
+                    currentSessionId,
+                },
             )));
             signal?.throwIfAborted();
             return {
@@ -219,12 +223,9 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             onResume: async (item) => {
                 try {
                     const outcome = await prepareForegroundWorkspaceResult(
-                        await lifecycle.manager.resume(
-                            item.id,
-                            undefined,
-                            undefined,
-                            lifecycle.backgroundUpdate(ctx),
-                        ),
+                        await lifecycle.manager.resume(item.id, {
+                            onProgress: lifecycle.backgroundUpdate(ctx),
+                        }),
                         ctx,
                         lifecycle.events,
                     );
@@ -300,8 +301,10 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                 workspaceDomains.set(replacement.id, replacement);
                 return workspaceBrowserItem(
                     replacement,
-                    await inspectAgentWorkspaceGitState(replacement),
-                    currentSessionId,
+                    {
+                        gitState: await inspectAgentWorkspaceGitState(replacement),
+                        currentSessionId,
+                    },
                 );
             },
         }, ctx);

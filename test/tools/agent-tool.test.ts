@@ -147,12 +147,14 @@ function configureRevisionAction(fixture: ReturnType<typeof revisionActionFixtur
 async function executeRevisionAction(fixture: ReturnType<typeof revisionActionFixture>): Promise<unknown> {
     return executeParentWorkspaceAction(
         { action: "revise", runId: fixture.record.runId, guidance: "Apply feedback" },
-        fixture.ctx as any,
-        fixture.manager as any,
-        undefined,
-        fixture.progress,
-        fixture.events,
-        fixture.discover,
+        {
+            ctx: fixture.ctx as any,
+            manager: fixture.manager as any,
+            signal: undefined,
+            progress: fixture.progress,
+            events: fixture.events,
+            discover: fixture.discover,
+        },
     );
 }
 
@@ -588,7 +590,7 @@ describe("agent extension registration", () => {
             undefined,
             ctx,
         );
-        expect(listWorkspaces).toHaveBeenCalledWith(process.cwd(), undefined, true);
+        expect(listWorkspaces).toHaveBeenCalledWith(process.cwd(), { includeMissingWorktrees: true });
         const collected = await tool.execute(
             "call-3",
             { action: "collect", runId: "scout-1" },
@@ -701,18 +703,36 @@ describe("agent extension registration", () => {
         );
 
         expect(setupSpy).toHaveBeenCalledOnce();
+        expect(setupSpy).toHaveBeenCalledWith(
+            process.cwd(),
+            expect.objectContaining({
+                definition: expect.objectContaining({ name: "worker" }),
+                factory: expect.any(Function),
+                manager: expect.anything(),
+                ctx,
+                signal: undefined,
+                onUiUpdate: expect.any(Function),
+                events: expect.anything(),
+                dialogEvents: undefined,
+            }),
+        );
         expect(transferSpy).toHaveBeenCalledWith(
             workspace.id,
-            "parent-session",
-            "provisional-1",
-            "worker-1",
-            "task",
-            undefined,
-            "provisional-instance-1",
-            expect.any(String),
+            {
+                ownerSessionId: "parent-session",
+                fromLeaseRunId: "provisional-1",
+                toLeaseRunId: "worker-1",
+                leaseKind: "task",
+                fromLeaseRunInstanceId: "provisional-instance-1",
+                toLeaseRunInstanceId: expect.any(String),
+            },
         );
         expect(getWorkspaceSpy).toHaveBeenCalledWith(workspace.id);
-        expect(prepareResultSpy).toHaveBeenCalledWith(workspace, "parent-session", "worker-1", undefined, expect.any(String));
+        expect(prepareResultSpy).toHaveBeenCalledWith(workspace, {
+            ownerSessionId: "parent-session",
+            leaseRunId: "worker-1",
+            leaseRunInstanceId: expect.any(String),
+        });
         expect(collected.details.workspaceResult).toEqual(result);
         await expect(collected.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.isolated-collect.txt");
         await handlers.session_shutdown[0]({}, ctx);
@@ -815,12 +835,14 @@ describe("agent extension registration", () => {
 
         const result = await executeParentWorkspaceAction(
             { action: "revise", runId: "worker-1", guidance: "Apply feedback" },
-            ctx as any,
-            manager as any,
-            undefined,
-            progress,
-            events,
-            discover,
+            {
+                ctx: ctx as any,
+                manager: manager as any,
+                signal: undefined,
+                progress,
+                events,
+                discover,
+            },
         );
 
         expect(result).toBe(continuationOutcome);
@@ -835,20 +857,23 @@ describe("agent extension registration", () => {
                 childSessionFile,
                 childSessionLeafId: "leaf-1",
             }),
-            undefined,
-            progress,
-            "Implement fix revision",
-            { runId: "worker-2", runInstanceId: "worker-instance-2" },
+            {
+                signal: undefined,
+                onProgress: progress,
+                title: "Implement fix revision",
+                identity: { runId: "worker-2", runInstanceId: "worker-instance-2" },
+            },
         );
         expect(transferSpy).toHaveBeenCalledWith(
             "workspace-1",
-            "parent-session",
-            "worker-1",
-            "worker-2",
-            "task",
-            undefined,
-            "worker-instance-1",
-            "worker-instance-2",
+            {
+                ownerSessionId: "parent-session",
+                fromLeaseRunId: "worker-1",
+                toLeaseRunId: "worker-2",
+                leaseKind: "task",
+                fromLeaseRunInstanceId: "worker-instance-1",
+                toLeaseRunInstanceId: "worker-instance-2",
+            },
         );
     });
 
@@ -899,13 +924,14 @@ describe("agent extension registration", () => {
         expect(transferSpy).toHaveBeenCalledOnce();
         expect(transferSpy).toHaveBeenCalledWith(
             "workspace-1",
-            "parent-session",
-            "worker-1",
-            "worker-2",
-            "task",
-            undefined,
-            "worker-instance-1",
-            "worker-instance-2",
+            {
+                ownerSessionId: "parent-session",
+                fromLeaseRunId: "worker-1",
+                toLeaseRunId: "worker-2",
+                leaseKind: "task",
+                fromLeaseRunInstanceId: "worker-instance-1",
+                toLeaseRunInstanceId: "worker-instance-2",
+            },
         );
     });
 
@@ -920,13 +946,14 @@ describe("agent extension registration", () => {
         expect(transferSpy).toHaveBeenNthCalledWith(
             2,
             "workspace-1",
-            "parent-session",
-            "worker-2",
-            "worker-1",
-            "task",
-            undefined,
-            "worker-instance-2",
-            "worker-instance-1",
+            {
+                ownerSessionId: "parent-session",
+                fromLeaseRunId: "worker-2",
+                toLeaseRunId: "worker-1",
+                leaseKind: "task",
+                fromLeaseRunInstanceId: "worker-instance-2",
+                toLeaseRunInstanceId: "worker-instance-1",
+            },
         );
     });
 
@@ -1030,16 +1057,25 @@ describe("agent extension registration", () => {
         expect(order.indexOf("transfer")).toBeLessThan(order.indexOf("prompt"));
         expect(transferSpy).toHaveBeenCalledWith(
             workspace.id,
-            "parent-session",
-            "provisional-foreground",
-            "worker-1",
-            "task",
-            undefined,
-            "provisional-instance-foreground",
-            expect.any(String),
+            {
+                ownerSessionId: "parent-session",
+                fromLeaseRunId: "provisional-foreground",
+                toLeaseRunId: "worker-1",
+                leaseKind: "task",
+                fromLeaseRunInstanceId: "provisional-instance-foreground",
+                toLeaseRunInstanceId: expect.any(String),
+            },
         );
-        expect(prepareResultSpy).toHaveBeenCalledWith(workspace, "parent-session", "worker-1", undefined, expect.any(String));
-        expect(releaseSpy).toHaveBeenCalledWith(workspace.id, "parent-session", "worker-1", undefined, expect.any(String));
+        expect(prepareResultSpy).toHaveBeenCalledWith(workspace, {
+            ownerSessionId: "parent-session",
+            leaseRunId: "worker-1",
+            leaseRunInstanceId: expect.any(String),
+        });
+        expect(releaseSpy).toHaveBeenCalledWith(workspace.id, {
+            ownerSessionId: "parent-session",
+            leaseRunId: "worker-1",
+            leaseRunInstanceId: expect.any(String),
+        });
         expect(completed.details.workspaceResult).toEqual(result);
         await expect(completed.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.isolated-foreground.txt");
         await handlers.session_shutdown[0]({}, ctx);

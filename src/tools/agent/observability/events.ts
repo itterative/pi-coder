@@ -64,10 +64,14 @@ export function subscribeAgentEvents(
     });
 }
 
+export interface EmitAgentEventOptions {
+    sink?: AgentEventSink;
+    cwd: string;
+}
+
 export function emitAgentEvent(
-    sink: AgentEventSink | undefined,
-    cwd: string,
     event: AgentEventPayload,
+    { sink, cwd }: EmitAgentEventOptions,
 ): void {
     sink?.emit({
         ...event,

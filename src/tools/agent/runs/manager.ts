@@ -59,6 +59,37 @@ export interface AgentRunIdentity {
     runInstanceId: string;
 }
 
+/** Named controls for starting a foreground delegated agent run. */
+export interface AgentStartOptions {
+    signal?: AbortSignal;
+    onProgress?: AgentProgressCallback;
+    title?: string;
+    identity?: AgentRunIdentity;
+}
+
+/** Named controls for starting a background delegated agent run. */
+export interface AgentSpawnOptions {
+    signal?: AbortSignal;
+    onBackgroundUpdate?: AgentBackgroundCallback;
+    title?: string;
+    identity?: AgentRunIdentity;
+}
+
+/** Named controls for continuing a delegated agent run with a new prompt. */
+export interface AgentContinuationOptions {
+    signal?: AbortSignal;
+    onProgress?: AgentProgressCallback;
+    title?: string;
+    identity?: AgentRunIdentity;
+}
+
+/** Named controls for resuming a waiting or interrupted delegated agent run. */
+export interface AgentResumeOptions {
+    guidance?: string;
+    signal?: AbortSignal;
+    onProgress?: AgentProgressCallback;
+}
+
 type AgentStartContext = Omit<
     ChildAgentFactoryContext,
     "definition" | "background" | "onProgress" | "onTrace"
@@ -452,10 +483,12 @@ export class AgentRunManager {
         definitionOrName: AgentDefinition | string,
         task: string,
         context: AgentStartContext,
-        signal?: AbortSignal,
-        onProgress?: AgentProgressCallback,
-        title?: string,
-        identity?: AgentRunIdentity,
+        {
+            signal,
+            onProgress,
+            title,
+            identity,
+        }: AgentStartOptions = {},
     ): Promise<AgentRunOutcome> {
         const { definition, run } = this.createRun(definitionOrName, task, context, false, title, identity);
         const setupOutcome = await this.setupRun(
@@ -473,10 +506,12 @@ export class AgentRunManager {
         definitionOrName: AgentDefinition | string,
         task: string,
         context: AgentStartContext,
-        signal?: AbortSignal,
-        onBackgroundUpdate?: AgentBackgroundCallback,
-        title?: string,
-        identity?: AgentRunIdentity,
+        {
+            signal,
+            onBackgroundUpdate,
+            title,
+            identity,
+        }: AgentSpawnOptions = {},
     ): AgentRunOutcome {
         if (signal?.aborted) throw new AgentActionError("Agent spawn was aborted before launch.");
         const { definition, run } = this.createRun(definitionOrName, task, context, true, title, identity);
@@ -502,10 +537,12 @@ export class AgentRunManager {
         task: string,
         prompt: string,
         context: AgentStartContext,
-        signal?: AbortSignal,
-        onProgress?: AgentProgressCallback,
-        title?: string,
-        identity?: AgentRunIdentity,
+        {
+            signal,
+            onProgress,
+            title,
+            identity,
+        }: AgentContinuationOptions = {},
     ): Promise<AgentRunOutcome> {
         const { definition, run } = this.createRun(definitionOrName, task, context, false, title, identity);
         const setupOutcome = await this.setupRun(
@@ -521,9 +558,11 @@ export class AgentRunManager {
 
     async resume(
         runId: string,
-        guidance?: string,
-        signal?: AbortSignal,
-        onProgress?: AgentProgressCallback,
+        {
+            guidance,
+            signal,
+            onProgress,
+        }: AgentResumeOptions = {},
     ): Promise<AgentRunOutcome> {
         const run = this.runs.get(runId);
         if (!run) {
@@ -724,7 +763,10 @@ export class AgentRunManager {
             agentFilePath: definition.filePath,
             definition: snapshotAgentDefinition(definition),
             task,
-            initialPrompt: renderAgentTask(task, context.agentContext, definition.contextPolicy),
+            initialPrompt: renderAgentTask(task, {
+                context: context.agentContext,
+                policy: definition.contextPolicy,
+            }),
             status: "starting",
             background,
             usageCheckpoint: cloneUsage(ZERO_USAGE),
@@ -1573,7 +1615,7 @@ export class AgentRunManager {
         previousStatus: AgentRunStatus,
         status: AgentRunStatus,
     ): void {
-        emitAgentEvent(this.events, run.cwd, {
+        emitAgentEvent({
             type: "run",
             action: "status_changed",
             parentCwd: run.parentCwd,
@@ -1581,11 +1623,11 @@ export class AgentRunManager {
             status,
             previousStatus,
             workspaceId: run.workspaceId,
-        });
+        }, { sink: this.events, cwd: run.cwd });
     }
 
     private emitRunEvent(run: AgentRun, event: Extract<AgentEventPayload, { type: "run" }>): void {
-        emitAgentEvent(this.events, run.cwd, { ...event, parentCwd: run.parentCwd });
+        emitAgentEvent({ ...event, parentCwd: run.parentCwd }, { sink: this.events, cwd: run.cwd });
     }
 
     private record(run: AgentRun, type: string, data?: AgentTraceData): void {

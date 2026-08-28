@@ -309,6 +309,15 @@ export interface AgentSessionHistoryScope {
     activeBranchOnly?: boolean;
 }
 
+export interface AgentPastSessionListsOptions {
+    agentSessionsDir?: string;
+    activeBranch?: AgentPastSessionActiveBranch;
+}
+
+export interface AgentPastSessionOptions extends AgentSessionHistoryScope {
+    agentSessionsDir?: string;
+}
+
 async function activeBranchChildCheckpoints(
     parentSessionFile: string | undefined,
     parentSessionLeafId: string | null | undefined,
@@ -398,10 +407,12 @@ export interface AgentPastSessionActiveBranch {
  */
 export async function listAgentPastSessionLists(
     cwd: string,
-    agentSessionsDir?: string,
-    activeBranch?: AgentPastSessionActiveBranch,
+    {
+        agentSessionsDir = PI_CODER_AGENT_SESSIONS_DIR,
+        activeBranch,
+    }: AgentPastSessionListsOptions = {},
 ): Promise<AgentPastSessionLists> {
-    const cwdSessionDir = getAgentCwdSessionDir(cwd, agentSessionsDir);
+    const cwdSessionDir = getAgentCwdSessionDir(cwd, { agentSessionsDir });
     const workspacesDir = path.join(
         path.dirname(path.resolve(agentSessionsDir ?? PI_CODER_AGENT_SESSIONS_DIR)),
         "workspaces",
@@ -521,22 +532,28 @@ async function listOrphanPastSessions(
 
 export async function listPastAgentSessions(
     cwd: string,
-    agentSessionsDir?: string,
-    scope?: AgentSessionHistoryScope,
+    options: AgentPastSessionOptions = {},
 ): Promise<AgentSessionBrowserItem[]> {
-    const activeBranch = scope?.activeBranchOnly && scope.parentSessionId
+    const {
+        agentSessionsDir,
+        parentSessionId,
+        parentSessionFile,
+        parentSessionLeafId,
+        activeBranchOnly,
+    } = options;
+    const activeBranch = activeBranchOnly && parentSessionId
         ? {
-            parentSessionId: scope.parentSessionId,
-            parentSessionFile: scope.parentSessionFile,
-            parentSessionLeafId: scope.parentSessionLeafId,
+            parentSessionId,
+            parentSessionFile,
+            parentSessionLeafId,
         }
         : undefined;
-    const lists = await listAgentPastSessionLists(cwd, agentSessionsDir, activeBranch);
-    if (scope?.activeBranchOnly) {
+    const lists = await listAgentPastSessionLists(cwd, { agentSessionsDir, activeBranch });
+    if (activeBranchOnly) {
         return lists.activeBranch;
     }
-    if (scope?.parentSessionId) {
-        return lists.all.filter((item) => item.parentSessionId === scope.parentSessionId);
+    if (parentSessionId) {
+        return lists.all.filter((item) => item.parentSessionId === parentSessionId);
     }
     return lists.all;
 }

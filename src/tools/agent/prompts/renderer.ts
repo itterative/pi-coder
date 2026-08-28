@@ -33,11 +33,15 @@ export function renderAgentSystemPrompt(
     ].join("\n");
 }
 
+export interface RenderAgentTaskOptions {
+    context?: AgentContext;
+    policy?: AgentContextPolicy;
+}
+
 /** Render dynamic context in the task message, keeping it out of the system prompt. */
 export function renderAgentTask(
     task: string,
-    context: AgentContext | undefined,
-    policy: AgentContextPolicy | undefined,
+    { context, policy }: RenderAgentTaskOptions = {},
 ): string {
     const sections = selectSections(context, policy);
     if (sections.length === 0) return task;

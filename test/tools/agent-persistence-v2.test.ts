@@ -64,7 +64,7 @@ describe("delegated-agent V2 persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), sessionsDir), "parent-1");
+        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
         fs.mkdirSync(parentDir, { recursive: true });
         const parent = SessionManager.create(process.cwd(), parentDir);
         const context = {
@@ -123,14 +123,14 @@ describe("delegated-agent V2 persistence", () => {
             diagnostics: ["Could not restore scout-1: this checkpoint is historical and was continued on another parent branch."],
         });
         expect(childCreated).toBe(false);
-        await expect(manager.resume("scout-1", "Continue")).rejects.toThrow("Unknown or stale");
+        await expect(manager.resume("scout-1", { guidance: "Continue" })).rejects.toThrow("Unknown or stale");
     });
 
     it("isolates true sibling branches and physical runs with the same display ID", async () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-siblings-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), sessionsDir), "parent-1");
+        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
         fs.mkdirSync(parentDir, { recursive: true });
         const parent = SessionManager.create(process.cwd(), parentDir);
         parent.appendMessage({
@@ -247,7 +247,7 @@ describe("delegated-agent V2 persistence", () => {
         });
         expect(repairCalls).toBe(0);
         expect(restoredChild.getSessionLeafId?.()).toBe(committedLeaf);
-        await expect(manager.resume("scout-1")).resolves.toMatchObject({
+        await expect(manager.resume("scout-1", {})).resolves.toMatchObject({
             details: { status: "running" },
         });
         expect(repairCalls).toBe(1);
@@ -305,7 +305,7 @@ describe("delegated-agent V2 persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-browser-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), sessionsDir), "parent-1");
+        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
         fs.mkdirSync(parentDir, { recursive: true });
         const parent = SessionManager.create(process.cwd(), parentDir);
         parent.appendMessage({
@@ -318,7 +318,7 @@ describe("delegated-agent V2 persistence", () => {
             stopReason: "stop",
             timestamp: 1,
         });
-        const childDir = path.join(getAgentCwdSessionDir(process.cwd(), sessionsDir), parent.getSessionId());
+        const childDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), parent.getSessionId());
         fs.mkdirSync(childDir, { recursive: true });
         const child = SessionManager.create(process.cwd(), childDir);
         const firstUser = child.appendMessage({
@@ -382,7 +382,8 @@ describe("delegated-agent V2 persistence", () => {
             resumable: true,
         });
 
-        const current = await listPastAgentSessions(process.cwd(), sessionsDir, {
+        const current = await listPastAgentSessions(process.cwd(), {
+            agentSessionsDir: sessionsDir,
             parentSessionId: ownerSessionId,
             parentSessionFile: parent.getSessionFile(),
             parentSessionLeafId: secondMarker,
@@ -394,7 +395,8 @@ describe("delegated-agent V2 persistence", () => {
         expect(loadedCurrent?.transcript).toContain("second checkpoint response");
         expect(loadedCurrent?.transcript).not.toContain("first checkpoint response");
 
-        const historical = await listPastAgentSessions(process.cwd(), sessionsDir, {
+        const historical = await listPastAgentSessions(process.cwd(), {
+            agentSessionsDir: sessionsDir,
             parentSessionId: ownerSessionId,
             parentSessionFile: parent.getSessionFile(),
             parentSessionLeafId: firstMarker,
@@ -413,7 +415,7 @@ describe("delegated-agent V2 persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-missing-leaf-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), sessionsDir), "parent-1");
+        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
         fs.mkdirSync(parentDir, { recursive: true });
         const child = SessionManager.create(process.cwd(), parentDir);
         child.appendMessage({ role: "user", content: "available child transcript", timestamp: 1 });
@@ -448,7 +450,7 @@ describe("delegated-agent V2 persistence", () => {
             usageSnapshot: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
         }, path.join(stateDir, "workspaces"));
 
-        const sessions = await listPastAgentSessions(process.cwd(), sessionsDir);
+        const sessions = await listPastAgentSessions(process.cwd(), { agentSessionsDir: sessionsDir });
         expect(sessions[0]?.transcript).toBeUndefined();
         const loaded = await loadAgentSessionTranscriptForItem(sessions[0]!);
         expect(loaded?.transcript).toBe("Transcript unavailable for the selected child checkpoint.");
@@ -499,6 +501,16 @@ describe("delegated-agent V2 persistence", () => {
         expect((markerFailureDatabase.prepare("SELECT COUNT(*) AS count FROM agent_run_snapshots").get() as { count: number }).count).toBe(1);
         expect((markerFailureDatabase.prepare("SELECT COUNT(*) AS count FROM agent_runs").get() as { count: number }).count).toBe(0);
         markerFailureWriter.close();
+
+        const optionalMarkerDatabase = await openAgentMetadataDatabase(path.join(stateDir, "optional-marker", "workspaces"));
+        const optionalMarkerWriter = createAgentRunStateWriter(
+            process.cwd(),
+            optionalMarkerDatabase,
+            () => undefined,
+            { requireMarker: false },
+        );
+        expect(optionalMarkerWriter.save(record("instance-optional-marker", "parent-1"))).toMatchObject({ ok: true });
+        optionalMarkerWriter.close();
     });
 
     it("keeps a committed snapshot when head projection commit fails after marker append", async () => {
@@ -545,11 +557,11 @@ describe("delegated-agent V2 persistence", () => {
         const writerA = createAgentRunStateWriter(process.cwd(), databaseA, (marker) => {
             markersA.push(marker);
             return `marker-${markersA.length}`;
-        }, initialHead);
+        }, { initialHeads: initialHead });
         const writerB = createAgentRunStateWriter(process.cwd(), databaseB, (marker) => {
             markersB.push(marker);
             return `marker-${markersB.length}`;
-        }, initialHead);
+        }, { initialHeads: initialHead });
         const releaseA = writerA.acquireContinuationLease?.("instance-contention");
         expect(() => writerB.acquireContinuationLease?.("instance-contention")).toThrow("already owned");
         expect(writerB.save({ ...record("instance-contention", "parent-1"), updatedAt: 2 })).toMatchObject({ ok: false });
@@ -578,8 +590,8 @@ describe("delegated-agent V2 persistence", () => {
             ) VALUES (?, ?, ?, ?, ?, ?)
         `).run("instance-pid-recovery", "parent-1", "scout-1", "old-snapshot", 1, 1);
         const initialHead = new Map([["instance-pid-recovery", "old-snapshot"]]);
-        const writerA = createAgentRunStateWriter(process.cwd(), databaseA, () => "marker-a", initialHead);
-        const writerB = createAgentRunStateWriter(process.cwd(), databaseB, () => "marker-b", initialHead);
+        const writerA = createAgentRunStateWriter(process.cwd(), databaseA, () => "marker-a", { initialHeads: initialHead });
+        const writerB = createAgentRunStateWriter(process.cwd(), databaseB, () => "marker-b", { initialHeads: initialHead });
         const leaseA = writerA.acquireContinuationLease?.("instance-pid-recovery");
         databaseA.prepare(`
             UPDATE agent_run_continuation_leases SET owner_pid = ? WHERE run_instance_id = ?
@@ -652,7 +664,7 @@ describe("delegated-agent V2 persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-missing-snapshot-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), sessionsDir), "parent-1");
+        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
         fs.mkdirSync(parentDir, { recursive: true });
         const parent = SessionManager.create(process.cwd(), parentDir);
         parent.appendMessage({

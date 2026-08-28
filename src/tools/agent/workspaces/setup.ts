@@ -34,23 +34,36 @@ export type WorkspaceSetupUiCallback = (
     update: WorkspaceSetupUiUpdate,
 ) => void;
 
+/** Named setup dependencies and UI/event controls for an isolated workspace. */
+export interface WorkspaceSetupOptions {
+    definition: AgentDefinition;
+    factory: ChildAgentFactory;
+    ctx: ExtensionContext;
+    signal?: AbortSignal;
+    setupRunId: string;
+    onUiUpdate?: WorkspaceSetupUiCallback;
+    events?: AgentEventSink;
+}
+
 export async function runWorkspaceSetup(
     workspace: AgentWorkspace,
-    definition: AgentDefinition,
-    factory: ChildAgentFactory,
-    ctx: ExtensionContext,
-    signal: AbortSignal | undefined,
-    setupRunId: string,
-    onUiUpdate?: WorkspaceSetupUiCallback,
-    events?: AgentEventSink,
+    {
+        definition,
+        factory,
+        ctx,
+        signal,
+        setupRunId,
+        onUiUpdate,
+        events,
+    }: WorkspaceSetupOptions,
 ): Promise<AgentWorkspace> {
     await updateAgentWorkspace(workspace, { setupState: "running" });
-    emitAgentEvent(events, ctx.cwd, {
+    emitAgentEvent({
         type: "workspace",
         action: "updated",
         workspaceId: workspace.id,
         reason: "setup_started",
-    });
+    }, { sink: events, cwd: ctx.cwd });
     onUiUpdate?.(setupRunId, workspace, {
         status: "starting",
         activity: "Starting workspace setup",
@@ -79,12 +92,12 @@ Do not implement the requested feature, edit unrelated source files, or make unr
             runTitle: `Setup ${workspace.slug}`,
             isolated: true,
             onProgress: (progress) => {
-                emitAgentEvent(events, ctx.cwd, {
+                emitAgentEvent({
                     type: "workspace",
                     action: "updated",
                     workspaceId: workspace.id,
                     reason: "setup_progress",
-                });
+                }, { sink: events, cwd: ctx.cwd });
                 onUiUpdate?.(setupRunId, workspace, {
                     status: progress.permissionPending ? "waiting_for_permission" : "running",
                     activity: progress.recentActivity[progress.recentActivity.length - 1] ?? "Preparing workspace",
@@ -115,12 +128,12 @@ Do not implement the requested feature, edit unrelated source files, or make unr
             setupState: "ready",
             setupSummary: summary,
         });
-        emitAgentEvent(events, ctx.cwd, {
+        emitAgentEvent({
             type: "workspace",
             action: "updated",
             workspaceId: readyWorkspace.id,
             reason: "setup_completed",
-        });
+        }, { sink: events, cwd: ctx.cwd });
         onUiUpdate?.(setupRunId, readyWorkspace, {
             status: "completed",
             activity: "Setup complete",
@@ -136,12 +149,12 @@ Do not implement the requested feature, edit unrelated source files, or make unr
             responsePreview: message,
         });
         const failedWorkspace = await updateAgentWorkspace(workspace, { setupState: "failed", setupSummary: message });
-        emitAgentEvent(events, ctx.cwd, {
+        emitAgentEvent({
             type: "workspace",
             action: "updated",
             workspaceId: failedWorkspace.id,
             reason: "setup_failed",
-        });
+        }, { sink: events, cwd: ctx.cwd });
         throw error;
     } finally {
         handle?.dispose();
@@ -155,16 +168,30 @@ export interface WorkspaceReservation {
     provisionalLeaseRunInstanceId: string;
 }
 
+/** Named dependencies and UI/event controls for isolated workspace preparation. */
+export interface PrepareIsolatedWorkspaceOptions {
+    definition: AgentDefinition;
+    factory: ChildAgentFactory;
+    manager: AgentRunManager;
+    ctx: ExtensionContext;
+    signal?: AbortSignal;
+    onUiUpdate?: WorkspaceSetupUiCallback;
+    events?: AgentEventSink;
+    dialogEvents?: EventBus;
+}
+
 export async function prepareIsolatedWorkspace(
     cwd: string,
-    definition: AgentDefinition,
-    factory: ChildAgentFactory,
-    manager: AgentRunManager,
-    ctx: ExtensionContext,
-    signal: AbortSignal | undefined,
-    onUiUpdate?: WorkspaceSetupUiCallback,
-    events?: AgentEventSink,
-    dialogEvents?: EventBus,
+    {
+        definition,
+        factory,
+        manager,
+        ctx,
+        signal,
+        onUiUpdate,
+        events,
+        dialogEvents,
+    }: PrepareIsolatedWorkspaceOptions,
 ): Promise<WorkspaceReservation> {
     if (!agentCanEdit(definition)) {
         throw new AgentActionError("Worktree isolation is currently available only for the mutation-capable worker.");
@@ -178,28 +205,26 @@ export async function prepareIsolatedWorkspace(
     const provisionalLeaseRunInstanceId = randomUUID();
     const released = await reconcileNoChangeAgentWorkspaceLeases(cwd);
     if (released > 0) {
-        emitAgentEvent(events, cwd, {
+        emitAgentEvent({
             type: "runtime",
             action: "reconciled",
             released,
-        });
+        }, { sink: events, cwd });
     }
     const available = await findAvailableAgentWorkspace(cwd);
     if (available) {
-        const workspace = await claimAgentWorkspace(
-            available.id,
+        const workspace = await claimAgentWorkspace(available.id, {
             ownerSessionId,
-            provisionalLeaseRunId,
-            "task",
-            undefined,
-            provisionalLeaseRunInstanceId,
-        );
-        emitAgentEvent(events, ctx.cwd, {
+            leaseRunId: provisionalLeaseRunId,
+            leaseKind: "task",
+            leaseRunInstanceId: provisionalLeaseRunInstanceId,
+        });
+        emitAgentEvent({
             type: "workspace",
             action: "lease_changed",
             workspaceId: workspace.id,
             reason: "claimed",
-        });
+        }, { sink: events, cwd: ctx.cwd });
         return { workspace, ownerSessionId, provisionalLeaseRunId, provisionalLeaseRunInstanceId };
     }
 
@@ -258,48 +283,48 @@ export async function prepareIsolatedWorkspace(
 
     const workspace = existing ?? await createAgentWorkspace(cwd);
     if (!existing) {
-        emitAgentEvent(events, ctx.cwd, {
+        emitAgentEvent({
             type: "workspace",
             action: "created",
             workspaceId: workspace.id,
-        });
+        }, { sink: events, cwd: ctx.cwd });
     }
     const leaseKind = choice === "setup" ? "setup" : "task";
     try {
-        const claimed = await claimAgentWorkspace(
-            workspace.id,
+        const claimed = await claimAgentWorkspace(workspace.id, {
             ownerSessionId,
-            provisionalLeaseRunId,
+            leaseRunId: provisionalLeaseRunId,
             leaseKind,
-            undefined,
-            provisionalLeaseRunInstanceId,
-        );
-        emitAgentEvent(events, ctx.cwd, {
+            leaseRunInstanceId: provisionalLeaseRunInstanceId,
+        });
+        emitAgentEvent({
             type: "workspace",
             action: "lease_changed",
             workspaceId: claimed.id,
             reason: "claimed",
-        });
+        }, { sink: events, cwd: ctx.cwd });
         if (choice === "setup") {
             await runWorkspaceSetup(
                 claimed,
-                definition,
-                factory,
-                ctx,
-                signal,
-                provisionalLeaseRunId,
-                onUiUpdate,
-                events,
+                {
+                    definition,
+                    factory,
+                    ctx,
+                    signal,
+                    setupRunId: provisionalLeaseRunId,
+                    onUiUpdate,
+                    events,
+                },
             );
         }
         else {
             const skipped = await updateAgentWorkspace(claimed, { setupState: "skipped" });
-            emitAgentEvent(events, ctx.cwd, {
+            emitAgentEvent({
                 type: "workspace",
                 action: "updated",
                 workspaceId: skipped.id,
                 reason: "setup_skipped",
-            });
+            }, { sink: events, cwd: ctx.cwd });
         }
         return {
             workspace: claimed,
@@ -309,19 +334,17 @@ export async function prepareIsolatedWorkspace(
         };
     } catch (error) {
         try {
-            await releaseAgentWorkspaceLease(
-                workspace.id,
+            await releaseAgentWorkspaceLease(workspace.id, {
                 ownerSessionId,
-                provisionalLeaseRunId,
-                undefined,
-                provisionalLeaseRunInstanceId,
-            );
-            emitAgentEvent(events, ctx.cwd, {
+                leaseRunId: provisionalLeaseRunId,
+                leaseRunInstanceId: provisionalLeaseRunInstanceId,
+            });
+            emitAgentEvent({
                 type: "workspace",
                 action: "lease_changed",
                 workspaceId: workspace.id,
                 reason: "claim_rolled_back",
-            });
+            }, { sink: events, cwd: ctx.cwd });
         } catch {
             // Preserve the original setup error; an uncertain lease remains
             // protected for explicit recovery.

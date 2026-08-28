@@ -23,19 +23,17 @@ export async function prepareCollectedWorkspaceResult(
             `Isolated workspace ${details.workspaceId} is missing; result was not collected.`,
         );
     }
-    const result = await prepareAgentWorkspaceApplication(
-        workspace,
-        ctx.sessionManager.getSessionId(),
-        details.runId,
-        undefined,
-        details.runInstanceId,
-    );
-    emitAgentEvent(events, ctx.cwd, {
+    const result = await prepareAgentWorkspaceApplication(workspace, {
+        ownerSessionId: ctx.sessionManager.getSessionId(),
+        leaseRunId: details.runId,
+        leaseRunInstanceId: details.runInstanceId,
+    });
+    emitAgentEvent({
         type: "workspace",
         action: "result_changed",
         workspaceId: result.workspaceId,
         reason: "prepared",
-    });
+    }, { sink: events, cwd: ctx.cwd });
     return result;
 }
 
@@ -58,19 +56,17 @@ export async function prepareForegroundWorkspaceResult(
     const noWorkspaceChanges = workspaceResult.workerHead === workspaceResult.baseRevision
         && workspaceResult.commits.length === 0;
     if (noWorkspaceChanges) {
-        await releaseAgentWorkspaceAfterNoChanges(
-            workspaceResult.workspaceId,
-            ctx.sessionManager.getSessionId(),
-            workspaceResult.runId,
-            undefined,
-            workspaceResult.runInstanceId,
-        );
-        emitAgentEvent(events, ctx.cwd, {
+        await releaseAgentWorkspaceAfterNoChanges(workspaceResult.workspaceId, {
+            ownerSessionId: ctx.sessionManager.getSessionId(),
+            leaseRunId: workspaceResult.runId,
+            leaseRunInstanceId: workspaceResult.runInstanceId,
+        });
+        emitAgentEvent({
             type: "workspace",
             action: "lease_changed",
             workspaceId: workspaceResult.workspaceId,
             reason: "released_no_changes",
-        });
+        }, { sink: events, cwd: ctx.cwd });
     }
     outcome.details.workspaceResult = workspaceResult;
     return outcome;

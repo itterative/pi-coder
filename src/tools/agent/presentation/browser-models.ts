@@ -54,6 +54,11 @@ export interface AgentWorkspaceGitView {
     text: string;
 }
 
+export interface AgentWorkspaceBrowserOptions {
+    gitState?: AgentWorkspaceGitState;
+    currentSessionId?: string;
+}
+
 export interface AgentWorkspaceBrowserItem {
     kind: "workspace";
     id: string;
@@ -165,8 +170,10 @@ function workspaceNotice(workspace: AgentWorkspace, currentSessionId?: string): 
 
 export function workspaceBrowserItem(
     workspace: AgentWorkspace,
-    gitState?: AgentWorkspaceGitState,
-    currentSessionId?: string,
+    {
+        gitState,
+        currentSessionId,
+    }: AgentWorkspaceBrowserOptions = {},
 ): AgentWorkspaceBrowserItem {
     const leaseKind = workspace.leaseKind ?? "unknown";
     const orphaned = workspace.leaseState === "orphaned" ? " · orphaned" : "";

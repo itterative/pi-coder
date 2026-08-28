@@ -23,6 +23,46 @@ export const MAX_AGENT_WORKSPACES = 3;
 
 type WorkspaceRow = Record<string, unknown>;
 
+export interface AgentWorkspaceDirectoryOptions {
+    workspacesDir?: string;
+}
+
+export interface AgentWorkspaceListOptions extends AgentWorkspaceDirectoryOptions {
+    includeMissingWorktrees?: boolean;
+}
+
+/** Required owner and run identity used by operations on an active workspace lease. */
+export interface AgentWorkspaceLeaseOptions {
+    ownerSessionId: string;
+    leaseRunId: string;
+    workspacesDir?: string;
+    leaseRunInstanceId?: string;
+}
+
+/** Optional lease controls used when a workspace may already be unleased. */
+export interface AgentWorkspaceLeaseControls {
+    ownerSessionId?: string;
+    leaseRunId?: string;
+    workspacesDir?: string;
+    leaseRunInstanceId?: string;
+}
+
+/** Lease identity and kind used when claiming an available workspace. */
+export interface ClaimAgentWorkspaceOptions extends AgentWorkspaceLeaseOptions {
+    leaseKind: WorkspaceLeaseKind;
+}
+
+/** Source and destination identities used when transferring a workspace lease. */
+export interface TransferAgentWorkspaceLeaseOptions
+    extends Pick<AgentWorkspaceLeaseOptions, "ownerSessionId" | "workspacesDir">
+{
+    fromLeaseRunId: string;
+    toLeaseRunId: string;
+    leaseKind?: WorkspaceLeaseKind;
+    fromLeaseRunInstanceId?: string;
+    toLeaseRunInstanceId?: string;
+}
+
 function rowToWorkspace(row: WorkspaceRow): AgentWorkspace | undefined {
     const setupState = row.setup_state;
     if (
@@ -155,10 +195,12 @@ export function attachLatestWorkspaceResult(
 
 export async function workspaceForLease(
     workspaceId: string,
-    ownerSessionId: string,
-    leaseRunId: string,
-    workspacesDir: string,
-    leaseRunInstanceId?: string,
+    {
+        ownerSessionId,
+        leaseRunId,
+        workspacesDir = PI_CODER_WORKSPACES_DIR,
+        leaseRunInstanceId,
+    }: AgentWorkspaceLeaseOptions,
 ): Promise<{ database: WorkspaceDatabase; workspace: AgentWorkspace }> {
     const database = await openDatabase(workspacesDir);
     const workspace = attachLatestWorkspaceResult(database, workspaceById(database, workspaceId));
@@ -176,7 +218,7 @@ export async function workspaceForLease(
 
 export async function getAgentWorkspace(
     workspaceId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
+    { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
 ): Promise<AgentWorkspace | undefined> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -225,8 +267,10 @@ export async function inspectAgentWorkspaceGitState(workspace: AgentWorkspace): 
 
 export async function listAgentWorkspaces(
     cwd: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    includeMissingWorktrees = false,
+    {
+        workspacesDir = PI_CODER_WORKSPACES_DIR,
+        includeMissingWorktrees = false,
+    }: AgentWorkspaceListOptions = {},
 ): Promise<AgentWorkspace[]> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -251,9 +295,9 @@ export async function listAgentWorkspaces(
 
 export async function findAvailableAgentWorkspace(
     cwd: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
+    { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
 ): Promise<AgentWorkspace | undefined> {
-    return (await listAgentWorkspaces(cwd, workspacesDir))
+    return (await listAgentWorkspaces(cwd, { workspacesDir }))
         .find((workspace) => (
             workspace.status === "available"
             && !workspace.leaseRunId
@@ -263,9 +307,9 @@ export async function findAvailableAgentWorkspace(
 
 export async function findUnpreparedAgentWorkspace(
     cwd: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
+    { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
 ): Promise<AgentWorkspace | undefined> {
-    return (await listAgentWorkspaces(cwd, workspacesDir))
+    return (await listAgentWorkspaces(cwd, { workspacesDir }))
         .find((workspace) => (
             !workspace.leaseRunId
             && (workspace.setupState === "not_started" || workspace.setupState === "failed")
@@ -274,7 +318,7 @@ export async function findUnpreparedAgentWorkspace(
 
 export async function listAgentWorkspaceResults(
     workspaceId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
+    { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
 ): Promise<AgentWorkspaceResult[]> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -315,11 +359,13 @@ function rollback(database: WorkspaceDatabase): void {
 
 export async function claimAgentWorkspace(
     workspaceId: string,
-    ownerSessionId: string,
-    leaseRunId: string,
-    leaseKind: WorkspaceLeaseKind,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    leaseRunInstanceId?: string,
+    {
+        ownerSessionId,
+        leaseRunId,
+        leaseKind,
+        workspacesDir = PI_CODER_WORKSPACES_DIR,
+        leaseRunInstanceId,
+    }: ClaimAgentWorkspaceOptions,
 ): Promise<AgentWorkspace> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -350,13 +396,15 @@ export async function claimAgentWorkspace(
 
 export async function transferAgentWorkspaceLease(
     workspaceId: string,
-    ownerSessionId: string,
-    fromLeaseRunId: string,
-    toLeaseRunId: string,
-    leaseKind: WorkspaceLeaseKind = "task",
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    fromLeaseRunInstanceId?: string,
-    toLeaseRunInstanceId?: string,
+    {
+        ownerSessionId,
+        fromLeaseRunId,
+        toLeaseRunId,
+        leaseKind = "task",
+        workspacesDir = PI_CODER_WORKSPACES_DIR,
+        fromLeaseRunInstanceId,
+        toLeaseRunInstanceId,
+    }: TransferAgentWorkspaceLeaseOptions,
 ): Promise<void> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -382,10 +430,12 @@ export async function transferAgentWorkspaceLease(
 
 export async function releaseAgentWorkspaceLease(
     workspaceId: string,
-    ownerSessionId: string,
-    leaseRunId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    leaseRunInstanceId?: string,
+    {
+        ownerSessionId,
+        leaseRunId,
+        workspacesDir = PI_CODER_WORKSPACES_DIR,
+        leaseRunInstanceId,
+    }: AgentWorkspaceLeaseOptions,
 ): Promise<void> {
     const database = await openDatabase(workspacesDir);
     try {

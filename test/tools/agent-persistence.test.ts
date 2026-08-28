@@ -83,7 +83,7 @@ describe("durable agent run persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), sessionsDir), "parent-1");
+        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
         fs.mkdirSync(parentDir, { recursive: true });
         const child = SessionManager.create(process.cwd(), parentDir);
         child.appendMessage({
@@ -120,7 +120,7 @@ describe("durable agent run persistence", () => {
         }, path.join(stateDir, "workspaces"));
         expect(fs.readdirSync(parentDir)).not.toHaveLength(0);
 
-        const sessions = await listPastAgentSessions(process.cwd(), sessionsDir);
+        const sessions = await listPastAgentSessions(process.cwd(), { agentSessionsDir: sessionsDir });
         expect(sessions).toHaveLength(1);
         expect(sessions[0]).toMatchObject({
             kind: "past",
@@ -138,7 +138,7 @@ describe("durable agent run persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), sessionsDir), "parent-1");
+        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
         fs.mkdirSync(parentDir, { recursive: true });
         const child = SessionManager.create(process.cwd(), parentDir);
         child.appendMessage({
@@ -175,7 +175,7 @@ describe("durable agent run persistence", () => {
             usageSnapshot: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
         }, path.join(stateDir, "workspaces"));
 
-        const lists = await listAgentPastSessionLists(process.cwd(), sessionsDir);
+        const lists = await listAgentPastSessionLists(process.cwd(), { agentSessionsDir: sessionsDir });
         expect(lists.all).toHaveLength(1);
         expect(lists.all[0]).toMatchObject({
             kind: "past",
@@ -211,7 +211,7 @@ describe("durable agent run persistence", () => {
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
         const workspacesDir = path.join(stateDir, "workspaces");
-        const childDir = path.join(getAgentCwdSessionDir(process.cwd(), sessionsDir), "parent-1");
+        const childDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
         fs.mkdirSync(childDir, { recursive: true });
         const childFile = path.join(childDir, "child.jsonl");
         fs.writeFileSync(childFile, "{}\n");
@@ -288,7 +288,7 @@ describe("durable agent run persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const cwdSessionDir = getAgentCwdSessionDir(process.cwd(), sessionsDir);
+        const cwdSessionDir = getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir });
         for (const [parent, timestamp] of [["parent-1", 1000], ["parent-2", 2000]] as const) {
             const directory = path.join(cwdSessionDir, parent);
             fs.mkdirSync(directory, { recursive: true });
@@ -311,7 +311,7 @@ describe("durable agent run persistence", () => {
             });
         }
 
-        const lists = await listAgentPastSessionLists(process.cwd(), sessionsDir);
+        const lists = await listAgentPastSessionLists(process.cwd(), { agentSessionsDir: sessionsDir });
 
         expect(lists.all.map((item) => item.parentSessionId)).toEqual(["parent-2", "parent-1"]);
         expect(lists.all.map((item) => item.firstMessage)).toEqual(["Task for parent-2", "Task for parent-1"]);
@@ -319,16 +319,18 @@ describe("durable agent run persistence", () => {
 
         const scoped = lists.all.filter((item) => item.parentSessionId === "parent-1");
         expect(scoped).toHaveLength(1);
-        expect(await listPastAgentSessions(process.cwd(), sessionsDir, { parentSessionId: "parent-1" }))
-            .toEqual(scoped);
-        expect(await listPastAgentSessions(process.cwd(), sessionsDir)).toEqual(lists.all);
+        expect(await listPastAgentSessions(process.cwd(), {
+            agentSessionsDir: sessionsDir,
+            parentSessionId: "parent-1",
+        })).toEqual(scoped);
+        expect(await listPastAgentSessions(process.cwd(), { agentSessionsDir: sessionsDir })).toEqual(lists.all);
     });
 
     it("loads current-run transcripts without scanning sibling sessions", async () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const directory = path.join(getAgentCwdSessionDir(process.cwd(), sessionsDir), "parent-1");
+        const directory = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
         fs.mkdirSync(directory, { recursive: true });
         const child = SessionManager.create(process.cwd(), directory);
         child.appendMessage({ role: "user", content: "Live run task", timestamp: 1 });

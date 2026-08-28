@@ -14,15 +14,21 @@ import {
     attachLatestWorkspaceResult,
     workspaceById,
     workspaceLeaseState,
+    type AgentWorkspaceDirectoryOptions,
+    type AgentWorkspaceLeaseControls,
 } from "./store";
 
 type WorkspaceRow = Record<string, unknown>;
 
+/** Named owner and storage controls for orphaned task lease recovery. */
+export interface RecoverAgentWorkspaceLeaseOptions extends AgentWorkspaceDirectoryOptions {
+    ownerSessionId: string;
+}
+
 /** Adopt an orphaned task lease into the current parent session without changing its result or worktree. */
 export async function recoverAgentWorkspaceLease(
     workspaceId: string,
-    ownerSessionId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
+    { ownerSessionId, workspacesDir = PI_CODER_WORKSPACES_DIR }: RecoverAgentWorkspaceLeaseOptions,
 ): Promise<AgentWorkspace> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -58,7 +64,7 @@ export async function recoverAgentWorkspaceLease(
  */
 export async function releaseAgentWorkspaceLeaseForRecovery(
     workspaceId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
+    { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
 ): Promise<AgentWorkspace> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -98,10 +104,12 @@ export async function releaseAgentWorkspaceLeaseForRecovery(
 /** Reset a workspace to the current parent revision and make it reusable. */
 export async function resetAgentWorkspaceForReuse(
     workspaceId: string,
-    ownerSessionId?: string,
-    leaseRunId?: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    leaseRunInstanceId?: string,
+    {
+        ownerSessionId,
+        leaseRunId,
+        workspacesDir = PI_CODER_WORKSPACES_DIR,
+        leaseRunInstanceId,
+    }: AgentWorkspaceLeaseControls = {},
 ): Promise<AgentWorkspace> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -156,10 +164,12 @@ export async function resetAgentWorkspaceForReuse(
 /** Permanently discard a workspace and all of its saved result refs. */
 export async function discardAgentWorkspace(
     workspaceId: string,
-    ownerSessionId?: string,
-    leaseRunId?: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    leaseRunInstanceId?: string,
+    {
+        ownerSessionId,
+        leaseRunId,
+        workspacesDir = PI_CODER_WORKSPACES_DIR,
+        leaseRunInstanceId,
+    }: AgentWorkspaceLeaseControls = {},
 ): Promise<void> {
     const database = await openDatabase(workspacesDir);
     try {
@@ -198,7 +208,7 @@ export async function discardAgentWorkspace(
 
 export async function createAgentWorkspace(
     cwd: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
+    { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
 ): Promise<AgentWorkspace> {
     const resolvedCwd = path.resolve(cwd);
     const repositoryRoot = path.resolve(await git(resolvedCwd, ["rev-parse", "--show-toplevel"]));
@@ -279,7 +289,7 @@ export async function createAgentWorkspace(
 export async function updateAgentWorkspace(
     workspace: AgentWorkspace,
     update: Pick<AgentWorkspace, "setupState"> & Partial<Pick<AgentWorkspace, "setupSummary">>,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
+    { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
 ): Promise<AgentWorkspace> {
     const next: AgentWorkspace = {
         ...workspace,

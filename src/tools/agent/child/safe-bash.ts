@@ -20,14 +20,31 @@ export interface SafeBashBlock {
     reason: string;
 }
 
+/** Named options for assessing a delegated agent's bash command. */
+export interface SafeBashOptions {
+    additionalRoots?: readonly string[];
+    sensitiveAdditionalRoots?: readonly string[];
+    safeBashCommands?: readonly string[];
+}
+
+/** Named options for guarding a delegated agent's bash command. */
+export interface SafeBashGuardOptions extends SafeBashOptions {
+    safeBash: boolean;
+    onTrace?: ChildAgentFactoryContext["onTrace"];
+}
+
 /** Assess whether a delegated agent's bash command is cwd-confined and safe. */
 export function getSafeBashAssessment(
     command: string,
     cwd: string,
-    additionalRoots: readonly string[] = [],
-    sensitiveAdditionalRoots?: readonly string[],
-    safeBashCommands: readonly string[] = [],
+    options: SafeBashOptions = {},
 ): HeuristicAssessment {
+    const {
+        additionalRoots = [],
+        sensitiveAdditionalRoots,
+        safeBashCommands = [],
+    } = options;
+
     return getCwdConfinementAssessment(command, {
         cwd,
         config: CHILD_CONFINEMENT,
@@ -43,17 +60,9 @@ export const getScoutBashAssessment = getSafeBashAssessment;
 export function isSafeBashAllowed(
     command: string,
     cwd: string,
-    additionalRoots: readonly string[] = [],
-    sensitiveAdditionalRoots?: readonly string[],
-    safeBashCommands: readonly string[] = [],
+    options: SafeBashOptions = {},
 ): boolean {
-    return getSafeBashAssessment(
-        command,
-        cwd,
-        additionalRoots,
-        sensitiveAdditionalRoots,
-        safeBashCommands,
-    ).classification === Heuristic.SAFE_READONLY;
+    return getSafeBashAssessment(command, cwd, options).classification === Heuristic.SAFE_READONLY;
 }
 
 /** @deprecated Use isSafeBashAllowed. */
@@ -66,12 +75,16 @@ export const isScoutBashAllowed = isSafeBashAllowed;
 export async function guardSafeBashCommand(
     command: string,
     cwd: string,
-    safeBash: boolean,
-    onTrace?: ChildAgentFactoryContext["onTrace"],
-    additionalRoots: readonly string[] = [],
-    sensitiveAdditionalRoots?: readonly string[],
-    safeBashCommands: readonly string[] = [],
+    options: SafeBashGuardOptions,
 ): Promise<SafeBashBlock | undefined> {
+    const {
+        safeBash,
+        onTrace,
+        additionalRoots,
+        sensitiveAdditionalRoots,
+        safeBashCommands,
+    } = options;
+
     if (!safeBash) {
         return {
             block: true,
@@ -79,13 +92,11 @@ export async function guardSafeBashCommand(
         };
     }
 
-    const assessment = getSafeBashAssessment(
-        command,
-        cwd,
+    const assessment = getSafeBashAssessment(command, cwd, {
         additionalRoots,
         sensitiveAdditionalRoots,
         safeBashCommands,
-    );
+    });
     if (assessment.classification !== Heuristic.SAFE_READONLY) {
         const reasons = assessment.reasons
             .map((reason) => `${describeUnsafeReason(reason)} [${reason}]`)

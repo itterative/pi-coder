@@ -1,4 +1,5 @@
 import type { AgentWorkspace, AgentWorkspaceResult } from "../contracts/workspaces";
+import type { AgentWorkspaceLeaseOptions } from "./store";
 import {
     discardAgentWorkspace,
     recoverAgentWorkspaceLease,
@@ -34,31 +35,29 @@ export interface WorkspaceActionResult {
 
 function requirePreparedResult(
     workspace: AgentWorkspace,
-    ownerSessionId: string,
-    runId: string,
-    runInstanceId?: string,
+    { ownerSessionId, leaseRunId, leaseRunInstanceId }: AgentWorkspaceLeaseOptions,
 ): AgentWorkspaceResult {
     if (
         workspace.leaseOwnerSessionId !== ownerSessionId
-        || workspace.leaseRunId !== runId
-        || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== runInstanceId)
+        || workspace.leaseRunId !== leaseRunId
+        || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== leaseRunInstanceId)
     ) {
-        throw new Error(`Workspace ${workspace.id} is not currently leased by run ${runId}.`);
+        throw new Error(`Workspace ${workspace.id} is not currently leased by run ${leaseRunId}.`);
     }
     if (
         workspace.leaseKind !== "task"
         || !workspace.latestResult
         || workspace.latestResult.status !== "prepared"
-        || workspace.latestResult.runId !== runId
-        || (workspace.leaseRunInstanceId !== undefined && workspace.latestResult.runInstanceId !== runInstanceId)
+        || workspace.latestResult.runId !== leaseRunId
+        || (workspace.leaseRunInstanceId !== undefined && workspace.latestResult.runInstanceId !== leaseRunInstanceId)
     ) {
-        throw new Error(`Workspace ${workspace.id} has no prepared result for run ${runId}.`);
+        throw new Error(`Workspace ${workspace.id} has no prepared result for run ${leaseRunId}.`);
     }
     return workspace.latestResult;
 }
 
 async function refreshed(workspace: AgentWorkspace, workspacesDir?: string): Promise<AgentWorkspace> {
-    return await getAgentWorkspace(workspace.id, workspacesDir) ?? workspace;
+    return await getAgentWorkspace(workspace.id, { workspacesDir }) ?? workspace;
 }
 
 /**
@@ -72,21 +71,15 @@ export async function executeWorkspaceAction(
     const { workspace, workspacesDir } = request;
     switch (request.action) {
         case "apply": {
-            requirePreparedResult(workspace, request.ownerSessionId, request.runId, request.runInstanceId);
-            const result = await applyAgentWorkspaceApplication(
-                workspace,
-                request.ownerSessionId,
-                request.runId,
+            const leaseOptions = {
+                ownerSessionId: request.ownerSessionId,
+                leaseRunId: request.runId,
                 workspacesDir,
-                request.runInstanceId,
-            );
-            await releaseAgentWorkspaceAfterApplication(
-                workspace.id,
-                request.ownerSessionId,
-                request.runId,
-                workspacesDir,
-                request.runInstanceId,
-            );
+                leaseRunInstanceId: request.runInstanceId,
+            };
+            requirePreparedResult(workspace, leaseOptions);
+            const result = await applyAgentWorkspaceApplication(workspace, leaseOptions);
+            await releaseAgentWorkspaceAfterApplication(workspace.id, leaseOptions);
             return {
                 workspace: await refreshed(workspace, workspacesDir),
                 result,
@@ -95,14 +88,14 @@ export async function executeWorkspaceAction(
             };
         }
         case "retain": {
-            const prepared = requirePreparedResult(workspace, request.ownerSessionId, request.runId, request.runInstanceId);
-            await retainAgentWorkspaceResult(
-                workspace.id,
-                request.ownerSessionId,
-                request.runId,
+            const leaseOptions = {
+                ownerSessionId: request.ownerSessionId,
+                leaseRunId: request.runId,
                 workspacesDir,
-                request.runInstanceId,
-            );
+                leaseRunInstanceId: request.runInstanceId,
+            };
+            const prepared = requirePreparedResult(workspace, leaseOptions);
+            await retainAgentWorkspaceResult(workspace.id, leaseOptions);
             return {
                 workspace: await refreshed(workspace, workspacesDir),
                 result: prepared,
@@ -111,13 +104,12 @@ export async function executeWorkspaceAction(
             };
         }
         case "reset": {
-            const reset = await resetAgentWorkspaceForReuse(
-                workspace.id,
-                request.ownerSessionId,
-                request.runId,
+            const reset = await resetAgentWorkspaceForReuse(workspace.id, {
+                ownerSessionId: request.ownerSessionId,
+                leaseRunId: request.runId,
                 workspacesDir,
-                request.runInstanceId,
-            );
+                leaseRunInstanceId: request.runInstanceId,
+            });
             return {
                 workspace: reset,
                 effects: ["lease_changed", "workspace_updated"],
@@ -126,14 +118,14 @@ export async function executeWorkspaceAction(
         }
         case "discard_result": {
             if (workspace.leaseRunId) {
-                const prepared = requirePreparedResult(workspace, request.ownerSessionId, request.runId, request.runInstanceId);
-                await discardAgentWorkspaceResult(
-                    workspace.id,
-                    request.ownerSessionId,
-                    request.runId,
+                const leaseOptions = {
+                    ownerSessionId: request.ownerSessionId,
+                    leaseRunId: request.runId,
                     workspacesDir,
-                    request.runInstanceId,
-                );
+                    leaseRunInstanceId: request.runInstanceId,
+                };
+                const prepared = requirePreparedResult(workspace, leaseOptions);
+                await discardAgentWorkspaceResult(workspace.id, leaseOptions);
                 return {
                     workspace: await refreshed(workspace, workspacesDir),
                     result: prepared,
@@ -149,12 +141,7 @@ export async function executeWorkspaceAction(
                 throw new Error(`Workspace ${workspace.id} has no result for run ${request.runId} to discard.`);
             }
             const result = workspace.latestResult;
-            const reset = await resetAgentWorkspaceForReuse(
-                workspace.id,
-                undefined,
-                undefined,
-                workspacesDir,
-            );
+            const reset = await resetAgentWorkspaceForReuse(workspace.id, { workspacesDir });
             return {
                 workspace: reset,
                 result,
@@ -164,15 +151,14 @@ export async function executeWorkspaceAction(
         }
         case "discard_workspace": {
             if (workspace.leaseRunId && !workspace.latestResult && request.allowStaleLeaseWithoutResult) {
-                await discardAgentWorkspace(workspace.id, undefined, undefined, workspacesDir);
+                await discardAgentWorkspace(workspace.id, { workspacesDir });
             } else {
-                await discardAgentWorkspace(
-                    workspace.id,
-                    request.ownerSessionId,
-                    request.runId,
+                await discardAgentWorkspace(workspace.id, {
+                    ownerSessionId: request.ownerSessionId,
+                    leaseRunId: request.runId,
                     workspacesDir,
-                    request.runInstanceId,
-                );
+                    leaseRunInstanceId: request.runInstanceId,
+                });
             }
             return {
                 workspace: null,
@@ -181,11 +167,10 @@ export async function executeWorkspaceAction(
             };
         }
         case "recover": {
-            const recovered = await recoverAgentWorkspaceLease(
-                workspace.id,
-                request.ownerSessionId,
+            const recovered = await recoverAgentWorkspaceLease(workspace.id, {
+                ownerSessionId: request.ownerSessionId,
                 workspacesDir,
-            );
+            });
             return {
                 workspace: recovered,
                 effects: ["lease_changed", "workspace_updated"],
@@ -193,7 +178,7 @@ export async function executeWorkspaceAction(
             };
         }
         case "release": {
-            const released = await releaseAgentWorkspaceLeaseForRecovery(workspace.id, workspacesDir);
+            const released = await releaseAgentWorkspaceLeaseForRecovery(workspace.id, { workspacesDir });
             return {
                 workspace: released,
                 effects: ["lease_changed", "workspace_updated"],

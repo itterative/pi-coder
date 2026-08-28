@@ -135,7 +135,7 @@ export class AgentLifecycle {
             this.manager.closePersistence();
             this.manager.setPersistence(undefined);
             await this.manager.shutdown();
-            emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "reset" });
+            emitAgentEvent({ type: "runtime", action: "reset" }, { sink: this.events, cwd: ctx.cwd });
             this.managerValue = this.createManager();
             this.publishAgentStatus();
             const discovered = this.discover(ctx);
@@ -150,7 +150,7 @@ export class AgentLifecycle {
             await this.manager.shutdown();
             await this.manager.flushPersistence();
             this.manager.closePersistence();
-            emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "shutdown" });
+            emitAgentEvent({ type: "runtime", action: "shutdown" }, { sink: this.events, cwd: ctx.cwd });
             this.activeContext = undefined;
             this.unsubscribeAgentUiEvents();
         });
@@ -193,12 +193,12 @@ export class AgentLifecycle {
         action: WorkspaceEventAction,
         reason?: string,
     ): void {
-        emitAgentEvent(this.events, ctx.cwd, {
+        emitAgentEvent({
             type: "workspace",
             action,
             workspaceId,
             reason,
-        });
+        }, { sink: this.events, cwd: ctx.cwd });
     }
 
     updateSetupRun(
@@ -336,7 +336,7 @@ export class AgentLifecycle {
             );
         }
         this.publishAgentStatus();
-        emitAgentEvent(this.events, ctx.cwd, { type: "runtime", action: "restored" });
+        emitAgentEvent({ type: "runtime", action: "restored" }, { sink: this.events, cwd: ctx.cwd });
         this.reconcileMailbox();
         await this.manager.flushPersistence();
     }

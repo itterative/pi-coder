@@ -10,7 +10,7 @@ keep_updated: true
 ## Ownership
 
 - `src/index.ts` registers the feature. The package is organized into `contracts/`, `definitions/`, `runs/`, `child/`, `storage/`, `workspaces/`, `presentation/`, and `observability/`.
-- Top-level `lifecycle.ts`, `browser.ts`, and `action-dispatch.ts` own extension hooks/state, `/agents` orchestration, and parent action routing. `presentation/browser-models.ts` projects authoritative session/workspace/Git state for the TUI.
+- Top-level `lifecycle.ts`, `browser.ts`, and `action-dispatch.ts` own extension hooks/state, `/agents` orchestration, and parent action routing. `presentation/browser-models.ts` projects authoritative session/workspace/Git state for the TUI. Intra-agent helpers retain their data/action subject positionally and name ancillary dependencies/options—for example, event emission takes the event plus `{ sink, cwd }`.
 - Source and tests should import canonical modules directly; compatibility facades are intentionally removed.
 
 ## Definitions

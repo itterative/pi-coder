@@ -27,13 +27,12 @@ export default function registerAgentTool(
     lifecycle.register();
 
     registerAgentToolDefinition(pi, async (params, signal, progress, ctx) => {
-        const outcome = await executeAgentAction(
-            params,
+        const outcome = await executeAgentAction(params, {
             signal,
             progress,
             ctx,
             lifecycle,
-        );
+        });
         outcome.details = { ...outcome.details, response: outcome.content };
         outcome.content = formatAgentToolContent(params.action, outcome);
         lifecycle.publishAgentStatus();

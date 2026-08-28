@@ -865,13 +865,15 @@ Keep the notes with the TODO list.
     it("merges workspaces into the agents browser", () => {
         let invalidations = 0;
         const workspaceView = workspaceBrowserItem(workspace, {
-            kind: "available",
-            dirty: true,
-            changedFiles: 2,
-            stagedFiles: 1,
-            unstagedFiles: 1,
-            untrackedFiles: 0,
-            headRevision: "abc123def456",
+            gitState: {
+                kind: "available",
+                dirty: true,
+                changedFiles: 2,
+                stagedFiles: 1,
+                unstagedFiles: 1,
+                untrackedFiles: 0,
+                headRevision: "abc123def456",
+            },
         });
         const value = new AgentSessionBrowserComponent({
             current: [current],

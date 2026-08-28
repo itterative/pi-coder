@@ -49,10 +49,14 @@ const RESTORABLE_STATUSES = new Set<PersistedAgentRun["status"]>([
 
 export { normalizeCwdForSessionDirectory } from "../../../common/paths";
 
+export interface AgentCwdSessionDirOptions {
+    agentSessionsDir?: string;
+}
+
 /** Returns the extension-local session directory for one cwd. */
 export function getAgentCwdSessionDir(
     cwd: string,
-    agentSessionsDir = PI_CODER_AGENT_SESSIONS_DIR,
+    { agentSessionsDir = PI_CODER_AGENT_SESSIONS_DIR }: AgentCwdSessionDirOptions = {},
 ): string {
     const sessionDir = path.join(
         path.resolve(agentSessionsDir),
@@ -217,12 +221,19 @@ function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCa
     };
 }
 
+export interface AgentRunStateWriterOptions {
+    initialHeads?: ReadonlyMap<string, string>;
+    requireMarker?: boolean;
+}
+
 export function createAgentRunStateWriter(
     parentCwd: string,
     database: AgentMetadataDatabase,
     appendMarker: (marker: { version: 2; snapshotId: string; runInstanceId: string; runId: string }) => string | undefined,
-    initialHeads: ReadonlyMap<string, string> = new Map(),
-    requireMarker = true,
+    {
+        initialHeads = new Map(),
+        requireMarker = true,
+    }: AgentRunStateWriterOptions = {},
 ): AgentRunStateWriter {
     let closed = false;
     const processToken = randomUUID();
@@ -715,7 +726,7 @@ export async function loadAgentRunPersistence(
 ): Promise<LoadedAgentRunPersistence | undefined> {
     if (!ctx.sessionManager.getSessionFile()) return undefined;
     const ownerSessionId = ctx.sessionManager.getSessionId();
-    const cwdSessionDir = getAgentCwdSessionDir(ctx.cwd, agentSessionsDir);
+    const cwdSessionDir = getAgentCwdSessionDir(ctx.cwd, { agentSessionsDir });
     const childSessionDir = path.join(cwdSessionDir, ownerSessionId);
     fs.mkdirSync(childSessionDir, { recursive: true, mode: 0o700 });
     fs.chmodSync(childSessionDir, 0o700);
@@ -814,8 +825,10 @@ export async function loadAgentRunPersistence(
             };
             return sessionManager.appendCustomEntry?.(AGENT_RUN_SNAPSHOT_MARKER, marker);
         },
-        new Map([...sessionHeads].map(([runInstanceId, head]) => [runInstanceId, head.snapshotId])),
-        hasEntryIndex,
+        {
+            initialHeads: new Map([...sessionHeads].map(([runInstanceId, head]) => [runInstanceId, head.snapshotId])),
+            requireMarker: hasEntryIndex,
+        },
     );
 
     let persistenceWarningShown = false;

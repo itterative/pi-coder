@@ -94,16 +94,26 @@ function requireParentWorkspaceLease(
     return workspace.latestResult;
 }
 
+/** Named dependencies and controls for dispatching a parent workspace action. */
+export interface ExecuteParentWorkspaceActionOptions {
+    ctx: ExtensionContext;
+    manager: AgentRunManager;
+    signal?: AbortSignal;
+    progress: (details: AgentRunDetails) => void;
+    events: AgentEventSink;
+    discover?: (ctx: ExtensionContext) => ReturnType<typeof discoverAgents>;
+}
+
 export async function executeParentWorkspaceAction(
     params: Extract<AgentRequest, { action: "inspect" | "apply" | "discard" | "revise" }>,
-    ctx: ExtensionContext,
-    manager: AgentRunManager,
-    signal: AbortSignal | undefined,
-    progress: (details: AgentRunDetails) => void,
-    events: AgentEventSink,
-    discover: (ctx: ExtensionContext) => ReturnType<typeof discoverAgents> = (context) => (
-        discoverAgents(context.cwd, context.isProjectTrusted())
-    ),
+    {
+        ctx,
+        manager,
+        signal,
+        progress,
+        events,
+        discover = (context) => discoverAgents(context.cwd, context.isProjectTrusted()),
+    }: ExecuteParentWorkspaceActionOptions,
 ): Promise<AgentRunOutcome> {
     const resolved = await resolveParentWorkspaceRun(params.runId, ctx, manager);
     const { record, workspace } = resolved;
@@ -121,12 +131,12 @@ export async function executeParentWorkspaceAction(
             runId: params.runId,
             runInstanceId: record.runInstanceId,
         });
-        emitAgentEvent(events, ctx.cwd, {
+        emitAgentEvent({
             type: "workspace",
             action: "lease_changed",
             workspaceId: workspace.id,
             reason: "parent_discarded",
-        });
+        }, { sink: events, cwd: ctx.cwd });
         const content = hadLease
             ? `Discarded workspace result ${action.result?.id ?? params.runId}; the isolated workspace is reusable.`
             : `Cleaned up the isolated workspace for result ${params.runId}; the parent checkout was unchanged.`;
@@ -141,12 +151,12 @@ export async function executeParentWorkspaceAction(
             runId: params.runId,
             runInstanceId: record.runInstanceId,
         });
-        emitAgentEvent(events, ctx.cwd, {
+        emitAgentEvent({
             type: "workspace",
             action: "lease_changed",
             workspaceId: workspace.id,
             reason: "parent_applied",
-        });
+        }, { sink: events, cwd: ctx.cwd });
         return parentWorkspaceOutcome(
             record,
             action.workspace ?? workspace,
@@ -209,40 +219,38 @@ export async function executeParentWorkspaceAction(
         record.task,
         revisionPrompt,
         revisionContext,
-        signal,
-        progress,
-        `${record.title} revision`,
-        runIdentity,
+        {
+            signal,
+            onProgress: progress,
+            title: `${record.title} revision`,
+            identity: runIdentity,
+        },
     );
 
     let leaseTransferred = false;
     try {
-        await transferAgentWorkspaceLease(
-            workspace.id,
-            sessionId,
-            params.runId,
-            runIdentity.runId,
-            "task",
-            undefined,
-            record.runInstanceId,
-            runIdentity.runInstanceId,
-        );
+        await transferAgentWorkspaceLease(workspace.id, {
+            ownerSessionId: sessionId,
+            fromLeaseRunId: params.runId,
+            toLeaseRunId: runIdentity.runId,
+            leaseKind: "task",
+            fromLeaseRunInstanceId: record.runInstanceId,
+            toLeaseRunInstanceId: runIdentity.runInstanceId,
+        });
         leaseTransferred = true;
         const prepared = await prepareForegroundWorkspaceResult(outcome, ctx, events);
         prepared.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
         return prepared;
     } catch (error) {
         if (leaseTransferred) {
-            await transferAgentWorkspaceLease(
-                workspace.id,
-                sessionId,
-                runIdentity.runId,
-                params.runId,
-                "task",
-                undefined,
-                runIdentity.runInstanceId,
-                record.runInstanceId,
-            ).catch(() => {});
+            await transferAgentWorkspaceLease(workspace.id, {
+                ownerSessionId: sessionId,
+                fromLeaseRunId: runIdentity.runId,
+                toLeaseRunId: params.runId,
+                leaseKind: "task",
+                fromLeaseRunInstanceId: runIdentity.runInstanceId,
+                toLeaseRunInstanceId: record.runInstanceId,
+            }).catch(() => {});
         }
         throw error;
     }

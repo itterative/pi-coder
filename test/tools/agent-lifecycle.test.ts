@@ -112,8 +112,10 @@ async function fixture(
         BUILTIN_WORKER,
         "Make a change",
         { cwd: root, parentContext: ctx },
-        undefined,
-        lifecycle.backgroundUpdate(ctx),
+        {
+            signal: undefined,
+            onBackgroundUpdate: lifecycle.backgroundUpdate(ctx),
+        },
     );
     await flushBackground();
     if (!onFileChanged) throw new Error("Worker file-change callback was not installed.");

@@ -83,15 +83,24 @@ describe("agent browser view models", () => {
                 status: "prepared",
             },
         }), {
-            kind: "available",
-            dirty: true,
-            changedFiles: 2,
-        }, "session-1");
+            gitState: {
+                kind: "available",
+                dirty: true,
+                changedFiles: 2,
+            },
+            currentSessionId: "session-1",
+        });
 
         expect(item).toMatchObject({
             kind: "workspace",
+            id: "workspace-1",
+            cwd: "/repo",
+            repositoryRoot: "/repo",
+            worktreePath: "/state/workspaces/workspace-1",
+            baseRevision: "base",
             statusText: "leased",
             leaseText: "task · worker-1",
+            leaseOwnerSessionId: "session-1",
             git: { text: "dirty · 2 changed files" },
         });
         expect(item.actions.map(({ action }) => action)).toEqual([
@@ -109,7 +118,7 @@ describe("agent browser view models", () => {
             leaseRunId: "worker-1",
             leaseKind: "task",
             leaseState: "known",
-        }), undefined, "session-1");
+        }), { currentSessionId: "session-1" });
 
         expect(item.actions).toEqual([]);
         expect(item.notice).toContain("leased by another parent session");
@@ -131,7 +140,7 @@ describe("agent browser view models", () => {
                 preparedAt: 3,
                 status: "prepared",
             },
-        }), undefined, "session-1");
+        }), { currentSessionId: "session-1" });
 
         expect(item.actions.map(({ action }) => action)).toEqual(["inspect", "release", "discard"]);
     });
@@ -153,7 +162,7 @@ describe("agent browser view models", () => {
                 preparedAt: 3,
                 status: "prepared",
             },
-        }), undefined, "session-1");
+        }), { currentSessionId: "session-1" });
 
         expect(item.statusText).toBe("orphaned lease");
         expect(item.actions.map(({ action }) => action)).toEqual(["recover", "inspect"]);

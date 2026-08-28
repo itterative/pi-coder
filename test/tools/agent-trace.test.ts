@@ -55,11 +55,7 @@ describe("delegated-agent traces", () => {
             return child;
         }, 4, store);
 
-        const result = await manager.start(
-            "scout",
-            "Investigate",
-            { cwd: process.cwd(), parentContext: {} },
-        );
+        const result = await manager.start("scout", "Investigate", { cwd: process.cwd(), parentContext: {} }, {});
         const trace = store.get("scout-1");
         const eventTypes = trace?.events.map((event) => event.type);
 

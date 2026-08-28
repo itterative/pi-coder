@@ -84,13 +84,22 @@ function restoreSessionFolders(
     }
 }
 
+export interface ApprovedFileFolderOptions {
+    operation: FileOperation;
+    state: PermissionState;
+    confinement?: SandboxConfigCwdConfinement;
+}
+
 export function getApprovedFileFolder(
     filePath: string,
     cwd: string,
-    operation: FileOperation,
-    state: PermissionState,
-    confinement = sandboxConfig.current?.heuristics?.cwdConfinement,
+    options: ApprovedFileFolderOptions,
 ): string | undefined {
+    const {
+        operation,
+        state,
+        confinement = sandboxConfig.current?.heuristics?.cwdConfinement,
+    } = options;
 
     for (const folder of state.fileFolders[operation]) {
         if (isPathWithinDirectory(filePath, folder, cwd, confinement)) {
@@ -259,7 +268,11 @@ export default function registerFileToolHook(
             }
         }
 
-        const approvedFolder = getApprovedFileFolder(filePath, cwd, operation, state, confinement);
+        const approvedFolder = getApprovedFileFolder(filePath, cwd, {
+            operation,
+            state,
+            confinement,
+        });
         if (approvedFolder !== undefined) {
             approvedToolCalls.add(event);
             return { block: false };

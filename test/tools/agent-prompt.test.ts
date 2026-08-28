@@ -24,7 +24,16 @@ describe("delegated-agent prompt rendering", () => {
     it.each(builtins)("renders the $name child system prompt", async ({ name, definition, mutating, safeBash, commandRunner = false, allowUserInteraction, hasScratchpad, hasBashOutputAccess }) => {
         const rendered = renderAgentSystemPrompt(
             definition,
-            childProtocolPrompt(false, mutating, safeBash, allowUserInteraction, false, commandRunner, hasScratchpad, hasBashOutputAccess),
+            childProtocolPrompt({
+                background: false,
+                canEdit: mutating,
+                safeBash,
+                allowUserInteraction,
+                isolated: false,
+                commandRunner,
+                hasScratchpad,
+                hasBashOutputAccess,
+            }),
         );
 
         await expect(rendered).toMatchFileSnapshot(`__snapshots__/agent-prompt.${name}.system.txt`);
@@ -33,18 +42,18 @@ describe("delegated-agent prompt rendering", () => {
     it("renders the scout system prompt with custom safe-Bash patterns", async () => {
         const rendered = renderAgentSystemPrompt(
             BUILTIN_SCOUT,
-            childProtocolPrompt(
-                false,
-                false,
-                true,
-                true,
-                false,
-                false,
-                false,
-                true,
-                [],
-                ["ast-outline digest *"],
-            ),
+            childProtocolPrompt({
+                background: false,
+                canEdit: false,
+                safeBash: true,
+                allowUserInteraction: true,
+                isolated: false,
+                commandRunner: false,
+                hasScratchpad: false,
+                hasBashOutputAccess: true,
+                additionalPaths: [],
+                safeBashCommands: ["ast-outline digest *"],
+            }),
         );
 
         await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.scout.custom-safe-bash.system.txt");
@@ -53,14 +62,31 @@ describe("delegated-agent prompt rendering", () => {
     it("renders the isolated worker child system prompt", async () => {
         const rendered = renderAgentSystemPrompt(
             BUILTIN_WORKER,
-            childProtocolPrompt(false, true, true, true, true, true, true, true),
+            childProtocolPrompt({
+                background: false,
+                canEdit: true,
+                safeBash: true,
+                allowUserInteraction: true,
+                isolated: true,
+                commandRunner: true,
+                hasScratchpad: true,
+                hasBashOutputAccess: true,
+            }),
         );
 
         await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.worker-isolated.system.txt");
     });
 
     it("describes the scratchpad as an additional path root", () => {
-        const prompt = childProtocolPrompt(false, false, true, true, false, false, true);
+        const prompt = childProtocolPrompt({
+            background: false,
+            canEdit: false,
+            safeBash: true,
+            allowUserInteraction: true,
+            isolated: false,
+            commandRunner: false,
+            hasScratchpad: true,
+        });
 
         expect(prompt).toContain("current working directory or the temporary scratchpad");
         expect(prompt).toContain("Sensitive-path restrictions apply outside the temporary scratchpad");
@@ -70,28 +96,30 @@ describe("delegated-agent prompt rendering", () => {
         const rendered = renderAgentTask(
             "Review the proposed approach.",
             {
-                sections: [
-                    {
-                        id: "parent_summary",
-                        title: "Parent implementation summary",
-                        content: "The parent added the run manager integration.",
-                        source: "parent",
-                    },
-                    {
-                        id: "recent_context",
-                        title: "Recent context",
-                        content: "The parent is weighing a prompt renderer.",
-                        source: "parent",
-                    },
-                    {
-                        id: "not_requested",
-                        title: "Not requested",
-                        content: "This section should not be included.",
-                        source: "repository",
-                    },
-                ],
+                context: {
+                    sections: [
+                        {
+                            id: "parent_summary",
+                            title: "Parent implementation summary",
+                            content: "The parent added the run manager integration.",
+                            source: "parent",
+                        },
+                        {
+                            id: "recent_context",
+                            title: "Recent context",
+                            content: "The parent is weighing a prompt renderer.",
+                            source: "parent",
+                        },
+                        {
+                            id: "not_requested",
+                            title: "Not requested",
+                            content: "This section should not be included.",
+                            source: "repository",
+                        },
+                    ],
+                },
+                policy: BUILTIN_ADVISOR.contextPolicy,
             },
-            BUILTIN_ADVISOR.contextPolicy,
         );
 
         await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.advisor-context.txt");
@@ -107,22 +135,24 @@ describe("delegated-agent prompt rendering", () => {
         const rendered = renderAgentTask(
             "Review the approach.",
             {
-                sections: [
-                    {
-                        id: "parent_summary",
-                        title: "Summary",
-                        content: "First section. " + "x".repeat(1_000),
-                        source: "parent",
-                    },
-                    {
-                        id: "parent_summary",
-                        title: "Duplicate summary",
-                        content: "This duplicate must not be rendered.",
-                        source: "parent",
-                    },
-                ],
+                context: {
+                    sections: [
+                        {
+                            id: "parent_summary",
+                            title: "Summary",
+                            content: "First section. " + "x".repeat(1_000),
+                            source: "parent",
+                        },
+                        {
+                            id: "parent_summary",
+                            title: "Duplicate summary",
+                            content: "This duplicate must not be rendered.",
+                            source: "parent",
+                        },
+                    ],
+                },
+                policy: { sectionIds: ["parent_summary"], maxChars: 300 },
             },
-            { sectionIds: ["parent_summary"], maxChars: 300 },
         );
         const contextStart = rendered.indexOf("## Additional delegated context");
         const renderedContext = rendered.slice(contextStart);
@@ -135,14 +165,15 @@ describe("delegated-agent prompt rendering", () => {
         const rendered = renderAgentTask(
             "Inspect the code.",
             {
-                sections: [{
-                    id: "parent_summary",
-                    title: "Summary",
-                    content: "Additional context",
-                    source: "parent",
-                }],
+                context: {
+                    sections: [{
+                        id: "parent_summary",
+                        title: "Summary",
+                        content: "Additional context",
+                        source: "parent",
+                    }],
+                },
             },
-            undefined,
         );
 
         await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.task-only.txt");

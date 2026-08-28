@@ -12,6 +12,8 @@ import {
     listAgentWorkspaces,
     workspaceById,
     workspaceForLease,
+    type AgentWorkspaceDirectoryOptions,
+    type AgentWorkspaceLeaseOptions,
 } from "./store";
 
 const FINAL_RESULT_COMMIT_MESSAGE = "pi-coder: finalize isolated worker result";
@@ -19,8 +21,7 @@ const RESULT_REF_PREFIX = "refs/pi-coder/workspace-results";
 
 function requireMatchingWorkspaceResult(
     workspace: AgentWorkspace,
-    leaseRunId: string,
-    leaseRunInstanceId?: string,
+    { leaseRunId, leaseRunInstanceId }: AgentWorkspaceLeaseOptions,
 ): AgentWorkspaceResult {
     const result = workspace.latestResult;
     if (
@@ -43,12 +44,10 @@ async function resetReusableWorkspace(workspace: AgentWorkspace, targetRevision?
 /** Finalize the isolated worker tree for an explicit apply request. */
 export async function prepareAgentWorkspaceApplication(
     workspace: AgentWorkspace,
-    ownerSessionId: string,
-    leaseRunId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    leaseRunInstanceId?: string,
+    options: AgentWorkspaceLeaseOptions,
 ): Promise<AgentWorkspaceResult> {
-    const { database, workspace: current } = await workspaceForLease(workspace.id, ownerSessionId, leaseRunId, workspacesDir, leaseRunInstanceId);
+    const { ownerSessionId, leaseRunId, leaseRunInstanceId } = options;
+    const { database, workspace: current } = await workspaceForLease(workspace.id, options);
     let durableRef: string | undefined;
     try {
         if (current.leaseKind !== "task") throw new Error(`Workspace ${workspace.id} does not have a task lease.`);
@@ -104,15 +103,13 @@ export async function prepareAgentWorkspaceApplication(
 /** Apply a prepared worker tree to its parent checkout without creating a parent commit. */
 export async function applyAgentWorkspaceApplication(
     workspace: AgentWorkspace,
-    ownerSessionId: string,
-    leaseRunId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    leaseRunInstanceId?: string,
+    options: AgentWorkspaceLeaseOptions,
 ): Promise<AgentWorkspaceResult> {
-    const { database, workspace: current } = await workspaceForLease(workspace.id, ownerSessionId, leaseRunId, workspacesDir, leaseRunInstanceId);
+    const { leaseRunId, leaseRunInstanceId } = options;
+    const { database, workspace: current } = await workspaceForLease(workspace.id, options);
     try {
         if (current.leaseKind !== "task") throw new Error(`Workspace ${current.id} does not have a task lease.`);
-        const result = requireMatchingWorkspaceResult(current, leaseRunId, leaseRunInstanceId);
+        const result = requireMatchingWorkspaceResult(current, options);
         if (result.status === "applied") return result;
         const workerHead = await git(current.worktreePath, ["rev-parse", "HEAD"]);
         const workerState = await inspectAgentWorkspaceGitState(current);
@@ -153,14 +150,12 @@ export async function applyAgentWorkspaceApplication(
 /** Retain a changed prepared result for later review without applying it. */
 export async function retainAgentWorkspaceResult(
     workspaceId: string,
-    ownerSessionId: string,
-    leaseRunId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    leaseRunInstanceId?: string,
+    options: AgentWorkspaceLeaseOptions,
 ): Promise<void> {
-    const { database, workspace } = await workspaceForLease(workspaceId, ownerSessionId, leaseRunId, workspacesDir, leaseRunInstanceId);
+    const { ownerSessionId, leaseRunId, leaseRunInstanceId } = options;
+    const { database, workspace } = await workspaceForLease(workspaceId, options);
     try {
-        const result = workspace.latestResult && requireMatchingWorkspaceResult(workspace, leaseRunId, leaseRunInstanceId);
+        const result = workspace.latestResult && requireMatchingWorkspaceResult(workspace, options);
         if (workspace.leaseKind !== "task" || !result || result.status !== "prepared" || result.commits.length === 0) {
             throw new Error(`Workspace ${workspaceId} has no changed prepared result to retain.`);
         }
@@ -183,17 +178,15 @@ export async function retainAgentWorkspaceResult(
 /** Discard a prepared result and make its existing isolated workspace reusable. */
 export async function discardAgentWorkspaceResult(
     workspaceId: string,
-    ownerSessionId: string,
-    leaseRunId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    leaseRunInstanceId?: string,
+    options: AgentWorkspaceLeaseOptions,
 ): Promise<void> {
-    const { database, workspace } = await workspaceForLease(workspaceId, ownerSessionId, leaseRunId, workspacesDir, leaseRunInstanceId);
+    const { ownerSessionId, leaseRunId, leaseRunInstanceId } = options;
+    const { database, workspace } = await workspaceForLease(workspaceId, options);
     try {
         if (workspace.leaseKind !== "task") {
             throw new Error(`Workspace ${workspaceId} has no prepared result to discard.`);
         }
-        const result = requireMatchingWorkspaceResult(workspace, leaseRunId, leaseRunInstanceId);
+        const result = requireMatchingWorkspaceResult(workspace, options);
         if (result.status !== "prepared") {
             throw new Error(`Workspace ${workspaceId} has no prepared result to discard.`);
         }
@@ -226,11 +219,9 @@ export async function discardAgentWorkspaceResult(
 /** Release a task lease only after its prepared result was applied successfully. */
 export async function releaseAgentWorkspaceAfterApplication(
     workspaceId: string,
-    ownerSessionId: string,
-    leaseRunId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    leaseRunInstanceId?: string,
+    options: AgentWorkspaceLeaseOptions,
 ): Promise<void> {
+    const { ownerSessionId, leaseRunId, workspacesDir = PI_CODER_WORKSPACES_DIR, leaseRunInstanceId } = options;
     const database = await openDatabase(workspacesDir);
     try {
         const workspace = workspaceById(database, workspaceId);
@@ -241,7 +232,7 @@ export async function releaseAgentWorkspaceAfterApplication(
         ) {
             throw new Error(`Workspace ${workspaceId} is not leased by ${leaseRunId}.`);
         }
-        const result = requireMatchingWorkspaceResult(workspace, leaseRunId, leaseRunInstanceId);
+        const result = requireMatchingWorkspaceResult(workspace, options);
         if (workspace.leaseKind !== "task" || result.status !== "applied") {
             throw new Error(`Workspace ${workspaceId} can be released only after successful application.`);
         }
@@ -259,11 +250,9 @@ export async function releaseAgentWorkspaceAfterApplication(
 /** Release a task lease when the worker produced no changes, making the clean workspace reusable. */
 export async function releaseAgentWorkspaceAfterNoChanges(
     workspaceId: string,
-    ownerSessionId: string,
-    leaseRunId: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
-    leaseRunInstanceId?: string,
+    options: AgentWorkspaceLeaseOptions,
 ): Promise<void> {
+    const { ownerSessionId, leaseRunId, workspacesDir = PI_CODER_WORKSPACES_DIR, leaseRunInstanceId } = options;
     const database = await openDatabase(workspacesDir);
     try {
         const workspace = workspaceById(database, workspaceId);
@@ -274,7 +263,7 @@ export async function releaseAgentWorkspaceAfterNoChanges(
         ) {
             throw new Error(`Workspace ${workspaceId} is not leased by ${leaseRunId}.`);
         }
-        const result = requireMatchingWorkspaceResult(workspace, leaseRunId, leaseRunInstanceId);
+        const result = requireMatchingWorkspaceResult(workspace, options);
         if (
             workspace.leaseKind !== "task"
             || result.status !== "prepared"
@@ -328,9 +317,9 @@ export async function inspectAgentWorkspaceResult(workspace: AgentWorkspace): Pr
 /** Reconcile previously collected no-change results from before automatic release existed. */
 export async function reconcileNoChangeAgentWorkspaceLeases(
     cwd: string,
-    workspacesDir = PI_CODER_WORKSPACES_DIR,
+    { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
 ): Promise<number> {
-    const workspaces = await listAgentWorkspaces(cwd, workspacesDir);
+    const workspaces = await listAgentWorkspaces(cwd, { workspacesDir });
     let released = 0;
     for (const workspace of workspaces) {
         if (
@@ -345,13 +334,12 @@ export async function reconcileNoChangeAgentWorkspaceLeases(
             || workspace.latestResult.commits.length > 0
         ) continue;
         try {
-            await releaseAgentWorkspaceAfterNoChanges(
-                workspace.id,
-                workspace.leaseOwnerSessionId,
-                workspace.leaseRunId,
+            await releaseAgentWorkspaceAfterNoChanges(workspace.id, {
+                ownerSessionId: workspace.leaseOwnerSessionId,
+                leaseRunId: workspace.leaseRunId,
                 workspacesDir,
-                workspace.leaseRunInstanceId,
-            );
+                leaseRunInstanceId: workspace.leaseRunInstanceId,
+            });
             released++;
         } catch {
             // Leave a changed or otherwise unsafe workspace leased for explicit recovery.

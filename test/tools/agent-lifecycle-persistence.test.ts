@@ -134,6 +134,7 @@ describe("delegated-agent session tree persistence", () => {
             scout,
             "Investigate the persistence boundary",
             { cwd: process.cwd(), parentContext: ctx },
+            {},
         );
         expect(waiting.details.status).toBe("waiting_for_parent");
         const waitingMarker = parent.getLeafId();

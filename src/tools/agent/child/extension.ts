@@ -40,18 +40,32 @@ const CHILD_CONFINEMENT: SandboxConfigCwdConfinement = {
     resolveSymlinks: true,
 };
 
-export function childProtocolPrompt(
-    background: boolean,
-    canEdit: boolean,
-    safeBash: boolean,
+/** Named controls for rendering the delegated child protocol. */
+export interface ChildProtocolPromptOptions {
+    background: boolean;
+    canEdit: boolean;
+    safeBash: boolean;
+    allowUserInteraction?: boolean;
+    isolated?: boolean;
+    commandRunner?: boolean;
+    hasScratchpad?: boolean;
+    hasBashOutputAccess?: boolean;
+    additionalPaths?: readonly string[];
+    safeBashCommands?: readonly string[];
+}
+
+export function childProtocolPrompt({
+    background,
+    canEdit,
+    safeBash,
     allowUserInteraction = true,
     isolated = false,
     commandRunner = false,
     hasScratchpad = false,
     hasBashOutputAccess = false,
-    additionalPaths: readonly string[] = [],
-    safeBashCommands: readonly string[] = [],
-): string {
+    additionalPaths = [],
+    safeBashCommands = [],
+}: ChildProtocolPromptOptions): string {
     const mutationPathScope = hasScratchpad
         ? "the current working directory or the temporary scratchpad"
         : "the current working directory";
@@ -143,12 +157,21 @@ export function childProtocolPrompt(
 
 }
 
+/** Named options for child read-path confinement checks. */
+export interface ChildPathOptions {
+    additionalRoots?: readonly string[];
+    sensitiveAdditionalRoots?: readonly string[];
+}
+
 export function isChildPathAllowed(
     filePath: string | undefined,
     cwd: string,
-    additionalRoots: readonly string[] = [],
-    sensitiveAdditionalRoots: readonly string[] = [],
+    options: ChildPathOptions = {},
 ): boolean {
+    const {
+        additionalRoots = [],
+        sensitiveAdditionalRoots = [],
+    } = options;
     const effectivePath = filePath?.trim() || cwd;
     return getPathConfinementPermission(effectivePath, {
         cwd,
@@ -159,7 +182,15 @@ export function isChildPathAllowed(
     }) === Heuristic.SAFE_READONLY;
 }
 
-export { getScoutBashAssessment, isScoutBashAllowed } from "./safe-bash";
+export {
+    getSafeBashAssessment,
+    getScoutBashAssessment,
+    guardSafeBashCommand,
+    isSafeBashAllowed,
+    isScoutBashAllowed,
+    type SafeBashGuardOptions,
+    type SafeBashOptions,
+} from "./safe-bash";
 
 export interface ChildUserQuestion {
     title: string;
@@ -231,26 +262,48 @@ export async function askChildUser(
     };
 }
 
+/** Named setup values and callbacks for the child extension factory. */
+export interface ChildExtensionOptions {
+    agentName: string;
+    background: boolean;
+    canEdit: boolean;
+    safeBash: boolean;
+    runId: string;
+    runTitle: string;
+    onProgress: ChildAgentFactoryContext["onProgress"];
+    onFileChanged?: ChildAgentFactoryContext["onFileChanged"];
+    onTrace?: ChildAgentFactoryContext["onTrace"];
+    events?: EventBus;
+    allowUserInteraction?: boolean;
+    workspaceId?: string;
+    isolated?: boolean;
+    commandRunner?: boolean;
+    additionalPaths?: readonly string[];
+    safeBashCommands?: readonly string[];
+}
+
 export function registerChildExtension(
     tracker: ProgressTracker,
     parentContext: ExtensionContext,
     cwd: string,
-    agentName: string,
-    background: boolean,
-    canEdit: boolean,
-    safeBash: boolean,
-    runId: string,
-    runTitle: string,
-    onProgress: ChildAgentFactoryContext["onProgress"],
-    onFileChanged?: ChildAgentFactoryContext["onFileChanged"],
-    onTrace?: ChildAgentFactoryContext["onTrace"],
-    events?: EventBus,
-    allowUserInteraction = true,
-    workspaceId?: string,
-    isolated = false,
-    commandRunner = false,
-    additionalPaths: readonly string[] = [],
-    safeBashCommands: readonly string[] = [],
+    {
+        agentName,
+        background,
+        canEdit,
+        safeBash,
+        runId,
+        runTitle,
+        onProgress,
+        onFileChanged,
+        onTrace,
+        events,
+        allowUserInteraction = true,
+        workspaceId,
+        isolated = false,
+        commandRunner = false,
+        additionalPaths = [],
+        safeBashCommands = [],
+    }: ChildExtensionOptions,
 ) {
     return (pi: ExtensionAPI): void => {
         const bashOutputPaths = new Map<string, BashOutputPath>();
@@ -468,26 +521,22 @@ export function registerChildExtension(
 
         pi.on("tool_call", (event, ctx) => {
             if (!canEdit && !commandRunner && isToolCallEventType<"bash", BashToolInput>("bash", event)) {
-                return guardSafeBashCommand(
-                    event.input.command,
-                    ctx.cwd,
+                return guardSafeBashCommand(event.input.command, ctx.cwd, {
                     safeBash,
                     onTrace,
-                    [...additionalPaths, ...getScratchpadRoots(ctx)],
-                    getScratchpadRoots(ctx),
+                    additionalRoots: [...additionalPaths, ...getScratchpadRoots(ctx)],
+                    sensitiveAdditionalRoots: getScratchpadRoots(ctx),
                     safeBashCommands,
-                );
+                });
             }
 
             const filePath = readToolPath(event);
             if (filePath === undefined) return;
             const additionalRoots = readRoots(ctx);
-            if (!isChildPathAllowed(
-                filePath,
-                ctx.cwd,
+            if (!isChildPathAllowed(filePath, ctx.cwd, {
                 additionalRoots,
-                getScratchpadRoots(ctx),
-            )) {
+                sensitiveAdditionalRoots: getScratchpadRoots(ctx),
+            })) {
                 if (!isFileAccessApproved(event)) {
                     return {
                         block: true,

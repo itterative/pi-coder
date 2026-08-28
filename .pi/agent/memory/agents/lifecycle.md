@@ -13,6 +13,7 @@ keep_updated: true
 - Run states are `starting`, `running`, `waiting_for_parent`, `completed`, `failed`, `aborted`, and `interrupted`. Waiting is paused, not completed; interrupted runs never restart or replay automatically.
 - Up to four starting/running/waiting/interrupted runs consume capacity, with no TTL. Same-checkout mutation-capable workers are single-flight; mutation-capable workers in distinct isolated worktrees may run concurrently, while read-only runs can continue alongside them. Terminal background results are retained separately (latest 20) and do not consume active capacity.
 - IDs become stale after collection, cancellation, or result eviction. Ephemeral parent runs also become stale after reload/replacement/restart; persisted runs restore only for the exact parent session and active tree branch.
+- `AgentRunManager` retains its definition/task/context (or run ID) as positional run subjects and uses named options for ancillary signals, callbacks, titles, identities, and resume guidance; its all-optional options objects default to `{}` so no-control calls remain valid. Parent action-dispatch entrypoints likewise accept the request as their positional subject and named dependency options.
 
 ## Interaction and presentation
 

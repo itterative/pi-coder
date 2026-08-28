@@ -34,7 +34,7 @@ The built-in `advisor` has the same read-only capability boundary as `scout`; it
 workflows. The implementation uses root-policy and strict-flag fields on
 `CommandSpec`/`FlagSpec`, the registry in
 `src/modules/sandbox/commands/mutators.ts`, sed validation in `commands/text.ts`,
-and confinement checks in `src/modules/sandbox/heuristics.ts`.
+and confinement checks behind the public `src/modules/sandbox/heuristics/index.ts` facade.
 
 The hardening invariants are:
 

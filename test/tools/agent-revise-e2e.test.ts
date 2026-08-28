@@ -64,16 +64,15 @@ describe("registered revise lifecycle", () => {
         const parentSession = SessionManager.create(repository, parentSessionDir);
         const ownerSessionId = parentSession.getSessionId();
 
-        const created = await createAgentWorkspace(repository, testPaths.workspaces);
-        const ready = await updateAgentWorkspace(created, { setupState: "skipped" }, testPaths.workspaces);
-        const provisional = await claimAgentWorkspace(
-            ready.id,
+        const created = await createAgentWorkspace(repository, { workspacesDir: testPaths.workspaces });
+        const ready = await updateAgentWorkspace(created, { setupState: "skipped" }, { workspacesDir: testPaths.workspaces });
+        const provisional = await claimAgentWorkspace(ready.id, {
             ownerSessionId,
-            "setup-1",
-            "setup",
-            testPaths.workspaces,
-            "setup-instance-1",
-        );
+            leaseRunId: "setup-1",
+            leaseKind: "setup",
+            workspacesDir: testPaths.workspaces,
+            leaseRunInstanceId: "setup-instance-1",
+        });
         const prompts: string[] = [];
         const factoryContexts: any[] = [];
         const childSessions: SessionManager[] = [];
