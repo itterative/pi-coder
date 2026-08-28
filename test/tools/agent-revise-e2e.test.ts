@@ -29,10 +29,12 @@ vi.mock("../../src/common/constants", async () => {
 
 import registerAgentTool from "../../src/tools/agent";
 import { ZERO_USAGE, type ChildAgentHandle } from "../../src/tools/agent/runs/manager";
+import * as workspaceFinalization from "../../src/tools/agent/workspaces/finalization";
 import * as runCatalog from "../../src/tools/agent/storage/run-catalog";
 import { createAgentWorkspace, updateAgentWorkspace } from "../../src/tools/agent/workspaces/lifecycle";
 import * as workspaceSetup from "../../src/tools/agent/workspaces/setup";
 import { claimAgentWorkspace, getAgentWorkspace } from "../../src/tools/agent/workspaces/store";
+import * as workspaceStore from "../../src/tools/agent/workspaces/store";
 
 interface Handler {
     (event: any, ctx: any): Promise<unknown> | unknown;
@@ -179,6 +181,10 @@ describe("registered revise lifecycle", () => {
             workspaceId: provisional.id,
             childSessionFile: persistedSessionFile,
             childSessionLeafId: childSessions[0]?.getLeafId(),
+            definitionSnapshot: expect.objectContaining({
+                name: "worker",
+                capabilities: expect.arrayContaining(["edit"]),
+            }),
             status: "removed",
         });
 
@@ -232,6 +238,57 @@ describe("registered revise lifecycle", () => {
             },
         });
 
+
+        const transferError = new Error("revision lease transfer failed");
+        const transferFailureSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease")
+            .mockRejectedValueOnce(transferError);
+        const transferFailure = await tool.execute(
+            "e2e-transfer-failure",
+            { action: "revise", runId: revised.details.runId, guidance: "Try transfer failure" },
+            undefined,
+            undefined,
+            ctx,
+        );
+        expect(transferFailure.details.status).toBe("failed");
+        expect(transferFailure.content[0].text).toContain(transferError.message);
+        expect(transferFailureSpy).toHaveBeenCalled();
+        expect(await getAgentWorkspace(provisional.id)).toMatchObject({
+            leaseOwnerSessionId: parentSession.getSessionId(),
+            leaseRunId: revised.details.runId,
+            leaseRunInstanceId: revised.details.runInstanceId,
+            latestResult: {
+                runId: revised.details.runId,
+                runInstanceId: revised.details.runInstanceId,
+                status: "prepared",
+            },
+        });
+
+        const finalizationError = new Error("revision finalization failed");
+        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult")
+            .mockRejectedValueOnce(finalizationError);
+        const finalizationFailure = await tool.execute(
+            "e2e-finalization-failure",
+            { action: "revise", runId: revised.details.runId, guidance: "Try finalization failure" },
+            undefined,
+            undefined,
+            ctx,
+        );
+        expect(finalizationFailure.details.status).toBe("failed");
+        expect(finalizationFailure.content[0].text).toContain(finalizationError.message);
+        expect(await getAgentWorkspace(provisional.id)).toMatchObject({
+            leaseOwnerSessionId: parentSession.getSessionId(),
+            leaseRunId: revised.details.runId,
+            leaseRunInstanceId: revised.details.runInstanceId,
+            latestResult: {
+                runId: revised.details.runId,
+                runInstanceId: revised.details.runInstanceId,
+                status: "prepared",
+            },
+        });
+        expect(gitOutput(repository, ["rev-parse", "HEAD"])).toBe(parentHead);
+        expect(gitOutput(repository, ["status", "--porcelain"])).toBe("");
+        expect(fs.existsSync(path.join(repository, "revision-marker.txt"))).toBe(false);
+
         runGit(provisional.worktreePath, ["checkout", "--orphan", "divergent"]);
         runGit(provisional.worktreePath, ["commit", "--quiet", "--allow-empty", "-m", "divergent history"]);
         const rejected = await tool.execute(
@@ -243,9 +300,9 @@ describe("registered revise lifecycle", () => {
         );
         expect(rejected.details.status).toBe("failed");
         expect(rejected.content[0].text).toContain("is not based on workspace base");
-        expect(invocation).toBe(2);
-        const preservedWorkspace = await getAgentWorkspace(provisional.id);
-        expect(preservedWorkspace).toMatchObject({
+        expect(invocation).toBe(4);
+        const preservedAfterDivergence = await getAgentWorkspace(provisional.id);
+        expect(preservedAfterDivergence).toMatchObject({
             leaseOwnerSessionId: parentSession.getSessionId(),
             leaseRunId: revised.details.runId,
             leaseRunInstanceId: revised.details.runInstanceId,

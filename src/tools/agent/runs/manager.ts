@@ -6,6 +6,7 @@ import {
     agentCanEdit,
     fingerprintAgentDefinition,
     isAgentDefinitionFingerprintCompatible,
+    snapshotAgentDefinition,
     type AgentDefinition,
 } from "../definitions/types";
 import { emitAgentEvent } from "../observability/events";
@@ -70,6 +71,7 @@ interface AgentRun {
     agent: string;
     agentSource: string;
     agentFilePath?: string;
+    definition?: AgentDefinition;
     task: string;
     initialPrompt?: string;
     status: AgentRunStatus;
@@ -273,18 +275,27 @@ export class AgentRunManager {
                 || record.status === "failed"
                 || record.status === "aborted"
                 || record.status === "canceled";
-            const definition = definitionByName.get(record.agent);
-            if (!persistedTerminal && (
-                !definition
-                || !isAgentDefinitionFingerprintCompatible(definition, record.definitionFingerprint)
-            )) {
-                diagnostics.push(`Could not restore ${record.runId}: its agent definition is missing or changed.`);
+            const currentDefinition = definitionByName.get(record.agent);
+            const definition = record.definitionSnapshot;
+            if (!persistedTerminal && !definition) {
+                diagnostics.push(`Could not restore ${record.runId}: its persisted agent definition snapshot is unavailable; start a new run.`);
                 continue;
             }
-            const currentMutating = definition !== undefined && agentCanEdit(definition);
+            if (!persistedTerminal && currentDefinition && !isAgentDefinitionFingerprintCompatible(currentDefinition, record.definitionFingerprint)) {
+                diagnostics.push(`Restored ${record.runId} using its persisted agent definition snapshot; the current definition has changed.`);
+            } else if (!persistedTerminal && !currentDefinition) {
+                diagnostics.push(`Restored ${record.runId} using its persisted agent definition snapshot; the current definition is unavailable.`);
+            }
+            const snapshotMutating = definition !== undefined && agentCanEdit(definition);
+            const currentMutating = currentDefinition !== undefined && agentCanEdit(currentDefinition);
             if (!persistedTerminal && (
-                record.mutating !== currentMutating
-                || (currentMutating && !(definition?.name === "worker" && definition.source === "builtin"))
+                record.mutating !== snapshotMutating
+                || (snapshotMutating && (
+                    !currentDefinition
+                    || !currentMutating
+                    || currentDefinition.name !== "worker"
+                    || currentDefinition.source !== "builtin"
+                ))
             )) {
                 diagnostics.push(`Could not restore ${record.runId}: persisted metadata cannot alter mutation capability.`);
                 continue;
@@ -312,6 +323,8 @@ export class AgentRunManager {
                 agent: record.agent,
                 agentSource: persistedTerminal ? record.agentSource : definition!.source,
                 agentFilePath: persistedTerminal ? record.agentFilePath : definition!.filePath,
+                definition,
+
                 definitionFingerprint: record.definitionFingerprint,
                 task: record.task,
                 status: restoredStatus,
@@ -326,7 +339,7 @@ export class AgentRunManager {
                 disposed: persistedTerminal,
                 shutdownRequested: false,
                 cancelRequested: false,
-                mutating: persistedTerminal ? record.mutating : currentMutating,
+                mutating: persistedTerminal ? record.mutating : snapshotMutating,
                 workspaceId: record.workspaceId,
                 permissionPending: false,
                 childSessionFile: record.childSessionFile,
@@ -708,6 +721,7 @@ export class AgentRunManager {
             agent: definition.name,
             agentSource: definition.source,
             agentFilePath: definition.filePath,
+            definition: snapshotAgentDefinition(definition),
             task,
             initialPrompt: renderAgentTask(task, context.agentContext, definition.contextPolicy),
             status: "starting",
@@ -1486,6 +1500,7 @@ export class AgentRunManager {
             agentSource: run.agentSource,
             agentFilePath: run.agentFilePath,
             definitionFingerprint: run.definitionFingerprint,
+            ...(run.definition ? { definitionSnapshot: snapshotAgentDefinition(run.definition) } : {}),
             task: truncate(run.task, this.maxTaskChars),
             status: durableStatus,
             background: run.background,

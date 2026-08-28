@@ -36,6 +36,57 @@ export interface AgentDefinition {
     allowUserInteraction?: boolean;
 }
 
+/** Copy the complete runtime contract into durable run metadata. */
+export function snapshotAgentDefinition(definition: AgentDefinition): AgentDefinition {
+    return {
+        name: definition.name,
+        description: definition.description,
+        capabilities: [...definition.capabilities],
+        ...(definition.model !== undefined ? { model: definition.model } : {}),
+        systemPrompt: definition.systemPrompt,
+        ...(definition.contextPolicy
+            ? {
+                contextPolicy: {
+                    sectionIds: [...definition.contextPolicy.sectionIds],
+                    maxChars: definition.contextPolicy.maxChars,
+                },
+            }
+            : {}),
+        source: definition.source,
+        ...(definition.filePath !== undefined ? { filePath: definition.filePath } : {}),
+        ...(definition.allowUserInteraction !== undefined
+            ? { allowUserInteraction: definition.allowUserInteraction }
+            : {}),
+    };
+}
+
+/** Parse a durable runtime contract without trusting malformed metadata. */
+export function parseAgentDefinitionSnapshot(value: unknown): AgentDefinition | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const candidate = value as Partial<AgentDefinition>;
+    if (
+        typeof candidate.name !== "string"
+        || !candidate.name
+        || typeof candidate.description !== "string"
+        || typeof candidate.systemPrompt !== "string"
+        || !Array.isArray(candidate.capabilities)
+        || candidate.capabilities.some((capability) => !AGENT_CAPABILITIES.includes(capability as AgentCapability))
+        || (candidate.model !== undefined && typeof candidate.model !== "string")
+        || !["builtin", "user", "project"].includes(candidate.source as string)
+        || (candidate.filePath !== undefined && typeof candidate.filePath !== "string")
+        || (candidate.allowUserInteraction !== undefined && typeof candidate.allowUserInteraction !== "boolean")
+    ) return undefined;
+    const contextPolicy = candidate.contextPolicy;
+    if (contextPolicy !== undefined && (
+        !contextPolicy
+        || !Array.isArray(contextPolicy.sectionIds)
+        || contextPolicy.sectionIds.some((sectionId) => typeof sectionId !== "string")
+        || typeof contextPolicy.maxChars !== "number"
+        || !Number.isFinite(contextPolicy.maxChars)
+    )) return undefined;
+    return snapshotAgentDefinition(candidate as AgentDefinition);
+}
+
 /** Returns the effective capability set, including the always-available baseline. */
 export function agentCapabilities(definition: AgentDefinition): AgentCapability[] {
     const declared = new Set<AgentCapability>([

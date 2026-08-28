@@ -141,6 +141,8 @@ export interface PersistedAgentRun {
     agentSource: string;
     agentFilePath?: string;
     definitionFingerprint: string;
+    /** Complete definition used when this run was started; absent only in legacy snapshots. */
+    definitionSnapshot?: AgentDefinition;
     task: string;
     status: Exclude<AgentRunStatus, "waiting_for_permission"> | "removed";
     background: boolean;

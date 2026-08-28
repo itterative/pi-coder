@@ -261,6 +261,13 @@ export const AGENT_METADATA_MIGRATIONS = [{
             ALTER TABLE agent_run_continuation_leases ADD COLUMN owner_pid INTEGER;
         `);
     },
+}, {
+    version: 12,
+    apply(database: AgentMetadataDatabase): void {
+        database.exec(`
+            ALTER TABLE agent_runs ADD COLUMN definition_snapshot_json TEXT;
+        `);
+    },
 }] as const;
 
 export function agentWorkspacesRoot(workspacesDir = PI_CODER_WORKSPACES_DIR): string {

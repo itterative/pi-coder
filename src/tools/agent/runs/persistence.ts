@@ -12,6 +12,7 @@ import {
     type PersistedAgentRun,
 } from "../contracts/runs";
 import { ZERO_USAGE } from "./usage";
+import { parseAgentDefinitionSnapshot } from "../definitions/types";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
 import {
     openAgentMetadataDatabase,
@@ -200,6 +201,7 @@ function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCa
         title: record.title ?? "Delegated task",
         agent: record.agent,
         agentSource: record.agentSource,
+        ...(record.definitionSnapshot ? { definitionSnapshot: record.definitionSnapshot } : {}),
         task: record.task,
         status: record.status,
         background: record.background,
@@ -611,6 +613,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         : undefined;
     const questionValue = record.question && typeof record.question === "object" ? record.question : undefined;
     const mutationValue = record.mutationReport && typeof record.mutationReport === "object" ? record.mutationReport : undefined;
+    const definitionSnapshot = parseAgentDefinitionSnapshot(record.definitionSnapshot);
 
     return {
         version: 1,
@@ -622,6 +625,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         agentSource: record.agentSource.slice(0, 32),
         agentFilePath: boundedString(record.agentFilePath, 4_096),
         definitionFingerprint: record.definitionFingerprint,
+        ...(definitionSnapshot ? { definitionSnapshot } : {}),
         task: boundedString(record.task, 16_000) ?? "Restored delegated task",
         status: record.status as PersistedAgentRun["status"],
         background: record.background,

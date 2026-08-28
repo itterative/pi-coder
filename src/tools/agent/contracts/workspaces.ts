@@ -1,5 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
+import type { AgentDefinition } from "../definitions/types";
 import type { WorkerMutationReport } from "./mutations";
 
 export const WORKSPACE_VERSION = 1 as const;
@@ -68,6 +69,7 @@ export interface AgentRunCatalogRecord {
     title: string;
     agent: string;
     agentSource: string;
+    definitionSnapshot?: AgentDefinition;
     task: string;
     status: string;
     background: boolean;

@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
 
 import { PI_CODER_WORKSPACES_DIR } from "../../../common/constants";
+import { parseAgentDefinitionSnapshot } from "../definitions/types";
 import type { WorkerMutationReport } from "../contracts/mutations";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
 import { openAgentMetadataDatabase, type AgentMetadataDatabase } from "./metadata";
@@ -35,6 +36,7 @@ function rowToAgentRunCatalogRecord(row: CatalogRow): AgentRunCatalogRecord | un
     const usageSnapshot = parseJson(row.usage_json);
     if (!usageSnapshot || typeof usageSnapshot !== "object") return undefined;
     const mutationReport = parseJson(row.mutation_report_json);
+    const definitionSnapshot = parseAgentDefinitionSnapshot(parseJson(row.definition_snapshot_json));
     return {
         ownerSessionId: row.owner_session_id,
         runId: row.run_id,
@@ -44,6 +46,7 @@ function rowToAgentRunCatalogRecord(row: CatalogRow): AgentRunCatalogRecord | un
         title: row.title,
         agent: row.agent,
         agentSource: row.agent_source,
+        ...(definitionSnapshot ? { definitionSnapshot } : {}),
         task: row.task,
         status: row.status,
         background: row.background === 1,
@@ -72,8 +75,8 @@ export function upsertAgentRunCatalogRecordInDatabase(
                 owner_session_id, run_id, run_instance_id, parent_cwd, execution_cwd, title, agent,
                 agent_source, task, status, background, mutating, workspace_id,
                 child_session_file, child_session_leaf_id, latest_snapshot_id, started_at, updated_at, usage_json,
-                response_preview, mutation_report_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                response_preview, mutation_report_json, definition_snapshot_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (run_instance_id) DO UPDATE SET
                 run_instance_id = COALESCE(excluded.run_instance_id, agent_runs.run_instance_id),
                 parent_cwd = excluded.parent_cwd,
@@ -93,7 +96,8 @@ export function upsertAgentRunCatalogRecordInDatabase(
                 updated_at = excluded.updated_at,
                 usage_json = excluded.usage_json,
                 response_preview = excluded.response_preview,
-                mutation_report_json = excluded.mutation_report_json
+                mutation_report_json = excluded.mutation_report_json,
+                definition_snapshot_json = excluded.definition_snapshot_json
             WHERE excluded.updated_at >= agent_runs.updated_at
         `).run(
         record.ownerSessionId,
@@ -117,6 +121,7 @@ export function upsertAgentRunCatalogRecordInDatabase(
         JSON.stringify(record.usageSnapshot),
         record.responsePreview ?? null,
         record.mutationReport ? JSON.stringify(record.mutationReport) : null,
+        record.definitionSnapshot ? JSON.stringify(record.definitionSnapshot) : null,
     );
 }
 
@@ -142,7 +147,7 @@ export async function listAgentRunCatalog(
             SELECT owner_session_id, run_id, run_instance_id, parent_cwd, execution_cwd, title, agent,
                    agent_source, task, status, background, mutating, workspace_id,
                    child_session_file, child_session_leaf_id, latest_snapshot_id, started_at, updated_at, usage_json,
-                   response_preview, mutation_report_json
+                   response_preview, mutation_report_json, definition_snapshot_json
             FROM agent_runs
             WHERE parent_cwd = ?
             ORDER BY updated_at DESC, run_id ASC

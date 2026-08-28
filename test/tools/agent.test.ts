@@ -818,6 +818,66 @@ describe("AgentRunManager", () => {
         await expect(restoredChild.prompts[0]).toMatchFileSnapshot("__snapshots__/agent-manager.resume-guidance.txt");
     });
 
+    it("fails fast when a resumable snapshot has no definition snapshot", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-missing-definition-snapshot-"));
+        tempDirs.push(dir);
+        const store = durableStore(dir);
+        const childFile = path.join(dir, "child.jsonl");
+        const firstManager = new AgentRunManager(async () => new FakeChild([
+            { question: { question: "Continue?" } },
+        ], childFile));
+        firstManager.setPersistence(store.persistence);
+        await firstManager.start(BUILTIN_SCOUT, "Inspect", context());
+        await firstManager.shutdown();
+        const missingSnapshot = { ...latestRecords(store.records)[0]! };
+        delete missingSnapshot.definitionSnapshot;
+
+        let created = false;
+        const secondManager = new AgentRunManager(async () => {
+            created = true;
+            return new FakeChild([]);
+        });
+        secondManager.setPersistence(store.persistence);
+        const restoration = await secondManager.restore([missingSnapshot], [BUILTIN_SCOUT], context());
+
+        expect(restoration).toEqual({
+            restored: 0,
+            diagnostics: ["Could not restore scout-1: its persisted agent definition snapshot is unavailable; start a new run."],
+        });
+        expect(created).toBe(false);
+    });
+
+    it("continues using the persisted definition when the current definition changes", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-definition-drift-"));
+        tempDirs.push(dir);
+        const store = durableStore(dir);
+        const childFile = path.join(dir, "child.jsonl");
+        const firstManager = new AgentRunManager(async () => new FakeChild([
+            { question: { question: "Continue?" } },
+        ], childFile));
+        firstManager.setPersistence(store.persistence);
+        await firstManager.start(BUILTIN_SCOUT, "Inspect", context());
+        await firstManager.shutdown();
+        const changedDefinition = { ...BUILTIN_SCOUT, systemPrompt: "Updated role instructions" };
+        let restoredDefinition: unknown;
+        const secondManager = new AgentRunManager(async (factoryContext) => {
+            restoredDefinition = factoryContext.definition;
+            return new FakeChild([], childFile);
+        });
+        secondManager.setPersistence(store.persistence);
+        const restoration = await secondManager.restore(
+            latestRecords(store.records),
+            [changedDefinition],
+            context(),
+        );
+
+        expect(restoration.restored).toBe(1);
+        expect(restoration.diagnostics).toEqual([
+            "Restored scout-1 using its persisted agent definition snapshot; the current definition has changed.",
+        ]);
+        expect(restoredDefinition).toEqual(BUILTIN_SCOUT);
+    });
+
     it("restores an uncollected terminal result without requiring the old definition", async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-sessions-"));
         tempDirs.push(dir);
@@ -933,6 +993,7 @@ describe("AgentRunManager", () => {
             agent: "scout",
             agentSource: "builtin",
             definitionFingerprint: fingerprintAgentDefinition(BUILTIN_SCOUT),
+            definitionSnapshot: BUILTIN_SCOUT,
             task: "Inspect",
             status: "interrupted",
             background: false,

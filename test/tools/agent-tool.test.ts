@@ -26,6 +26,14 @@ interface Handler {
     (event: any, ctx: any): Promise<unknown> | unknown;
 }
 
+const TEST_WORKER_DEFINITION = {
+    name: "worker",
+    source: "builtin",
+    capabilities: ["edit"],
+    description: "Test worker",
+    systemPrompt: "Test worker prompt",
+};
+
 const tempDirs: string[] = [];
 afterEach(() => {
     vi.restoreAllMocks();
@@ -41,6 +49,8 @@ function revisionActionFixture() {
         title: "Implement fix",
         agent: "worker",
         agentSource: "builtin",
+        definitionFingerprint: "definition-before-revise",
+        definitionSnapshot: TEST_WORKER_DEFINITION,
         task: "Original task",
         status: "removed",
         background: true,
@@ -80,7 +90,7 @@ function revisionActionFixture() {
         createdAt: 1,
         updatedAt: 2,
     };
-    const definition = { name: "worker", source: "builtin", capabilities: ["edit"] };
+    const definition = TEST_WORKER_DEFINITION;
     const continuationOutcome = {
         content: "Revised result",
         details: {
@@ -711,6 +721,8 @@ describe("agent extension registration", () => {
             title: "Implement fix",
             agent: "worker",
             agentSource: "builtin",
+            definitionFingerprint: "definition-before-revise",
+            definitionSnapshot: TEST_WORKER_DEFINITION,
             task: "Original task",
             status: "removed",
             background: true,
@@ -750,7 +762,10 @@ describe("agent extension registration", () => {
             createdAt: 1,
             updatedAt: 2,
         };
-        const definition = { name: "worker", source: "builtin", capabilities: ["edit"] };
+        const definition = {
+            ...TEST_WORKER_DEFINITION,
+            systemPrompt: "Current definition changed",
+        };
         const continuationOutcome = {
             content: "Revised result",
             details: {
@@ -804,7 +819,7 @@ describe("agent extension registration", () => {
         expect(result).toBe(continuationOutcome);
         expect(discover).toHaveBeenCalledWith(ctx);
         expect(manager.startContinuation).toHaveBeenCalledWith(
-            definition,
+            record.definitionSnapshot,
             "Original task",
             "Apply feedback",
             expect.objectContaining({
@@ -841,6 +856,18 @@ describe("agent extension registration", () => {
         );
         expect(fixture.manager.reserveRunIdentity).not.toHaveBeenCalled();
         expect(fixture.manager.startContinuation).not.toHaveBeenCalled();
+        expect(transferSpy).not.toHaveBeenCalled();
+    });
+
+    it("fails clearly when an isolated result has no persisted definition snapshot", async () => {
+        const fixture = revisionActionFixture();
+        delete fixture.record.definitionSnapshot;
+        const transferSpy = configureRevisionAction(fixture);
+
+        await expect(executeRevisionAction(fixture)).rejects.toThrow(
+            "has no persisted agent definition snapshot; it cannot be revised",
+        );
+        expect(fixture.manager.reserveRunIdentity).not.toHaveBeenCalled();
         expect(transferSpy).not.toHaveBeenCalled();
     });
 

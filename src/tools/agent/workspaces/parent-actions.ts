@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { discoverAgents } from "../definitions/discovery";
+import { agentCanEdit, discoverAgents } from "../definitions/discovery";
 import type { AgentRequest } from "../definitions/validate";
 import { emitAgentEvent } from "../observability/events";
 import type { AgentEventSink } from "../contracts/events";
@@ -164,13 +164,30 @@ export async function executeParentWorkspaceAction(
         throw new AgentActionError(`Could not inspect isolated workspace ${workspace.id} before revision: ${message}`);
     }
     if (!(await hasAncestor(workspace.worktreePath, workspace.baseRevision, workerHead))) {
-        throw new AgentActionError(
-            `Cannot revise workspace ${workspace.id}: worker revision ${workerHead} is not based on workspace base ${workspace.baseRevision}. Reconcile or reset the workspace explicitly before revising; the existing result was preserved.`,
-        );
+        const message = [
+            `Cannot revise workspace ${workspace.id}: worker revision ${workerHead} is not based on workspace base ${workspace.baseRevision}.`,
+            "Reconcile or reset the workspace explicitly before revising; the existing result was preserved.",
+        ].join(" ");
+        throw new AgentActionError(message);
     }
     const discovered = discover(ctx);
-    const definition = discovered.agents.find((agent) => agent.name === record.agent);
-    if (!definition) throw new AgentActionError(`Unknown agent definition for ${record.agent}.`);
+    const definition = record.definitionSnapshot;
+    if (!definition) {
+        throw new AgentActionError(
+            `Run ${params.runId} has no persisted agent definition snapshot; it cannot be revised. Start a new run instead.`,
+        );
+    }
+    const currentDefinition = discovered.agents.find((agent) => agent.name === record.agent);
+    if (agentCanEdit(definition) && (
+        !currentDefinition
+        || !agentCanEdit(currentDefinition)
+        || currentDefinition.name !== "worker"
+        || currentDefinition.source !== "builtin"
+    )) {
+        throw new AgentActionError(
+            `Run ${params.runId} has an unauthorized persisted mutation capability; it cannot be revised.`,
+        );
+    }
     if (!record.childSessionFile) {
         throw new AgentActionError(`Run ${params.runId} has no persisted child session to revise.`);
     }

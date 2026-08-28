@@ -151,11 +151,11 @@ Initial `start`/`spawn` goes through `lifecycle.discover(ctx)`, which applies pe
 
 This is not the direct cause of the ancestry error, but it made revise behavior inconsistent with initial execution. The current path uses the lifecycle discovery callback, and reopened child sessions prefer the model recorded in their transcript over the current definition's model override.
 
-### Definition/capability validation is weaker than resume
+### Definition/capability drift is informational for resume and revise
 
-`resume` restoration validates definition fingerprints and mutation capability. `revise` only looks up the current definition by name. It does not explicitly verify that the current definition still matches the recorded source/capability identity or that it remains mutation-capable.
+Restorable runs now persist the complete definition used at startup. `resume` and `revise` use that snapshot for the runtime contract while comparing the current definition only to report informational drift. A changed definition or capability set does not invalidate the run; a missing or malformed persisted snapshot fails clearly because the original contract cannot be reconstructed.
 
-Normal isolated runs are initially restricted to the built-in edit-capable worker, but definition changes, missing definitions, legacy records, and future custom definitions should receive a deliberate policy rather than relying on `workspaceId` to infer isolation.
+Normal isolated runs remain restricted to the built-in edit-capable worker. Persisted metadata cannot grant mutation authority: an edit-capable snapshot still requires current built-in-worker authorization. The persisted snapshot supplies the role/tools contract, while the child session remains authoritative for conversation/model continuity.
 
 ### Legacy run-instance compatibility may reject valid results
 
@@ -199,12 +199,12 @@ Also add a focused prompt-rendering assertion so the escaped-newline regression 
 ### Phase 2: Fix prompt and definition resolution
 
 - The revision prompt/session continuation fix is complete.
-- The current path uses the lifecycle discovery callback and reopens the child transcript. Continue testing that it applies the same configuration and validation policy as initial start.
+- The current path uses lifecycle discovery for diagnostics, then uses the persisted definition snapshot and child transcript. Definition changes intentionally do not invalidate resume/revise; missing snapshots fail clearly.
 - The current implementation deliberately uses a new logical run identity while continuing the old child session. Preserve and document this distinction in future changes.
 
 ### Phase 3: Make lease handoff failure-safe
 
-Focused parent-action tests now cover the current compensating-rollback strategy. Add real workspace-state assertions around the same failure cases, then choose whether the strategy is sufficient or needs a first-class reservation/state:
+Focused parent-action and end-to-end temporary-Git/SQLite tests now cover continuation failure, transfer failure, finalization failure with real lease rollback, and divergent-history rejection. The remaining question is whether the compensating-rollback strategy is sufficient or needs a first-class reservation/state:
 
 - transfer only after the new run has been successfully created and is ready to execute; or
 - retain transfer-before-start but provide an atomic/compensating rollback that restores the old lease when no new result was prepared; or

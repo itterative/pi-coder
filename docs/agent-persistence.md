@@ -26,8 +26,9 @@ SQLite run-state is scoped to the exact parent session and active parent-tree br
 - Interrupted runs never restart, replay tools, or resume automatically.
 - Resuming is user-driven and adds an instruction to inspect uncertain state first.
 - Unmatched crash-time tool calls receive synthetic uncertain-outcome errors.
-- Current agent definitions and fingerprints are revalidated.
-- Persisted metadata cannot grant mutation authority; only the current built-in worker can restore an edit-capable task worker.
+- Each resumable run must contain a complete persisted agent definition snapshot; missing or malformed snapshots fail fast with a recovery diagnostic.
+- The persisted definition snapshot supplies the runtime contract. A current definition fingerprint mismatch is informational and does not invalidate the run.
+- Persisted metadata cannot grant mutation authority; an edit-capable snapshot still requires the current built-in worker authorization.
 - New, forked, cloned, and ephemeral parent sessions do not inherit children.
 
 Collection, cancellation, and terminal-result eviction append removal tombstones but retain child files so `/agents` can browse historical work. Historical checkpoints without an exact child leaf are read-only or report an unavailable transcript rather than opening the physical session's latest leaf.
@@ -42,6 +43,8 @@ Checkpoint writes use SQLite continuation leases, expected-head compare-and-swap
 
 ## Revise persistence semantics
 
+`resume` and `revise` use the persisted definition snapshot as the runtime contract. The current definition is compared only for an informational drift diagnostic.
+
 `revise` advances workspace-result ownership without creating a separate child conversation:
 
 1. Resolve the parent-session catalog record and prepared task lease.
@@ -52,7 +55,7 @@ Checkpoint writes use SQLite continuation leases, expected-head compare-and-swap
 6. Transfer the workspace lease from the old run to the new run.
 7. Finalize and persist a new prepared workspace result.
 
-The old run ID is intentionally stale for later result disposition after successful revision. The new run ID and physical run instance are authoritative for inspect/apply/discard/revise.
+The old run ID is intentionally stale for later result disposition after successful revision. The new run ID and physical run instance are authoritative for inspect/apply/discard/revise. Definition drift does not reject a prepared result: the persisted definition snapshot supplies capabilities and the child session supplies transcript/model continuity.
 
 ## Failure and recovery semantics
 

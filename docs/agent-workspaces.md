@@ -33,6 +33,8 @@ A revision has two identities:
 - The **child session** continues: the original JSONL transcript and exact leaf are reopened, the original recorded model is used, and only the parent's guidance is sent as the next prompt.
 - The **workspace result run** advances: a new logical run ID and physical run instance own the revised result. The returned new run ID is required for later actions; the old ID is stale for result disposition.
 
+Revision does not invalidate a result because its definition fingerprint or capabilities changed after the original run. It uses the complete definition snapshot persisted with the run; the child session remains authoritative for the conversation and recorded model. The current definition is informational only, while a missing or malformed persisted snapshot fails clearly because the original execution contract cannot be reconstructed.
+
 ### Divergent-history policy
 
 Before starting the child, pi-coder reads the worktree `HEAD` and verifies that the recorded workspace `baseRevision` is an ancestor. This protects the existing result and the normal base-to-worker diff model when a worktree has been rebased, force-reset, or otherwise moved to unrelated history.

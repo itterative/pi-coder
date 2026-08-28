@@ -43,6 +43,7 @@ function record(
         agent: "scout",
         agentSource: "builtin",
         definitionFingerprint: fingerprintAgentDefinition(BUILTIN_SCOUT),
+        definitionSnapshot: BUILTIN_SCOUT,
         task: "Inspect",
         status: "waiting_for_parent",
         background: true,
