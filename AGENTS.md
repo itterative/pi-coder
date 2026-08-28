@@ -5,6 +5,7 @@ pi-coder is a pi extension providing coding-oriented memory, sandbox, TUI, and d
 ## Workflow
 
 - Read relevant memories before exploring or implementing changes, and use them to guide the work.
+- Resolve relative paths mentioned in project documentation from the project root, not from the location of the document that mentions them.
 - Give a thorough plan before making changes unless the user has directly requested the specific change.
 - After making requested changes, review and update relevant project memories.
 - Ask clarifying questions when requirements or tradeoffs are unclear.
