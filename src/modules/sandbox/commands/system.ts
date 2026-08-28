@@ -1,6 +1,48 @@
 import { PATH_VALUE, UNSAFE, VALUE, type CommandSpec } from "./spec";
 
 /**
+ * `command -v`/`command -V` only inspect command resolution; without one of
+ * those lookup flags, the builtin executes its operand and is unsafe.
+ */
+function isSafeCommandLookup(args: readonly string[]): boolean {
+    let parsingOptions = true;
+    let hasLookupFlag = false;
+
+    for (const arg of args.slice(1)) {
+        if (!parsingOptions) {
+            continue;
+        }
+
+        if (arg === "--") {
+            parsingOptions = false;
+            continue;
+        }
+
+        if (arg === "-" || !arg.startsWith("-")) {
+            parsingOptions = false;
+            continue;
+        }
+
+        if (arg.startsWith("--")) {
+            return false;
+        }
+
+        for (const flag of arg.slice(1)) {
+            if (flag === "v" || flag === "V") {
+                hasLookupFlag = true;
+                continue;
+            }
+            if (flag === "p") {
+                continue;
+            }
+            return false;
+        }
+    }
+
+    return hasLookupFlag;
+}
+
+/**
  * No-filesystem-argument commands and system utilities (no file access, or
  * program names instead of paths).
  */
@@ -8,6 +50,10 @@ export const SYSTEM_COMMANDS: Record<string, CommandSpec> = {
     pwd: { positionals: "none" },
     true: { positionals: "none" },
     false: { positionals: "none" },
+    command: {
+        positionals: "ignore",
+        validate: isSafeCommandLookup,
+    },
     echo: { positionals: "ignore" },
     printf: { positionals: "ignore" },
     // export: NAME=VALUE positionals are checked like leading env
