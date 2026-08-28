@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { getScratchpadPath } from "../scratchpad";
+import { registerTodoBashGuard } from "./bash-guard";
 import {
     FrontmatterParseError,
     parseTodoList,
@@ -148,8 +149,10 @@ function validationFailure(error: unknown): ToolCallEventResult {
     return { block: true, reason };
 }
 
-/** Register TODO prompt and write/edit validation for one runtime. */
+/** Register TODO prompt, validation, and defensive Bash handling for one runtime. */
 export default function registerTodoListExtension(pi: ExtensionAPI): void {
+    registerTodoBashGuard(pi);
+
     pi.on("before_agent_start", (event, ctx) => {
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
         if (!scratchpadPath) return;

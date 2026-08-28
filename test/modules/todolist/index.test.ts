@@ -137,6 +137,162 @@ describe("TODO runtime extension", () => {
         }, ctx)).resolves.toEqual({ block: false });
     });
 
+    it("guards Bash changes, restores invalid existing files, and removes invalid creations", async () => {
+        const { pi, handler } = harness();
+        const sessionManager = {};
+        const ctx = runtimeContext(sessionManager);
+        registerScratchpadExtension(pi);
+        registerTodoListExtension(pi);
+        await handler("session_start")({ reason: "startup" }, ctx);
+
+        const scratchpadPath = getScratchpadPath(sessionManager)!;
+        temporaryDirectories.push(scratchpadPath);
+        const todoPath = path.join(scratchpadPath, "TODO.md");
+        fs.writeFileSync(todoPath, validDocument);
+        const updatedDocument = validDocument.replace("status: pending", "status: completed");
+
+        await handler("tool_execution_start")({
+            type: "tool_execution_start",
+            toolCallId: "bash-valid",
+            toolName: "bash",
+            args: { command: "update TODO.md" },
+        }, ctx);
+        fs.writeFileSync(todoPath, updatedDocument);
+        await expect(handler("tool_result")({
+            type: "tool_result",
+            toolCallId: "bash-valid",
+            toolName: "bash",
+            input: { command: "update TODO.md" },
+            content: [{ type: "text", text: "updated" }],
+            isError: false,
+            details: undefined,
+        }, ctx)).resolves.toBeUndefined();
+        expect(fs.readFileSync(todoPath, "utf8")).toBe(updatedDocument);
+
+        await handler("tool_execution_start")({
+            type: "tool_execution_start",
+            toolCallId: "bash-existing",
+            toolName: "bash",
+            args: { command: "printf invalid > TODO.md" },
+        }, ctx);
+        fs.writeFileSync(todoPath, "---\nversion: 1\ntodos: invalid\n---\n");
+        const restored = await handler("tool_result")({
+            type: "tool_result",
+            toolCallId: "bash-existing",
+            toolName: "bash",
+            input: { command: "printf invalid > TODO.md" },
+            content: [{ type: "text", text: "stdout" }],
+            isError: false,
+            details: undefined,
+        }, ctx) as { content: Array<{ type: "text"; text: string }> };
+        expect(fs.readFileSync(todoPath, "utf8")).toBe(updatedDocument);
+        expect(restored.content[0]?.text).toContain("previous valid TODO.md was restored");
+        expect(restored.content[1]?.text).toBe("stdout");
+
+        fs.unlinkSync(todoPath);
+        await handler("tool_execution_start")({
+            type: "tool_execution_start",
+            toolCallId: "bash-create",
+            toolName: "bash",
+            args: { command: "printf invalid > TODO.md" },
+        }, ctx);
+        fs.writeFileSync(todoPath, "not TODO frontmatter");
+        const removed = await handler("tool_result")({
+            type: "tool_result",
+            toolCallId: "bash-create",
+            toolName: "bash",
+            input: { command: "printf invalid > TODO.md" },
+            content: [{ type: "text", text: "created" }],
+            isError: true,
+            details: undefined,
+        }, ctx) as { content: Array<{ type: "text"; text: string }> };
+        expect(fs.existsSync(todoPath)).toBe(false);
+        expect(removed.content[0]?.text).toContain("was removed");
+    });
+
+    it("leaves an invalid Bash change in place when another TODO mutation is outstanding", async () => {
+        const { pi, handler } = harness();
+        const sessionManager = {};
+        const ctx = runtimeContext(sessionManager);
+        registerScratchpadExtension(pi);
+        registerTodoListExtension(pi);
+        await handler("session_start")({ reason: "startup" }, ctx);
+
+        const scratchpadPath = getScratchpadPath(sessionManager)!;
+        temporaryDirectories.push(scratchpadPath);
+        const todoPath = path.join(scratchpadPath, "TODO.md");
+        fs.writeFileSync(todoPath, validDocument);
+        const bashInput = { command: "printf invalid > TODO.md" };
+
+        await handler("tool_execution_start")({
+            type: "tool_execution_start",
+            toolCallId: "bash-concurrent-a",
+            toolName: "bash",
+            args: bashInput,
+        }, ctx);
+        await handler("tool_execution_start")({
+            type: "tool_execution_start",
+            toolCallId: "bash-concurrent-b",
+            toolName: "bash",
+            args: bashInput,
+        }, ctx);
+        fs.writeFileSync(todoPath, "---\nversion: 1\ntodos: invalid\n---\n");
+        const result = await handler("tool_result")({
+            type: "tool_result",
+            toolCallId: "bash-concurrent-a",
+            toolName: "bash",
+            input: bashInput,
+            content: [{ type: "text", text: "stdout" }],
+            isError: false,
+            details: undefined,
+        }, ctx) as { content: Array<{ type: "text"; text: string }> };
+
+        expect(fs.readFileSync(todoPath, "utf8")).toContain("todos: invalid");
+        expect(result.content[0]?.text).toContain("could not be safely restored");
+    });
+
+    it("cleans Bash snapshots when execution ends without a result", async () => {
+        const { pi, handler } = harness();
+        const sessionManager = {};
+        const ctx = runtimeContext(sessionManager);
+        registerScratchpadExtension(pi);
+        registerTodoListExtension(pi);
+        await handler("session_start")({ reason: "startup" }, ctx);
+
+        const scratchpadPath = getScratchpadPath(sessionManager)!;
+        temporaryDirectories.push(scratchpadPath);
+        const todoPath = path.join(scratchpadPath, "TODO.md");
+        fs.writeFileSync(todoPath, validDocument);
+        const bashInput = { command: "printf invalid > TODO.md" };
+
+        await handler("tool_execution_start")({
+            type: "tool_execution_start",
+            toolCallId: "bash-aborted",
+            toolName: "bash",
+            args: bashInput,
+        }, ctx);
+        await handler("tool_execution_end")({
+            type: "tool_execution_end",
+            toolCallId: "bash-aborted",
+            toolName: "bash",
+            args: bashInput,
+            result: undefined,
+            isError: true,
+        }, ctx);
+        fs.writeFileSync(todoPath, "---\nversion: 1\ntodos: invalid\n---\n");
+
+        await handler("tool_result")({
+            type: "tool_result",
+            toolCallId: "bash-aborted",
+            toolName: "bash",
+            input: bashInput,
+            content: [{ type: "text", text: "stdout" }],
+            isError: true,
+            details: undefined,
+        }, ctx);
+        expect(fs.readFileSync(todoPath, "utf8")).toContain("todos: invalid");
+    });
+
     it("rejects a symlink at the managed TODO path", async () => {
         const { pi, handler } = harness();
         const sessionManager = {};
