@@ -19,11 +19,17 @@ import {
     type TodoList,
     type TodoStatus,
 } from "./parser";
+import { summarizeTodoList, type TodoProgress } from "./format";
+import { clearTodoWidget, updateTodoWidget } from "../../tui/todolist-widget";
 
 const TODO_SYSTEM_TAG = "<todolist_system>";
 const TODO_SYSTEM_END_TAG = "</todolist_system>";
 
 type TodoEdit = Pick<EditToolInput["edits"][number], "oldText" | "newText">;
+
+export interface TodoListExtensionOptions {
+    onTodoProgress?: (progress: TodoProgress | undefined) => void;
+}
 
 function normalizeToLf(text: string): string {
     return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -149,9 +155,57 @@ function validationFailure(error: unknown): ToolCallEventResult {
     return { block: true, reason };
 }
 
-/** Register TODO prompt, validation, and defensive Bash handling for one runtime. */
-export default function registerTodoListExtension(pi: ExtensionAPI): void {
+/** Register TODO prompt, validation, UI refresh, and Bash handling for one runtime. */
+export default function registerTodoListExtension(
+    pi: ExtensionAPI,
+    options: TodoListExtensionOptions = {},
+): void {
     registerTodoBashGuard(pi);
+
+    const refresh = async (ctx: ExtensionContext): Promise<void> => {
+        const scratchpadPath = getScratchpadPath(ctx.sessionManager);
+        if (!scratchpadPath) {
+            options.onTodoProgress?.(undefined);
+            clearTodoWidget(ctx);
+            return;
+        }
+
+        const todoPath = path.join(scratchpadPath, "TODO.md");
+        let content: string;
+        try {
+            content = await readFile(todoPath, "utf8");
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                options.onTodoProgress?.(undefined);
+                clearTodoWidget(ctx);
+            }
+            return;
+        }
+
+        try {
+            const todo = parseTodoList(content, todoPath);
+            const progress = summarizeTodoList(todo);
+            options.onTodoProgress?.(progress);
+            if (progress) {
+                updateTodoWidget(ctx, todo);
+            } else {
+                clearTodoWidget(ctx);
+            }
+        } catch {
+            // Preserve the last valid progress/widget while the validation
+            // hook reports the malformed update to the agent.
+        }
+    };
+
+    pi.on("session_start", (_event, ctx) => refresh(ctx));
+    pi.on("session_tree", (_event, ctx) => {
+        options.onTodoProgress?.(undefined);
+        clearTodoWidget(ctx);
+    });
+    pi.on("session_shutdown", (_event, ctx) => {
+        options.onTodoProgress?.(undefined);
+        clearTodoWidget(ctx);
+    });
 
     pi.on("before_agent_start", (event, ctx) => {
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
@@ -199,15 +253,28 @@ export default function registerTodoListExtension(pi: ExtensionAPI): void {
             return validationFailure(error);
         }
     });
+
+    pi.on("tool_result", async (event, ctx) => {
+        if (event.toolName !== "write" && event.toolName !== "edit" && event.toolName !== "bash") return;
+        await refresh(ctx);
+    });
 }
 
 export {
     appendTodoPrompt,
     applyTodoEdits,
     isManagedTodoPath,
+};
+export {
     parseTodoList,
     type TodoItem,
     type TodoList,
     type TodoStatus,
-};
+} from "./parser";
+export {
+    formatTodoList,
+    formatTodoProgress,
+    summarizeTodoList,
+    type TodoProgress,
+} from "./format";
 export { FrontmatterParseError } from "./parser";

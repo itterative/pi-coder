@@ -3,6 +3,7 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Spinner } from "../spinner";
 import type { AgentRunDetails, AgentRunSummary } from "../../tools/agent/contracts/runs";
+import { formatTodoProgress } from "../../modules/todolist/format";
 export { diagnosticText } from "../../tools/agent/presentation/text";
 
 export const AGENT_WIDGET_ID = "pi-coder-agent-activity";
@@ -74,7 +75,11 @@ function renderRunningRun(run: AgentRunSummary, spinnerFrame: string): string[] 
         : run.phase ?? "Thinking";
     const firstLine = `${spinnerFrame} ${label} · ${formatElapsed(run.startedAt)} · ${status}`;
     const action = run.activity && run.activity !== "Thinking" ? run.activity : run.lastToolActivity;
-    const details = [formatToolCounts(run.toolCounts), action ? oneLinePreview(action, MAX_ACTIVITY_CHARS) : ""]
+    const details = [
+        formatToolCounts(run.toolCounts),
+        action ? oneLinePreview(action, MAX_ACTIVITY_CHARS) : "",
+        formatTodoProgress(run.todo),
+    ]
         .filter(Boolean)
         .join(" · ");
     return details ? [firstLine, `  ${details}`] : [firstLine];
@@ -85,11 +90,13 @@ function renderRun(run: AgentRunSummary, spinnerFrame: string): string[] {
     if (run.status === "running") return renderRunningRun(run, spinnerFrame);
     if (run.status === "starting") return [`● ${label} · ${formatElapsed(run.startedAt)} · Starting: ${oneLinePreview(run.task, 90)}`];
     const response = run.responsePreview ? ` · “${firstLinePreview(run.responsePreview, MAX_PREVIEW_CHARS)}”` : "";
-    if (run.status === "waiting_for_permission") return [`? ${label} — ${run.activity ?? "Waiting for mutation permission"}${response}`];
-    if (run.status === "waiting_for_parent") return [`? ${label} — Waiting: ${oneLinePreview(run.question ?? "parent guidance", MAX_ACTIVITY_CHARS)}${response}`];
-    if (run.status === "interrupted") return [`! ${label} — Interrupted; resume with explicit guidance${response}`];
-    if (run.status === "completed") return [run.agent === "workspace-setup" ? `✓ ${label} — Setup complete${response}` : `✓ ${label} — Ready to collect${response}`];
-    if (run.status === "failed") return [run.agent === "workspace-setup" ? `! ${label} — Setup failed${response}` : `! ${label} — Failed; result ready to collect${response}`];
+    const todo = formatTodoProgress(run.todo);
+    const todoSuffix = todo ? ` · ${todo}` : "";
+    if (run.status === "waiting_for_permission") return [`? ${label} — ${run.activity ?? "Waiting for mutation permission"}${todoSuffix}${response}`];
+    if (run.status === "waiting_for_parent") return [`? ${label} — Waiting: ${oneLinePreview(run.question ?? "parent guidance", MAX_ACTIVITY_CHARS)}${todoSuffix}${response}`];
+    if (run.status === "interrupted") return [`! ${label} — Interrupted; resume with explicit guidance${todoSuffix}${response}`];
+    if (run.status === "completed") return [run.agent === "workspace-setup" ? `✓ ${label} — Setup complete${todoSuffix}${response}` : `✓ ${label} — Ready to collect${todoSuffix}${response}`];
+    if (run.status === "failed") return [run.agent === "workspace-setup" ? `! ${label} — Setup failed${todoSuffix}${response}` : `! ${label} — Failed; result ready to collect${todoSuffix}${response}`];
     return [`× ${label} — ${run.status}`];
 }
 

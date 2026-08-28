@@ -5,6 +5,7 @@ import type { AgentContext } from "./context";
 import type { AgentDefinition } from "../definitions/types";
 import type { WorkerMutationReport } from "./mutations";
 import type { AgentTraceData } from "./trace";
+import type { TodoProgress } from "../../../modules/todolist/format";
 import type { AgentWorkspaceResult } from "./workspaces";
 
 export type AgentRunStatus =
@@ -34,6 +35,8 @@ export interface ChildProgress {
     toolCounts?: Record<string, number>;
     failedToolCalls?: number;
     permissionPending?: boolean;
+    /** Volatile TODO summary; intentionally excluded from durable snapshots. */
+    todo?: TodoProgress;
 }
 
 export interface ChildAgentHandle {
@@ -107,6 +110,7 @@ export interface AgentRunDetails {
     lastToolActivity?: string;
     toolCounts?: Record<string, number>;
     failedToolCalls?: number;
+    todo?: TodoProgress;
     usage: Usage;
     startedAt: number;
     updatedAt: number;
@@ -218,6 +222,7 @@ export interface AgentRunSummary {
     lastToolActivity?: string;
     toolCounts?: Record<string, number>;
     failedToolCalls?: number;
+    todo?: TodoProgress;
     responsePreview?: string;
     question?: string;
     usage: Usage;

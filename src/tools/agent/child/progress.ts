@@ -243,7 +243,7 @@ function toolActivity(toolName: string, args: unknown): string {
     return `Using ${toolName}`;
 }
 
-function reportProgress(
+export function reportProgress(
     tracker: ChildProgressTracker,
     onProgress: (progress: ChildProgress) => void,
 ): void {
@@ -260,6 +260,7 @@ function reportProgress(
             ? { failedToolCalls: tracker.progress.failedToolCalls }
             : {}),
         permissionPending: tracker.progress.permissionPending,
+        ...(tracker.progress.todo ? { todo: { ...tracker.progress.todo } } : {}),
     });
 }
 

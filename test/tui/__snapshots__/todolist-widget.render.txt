@@ -1,0 +1,5 @@
+ TODO 1/4 · Implement the feature with[0m...[0m
+ ✓ Inspect the implementation
+ ◐ Implement the feature with careful [0m...[0m
+ ○ Verify the result
+ ! Release the change

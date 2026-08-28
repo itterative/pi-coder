@@ -4,6 +4,7 @@ import {
     SettingsManager,
     createAgentSession,
     getAgentDir,
+    type ExtensionAPI,
     type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -27,6 +28,7 @@ import {
 import {
     aggregateUsage,
     childError,
+    reportProgress,
     textFromAssistantMessage,
     traceSessionEvent,
     updateTracker,
@@ -72,6 +74,9 @@ export async function createAgentChild(
                 recentActivity: [...context.initialProgress.recentActivity],
                 ...(context.initialProgress.toolCounts
                     ? { toolCounts: { ...context.initialProgress.toolCounts } }
+                    : {}),
+                ...(context.initialProgress.todo
+                    ? { todo: { ...context.initialProgress.todo } }
                     : {}),
             }
             : { output: "", recentActivity: [], toolCounts: {} },
@@ -162,7 +167,12 @@ export async function createAgentChild(
                 ? [{
                     name: "pi-coder-todolist-child",
                     hidden: true,
-                    factory: registerTodoListExtension,
+                    factory: (pi: ExtensionAPI) => registerTodoListExtension(pi, {
+                        onTodoProgress: (todo) => {
+                            tracker.progress.todo = todo ? { ...todo } : undefined;
+                            reportProgress(tracker, context.onProgress);
+                        },
+                    }),
                 }]
                 : []),
         ],
@@ -289,6 +299,7 @@ export async function createAgentChild(
                     ? { failedToolCalls: tracker.progress.failedToolCalls }
                     : {}),
                 permissionPending: tracker.progress.permissionPending,
+                ...(tracker.progress.todo ? { todo: { ...tracker.progress.todo } } : {}),
             };
         },
         getFinalOutput() {

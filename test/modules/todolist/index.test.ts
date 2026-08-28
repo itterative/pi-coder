@@ -4,8 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { renderText } from "../../helpers";
+
 import registerTodoListExtension from "../../../src/modules/todolist";
 import registerScratchpadExtension, { getScratchpadPath } from "../../../src/modules/scratchpad";
+import { TodoListWidget } from "../../../src/tui/todolist-widget";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
@@ -38,11 +41,15 @@ function harness(): {
             if (!registered?.length) throw new Error(`Missing handler: ${name}`);
             return async (event: unknown, ctx: ExtensionContext) => {
                 let result: unknown;
+                let currentEvent = event as Record<string, unknown>;
                 for (const callback of registered) {
-                    result = await callback(event, ctx);
+                    result = await callback(currentEvent, ctx);
                     if ((result as { block?: boolean } | undefined)?.block) return result;
+                    if (name === "tool_result" && result && typeof result === "object") {
+                        currentEvent = { ...currentEvent, ...(result as Record<string, unknown>) };
+                    }
                 }
-                return result;
+                return name === "tool_result" ? currentEvent : result;
             };
         },
     };
@@ -166,7 +173,9 @@ describe("TODO runtime extension", () => {
             content: [{ type: "text", text: "updated" }],
             isError: false,
             details: undefined,
-        }, ctx)).resolves.toBeUndefined();
+        }, ctx)).resolves.toMatchObject({
+            content: [{ type: "text", text: "updated" }],
+        });
         expect(fs.readFileSync(todoPath, "utf8")).toBe(updatedDocument);
 
         await handler("tool_execution_start")({
@@ -291,6 +300,47 @@ describe("TODO runtime extension", () => {
             details: undefined,
         }, ctx);
         expect(fs.readFileSync(todoPath, "utf8")).toContain("todos: invalid");
+    });
+
+    it("refreshes and clears the parent widget around valid and invalid updates", async () => {
+        const { pi, handler } = harness();
+        const registrations: Array<{ key: string; content: unknown }> = [];
+        const sessionManager = {};
+        const ctx = {
+            ...runtimeContext(sessionManager),
+            mode: "tui",
+            hasUI: true,
+            ui: {
+                setWidget(key: string, content: unknown) {
+                    registrations.push({ key, content });
+                },
+            },
+        } as unknown as ExtensionContext;
+        registerScratchpadExtension(pi);
+        registerTodoListExtension(pi);
+        await handler("session_start")({ reason: "startup" }, ctx);
+
+        const scratchpadPath = getScratchpadPath(sessionManager)!;
+        temporaryDirectories.push(scratchpadPath);
+        const todoPath = path.join(scratchpadPath, "TODO.md");
+        fs.writeFileSync(todoPath, validDocument);
+        await handler("tool_result")({ toolName: "write" }, ctx);
+
+        const widgetRegistration = registrations.findLast((entry) => entry.content !== undefined);
+        expect(widgetRegistration?.key).toBe("pi-coder-todolist");
+        const widget = (widgetRegistration?.content as (tui: unknown) => TodoListWidget)({
+            requestRender() {},
+        });
+        expect(renderText(widget, 80)).toContain("TODO 0/1 · Inspect the implementation");
+
+        fs.writeFileSync(todoPath, "---\nversion: 1\ntodos: invalid\n---\n");
+        await handler("tool_result")({ toolName: "write" }, ctx);
+        expect(renderText(widget, 80)).toContain("TODO 0/1 · Inspect the implementation");
+
+        fs.unlinkSync(todoPath);
+        await handler("tool_result")({ toolName: "bash" }, ctx);
+        expect(registrations.at(-1)?.content).toBeUndefined();
+        widget.dispose();
     });
 
     it("rejects a symlink at the managed TODO path", async () => {

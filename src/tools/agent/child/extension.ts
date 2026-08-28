@@ -284,6 +284,7 @@ export function registerChildExtension(
                 ...(tracker.progress.failedToolCalls !== undefined
                     ? { failedToolCalls: tracker.progress.failedToolCalls }
                     : {}),
+                ...(tracker.progress.todo ? { todo: { ...tracker.progress.todo } } : {}),
                 permissionPending: pending,
             });
         };

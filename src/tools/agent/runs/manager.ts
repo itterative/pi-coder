@@ -231,6 +231,7 @@ export class AgentRunManager {
                     : undefined,
                 toolCounts: progress.toolCounts ? { ...progress.toolCounts } : undefined,
                 failedToolCalls: progress.failedToolCalls,
+                ...(progress.todo ? { todo: { ...progress.todo } } : {}),
                 responsePreview: response ? truncate(response, 120) : undefined,
                 question: run.question ? truncate(run.question.question, 500) : undefined,
                 usage: this.readUsage(run),
@@ -1360,6 +1361,7 @@ export class AgentRunManager {
             lastToolActivity: progress.lastToolActivity,
             toolCounts: progress.toolCounts ? { ...progress.toolCounts } : undefined,
             failedToolCalls: progress.failedToolCalls,
+            ...(progress.todo ? { todo: { ...progress.todo } } : {}),
             usage: cloneUsage(cumulative),
             startedAt: run.startedAt,
             updatedAt: run.updatedAt,
@@ -1414,6 +1416,9 @@ export class AgentRunManager {
             recentActivity: [...run.restoredProgress.recentActivity],
             ...(run.restoredProgress.toolCounts
                 ? { toolCounts: { ...run.restoredProgress.toolCounts } }
+                : {}),
+            ...(run.restoredProgress.todo
+                ? { todo: { ...run.restoredProgress.todo } }
                 : {}),
         };
         return {
@@ -1487,6 +1492,8 @@ export class AgentRunManager {
         const durableStatus: PersistedAgentRun["status"] = status
             ?? (run.status === "waiting_for_permission" ? "running" : run.status);
         const progress = this.progressSnapshot(run);
+        const durableProgress = { ...progress };
+        delete durableProgress.todo;
         const usageSnapshot = this.readUsage(run);
         const terminal = run.terminalOutcome;
         run.childSessionLeafId = run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId;
@@ -1507,7 +1514,7 @@ export class AgentRunManager {
             mutating: run.mutating,
             workspaceId: run.workspaceId,
             question: run.question,
-            progress,
+            progress: durableProgress,
             usageCheckpoint: cloneUsage(run.usageCheckpoint),
             usageSnapshot,
             startedAt: run.startedAt,

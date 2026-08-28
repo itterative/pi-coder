@@ -2,11 +2,11 @@
 
 ## Status
 
-Parser, prompt, capability wiring, write/edit validation hooks, and Bash
-change guarding are implemented. UI and live worker progress remain for later
-phases. This document records the implementation shape for a `todolist`
-capability built on the existing temporary scratchpad. It is not a user-facing
-command reference.
+Parser, prompt, capability wiring, write/edit validation hooks, Bash change
+guarding, parent UI, and live worker progress are implemented. Documentation
+and hardening remain for later phases. This document records the implementation
+shape for a `todolist` capability built on the existing temporary scratchpad.
+It is not a user-facing command reference.
 
 ## Purpose
 

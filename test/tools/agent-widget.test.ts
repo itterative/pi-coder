@@ -18,6 +18,7 @@ const runningRun = {
     responsePreview: "I found the entry points.\nThe next section is less relevant.",
     activity: "Searching \"widget\" in src",
     lastToolActivity: "Reading src/index.ts",
+    todo: { completed: 2, total: 5, current: "Implement the feature" },
     toolCounts: { read: 4, grep: 2 },
     usage: {},
 } as any;
@@ -38,7 +39,7 @@ describe("agent activity widget", () => {
 
         expect(widget.render(200)).toEqual([
             expect.stringMatching(/^ ⠋ scout-1 · 00:18 · I found the entry points\. $/),
-            '   4 reads · 2 searches · Searching "widget" in src ', 
+            '   4 reads · 2 searches · Searching "widget" in src · TODO 2/5 · Implement the feature ',
         ]);
 
         widget.dispose();
