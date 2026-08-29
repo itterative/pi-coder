@@ -67,6 +67,26 @@ function responseResult(result: AgentToolResult, expanded: boolean, theme: Param
 
 const BACKGROUND_SHORTCUT_HINT = "(Ctrl+Alt+B to move to background)";
 
+function continueResult(
+    result: AgentToolResult,
+    expanded: boolean,
+    isPartial: boolean,
+    theme: Parameters<typeof markdownTheme>[0],
+): Container {
+    const body = taskResult(result, expanded, theme);
+    const showBackgroundHint = isPartial
+        && !result.details.background
+        && result.details.status === "running";
+    if (!showBackgroundHint) {
+        return body;
+    }
+
+    const container = new Container();
+    container.addChild(new Text(theme.fg("muted", BACKGROUND_SHORTCUT_HINT), 0, 0));
+    container.addChild(body);
+    return container;
+}
+
 function startResult(
     result: AgentToolResult,
     expanded: boolean,
@@ -98,7 +118,7 @@ function renderAgentResult(
     switch (result.details.action) {
         case "list": return responseResult(result, expanded, theme);
         case "start": return startResult(result, expanded, isPartial, theme);
-        case "continue": return taskResult(result, expanded, theme);
+        case "continue": return continueResult(result, expanded, isPartial, theme);
         case "cancel": return responseResult(result, expanded, theme);
         case "inspect": return responseResult(result, expanded, theme);
         case "apply": return responseResult(result, expanded, theme);

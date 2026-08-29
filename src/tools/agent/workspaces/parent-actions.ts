@@ -5,7 +5,11 @@ import type { AgentRequest } from "../definitions/validate";
 import { emitAgentEvent } from "../observability/events";
 import type { AgentEventSink } from "../contracts/events";
 import type { AgentRunDetails, AgentRunOutcome, PersistedAgentRun } from "../contracts/runs";
-import { AgentActionError, AgentRunManager } from "../runs/manager";
+import {
+    AgentActionError,
+    AgentRunManager,
+    type AgentBackgroundCallback,
+} from "../runs/manager";
 import { ZERO_USAGE } from "../runs/usage";
 import { diagnosticText } from "../presentation/text";
 import { prepareForegroundWorkspaceResult } from "./finalization";
@@ -155,6 +159,7 @@ export interface ExecuteParentWorkspaceActionOptions {
     signal?: AbortSignal;
     progress: (details: AgentRunDetails) => void;
     events: AgentEventSink;
+    onBackgroundUpdate?: AgentBackgroundCallback;
     discover?: (ctx: ExtensionContext) => ReturnType<typeof discoverAgents>;
 }
 
@@ -168,6 +173,7 @@ async function continueNonIsolatedRun(
         manager,
         signal,
         progress,
+        onBackgroundUpdate,
         discover = (context) => discoverAgents(context.cwd, context.isProjectTrusted()),
     }: ExecuteParentWorkspaceActionOptions,
 ): Promise<AgentRunOutcome> {
@@ -223,6 +229,7 @@ async function continueNonIsolatedRun(
         {
             signal,
             onProgress: progress,
+            onBackgroundUpdate,
             title: `${record.title} revision`,
             identity: runIdentity,
         },
@@ -239,6 +246,7 @@ export async function executeParentWorkspaceAction(
         signal,
         progress,
         events,
+        onBackgroundUpdate,
         discover = (context) => discoverAgents(context.cwd, context.isProjectTrusted()),
     }: ExecuteParentWorkspaceActionOptions,
 ): Promise<AgentRunOutcome> {
@@ -253,6 +261,7 @@ export async function executeParentWorkspaceAction(
             signal,
             progress,
             events,
+            onBackgroundUpdate,
             discover,
         });
     }
@@ -368,6 +377,7 @@ export async function executeParentWorkspaceAction(
         {
             signal,
             onProgress: progress,
+            onBackgroundUpdate,
             title: `${record.title} revision`,
             identity: runIdentity,
         },

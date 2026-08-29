@@ -133,6 +133,17 @@ const actionCases: AgentRenderCase[] = [
         ),
     },
     {
+        snapshotName: "continue-foreground-partial",
+        isPartial: true,
+        args: { action: "continue", runId: "scout-1", guidance: "Continue with the remaining checks." },
+        outcome: outcome(
+            { action: "continue", runId: "scout-1", guidance: "Continue with the remaining checks." },
+            projectTask,
+            "The child is still inspecting the project.",
+            { runId: "scout-1", title: "Project audit", agent: "scout", status: "running" },
+        ),
+    },
+    {
         args: { action: "cancel", runId: "worker-1" },
         outcome: outcome(
             { action: "cancel", runId: "worker-1" },

@@ -1059,6 +1059,7 @@ describe("agent extension registration", () => {
             ui: { notify: () => {} },
         };
         const progress = vi.fn();
+        const onBackgroundUpdate = vi.fn();
         const discover = vi.fn(() => ({ agents: [definition], diagnostics: [] }));
         vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record] as any);
 
@@ -1070,6 +1071,7 @@ describe("agent extension registration", () => {
                 signal: undefined,
                 progress,
                 events: {} as any,
+                onBackgroundUpdate,
                 discover,
             },
         );
@@ -1100,6 +1102,7 @@ describe("agent extension registration", () => {
             {
                 signal: undefined,
                 onProgress: progress,
+                onBackgroundUpdate,
                 title: "Review changes revision",
                 identity: { runId: "reviewer-1", runInstanceId: "reviewer-instance-1" }
             },
@@ -1134,6 +1137,7 @@ describe("agent extension registration", () => {
                 signal: undefined,
                 progress,
                 events: {} as any,
+                onBackgroundUpdate,
                 discover,
             },
         );
@@ -1149,6 +1153,7 @@ describe("agent extension registration", () => {
                 childSessionLeafId: "leaf-2",
             }),
             expect.objectContaining({
+                onBackgroundUpdate,
                 title: "Review changes revision",
                 identity: { runId: "reviewer-1", runInstanceId: "reviewer-instance-1" }
             }),

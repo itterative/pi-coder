@@ -165,6 +165,7 @@ export async function executeAgentAction(
                     guidance: request.guidance,
                     signal,
                     onProgress: progress,
+                    onBackgroundUpdate: lifecycle.backgroundUpdate(ctx),
                 });
                 outcome = await prepareForegroundWorkspaceResult(outcome, ctx, lifecycle.events);
                 lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
@@ -175,6 +176,7 @@ export async function executeAgentAction(
                     signal,
                     progress,
                     events: lifecycle.events,
+                    onBackgroundUpdate: lifecycle.backgroundUpdate(ctx),
                     discover: lifecycle.discover.bind(lifecycle),
                 });
             }

@@ -1,0 +1,13 @@
+[simple]
+agent continue scout-1
+(Ctrl+Alt+B to move to background)
+
+[detailed]
+agent continue scout-1
+(Ctrl+Alt+B to move to background)
+
+│ Inspect the project structure.
+
+0 tool calls (0 failed)
+
+The child is still inspecting the project.

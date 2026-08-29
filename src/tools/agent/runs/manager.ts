@@ -73,6 +73,7 @@ export interface AgentStartOptions {
 export interface AgentContinuationOptions {
     signal?: AbortSignal;
     onProgress?: AgentProgressCallback;
+    onBackgroundUpdate?: AgentBackgroundCallback;
     title?: string;
     identity?: AgentRunIdentity;
 }
@@ -82,6 +83,7 @@ export interface AgentResumeOptions {
     guidance?: string;
     signal?: AbortSignal;
     onProgress?: AgentProgressCallback;
+    onBackgroundUpdate?: AgentBackgroundCallback;
 }
 
 type AgentStartContext = Omit<
@@ -534,8 +536,6 @@ export class AgentRunManager {
         }
 
         const { definition, run } = this.createRun(definitionOrName, task, context, false, title, identity);
-        run.detachable = true;
-        run.onBackgroundUpdate = onBackgroundUpdate;
         const setupOutcome = await this.setupRun(
             run,
             definition,
@@ -545,15 +545,10 @@ export class AgentRunManager {
         );
         if (setupOutcome) return setupOutcome;
 
-        const detachedOutcome = new Promise<AgentRunOutcome>((resolve) => {
-            run.resolveDetachedOutcome = resolve;
-        });
-        run.detachedOutcome = detachedOutcome;
-        const operation = this.beginOperation(run, run.initialPrompt ?? task, signal, onProgress);
-        return Promise.race([operation, detachedOutcome]).finally(() => {
-            if (run.detachedOutcome !== detachedOutcome) return;
-            run.detachedOutcome = undefined;
-            run.resolveDetachedOutcome = undefined;
+        return this.beginDetachableOperation(run, run.initialPrompt ?? task, {
+            signal,
+            onProgress,
+            onBackgroundUpdate,
         });
     }
 
@@ -565,6 +560,7 @@ export class AgentRunManager {
         {
             signal,
             onProgress,
+            onBackgroundUpdate,
             title,
             identity,
         }: AgentContinuationOptions = {},
@@ -578,7 +574,12 @@ export class AgentRunManager {
             onProgress,
         );
         if (setupOutcome) return setupOutcome;
-        return this.beginOperation(run, prompt, signal, onProgress);
+
+        return this.beginDetachableOperation(run, prompt, {
+            signal,
+            onProgress,
+            onBackgroundUpdate,
+        });
     }
 
     async resume(
@@ -587,6 +588,7 @@ export class AgentRunManager {
             guidance,
             signal,
             onProgress,
+            onBackgroundUpdate,
         }: AgentResumeOptions = {},
     ): Promise<AgentRunOutcome> {
         const run = this.runs.get(runId);
@@ -646,13 +648,16 @@ export class AgentRunManager {
         }
         const prompt = `Parent guidance:\n${resumeGuidance}`;
         if (!run.background) {
-            try {
-                return await this.beginOperation(run, prompt, signal, onProgress);
-            } finally {
-                this.releaseRunContinuationLease(run);
-            }
+            return this.beginDetachableOperation(run, prompt, {
+                signal,
+                onProgress,
+                onBackgroundUpdate: onBackgroundUpdate ?? run.onBackgroundUpdate,
+            });
         }
 
+        if (onBackgroundUpdate) {
+            run.backgroundCallback = onBackgroundUpdate;
+        }
         const taskPromise = Promise.resolve()
             .then(() => this.beginOperation(run, prompt))
             .catch((error) => {
@@ -1144,6 +1149,45 @@ export class AgentRunManager {
                 });
             }
             this.removeRun(run, "shutdown", false);
+        }
+    }
+
+    private async beginDetachableOperation(
+        run: AgentRun,
+        prompt: string,
+        {
+            signal,
+            onProgress,
+            onBackgroundUpdate,
+        }: {
+            signal?: AbortSignal;
+            onProgress?: AgentProgressCallback;
+            onBackgroundUpdate?: AgentBackgroundCallback;
+        },
+    ): Promise<AgentRunOutcome> {
+        run.detachable = true;
+        if (onBackgroundUpdate) {
+            run.onBackgroundUpdate = onBackgroundUpdate;
+        }
+
+        const detachedOutcome = new Promise<AgentRunOutcome>((resolve) => {
+            run.resolveDetachedOutcome = resolve;
+        });
+        run.detachedOutcome = detachedOutcome;
+        const operation = this.beginOperation(run, prompt, signal, onProgress);
+        const releaseAfterOperation = () => {
+            run.detachable = false;
+            this.releaseRunContinuationLease(run);
+        };
+        void operation.then(releaseAfterOperation, releaseAfterOperation);
+
+        try {
+            return await Promise.race([operation, detachedOutcome]);
+        } finally {
+            if (run.detachedOutcome === detachedOutcome) {
+                run.detachedOutcome = undefined;
+                run.resolveDetachedOutcome = undefined;
+            }
         }
     }
 

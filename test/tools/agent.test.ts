@@ -254,6 +254,129 @@ describe("AgentRunManager", () => {
         expect(manager.collect("scout-1").content).toBe("Finished in the background.");
     });
 
+    it("moves a resumed foreground run to the background", async () => {
+        let promptCount = 0;
+        let promptStarted = false;
+        let releasePrompt: (() => void) | undefined;
+        let output = "Partial findings";
+        let question: ParentQuestion | undefined;
+        const backgroundUpdates: AgentRunStatus[] = [];
+        const child: ChildAgentHandle = {
+            prompt: async () => {
+                promptCount++;
+                if (promptCount === 1) {
+                    question = { question: "Which path?" };
+                    return;
+                }
+                promptStarted = true;
+                await new Promise<void>((resolve) => {
+                    releasePrompt = resolve;
+                });
+                output = "Finished after resuming.";
+            },
+            abort: async () => {
+                releasePrompt?.();
+            },
+            dispose: () => {},
+            takeParentQuestion: () => {
+                const result = question;
+                question = undefined;
+                return result;
+            },
+            getProgress: () => ({ output, recentActivity: [] }),
+            getFinalOutput: () => output,
+            getError: () => undefined,
+            getUsage: () => usage(),
+        };
+        let releaseCount = 0;
+        const manager = managerWith(child);
+        const store = durableStore(process.cwd());
+        manager.setPersistence({
+            ...store.persistence,
+            usesSnapshotMarkers: true,
+            acquireContinuationLease: () => ({
+                release: () => {
+                    releaseCount++;
+                },
+            }),
+        });
+        await manager.start("scout", "Investigate", context(), {
+            onBackgroundUpdate: (details) => backgroundUpdates.push(details.status),
+        });
+        expect(releaseCount).toBe(1);
+
+        let resumed = false;
+        const resume = manager.resume("scout-1", {
+            guidance: "Continue investigating",
+        }).then((result) => {
+            resumed = true;
+            return result;
+        });
+        await vi.waitFor(() => expect(promptStarted).toBe(true));
+        const moved = manager.moveForegroundToBackground();
+
+        expect(moved).toMatchObject({
+            content: expect.stringContaining("manually moved to the background by the user"),
+            details: { background: true, status: "running" },
+        });
+        await vi.waitFor(() => expect(resumed).toBe(true));
+        await expect(resume).resolves.toMatchObject({
+            details: { background: true, status: "running" },
+        });
+        expect(releaseCount).toBe(1);
+
+        releasePrompt?.();
+        await vi.waitFor(() => expect(manager.status("scout-1").details.status).toBe("completed"));
+        expect(releaseCount).toBe(2);
+        expect(backgroundUpdates).toContain("completed");
+        expect(manager.collect("scout-1").content).toBe("Finished after resuming.");
+    });
+
+    it("moves a foreground continuation to the background", async () => {
+        let promptStarted = false;
+        let releasePrompt: (() => void) | undefined;
+        let output = "";
+        const child: ChildAgentHandle = {
+            prompt: async () => {
+                promptStarted = true;
+                await new Promise<void>((resolve) => {
+                    releasePrompt = resolve;
+                });
+                output = "Finished after continuing.";
+            },
+            abort: async () => {
+                releasePrompt?.();
+            },
+            dispose: () => {},
+            takeParentQuestion: () => undefined,
+            getProgress: () => ({ output, recentActivity: [] }),
+            getFinalOutput: () => output,
+            getError: () => undefined,
+            getUsage: () => usage(),
+        };
+        const manager = managerWith(child);
+        const continuation = manager.startContinuation(
+            "scout",
+            "Investigate",
+            "Parent guidance:\nContinue investigating",
+            context(),
+        );
+
+        await vi.waitFor(() => expect(promptStarted).toBe(true));
+        const moved = manager.moveForegroundToBackground();
+
+        expect(moved).toMatchObject({
+            details: { background: true, status: "running" },
+        });
+        await expect(continuation).resolves.toMatchObject({
+            details: { background: true, status: "running" },
+        });
+
+        releasePrompt?.();
+        await vi.waitFor(() => expect(manager.status("scout-1").details.status).toBe("completed"));
+        expect(manager.collect("scout-1").content).toBe("Finished after continuing.");
+    });
+
     it("assigns a durable human-readable title to each run", async () => {
         const child = new FakeChild([{ output: "Found it." }]);
         const manager = managerWith(child);
