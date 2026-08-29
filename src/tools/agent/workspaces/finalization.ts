@@ -12,11 +12,11 @@ import {
 } from "./results";
 
 export async function prepareCollectedWorkspaceResult(
-    details: Pick<AgentRunDetails, "workspaceId" | "runId" | "runInstanceId">,
+    details: Pick<AgentRunDetails, "workspaceId" | "runId" | "runInstanceId" | "setupFailed">,
     ctx: ExtensionContext,
     events?: AgentEventSink,
 ): Promise<AgentWorkspaceResult | undefined> {
-    if (!details.workspaceId) return undefined;
+    if (!details.workspaceId || details.setupFailed) return undefined;
     const workspace = await getAgentWorkspace(details.workspaceId);
     if (!workspace) {
         throw new AgentActionError(
@@ -50,7 +50,7 @@ export async function prepareForegroundWorkspaceResult(
     ctx: ExtensionContext,
     events?: AgentEventSink,
 ): Promise<AgentRunOutcome> {
-    if (!isTerminalAgentStatus(outcome.details.status) || !outcome.details.workspaceId) return outcome;
+    if (outcome.details.setupFailed || !isTerminalAgentStatus(outcome.details.status) || !outcome.details.workspaceId) return outcome;
     const workspaceResult = await prepareCollectedWorkspaceResult(outcome.details, ctx, events);
     if (!workspaceResult) return outcome;
     const noWorkspaceChanges = workspaceResult.workerHead === workspaceResult.baseRevision

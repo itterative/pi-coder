@@ -49,17 +49,17 @@ Checkpoint writes use SQLite continuation leases, expected-head compare-and-swap
 
 1. Resolve the checkpoint authoritative for the exact parent session and active parent-tree branch.
 2. For an isolated worker, confirm worktree ancestry before starting anything and require its prepared task lease.
-3. Reserve a new logical run identity.
+3. Reuse the public run ID and reserve the existing physical run identity for the continued child.
 4. Reopen the original child transcript at its persisted leaf.
 5. Send only revision guidance as the next child message, using the model recorded in that session.
-6. For an isolated worker, transfer the workspace lease from the old run to the new run.
+6. For an isolated worker, retain the existing workspace lease for the continued run identity.
 7. For an isolated worker, finalize and persist a new prepared workspace result.
 
-Non-mutating source checkpoints remain addressable after revision so a later action can intentionally fork from the original child leaf. Isolated result ownership still advances to the new run ID. Definition drift does not reject a prepared result: the persisted definition snapshot supplies capabilities and the child session supplies transcript/model continuity.
+The public run ID remains stable across revision, so repeated `revise` actions continue the latest checkpoint rather than creating confusing new agent IDs. The child session and physical run identity remain the same; isolated workspace results still receive a new result record while retaining the existing lease. Legacy records without a physical `runInstanceId` are accepted for compatibility and receive a synthesized identity when revised. Definition drift does not reject a prepared result: the persisted definition snapshot supplies capabilities and the child session supplies transcript/model continuity.
 
 ## Failure and recovery semantics
 
-The workspace lease remains with the old run while continuation setup and execution occur. If continuation fails, no lease transfer occurs. If transfer fails, the old lease remains. If finalization fails after transfer, pi-coder attempts a compare-and-swap-style rollback from the new run to the old run and preserves the original error. A rollback failure is not silently repaired; the workspace must be explicitly inspected or recovered.
+The workspace lease remains with the same run identity while continuation setup and execution occur. Setup failures are marked explicitly and skip workspace-result finalization because no child prompt ran. If continuation or finalization fails, the existing lease and prior prepared result remain addressable for recovery; no ownership transfer is required.
 
 A divergent worktree is rejected before child startup, lease transfer, or metadata mutation. Pi-coder does not silently rebase, reset, update the recorded base, or accept an ambiguous diff. See [Workspace lifecycle](docs/agent-workspaces.md).
 

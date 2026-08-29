@@ -674,6 +674,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         terminalContent: boundedString(record.terminalContent, 48_000),
         terminalError: boundedString(record.terminalError, 4_000),
         terminalIsError: typeof record.terminalIsError === "boolean" ? record.terminalIsError : undefined,
+        setupFailed: record.setupFailed === true ? true : undefined,
         mutationReport: mutationValue ? {
             changedFiles: Array.isArray(mutationValue.changedFiles)
                 ? mutationValue.changedFiles.filter((item): item is string => typeof item === "string").slice(0, 1_000).map((item) => item.slice(0, 4_096))

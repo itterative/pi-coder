@@ -326,6 +326,41 @@ describe("durable agent run persistence", () => {
         expect(await listPastAgentSessions(process.cwd(), { agentSessionsDir: sessionsDir })).toEqual(lists.all);
     });
 
+    it("falls back to the latest catalog leaf for visual transcript loading", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-leaf-fallback-"));
+        tempDirs.push(stateDir);
+        const child = SessionManager.create(process.cwd(), stateDir);
+        child.appendMessage({ role: "user", content: "Review the changes", timestamp: 1 });
+        child.appendMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "Latest review response" }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
+            stopReason: "stop",
+            timestamp: 2,
+        });
+        const latestLeaf = child.getLeafId();
+        expect(latestLeaf).toBeDefined();
+
+        const loaded = await loadAgentSessionTranscriptForItem({
+            kind: "past",
+            id: "reviewer-1",
+            title: "Review",
+            agent: "reviewer",
+            status: "completed",
+            task: "Review the changes",
+            updatedAt: 2,
+            sessionFile: child.getSessionFile(),
+            childSessionLeafId: "historical-leaf-no-longer-present",
+            fallbackChildSessionLeafId: latestLeaf,
+        });
+
+        expect(loaded?.transcript).toContain("Latest review response");
+        expect(loaded?.messageCount).toBe(2);
+    });
+
     it("loads current-run transcripts without scanning sibling sessions", async () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
         tempDirs.push(stateDir);

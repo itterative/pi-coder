@@ -17,7 +17,7 @@ import type {
 import { listAgentRunCatalog } from "../storage/run-catalog";
 import { executeWorkspaceAction } from "./actions";
 import { inspectAgentWorkspaceResult } from "./results";
-import { getAgentWorkspace, transferAgentWorkspaceLease } from "./store";
+import { getAgentWorkspace } from "./store";
 import { git, hasAncestor } from "./git";
 
 type ParentCatalogRecord = AgentRunCatalogRecord;
@@ -158,9 +158,8 @@ export interface ExecuteParentWorkspaceActionOptions {
     discover?: (ctx: ExtensionContext) => ReturnType<typeof discoverAgents>;
 }
 
-// Non-mutating runs have no workspace lease to transfer. Keep the source
-// checkpoint addressable so revising it intentionally forks the child
-// transcript from that exact leaf.
+// Non-mutating runs have no workspace lease to transfer. Reuse the public
+// run ID so a revision remains the same agent in the parent UI.
 async function reviseNonIsolatedRun(
     record: ParentCatalogRecord,
     params: Extract<AgentRequest, { action: "revise" }>,
@@ -205,7 +204,13 @@ async function reviseNonIsolatedRun(
             ? { childSessionLeafId: record.childSessionLeafId }
             : {}),
     };
-    const runIdentity = manager.reserveRunIdentity(definition, record.task, revisionContext);
+    const runIdentity = manager.reserveRunIdentity(
+        definition,
+        record.task,
+        revisionContext,
+        record.runId,
+        record.runInstanceId,
+    );
     const outcome = await manager.startContinuation(
         definition,
         record.task,
@@ -340,7 +345,13 @@ export async function executeParentWorkspaceAction(
             ? { childSessionLeafId: record.childSessionLeafId }
             : {}),
     };
-    const runIdentity = manager.reserveRunIdentity(definition, record.task, revisionContext);
+    const runIdentity = manager.reserveRunIdentity(
+        definition,
+        record.task,
+        revisionContext,
+        record.runId,
+        record.runInstanceId,
+    );
     const revisionPrompt = params.guidance;
     const outcome = await manager.startContinuation(
         definition,
@@ -354,32 +365,7 @@ export async function executeParentWorkspaceAction(
             identity: runIdentity,
         },
     );
-
-    let leaseTransferred = false;
-    try {
-        await transferAgentWorkspaceLease(workspace.id, {
-            ownerSessionId: sessionId,
-            fromLeaseRunId: params.runId,
-            toLeaseRunId: runIdentity.runId,
-            leaseKind: "task",
-            fromLeaseRunInstanceId: record.runInstanceId,
-            toLeaseRunInstanceId: runIdentity.runInstanceId,
-        });
-        leaseTransferred = true;
-        const prepared = await prepareForegroundWorkspaceResult(outcome, ctx, events);
-        prepared.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
-        return prepared;
-    } catch (error) {
-        if (leaseTransferred) {
-            await transferAgentWorkspaceLease(workspace.id, {
-                ownerSessionId: sessionId,
-                fromLeaseRunId: runIdentity.runId,
-                toLeaseRunId: params.runId,
-                leaseKind: "task",
-                fromLeaseRunInstanceId: runIdentity.runInstanceId,
-                toLeaseRunInstanceId: record.runInstanceId,
-            }).catch(() => {});
-        }
-        throw error;
-    }
+    const prepared = await prepareForegroundWorkspaceResult(outcome, ctx, events);
+    prepared.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
+    return prepared;
 }

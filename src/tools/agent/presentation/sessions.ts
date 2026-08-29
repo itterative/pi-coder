@@ -63,6 +63,27 @@ interface ActiveBranchChildCheckpoint {
 const NO_LEAF_TRANSCRIPT = "Transcript unavailable: no exact child transcript leaf is recorded.";
 const UNAVAILABLE_TRANSCRIPT = "Transcript unavailable for the selected child checkpoint.";
 
+function transcriptLeafCandidates(item: AgentSessionBrowserItem): Array<string | null> {
+    const leaves: Array<string | null> = [];
+    if (item.childSessionLeafId !== undefined) leaves.push(item.childSessionLeafId);
+    if (
+        item.fallbackChildSessionLeafId !== undefined
+        && item.fallbackChildSessionLeafId !== item.childSessionLeafId
+    ) {
+        leaves.push(item.fallbackChildSessionLeafId);
+    }
+    return leaves;
+}
+
+function loadTranscriptAtLeaf(item: AgentSessionBrowserItem, leaf: string | null) {
+    const session = openPersistedChildSession(item.sessionFile!, leaf);
+    const branch = session.getBranch();
+    return {
+        views: formatAgentSessionTranscripts(branch),
+        messageCount: branch.filter((entry) => entry.type === "message").length,
+    };
+}
+
 interface PastItemFields {
     agent: string;
     status: string;
@@ -108,6 +129,7 @@ interface PastItemSource {
     startedAt?: number;
     updatedAt: number;
     childSessionLeafId?: string | null;
+    fallbackChildSessionLeafId?: string | null;
     readOnlyReason?: string;
     firstMessage?: string;
     messageCount?: number;
@@ -135,6 +157,9 @@ function buildPastItem(source: PastItemSource): AgentSessionBrowserItem {
         updatedAt: source.updatedAt,
         sessionFile: source.file,
         ...(source.childSessionLeafId !== undefined ? { childSessionLeafId: source.childSessionLeafId } : {}),
+        ...(source.fallbackChildSessionLeafId !== undefined
+            ? { fallbackChildSessionLeafId: source.fallbackChildSessionLeafId }
+            : {}),
         parentSessionId: source.parentSessionId,
         readOnlyReason: source.readOnlyReason,
         firstMessage: source.firstMessage,
@@ -176,6 +201,7 @@ function pastItem(
         startedAt: fields?.startedAt,
         updatedAt: fields?.updatedAt ?? info.modified.getTime(),
         childSessionLeafId: checkpoint ? checkpoint.childSessionLeafId : catalogLeaf,
+        fallbackChildSessionLeafId: checkpoint ? catalogLeaf : undefined,
         readOnlyReason: checkpoint?.readOnlyReason,
         firstMessage: info.firstMessage,
         messageCount: info.messageCount,
@@ -207,6 +233,7 @@ function pastItemFromCatalog(
         startedAt: fields.startedAt,
         updatedAt: fields.updatedAt,
         childSessionLeafId: checkpoint ? checkpoint.childSessionLeafId : catalogLeaf,
+        fallbackChildSessionLeafId: checkpoint ? catalogLeaf : undefined,
         readOnlyReason: checkpoint?.readOnlyReason,
         mutating: fields.mutating,
         usage: fields.usage,
@@ -238,7 +265,8 @@ export async function loadAgentSessionTranscripts(
             return item;
         }
 
-        if (item.childSessionLeafId === undefined) {
+        const leaves = transcriptLeafCandidates(item);
+        if (leaves.length === 0) {
             return {
                 ...item,
                 transcript: NO_LEAF_TRANSCRIPT,
@@ -248,22 +276,26 @@ export async function loadAgentSessionTranscripts(
         // A plain existence check plus the transcript parse below is enough; the
         // directory scan SessionManager.listAll would perform re-reads every
         // sibling transcript in the same directory for no additional data.
-        const transcript = formatAgentSessionTranscripts(
-            openPersistedChildSession(item.sessionFile, item.childSessionLeafId).getBranch(),
-        );
-        return transcript
-            ? {
-                ...item,
-                transcript: transcript.detailed,
-                transcriptCollapsed: transcript.collapsed,
-                transcriptParts: transcript.detailedParts,
-                transcriptCollapsedParts: transcript.collapsedParts,
+        for (const leaf of leaves) {
+            try {
+                const transcript = loadTranscriptAtLeaf(item, leaf).views;
+                return {
+                    ...item,
+                    transcript: transcript.detailed,
+                    transcriptCollapsed: transcript.collapsed,
+                    transcriptParts: transcript.detailedParts,
+                    transcriptCollapsedParts: transcript.collapsedParts,
+                };
+            } catch {
+                // A historical checkpoint may no longer contain its exact leaf;
+                // try the latest catalog leaf for visual browsing.
             }
-            : {
-                ...item,
-                transcript: UNAVAILABLE_TRANSCRIPT,
-                transcriptCollapsed: UNAVAILABLE_TRANSCRIPT,
-            };
+        }
+        return {
+            ...item,
+            transcript: UNAVAILABLE_TRANSCRIPT,
+            transcriptCollapsed: UNAVAILABLE_TRANSCRIPT,
+        };
     }));
 }
 
@@ -279,32 +311,35 @@ export async function loadAgentSessionTranscriptForItem(
     if (item.transcript !== undefined || !item.sessionFile) {
         return item;
     }
-    if (item.childSessionLeafId === undefined) {
+    const leaves = transcriptLeafCandidates(item);
+    if (leaves.length === 0) {
         return {
             ...item,
             transcript: NO_LEAF_TRANSCRIPT,
             transcriptCollapsed: NO_LEAF_TRANSCRIPT,
         };
     }
-    try {
-        const session = openPersistedChildSession(item.sessionFile, item.childSessionLeafId);
-        const branch = session.getBranch();
-        const views = formatAgentSessionTranscripts(branch);
-        return {
-            ...item,
-            transcript: views.detailed,
-            transcriptCollapsed: views.collapsed,
-            transcriptParts: views.detailedParts,
-            transcriptCollapsedParts: views.collapsedParts,
-            messageCount: branch.filter((entry) => entry.type === "message").length,
-        };
-    } catch {
-        return {
-            ...item,
-            transcript: UNAVAILABLE_TRANSCRIPT,
-            transcriptCollapsed: UNAVAILABLE_TRANSCRIPT,
-        };
+    for (const leaf of leaves) {
+        try {
+            const { views, messageCount } = loadTranscriptAtLeaf(item, leaf);
+            return {
+                ...item,
+                transcript: views.detailed,
+                transcriptCollapsed: views.collapsed,
+                transcriptParts: views.detailedParts,
+                transcriptCollapsedParts: views.collapsedParts,
+                messageCount,
+            };
+        } catch {
+            // A historical checkpoint may no longer contain its exact leaf;
+            // try the latest catalog leaf for visual browsing.
+        }
     }
+    return {
+        ...item,
+        transcript: UNAVAILABLE_TRANSCRIPT,
+        transcriptCollapsed: UNAVAILABLE_TRANSCRIPT,
+    };
 }
 
 export interface AgentSessionHistoryScope {

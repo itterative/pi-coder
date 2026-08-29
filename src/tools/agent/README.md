@@ -26,9 +26,9 @@ agent(action="revise", runId="worker-1", guidance="...")
 
 ## Revise at a glance
 
-`revise` continues a collected terminal child run in the existing child conversation. For an isolated worker, it keeps the same workspace; for a non-mutating run such as `reviewer`, it reuses the original execution cwd without a workspace. Resolution is restricted to the exact parent session and active parent-tree branch. It uses the persisted definition snapshot (including capabilities and role prompt), reopens the original child session and exact transcript leaf, preserves the recorded model, and sends only the supplied guidance as the next prompt. A current definition fingerprint mismatch is informational; snapshots without the definition contract fail clearly. It returns a new logical run ID for the revised result; use that ID for later actions.
+`revise` continues a collected terminal child run in the existing child conversation. For an isolated worker, it keeps the same workspace; for a non-mutating run such as `reviewer`, it reuses the original execution cwd without a workspace. Resolution is restricted to the exact parent session and active parent-tree branch. It uses the persisted definition snapshot (including capabilities and role prompt), reopens the original child session and exact transcript leaf, preserves the recorded model, and sends only the supplied guidance as the next prompt. A current definition fingerprint mismatch is informational; snapshots without the definition contract fail clearly. It keeps the same public run ID for the revised result; continue using that ID for later actions.
 
-Before starting the child, revise verifies that the worktree `HEAD` descends from the recorded workspace base. Divergent history is rejected without starting the child, transferring the lease, or changing the existing result. Lease transfer happens only after continuation succeeds, with rollback attempted if transfer or finalization fails.
+Before starting the child, revise verifies that the worktree `HEAD` descends from the recorded workspace base. Divergent history is rejected without starting the child or changing the existing result. The existing workspace lease remains held throughout continuation and finalization; failures preserve it for explicit recovery.
 
 ## More documentation
 

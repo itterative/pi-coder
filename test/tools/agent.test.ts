@@ -352,6 +352,61 @@ describe("AgentRunManager", () => {
         expect(revised.details.runId).toBe("scout-2");
     });
 
+    it("preserves the continuation checkpoint when child setup fails so a stable ID can retry", async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-revise-retry-"));
+        tempDirs.push(directory);
+        const childFile = path.join(directory, "child.jsonl");
+        const store = durableStore(directory);
+        const factoryContexts: unknown[] = [];
+        let attempts = 0;
+        const manager = new AgentRunManager(async (factoryContext) => {
+            factoryContexts.push(factoryContext);
+            attempts++;
+            if (attempts === 1) throw new Error("child session could not be reopened");
+            return new FakeChild([{ output: "Retried findings" }], childFile);
+        });
+        manager.setPersistence(store.persistence);
+
+        const continuationContext = {
+            ...context(),
+            childSessionFile: childFile,
+            childSessionLeafId: "leaf-before-retry",
+        };
+        const identity = { runId: "reviewer-1", runInstanceId: "reviewer-instance-1" };
+        const firstFailure = await manager.startContinuation(
+            "reviewer",
+            "Review the changes",
+            "Please retry the review.",
+            continuationContext,
+            { identity },
+        );
+        expect(firstFailure.details.status).toBe("failed");
+        expect(firstFailure.content).toContain("Failed to create child session");
+
+        expect(latestRecords(store.records).at(-1)).toMatchObject({
+            runId: identity.runId,
+            runInstanceId: identity.runInstanceId,
+            status: "removed",
+            childSessionFile: childFile,
+            childSessionLeafId: "leaf-before-retry",
+        });
+
+        const retried = await manager.startContinuation(
+            "reviewer",
+            "Review the changes",
+            "Please retry the review.",
+            continuationContext,
+            { identity },
+        );
+
+        expect(retried.details.runId).toBe(identity.runId);
+        expect(retried.details.runInstanceId).toBe(identity.runInstanceId);
+        expect(factoryContexts[1]).toMatchObject({
+            childSessionFile: childFile,
+            childSessionLeafId: "leaf-before-retry",
+        });
+    });
+
     it("retains context across repeated parent-guidance cycles and reports usage deltas", async () => {
         const child = new FakeChild([
             {

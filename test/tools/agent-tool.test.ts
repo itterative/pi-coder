@@ -96,8 +96,8 @@ function revisionActionFixture() {
     const continuationOutcome = {
         content: "Revised result",
         details: {
-            runId: "worker-2",
-            runInstanceId: "worker-instance-2",
+            runId: "worker-1",
+            runInstanceId: "worker-instance-1",
             title: "Implement fix revision",
             agent: "worker",
             status: "completed",
@@ -115,7 +115,7 @@ function revisionActionFixture() {
     const manager = {
         flushPersistence: vi.fn(async () => {}),
         getPersistedRun: vi.fn(() => record),
-        reserveRunIdentity: vi.fn(() => ({ runId: "worker-2", runInstanceId: "worker-instance-2" })),
+        reserveRunIdentity: vi.fn(() => ({ runId: "worker-1", runInstanceId: "worker-instance-1" })),
         startContinuation: vi.fn(async () => continuationOutcome),
     };
     const ctx = {
@@ -797,8 +797,8 @@ describe("agent extension registration", () => {
         const continuationOutcome = {
             content: "Revised result",
             details: {
-                runId: "worker-2",
-                runInstanceId: "worker-instance-2",
+                runId: "worker-1",
+                runInstanceId: "worker-instance-1",
                 title: "Implement fix revision",
                 agent: "worker",
                 status: "completed",
@@ -816,7 +816,7 @@ describe("agent extension registration", () => {
         const manager = {
             flushPersistence: vi.fn(async () => {}),
             getPersistedRun: vi.fn(() => record),
-            reserveRunIdentity: vi.fn(() => ({ runId: "worker-2", runInstanceId: "worker-instance-2" })),
+            reserveRunIdentity: vi.fn(() => ({ runId: "worker-1", runInstanceId: "worker-instance-1" })),
             startContinuation: vi.fn(async () => continuationOutcome),
         };
         const ctx = {
@@ -863,20 +863,10 @@ describe("agent extension registration", () => {
                 signal: undefined,
                 onProgress: progress,
                 title: "Implement fix revision",
-                identity: { runId: "worker-2", runInstanceId: "worker-instance-2" },
+                identity: { runId: "worker-1", runInstanceId: "worker-instance-1" },
             },
         );
-        expect(transferSpy).toHaveBeenCalledWith(
-            "workspace-1",
-            {
-                ownerSessionId: "parent-session",
-                fromLeaseRunId: "worker-1",
-                toLeaseRunId: "worker-2",
-                leaseKind: "task",
-                fromLeaseRunInstanceId: "worker-instance-1",
-                toLeaseRunInstanceId: "worker-instance-2",
-            },
-        );
+        expect(transferSpy).not.toHaveBeenCalled();
     });
 
     it("revises a collected reviewer result by continuing its persisted child session", async () => {
@@ -912,8 +902,8 @@ describe("agent extension registration", () => {
         const continuationOutcome = {
             content: "The revised review found no additional issues.",
             details: {
-                runId: "reviewer-2",
-                runInstanceId: "reviewer-instance-2",
+                runId: "reviewer-1",
+                runInstanceId: "reviewer-instance-1",
                 title: "Review changes revision",
                 agent: "reviewer",
                 status: "completed",
@@ -930,7 +920,7 @@ describe("agent extension registration", () => {
         const manager = {
             flushPersistence: vi.fn(async () => {}),
             getPersistedRun: vi.fn(() => record),
-            reserveRunIdentity: vi.fn(() => ({ runId: "reviewer-2", runInstanceId: "reviewer-instance-2" })),
+            reserveRunIdentity: vi.fn(() => ({ runId: "reviewer-1", runInstanceId: "reviewer-instance-1" })),
             startContinuation: vi.fn(async () => continuationOutcome),
         };
         const ctx = {
@@ -965,6 +955,8 @@ describe("agent extension registration", () => {
                 childSessionFile,
                 childSessionLeafId: "leaf-1",
             }),
+            "reviewer-1",
+            "reviewer-instance-1",
         );
         expect(manager.startContinuation).toHaveBeenCalledWith(
             definition,
@@ -980,11 +972,58 @@ describe("agent extension registration", () => {
                 signal: undefined,
                 onProgress: progress,
                 title: "Review changes revision",
-                identity: { runId: "reviewer-2", runInstanceId: "reviewer-instance-2" },
+                identity: { runId: "reviewer-1", runInstanceId: "reviewer-instance-1" }
             },
         );
         expect(discover).toHaveBeenCalledWith(ctx);
         expect(result.details.discoveryDiagnostics).toEqual([]);
+
+        const continuedRecord = {
+            ...record,
+            runInstanceId: "reviewer-instance-1",
+            childSessionLeafId: "leaf-2",
+            updatedAt: 6,
+        };
+        const secondOutcome = {
+            ...continuationOutcome,
+            content: "The second review continuation completed.",
+            details: {
+                ...continuationOutcome.details,
+                runInstanceId: "reviewer-instance-1",
+                updatedAt: 7,
+            },
+        };
+        manager.getPersistedRun.mockReturnValue(continuedRecord);
+        manager.reserveRunIdentity.mockReturnValue({ runId: "reviewer-1", runInstanceId: "reviewer-instance-1" });
+        manager.startContinuation.mockResolvedValue(secondOutcome);
+
+        const secondResult = await executeParentWorkspaceAction(
+            { action: "revise", runId: "reviewer-1", guidance: "Follow up on the remaining concern." },
+            {
+                ctx: ctx as any,
+                manager: manager as any,
+                signal: undefined,
+                progress,
+                events: {} as any,
+                discover,
+            },
+        );
+
+        expect(secondResult).toBe(secondOutcome);
+        expect(secondResult.details.runId).toBe(result.details.runId);
+        expect(manager.startContinuation).toHaveBeenLastCalledWith(
+            definition,
+            "Review the current changes",
+            "Follow up on the remaining concern.",
+            expect.objectContaining({
+                childSessionFile,
+                childSessionLeafId: "leaf-2",
+            }),
+            expect.objectContaining({
+                title: "Review changes revision",
+                identity: { runId: "reviewer-1", runInstanceId: "reviewer-instance-1" }
+            }),
+        );
     });
 
     it("does not fall back to catalog-only runs when branch persistence is active", async () => {
@@ -1035,62 +1074,14 @@ describe("agent extension registration", () => {
         expect(transferSpy).not.toHaveBeenCalled();
     });
 
-    it("leaves the original lease when revision lease transfer fails", async () => {
-        const fixture = revisionActionFixture();
-        const transferError = new Error("lease transfer failed");
-        const transferSpy = configureRevisionAction(fixture);
-        transferSpy.mockRejectedValue(transferError);
-
-        await expect(executeRevisionAction(fixture)).rejects.toBe(transferError);
-        expect(fixture.manager.startContinuation).toHaveBeenCalledOnce();
-        expect(transferSpy).toHaveBeenCalledOnce();
-        expect(transferSpy).toHaveBeenCalledWith(
-            "workspace-1",
-            {
-                ownerSessionId: "parent-session",
-                fromLeaseRunId: "worker-1",
-                toLeaseRunId: "worker-2",
-                leaseKind: "task",
-                fromLeaseRunInstanceId: "worker-instance-1",
-                toLeaseRunInstanceId: "worker-instance-2",
-            },
-        );
-    });
-
-    it("restores the original lease when revised result finalization fails", async () => {
+    it("preserves the stable workspace lease when revised result finalization fails", async () => {
         const fixture = revisionActionFixture();
         const transferSpy = configureRevisionAction(fixture);
         const finalizationError = new Error("result finalization failed");
         vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockRejectedValue(finalizationError);
 
         await expect(executeRevisionAction(fixture)).rejects.toBe(finalizationError);
-        expect(transferSpy).toHaveBeenCalledTimes(2);
-        expect(transferSpy).toHaveBeenNthCalledWith(
-            2,
-            "workspace-1",
-            {
-                ownerSessionId: "parent-session",
-                fromLeaseRunId: "worker-2",
-                toLeaseRunId: "worker-1",
-                leaseKind: "task",
-                fromLeaseRunInstanceId: "worker-instance-2",
-                toLeaseRunInstanceId: "worker-instance-1",
-            },
-        );
-    });
-
-    it("preserves the finalization error when lease rollback fails", async () => {
-        const fixture = revisionActionFixture();
-        const finalizationError = new Error("result finalization failed");
-        const rollbackError = new Error("lease rollback failed");
-        const transferSpy = configureRevisionAction(fixture);
-        transferSpy
-            .mockResolvedValueOnce()
-            .mockRejectedValueOnce(rollbackError);
-        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockRejectedValue(finalizationError);
-
-        await expect(executeRevisionAction(fixture)).rejects.toBe(finalizationError);
-        expect(transferSpy).toHaveBeenCalledTimes(2);
+        expect(transferSpy).not.toHaveBeenCalled();
     });
 
     it("prepares and releases a no-change isolated foreground result", async () => {

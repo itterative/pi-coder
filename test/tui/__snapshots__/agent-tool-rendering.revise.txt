@@ -4,12 +4,7 @@ agent revise worker-1
 [detailed]
 agent revise worker-1
 
-│ Continue the delegated task in the existing isolated workspace. Inspect the current worktree and the previous result
-│ before making changes.
-│
-│ Original task: Implement the requested fix.
-│
-│ Parent feedback: Please revisit the test coverage.
+│ Implement the requested fix.
 
 4 tool calls (0 failed)
 

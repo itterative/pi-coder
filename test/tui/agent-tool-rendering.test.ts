@@ -31,12 +31,6 @@ interface AgentRenderCase {
 
 const projectTask = "Inspect the project structure.";
 const workerTask = "Implement the requested fix.";
-const revisionTask = [
-    "Continue the delegated task in the existing isolated workspace. Inspect the current worktree and the previous result before making changes.",
-    `Original task: ${workerTask}`,
-    "Parent feedback: Please revisit the test coverage.",
-].join("\n\n");
-
 function outcome(
     args: AgentParameters,
     task: string,
@@ -167,9 +161,9 @@ const actionCases: AgentRenderCase[] = [
         args: { action: "revise", runId: "worker-1", guidance: "Please revisit the test coverage." },
         outcome: outcome(
             { action: "revise", runId: "worker-1", guidance: "Please revisit the test coverage." },
-            revisionTask,
+            workerTask,
             "The revised implementation passes the focused tests.",
-            { runId: "worker-2", title: "Implement fix revision", background: false, toolCounts: { read: 2, edit: 1, bash: 1 } },
+            { runId: "worker-1", title: "Implement fix revision", background: false, toolCounts: { read: 2, edit: 1, bash: 1 } },
         ),
     },
     {

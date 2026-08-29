@@ -120,6 +120,7 @@ interface AgentRun {
     shutdownRequested: boolean;
     cancelRequested: boolean;
     mutating: boolean;
+    setupFailed?: boolean;
     workspaceId?: string;
     definitionFingerprint: string;
     permissionPending: boolean;
@@ -386,6 +387,7 @@ export class AgentRunManager {
                 shutdownRequested: false,
                 cancelRequested: false,
                 mutating: persistedTerminal ? record.mutating : snapshotMutating,
+                setupFailed: record.setupFailed,
                 workspaceId: record.workspaceId,
                 permissionPending: false,
                 childSessionFile: record.childSessionFile,
@@ -481,16 +483,18 @@ export class AgentRunManager {
         return { restored: this.runs.size, diagnostics };
     }
 
-    /** Reserve the physical/display identity before an isolated workspace starts running. */
+    /** Reserve a run identity; revisions may retain their existing public run ID. */
     reserveRunIdentity(
         definitionOrName: AgentDefinition | string,
         task: string,
         context: AgentStartContext,
+        requestedRunId?: string,
+        requestedRunInstanceId?: string,
     ): AgentRunIdentity {
         if (this.closing) throw new AgentActionError("Agent runtime is shutting down.");
         const definition = this.resolveDefinition(definitionOrName);
         this.validateRunStart(definition, task, context);
-        return this.allocateRunIdentity(definition);
+        return this.allocateRunIdentity(definition, requestedRunId, requestedRunInstanceId);
     }
 
     async start(
@@ -790,6 +794,8 @@ export class AgentRunManager {
             cwd: context.cwd,
             parentCwd: context.parentCwd ?? context.cwd,
             workspaceId: context.workspaceId,
+            childSessionFile: context.childSessionFile,
+            childSessionLeafId: context.childSessionLeafId,
             disposed: false,
             shutdownRequested: false,
             cancelRequested: false,
@@ -918,10 +924,14 @@ export class AgentRunManager {
         }
     }
 
-    private allocateRunIdentity(definition: AgentDefinition): AgentRunIdentity {
+    private allocateRunIdentity(
+        definition: AgentDefinition,
+        requestedRunId?: string,
+        requestedRunInstanceId?: string,
+    ): AgentRunIdentity {
         return {
-            runId: `${definition.name}-${this.nextRunNumber++}`,
-            runInstanceId: randomUUID(),
+            runId: requestedRunId ?? `${definition.name}-${this.nextRunNumber++}`,
+            runInstanceId: requestedRunInstanceId ?? randomUUID(),
         };
     }
 
@@ -995,6 +1005,7 @@ export class AgentRunManager {
             this.record(run, "setup.completed");
         } catch (error) {
             run.setup = undefined;
+            run.setupFailed = true;
             const message = errorMessage(error);
             this.record(run, "setup.failed", { error: truncate(message, 500) });
             if (preserveOnSetupFailure) {
@@ -1422,6 +1433,7 @@ export class AgentRunManager {
             startedAt: run.startedAt,
             updatedAt: run.updatedAt,
             error,
+            setupFailed: run.setupFailed,
             mutating: run.mutating,
             mutationReport: this.mutationReport(run),
         };
@@ -1584,6 +1596,7 @@ export class AgentRunManager {
             terminalContent: terminal?.content,
             terminalError: terminal?.details.error,
             terminalIsError: terminal?.isError,
+            setupFailed: run.setupFailed,
             mutationReport: this.mutationReport(run),
         };
         const saved = this.persistence.save(persisted);

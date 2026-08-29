@@ -28,10 +28,11 @@ Applying uses the complete base-to-worker tree diff without creating a parent co
 
 For isolated workers, `revise` is available only for a prepared changed result whose task lease is still owned by the current parent session. It is not normally available after `retain`, `apply`, `discard`, or no-change release. Collected non-mutating runs such as `reviewer` can be revised without a workspace; revision is restricted to the exact parent session and active parent-tree branch.
 
-A revision has two identities:
+A revision keeps the same public agent identity:
 
 - The **child session** continues: the original JSONL transcript and exact leaf are reopened, the original recorded model is used, and only the parent's guidance is sent as the next prompt.
-- The **workspace result run** advances: a new logical run ID and physical run instance own the revised result. The returned new run ID is required for later isolated actions; the old ID is stale for isolated result disposition. For non-mutating runs, the old ID remains addressable as a deliberate fork point from its original child leaf.
+- The **run identity** remains stable: the public run ID and physical run instance are reused, so the parent UI continues to show one agent and repeated revisions continue the latest checkpoint.
+- The **workspace result** advances to a new result record while retaining the existing workspace lease. Use the same run ID for later isolated actions.
 
 Revision does not invalidate a result because its definition fingerprint or capabilities changed after the original run. It uses the complete definition snapshot persisted with the run; the child session remains authoritative for the conversation and recorded model. The current definition is informational only, while a missing or malformed persisted snapshot fails clearly because the original execution contract cannot be reconstructed.
 
@@ -73,7 +74,7 @@ Pi-coder does not silently update `baseRevision`, rebase the worktree, discard t
                     divergent    │ descendant
                        v          v
               [Reject before   ┌──────────────────────────────┐
-               child/transfer; │ Reserve new logical identity │
+               child/transfer; │ Retain existing run identity │
                preserve old]   └──────────────┬───────────────┘
                                               v
                  ┌────────────────────────────────────────────┐
@@ -86,18 +87,18 @@ Pi-coder does not silently update `baseRevision`, rebase the worktree, discard t
                                        │ success
                                        v
                  ┌────────────────────────────────────────────┐
-                 │ Transfer lease old → new, then finalize    │
+                 │ Retain the existing lease, then finalize    │
                  │ the revised worktree as a prepared result  │
                  └─────────────────────┬──────────────────────┘
-                                       │ transfer/finalize failure
+                                       │ finalization failure
                                        v
-                 [Attempt new → old lease rollback; preserve error]
+                 [Preserve the prior result and lease; return error]
                                        │ success
                                        v
-                 [Return new run/result ID; old ID is stale]
+                 [Return the same run ID with the revised result]
 ```
 
-The old lease remains authoritative while the child continuation runs. Transfer occurs only after continuation succeeds. If transfer succeeds but result finalization fails, pi-coder attempts a compare-and-swap-style transfer back to the old run. A rollback failure does not replace the original finalization error; the workspace requires explicit recovery and should not be silently reused.
+The existing lease remains authoritative while the child continuation runs. No ownership transfer is required because the public and physical run identity remain stable. If result finalization fails, the prior prepared result and lease remain available for explicit recovery.
 
 ## Validation
 

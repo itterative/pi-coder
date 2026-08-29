@@ -34,7 +34,6 @@ import * as runCatalog from "../../src/tools/agent/storage/run-catalog";
 import { createAgentWorkspace, updateAgentWorkspace } from "../../src/tools/agent/workspaces/lifecycle";
 import * as workspaceSetup from "../../src/tools/agent/workspaces/setup";
 import { claimAgentWorkspace, getAgentWorkspace } from "../../src/tools/agent/workspaces/store";
-import * as workspaceStore from "../../src/tools/agent/workspaces/store";
 
 interface Handler {
     (event: any, ctx: any): Promise<unknown> | unknown;
@@ -77,9 +76,14 @@ describe("registered revise lifecycle", () => {
         const factoryContexts: any[] = [];
         const childSessions: SessionManager[] = [];
         let invocation = 0;
+        let failNextSetup = false;
         const fakeFactory = async (context: any): Promise<ChildAgentHandle> => {
             invocation++;
             const currentInvocation = invocation;
+            if (failNextSetup) {
+                failNextSetup = false;
+                throw new Error("child session could not be reopened");
+            }
             const childSession = context.childSessionFile
                 ? SessionManager.open(context.childSessionFile, context.childSessionDir, context.cwd)
                 : SessionManager.create(context.cwd, context.childSessionDir);
@@ -210,8 +214,8 @@ describe("registered revise lifecycle", () => {
             return [entry.message.content];
         });
         expect(userMessages).toEqual(["Create the marker", "Apply the feedback"]);
-        expect(revised.details.runId).not.toBe(spawned.details.runId);
-        expect(revised.details.runInstanceId).not.toBe(spawned.details.runInstanceId);
+        expect(revised.details.runId).toBe(spawned.details.runId);
+        expect(revised.details.runInstanceId).toBe(spawned.details.runInstanceId);
         expect(revised.details.workspaceResult).toMatchObject({
             workspaceId: provisional.id,
             runId: revised.details.runId,
@@ -237,30 +241,44 @@ describe("registered revise lifecycle", () => {
             },
         });
 
-
-        const transferError = new Error("revision lease transfer failed");
-        const transferFailureSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease")
-            .mockRejectedValueOnce(transferError);
-        const transferFailure = await tool.execute(
-            "e2e-transfer-failure",
-            { action: "revise", runId: revised.details.runId, guidance: "Try transfer failure" },
+        failNextSetup = true;
+        const setupFailure = await tool.execute(
+            "e2e-setup-failure",
+            { action: "revise", runId: revised.details.runId, guidance: "Retry after setup failure" },
             undefined,
             undefined,
             ctx,
         );
-        expect(transferFailure.details.status).toBe("failed");
-        expect(transferFailure.content[0].text).toContain(transferError.message);
-        expect(transferFailureSpy).toHaveBeenCalled();
-        expect(await getAgentWorkspace(provisional.id)).toMatchObject({
+        expect(setupFailure.details.status).toBe("failed");
+        expect(setupFailure.details.setupFailed).toBe(true);
+        expect(setupFailure.content[0].text).toContain("child session could not be reopened");
+        const workspaceAfterSetupFailure = await getAgentWorkspace(provisional.id);
+        expect(workspaceAfterSetupFailure).toMatchObject({
             leaseOwnerSessionId: parentSession.getSessionId(),
             leaseRunId: revised.details.runId,
             leaseRunInstanceId: revised.details.runInstanceId,
             latestResult: {
+                id: revised.details.workspaceResult!.id,
                 runId: revised.details.runId,
                 runInstanceId: revised.details.runInstanceId,
                 status: "prepared",
             },
         });
+
+        const retried = await tool.execute(
+            "e2e-setup-retry",
+            { action: "revise", runId: revised.details.runId, guidance: "Retry the review after setup recovers" },
+            undefined,
+            undefined,
+            ctx,
+        );
+        expect(retried.details.runId).toBe(revised.details.runId);
+        expect(retried.details.runInstanceId).toBe(revised.details.runInstanceId);
+        expect(prompts).toEqual([
+            "Create the marker",
+            "Apply the feedback",
+            "Retry the review after setup recovers",
+        ]);
 
         const finalizationError = new Error("revision finalization failed");
         vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult")
@@ -299,7 +317,7 @@ describe("registered revise lifecycle", () => {
         );
         expect(rejected.details.status).toBe("failed");
         expect(rejected.content[0].text).toContain("is not based on workspace base");
-        expect(invocation).toBe(4);
+        expect(invocation).toBe(5);
         const preservedAfterDivergence = await getAgentWorkspace(provisional.id);
         expect(preservedAfterDivergence).toMatchObject({
             leaseOwnerSessionId: parentSession.getSessionId(),

@@ -20,7 +20,7 @@ This document contains the detailed reference for pi-coder's delegated-agent too
 | `discard` | Discard an isolated result or workspace. |
 | `revise` | Continue a collected terminal child run with parent guidance; isolated workers retain their workspace, while non-mutating runs do not need one. |
 
-There can be up to four active or interrupted runs, and up to three persistent isolated workspaces per project. Terminal background results are retained separately until collected or evicted. Revision lookup is bound to the exact parent session and active parent-tree branch. Non-mutating source run IDs remain addressable as intentional fork points; isolated result IDs follow workspace ownership and become stale after revision.
+There can be up to four active or interrupted runs, and up to three persistent isolated workspaces per project. Terminal background results are retained separately until collected or evicted. Revision lookup is bound to the exact parent session and active parent-tree branch. Revisions retain the same public run ID and physical child identity, so repeated revisions continue the latest checkpoint; isolated workspace results receive new result records while using that same run ID.
 
 ### Background behavior
 

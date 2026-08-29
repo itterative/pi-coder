@@ -115,6 +115,8 @@ export interface AgentRunDetails {
     startedAt: number;
     updatedAt: number;
     error?: string;
+    /** True when the child could not be created or reopened before prompting. */
+    setupFailed?: boolean;
     discoveryDiagnostics?: string[];
     workspaceId?: string;
     childSessionLeafId?: string | null;
@@ -171,6 +173,7 @@ export interface PersistedAgentRun {
     terminalContent?: string;
     terminalError?: string;
     terminalIsError?: boolean;
+    setupFailed?: boolean;
     mutationReport?: WorkerMutationReport;
 }
 

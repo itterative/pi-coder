@@ -1,6 +1,6 @@
 # `revise` Investigation
 
-Status: investigation plus implementation passes. The continuation/session flow, original-model selection, lifecycle discovery, early divergent-history rejection, non-isolated read-only continuation, and basic lease rollback changes are implemented; broader recovery coverage remains open.
+Status: investigation plus implementation passes. The continuation/session flow, original-model selection, lifecycle discovery, early divergent-history rejection, non-isolated read-only continuation, and stable run identity are implemented; broader recovery coverage remains open.
 
 This note records the findings and remaining work so the `revise` workflow can be fixed across multiple sessions. Do not modify `src/tools/agent/TODOS.md`; it is user-managed.
 
@@ -16,9 +16,9 @@ agent(action="revise", runId, guidance)
   -> executeParentWorkspaceAction()
   -> resolve the active-branch run checkpoint (and workspace when isolated)
   -> validate lease and prepared result
-  -> reserve a new run identity
+  -> reserve the existing run identity
   -> start a foreground continuation using the original child session
-  -> transfer the workspace lease to the new logical run
+  -> retain the workspace lease for that identity
   -> prepare the revised workspace result
 ```
 
@@ -79,45 +79,36 @@ The guard is correct as a safety policy. The current `revise` path now performs 
 
 ### 3. A failed revision could strand the workspace lease (partially resolved)
 
-`parent-actions.ts:169-179` transfers the old lease to the new run before calling `manager.start()`:
-
-```text
-old run ID -> new run ID
-then start the new worker
-```
+The earlier implementation transferred the old lease to a new run before calling `manager.start()`. The current implementation retains the public and physical run identity, so the existing lease remains valid while the continued worker starts.
 
 If the new worker reaches terminal state but `prepareForegroundWorkspaceResult()` fails during ancestry validation, the resulting state is:
 
 - the new foreground run has been terminally removed and persisted;
-- the workspace lease belongs to the new run ID;
-- `workspace_results.latestResult` still belongs to the old run ID;
+- the workspace lease remains associated with the same public run ID;
+- `workspace_results.latestResult` still belongs to the prior result record for that run;
 - no new prepared result was inserted;
 - `executeAgentAction()` has no revise-specific rollback path.
 
 Subsequent recovery is effectively blocked:
 
-- the old run ID fails because the workspace is leased by the new run;
-- the new run ID fails because the latest prepared result belongs to the old run;
+- the stable run ID must continue to resolve the prior physical result identity;
+- a mismatched physical run instance would fail because the latest prepared result belongs to the prior continuation;
 - destructive workspace discard/recovery may be the only way out.
 
-This is the highest-risk lifecycle defect. The same issue can occur for other failures after lease transfer, not only the ancestry check.
-
-The transfer-before-start ordering was introduced when run-instance identity reservation was added. Earlier code started the worker first and transferred the lease afterward; that avoided this particular stranded-transfer window but had different concurrency/ownership tradeoffs.
-
-The current implementation starts the continuation while the old lease still protects the workspace, then transfers the lease before finalization. If transfer or finalization fails, it attempts a compare-and-swap-style reverse transfer to restore the old owner. This makes the failure recoverable in normal cases. Focused action-level tests now cover continuation failure, transfer failure, finalization failure with rollback, and rollback failure; real temporary-Git state assertions for those failures and divergent worktree behavior remain.
+The earlier transfer-before-start ordering was introduced when run-instance identity reservation was added. Stable identity reuse now avoids that handoff window entirely: the existing lease protects the workspace through continuation and finalization. Focused action-level tests cover continuation failure, stable lease retention, finalization failure, and divergent worktree behavior; real temporary-Git state assertions for some failure paths remain.
 
 ### 4. `revise` created a new child session rather than continuing the old transcript (resolved)
 
-`resume` reuses the existing child handle or reopens the persisted child session and exact transcript leaf. `revise` instead calls `manager.start()` with a new run identity and no `childSessionFile` or `childSessionLeafId`.
+`resume` reuses the existing child handle or reopens the persisted child session and exact transcript leaf. `revise` starts a new manager run wrapper with the existing run identity and the persisted `childSessionFile` and `childSessionLeafId`.
 
-The new worker receives only:
+The continued worker receives only:
 
 - the generic revision instruction;
 - the original catalog task;
 - parent feedback;
 - the existing worktree as its current directory.
 
-It did not receive the previous child transcript, assistant findings, tool history, or explicit prior workspace revision metadata. The current implementation passes the original `childSessionFile` and exact persisted leaf to `startContinuation()`, so the child runtime reopens that transcript and appends only the revision guidance. The logical run receives a new run ID because workspace-result ownership still needs to advance without reusing a stale result identity.
+It did not receive the previous child transcript, assistant findings, tool history, or explicit prior workspace revision metadata. The current implementation passes the original `childSessionFile` and exact persisted leaf to `startContinuation()`, so the child runtime reopens that transcript and appends only the revision guidance. The public run ID remains stable; the continued child reuses the same physical identity, while workspace finalization creates a new result record.
 
 ### 5. Isolated `revise` is only available while the original task lease remains held
 
@@ -139,7 +130,7 @@ This may be correct, but the user-facing contract should make it explicit. If re
 
 ## 6. Non-isolated revision uses active-branch authority
 
-Non-mutating revisions now resolve through the manager's checkpoints loaded from or written to the active parent branch, rather than the cross-branch catalog. The exact parent session is still required. The original non-mutating checkpoint remains addressable so revising it intentionally forks the child transcript from its exact leaf; isolated workers continue to use workspace lease/result ownership.
+Non-mutating revisions now resolve through the manager's checkpoints loaded from or written to the active parent branch, rather than the cross-branch catalog. The exact parent session is still required. The stable non-mutating run checkpoint is updated after each revision, so a later `revise` continues the latest child leaf rather than unexpectedly forking from the original request; isolated workers continue to use workspace lease/result ownership.
 
 ## Secondary inconsistencies
 
@@ -167,11 +158,11 @@ Normal isolated runs remain restricted to the built-in edit-capable worker. Pers
 
 This is a compatibility edge rather than the main current failure, but it should be covered if revise is made persistence-safe.
 
-### New run IDs are expected after successful revise
+### Stable run IDs after successful revise
 
-A successful revise transfers ownership from, for example, `worker-1` to `worker-2`. The parent must use the returned new `details.runId` for subsequent `inspect`, `apply`, `discard`, or another `revise` action. Reusing the old ID should be rejected once the new result exists.
+A successful revise retains the same public and physical identity, for example `worker-1`. The parent continues using that same `details.runId` for subsequent `inspect`, `apply`, `discard`, or another `revise` action; repeated revision resolves the latest persisted child leaf.
 
-This is correct stale-run protection, but the result text and prompt guidance should make the ID transition obvious.
+This stable-ID behavior keeps the parent UI focused on one agent while each isolated revision still creates a new workspace result record.
 
 ### Isolated mutation deadlocks are a broader related risk
 
@@ -189,11 +180,11 @@ The current pass added focused manager and parent-action tests plus an end-to-en
 
 1. changed isolated `spawn` -> `collect` -> `revise`;
 2. capture the exact revision prompt and assert real paragraph newlines;
-3. assert the new worker uses the same workspace and a new run/run-instance identity;
-4. assert the returned result is prepared under the new identity;
-5. assert the old ID is stale and the new ID is the only valid disposition ID;
+3. assert the continued worker uses the same workspace and the same public/physical run identity;
+4. assert the returned result is prepared under the stable identity;
+5. assert the stable public ID remains valid and identifies the revised result;
 6. force a divergent worker HEAD and verify failure state, lease owner, latest result, and recoverability;
-7. test a child/setup/start failure after lease handoff;
+7. test a child/setup/start failure while the existing lease remains held;
 8. test the behavior after retain/apply/discard explicitly;
 9. test configured worker model/definition behavior;
 10. test legacy nullable/synthesized run-instance combinations.
@@ -204,17 +195,11 @@ Also add a focused prompt-rendering assertion so the escaped-newline regression 
 
 - The revision prompt/session continuation fix is complete.
 - The current path uses lifecycle discovery for diagnostics, then uses the persisted definition snapshot and child transcript. Definition changes intentionally do not invalidate resume/revise; missing snapshots fail clearly.
-- The current implementation deliberately uses a new logical run identity while continuing the old child session. Preserve and document this distinction in future changes.
+- The current implementation deliberately preserves the public and physical run identity while continuing the old child session. Preserve and document this stable-ID behavior in future changes.
 
-### Phase 3: Make lease handoff failure-safe
+### Phase 3: Preserve lease ownership during revision
 
-Focused parent-action and end-to-end temporary-Git/SQLite tests now cover continuation failure, transfer failure, finalization failure with real lease rollback, and divergent-history rejection. The remaining question is whether the compensating-rollback strategy is sufficient or needs a first-class reservation/state:
-
-- transfer only after the new run has been successfully created and is ready to execute; or
-- retain transfer-before-start but provide an atomic/compensating rollback that restores the old lease when no new result was prepared; or
-- create a first-class revision reservation/state in persistence so an interrupted handoff is recoverable and visible.
-
-The chosen approach must preserve stale-run protections and must not allow another worker to claim the workspace during the handoff.
+The stable public/physical identity removes the lease handoff window: continuation and result finalization run while the existing lease remains held. Failure coverage should continue to verify that the prior prepared result and lease remain recoverable, and that another worker cannot claim the workspace during revision.
 
 ### Phase 4: Decide divergent-history policy — chosen
 
@@ -230,8 +215,8 @@ Do not silently update `baseRevision` or discard the prior result. The existing 
 
 Use a disposable repository and the manual workspace checklist. Add a dedicated revise section that records:
 
-- original run ID and result ID;
-- revision run ID and result ID;
+- stable run ID and original result ID;
+- stable run ID and revised result ID;
 - workspace lease before/after;
 - base and worker revisions before/after;
 - prompt received by the revised child;
@@ -246,9 +231,9 @@ The issue is not one isolated rendering or parameter bug. Before the first imple
 ```text
 rebased/divergent worktree
   -> ancestry guard fails during revised result preparation
-  -> lease was already transferred to the new run
-  -> old prepared result remains associated with the old run
-  -> revise becomes unrecoverable through normal run IDs
+  -> the stable run identity remains associated with the existing lease
+  -> the prior prepared result remains available until a revised result is finalized
+  -> revise remains recoverable through the same run ID
 ```
 
-The prompt/session portion is now corrected: revise reopens the original child transcript, preserves its recorded model, and sends only the revision guidance. Collected non-mutating runs now resolve through active-branch manager checkpoints and can intentionally fork from an earlier child leaf without a workspace. Isolated lease transfer happens after the continuation starts and has compensating rollback around transfer/finalization. The divergent-history decision is now settled: isolated revisions fail before child startup when ancestry is broken. Remaining work is broader real-state failure coverage, explicit disposition behavior, definition validation, legacy compatibility, and manual lifecycle validation.
+The prompt/session portion is now corrected: revise reopens the original child transcript, preserves its recorded model, and sends only the revision guidance. Collected non-mutating runs now resolve through active-branch manager checkpoints and retain a stable public/physical identity while continuing from the latest child leaf without a workspace. The existing isolated lease remains held through continuation and finalization without an ownership handoff. The divergent-history decision is now settled: isolated revisions fail before child startup when ancestry is broken. Remaining work is broader real-state failure coverage, explicit disposition behavior, definition validation, legacy compatibility, and manual lifecycle validation.

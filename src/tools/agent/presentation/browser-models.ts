@@ -20,6 +20,8 @@ export interface AgentSessionBrowserItem {
     updatedAt: number;
     sessionFile?: string;
     childSessionLeafId?: string | null;
+    /** Latest catalog leaf used only as a visual fallback if the checkpoint leaf cannot open. */
+    fallbackChildSessionLeafId?: string | null;
     parentSessionId?: string;
     messageCount?: number;
     firstMessage?: string;
