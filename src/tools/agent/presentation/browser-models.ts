@@ -108,11 +108,20 @@ function workspaceActions(
         && workspace.leaseOwnerSessionId !== undefined
         && workspace.leaseOwnerSessionId !== currentSessionId;
     const orphanedByAnotherSession = workspace.leaseState === "orphaned" && ownedByAnotherSession;
+    const clearableForeignTaskLease = ownedByAnotherSession
+        && workspace.leaseKind === "task"
+        && workspace.leaseActive !== true;
     if (orphanedByAnotherSession) {
         actions.push({ action: "recover", key: "x", label: "recover orphaned lease" });
     }
     if (workspace.latestResult && workspace.latestResult.status !== "discarded") {
         actions.push({ action: "inspect", key: "i", label: "inspect changes" });
+    }
+    if (clearableForeignTaskLease) {
+        actions.push(
+            { action: "reset", key: "r", label: "reset" },
+            { action: "discard", key: "d", label: "discard" },
+        );
     }
     if (ownedByAnotherSession) return actions;
 
@@ -155,11 +164,17 @@ function workspaceNotice(workspace: AgentWorkspace, currentSessionId?: string): 
     const ownedByAnotherSession = currentSessionId !== undefined
         && workspace.leaseOwnerSessionId !== undefined
         && workspace.leaseOwnerSessionId !== currentSessionId;
-    if (workspace.leaseState === "orphaned" && ownedByAnotherSession) {
-        return "The recorded run is no longer present in the durable run catalog. The lease and result remain protected until explicit recovery.";
+    const clearableForeignTaskLease = ownedByAnotherSession
+        && workspace.leaseKind === "task"
+        && workspace.leaseActive !== true;
+    if (workspace.leaseState === "orphaned" && clearableForeignTaskLease) {
+        return "The recorded run is no longer active. You can reset or discard this old lease manually.";
     }
     if (workspace.leaseState === "orphaned") {
         return "The recorded run is no longer present in the durable run catalog, but this session has recovered control of the lease.";
+    }
+    if (clearableForeignTaskLease) {
+        return "This workspace has an old lease. You can reset or discard it manually.";
     }
     if (ownedByAnotherSession) {
         return "This workspace is leased by another parent session and remains protected until that session dispositions its run.";

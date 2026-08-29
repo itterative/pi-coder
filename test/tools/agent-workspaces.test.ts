@@ -24,6 +24,7 @@ import {
     releaseAgentWorkspaceAfterNoChanges,
     retainAgentWorkspaceResult,
 } from "../../src/tools/agent/workspaces/results";
+import { openAgentMetadataDatabase } from "../../src/tools/agent/storage/metadata";
 import {
     claimAgentWorkspace,
     findAvailableAgentWorkspace,
@@ -210,6 +211,72 @@ describe("agent workspaces", () => {
 
         expect(await listAgentWorkspaces(repository, { workspacesDir: state })).toHaveLength(0);
         await expect(fs.access(workspace.worktreePath)).rejects.toThrow();
+    });
+
+    it("allows another session to reset or discard an inactive task lease", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "README.md"), "cross-session clear test\n");
+        await git(repository, "add", "README.md");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const resetTarget = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(resetTarget.workspace.worktreePath, "reset-me.txt"), "reset\n");
+        const database = await openAgentMetadataDatabase(state);
+        database.prepare(`
+            INSERT INTO agent_runs (
+                run_instance_id, owner_session_id, run_id, parent_cwd, title, agent, agent_source,
+                task, status, background, mutating, started_at, updated_at, usage_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            "session-1:worker-1",
+            "session-1",
+            "worker-1",
+            repository,
+            "Worker",
+            "worker",
+            "builtin",
+            "Clear test",
+            "running",
+            0,
+            1,
+            1,
+            1,
+            "{}",
+        );
+        database.close();
+        await expect(resetAgentWorkspaceForReuse(resetTarget.workspace.id, {
+            ownerSessionId: "session-2",
+            leaseRunId: "worker-1",
+            workspacesDir: state,
+        })).rejects.toThrow("still used by active run worker-1");
+
+        const completedDatabase = await openAgentMetadataDatabase(state);
+        completedDatabase.prepare("UPDATE agent_runs SET status = 'completed' WHERE run_instance_id = ?")
+            .run("session-1:worker-1");
+        completedDatabase.close();
+        const reset = await resetAgentWorkspaceForReuse(resetTarget.workspace.id, {
+            ownerSessionId: "session-2",
+            leaseRunId: "worker-1",
+            workspacesDir: state,
+        });
+        expect(reset.leaseRunId).toBeUndefined();
+        await expect(fs.access(path.join(resetTarget.workspace.worktreePath, "reset-me.txt"))).rejects.toThrow();
+
+        const discardTarget = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(discardTarget.workspace.worktreePath, "discard-me.txt"), "discard\n");
+        await discardAgentWorkspace(discardTarget.workspace.id, {
+            ownerSessionId: "session-2",
+            leaseRunId: "worker-1",
+            workspacesDir: state,
+        });
+        await expect(fs.access(discardTarget.workspace.worktreePath)).rejects.toThrow();
     });
 
     it("does not recover a stale lease when the worktree is dirty", async () => {

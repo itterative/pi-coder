@@ -118,10 +118,24 @@ describe("agent browser view models", () => {
             leaseRunId: "worker-1",
             leaseKind: "task",
             leaseState: "known",
+            leaseActive: true,
         }), { currentSessionId: "session-1" });
 
         expect(item.actions).toEqual([]);
         expect(item.notice).toContain("leased by another parent session");
+    });
+
+    it("allows an old task lease from another session to be reset or discarded", () => {
+        const item = workspaceBrowserItem(workspace({
+            leaseOwnerSessionId: "other-session",
+            leaseRunId: "worker-1",
+            leaseKind: "task",
+            leaseState: "known",
+            leaseActive: false,
+        }), { currentSessionId: "session-1" });
+
+        expect(item.actions.map(({ action }) => action)).toEqual(["reset", "discard"]);
+        expect(item.notice).toContain("reset or discard");
     });
 
     it("treats a historical result as unrelated to the current stale lease", () => {
@@ -145,12 +159,13 @@ describe("agent browser view models", () => {
         expect(item.actions.map(({ action }) => action)).toEqual(["inspect", "release", "discard"]);
     });
 
-    it("limits an orphaned lease owned by another session to recovery actions", () => {
+    it("offers recovery and manual clearing for an orphaned lease owned by another session", () => {
         const item = workspaceBrowserItem(workspace({
             leaseOwnerSessionId: "other-session",
             leaseRunId: "missing-run",
             leaseKind: "task",
             leaseState: "orphaned",
+            leaseActive: false,
             latestResult: {
                 id: "result-1",
                 workspaceId: "workspace-1",
@@ -165,7 +180,7 @@ describe("agent browser view models", () => {
         }), { currentSessionId: "session-1" });
 
         expect(item.statusText).toBe("orphaned lease");
-        expect(item.actions.map(({ action }) => action)).toEqual(["recover", "inspect"]);
-        expect(item.notice).toContain("protected until explicit recovery");
+        expect(item.actions.map(({ action }) => action)).toEqual(["recover", "inspect", "reset", "discard"]);
+        expect(item.notice).toContain("reset or discard");
     });
 });

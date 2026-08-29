@@ -22,7 +22,7 @@ Applying uses the complete base-to-worker tree diff without creating a parent co
 - A prepared result must match the task lease's run ID and physical run instance.
 - A stale run ID cannot inspect or disposition a newer result.
 - A no-change result is consumed before its lease is released, so collection failure does not strand an unleased result.
-- Explicit reset returns a workspace to the current parent revision and removes result refs. Explicit discard removes the isolated workspace and saved refs.
+- Explicit reset returns a workspace to the current parent revision and removes result refs. Explicit discard removes the isolated workspace and saved refs. Both manual clearing actions may be performed from another session once the durable task run is no longer active; active task leases and setup leases remain protected.
 
 ## Continue
 

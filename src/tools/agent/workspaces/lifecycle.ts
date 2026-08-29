@@ -13,6 +13,7 @@ import {
     MAX_AGENT_WORKSPACES,
     attachLatestWorkspaceResult,
     workspaceById,
+    workspaceLeaseActive,
     workspaceLeaseState,
     type AgentWorkspaceDirectoryOptions,
     type AgentWorkspaceLeaseControls,
@@ -105,10 +106,7 @@ export async function releaseAgentWorkspaceLeaseForRecovery(
 export async function resetAgentWorkspaceForReuse(
     workspaceId: string,
     {
-        ownerSessionId,
-        leaseRunId,
         workspacesDir = PI_CODER_WORKSPACES_DIR,
-        leaseRunInstanceId,
     }: AgentWorkspaceLeaseControls = {},
 ): Promise<AgentWorkspace> {
     const database = await openDatabase(workspacesDir);
@@ -116,20 +114,11 @@ export async function resetAgentWorkspaceForReuse(
         const workspace = workspaceById(database, workspaceId);
         if (!workspace) throw new Error(`Workspace ${workspaceId} was not found.`);
         if (workspace.leaseRunId) {
-            if (
-                workspace.leaseKind !== "task"
-                || workspace.leaseOwnerSessionId !== ownerSessionId
-                || workspace.leaseRunId !== leaseRunId
-                || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== leaseRunInstanceId)
-            ) throw new Error(`Workspace ${workspaceId} is actively leased and cannot be reset by this session.`);
-            if (
-                !workspace.latestResult
-                || workspace.latestResult.runId !== leaseRunId
-                || (workspace.leaseRunInstanceId !== undefined
-                    && workspace.latestResult.runInstanceId !== leaseRunInstanceId)
-                || !["prepared", "applied"].includes(workspace.latestResult.status)
-            ) {
-                throw new Error(`Workspace ${workspaceId} has no completed task result for this physical run to reset.`);
+            if (workspace.leaseKind !== "task") {
+                throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be reset.`);
+            }
+            if (workspaceLeaseActive(database, workspace)) {
+                throw new Error(`Workspace ${workspaceId} is still used by active run ${workspace.leaseRunId}; finish or cancel that run first.`);
             }
         } else if (workspace.leaseKind) {
             throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be reset.`);
@@ -165,10 +154,7 @@ export async function resetAgentWorkspaceForReuse(
 export async function discardAgentWorkspace(
     workspaceId: string,
     {
-        ownerSessionId,
-        leaseRunId,
         workspacesDir = PI_CODER_WORKSPACES_DIR,
-        leaseRunInstanceId,
     }: AgentWorkspaceLeaseControls = {},
 ): Promise<void> {
     const database = await openDatabase(workspacesDir);
@@ -176,16 +162,12 @@ export async function discardAgentWorkspace(
         const workspace = workspaceById(database, workspaceId);
         if (!workspace) throw new Error(`Workspace ${workspaceId} was not found.`);
         if (workspace.leaseRunId) {
-            const staleTaskLease = workspace.leaseKind === "task"
-                && !workspace.latestResult
-                && ownerSessionId === undefined
-                && leaseRunId === undefined;
-            if (!staleTaskLease && (
-                workspace.leaseKind !== "task"
-                || workspace.leaseOwnerSessionId !== ownerSessionId
-                || workspace.leaseRunId !== leaseRunId
-                || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== leaseRunInstanceId)
-            )) throw new Error(`Workspace ${workspaceId} is actively leased by another session or run.`);
+            if (workspace.leaseKind !== "task") {
+                throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be discarded.`);
+            }
+            if (workspaceLeaseActive(database, workspace)) {
+                throw new Error(`Workspace ${workspaceId} is still used by active run ${workspace.leaseRunId}; finish or cancel that run first.`);
+            }
         } else if (workspace.leaseKind) {
             throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be discarded.`);
         }

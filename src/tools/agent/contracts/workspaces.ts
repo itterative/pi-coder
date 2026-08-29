@@ -56,6 +56,8 @@ export interface AgentWorkspace {
     leaseKind?: WorkspaceLeaseKind;
     leaseAcquiredAt?: number;
     leaseState?: WorkspaceLeaseState;
+    /** Whether the recorded task run is still active in the durable catalog. */
+    leaseActive?: boolean;
     latestResult?: AgentWorkspaceResult;
     createdAt: number;
     updatedAt: number;

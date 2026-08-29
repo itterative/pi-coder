@@ -15,6 +15,16 @@ export async function handleWorkspaceAction(
     try {
         const sessionId = ctx.sessionManager.getSessionId();
         const leaseRunId = workspace.leaseRunId;
+        const activeLeaseRun = workspace.leaseRunId
+            ? manager.listRuns().find((run) => (
+                run.runId === workspace.leaseRunId
+                && (workspace.leaseRunInstanceId === undefined || run.runInstanceId === workspace.leaseRunInstanceId)
+                && !["completed", "failed", "aborted", "canceled"].includes(run.status)
+            ))
+            : undefined;
+        if (activeLeaseRun && action !== "apply" && action !== "retain") {
+            throw new Error(`Workspace ${workspace.slug} is still used by active run ${activeLeaseRun.runId}; finish or cancel that run first.`);
+        }
         if (action === "apply") {
             if (!leaseRunId) throw new Error("The workspace result is not currently leased.");
             const result = await executeWorkspaceAction({
@@ -49,16 +59,6 @@ export async function handleWorkspaceAction(
             });
             ctx.ui.notify(`Reset workspace ${workspace.slug}; it is reusable.`, "info");
             return result.workspace;
-        }
-        const activeLeaseRun = workspace.leaseRunId
-            ? manager.listRuns().find((run) => (
-                run.runId === workspace.leaseRunId
-                && (workspace.leaseRunInstanceId === undefined || run.runInstanceId === workspace.leaseRunInstanceId)
-                && !["completed", "failed", "aborted", "canceled"].includes(run.status)
-            ))
-            : undefined;
-        if (activeLeaseRun) {
-            throw new Error(`Workspace ${workspace.slug} is still used by active run ${activeLeaseRun.runId}; finish or cancel that run first.`);
         }
         if (action === "recover") {
             const result = await executeWorkspaceAction({

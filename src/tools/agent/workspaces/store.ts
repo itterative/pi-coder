@@ -162,6 +162,28 @@ function latestWorkspaceResult(database: WorkspaceDatabase, workspaceId: string)
     return row ? rowToWorkspaceResult(row) : undefined;
 }
 
+const ACTIVE_AGENT_RUN_STATUSES = new Set([
+    "starting",
+    "running",
+    "waiting_for_permission",
+    "waiting_for_parent",
+]);
+
+/** Return whether a task lease still has an active durable run behind it. */
+export function workspaceLeaseActive(database: WorkspaceDatabase, workspace: AgentWorkspace): boolean {
+    if (!workspace.leaseRunId || workspace.leaseKind !== "task" || !workspace.leaseOwnerSessionId) {
+        return false;
+    }
+    const row = database.prepare(`
+        SELECT status FROM agent_runs
+        WHERE owner_session_id = ? AND run_instance_id = ?
+    `).get(
+        workspace.leaseOwnerSessionId,
+        workspace.leaseRunInstanceId ?? `${workspace.leaseOwnerSessionId}:${workspace.leaseRunId}`,
+    ) as WorkspaceRow | undefined;
+    return typeof row?.status === "string" && ACTIVE_AGENT_RUN_STATUSES.has(row.status);
+}
+
 export function workspaceLeaseState(database: WorkspaceDatabase, workspace: AgentWorkspace): WorkspaceLeaseState {
     if (!workspace.leaseRunId) return "none";
     if (workspace.leaseKind === "setup") return "setup";
@@ -189,6 +211,7 @@ export function attachLatestWorkspaceResult(
     return {
         ...workspace,
         leaseState: workspaceLeaseState(database, workspace),
+        leaseActive: workspaceLeaseActive(database, workspace),
         ...(latestResult ? { latestResult } : {}),
     };
 }
