@@ -73,7 +73,7 @@ inspect/apply/discard — manage an isolated result; revise — continue a colle
 
 Runs are bounded to four active or interrupted records. At most one may be an edit-capable worker, and its permission-gated calls are serialized. Terminal background results are retained separately until collected or evicted.
 
-`ask_parent` pauses a child and requires explicit guidance. Foreground children may use restricted `ask_user`, except the advisor, which always uses `ask_parent`; background children never open parent dialogs. Cancellation and shutdown abort children and clean up handles. A waiting run is paused, not completed; an interrupted run is never restarted or replayed automatically and requires explicit user action with a safety check.
+`ask_parent` pauses a child and requires explicit guidance. Foreground and background children may use restricted `ask_user` when direct interaction is allowed and the parent is in an interactive TUI; all children may use `ask_parent`, while the advisor always uses `ask_parent`. Cancellation and shutdown abort children and clean up handles. A waiting run is paused, not completed; an interrupted run is never restarted or replayed automatically and requires explicit user action with a safety check.
 
 Background runs report progress in the above-editor widget. Parent-guidance waits and retained terminal outcomes send coalesced, non-interrupting mailbox notifications after parent work settles. The parent should not poll or sleep; it can use `list`, `status`, or `collect` when deliberate recovery is needed.
 

@@ -28,7 +28,7 @@ There can be up to four active or interrupted runs, and up to three persistent i
 
 A running foreground `start` can be moved to the background with **Ctrl+B**. The foreground call returns a short control message immediately; progress and the terminal result are then delivered asynchronously. Retrieve the retained result with `collect` after the terminal notification. This shortcut applies when exactly one detachable foreground start is active; parallel foreground-call selection is not supported yet.
 
-A background child cannot open `ask_user`; it pauses through `ask_parent` instead. Foreground children may use the restricted `ask_user` tool, except the advisor, which always uses `ask_parent`. If supplied context sections are not accepted by the selected agent, the tool emits a non-blocking warning inside its metadata and continues without that context. Cancellation and shutdown abort active children and close dialogs.
+Foreground and background children may use `ask_user` when direct user interaction is allowed and the parent is running in an interactive TUI. They may use `ask_parent` for parent guidance in any mode. The advisor always uses `ask_parent` because its definition disables direct user interaction. If supplied context sections are not accepted by the selected agent, the tool emits a non-blocking warning inside its metadata and continues without that context. Cancellation and shutdown abort active children and close dialogs.
 
 ### Interaction and recovery
 

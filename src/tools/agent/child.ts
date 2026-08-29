@@ -106,6 +106,9 @@ export async function createAgentChild(
     const additionalPaths = agentAdditionalPaths(context.definition);
     const safeBashCommands = context.definition.safeBashCommands ?? [];
     const allowUserInteraction = context.definition.allowUserInteraction !== false;
+    const canAskUser = allowUserInteraction
+        && parentContext.hasUI === true
+        && parentContext.mode === "tui";
     const agentDir = getAgentDir();
     let sessionManager = context.childSessionFile
         ? SessionManager.open(context.childSessionFile, context.childSessionDir, cwd)
@@ -155,7 +158,7 @@ export async function createAgentChild(
                         onFileChanged: context.onFileChanged,
                         onTrace: context.onTrace,
                         events: context.events,
-                        allowUserInteraction,
+                        allowUserInteraction: canAskUser,
                         workspaceId: context.workspaceId,
                         isolated: context.isolated,
                         commandRunner: canRunCommands,
@@ -198,7 +201,7 @@ export async function createAgentChild(
                     background: context.background === true,
                     canEdit,
                     safeBash,
-                    allowUserInteraction,
+                    allowUserInteraction: canAskUser,
                     isolated: context.isolated === true || context.workspaceId !== undefined,
                     commandRunner: canRunCommands,
                     hasScratchpad,
@@ -210,10 +213,10 @@ export async function createAgentChild(
         ],
     });
     await resourceLoader.reload();
-    const interactionToolCount = context.background || !allowUserInteraction ? 1 : 2;
+    const interactionToolCount = canAskUser ? 2 : 1;
     context.onTrace?.("resources.loaded", {
         readOnlyToolCount: canEdit ? READ_ONLY_AGENT_TOOLS.length : tools.length,
-        directUserUI: !context.background && parentContext.hasUI && parentContext.mode === "tui",
+        directUserUI: canAskUser,
         background: context.background === true,
         ...(canEdit
             ? { configuredToolCount: tools.length, mutating: true }
@@ -250,7 +253,7 @@ export async function createAgentChild(
         sessionManager,
         tools: [
             ...tools,
-            ...(context.background || !allowUserInteraction ? [] : ["ask_user"]),
+            ...(canAskUser ? ["ask_user"] : []),
             "ask_parent",
         ],
     });

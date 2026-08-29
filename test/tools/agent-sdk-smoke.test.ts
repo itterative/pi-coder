@@ -21,6 +21,7 @@ import {
 } from "../../src/tools/agent/child";
 import {
     agentTools,
+    BUILTIN_ADVISOR,
     BUILTIN_REVIEWER,
     BUILTIN_SCOUT,
     BUILTIN_WORKER,
@@ -39,6 +40,8 @@ describe("in-process scout SDK session", () => {
 
         const parentContext = {
             model,
+            mode: "tui",
+            hasUI: true,
             thinkingLevel: "off",
             modelRegistry: {
                 getRegisteredNativeProvider: () => undefined,
@@ -72,13 +75,13 @@ describe("in-process scout SDK session", () => {
         });
         expect(backgroundEvents).toContainEqual({
             type: "session.created",
-            data: { toolCount: agentTools(BUILTIN_SCOUT).length + 1 },
+            data: { toolCount: agentTools(BUILTIN_SCOUT).length + 2 },
         });
         expect(backgroundEvents).toContainEqual({
             type: "resources.loaded",
             data: {
                 readOnlyToolCount: agentTools(BUILTIN_SCOUT).length,
-                directUserUI: false,
+                directUserUI: true,
                 background: true,
             },
         });
@@ -95,7 +98,7 @@ describe("in-process scout SDK session", () => {
         });
         expect(reviewerEvents).toContainEqual({
             type: "session.created",
-            data: { toolCount: agentTools(BUILTIN_REVIEWER).length + 1 },
+            data: { toolCount: agentTools(BUILTIN_REVIEWER).length + 2 },
         });
         reviewer.dispose();
 
@@ -111,11 +114,26 @@ describe("in-process scout SDK session", () => {
         });
         expect(workerEvents).toContainEqual({
             type: "session.created",
-            data: { toolCount: agentTools(BUILTIN_WORKER).length + 1 },
+            data: { toolCount: agentTools(BUILTIN_WORKER).length + 2 },
         });
         expect(worker.getMutationReport?.()).toEqual({ changedFiles: [], bashApproved: false });
         expect(todoExtensionFactory).toHaveBeenCalledTimes(1);
         worker.dispose();
+
+        const advisorEvents: Array<{ type: string; data?: Record<string, unknown> }> = [];
+        const advisor = await createAgentChild({
+            cwd: process.cwd(),
+            definition: BUILTIN_ADVISOR,
+            parentContext,
+            background: true,
+            onProgress: () => {},
+            onTrace: (type, data) => advisorEvents.push({ type, data }),
+        });
+        expect(advisorEvents).toContainEqual({
+            type: "session.created",
+            data: { toolCount: agentTools(BUILTIN_ADVISOR).length + 1 },
+        });
+        advisor.dispose();
     });
 
     it("loads the memory extension according to the memories capability", async () => {

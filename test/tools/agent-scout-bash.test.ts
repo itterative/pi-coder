@@ -104,6 +104,36 @@ function setup(
     return { handlers, ctx: { cwd, sessionManager }, tools, dialogs, sessionManager };
 }
 
+describe("child interaction tools", () => {
+    it("registers both interaction tools for background children when allowed", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-background-tools-"));
+        tempDirs.push(cwd);
+        const runtime = setup(cwd, { background: true, allowUserInteraction: true, commandRunner: true });
+
+        expect(runtime.tools.map((tool) => tool.name)).toEqual(
+            expect.arrayContaining(["ask_user", "ask_parent"]),
+        );
+    });
+
+    it("keeps ask_user disabled for definitions that disallow direct interaction", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-parent-only-"));
+        tempDirs.push(cwd);
+        const runtime = setup(cwd, { background: true, allowUserInteraction: false, commandRunner: true });
+
+        expect(runtime.tools.map((tool) => tool.name)).not.toContain("ask_user");
+        expect(runtime.tools.map((tool) => tool.name)).toContain("ask_parent");
+    });
+
+    it("does not register ask_user when the parent is non-interactive", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-noninteractive-"));
+        tempDirs.push(cwd);
+        const runtime = setup(cwd, { background: true, allowUserInteraction: true });
+
+        expect(runtime.tools.map((tool) => tool.name)).not.toContain("ask_user");
+        expect(runtime.tools.map((tool) => tool.name)).toContain("ask_parent");
+    });
+});
+
 describe("child Bash permissions", () => {
     it("permits only heuristic-classified read-only commands", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));

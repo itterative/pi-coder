@@ -39,6 +39,24 @@ describe("delegated-agent prompt rendering", () => {
         await expect(rendered).toMatchFileSnapshot(`__snapshots__/agent-prompt.${name}.system.txt`);
     });
 
+    it("renders background interaction guidance for the scout", async () => {
+        const rendered = renderAgentSystemPrompt(
+            BUILTIN_SCOUT,
+            childProtocolPrompt({
+                background: true,
+                canEdit: false,
+                safeBash: true,
+                allowUserInteraction: true,
+                isolated: false,
+                commandRunner: false,
+                hasScratchpad: false,
+                hasBashOutputAccess: true,
+            }),
+        );
+
+        await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.scout-background.system.txt");
+    });
+
     it("renders the scout system prompt with custom safe-Bash patterns", async () => {
         const rendered = renderAgentSystemPrompt(
             BUILTIN_SCOUT,

@@ -55,7 +55,6 @@ export interface ChildProtocolPromptOptions {
 }
 
 export function childProtocolPrompt({
-    background,
     canEdit,
     safeBash,
     allowUserInteraction = true,
@@ -91,7 +90,7 @@ export function childProtocolPrompt({
     const customSafeBashPrompt = safeBashCommands.length > 0
         ? `The definition also permits these exact safe-Bash command patterns: ${safeBashCommands.map((command) => JSON.stringify(command)).join(", ")}. These executables are trusted as read-only by the definition author. A trailing \`*\` matches one or more trailing arguments; matched commands still undergo path-confinement and sensitive-path checks.`
         : undefined;
-    const interaction = background || !allowUserInteraction
+    const interaction = !allowUserInteraction
         ? "If guidance from the parent is necessary, make reasonable progress first, then use `ask_parent` with the evidence you found and your recommended course. Call `ask_parent` by itself, not alongside other tools."
         : [
             "Use `ask_user` when you need a preference, clarification, or decision from the end user. Call it by itself, not alongside other tools, and continue after the answer is returned.",
@@ -288,7 +287,6 @@ export function registerChildExtension(
     cwd: string,
     {
         agentName,
-        background,
         canEdit,
         safeBash,
         runId,
@@ -307,6 +305,9 @@ export function registerChildExtension(
 ) {
     return (pi: ExtensionAPI): void => {
         const bashOutputPaths = new Map<string, BashOutputPath>();
+        const canAskUser = allowUserInteraction
+            && parentContext.hasUI === true
+            && parentContext.mode === "tui";
         const readRoots = (ctx: ExtensionContext): readonly string[] => [
             ...additionalPaths,
             ...getScratchpadRoots(ctx),
@@ -386,7 +387,7 @@ export function registerChildExtension(
             });
         }
 
-        if (!background && allowUserInteraction) pi.registerTool({
+        if (canAskUser) pi.registerTool({
             name: "ask_user",
             label: "Ask User",
             description:
@@ -449,9 +450,9 @@ export function registerChildExtension(
             promptGuidelines: [
                 "Call ask_parent alone in a tool batch and only when parent guidance materially improves the result",
                 "Include relevant evidence, partial findings, and your recommended next step",
-                background || !allowUserInteraction
-                    ? "Direct end-user dialogs are unavailable for this child"
-                    : "Use ask_user instead when a decision genuinely requires direct end-user input",
+                ...(canAskUser
+                    ? ["Use ask_user when a decision genuinely requires direct end-user input"]
+                    : []),
             ],
             executionMode: "sequential",
             parameters: Type.Object({
