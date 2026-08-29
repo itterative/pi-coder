@@ -14,7 +14,7 @@ interface AgentToolResult {
 
 interface AgentToolDefinition {
     renderCall: (args: AgentParameters, theme: typeof mockTheme) => unknown;
-    renderResult: (result: AgentToolResult, options: { expanded: boolean }, theme: typeof mockTheme) => unknown;
+    renderResult: (result: AgentToolResult, options: { expanded: boolean; isPartial?: boolean }, theme: typeof mockTheme) => unknown;
     execute: (
         toolCallId: string,
         args: AgentParameters,
@@ -27,6 +27,7 @@ interface AgentToolDefinition {
 interface AgentRenderCase {
     args: AgentParameters;
     outcome: AgentRunOutcome;
+    isPartial?: boolean;
 }
 
 const projectTask = "Inspect the project structure.";
@@ -118,6 +119,17 @@ const actionCases: AgentRenderCase[] = [
             projectTask,
             `Agent scout-1 resumed in the background. ${BACKGROUND_AGENT_WAIT_GUIDANCE}`,
             { runId: "scout-1", title: "Project audit", agent: "scout", background: true, status: "running" },
+        ),
+    },
+    {
+        snapshotName: "start-foreground-partial",
+        isPartial: true,
+        args: { action: "start", agent: "scout", title: "Project audit", task: projectTask },
+        outcome: outcome(
+            { action: "start", agent: "scout", title: "Project audit", task: projectTask },
+            projectTask,
+            "The child is still inspecting the project.",
+            { runId: "scout-1", title: "Project audit", agent: "scout", status: "running" },
         ),
     },
     {
@@ -225,13 +237,41 @@ function renderCallAndResult(
     args: AgentParameters,
     result: AgentToolResult,
     expanded: boolean,
+    isPartial = false,
 ): string {
     const call = renderText(tool.renderCall(args, mockTheme) as any, 120);
-    const renderedResult = renderText(tool.renderResult(result, { expanded }, mockTheme) as any, 120);
+    const renderedResult = renderText(tool.renderResult(result, { expanded, isPartial }, mockTheme) as any, 120);
     return snapshotText([call, renderedResult].filter((part) => part.length > 0).join("\n"));
 }
 
 describe("agent tool TUI rendering", () => {
+    it("does not retain the Ctrl+B hint after a foreground start is backgrounded", () => {
+        const tool = setupAgentTool(
+            outcome(
+                { action: "start", agent: "scout", task: projectTask },
+                projectTask,
+                "The child is still inspecting the project.",
+                { runId: "scout-1", agent: "scout", status: "running", background: true },
+            ),
+        );
+        const args: AgentParameters = { action: "start", agent: "scout", task: projectTask };
+        const result = tool.execute(
+            "call-manual-background",
+            args,
+            undefined,
+            undefined,
+            {},
+        );
+
+        return result.then((renderedResult) => {
+            expect(renderText(tool.renderCall(args, mockTheme) as any, 120)).not.toContain("Ctrl+B");
+            expect(renderText(
+                tool.renderResult(renderedResult, { expanded: false, isPartial: true }, mockTheme) as any,
+                120,
+            )).not.toContain("Ctrl+B");
+        });
+    });
+
     it.each(actionCases)("renders $args.action", async (testCase) => {
         const tool = setupAgentTool(testCase.outcome);
         const result = await tool.execute(
@@ -243,8 +283,8 @@ describe("agent tool TUI rendering", () => {
         );
 
         expect(result.details.action).toBe(testCase.args.action);
-        const simple = renderCallAndResult(tool, testCase.args, result, false);
-        const detailed = renderCallAndResult(tool, testCase.args, result, true);
+        const simple = renderCallAndResult(tool, testCase.args, result, false, testCase.isPartial);
+        const detailed = renderCallAndResult(tool, testCase.args, result, true, testCase.isPartial);
         const rendered = ["[simple]", simple, "", "[detailed]", detailed].join("\n");
 
         await expect(rendered).toMatchFileSnapshot(

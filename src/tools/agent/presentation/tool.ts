@@ -65,12 +65,39 @@ function responseResult(result: AgentToolResult, expanded: boolean, theme: Param
     return markdownResult(resultResponse(result), expanded, theme);
 }
 
-function renderAgentResult(result: AgentToolResult, expanded: boolean, theme: Parameters<typeof markdownTheme>[0]): Container {
+const BACKGROUND_SHORTCUT_HINT = "(Ctrl+B to move to background)";
+
+function startResult(
+    result: AgentToolResult,
+    expanded: boolean,
+    isPartial: boolean,
+    theme: Parameters<typeof markdownTheme>[0],
+): Container {
+    const body = result.details.background
+        ? responseResult(result, expanded, theme)
+        : taskResult(result, expanded, theme);
+    const showBackgroundHint = isPartial
+        && !result.details.background
+        && result.details.status === "running";
+    if (!showBackgroundHint) {
+        return body;
+    }
+
+    const container = new Container();
+    container.addChild(new Text(theme.fg("muted", BACKGROUND_SHORTCUT_HINT), 0, 0));
+    container.addChild(body);
+    return container;
+}
+
+function renderAgentResult(
+    result: AgentToolResult,
+    expanded: boolean,
+    isPartial: boolean,
+    theme: Parameters<typeof markdownTheme>[0],
+): Container {
     switch (result.details.action) {
         case "list": return responseResult(result, expanded, theme);
-        case "start": return result.details.background
-            ? responseResult(result, expanded, theme)
-            : taskResult(result, expanded, theme);
+        case "start": return startResult(result, expanded, isPartial, theme);
         case "continue": return taskResult(result, expanded, theme);
         case "cancel": return responseResult(result, expanded, theme);
         case "inspect": return responseResult(result, expanded, theme);
@@ -119,10 +146,7 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
                     theme.fg("toolTitle", theme.bold(`agent ${args.action} `))
                     + theme.fg("muted", `(${args.agent ?? "unknown"})`)
                     + " — "
-                    + theme.fg("accent", args.title ?? args.agent ?? args.action)
-                    + (args.action === "start" && args.background !== true
-                        ? ` ${theme.fg("muted", "(Ctrl+B to move to background)")}`
-                        : ""),
+                    + theme.fg("accent", args.title ?? args.agent ?? args.action),
                     0,
                     0,
                 );
@@ -134,8 +158,8 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
                 0,
             );
         },
-        renderResult(result, { expanded }, theme) {
-            return renderAgentResult(result as AgentToolResult, expanded, theme);
+        renderResult(result, { expanded, isPartial }, theme) {
+            return renderAgentResult(result as AgentToolResult, expanded, isPartial, theme);
         },
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const outcome = await executeAction(

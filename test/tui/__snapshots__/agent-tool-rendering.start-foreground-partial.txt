@@ -1,11 +1,13 @@
 [simple]
 agent start (scout) — Project audit
+(Ctrl+B to move to background)
 
 [detailed]
 agent start (scout) — Project audit
+(Ctrl+B to move to background)
 
 │ Inspect the project structure.
 
-4 tool calls (0 failed)
+0 tool calls (0 failed)
 
-Finished inspecting the project. The main entry point is src/index.ts.
+The child is still inspecting the project.
