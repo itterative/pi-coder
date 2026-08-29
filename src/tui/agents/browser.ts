@@ -539,6 +539,7 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
         state.cursor = 0;
         state.scrollOffset = 0;
         this.tabHeader?.setText(tabText(this.activeTab, this.theme!, this.tabs.includes("workspaces"), this.tabs.includes("settings")));
+        this.invalidate();
     }
 
     private updateWorkspace(workspace: AgentWorkspaceBrowserItem, replacement: AgentWorkspaceBrowserItem | null | undefined): void {

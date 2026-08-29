@@ -925,19 +925,28 @@ Keep the notes with the TODO list.
         );
     });
 
-    it("uses left and right for directional view selection", () => {
+    it("renders the selected view when switching tabs", async () => {
         const value = new AgentSessionBrowserComponent({
-            current: [],
+            current: [current],
             past: [],
-            workspaces: [],
+            workspaces: [workspaceBrowserItem(workspace)],
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
 
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.tab-switch-agents-initial.txt",
+        );
+
         ui.press(KEY.right);
-        expect(ui.render()).toContain("● Workspaces");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.tab-switch-workspaces.txt",
+        );
+
         ui.press(KEY.left);
-        expect(ui.render()).toContain("● Agents");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.tab-switch-agents-return.txt",
+        );
     });
 
     it("allows explicit cancellation of a running current agent", async () => {

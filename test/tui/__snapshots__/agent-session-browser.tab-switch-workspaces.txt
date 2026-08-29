@@ -1,0 +1,13 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   Agents                                                                                         │
+│                                                                                                  │
+│     ○ Agents    ● Workspaces                                                                     │
+│                                                                                                  │
+│   → quiet-lantern-7k3 · available                                                                │
+│     Setup: ready · Lease: none · Git: unknown                                                    │
+│     Path: /state/workspaces/quiet-lantern-7k3                                                    │
+│                                                                                                  │
+│   1 workspace                                                                                    │
+│                                                                                                  │
+│     ↑/↓ navigate · Tab/←/→ switch tab · Enter open · Esc close                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
