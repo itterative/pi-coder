@@ -110,7 +110,7 @@ describe("agent parent mailbox", () => {
         expect(mailbox.flush()).toBe(0);
     });
 
-    it("notifies the parent when the user cancels a run", () => {
+    it("notifies the parent when the user cancels a run", async () => {
         const sendMessage = vi.fn();
         const mailbox = new AgentMailbox({ sendMessage });
 
@@ -127,6 +127,9 @@ describe("agent parent mailbox", () => {
             { deliverAs: "followUp", triggerTurn: true },
         );
         expect(sendMessage.mock.calls[0]?.[0].content).toContain("Do not start or continue");
+        await expect(sendMessage.mock.calls[0]?.[0].content).toMatchFileSnapshot(
+            "__snapshots__/agent-mailbox.user-canceled.txt",
+        );
     });
 
     it("drops stale updates after collection, continuation, or cancellation", () => {

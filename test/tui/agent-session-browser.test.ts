@@ -525,6 +525,40 @@ describe("AgentSessionBrowserComponent", () => {
         expect(canceled).toBe(true);
     });
 
+    it("confirms cancellation before stopping a current agent", async () => {
+        let confirmCalls = 0;
+        let resolveConfirmation!: (confirmed: boolean) => void;
+        let canceled = false;
+        const value = new AgentSessionBrowserComponent({
+            current: [current],
+            past: [],
+            onCancelConfirmation: () => {
+                confirmCalls++;
+                return new Promise<boolean>((resolve) => {
+                    resolveConfirmation = resolve;
+                });
+            },
+            onCancel: () => { canceled = true; },
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press("c");
+        await vi.waitFor(() => expect(confirmCalls).toBe(1));
+        ui.press("c");
+        expect(confirmCalls).toBe(1);
+        expect(canceled).toBe(false);
+
+        resolveConfirmation(false);
+        await Promise.resolve();
+        expect(canceled).toBe(false);
+
+        ui.press("c");
+        await vi.waitFor(() => expect(confirmCalls).toBe(2));
+        resolveConfirmation(true);
+        await vi.waitFor(() => expect(canceled).toBe(true));
+    });
+
     it("opens a separate detail view with metadata and transcript", async () => {
         const value = component();
         const ui = interact(value, 100);

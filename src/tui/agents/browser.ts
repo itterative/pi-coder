@@ -141,6 +141,7 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
     private sessionDetail: AgentSessionDetailComponent | null = null;
     private workspaceDetail: AgentWorkspaceDetailComponent | null = null;
     private modelSelector: SelectComponent<AgentModelOption> | null = null;
+    private cancelConfirmationOpen = false;
     private tabHeader: Text | null = null;
     private theme: Theme | null = null;
     private done: (() => void) | null = null;
@@ -323,7 +324,15 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
             return true;
         }
         if (key === "c" && selected && isSession(selected) && selected.kind === "current" && this.isCancelable(selected.status)) {
-            this.closeListAndQueue(options.onCancel, selected);
+            if (!options.onCancelConfirmation) {
+                this.closeListAndQueue(options.onCancel, selected);
+                return true;
+            }
+            if (this.cancelConfirmationOpen) {
+                return true;
+            }
+            this.cancelConfirmationOpen = true;
+            void this.confirmCancellation(selected, options);
             return true;
         }
         if (matchesKey(key, "tab") || matchesKey(key, "left") || matchesKey(key, "right")) {
@@ -394,9 +403,13 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
     }
 
     private openWorkspace(workspace: AgentWorkspaceBrowserItem, options: AgentSessionBrowserOptions): void {
+        const confirmAction = options.onConfirmWorkspaceAction;
         let detail: AgentWorkspaceDetailComponent;
         detail = new AgentWorkspaceDetailComponent(workspace, options.fixedHeight, {
             onInspect: () => options.onWorkspaceInspect?.(detail.workspace) ?? "No saved worker result is available.",
+            onConfirmAction: confirmAction
+                ? (action) => confirmAction(detail.workspace, action)
+                : undefined,
             onAction: async (action) => {
                 const replacement = await options.onWorkspaceAction?.(detail.workspace, action);
                 this.updateWorkspace(workspace, replacement);
@@ -497,6 +510,19 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
     private closeListAndQueue(callback: AgentSessionBrowserOptions["onResume"] | AgentSessionBrowserOptions["onCancel"], item: AgentSessionBrowserItem): void {
         this.done?.();
         queueMicrotask(() => void callback?.(item));
+    }
+
+    private async confirmCancellation(item: AgentSessionBrowserItem, options: AgentSessionBrowserOptions): Promise<void> {
+        try {
+            const confirmed = await options.onCancelConfirmation?.(item) ?? true;
+            if (confirmed) {
+                this.closeListAndQueue(options.onCancel, item);
+            }
+        } catch (error) {
+            console.error("Agent cancellation confirmation failed:", error);
+        } finally {
+            this.cancelConfirmationOpen = false;
+        }
     }
 
     private switchTab(key: string, state: BrowserState): void {

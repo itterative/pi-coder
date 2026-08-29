@@ -4,6 +4,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { PI_CODER_WORKSPACES_DIR } from "../../../common/constants";
 import { parseAgentDefinitionSnapshot } from "../definitions/types";
 import type { WorkerMutationReport } from "../contracts/mutations";
+import { isAgentTerminalStatus } from "../contracts/runs";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
 import { openAgentMetadataDatabase, type AgentMetadataDatabase } from "./metadata";
 
@@ -49,6 +50,7 @@ function rowToAgentRunCatalogRecord(row: CatalogRow): AgentRunCatalogRecord | un
         ...(definitionSnapshot ? { definitionSnapshot } : {}),
         task: row.task,
         status: row.status,
+        ...(isAgentTerminalStatus(row.terminal_status) ? { terminalStatus: row.terminal_status } : {}),
         background: row.background === 1,
         mutating: row.mutating === 1,
         ...(typeof row.workspace_id === "string" ? { workspaceId: row.workspace_id } : {}),
@@ -73,10 +75,10 @@ export function upsertAgentRunCatalogRecordInDatabase(
     database.prepare(`
             INSERT INTO agent_runs (
                 owner_session_id, run_id, run_instance_id, parent_cwd, execution_cwd, title, agent,
-                agent_source, task, status, background, mutating, workspace_id,
+                agent_source, task, status, terminal_status, background, mutating, workspace_id,
                 child_session_file, child_session_leaf_id, latest_snapshot_id, started_at, updated_at, usage_json,
                 response_preview, mutation_report_json, definition_snapshot_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (run_instance_id) DO UPDATE SET
                 run_instance_id = COALESCE(excluded.run_instance_id, agent_runs.run_instance_id),
                 parent_cwd = excluded.parent_cwd,
@@ -86,6 +88,7 @@ export function upsertAgentRunCatalogRecordInDatabase(
                 agent_source = excluded.agent_source,
                 task = excluded.task,
                 status = excluded.status,
+                terminal_status = excluded.terminal_status,
                 background = excluded.background,
                 mutating = excluded.mutating,
                 workspace_id = excluded.workspace_id,
@@ -110,6 +113,7 @@ export function upsertAgentRunCatalogRecordInDatabase(
         record.agentSource,
         record.task,
         record.status,
+        record.terminalStatus ?? null,
         record.background ? 1 : 0,
         record.mutating ? 1 : 0,
         record.workspaceId ?? null,
@@ -145,7 +149,7 @@ export async function listAgentRunCatalog(
     try {
         const rows = database.prepare(`
             SELECT owner_session_id, run_id, run_instance_id, parent_cwd, execution_cwd, title, agent,
-                   agent_source, task, status, background, mutating, workspace_id,
+                   agent_source, task, status, terminal_status, background, mutating, workspace_id,
                    child_session_file, child_session_leaf_id, latest_snapshot_id, started_at, updated_at, usage_json,
                    response_preview, mutation_report_json, definition_snapshot_json
             FROM agent_runs

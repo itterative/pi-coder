@@ -7,6 +7,7 @@ import { PI_CODER_AGENT_SESSIONS_DIR } from "../../../common/constants";
 import { normalizeCwdForSessionDirectory } from "../../../common/paths";
 import {
     AgentContinuationLeaseBusyError,
+    isAgentTerminalStatus,
     type AgentContinuationLease,
     type AgentRunPersistence,
     type PersistedAgentRun,
@@ -208,6 +209,7 @@ function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCa
         ...(record.definitionSnapshot ? { definitionSnapshot: record.definitionSnapshot } : {}),
         task: record.task,
         status: record.status,
+        ...(record.terminalStatus ? { terminalStatus: record.terminalStatus } : {}),
         background: record.background,
         mutating: record.mutating,
         workspaceId: record.workspaceId,
@@ -639,6 +641,9 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         ...(definitionSnapshot ? { definitionSnapshot } : {}),
         task: boundedString(record.task, 16_000) ?? "Restored delegated task",
         status: record.status as PersistedAgentRun["status"],
+        ...(isAgentTerminalStatus(record.terminalStatus)
+            ? { terminalStatus: record.terminalStatus }
+            : {}),
         background: record.background,
         mutating: record.mutating,
         workspaceId: boundedString(record.workspaceId, 200),

@@ -11,7 +11,7 @@ import {
 } from "../definitions/types";
 import { emitAgentEvent } from "../observability/events";
 import type { AgentEventPayload, AgentEventSink } from "../contracts/events";
-import { AgentContinuationLeaseBusyError } from "../contracts/runs";
+import { AgentContinuationLeaseBusyError, isAgentTerminalStatus } from "../contracts/runs";
 import type {
     AgentBackgroundCallback,
     AgentContinuationLease,
@@ -1615,6 +1615,9 @@ export class AgentRunManager {
         if (this.persistence.usesSnapshotMarkers && run.continuationLeaseLost) return false;
         const durableStatus: PersistedAgentRun["status"] = status
             ?? (run.status === "waiting_for_permission" ? "running" : run.status);
+        const terminalStatus = durableStatus === "removed" && isAgentTerminalStatus(run.status)
+            ? run.status
+            : undefined;
         const progress = this.progressSnapshot(run);
         const durableProgress = { ...progress };
         delete durableProgress.todo;
@@ -1634,6 +1637,7 @@ export class AgentRunManager {
             ...(run.definition ? { definitionSnapshot: snapshotAgentDefinition(run.definition) } : {}),
             task: truncate(run.task, this.maxTaskChars),
             status: durableStatus,
+            ...(terminalStatus ? { terminalStatus } : {}),
             background: run.background,
             mutating: run.mutating,
             workspaceId: run.workspaceId,

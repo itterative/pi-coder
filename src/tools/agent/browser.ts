@@ -20,6 +20,7 @@ import {
     loadAgentSessionTranscripts,
     removeCurrentAgentTranscripts,
 } from "./presentation/sessions";
+import { confirm } from "../../tui/confirmation";
 import {
     showAgentSessionBrowser,
     type AgentModelOption,
@@ -31,6 +32,10 @@ import { prepareForegroundWorkspaceResult } from "./workspaces/finalization";
 import { inspectAgentWorkspaceResult, reconcileNoChangeAgentWorkspaceLeases } from "./workspaces/results";
 import { inspectAgentWorkspaceGitState, listAgentWorkspaces } from "./workspaces/store";
 import { handleWorkspaceAction } from "./workspaces/tui-actions";
+
+function capitalize(text: string): string {
+    return text.charAt(0).toUpperCase() + text.slice(1);
+}
 
 export function mergeHistoricalAgentSessions(
     allPast: AgentSessionBrowserItem[],
@@ -236,6 +241,10 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                     ctx.ui.notify(`Could not resume ${item.id}: ${message}`, "warning");
                 }
             },
+            onCancelConfirmation: (item) => confirm({
+                title: "Cancel delegated agent?",
+                message: `Cancel "${item.title || item.id}"? The agent will stop as soon as its current operation allows.`,
+            }, ctx),
             onCancel: async (item) => {
                 try {
                     const outcome = await prepareForegroundWorkspaceResult(
@@ -251,6 +260,10 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                 }
             },
             onWorkspaceInspect: async (item) => inspectAgentWorkspaceResult(requireWorkspace(item.id)),
+            onConfirmWorkspaceAction: (item, action) => confirm({
+                title: `${capitalize(action)} workspace?`,
+                message: `${capitalize(action)} the isolated workspace "${item.slug}"?`,
+            }, ctx),
             onLoadTranscript: (item) => loadAgentSessionTranscriptForItem(item),
             onModelChange: (agent, model) => {
                 agentConfig.setModel(agent, model, ctx.cwd);

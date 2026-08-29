@@ -268,6 +268,14 @@ export const AGENT_METADATA_MIGRATIONS = [{
             ALTER TABLE agent_runs ADD COLUMN definition_snapshot_json TEXT;
         `);
     },
+}, {
+    version: 13,
+    apply(database: AgentMetadataDatabase): void {
+        database.exec(`
+            ALTER TABLE agent_runs ADD COLUMN terminal_status TEXT DEFAULT 'removed'
+                CHECK (terminal_status IS NULL OR terminal_status IN ('removed', 'completed', 'failed', 'aborted', 'canceled'));
+        `);
+    },
 }] as const;
 
 export function agentWorkspacesRoot(workspacesDir = PI_CODER_WORKSPACES_DIR): string {

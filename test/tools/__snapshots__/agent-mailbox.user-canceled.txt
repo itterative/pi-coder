@@ -1,0 +1,8 @@
+<delegated-agent-mailbox>
+The user explicitly canceled a delegated agent from the /agents browser.
+- Run ID: "worker-1"
+  Title: "Implement change"
+  Agent: "worker"
+  Status: canceled_by_user
+  Instruction: Do not start or continue this run unless the user explicitly asks.
+</delegated-agent-mailbox>

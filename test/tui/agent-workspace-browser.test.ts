@@ -63,6 +63,41 @@ describe("AgentWorkspaceBrowserComponent", () => {
         expect(ui.render()).not.toContain("Workspace: quiet-lantern-7k3");
     });
 
+    it("waits for the confirmation callback before running a workspace action", async () => {
+        let confirmationCalls = 0;
+        let resolveConfirmation!: (confirmed: boolean) => void;
+        let actionRun = false;
+        const component = new AgentWorkspaceDetailComponent(
+            workspaceBrowserItem(available),
+            undefined,
+            {
+                onConfirmAction: () => {
+                    confirmationCalls++;
+                    return new Promise<boolean>((resolve) => {
+                        resolveConfirmation = resolve;
+                    });
+                },
+                onAction: async () => {
+                    actionRun = true;
+                    return workspaceBrowserItem(available);
+                },
+            },
+        );
+        component.initialize(mockTheme);
+        const ui = interact(component, 100);
+
+        ui.press("d");
+        await vi.waitFor(() => expect(confirmationCalls).toBe(1));
+        expect(actionRun).toBe(false);
+        resolveConfirmation(false);
+        await vi.waitFor(() => expect(actionRun).toBe(false));
+
+        ui.press("d");
+        await vi.waitFor(() => expect(confirmationCalls).toBe(2));
+        resolveConfirmation(true);
+        await vi.waitFor(() => expect(actionRun).toBe(true));
+    });
+
     it("renders rejected workspace actions without an unhandled rejection", async () => {
         const component = new AgentWorkspaceDetailComponent(
             workspaceBrowserItem(available),

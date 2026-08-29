@@ -2,6 +2,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 
 import type { AgentDefinition } from "../definitions/types";
 import type { WorkerMutationReport } from "./mutations";
+import type { AgentTerminalStatus } from "./runs";
 
 export const WORKSPACE_VERSION = 1 as const;
 
@@ -72,6 +73,8 @@ export interface AgentRunCatalogRecord {
     definitionSnapshot?: AgentDefinition;
     task: string;
     status: string;
+    /** Original terminal status retained when status is the removal tombstone. */
+    terminalStatus?: AgentTerminalStatus;
     background: boolean;
     mutating: boolean;
     workspaceId?: string;

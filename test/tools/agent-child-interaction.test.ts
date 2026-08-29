@@ -60,7 +60,9 @@ describe("child-to-user interaction", () => {
         const result = await askChildUser(question, context, "scout");
 
         expect(result.details).toEqual({ canceled: true });
-        expect(result.content[0]?.text).toContain("reasonable default");
+        await expect(result.content[0]?.text).toMatchFileSnapshot(
+            "__snapshots__/agent-child-interaction.user-canceled.txt",
+        );
     });
 
     it("does not open a dialog outside interactive TUI mode", async () => {

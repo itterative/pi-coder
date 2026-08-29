@@ -41,6 +41,13 @@ export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
     fixedHeight?: () => number;
     onResume?: (item: AgentSessionBrowserItem) => void | Promise<void>;
     onCancel?: (item: AgentSessionBrowserItem) => void | Promise<void>;
+    /** Opens a confirmation overlay before cancelling an agent. */
+    onCancelConfirmation?: (item: AgentSessionBrowserItem) => boolean | Promise<boolean>;
+    /** Opens a confirmation overlay before a workspace disposition action. */
+    onConfirmWorkspaceAction?: (
+        workspace: AgentWorkspaceBrowserItem,
+        action: WorkspaceDispositionAction,
+    ) => boolean | Promise<boolean>;
     /** Lazily loads a session transcript when its detail view is opened. */
     onLoadTranscript?: (item: AgentSessionBrowserItem) => Promise<AgentSessionBrowserItem | undefined>;
     onWorkspaceAction?: (
@@ -65,6 +72,7 @@ export interface AgentWorkspaceBrowserOptions {
 
 export interface AgentWorkspaceActionCallbacks {
     onInspect?: () => string | Promise<string>;
+    onConfirmAction?: (action: WorkspaceDispositionAction) => boolean | Promise<boolean>;
     onAction?: (
         action: WorkspaceDispositionAction,
     ) => AgentWorkspaceBrowserItem | null | undefined | Promise<AgentWorkspaceBrowserItem | null | undefined>;

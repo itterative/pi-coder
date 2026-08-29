@@ -34,6 +34,7 @@ export class AgentWorkspaceDetailComponent implements Component {
     private diffText = "";
     private errorText = "";
     private pendingAction: WorkspaceDispositionAction | null = null;
+    private confirmationOpen = false;
     private busy = false;
     private contentWidth = 80;
     private done: (() => void) | null = null;
@@ -80,6 +81,7 @@ export class AgentWorkspaceDetailComponent implements Component {
         this.pager.updateTitle(`Workspace · ${workspace.slug}`);
         this.pager.updateHelpText(workspaceDetailHelpText(workspace));
         this.pendingAction = null;
+        this.confirmationOpen = false;
         this.invalidate();
     }
 
@@ -115,7 +117,9 @@ export class AgentWorkspaceDetailComponent implements Component {
     }
 
     private handleKey(key: string): boolean {
-        if (this.busy) return true;
+        if (this.busy || this.confirmationOpen) {
+            return true;
+        }
         if (this.showingDiff) {
             if (matchesKey(key, "escape") || key === "q") {
                 this.showingDiff = false;
@@ -144,11 +148,29 @@ export class AgentWorkspaceDetailComponent implements Component {
         if (!action) return false;
         if (action === "inspect") {
             this.runAction(action);
+        } else if (this.callbacks.onConfirmAction) {
+            this.confirmationOpen = true;
+            void this.confirmAction(action);
         } else {
             this.pendingAction = action;
             this.invalidate();
         }
         return true;
+    }
+
+    private async confirmAction(action: WorkspaceDispositionAction): Promise<void> {
+        try {
+            const confirmed = await this.callbacks.onConfirmAction?.(action);
+            if (confirmed) {
+                this.runAction(action);
+            }
+        } catch (error) {
+            this.errorText = error instanceof Error ? error.message : String(error);
+        } finally {
+            this.confirmationOpen = false;
+            this.invalidate();
+            this.callbacks.onInvalidate?.();
+        }
     }
 
     private runAction(action: AgentWorkspaceAction): void {

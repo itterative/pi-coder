@@ -525,6 +525,31 @@ describe("AgentRunManager", () => {
         expect(manager.activeCount).toBe(0);
     });
 
+    it("retains the original terminal status in removal tombstones", async () => {
+        const completedStore = durableStore(process.cwd());
+        const completedManager = managerWith(new FakeChild([{ output: "Done" }]));
+        completedManager.setPersistence(completedStore.persistence);
+        await completedManager.start("scout", "Investigate", context());
+
+        expect(latestRecords(completedStore.records)).toEqual([
+            expect.objectContaining({ status: "removed", terminalStatus: "completed" }),
+        ]);
+
+        for (const background of [false, true]) {
+            const canceledStore = durableStore(process.cwd());
+            const canceledManager = managerWith(new FakeChild([{ waitForAbort: true }]));
+            canceledManager.setPersistence(canceledStore.persistence);
+            const pending = canceledManager.start("scout", "Investigate", context(), { background });
+            await flushBackground();
+            await canceledManager.cancel("scout-1");
+            await pending;
+
+            expect(latestRecords(canceledStore.records)).toEqual([
+                expect.objectContaining({ status: "removed", terminalStatus: "canceled" }),
+            ]);
+        }
+    });
+
     it("interrupts an active run when continuation ownership is lost", async () => {
         const child = new FakeChild([{ waitForAbort: true }]);
         let onLost: (() => void) | undefined;

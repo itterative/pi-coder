@@ -54,6 +54,15 @@ function historicalStatus(status: string | undefined): string | undefined {
         : status;
 }
 
+function displayStatus(
+    displayMetadata: AgentRunCatalogRecord | PersistedAgentRun,
+): string {
+    if (displayMetadata.status !== "removed") {
+        return displayMetadata.status;
+    }
+    return displayMetadata.terminalStatus ?? displayMetadata.status;
+}
+
 interface ActiveBranchChildCheckpoint {
     childSessionLeafId: string | null;
     record: PersistedAgentRun;
@@ -104,7 +113,7 @@ function displayMetadataFields(
     const mutationReport = displayMetadata.mutationReport;
     return {
         agent: displayMetadata.agent,
-        status: displayMetadata.status,
+        status: displayStatus(displayMetadata),
         task: displayMetadata.task,
         startedAt: displayMetadata.startedAt,
         updatedAt: displayMetadata.updatedAt,

@@ -1,0 +1,1 @@
+The user cancelled the question. Continue with a reasonable default or use ask_parent if guidance is required.

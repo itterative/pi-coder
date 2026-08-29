@@ -19,6 +19,15 @@ export type AgentRunStatus =
     | "aborted"
     | "canceled";
 
+export type AgentTerminalStatus = "completed" | "failed" | "aborted" | "canceled";
+
+export function isAgentTerminalStatus(value: unknown): value is AgentTerminalStatus {
+    return value === "completed"
+        || value === "failed"
+        || value === "aborted"
+        || value === "canceled";
+}
+
 export interface ParentQuestion {
     question: string;
     context?: string;
@@ -155,6 +164,8 @@ export interface PersistedAgentRun {
     definitionSnapshot?: AgentDefinition;
     task: string;
     status: Exclude<AgentRunStatus, "waiting_for_permission"> | "removed";
+    /** Original terminal status retained when status is the removal tombstone. */
+    terminalStatus?: AgentTerminalStatus;
     background: boolean;
     mutating: boolean;
     workspaceId?: string;
