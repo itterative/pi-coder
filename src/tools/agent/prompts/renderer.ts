@@ -71,6 +71,30 @@ export function renderAgentTask(
     return `${task}\n\n${renderedContext.trimEnd()}`;
 }
 
+/** Returns a parent-facing warning for context that the target agent will ignore. */
+export function unusedAgentContextWarning(
+    agentName: string,
+    context: AgentContext | undefined,
+    policy: AgentContextPolicy | undefined,
+): string | undefined {
+    const unused = unusedContextSections(context, policy);
+    if (unused.length === 0) return undefined;
+
+    const sectionIds = unused.map((section) => JSON.stringify(section.id)).join(", ");
+    const sectionLabel = unused.length === 1 ? "section" : "sections";
+    if (!policy || policy.sectionIds.length === 0) {
+        return [
+            `Warning: Agent ${JSON.stringify(agentName)} does not accept additional context;`,
+            `ignored ${sectionLabel}: ${sectionIds}.`,
+        ].join(" ");
+    }
+
+    return [
+        `Warning: Agent ${JSON.stringify(agentName)} ignored additional context`,
+        `${sectionLabel}: ${sectionIds}.`,
+    ].join(" ");
+}
+
 function selectSections(
     context: AgentContext | undefined,
     policy: AgentContextPolicy | undefined,
@@ -85,6 +109,23 @@ function selectSections(
         selected.push(section);
     }
     return selected;
+}
+
+function unusedContextSections(
+    context: AgentContext | undefined,
+    policy: AgentContextPolicy | undefined,
+): AgentContextSection[] {
+    if (!context || context.sections.length === 0) return [];
+    if (!policy || policy.sectionIds.length === 0) return [...context.sections];
+
+    const allowed = new Set(policy.sectionIds);
+    const seen = new Set<string>();
+    return context.sections.filter((section) => {
+        if (!allowed.has(section.id)) return true;
+        if (seen.has(section.id)) return true;
+        seen.add(section.id);
+        return false;
+    });
 }
 
 function contextLimit(policy: AgentContextPolicy | undefined): number {

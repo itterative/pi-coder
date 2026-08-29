@@ -11,6 +11,7 @@ import {
 } from "./runs/manager";
 import { diagnosticText } from "./presentation/text";
 import { failedOutcome, listOutcome } from "./presentation/outcomes";
+import { unusedAgentContextWarning } from "./prompts/renderer";
 import {
     prepareIsolatedWorkspace,
     type WorkspaceReservation,
@@ -74,6 +75,11 @@ export async function executeAgentAction(
                     "The advisor is enabled but has no model configured. Select an advisor model in /agents first.",
                 );
             }
+            const contextWarning = unusedAgentContextWarning(
+                definition.name,
+                request.context,
+                definition.contextPolicy,
+            );
             reservation = request.isolation === "worktree"
                 ? await prepareIsolatedWorkspace(
                     ctx.cwd,
@@ -149,6 +155,12 @@ export async function executeAgentAction(
             }
             lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
             outcome.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
+            if (contextWarning) {
+                outcome = {
+                    ...outcome,
+                    content: `${outcome.content}\n\n${contextWarning}`,
+                };
+            }
         } else if (request.action === "resume") {
             outcome = await lifecycle.manager.resume(request.runId, {
                 guidance: request.guidance,

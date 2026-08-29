@@ -258,6 +258,59 @@ describe("agent extension registration", () => {
         await handlers.session_shutdown[0]({}, ctx);
     });
 
+    it("warns the parent when an agent ignores additional context", async () => {
+        let tool: any;
+        const handlers: Record<string, Handler[]> = {};
+        const pi = {
+            events: createEventBus(),
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            registerTool(definition: any) {
+                tool = definition;
+            },
+            registerCommand() {},
+        } as any;
+        const child: ChildAgentHandle = {
+            prompt: async () => {},
+            abort: async () => {},
+            dispose: () => {},
+            takeParentQuestion: () => undefined,
+            getProgress: () => ({ output: "Done", recentActivity: [] }),
+            getFinalOutput: () => "Done",
+            getError: () => undefined,
+            getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
+        };
+        registerAgentTool(pi, async () => child);
+
+        const result = await tool.execute(
+            "call-context-warning",
+            {
+                action: "start",
+                agent: "scout",
+                task: "Inspect",
+                context: {
+                    sections: [{ id: "parent_summary", title: "Summary", content: "Known", source: "parent" }],
+                },
+            },
+            undefined,
+            undefined,
+            {
+                cwd: process.cwd(),
+                isProjectTrusted: () => false,
+                sessionManager: { getSessionId: () => "parent-session", getSessionFile: () => undefined },
+                ui: { notify: () => {}, setWidget: () => {} },
+            },
+        );
+
+        expect(result.details.status).toBe("completed");
+        expect(result.content[0].text).toContain(
+            'Warning: Agent "scout" does not accept additional context; ignored section: "parent_summary".',
+        );
+        expect(result.content[0].text).toContain("Done");
+        await handlers.session_shutdown?.[0]?.({}, {});
+    });
+
     it("renders the full prompt and preserves response whitespace without metadata", async () => {
         let tool: any;
         const prompt = "Review the implementation.\nPlease inspect the relevant modules and report any regressions.";

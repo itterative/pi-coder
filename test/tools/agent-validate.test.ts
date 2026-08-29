@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { validateAgentParameters } from "../../src/tools/agent/definitions/validate";
 import type { AgentParameters } from "../../src/tools/agent/definitions/prompt";
+import { unusedAgentContextWarning } from "../../src/tools/agent/prompts/renderer";
 
 function validate(params: AgentParameters) {
     return validateAgentParameters(params);
@@ -71,5 +72,30 @@ describe("validateAgentParameters", () => {
         const request = validate({ action: "start", agent: "scout", task: "t", context });
         if (request.action !== "start") throw new Error("expected start");
         expect(request.context).toEqual(context);
+    });
+
+    it("warns when an agent ignores additional context", () => {
+        const context = {
+            sections: [
+                { id: "parent_summary", title: "Summary", content: "Known", source: "parent" as const },
+                { id: "recent_context", title: "Recent", content: "Recent", source: "parent" as const },
+            ],
+        };
+
+        expect(unusedAgentContextWarning("scout", context, undefined)).toBe(
+            'Warning: Agent "scout" does not accept additional context; ignored sections: "parent_summary", "recent_context".',
+        );
+        expect(unusedAgentContextWarning("advisor", context, {
+            sectionIds: ["parent_summary"],
+            maxChars: 1_000,
+        })).toBe(
+            'Warning: Agent "advisor" ignored additional context section: "recent_context".',
+        );
+        expect(unusedAgentContextWarning("advisor", {
+            sections: [{ id: "parent_summary", title: "Summary", content: "Known", source: "parent" }],
+        }, {
+            sectionIds: ["parent_summary"],
+            maxChars: 1_000,
+        })).toBeUndefined();
     });
 });
