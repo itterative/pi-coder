@@ -99,9 +99,9 @@ describe("TODO runtime extension", () => {
         const prompt = await handler("before_agent_start")({
             systemPrompt: "<project_context>\nProject\n</project_context>",
         }, ctx) as { systemPrompt: string };
-        expect(prompt.systemPrompt).toContain("<todolist_system>");
-        expect(prompt.systemPrompt).toContain(todoPath);
-        expect(prompt.systemPrompt).toContain("Skip TODO tracking for trivial, single-step tasks");
+        await expect(prompt.systemPrompt.replace(todoPath, "<TODO_PATH>")).toMatchFileSnapshot(
+            "./__snapshots__/todolist.prompt.txt",
+        );
 
         await expect(handler("tool_call")({
             toolName: "write",

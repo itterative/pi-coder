@@ -1,0 +1,26 @@
+<project_context>
+Project
+</project_context>
+
+<todolist_system>
+## Temporary TODO list
+
+Your private runtime TODO list is at `<TODO_PATH>`.
+Use TODO.md for substantive, multi-step, or longer-running work. Skip TODO tracking for trivial, single-step tasks that do not need progress tracking. Keep its YAML frontmatter valid and update TODO statuses as work starts, completes, or becomes blocked.
+When mutation tools are available, use the write or edit tool to change TODO.md and preserve the freeform Markdown body after the frontmatter.
+The TODO file is temporary and private to this runtime, not a project TODO file. Keep it current.
+Use this exact frontmatter shape: `version: 1` and a `todos` YAML sequence; each entry has a unique lowercase `id`, a non-empty `title`, and a `status`.
+For example:
+```yaml
+---
+version: 1
+todos:
+  - id: inspect
+    title: Inspect the implementation
+    status: in_progress
+---
+```
+The Markdown body after the closing `---` is freeform and must be preserved. For large, multi-phase developments, you may use it for internal notes, plans, or other relevant information.
+TODO.md is initialized for every runtime; deleting an existing TODO.md is treated as clearing it to `todos: []`, so use an empty list when no active tasks remain.
+Allowed statuses are `pending`, `in_progress`, `completed`, and `blocked`.
+</todolist_system>

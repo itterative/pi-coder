@@ -66,7 +66,7 @@ function appendTodoPrompt(systemPrompt: string, pathname: string): string {
         "    status: in_progress",
         "---",
         "```",
-        "The Markdown body after the closing `---` is freeform and must be preserved.",
+        "The Markdown body after the closing `---` is freeform and must be preserved. For large, multi-phase developments, you may use it for internal notes, plans, or other relevant information.",
         "TODO.md is initialized for every runtime; deleting an existing TODO.md is treated as clearing it to `todos: []`, so use an empty list when no active tasks remain.",
         "Allowed statuses are `pending`, `in_progress`, `completed`, and `blocked`.",
         TODO_SYSTEM_END_TAG,

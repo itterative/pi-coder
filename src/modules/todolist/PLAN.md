@@ -122,7 +122,7 @@ scratchpad blocks. It includes:
 - guidance to use TODO.md for substantive, multi-step, or longer-running work while skipping trivial single-step tasks;
 - an instruction to update status as work starts, completes, or becomes blocked;
 - an instruction to use `write` or `edit` for TODO changes;
-- an instruction to preserve the freeform Markdown body;
+- an instruction to preserve the freeform Markdown body and guidance that, for large, multi-phase developments, it may be used for internal notes, plans, or other relevant information;
 - a reminder that the file is temporary and runtime-local.
 
 The parent receives the block from the top-level TODO extension. A capable
