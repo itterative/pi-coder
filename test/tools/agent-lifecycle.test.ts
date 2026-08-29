@@ -115,13 +115,14 @@ async function fixture(
         },
     } as any;
 
-    lifecycle.manager.spawn(
+    await lifecycle.manager.start(
         BUILTIN_WORKER,
         "Make a change",
         { cwd: root, parentContext: ctx },
         {
             signal: undefined,
             onBackgroundUpdate: lifecycle.backgroundUpdate(ctx),
+            background: true,
         },
     );
     await flushBackground();

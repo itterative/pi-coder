@@ -68,8 +68,9 @@ function responseResult(result: AgentToolResult, expanded: boolean, theme: Param
 function renderAgentResult(result: AgentToolResult, expanded: boolean, theme: Parameters<typeof markdownTheme>[0]): Container {
     switch (result.details.action) {
         case "list": return responseResult(result, expanded, theme);
-        case "start": return taskResult(result, expanded, theme);
-        case "spawn": return responseResult(result, expanded, theme);
+        case "start": return result.details.background
+            ? responseResult(result, expanded, theme)
+            : taskResult(result, expanded, theme);
         case "resume": return responseResult(result, expanded, theme);
         case "cancel": return responseResult(result, expanded, theme);
         case "inspect": return responseResult(result, expanded, theme);
@@ -91,15 +92,15 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
             + "Scout and advisor are read-only. Reviewer and custom agents with command-runner are command-capable: they may execute Bash through the permission flow but have no direct edit/write tools. The built-in worker is the only direct edit-capable child. A non-isolated worker edits the parent's current checkout using inherited in-cwd file access and session-approved bash rules; outside-cwd file access and unmatched bash use shared parent-visible prompts. An isolated worker edits a separate worktree with independent mutation prompts, and its changes reach the parent only after apply. "
             + "Run work in the foreground or background; provide a detailed, self-contained task that may be multiline, plus an optional short human-readable title and bounded supplemental context sections; list, status, collect, resume, or cancel retained runs. In persisted "
             + "parent sessions, paused and interrupted child context survives reload, restart, and switching away and back. The parent can inspect, apply, or discard isolated workspace results; revise an isolated worker only while its prepared task lease is held, or revise a collected terminal non-mutating run such as reviewer without a workspace, without opening the TUI. "
-            + "Parameters depend on action: start and spawn take agent, task, and optional title, isolation, and context; resume takes runId and optional guidance; cancel, inspect, apply, discard, status, and collect take runId; revise takes runId and guidance; list takes no parameters.",
+            + "Parameters depend on action: start takes agent, task, and optional background, title, isolation, and context; resume takes runId and optional guidance; cancel, inspect, apply, discard, status, and collect take runId; revise takes runId and guidance; list takes no parameters.",
         promptSnippet:
             "Use agent for optional delegated work; the parent may edit directly with its own built-in tools. The worker handles implementation in either the current checkout or an isolated worktree, with the permission model described by the selected mode.",
         promptGuidelines: [
             "Use agent with action=\"list\" to recover delegated run IDs and statuses after compaction or session restoration; use the returned IDs with agent actions status, resume, collect, revise, or cancel",
-            "Use agent with action=\"start\" when the result is needed immediately; use agent with action=\"spawn\" for independent work that can run concurrently; provide a short title when the run should be easy to identify later",
+            "Use agent with action=\"start\" when the result is needed immediately; use agent with action=\"start\" and background=true for independent work that can run concurrently; provide a short title when the run should be easy to identify later",
             "Make every delegation task a self-contained, detailed brief for a child that cannot see the parent's conversation or infer unstated context. Include the objective, relevant files/symbols and current state, scope and non-goals, constraints, expected report or changes, validation steps, and any other details the child needs; do not optimize the task for brevity.",
             "Delegation tasks may and should be multiline. A title is only a short display label and does not constrain the task's length or detail. Put required instructions and facts in task; use context.sections only for supplemental parent, repository, or workspace context when the selected agent supports those sections.",
-            "Spawned-agent progress and results arrive asynchronously. Do not duplicate the same investigation in the parent unless you intentionally want overlapping work; if you have no other work to do, report your current progress to the user and end your turn. Do not poll with agent action=\"status\" or wait by sleeping; automatic follow-up mailbox context will notify you when they finish or need parent guidance",
+            "Background-agent progress and results arrive asynchronously. Do not duplicate the same investigation in the parent unless you intentionally want overlapping work; if you have no other work to do, report your current progress to the user and end your turn. Do not poll with agent action=\"status\" or wait by sleeping; automatic follow-up mailbox context will notify you when they finish or need parent guidance",
             "After a terminal agent notification, use agent action=\"collect\" to retrieve the full result; mailbox updates never interrupt current work and never include the full result",
             "For an isolated worker result, use action=\"inspect\", \"apply\", \"discard\", or \"revise\" with the runId; revise is available only while its prepared task lease is held. These are parent-controlled dispositions and only apply modifies the parent checkout.",
             "After collecting a terminal read-only or command-capable run, such as reviewer, use action=\"revise\" with its runId and guidance to continue the existing child session without an isolated workspace.",
@@ -114,13 +115,13 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
             if (args.action === "list") {
                 return new Text(theme.fg("toolTitle", theme.bold("agent list")), 0, 0);
             }
-            if (args.action === "start" || args.action === "spawn") {
+            if (args.action === "start") {
                 return new Text(
                     theme.fg("toolTitle", theme.bold(`agent ${args.action} `))
                     + theme.fg("muted", `(${args.agent ?? "unknown"})`)
                     + " — "
                     + theme.fg("accent", args.title ?? args.agent ?? args.action)
-                    + (args.action === "start"
+                    + (args.action === "start" && args.background !== true
                         ? ` ${theme.fg("muted", "(Ctrl+B to move to background)")}`
                         : ""),
                     0,

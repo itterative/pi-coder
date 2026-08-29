@@ -1,5 +1,6 @@
- ● scout-1 · 00:00 · Starting: Inspect concurrently
  ⠋ scout-1 · 00:00 · Thinking
+ ⠋ scout-1 · 00:00 · Inspecting the run manager lifecycle.
+   Reading src/tools/agent/runtime.ts
  ⠋ scout-1 · 00:00 · Inspecting the run manager lifecycle.
    Reading src/tools/agent/runtime.ts
  ✓ scout-1 — Ready to collect · “Inspecting the run manager lifecycle.”

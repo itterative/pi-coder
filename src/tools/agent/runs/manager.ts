@@ -59,21 +59,14 @@ export interface AgentRunIdentity {
     runInstanceId: string;
 }
 
-/** Named controls for starting a foreground delegated agent run. */
+/** Named controls for starting a delegated agent run. */
 export interface AgentStartOptions {
     signal?: AbortSignal;
     onProgress?: AgentProgressCallback;
     onBackgroundUpdate?: AgentBackgroundCallback;
     title?: string;
     identity?: AgentRunIdentity;
-}
-
-/** Named controls for starting a background delegated agent run. */
-export interface AgentSpawnOptions {
-    signal?: AbortSignal;
-    onBackgroundUpdate?: AgentBackgroundCallback;
-    title?: string;
-    identity?: AgentRunIdentity;
+    background?: boolean;
 }
 
 /** Named controls for continuing a delegated agent run with a new prompt. */
@@ -513,8 +506,29 @@ export class AgentRunManager {
             onBackgroundUpdate,
             title,
             identity,
+            background = false,
         }: AgentStartOptions = {},
     ): Promise<AgentRunOutcome> {
+        if (background) {
+            if (signal?.aborted) throw new AgentActionError("Agent start was aborted before launch.");
+            const { definition, run } = this.createRun(definitionOrName, task, context, true, title, identity);
+            run.backgroundCallback = onBackgroundUpdate;
+            const taskPromise = this.launchBackground(run, definition, context).catch((error) => {
+                if (isTerminalStatus(run.status)) return run.terminalOutcome!;
+                return this.finishFailure(
+                    run,
+                    `Background agent failed unexpectedly: ${errorMessage(error)}`,
+                );
+            });
+            this.trackBackgroundTask(run, taskPromise);
+            return this.checkpointOutcome(
+                run,
+                `Agent ${run.id} started in the background. ${BACKGROUND_AGENT_WAIT_GUIDANCE} After a terminal notification, retrieve the full result with agent(action="collect", runId="${run.id}").`,
+                false,
+                { output: "", recentActivity: [] },
+            );
+        }
+
         const { definition, run } = this.createRun(definitionOrName, task, context, false, title, identity);
         run.detachable = true;
         run.onBackgroundUpdate = onBackgroundUpdate;
@@ -537,36 +551,6 @@ export class AgentRunManager {
             run.detachedOutcome = undefined;
             run.resolveDetachedOutcome = undefined;
         });
-    }
-
-    spawn(
-        definitionOrName: AgentDefinition | string,
-        task: string,
-        context: AgentStartContext,
-        {
-            signal,
-            onBackgroundUpdate,
-            title,
-            identity,
-        }: AgentSpawnOptions = {},
-    ): AgentRunOutcome {
-        if (signal?.aborted) throw new AgentActionError("Agent spawn was aborted before launch.");
-        const { definition, run } = this.createRun(definitionOrName, task, context, true, title, identity);
-        run.backgroundCallback = onBackgroundUpdate;
-        const taskPromise = this.launchBackground(run, definition, context).catch((error) => {
-            if (isTerminalStatus(run.status)) return run.terminalOutcome!;
-            return this.finishFailure(
-                run,
-                `Background agent failed unexpectedly: ${errorMessage(error)}`,
-            );
-        });
-        this.trackBackgroundTask(run, taskPromise);
-        return this.checkpointOutcome(
-            run,
-            `Agent ${run.id} started in the background. ${BACKGROUND_AGENT_WAIT_GUIDANCE} After a terminal notification, retrieve the full result with agent(action="collect", runId="${run.id}").`,
-            false,
-            { output: "", recentActivity: [] },
-        );
     }
 
     async startContinuation(

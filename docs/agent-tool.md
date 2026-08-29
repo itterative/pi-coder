@@ -6,8 +6,7 @@ This document contains the detailed reference for pi-coder's delegated-agent too
 
 | Action | Behavior |
 | --- | --- |
-| `start` | Run an agent in the foreground. |
-| `spawn` | Start an agent in the background and return immediately. |
+| `start` | Run an agent in the foreground by default; set `background=true` to start it in the background and return immediately. |
 | `list` | List tracked runs and available workspaces. |
 | `status` | Inspect a deliberate snapshot of a run. |
 | `collect` | Consume a terminal background result. |
@@ -24,7 +23,7 @@ There can be up to four active or interrupted runs, and up to three persistent i
 
 ### Background behavior
 
-`spawn` returns immediately. Progress appears in the above-editor activity widget and terminal changes are delivered through a coalesced parent mailbox after parent work settles. The mailbox contains only run IDs, statuses, and short previews; use `collect` for the full result. Do not routinely poll with `status` or wait by sleeping.
+A background `start` returns immediately. Progress appears in the above-editor activity widget and terminal changes are delivered through a coalesced parent mailbox after parent work settles. The mailbox contains only run IDs, statuses, and short previews; use `collect` for the full result. Do not routinely poll with `status` or wait by sleeping.
 
 A running foreground `start` can be moved to the background with **Ctrl+B**. The foreground call returns a short control message immediately; progress and the terminal result are then delivered asynchronously. Retrieve the retained result with `collect` after the terminal notification. This shortcut applies when exactly one detachable foreground start is active; parallel foreground-call selection is not supported yet.
 

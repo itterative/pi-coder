@@ -7,7 +7,7 @@
 ```text
 agent(action="list")
 agent(action="start", agent="scout", task="Investigate ...")
-agent(action="spawn", agent="worker", isolation="worktree", task="Implement ...")
+agent(action="start", agent="worker", isolation="worktree", background=true, task="Implement ...")
 agent(action="status", runId="worker-1")
 agent(action="collect", runId="worker-1")
 agent(action="resume", runId="worker-1", guidance="...")
@@ -18,9 +18,9 @@ agent(action="discard", runId="worker-1")
 agent(action="revise", runId="worker-1", guidance="...")
 ```
 
-- `start` runs a child in the foreground; while a foreground `start` is running in the TUI, press Ctrl+B to move it to the background. The start result explains how to collect its eventual result. `spawn` runs a child in the background.
+- `start` runs a child in the foreground by default; set `background=true` for asynchronous execution. While a foreground `start` is running in the TUI, press Ctrl+B to move it to the background. Background start results explain how to collect the eventual result.
 - `scout` is read-only, `reviewer` can run permission-gated commands, and only the built-in `worker` can edit.
-- `spawn` returns immediately. Collect terminal background results explicitly; do not poll or sleep while waiting.
+- Background `start` returns immediately. Collect terminal background results explicitly; do not poll or sleep while waiting.
 - Isolated workers use persistent Git worktrees. Changed results remain outside the parent checkout until an explicit `apply`.
 - `/agents` browses delegated runs and isolated workspaces.
 

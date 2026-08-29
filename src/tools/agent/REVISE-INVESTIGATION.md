@@ -33,7 +33,7 @@ Relevant files:
 - `src/tools/agent/definitions/discovery.ts`
 - `src/tools/agent/lifecycle.ts`
 
-Regression coverage now includes an end-to-end temporary-Git/SQLite test in `test/tools/agent-revise-e2e.test.ts` covering the registered `spawn`/`collect`/`revise` lifecycle. Focused manager and parent-action tests remain useful for failure-specific cases not covered by that scenario.
+Regression coverage now includes an end-to-end temporary-Git/SQLite test in `test/tools/agent-revise-e2e.test.ts` covering the registered background `start`/`collect`/`revise` lifecycle. Focused manager and parent-action tests remain useful for failure-specific cases not covered by that scenario.
 
 ## Confirmed findings
 
@@ -119,7 +119,7 @@ For isolated worker results, `requireParentWorkspaceLease()` requires all of the
 - the lease kind is `task`;
 - the latest workspace result is `prepared`.
 
-Therefore revise works directly after a changed isolated `spawn` is collected or an isolated foreground run is finalized. It does not work after:
+Therefore revise works directly after a changed isolated background `start` is collected or an isolated foreground run is finalized. It does not work after:
 
 - `retain`, which intentionally releases the task lease;
 - successful `apply`, which releases the task lease;
@@ -142,7 +142,7 @@ Non-mutating revisions now resolve through the manager's checkpoints loaded from
 const discovered = discoverAgents(ctx.cwd, ctx.isProjectTrusted());
 ```
 
-Initial `start`/`spawn` goes through `lifecycle.discover(ctx)`, which applies persisted built-in model configuration and advisor availability. `revise` bypasses that lifecycle method, so a revised built-in worker may lose its configured model override and use the parent model instead.
+Initial `start` (foreground or background) goes through `lifecycle.discover(ctx)`, which applies persisted built-in model configuration and advisor availability. `revise` bypasses that lifecycle method, so a revised built-in worker may lose its configured model override and use the parent model instead.
 
 This is not the direct cause of the ancestry error, but it made revise behavior inconsistent with initial execution. The current path uses the lifecycle discovery callback, and reopened child sessions prefer the model recorded in their transcript over the current definition's model override.
 
@@ -178,7 +178,7 @@ The first implementation pass addressed the prompt/session continuation and part
 
 The current pass added focused manager and parent-action tests plus an end-to-end registered-tool test with a fake child, real child transcript, temporary Git repository, and SQLite workspace metadata. Extend that coverage with real failure-state and disposition cases. Cover:
 
-1. changed isolated `spawn` -> `collect` -> `revise`;
+1. changed isolated background `start` -> `collect` -> `revise`;
 2. capture the exact revision prompt and assert real paragraph newlines;
 3. assert the continued worker uses the same workspace and the same public/physical run identity;
 4. assert the returned result is prepared under the stable identity;

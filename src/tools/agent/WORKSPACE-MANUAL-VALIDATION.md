@@ -38,13 +38,13 @@ This checklist is for a separate validation agent/operator. It tests the current
    ```
 
    The starting status must be empty before apply/reset tests. Keep the fixture repository available until all results have been recorded.
-4. Use the built-in `worker` and `isolation: "worktree"` for isolated tasks. Use `spawn` for scenarios that require later collection. Foreground `start` returns its terminal result directly and must not be followed by `collect`. Example background tool calls:
+4. Use the built-in `worker` and `isolation: "worktree"` for isolated tasks. Use `start` with `background=true` for scenarios that require later collection. Foreground `start` returns its terminal result directly and must not be followed by `collect`. Example background tool calls:
 
    ```text
-   agent(action="spawn", agent="worker", isolation="worktree",
+   agent(action="start", agent="worker", isolation="worktree", background=true,
          task="Inspect the repository and report its files. Do not change anything.")
 
-   agent(action="spawn", agent="worker", isolation="worktree",
+   agent(action="start", agent="worker", isolation="worktree", background=true,
          task="Create a new file named workspace-validation-marker.txt containing exactly `workspace test`. Do not change any other file.")
    ```
 

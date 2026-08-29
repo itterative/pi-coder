@@ -608,7 +608,7 @@ describe("agent extension registration", () => {
         await handlers.session_shutdown[0]({}, ctx);
     });
 
-    it("executes a spawn, status, and collect flow", async () => {
+    it("executes a background start, status, and collect flow", async () => {
         const handlers: Record<string, Handler[]> = {};
         let tool: any;
         const sentMessages: Array<{ message: any; options: any }> = [];
@@ -684,9 +684,9 @@ describe("agent extension registration", () => {
         registerStatusWidget(pi);
         await handlers.session_start.at(-1)?.({}, ctx);
 
-        const spawned = await tool.execute(
+        const started = await tool.execute(
             "call-1",
-            { action: "spawn", agent: "scout", task: "Inspect concurrently" },
+            { action: "start", agent: "scout", task: "Inspect concurrently", background: true },
             undefined,
             undefined,
             ctx,
@@ -729,8 +729,8 @@ describe("agent extension registration", () => {
             ctx,
         );
 
-        expect(spawned.details).toMatchObject({ status: "starting", background: true });
-        await expect(spawned.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-spawn.txt");
+        expect(started.details).toMatchObject({ status: "starting", background: true });
+        await expect(started.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-start.txt");
         expect(status.details.status).toBe("completed");
         await expect(status.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-status.txt");
         const promptAfterSpawn = await handlers.before_agent_start[0]({ systemPrompt: "Parent prompt" }, ctx) as any;
@@ -817,7 +817,7 @@ describe("agent extension registration", () => {
         await handlers.session_start[0]({}, ctx);
         await tool.execute(
             "call-1",
-            { action: "spawn", agent: "worker", task: "Implement in isolation", isolation: "worktree" },
+            { action: "start", agent: "worker", task: "Implement in isolation", isolation: "worktree", background: true },
             undefined,
             undefined,
             ctx,
@@ -1363,7 +1363,7 @@ describe("agent extension registration", () => {
 
         await tool.execute(
             "call-1",
-            { action: "spawn", agent: "scout", task: "Finish while idle" },
+            { action: "start", agent: "scout", task: "Finish while idle", background: true },
             undefined,
             undefined,
             ctx,

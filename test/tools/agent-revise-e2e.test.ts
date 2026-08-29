@@ -49,7 +49,7 @@ afterEach(async () => {
 });
 
 describe("registered revise lifecycle", () => {
-    it("persists and continues the real isolated spawn/collect session", async () => {
+    it("persists and continues the real isolated background start/collect session", async () => {
         const repository = path.join(testPaths.root, "repo");
         fs.mkdirSync(repository, { recursive: true });
         runGit(repository, ["init", "--quiet"]);
@@ -150,8 +150,8 @@ describe("registered revise lifecycle", () => {
         await handlers.session_start[0]({}, ctx);
 
         const spawned = await tool.execute(
-            "e2e-spawn",
-            { action: "spawn", agent: "worker", task: "Create the marker", isolation: "worktree" },
+            "e2e-background-start",
+            { action: "start", agent: "worker", task: "Create the marker", isolation: "worktree", background: true },
             undefined,
             undefined,
             ctx,

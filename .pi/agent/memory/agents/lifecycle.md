@@ -9,7 +9,7 @@ keep_updated: true
 
 ## Runs
 
-- The sequential parent `agent` tool supports foreground `start`, asynchronous `spawn`, `list`, `status`, one-shot `collect`, `resume`, `cancel`, and isolated-result actions.
+- The sequential parent `agent` tool supports `start` (foreground by default, asynchronous with `background=true`), `list`, `status`, one-shot `collect`, `resume`, `cancel`, and isolated-result actions.
 - Run states are `starting`, `running`, `waiting_for_parent`, `completed`, `failed`, `aborted`, and `interrupted`. Waiting is paused, not completed; interrupted runs never restart or replay automatically.
 - Up to four starting/running/waiting/interrupted runs consume capacity, with no TTL. Same-checkout mutation-capable workers are single-flight; mutation-capable workers in distinct isolated worktrees may run concurrently, while read-only runs can continue alongside them. Terminal background results are retained separately (latest 20) and do not consume active capacity.
 - Run IDs become stale after cancellation or result eviction; collected terminal runs remain addressable for explicit `revise`, and revisions retain the same public run ID while continuing the latest checkpoint. Ephemeral parent runs also become stale after reload/replacement/restart; persisted runs restore only for the exact parent session and active tree branch.

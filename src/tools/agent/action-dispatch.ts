@@ -64,7 +64,7 @@ export async function executeAgentAction(
             }
             outcome = listOutcome(lifecycle.manager, workspaces);
             if (catalogWarning) outcome.content += `\n\nWarning: ${catalogWarning}`;
-        } else if (request.action === "start" || request.action === "spawn") {
+        } else if (request.action === "start") {
             const discovered = lifecycle.discover(ctx);
             const definition = discovered.agents.find((agent) => agent.name === request.agent);
             if (!definition) {
@@ -127,31 +127,20 @@ export async function executeAgentAction(
                     "transferred",
                 );
             }
-            outcome = request.action === "start"
-                ? await lifecycle.manager.start(
-                    definition,
-                    request.task,
-                    runContext,
-                    {
-                        signal,
-                        onProgress: progress,
-                        onBackgroundUpdate: workspaceBackground,
-                        title: request.title,
-                        identity: runIdentity,
-                    },
-                )
-                : lifecycle.manager.spawn(
-                    definition,
-                    request.task,
-                    runContext,
-                    {
-                        signal,
-                        onBackgroundUpdate: workspaceBackground,
-                        title: request.title,
-                        identity: runIdentity,
-                    },
-                );
-            if (request.action === "start") {
+            outcome = await lifecycle.manager.start(
+                definition,
+                request.task,
+                runContext,
+                {
+                    signal,
+                    onProgress: progress,
+                    onBackgroundUpdate: workspaceBackground,
+                    title: request.title,
+                    identity: runIdentity,
+                    background: request.background,
+                },
+            );
+            if (!request.background) {
                 outcome = await prepareForegroundWorkspaceResult(outcome, ctx, lifecycle.events);
             }
             lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);

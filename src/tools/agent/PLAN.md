@@ -54,7 +54,7 @@ Custom definitions are read-only by default, may opt into `memories`, `scratchpa
 
 Custom Markdown definitions are loaded from `~/.pi/agent/agents` and the nearest trusted `.pi/agents`. Every custom agent gets `read`, `grep`, `find`, and `ls`; optional capabilities include `memories`, `scratchpad`, `safe-bash`, and `command-runner`, while `edit` is reserved for the built-in worker. Definitions named `scout`, `reviewer`, `advisor`, or `worker` overlay the matching built-in metadata but cannot change its capabilities; an empty body preserves the built-in role. Paths are sorted, same-scope duplicates are first-wins, and trusted-project definitions override user definitions.
 
-Runtime context is passed as bounded `context.sections` on `start` and `spawn`. Built-in definitions select allowed sections through a context policy; the renderer places selected context in the initial task message rather than the system prompt so persisted child transcripts retain the exact context. Automatic parent-summary and recent-context collection remains future work.
+Runtime context is passed as bounded `context.sections` on `start` (with `background=true` for asynchronous runs). Built-in definitions select allowed sections through a context policy; the renderer places selected context in the initial task message rather than the system prompt so persisted child transcripts retain the exact context. Automatic parent-summary and recent-context collection remains future work.
 
 ### Actions and lifecycle
 
@@ -62,7 +62,7 @@ The `agent` tool exposes:
 
 ```text
 start   — run in the foreground; Ctrl+B in the TUI moves a running start to the background
-spawn   — start in the background
+start   — run in the foreground by default; `background=true` starts it in the background
 list    — recover tracked runs
 status  — inspect a deliberate snapshot
 collect — consume a terminal background result

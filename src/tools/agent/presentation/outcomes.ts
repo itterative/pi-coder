@@ -148,7 +148,7 @@ export function listOutcome(
 export function failedOutcome(params: AgentParameters, error: unknown): AgentRunOutcome {
     const message = error instanceof Error ? error.message : String(error);
     const now = Date.now();
-    const isNewRun = params.action === "start" || params.action === "spawn";
+    const isNewRun = params.action === "start";
     const runId = isNewRun ? "unstarted" : "unknown";
     // Params may be partial when validation rejects a malformed call, so keep
     // every access optional.
@@ -160,7 +160,7 @@ export function failedOutcome(params: AgentParameters, error: unknown): AgentRun
             title: isNewRun ? deriveAgentTitle(task, params.title) : "Agent action",
             agent: isNewRun ? (params.agent ?? "unknown") : "unknown",
             status: "failed",
-            background: params.action === "spawn",
+            background: params.action === "start" && params.background === true,
             task: task.slice(0, 2_000),
             recentActivity: [],
             usage: cloneUsage(),

@@ -9,8 +9,7 @@ import type { AgentParameters } from "./prompt";
  */
 export type AgentRequest =
     | { action: "list" }
-    | { action: "start"; agent: string; task: string; title?: string; isolation?: "worktree"; context?: AgentContext }
-    | { action: "spawn"; agent: string; task: string; title?: string; isolation?: "worktree"; context?: AgentContext }
+    | { action: "start"; agent: string; task: string; title?: string; isolation?: "worktree"; context?: AgentContext; background?: boolean }
     | { action: "resume"; runId: string; guidance?: string }
     | { action: "cancel"; runId: string }
     | { action: "inspect"; runId: string }
@@ -27,8 +26,7 @@ type ActionSpec = {
 
 const ACTION_FIELDS: Record<string, ActionSpec> = {
     list: { required: [], optional: [] },
-    start: { required: ["agent", "task"], optional: ["title", "isolation", "context"] },
-    spawn: { required: ["agent", "task"], optional: ["title", "isolation", "context"] },
+    start: { required: ["agent", "task"], optional: ["title", "isolation", "context", "background"] },
     resume: { required: ["runId"], optional: ["guidance"] },
     cancel: { required: ["runId"], optional: [] },
     inspect: { required: ["runId"], optional: [] },

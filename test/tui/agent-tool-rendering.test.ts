@@ -101,9 +101,10 @@ const actionCases: AgentRenderCase[] = [
         ),
     },
     {
-        args: { action: "spawn", agent: "worker", title: "Implement fix", task: workerTask, isolation: "worktree" },
+        snapshotName: "start-background",
+        args: { action: "start", agent: "worker", title: "Implement fix", task: workerTask, isolation: "worktree", background: true },
         outcome: outcome(
-            { action: "spawn", agent: "worker", title: "Implement fix", task: workerTask, isolation: "worktree" },
+            { action: "start", agent: "worker", title: "Implement fix", task: workerTask, isolation: "worktree", background: true },
             workerTask,
             `Agent worker-1 started in the background. ${BACKGROUND_AGENT_WAIT_GUIDANCE} After a terminal notification, retrieve the full result with agent(action="collect", runId="worker-1").`,
             { runId: "worker-1", title: "Implement fix", background: true },
@@ -245,7 +246,7 @@ describe("agent tool TUI rendering", () => {
         const rendered = ["[simple]", simple, "", "[detailed]", detailed].join("\n");
 
         await expect(rendered).toMatchFileSnapshot(
-            `__snapshots__/agent-tool-rendering.${testCase.args.action}.txt`,
+            `__snapshots__/agent-tool-rendering.${testCase.snapshotName ?? testCase.args.action}.txt`,
         );
     });
 });

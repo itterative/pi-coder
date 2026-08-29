@@ -194,7 +194,7 @@ describe("AgentRunManager", () => {
         expect(continuation.details.status).toBe("completed");
 
         const spawnedManager = managerWith(new FakeChild([{ output: "Spawned" }]));
-        spawnedManager.spawn("scout", "Investigate", context());
+        await spawnedManager.start("scout", "Investigate", context(), { background: true });
         await flushBackground();
         expect(spawnedManager.collect("scout-1").content).toBe("Spawned");
 
@@ -672,8 +672,8 @@ describe("AgentRunManager", () => {
             return children[index++]!;
         });
 
-        const first = manager.spawn("scout", "First task", context(), {});
-        const second = manager.spawn("scout", "Second task", context(), {});
+        const first = await manager.start("scout", "First task", context(), { background: true });
+        const second = await manager.start("scout", "Second task", context(), { background: true });
 
         expect(first.details).toMatchObject({ runId: "scout-1", status: "starting", background: true });
         expect(first.content).toContain("Do not sleep or poll");
@@ -710,13 +710,14 @@ describe("AgentRunManager", () => {
         const manager = managerWith(child);
         const notifications: AgentRunStatus[] = [];
 
-        manager.spawn(
+        await manager.start(
             "scout",
             "Investigate",
             context(),
             {
                 signal: undefined,
                 onBackgroundUpdate: (details) => notifications.push(details.status),
+                background: true,
             },
         );
         await flushBackground();
@@ -742,7 +743,7 @@ describe("AgentRunManager", () => {
         const child = new FakeChild([{ waitForAbort: true }]);
         const manager = managerWith(child);
 
-        manager.spawn("scout", "Keep investigating", context(), {});
+        await manager.start("scout", "Keep investigating", context(), { background: true });
         await flushBackground();
         expect(manager.listRuns()[0]?.status).toBe("running");
 
@@ -760,7 +761,7 @@ describe("AgentRunManager", () => {
             throw new Error("provider unavailable");
         });
 
-        manager.spawn("scout", "Investigate", context(), {});
+        await manager.start("scout", "Investigate", context(), { background: true });
         await flushBackground();
 
         expect(manager.listRuns()[0]?.status).toBe("failed");
@@ -778,8 +779,8 @@ describe("AgentRunManager", () => {
         let index = 0;
         const manager = new AgentRunManager(async () => children[index++]!);
 
-        manager.spawn("scout", "Wait", context(), {});
-        manager.spawn("scout", "Run", context(), {});
+        await manager.start("scout", "Wait", context(), { background: true });
+        await manager.start("scout", "Run", context(), { background: true });
         await flushBackground();
         expect(manager.listRuns().map((run) => run.status)).toEqual([
             "waiting_for_parent",
@@ -806,9 +807,9 @@ describe("AgentRunManager", () => {
             2,
         );
 
-        manager.spawn("scout", "One", context(), {});
-        manager.spawn("scout", "Two", context(), {});
-        manager.spawn("scout", "Three", context(), {});
+        await manager.start("scout", "One", context(), { background: true });
+        await manager.start("scout", "Two", context(), { background: true });
+        await manager.start("scout", "Three", context(), { background: true });
         await flushBackground();
 
         expect(manager.listRuns().map((run) => run.runId)).toEqual(["scout-2", "scout-3"]);
@@ -836,10 +837,10 @@ describe("AgentRunManager", () => {
         let index = 0;
         const manager = new AgentRunManager(async () => children[index++]!);
 
-        manager.spawn(BUILTIN_WORKER, "Implement", context(), {});
-        expect(() => manager.spawn(BUILTIN_WORKER, "Also implement", context(), {}))
-            .toThrow("same-checkout mutation-capable worker is already active");
-        expect(() => manager.spawn(BUILTIN_SCOUT, "Inspect", context(), {})).not.toThrow();
+        await manager.start(BUILTIN_WORKER, "Implement", context(), { background: true });
+        await expect(manager.start(BUILTIN_WORKER, "Also implement", context(), { background: true }))
+            .rejects.toThrow("same-checkout mutation-capable worker is already active");
+        await expect(manager.start(BUILTIN_SCOUT, "Inspect", context(), { background: true })).resolves.toBeDefined();
 
         await flushBackground();
         await manager.cancel("worker-1");
@@ -854,14 +855,14 @@ describe("AgentRunManager", () => {
         let index = 0;
         const manager = new AgentRunManager(async () => children[index++]!);
 
-        manager.spawn(BUILTIN_WORKER, "Implement one", {
+        await manager.start(BUILTIN_WORKER, "Implement one", {
             ...context(),
             workspaceId: "workspace-one",
-        }, {});
-        manager.spawn(BUILTIN_WORKER, "Implement two", {
+        }, { background: true });
+        await manager.start(BUILTIN_WORKER, "Implement two", {
             ...context(),
             workspaceId: "workspace-two",
-        }, {});
+        }, { background: true });
 
         await flushBackground();
         await manager.cancel("worker-1");
@@ -901,7 +902,7 @@ describe("AgentRunManager", () => {
             return child;
         });
 
-        manager.spawn(BUILTIN_WORKER, "Implement", context(), {});
+        await manager.start(BUILTIN_WORKER, "Implement", context(), { background: true });
         await flushBackground();
 
         expect(manager.listRuns()[0]).toMatchObject({
@@ -919,7 +920,7 @@ describe("AgentRunManager", () => {
         const manager = new AgentRunManager(async () => child);
         manager.setPersistence(store.persistence);
 
-        manager.spawn(BUILTIN_SCOUT, "Inspect", context(), {});
+        await manager.start(BUILTIN_SCOUT, "Inspect", context(), { background: true });
         await flushBackground();
         manager.collect("scout-1");
 
@@ -1037,7 +1038,7 @@ describe("AgentRunManager", () => {
         const child = new FakeChild([{ output: "Persisted result", usage: usage(6, 2) }], path.join(dir, "child.jsonl"));
         const firstManager = new AgentRunManager(async () => child);
         firstManager.setPersistence(store.persistence);
-        firstManager.spawn(BUILTIN_SCOUT, "Inspect", context(), {});
+        await firstManager.start(BUILTIN_SCOUT, "Inspect", context(), { background: true });
         await flushBackground();
         expect(firstManager.listRuns()[0]?.status).toBe("completed");
 
@@ -1111,7 +1112,7 @@ describe("AgentRunManager", () => {
         const runningChild = new FakeChild([{ waitForAbort: true }], childFile);
         const firstManager = new AgentRunManager(async () => runningChild);
         firstManager.setPersistence(store.persistence);
-        firstManager.spawn(BUILTIN_WORKER, "Implement", context(), {});
+        await firstManager.start(BUILTIN_WORKER, "Implement", context(), { background: true });
         await flushBackground();
         await firstManager.shutdown();
         expect(store.records.at(-1)).toMatchObject({ status: "interrupted" });

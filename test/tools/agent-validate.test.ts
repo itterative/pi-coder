@@ -15,8 +15,8 @@ describe("validateAgentParameters", () => {
             validate({ action: "start", agent: "scout", task: "Inspect the repo" }),
         ).toMatchObject({ action: "start", agent: "scout", task: "Inspect the repo" });
         expect(
-            validate({ action: "spawn", agent: "worker", task: "Implement", isolation: "worktree", title: "Impl" }),
-        ).toMatchObject({ action: "spawn", isolation: "worktree" });
+            validate({ action: "start", agent: "worker", task: "Implement", isolation: "worktree", title: "Impl", background: true }),
+        ).toMatchObject({ action: "start", isolation: "worktree", background: true });
         expect(validate({ action: "resume", runId: "scout-1" })).toEqual({ action: "resume", runId: "scout-1" });
         expect(
             validate({ action: "resume", runId: "scout-1", guidance: "Compare both." }),
@@ -34,7 +34,7 @@ describe("validateAgentParameters", () => {
 
     it("rejects unknown actions with the valid action list", () => {
         expect(() => validate({ action: "restart" } as AgentParameters)).toThrow(
-            'Unknown action "restart". Valid actions: list, start, spawn, resume, cancel, inspect, apply, discard, revise, status, collect.',
+            'Unknown action "restart". Valid actions: list, start, resume, cancel, inspect, apply, discard, revise, status, collect.',
         );
     });
 
@@ -65,7 +65,7 @@ describe("validateAgentParameters", () => {
         ).toThrow('Action "status" does not accept "guidance". Parameters for action "status": "runId".');
     });
 
-    it("preserves context sections for start and spawn", () => {
+    it("preserves context sections for start", () => {
         const context = {
             sections: [{ id: "goal", title: "Goal", content: "Do X", source: "parent" }],
         };
