@@ -21,6 +21,17 @@ import {
 
 type WorkspaceRow = Record<string, unknown>;
 
+function requireNoResultReservation(database: import("node:sqlite").DatabaseSync, workspaceId: string): void {
+    const reservation = database.prepare(`
+        SELECT id FROM workspace_results
+        WHERE workspace_id = ? AND reservation_token IS NOT NULL
+        LIMIT 1
+    `).get(workspaceId) as WorkspaceRow | undefined;
+    if (reservation) {
+        throw new Error(`Workspace ${workspaceId} has a result disposition in progress; try again shortly.`);
+    }
+}
+
 /** Named owner and storage controls for orphaned task lease recovery. */
 export interface RecoverAgentWorkspaceLeaseOptions extends AgentWorkspaceDirectoryOptions {
     ownerSessionId: string;
@@ -102,6 +113,111 @@ export async function releaseAgentWorkspaceLeaseForRecovery(
     }
 }
 
+/**
+ * Recycle an inactive task workspace into a new task lease without deleting
+ * the old worker's checkpoint or result history.
+ */
+export interface RecycleAgentWorkspaceOptions extends AgentWorkspaceDirectoryOptions {
+    previousOwnerSessionId: string;
+    previousLeaseRunId: string;
+    previousLeaseRunInstanceId: string;
+    ownerSessionId: string;
+    leaseRunId: string;
+    leaseRunInstanceId: string;
+}
+
+export async function recycleAgentWorkspaceForReuse(
+    workspaceId: string,
+    {
+        previousOwnerSessionId,
+        previousLeaseRunId,
+        previousLeaseRunInstanceId,
+        ownerSessionId,
+        leaseRunId,
+        leaseRunInstanceId,
+        workspacesDir = PI_CODER_WORKSPACES_DIR,
+    }: RecycleAgentWorkspaceOptions,
+): Promise<AgentWorkspace> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        database.exec("BEGIN IMMEDIATE");
+        const workspace = attachLatestWorkspaceResult(database, workspaceById(database, workspaceId));
+        if (!workspace) throw new Error(`Workspace ${workspaceId} was not found.`);
+        requireNoResultReservation(database, workspaceId);
+        if (
+            workspace.leaseOwnerSessionId !== previousOwnerSessionId
+            || workspace.leaseRunId !== previousLeaseRunId
+            || workspace.leaseRunInstanceId !== previousLeaseRunInstanceId
+            || workspace.leaseKind !== "task"
+        ) {
+            throw new Error(`Workspace ${workspaceId} changed before it could be recycled.`);
+        }
+        if (workspace.status === "recycling") {
+            throw new Error(`Workspace ${workspaceId} is already being recycled.`);
+        }
+        if (workspaceLeaseActive(database, workspace)) {
+            throw new Error(`Workspace ${workspaceId} is still used by active run ${previousLeaseRunId}; finish or cancel that run first.`);
+        }
+
+        const marked = database.prepare(`
+            UPDATE workspaces SET workspace_status = 'recycling', updated_at = ?
+            WHERE id = ? AND workspace_status IN ('available', 'review_required')
+              AND lease_owner_session_id = ? AND lease_run_id = ?
+              AND lease_run_instance_id = ? AND lease_kind = 'task'
+        `).run(
+            Date.now(),
+            workspaceId,
+            previousOwnerSessionId,
+            previousLeaseRunId,
+            previousLeaseRunInstanceId,
+        );
+        if (marked.changes !== 1) {
+            throw new Error(`Workspace ${workspaceId} changed before it could be recycled.`);
+        }
+
+        const targetRevision = await git(workspace.repositoryRoot, ["rev-parse", "HEAD"]);
+        await git(workspace.worktreePath, ["reset", "--hard", targetRevision]);
+        await git(workspace.worktreePath, ["clean", "-fd"]);
+
+        const claimed = database.prepare(`
+            UPDATE workspaces
+            SET base_revision = ?, workspace_status = 'available',
+                lease_owner_session_id = ?, lease_run_id = ?, lease_run_instance_id = ?,
+                lease_kind = 'task', lease_acquired_at = ?, updated_at = ?
+            WHERE id = ? AND workspace_status = 'recycling'
+              AND lease_owner_session_id = ? AND lease_run_id = ?
+              AND lease_run_instance_id = ?
+        `).run(
+            targetRevision,
+            ownerSessionId,
+            leaseRunId,
+            leaseRunInstanceId,
+            Date.now(),
+            Date.now(),
+            workspaceId,
+            previousOwnerSessionId,
+            previousLeaseRunId,
+            previousLeaseRunInstanceId,
+        );
+        if (claimed.changes !== 1) {
+            throw new Error(`Workspace ${workspaceId} changed while it was being recycled.`);
+        }
+        const recycled = workspaceById(database, workspaceId);
+        if (!recycled) throw new Error(`Workspace ${workspaceId} disappeared while it was being recycled.`);
+        database.exec("COMMIT");
+        return recycled;
+    } catch (error) {
+        try {
+            database.exec("ROLLBACK");
+        } catch {
+            // Preserve the original recycle error.
+        }
+        throw error;
+    } finally {
+        database.close();
+    }
+}
+
 /** Reset a workspace to the current parent revision and make it reusable. */
 export async function resetAgentWorkspaceForReuse(
     workspaceId: string,
@@ -111,8 +227,13 @@ export async function resetAgentWorkspaceForReuse(
 ): Promise<AgentWorkspace> {
     const database = await openDatabase(workspacesDir);
     try {
+        database.exec("BEGIN IMMEDIATE");
         const workspace = workspaceById(database, workspaceId);
         if (!workspace) throw new Error(`Workspace ${workspaceId} was not found.`);
+        requireNoResultReservation(database, workspaceId);
+        if (workspace.status === "recycling") {
+            throw new Error(`Workspace ${workspaceId} is being recycled and cannot be reset.`);
+        }
         if (workspace.leaseRunId) {
             if (workspace.leaseKind !== "task") {
                 throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be reset.`);
@@ -135,8 +256,14 @@ export async function resetAgentWorkspaceForReuse(
                 await git(workspace.repositoryRoot, ["update-ref", "-d", row.durable_ref]);
             }
         }
-        database.prepare("UPDATE workspace_results SET status = CASE WHEN status = 'prepared' THEN 'discarded' ELSE status END, durable_ref = NULL WHERE workspace_id = ?")
-            .run(workspaceId);
+        database.prepare(`
+            UPDATE workspace_results
+            SET status = CASE WHEN status = 'prepared' THEN 'discarded' ELSE status END,
+                durable_ref = NULL, reservation_token = NULL, reservation_owner_session_id = NULL,
+                reservation_run_id = NULL, reservation_run_instance_id = NULL,
+                reservation_owner_pid = NULL, reservation_acquired_at = NULL
+            WHERE workspace_id = ?
+        `).run(workspaceId);
         database.prepare(`
             UPDATE workspaces SET base_revision = ?, workspace_status = 'available',
                 lease_owner_session_id = NULL, lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL,
@@ -144,7 +271,15 @@ export async function resetAgentWorkspaceForReuse(
         `).run(targetRevision, Date.now(), workspaceId);
         const reset = workspaceById(database, workspaceId);
         if (!reset) throw new Error(`Workspace ${workspaceId} disappeared while being reset.`);
+        database.exec("COMMIT");
         return reset;
+    } catch (error) {
+        try {
+            database.exec("ROLLBACK");
+        } catch {
+            // Preserve the original reset error.
+        }
+        throw error;
     } finally {
         database.close();
     }
@@ -159,8 +294,13 @@ export async function discardAgentWorkspace(
 ): Promise<void> {
     const database = await openDatabase(workspacesDir);
     try {
+        database.exec("BEGIN IMMEDIATE");
         const workspace = workspaceById(database, workspaceId);
         if (!workspace) throw new Error(`Workspace ${workspaceId} was not found.`);
+        requireNoResultReservation(database, workspaceId);
+        if (workspace.status === "recycling") {
+            throw new Error(`Workspace ${workspaceId} is being recycled and cannot be discarded.`);
+        }
         if (workspace.leaseRunId) {
             if (workspace.leaseKind !== "task") {
                 throw new Error(`Workspace ${workspaceId} is leased for setup and cannot be discarded.`);
@@ -183,6 +323,14 @@ export async function discardAgentWorkspace(
         }
         database.prepare("DELETE FROM workspace_results WHERE workspace_id = ?").run(workspaceId);
         database.prepare("DELETE FROM workspaces WHERE id = ?").run(workspaceId);
+        database.exec("COMMIT");
+    } catch (error) {
+        try {
+            database.exec("ROLLBACK");
+        } catch {
+            // Preserve the original discard error.
+        }
+        throw error;
     } finally {
         database.close();
     }
@@ -194,11 +342,18 @@ export async function createAgentWorkspace(
 ): Promise<AgentWorkspace> {
     const resolvedCwd = path.resolve(cwd);
     const repositoryRoot = path.resolve(await git(resolvedCwd, ["rev-parse", "--show-toplevel"]));
+    const parentStatus = await git(repositoryRoot, ["status", "--porcelain=v1", "--untracked-files=all"]);
+    if (parentStatus) {
+        throw new Error("Cannot create an isolated workspace while the parent checkout has uncommitted changes.");
+    }
     const baseRevision = await git(repositoryRoot, ["rev-parse", "HEAD"]);
     const directory = workspacesRoot(workspacesDir);
     const database = await openDatabase(workspacesDir);
     let worktreePath: string | undefined;
     try {
+        // Serialize the capacity check with the worktree creation and row insert
+        // so concurrent pi processes cannot allocate the same final slot.
+        database.exec("BEGIN IMMEDIATE");
         const countRow = database.prepare("SELECT COUNT(*) AS count FROM workspaces WHERE cwd = ?")
             .get(resolvedCwd) as { count?: number } | undefined;
         const count = Number(countRow?.count ?? 0);
@@ -257,8 +412,14 @@ export async function createAgentWorkspace(
             workspace.createdAt,
             workspace.updatedAt,
         );
+        database.exec("COMMIT");
         return workspace;
     } catch (error) {
+        try {
+            database.exec("ROLLBACK");
+        } catch {
+            // Preserve the original workspace allocation error.
+        }
         if (worktreePath) {
             await git(repositoryRoot, ["worktree", "remove", "--force", worktreePath]).catch(() => {});
         }

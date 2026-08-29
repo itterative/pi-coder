@@ -581,6 +581,59 @@ describe("AgentRunManager", () => {
         });
     });
 
+    it("checkpoints settled intermediate and terminal states", async () => {
+        const checkpoints: Array<{ kind: string; runStatus: string; workspaceId: string }> = [];
+        const child = new FakeChild([
+            { question: { question: "Continue?" }, leafId: "leaf-1" },
+            { output: "Finished", leafId: "leaf-2" },
+        ]);
+        const manager = managerWith(child);
+        const onWorkspaceCheckpoint = async (request: {
+            kind: "intermediate" | "terminal";
+            runStatus: "waiting_for_parent" | "interrupted" | "completed" | "failed" | "aborted" | "canceled";
+            workspaceId: string;
+        }) => {
+            checkpoints.push({
+                kind: request.kind,
+                runStatus: request.runStatus,
+                workspaceId: request.workspaceId,
+            });
+        };
+
+        const first = await manager.start(
+            "scout",
+            "Investigate",
+            { ...context(), workspaceId: "workspace-1" },
+            { onWorkspaceCheckpoint },
+        );
+        const second = await manager.resume("scout-1", {
+            guidance: "Continue",
+            onWorkspaceCheckpoint,
+        });
+
+        expect(first.details.status).toBe("waiting_for_parent");
+        expect(second.details.status).toBe("completed");
+        expect(checkpoints).toEqual([
+            { kind: "intermediate", runStatus: "waiting_for_parent", workspaceId: "workspace-1" },
+            { kind: "terminal", runStatus: "completed", workspaceId: "workspace-1" },
+        ]);
+    });
+
+    it("parks a settled workspace run before its slot is reused", async () => {
+        const child = new FakeChild([{ question: { question: "Continue?" }, leafId: "leaf-1" }]);
+        const manager = managerWith(child);
+        await manager.start(
+            "scout",
+            "Investigate",
+            { ...context(), workspaceId: "workspace-1" },
+        );
+
+        expect(manager.parkWorkspaceRunForReuse("workspace-1", "scout-1")).toBe(true);
+        expect(manager.activeCount).toBe(0);
+        expect(child.disposed).toBe(true);
+        expect(() => manager.status("scout-1")).toThrow("Unknown or stale agent run ID");
+    });
+
     it("retains context across repeated parent-guidance cycles and reports usage deltas", async () => {
         const child = new FakeChild([
             {
@@ -632,17 +685,23 @@ describe("AgentRunManager", () => {
         await expect(manager.cancel("scout-1")).rejects.toThrow(AgentActionError);
     });
 
-    it("cancels a running foreground child", async () => {
+    it("cancels a running foreground child after checkpointing the settled state", async () => {
         const child = new FakeChild([{ waitForAbort: true }]);
         const manager = managerWith(child);
-        const pending = manager.start("scout", "Investigate", context(), {});
+        const pending = manager.start("scout", "Investigate", { ...context(), workspaceId: "workspace-1" });
         await Promise.resolve();
+        const checkpoints: string[] = [];
 
-        const canceled = await manager.cancel("scout-1");
+        const canceled = await manager.cancel("scout-1", {
+            onWorkspaceCheckpoint: async (request) => {
+                checkpoints.push(`${request.kind}:${request.runStatus}`);
+            },
+        });
         const settled = await pending;
 
         expect(canceled.details.status).toBe("canceled");
         expect(settled.details.status).toBe("canceled");
+        expect(checkpoints).toEqual(["terminal:canceled"]);
         expect(child.abortCount).toBeGreaterThan(0);
         expect(child.disposed).toBe(true);
         expect(manager.activeCount).toBe(0);

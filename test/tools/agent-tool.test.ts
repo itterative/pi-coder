@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 
 import { registerStatusWidget } from "../../src/tui/status";
 import registerAgentTool, { clearCompletedWorkspaceSetupRun } from "../../src/tools/agent";
+import { executeAgentAction } from "../../src/tools/agent/action-dispatch";
 import { registerAgentTool as registerAgentToolDefinition } from "../../src/tools/agent/presentation/tool";
 import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/observability/events";
 import { ZERO_USAGE, type AgentRunSummary, type ChildAgentHandle } from "../../src/tools/agent/runs/manager";
@@ -15,6 +16,7 @@ import type {
 } from "../../src/tools/agent/contracts/workspaces";
 import * as runCatalog from "../../src/tools/agent/storage/run-catalog";
 import * as workspaceActions from "../../src/tools/agent/workspaces/actions";
+import * as workspaceCheckpoints from "../../src/tools/agent/workspaces/checkpoints";
 import * as workspaceResults from "../../src/tools/agent/workspaces/results";
 import * as workspaceFinalization from "../../src/tools/agent/workspaces/finalization";
 import * as workspaceGit from "../../src/tools/agent/workspaces/git";
@@ -37,6 +39,27 @@ const TEST_WORKER_DEFINITION = {
 };
 
 const tempDirs: string[] = [];
+beforeEach(() => {
+    vi.spyOn(workspaceCheckpoints, "createAgentWorkspaceCheckpointCallback")
+        .mockReturnValue(async () => {});
+    vi.spyOn(workspaceCheckpoints, "latestAgentWorkspaceCheckpoint").mockResolvedValue({
+        id: "checkpoint-1",
+        workspaceId: "workspace-1",
+        runId: "worker-1",
+        runInstanceId: "worker-instance-1",
+        sequence: 1,
+        kind: "terminal",
+        runStatus: "completed",
+        baseRevision: "base-revision",
+        headRevision: "worker-head",
+        durableRef: "refs/pi-coder/workspace-checkpoints/workspace-1/checkpoint-1",
+        childSessionLeafId: "leaf-1",
+        createdAt: 3,
+    });
+    vi.spyOn(workspaceCheckpoints, "restoreAgentWorkspaceCheckpoint").mockResolvedValue();
+    vi.spyOn(workspaceGit, "hasAncestor").mockResolvedValue(true);
+});
+
 afterEach(() => {
     vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -116,6 +139,7 @@ function revisionActionFixture() {
         flushPersistence: vi.fn(async () => {}),
         getPersistedRun: vi.fn(() => record),
         reserveRunIdentity: vi.fn(() => ({ runId: "worker-1", runInstanceId: "worker-instance-1" })),
+        reserveContinuationLease: vi.fn(() => undefined),
         startContinuation: vi.fn(async () => continuationOutcome),
     };
     const ctx = {
@@ -160,6 +184,76 @@ async function executeRevisionAction(fixture: ReturnType<typeof revisionActionFi
 }
 
 describe("agent extension registration", () => {
+    it("rolls back a transferred workspace lease when manager startup rejects", async () => {
+        const workspace = {
+            id: "workspace-start-failure",
+            cwd: process.cwd(),
+            repositoryRoot: process.cwd(),
+            worktreePath: "/tmp/workspace-start-failure",
+            slug: "workspace-start-failure",
+            baseRevision: "base-revision",
+            setupState: "ready",
+            status: "available",
+            createdAt: 1,
+            updatedAt: 1,
+        } as AgentWorkspace;
+        const reservation = {
+            workspace,
+            ownerSessionId: "parent-session",
+            provisionalLeaseRunId: "provisional-1",
+            provisionalLeaseRunInstanceId: "provisional-instance-1",
+        };
+        const startError = new Error("manager startup failed");
+        vi.spyOn(workspaceSetup, "prepareIsolatedWorkspace").mockResolvedValue(reservation);
+        const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
+        const manager = {
+            reserveRunIdentity: vi.fn(() => ({ runId: "worker-1", runInstanceId: "worker-instance-1" })),
+            start: vi.fn().mockRejectedValue(startError),
+        };
+        const definition = TEST_WORKER_DEFINITION;
+        const ctx = {
+            cwd: process.cwd(),
+            isProjectTrusted: () => true,
+            isIdle: () => true,
+            sessionManager: { getSessionId: () => "parent-session" },
+            ui: { notify: () => {} },
+        };
+        const lifecycle = {
+            manager,
+            factory: vi.fn(),
+            discover: vi.fn(() => ({ agents: [definition], diagnostics: [] })),
+            backgroundUpdate: vi.fn(() => () => {}),
+            updateSetupRun: vi.fn(),
+            clearCompletedWorkspaceSetup: vi.fn(),
+            emitWorkspaceEvent: vi.fn(),
+            events: undefined,
+            eventBus: undefined,
+        };
+
+        const outcome = await executeAgentAction(
+            { action: "start", agent: "worker", task: "Implement the change", isolation: "worktree", background: true },
+            { signal: undefined, progress: vi.fn(), ctx: ctx as any, lifecycle: lifecycle as any },
+        );
+
+        expect(outcome.details.status).toBe("failed");
+        expect(transferSpy).toHaveBeenNthCalledWith(1, workspace.id, {
+            ownerSessionId: reservation.ownerSessionId,
+            fromLeaseRunId: reservation.provisionalLeaseRunId,
+            fromLeaseRunInstanceId: reservation.provisionalLeaseRunInstanceId,
+            toLeaseRunId: "worker-1",
+            toLeaseRunInstanceId: "worker-instance-1",
+            leaseKind: "task",
+        });
+        expect(transferSpy).toHaveBeenNthCalledWith(2, workspace.id, {
+            ownerSessionId: reservation.ownerSessionId,
+            fromLeaseRunId: "worker-1",
+            fromLeaseRunInstanceId: "worker-instance-1",
+            toLeaseRunId: reservation.provisionalLeaseRunId,
+            toLeaseRunInstanceId: reservation.provisionalLeaseRunInstanceId,
+            leaseKind: "task",
+        });
+    });
+
     it("keeps setup status for non-completed task outcomes", () => {
         const setupRuns = new Map<string, AgentRunSummary>([
             ["setup-1", { workspaceId: "workspace-1" } as AgentRunSummary],
@@ -518,6 +612,7 @@ describe("agent extension registration", () => {
             workspace,
             ownerSessionId: "parent-1",
             runId: "worker-1",
+            resultId: "result-1",
         });
         expect(outcome.details.workspaceResult).toMatchObject({ status: "applied" });
         expect(releasedWorkspace.leaseRunId).toBeUndefined();
@@ -988,12 +1083,13 @@ describe("agent extension registration", () => {
                 childSessionFile,
                 childSessionLeafId: "leaf-1",
             }),
-            {
+            expect.objectContaining({
                 signal: undefined,
                 onProgress: progress,
                 title: "Implement fix revision",
                 identity: { runId: "worker-1", runInstanceId: "worker-instance-1" },
-            },
+                onWorkspaceCheckpoint: expect.any(Function),
+            }),
         );
         expect(transferSpy).not.toHaveBeenCalled();
     });
@@ -1179,7 +1275,7 @@ describe("agent extension registration", () => {
         vi.mocked(workspaceGit.hasAncestor).mockResolvedValue(false);
 
         await expect(executeRevisionAction(fixture)).rejects.toThrow(
-            "is not based on workspace base base-revision",
+            "Cannot continue workspace workspace-1",
         );
         expect(fixture.manager.reserveRunIdentity).not.toHaveBeenCalled();
         expect(fixture.manager.startContinuation).not.toHaveBeenCalled();

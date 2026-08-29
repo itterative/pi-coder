@@ -50,19 +50,19 @@ export function migrateSqliteDatabase(
         throw new Error("SQLite migrations must have strictly increasing positive integer versions.");
     }
 
-    const row = database.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-    const currentVersion = typeof row?.user_version === "number" ? row.user_version : 0;
     const latestVersion = versions[versions.length - 1] ?? 0;
-    if (currentVersion > latestVersion) {
-        throw new Error(`SQLite database version ${currentVersion} is newer than supported version ${latestVersion}.`);
-    }
-
-    const pending = migrations.filter((migration) => migration.version > currentVersion);
-    if (!pending.length) return;
-
     database.exec("BEGIN IMMEDIATE");
     try {
-        for (const migration of pending) {
+        // Read the version only after acquiring the write lock. Otherwise
+        // concurrent first-openers can all observe the same old version and
+        // apply the same ALTER TABLE migration.
+        const row = database.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
+        const currentVersion = typeof row?.user_version === "number" ? row.user_version : 0;
+        if (currentVersion > latestVersion) {
+            throw new Error(`SQLite database version ${currentVersion} is newer than supported version ${latestVersion}.`);
+        }
+
+        for (const migration of migrations.filter((migration) => migration.version > currentVersion)) {
             migration.apply(database);
             database.exec(`PRAGMA user_version = ${migration.version}`);
         }

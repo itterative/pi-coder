@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,8 +16,8 @@ const testPaths = vi.hoisted(() => {
     };
 });
 
-vi.mock("../../src/common/constants", async () => {
-    const actual = await vi.importActual<typeof import("../../src/common/constants")>("../../src/common/constants");
+vi.mock("../../../src/common/constants", async () => {
+    const actual = await vi.importActual<typeof import("../../../src/common/constants")>("../../../src/common/constants");
     return {
         ...actual,
         PI_CODER_STATE_DIR: testPaths.root,
@@ -27,49 +26,54 @@ vi.mock("../../src/common/constants", async () => {
     };
 });
 
-import registerAgentTool from "../../src/tools/agent";
-import { ZERO_USAGE, type ChildAgentHandle } from "../../src/tools/agent/runs/manager";
-import * as workspaceFinalization from "../../src/tools/agent/workspaces/finalization";
-import * as runCatalog from "../../src/tools/agent/storage/run-catalog";
-import { createAgentWorkspace, updateAgentWorkspace } from "../../src/tools/agent/workspaces/lifecycle";
-import * as workspaceSetup from "../../src/tools/agent/workspaces/setup";
-import { claimAgentWorkspace, getAgentWorkspace } from "../../src/tools/agent/workspaces/store";
+import registerAgentTool from "../../../src/tools/agent";
+import { createAgentWorkspaceCheckpoint } from "../../../src/tools/agent/workspaces/checkpoints";
+import * as workspaceFinalization from "../../../src/tools/agent/workspaces/finalization";
+import * as runCatalog from "../../../src/tools/agent/storage/run-catalog";
+import {
+    createAgentWorkspace,
+    recycleAgentWorkspaceForReuse,
+    updateAgentWorkspace,
+} from "../../../src/tools/agent/workspaces/lifecycle";
+import * as workspaceSetup from "../../../src/tools/agent/workspaces/setup";
+import { claimAgentWorkspace, getAgentWorkspace } from "../../../src/tools/agent/workspaces/store";
+import {
+    createE2EPathsAtRoot,
+    createParentSession,
+    createScriptedChild,
+    gitOutput,
+    initializeRepository,
+    removeE2EPaths,
+    runGit,
+} from "./helpers";
 
 interface Handler {
     (event: any, ctx: any): Promise<unknown> | unknown;
 }
 
-const runGit = (cwd: string, args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
-const gitOutput = (cwd: string, args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+const paths = createE2EPathsAtRoot(testPaths.root);
 
 const handlersToClose: Array<() => Promise<void>> = [];
 afterEach(async () => {
     for (const close of handlersToClose.splice(0)) await close();
-    fs.rmSync(testPaths.root, { recursive: true, force: true });
+    removeE2EPaths(paths);
 });
 
 describe("registered continuation lifecycle", () => {
     it("persists and continues the real isolated background start/collect session", async () => {
-        const repository = path.join(testPaths.root, "repo");
-        fs.mkdirSync(repository, { recursive: true });
-        runGit(repository, ["init", "--quiet"]);
-        runGit(repository, ["config", "user.email", "test@example.com"]);
-        runGit(repository, ["config", "user.name", "Test"]);
-        fs.writeFileSync(path.join(repository, "README.md"), "base\n");
-        runGit(repository, ["add", "README.md"]);
-        runGit(repository, ["commit", "--quiet", "-m", "initial"]);
+        const repository = paths.repository;
+        initializeRepository(repository);
         const parentHead = gitOutput(repository, ["rev-parse", "HEAD"]);
-        const parentSessionDir = path.join(testPaths.root, "parent");
-        const parentSession = SessionManager.create(repository, parentSessionDir);
+        const parentSession = createParentSession(paths);
         const ownerSessionId = parentSession.getSessionId();
 
-        const created = await createAgentWorkspace(repository, { workspacesDir: testPaths.workspaces });
-        const ready = await updateAgentWorkspace(created, { setupState: "skipped" }, { workspacesDir: testPaths.workspaces });
+        const created = await createAgentWorkspace(repository, { workspacesDir: paths.state });
+        const ready = await updateAgentWorkspace(created, { setupState: "skipped" }, { workspacesDir: paths.state });
         const provisional = await claimAgentWorkspace(ready.id, {
             ownerSessionId,
             leaseRunId: "setup-1",
             leaseKind: "setup",
-            workspacesDir: testPaths.workspaces,
+            workspacesDir: paths.state,
             leaseRunInstanceId: "setup-instance-1",
         });
         const prompts: string[] = [];
@@ -77,7 +81,7 @@ describe("registered continuation lifecycle", () => {
         const childSessions: SessionManager[] = [];
         let invocation = 0;
         let failNextSetup = false;
-        const fakeFactory = async (context: any): Promise<ChildAgentHandle> => {
+        const fakeFactory = async (context: any) => {
             invocation++;
             const currentInvocation = invocation;
             if (failNextSetup) {
@@ -89,35 +93,17 @@ describe("registered continuation lifecycle", () => {
                 : SessionManager.create(context.cwd, context.childSessionDir);
             childSessions.push(childSession);
             factoryContexts.push(context);
-            return {
-                sessionFile: childSession.getSessionFile(),
-                prompt: async (prompt: string) => {
+            return createScriptedChild({
+                output: currentInvocation === 1 ? "Initial result" : "Revised result",
+                session: childSession,
+                onPrompt: (prompt) => {
                     prompts.push(prompt);
-                    childSession.appendMessage({ role: "user", content: prompt } as any);
-                    childSession.appendMessage({
-                        role: "assistant",
-                        content: [{ type: "text", text: currentInvocation === 1 ? "Initial result" : "Revised result" }],
-                        api: "test",
-                        provider: "test",
-                        model: "test-model",
-                        usage: ZERO_USAGE,
-                        stopReason: "stop",
-                        timestamp: Date.now(),
-                    } as any);
                     fs.writeFileSync(
                         path.join(context.cwd, "revision-marker.txt"),
                         currentInvocation === 1 ? "initial\n" : "revised\n",
                     );
                 },
-                abort: async () => {},
-                dispose: () => {},
-                takeParentQuestion: () => undefined,
-                getProgress: () => ({ output: currentInvocation === 1 ? "Initial output" : "Revised output", recentActivity: [] }),
-                getFinalOutput: () => currentInvocation === 1 ? "Initial result" : "Revised result",
-                getError: () => undefined,
-                getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
-                getSessionLeafId: () => childSession.getLeafId(),
-            };
+            });
         };
         const handlers: Record<string, Handler[]> = {};
         let tool: any;
@@ -157,6 +143,11 @@ describe("registered continuation lifecycle", () => {
             ctx,
         );
         await vi.waitFor(() => expect(prompts).toHaveLength(1));
+        await vi.waitFor(async () => {
+            const record = (await runCatalog.listAgentRunCatalog(repository))
+                .find((candidate) => candidate.runId === spawned.details.runId);
+            expect(record?.status).toBe("completed");
+        });
         const collected = await tool.execute(
             "e2e-collect",
             { action: "collect", runId: spawned.details.runId },
@@ -189,6 +180,26 @@ describe("registered continuation lifecycle", () => {
                 capabilities: expect.arrayContaining(["edit"]),
             }),
             status: "removed",
+        });
+
+        const recycledForOtherWorker = await recycleAgentWorkspaceForReuse(provisional.id, {
+            previousOwnerSessionId: ownerSessionId,
+            previousLeaseRunId: spawned.details.runId,
+            previousLeaseRunInstanceId: spawned.details.runInstanceId,
+            ownerSessionId: "other-parent",
+            leaseRunId: "worker-y",
+            leaseRunInstanceId: "worker-y-instance",
+            workspacesDir: paths.state,
+        });
+        fs.writeFileSync(path.join(recycledForOtherWorker.worktreePath, "other-worker.txt"), "other worker\n");
+        await createAgentWorkspaceCheckpoint(recycledForOtherWorker.id, {
+            ownerSessionId: "other-parent",
+            leaseRunId: "worker-y",
+            runInstanceId: "worker-y-instance",
+            kind: "intermediate",
+            runStatus: "interrupted",
+            childSessionLeafId: null,
+            workspacesDir: paths.state,
         });
 
         const revised = await tool.execute(
@@ -308,16 +319,18 @@ describe("registered continuation lifecycle", () => {
 
         runGit(provisional.worktreePath, ["checkout", "--orphan", "divergent"]);
         runGit(provisional.worktreePath, ["commit", "--quiet", "--allow-empty", "-m", "divergent history"]);
-        const rejected = await tool.execute(
+        const divergentHead = gitOutput(provisional.worktreePath, ["rev-parse", "HEAD"]);
+        const continuedAfterDivergence = await tool.execute(
             "e2e-divergent-revise",
             { action: "continue", runId: revised.details.runId, guidance: "Try again" },
             undefined,
             undefined,
             ctx,
         );
-        expect(rejected.details.status).toBe("failed");
-        expect(rejected.content[0].text).toContain("is not based on workspace base");
+        expect(continuedAfterDivergence.details.status).toBe("failed");
+        expect(continuedAfterDivergence.content[0].text).toContain("differs from checkpoint");
         expect(invocation).toBe(5);
+        expect(gitOutput(provisional.worktreePath, ["rev-parse", "HEAD"])).toBe(divergentHead);
         const preservedAfterDivergence = await getAgentWorkspace(provisional.id);
         expect(preservedAfterDivergence).toMatchObject({
             leaseOwnerSessionId: parentSession.getSessionId(),

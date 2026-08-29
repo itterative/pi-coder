@@ -11,10 +11,15 @@ import {
     releaseAgentWorkspaceAfterNoChanges,
 } from "./results";
 
+export interface PrepareWorkspaceResultOptions {
+    baseRevision?: string;
+}
+
 export async function prepareCollectedWorkspaceResult(
     details: Pick<AgentRunDetails, "workspaceId" | "runId" | "runInstanceId" | "setupFailed">,
     ctx: ExtensionContext,
     events?: AgentEventSink,
+    options: PrepareWorkspaceResultOptions = {},
 ): Promise<AgentWorkspaceResult | undefined> {
     if (!details.workspaceId || details.setupFailed) return undefined;
     const workspace = await getAgentWorkspace(details.workspaceId);
@@ -27,6 +32,7 @@ export async function prepareCollectedWorkspaceResult(
         ownerSessionId: ctx.sessionManager.getSessionId(),
         leaseRunId: details.runId,
         leaseRunInstanceId: details.runInstanceId,
+        ...(options.baseRevision ? { baseRevision: options.baseRevision } : {}),
     });
     emitAgentEvent({
         type: "workspace",
@@ -49,9 +55,10 @@ export async function prepareForegroundWorkspaceResult(
     outcome: AgentRunOutcome,
     ctx: ExtensionContext,
     events?: AgentEventSink,
+    options: PrepareWorkspaceResultOptions = {},
 ): Promise<AgentRunOutcome> {
     if (outcome.details.setupFailed || !isTerminalAgentStatus(outcome.details.status) || !outcome.details.workspaceId) return outcome;
-    const workspaceResult = await prepareCollectedWorkspaceResult(outcome.details, ctx, events);
+    const workspaceResult = await prepareCollectedWorkspaceResult(outcome.details, ctx, events, options);
     if (!workspaceResult) return outcome;
     const noWorkspaceChanges = workspaceResult.workerHead === workspaceResult.baseRevision
         && workspaceResult.commits.length === 0;

@@ -9,11 +9,13 @@ import { executeWorkspaceAction } from "../../src/tools/agent/workspaces/actions
 import {
     createAgentWorkspace,
     discardAgentWorkspace,
+    recycleAgentWorkspaceForReuse,
     recoverAgentWorkspaceLease,
     releaseAgentWorkspaceLeaseForRecovery,
     resetAgentWorkspaceForReuse,
     updateAgentWorkspace,
 } from "../../src/tools/agent/workspaces/lifecycle";
+import { prepareIsolatedWorkspace } from "../../src/tools/agent/workspaces/setup";
 import {
     applyAgentWorkspaceApplication,
     discardAgentWorkspaceResult,
@@ -24,6 +26,13 @@ import {
     releaseAgentWorkspaceAfterNoChanges,
     retainAgentWorkspaceResult,
 } from "../../src/tools/agent/workspaces/results";
+import {
+    createAgentWorkspaceCheckpoint,
+    getAgentWorkspaceCheckpoint,
+    latestAgentWorkspaceCheckpoint,
+    listAgentWorkspaceCheckpoints,
+    restoreAgentWorkspaceCheckpoint,
+} from "../../src/tools/agent/workspaces/checkpoints";
 import { openAgentMetadataDatabase } from "../../src/tools/agent/storage/metadata";
 import {
     claimAgentWorkspace,
@@ -62,6 +71,258 @@ describe("agent workspaces", () => {
         });
         return { workspace: claimed, state };
     }
+
+    it("creates durable checkpoints without changing the parent checkout", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "base\n");
+        await git(repository, "add", "tracked.txt");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+        const parentHead = await gitOutput(repository, "rev-parse", "HEAD");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "checkpointed\n");
+        await fs.writeFile(path.join(workspace.worktreePath, "untracked.txt"), "also checkpointed\n");
+        const beforeStatus = await gitOutput(workspace.worktreePath, "status", "--porcelain=v1", "--untracked-files=all");
+        const checkpoint = await createAgentWorkspaceCheckpoint(workspace.id, {
+            ownerSessionId: "session-1",
+            leaseRunId: "worker-1",
+            runInstanceId: "worker-instance",
+            kind: "intermediate",
+            runStatus: "interrupted",
+            childSessionLeafId: null,
+            workspacesDir: state,
+        });
+
+        expect(checkpoint.sequence).toBe(1);
+        expect(checkpoint.workspaceId).toBe(workspace.id);
+        expect(checkpoint.baseRevision).toBe(parentHead);
+        expect(await gitOutput(repository, "rev-parse", checkpoint.durableRef)).toBe(checkpoint.headRevision);
+        expect(await gitOutput(repository, "rev-parse", "HEAD")).toBe(parentHead);
+        expect(await gitOutput(workspace.worktreePath, "status", "--porcelain=v1", "--untracked-files=all")).toBe("");
+        expect(await gitOutput(workspace.worktreePath, "log", "-1", "--format=%s")).toBe("pi-coder: workspace checkpoint");
+        expect(await gitOutput(workspace.worktreePath, "show", `${checkpoint.headRevision}:tracked.txt`)).toBe("checkpointed");
+        expect(await gitOutput(workspace.worktreePath, "show", `${checkpoint.headRevision}:untracked.txt`)).toBe("also checkpointed");
+        expect(beforeStatus).toContain("tracked.txt");
+        expect(beforeStatus).toContain("untracked.txt");
+
+        const stored = await getAgentWorkspaceCheckpoint(checkpoint.id, { workspacesDir: state });
+        expect(stored).toEqual(checkpoint);
+        expect(await latestAgentWorkspaceCheckpoint(workspace.id, "worker-instance", { workspacesDir: state })).toEqual(checkpoint);
+        expect(await listAgentWorkspaceCheckpoints(workspace.id, { workspacesDir: state })).toEqual([checkpoint]);
+    });
+
+    it("recycles an inactive checkpointed workspace while preserving history", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "base\n");
+        await git(repository, "add", "tracked.txt");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const workspace = await createAgentWorkspace(repository, { workspacesDir: state });
+        const prepared = await updateAgentWorkspace(workspace, { setupState: "skipped" }, { workspacesDir: state });
+        const leased = await claimAgentWorkspace(prepared.id, {
+            ownerSessionId: "session-1",
+            leaseRunId: "worker-1",
+            leaseRunInstanceId: "worker-instance-1",
+            leaseKind: "task",
+            workspacesDir: state,
+        });
+        await fs.writeFile(path.join(leased.worktreePath, "tracked.txt"), "checkpointed\n");
+        const checkpoint = await createAgentWorkspaceCheckpoint(leased.id, {
+            ownerSessionId: "session-1",
+            leaseRunId: "worker-1",
+            runInstanceId: "worker-instance-1",
+            kind: "terminal",
+            runStatus: "completed",
+            childSessionLeafId: null,
+            workspacesDir: state,
+        });
+        const result = await prepareAgentWorkspaceApplication(leased, {
+            ownerSessionId: "session-1",
+            leaseRunId: "worker-1",
+            leaseRunInstanceId: "worker-instance-1",
+            workspacesDir: state,
+        });
+        await fs.writeFile(path.join(repository, "parent-change.txt"), "new parent state\n");
+        await git(repository, "add", "parent-change.txt");
+        await git(repository, "commit", "--quiet", "-m", "parent update");
+        const parentHead = await gitOutput(repository, "rev-parse", "HEAD");
+
+        const recycled = await recycleAgentWorkspaceForReuse(leased.id, {
+            previousOwnerSessionId: "session-1",
+            previousLeaseRunId: "worker-1",
+            previousLeaseRunInstanceId: "worker-instance-1",
+            ownerSessionId: "session-2",
+            leaseRunId: "worker-2",
+            leaseRunInstanceId: "worker-instance-2",
+            workspacesDir: state,
+        });
+
+        expect(recycled).toMatchObject({
+            id: leased.id,
+            baseRevision: parentHead,
+            status: "available",
+            leaseOwnerSessionId: "session-2",
+            leaseRunId: "worker-2",
+            leaseRunInstanceId: "worker-instance-2",
+            leaseKind: "task",
+        });
+        expect(await gitOutput(recycled.worktreePath, "rev-parse", "HEAD")).toBe(parentHead);
+        expect(await gitOutput(recycled.worktreePath, "status", "--porcelain=v1", "--untracked-files=all")).toBe("");
+        expect(await getAgentWorkspaceCheckpoint(checkpoint.id, { workspacesDir: state })).toEqual(checkpoint);
+        expect(await listAgentWorkspaceResults(leased.id, { workspacesDir: state })).toEqual([result]);
+        expect(await gitOutput(repository, "rev-parse", checkpoint.durableRef)).toBe(checkpoint.headRevision);
+
+        await fs.writeFile(path.join(recycled.worktreePath, "new-worker.txt"), "new worker\n");
+        const newerResult = await prepareAgentWorkspaceApplication(recycled, {
+            ownerSessionId: "session-2",
+            leaseRunId: "worker-2",
+            leaseRunInstanceId: "worker-instance-2",
+            workspacesDir: state,
+        });
+        const historicalInspection = await inspectAgentWorkspaceResult(recycled, result);
+        expect(historicalInspection).toContain("tracked.txt");
+        const metadata = await openAgentMetadataDatabase(state);
+        metadata.prepare("UPDATE workspace_results SET reservation_token = ? WHERE id = ?").run("held-by-other", result.id);
+        metadata.close();
+        await expect(applyAgentWorkspaceApplication(recycled, {
+            ownerSessionId: "session-1",
+            leaseRunId: "worker-1",
+            leaseRunInstanceId: "worker-instance-1",
+            resultId: result.id,
+            workspacesDir: state,
+        })).rejects.toThrow("already reserved");
+        const releasedMetadata = await openAgentMetadataDatabase(state);
+        releasedMetadata.prepare("UPDATE workspace_results SET reservation_token = NULL WHERE id = ?").run(result.id);
+        releasedMetadata.close();
+        await applyAgentWorkspaceApplication(recycled, {
+            ownerSessionId: "session-1",
+            leaseRunId: "worker-1",
+            leaseRunInstanceId: "worker-instance-1",
+            resultId: result.id,
+            workspacesDir: state,
+        });
+        expect(await fs.readFile(path.join(repository, "tracked.txt"), "utf8")).toBe("checkpointed\n");
+        expect(await fs.readFile(path.join(recycled.worktreePath, "new-worker.txt"), "utf8")).toBe("new worker\n");
+        expect(await listAgentWorkspaceResults(leased.id, { workspacesDir: state })).toEqual([
+            { ...result, status: "applied", parentRevision: parentHead, appliedAt: expect.any(Number) },
+            newerResult,
+        ]);
+    });
+
+    it("allocates a recyclable checkpointed slot before reporting capacity", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "base\n");
+        await git(repository, "add", "tracked.txt");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const workspace = await createAgentWorkspace(repository, { workspacesDir: state });
+        const prepared = await updateAgentWorkspace(workspace, { setupState: "skipped" }, { workspacesDir: state });
+        const leased = await claimAgentWorkspace(prepared.id, {
+            ownerSessionId: "session-1",
+            leaseRunId: "worker-1",
+            leaseRunInstanceId: "worker-instance-1",
+            leaseKind: "task",
+            workspacesDir: state,
+        });
+        await fs.writeFile(path.join(leased.worktreePath, "worker.txt"), "saved\n");
+        await createAgentWorkspaceCheckpoint(leased.id, {
+            ownerSessionId: "session-1",
+            leaseRunId: "worker-1",
+            runInstanceId: "worker-instance-1",
+            kind: "intermediate",
+            runStatus: "interrupted",
+            childSessionLeafId: null,
+            workspacesDir: state,
+        });
+
+        const reservation = await prepareIsolatedWorkspace(repository, {
+            definition: {
+                name: "worker",
+                source: "builtin",
+                capabilities: ["edit"],
+                description: "worker",
+                systemPrompt: "worker",
+            },
+            factory: async () => {
+                throw new Error("the setup worker must not run while recycling");
+            },
+            manager: {
+                hasActiveNonIsolatedMutatingRun: false,
+                getRunStatus: () => undefined,
+                parkWorkspaceRunForReuse: () => false,
+            } as never,
+            ctx: {
+                cwd: repository,
+                sessionManager: { getSessionId: () => "session-2" },
+            } as never,
+            workspacesDir: state,
+        });
+
+        expect(reservation).toMatchObject({
+            workspace: {
+                id: leased.id,
+                leaseOwnerSessionId: "session-2",
+                leaseRunId: expect.stringMatching(/^workspace-provision-/),
+                leaseKind: "task",
+            },
+            ownerSessionId: "session-2",
+        });
+    });
+
+    it("restores a checkpoint into its original workspace", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "tracked.txt"), "base\n");
+        await git(repository, "add", "tracked.txt");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+
+        const { workspace } = await createClaimedWorkspace(repository, state);
+        await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "first checkpoint\n");
+        const checkpoint = await createAgentWorkspaceCheckpoint(workspace.id, {
+            ownerSessionId: "session-1",
+            leaseRunId: "worker-1",
+            runInstanceId: "worker-instance",
+            kind: "terminal",
+            runStatus: "canceled",
+            childSessionLeafId: "leaf-1",
+            workspacesDir: state,
+        });
+        await fs.writeFile(path.join(workspace.worktreePath, "tracked.txt"), "later state\n");
+        await fs.writeFile(path.join(workspace.worktreePath, "later.txt"), "remove me\n");
+
+        await restoreAgentWorkspaceCheckpoint(workspace, checkpoint, { workspacesDir: state });
+
+        expect(await gitOutput(workspace.worktreePath, "rev-parse", "HEAD")).toBe(checkpoint.headRevision);
+        expect(await fs.readFile(path.join(workspace.worktreePath, "tracked.txt"), "utf8")).toBe("first checkpoint\n");
+        await expect(fs.access(path.join(workspace.worktreePath, "later.txt"))).rejects.toThrow();
+    });
 
     it("creates flat random-slug worktrees and claims them atomically", async () => {
         const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
@@ -581,6 +842,7 @@ describe("agent workspaces", () => {
         expect(resetResult).toMatchObject({ status: "discarded" });
         expect(resetResult?.durableRef).toBeUndefined();
 
+        await fs.rm(path.join(repository, "parent-dirty.txt"));
         const discarded = await createAgentWorkspace(repository, { workspacesDir: state });
         await discardAgentWorkspace(discarded.id, { workspacesDir: state });
         expect(await listAgentWorkspaces(repository, { workspacesDir: state })).toHaveLength(1);

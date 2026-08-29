@@ -37,6 +37,7 @@ export interface AgentWorkspaceLeaseOptions {
     leaseRunId: string;
     workspacesDir?: string;
     leaseRunInstanceId?: string;
+    resultId?: string;
 }
 
 /** Optional lease controls used when a workspace may already be unleased. */
@@ -74,7 +75,7 @@ function rowToWorkspace(row: WorkspaceRow): AgentWorkspace | undefined {
         || typeof row.slug !== "string"
         || typeof row.base_revision !== "string"
         || !["not_started", "running", "ready", "skipped", "failed"].includes(setupState as string)
-        || !["available", "review_required"].includes(row.workspace_status as string)
+        || !["available", "review_required", "recycling"].includes(row.workspace_status as string)
         || typeof row.created_at !== "number"
         || typeof row.updated_at !== "number"
     ) return undefined;
@@ -121,7 +122,7 @@ function rowToWorkspaceResult(row: WorkspaceRow): AgentWorkspaceResult | undefin
         || !Array.isArray(commits)
         || !commits.every((commit): commit is string => typeof commit === "string")
         || typeof row.prepared_at !== "number"
-        || !["prepared", "applied", "discarded"].includes(row.status as string)
+        || !["prepared", "applying", "applied", "discarded"].includes(row.status as string)
     ) return undefined;
     return {
         id: row.id,
@@ -140,13 +141,31 @@ function rowToWorkspaceResult(row: WorkspaceRow): AgentWorkspaceResult | undefin
     };
 }
 
-function workspaceResultById(database: WorkspaceDatabase, resultId: string): AgentWorkspaceResult | undefined {
+export function workspaceResultById(database: WorkspaceDatabase, resultId: string): AgentWorkspaceResult | undefined {
     const row = database.prepare(`
         SELECT id, workspace_id, run_id, run_instance_id, base_revision, worker_head, commit_range,
                commits_json, durable_ref, prepared_at, status, parent_revision, applied_at
         FROM workspace_results
         WHERE id = ?
     `).get(resultId) as WorkspaceRow | undefined;
+    return row ? rowToWorkspaceResult(row) : undefined;
+}
+
+export function workspaceResultForRun(
+    database: WorkspaceDatabase,
+    workspaceId: string,
+    runId: string,
+    runInstanceId?: string,
+): AgentWorkspaceResult | undefined {
+    const row = database.prepare(`
+        SELECT id, workspace_id, run_id, run_instance_id, base_revision, worker_head, commit_range,
+               commits_json, durable_ref, prepared_at, status, parent_revision, applied_at
+        FROM workspace_results
+        WHERE workspace_id = ? AND run_id = ?
+          AND (? IS NULL AND run_instance_id IS NULL OR run_instance_id = ?)
+        ORDER BY prepared_at DESC, id DESC
+        LIMIT 1
+    `).get(workspaceId, runId, runInstanceId ?? null, runInstanceId ?? null) as WorkspaceRow | undefined;
     return row ? rowToWorkspaceResult(row) : undefined;
 }
 
@@ -169,19 +188,39 @@ const ACTIVE_AGENT_RUN_STATUSES = new Set([
     "waiting_for_parent",
 ]);
 
+function isProcessAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        return error instanceof Error && (error as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+}
+
 /** Return whether a task lease still has an active durable run behind it. */
 export function workspaceLeaseActive(database: WorkspaceDatabase, workspace: AgentWorkspace): boolean {
     if (!workspace.leaseRunId || workspace.leaseKind !== "task" || !workspace.leaseOwnerSessionId) {
         return false;
     }
     const row = database.prepare(`
-        SELECT status FROM agent_runs
+        SELECT status, owner_pid FROM agent_runs
         WHERE owner_session_id = ? AND run_instance_id = ?
     `).get(
         workspace.leaseOwnerSessionId,
         workspace.leaseRunInstanceId ?? `${workspace.leaseOwnerSessionId}:${workspace.leaseRunId}`,
     ) as WorkspaceRow | undefined;
-    return typeof row?.status === "string" && ACTIVE_AGENT_RUN_STATUSES.has(row.status);
+    const continuation = database.prepare(`
+        SELECT lease_until FROM agent_run_continuation_leases
+        WHERE run_instance_id = ? AND lease_until > ?
+    `).get(
+        workspace.leaseRunInstanceId ?? `${workspace.leaseOwnerSessionId}:${workspace.leaseRunId}`,
+        Date.now(),
+    ) as WorkspaceRow | undefined;
+    if (typeof continuation?.lease_until === "number") return true;
+    const active = typeof row?.status === "string" && ACTIVE_AGENT_RUN_STATUSES.has(row.status);
+    if (!active) return false;
+    if (typeof row?.owner_pid !== "number") return true;
+    return isProcessAlive(row.owner_pid);
 }
 
 export function workspaceLeaseState(database: WorkspaceDatabase, workspace: AgentWorkspace): WorkspaceLeaseState {
@@ -246,6 +285,32 @@ export async function getAgentWorkspace(
     const database = await openDatabase(workspacesDir);
     try {
         return attachLatestWorkspaceResult(database, workspaceById(database, workspaceId));
+    } finally {
+        database.close();
+    }
+}
+
+export async function getAgentWorkspaceResultById(
+    resultId: string,
+    { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
+): Promise<AgentWorkspaceResult | undefined> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        return workspaceResultById(database, resultId);
+    } finally {
+        database.close();
+    }
+}
+
+export async function getAgentWorkspaceResult(
+    workspaceId: string,
+    runId: string,
+    runInstanceId?: string,
+    { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
+): Promise<AgentWorkspaceResult | undefined> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        return workspaceResultForRun(database, workspaceId, runId, runInstanceId);
     } finally {
         database.close();
     }
@@ -417,6 +482,52 @@ export async function claimAgentWorkspace(
     }
 }
 
+/** Claim a review-required or available slot for continuation of its original run. */
+export async function claimAgentWorkspaceForContinuation(
+    workspaceId: string,
+    {
+        ownerSessionId,
+        leaseRunId,
+        leaseRunInstanceId,
+        workspacesDir = PI_CODER_WORKSPACES_DIR,
+    }: AgentWorkspaceLeaseOptions,
+): Promise<AgentWorkspace> {
+    const database = await openDatabase(workspacesDir);
+    try {
+        database.exec("BEGIN IMMEDIATE");
+        const result = database.prepare(`
+            UPDATE workspaces
+            SET lease_owner_session_id = ?, lease_run_id = ?, lease_run_instance_id = ?,
+                lease_kind = 'task', lease_acquired_at = ?, updated_at = ?
+            WHERE id = ? AND workspace_status IN ('available', 'review_required')
+              AND lease_run_id IS NULL
+        `).run(
+            ownerSessionId,
+            leaseRunId,
+            leaseRunInstanceId ?? null,
+            Date.now(),
+            Date.now(),
+            workspaceId,
+        );
+        if (Number(result.changes) !== 1) {
+            rollback(database);
+            throw new Error(`Workspace ${workspaceId} is not available for continuation.`);
+        }
+        const workspace = workspaceById(database, workspaceId);
+        if (!workspace) {
+            rollback(database);
+            throw new Error(`Workspace ${workspaceId} disappeared while being claimed for continuation.`);
+        }
+        database.exec("COMMIT");
+        return workspace;
+    } catch (error) {
+        rollback(database);
+        throw error;
+    } finally {
+        database.close();
+    }
+}
+
 export async function transferAgentWorkspaceLease(
     workspaceId: string,
     {
@@ -470,7 +581,10 @@ export async function releaseAgentWorkspaceLease(
         ) {
             throw new Error(`Workspace ${workspaceId} is not leased by ${leaseRunId}.`);
         }
-        if (workspace.leaseKind === "task" && workspace.latestResult?.status !== "applied") {
+        const result = workspace.leaseKind === "task"
+            ? workspaceResultForRun(database, workspaceId, leaseRunId, leaseRunInstanceId)
+            : undefined;
+        if (workspace.leaseKind === "task" && result?.status !== "applied") {
             throw new Error(`Workspace ${workspaceId} can be released only after successful application.`);
         }
         database.prepare(`

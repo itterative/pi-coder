@@ -199,6 +199,7 @@ export function initializeAgentRunContinuationHeads(
 function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCatalogRecord {
     return {
         ownerSessionId: record.ownerSessionId,
+        ownerPid: record.ownerPid,
         runId: record.runId,
         runInstanceId: record.runInstanceId,
         parentCwd: record.parentCwd ?? parentCwd,
@@ -213,6 +214,7 @@ function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCa
         background: record.background,
         mutating: record.mutating,
         workspaceId: record.workspaceId,
+        workspaceResultId: record.workspaceResultId,
         childSessionFile: record.childSessionFile,
         childSessionLeafId: record.childSessionLeafId,
         startedAt: record.startedAt,
@@ -631,6 +633,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
     return {
         version: 1,
         ownerSessionId,
+        ownerPid: typeof record.ownerPid === "number" && Number.isSafeInteger(record.ownerPid) ? record.ownerPid : undefined,
         runId: record.runId,
         ...(typeof record.runInstanceId === "string" ? { runInstanceId: record.runInstanceId } : {}),
         title: boundedString(record.title, 80),
@@ -647,6 +650,7 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         background: record.background,
         mutating: record.mutating,
         workspaceId: boundedString(record.workspaceId, 200),
+        workspaceResultId: boundedString(record.workspaceResultId, 200),
         question: typeof questionValue?.question === "string" ? {
             question: questionValue.question.slice(0, 4_000),
             context: boundedString(questionValue.context, 12_000),

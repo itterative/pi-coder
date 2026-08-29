@@ -17,6 +17,7 @@ import {
     type WorkspaceReservation,
 } from "./workspaces/setup";
 import { releaseAgentWorkspaceAfterNoChanges } from "./workspaces/results";
+import { createAgentWorkspaceCheckpointCallback } from "./workspaces/checkpoints";
 import {
     listAgentWorkspaces,
     releaseAgentWorkspaceLease,
@@ -50,6 +51,11 @@ export async function executeAgentAction(
     let outcome: AgentRunOutcome;
     let reservation: WorkspaceReservation | undefined;
     let transferredLeaseIdentity: AgentRunIdentity | undefined;
+    let startCompleted = false;
+    const ownerSessionId = ctx.sessionManager?.getSessionId?.();
+    const workspaceCheckpoint = ownerSessionId
+        ? createAgentWorkspaceCheckpointCallback(ownerSessionId)
+        : undefined;
     try {
         const request = validateAgentParameters(params);
         if (request.action === "list") {
@@ -138,8 +144,12 @@ export async function executeAgentAction(
                     title: request.title,
                     identity: runIdentity,
                     background: request.background,
+                    ...(request.isolation === "worktree" && workspaceCheckpoint
+                        ? { onWorkspaceCheckpoint: workspaceCheckpoint }
+                        : {}),
                 },
             );
+            startCompleted = true;
             if (!request.background) {
                 outcome = await prepareForegroundWorkspaceResult(outcome, ctx, lifecycle.events);
             }
@@ -166,6 +176,7 @@ export async function executeAgentAction(
                     signal,
                     onProgress: progress,
                     onBackgroundUpdate: lifecycle.backgroundUpdate(ctx),
+                    ...(workspaceCheckpoint ? { onWorkspaceCheckpoint: workspaceCheckpoint } : {}),
                 });
                 outcome = await prepareForegroundWorkspaceResult(outcome, ctx, lifecycle.events);
                 lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
@@ -182,7 +193,9 @@ export async function executeAgentAction(
             }
         } else if (request.action === "cancel") {
             outcome = await prepareForegroundWorkspaceResult(
-                await lifecycle.manager.cancel(request.runId),
+                await lifecycle.manager.cancel(request.runId, workspaceCheckpoint
+                    ? { onWorkspaceCheckpoint: workspaceCheckpoint }
+                    : {}),
                 ctx,
                 lifecycle.events,
             );
@@ -203,6 +216,15 @@ export async function executeAgentAction(
             outcome = lifecycle.manager.status(request.runId);
         } else {
             const pending = lifecycle.manager.status(request.runId);
+            const terminal = pending.details.status === "completed"
+                || pending.details.status === "failed"
+                || pending.details.status === "aborted"
+                || pending.details.status === "canceled";
+            if (!terminal) {
+                throw new AgentActionError(
+                    `Agent run ${request.runId} is ${pending.details.status}; wait for its terminal checkpoint before collecting.`,
+                );
+            }
             const workspaceResult = await prepareCollectedWorkspaceResult(
                 pending.details,
                 ctx,
@@ -235,7 +257,17 @@ export async function executeAgentAction(
             lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
         }
     } catch (error) {
-        if (reservation && !transferredLeaseIdentity) {
+        if (reservation && transferredLeaseIdentity && !startCompleted) {
+            await transferAgentWorkspaceLease(reservation.workspace.id, {
+                ownerSessionId: reservation.ownerSessionId,
+                fromLeaseRunId: transferredLeaseIdentity.runId,
+                fromLeaseRunInstanceId: transferredLeaseIdentity.runInstanceId,
+                toLeaseRunId: reservation.provisionalLeaseRunId,
+                toLeaseRunInstanceId: reservation.provisionalLeaseRunInstanceId,
+                leaseKind: "task",
+            }).catch(() => {});
+        }
+        else if (reservation && !transferredLeaseIdentity) {
             await releaseAgentWorkspaceLease(reservation.workspace.id, {
                 ownerSessionId: reservation.ownerSessionId,
                 leaseRunId: reservation.provisionalLeaseRunId,
@@ -245,5 +277,11 @@ export async function executeAgentAction(
         outcome = failedOutcome(params, error);
     }
 
+    if (outcome.details.workspaceResult) {
+        lifecycle.manager.setWorkspaceResultId(
+            outcome.details.runId,
+            outcome.details.workspaceResult.id,
+        );
+    }
     return outcome;
 }

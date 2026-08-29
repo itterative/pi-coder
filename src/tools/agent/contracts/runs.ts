@@ -128,6 +128,7 @@ export interface AgentRunDetails {
     setupFailed?: boolean;
     discoveryDiagnostics?: string[];
     workspaceId?: string;
+    workspaceResultId?: string;
     childSessionLeafId?: string | null;
     workspaceResult?: AgentWorkspaceResult;
     mutating?: boolean;
@@ -151,6 +152,8 @@ export type AgentBackgroundCallback = (details: AgentRunDetails) => void;
 export interface PersistedAgentRun {
     version: 1;
     ownerSessionId: string;
+    /** PID that last persisted this run; used only for conservative lease health checks. */
+    ownerPid?: number;
     runId: string;
     /** Globally unique physical run identity. Required by V2 snapshots. */
     runInstanceId?: string;
@@ -169,6 +172,7 @@ export interface PersistedAgentRun {
     background: boolean;
     mutating: boolean;
     workspaceId?: string;
+    workspaceResultId?: string;
     question?: ParentQuestion;
     progress: ChildProgress;
     usageCheckpoint: Usage;
@@ -218,6 +222,20 @@ export interface AgentRunPersistence {
     close?: () => void;
     deleteChildSession(sessionFile: string): void;
 }
+
+export interface AgentWorkspaceCheckpointRequest {
+    workspaceId: string;
+    runId: string;
+    runInstanceId: string;
+    kind: "intermediate" | "terminal";
+    runStatus: "waiting_for_parent" | "interrupted" | "completed" | "failed" | "aborted" | "canceled";
+    childSessionFile?: string;
+    childSessionLeafId: string | null;
+}
+
+export type AgentWorkspaceCheckpointCallback = (
+    request: AgentWorkspaceCheckpointRequest,
+) => Promise<void>;
 
 export interface AgentRunSummary {
     runId: string;

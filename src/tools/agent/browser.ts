@@ -273,6 +273,12 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                         ctx,
                         lifecycle.events,
                     );
+                    if (outcome.details.workspaceResult) {
+                        lifecycle.manager.setWorkspaceResultId(
+                            outcome.details.runId,
+                            outcome.details.workspaceResult.id,
+                        );
+                    }
                     lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
                     lifecycle.publishAgentStatus();
                 } catch (error) {
@@ -291,6 +297,12 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                         ctx,
                         lifecycle.events,
                     );
+                    if (outcome.details.workspaceResult) {
+                        lifecycle.manager.setWorkspaceResultId(
+                            outcome.details.runId,
+                            outcome.details.workspaceResult.id,
+                        );
+                    }
                     lifecycle.notifyUserCanceled(outcome.details);
                     lifecycle.publishAgentStatus();
                 } catch (error) {

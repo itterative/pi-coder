@@ -16,6 +16,7 @@ import type {
     AgentBackgroundCallback,
     AgentContinuationLease,
     AgentProgressCallback,
+    AgentWorkspaceCheckpointCallback,
     AgentRunDetails,
     AgentRunOutcome,
     AgentRunPersistence,
@@ -32,6 +33,7 @@ import type { WorkerMutationReport } from "../contracts/mutations";
 import type { AgentTraceData, AgentTraceSink } from "../contracts/trace";
 import { renderAgentTask } from "../prompts/renderer";
 import { CONTINUATION_LEASE_RECOVERY_GRACE_MS } from "./persistence";
+import { getAgentWorkspace } from "../workspaces/store";
 import { cloneUsage, subtractUsage, ZERO_USAGE } from "./usage";
 
 export { ZERO_USAGE } from "./usage";
@@ -40,6 +42,7 @@ export type {
     AgentBackgroundCallback,
     AgentContinuationLease,
     AgentProgressCallback,
+    AgentWorkspaceCheckpointCallback,
     AgentRunDetails,
     AgentRunOutcome,
     AgentRunPersistence,
@@ -64,6 +67,7 @@ export interface AgentStartOptions {
     signal?: AbortSignal;
     onProgress?: AgentProgressCallback;
     onBackgroundUpdate?: AgentBackgroundCallback;
+    onWorkspaceCheckpoint?: AgentWorkspaceCheckpointCallback;
     title?: string;
     identity?: AgentRunIdentity;
     background?: boolean;
@@ -74,8 +78,11 @@ export interface AgentContinuationOptions {
     signal?: AbortSignal;
     onProgress?: AgentProgressCallback;
     onBackgroundUpdate?: AgentBackgroundCallback;
+    onWorkspaceCheckpoint?: AgentWorkspaceCheckpointCallback;
     title?: string;
     identity?: AgentRunIdentity;
+    /** Lease acquired before workspace restoration to serialize continuations. */
+    continuationLease?: AgentContinuationLease;
 }
 
 /** Named controls for resuming a waiting or interrupted delegated agent run. */
@@ -84,6 +91,7 @@ export interface AgentResumeOptions {
     signal?: AbortSignal;
     onProgress?: AgentProgressCallback;
     onBackgroundUpdate?: AgentBackgroundCallback;
+    onWorkspaceCheckpoint?: AgentWorkspaceCheckpointCallback;
 }
 
 type AgentStartContext = Omit<
@@ -118,6 +126,7 @@ interface AgentRun {
     mutating: boolean;
     setupFailed?: boolean;
     workspaceId?: string;
+    workspaceResultId?: string;
     definitionFingerprint: string;
     permissionPending: boolean;
     childSessionFile?: string;
@@ -127,6 +136,7 @@ interface AgentRun {
     restoredProgress?: ChildProgress;
     restoredMutationReport?: WorkerMutationReport;
     operation?: Promise<AgentRunOutcome>;
+    operationSettled?: Promise<AgentRunOutcome>;
     backgroundTask?: Promise<AgentRunOutcome>;
     backgroundCallback?: AgentBackgroundCallback;
     onBackgroundUpdate?: AgentBackgroundCallback;
@@ -136,6 +146,8 @@ interface AgentRun {
     continuationLease?: AgentContinuationLease;
     continuationLeaseLost?: boolean;
     terminalOutcome?: AgentRunOutcome;
+    terminalCompletion?: Promise<AgentRunOutcome>;
+    workspaceCheckpoint?: AgentWorkspaceCheckpointCallback;
     abortPromise?: Promise<void>;
 }
 
@@ -220,6 +232,37 @@ export class AgentRunManager {
         return this.persistedRuns.get(runId);
     }
 
+    /** Reserve a persisted continuation before touching its physical workspace. */
+    reserveContinuationLease(runId: string): AgentContinuationLease | undefined {
+        const run = this.runs.get(runId);
+        const persisted = this.persistedRuns.get(runId);
+        const runInstanceId = run?.runInstanceId ?? persisted?.runInstanceId;
+        if (!runInstanceId || !this.persistence?.usesSnapshotMarkers || !this.persistence.acquireContinuationLease) {
+            return undefined;
+        }
+        return this.persistence.acquireContinuationLease(runInstanceId);
+    }
+
+    /** Associate the latest exact workspace result with its logical run. */
+    setWorkspaceResultId(runId: string, resultId: string): boolean {
+        const run = this.runs.get(runId);
+        if (run) {
+            run.workspaceResultId = resultId;
+            this.persistRun(run);
+            return true;
+        }
+        const persisted = this.persistedRuns.get(runId);
+        if (!persisted) return false;
+        const updated: PersistedAgentRun = {
+            ...persisted,
+            workspaceResultId: resultId,
+            updatedAt: Date.now(),
+        };
+        if (this.persistence && !this.persistence.save(updated)) return false;
+        this.persistedRuns.set(runId, updated);
+        return true;
+    }
+
     async flushPersistence(): Promise<void> {
         await this.persistence?.flush?.();
     }
@@ -234,6 +277,18 @@ export class AgentRunManager {
 
     get activeCount(): number {
         return [...this.runs.values()].filter((run) => !isTerminalStatus(run.status)).length;
+    }
+
+    /** Detach a settled workspace run before its physical slot is recycled. */
+    parkWorkspaceRunForReuse(workspaceId: string, runId: string): boolean {
+        const run = this.runs.get(runId);
+        if (!run || run.workspaceId !== workspaceId) return false;
+        if (run.status !== "waiting_for_parent" && run.status !== "interrupted" && !isTerminalStatus(run.status)) return false;
+        if (this.persistence && !this.persistRun(run, "removed")) return false;
+        this.releaseRunContinuationLease(run);
+        this.disposeRun(run);
+        this.runs.delete(run.id);
+        return true;
     }
 
     get hasActiveMutatingRun(): boolean {
@@ -286,6 +341,7 @@ export class AgentRunManager {
                 mutationReport: this.mutationReport(run),
                 mutating: run.mutating,
                 workspaceId: run.workspaceId,
+                workspaceResultId: run.workspaceResultId,
             };
         });
     }
@@ -318,6 +374,18 @@ export class AgentRunManager {
         for (const record of records.sort((a, b) => a.startedAt - b.startedAt)) {
             if (this.closing || this.restoreAbortController.signal.aborted) break;
             if (record.status === "removed" || record.ownerSessionId !== this.persistence?.ownerSessionId) continue;
+            if (record.workspaceId) {
+                const workspace = await getAgentWorkspace(record.workspaceId);
+                const ownsOriginalWorkspace = workspace?.leaseOwnerSessionId === record.ownerSessionId
+                    && workspace.leaseRunId === record.runId
+                    && workspace.leaseRunInstanceId === record.runInstanceId
+                    && workspace.leaseKind === "task"
+                    && workspace.status !== "recycling";
+                if (!ownsOriginalWorkspace) {
+                    diagnostics.push(`Could not restore ${record.runId}: its original workspace is parked or occupied; continue it explicitly after reclaiming that workspace.`);
+                    continue;
+                }
+            }
             if (record.resumable === false) {
                 diagnostics.push(`Could not restore ${record.runId}: this checkpoint is historical and was continued on another parent branch.`);
                 continue;
@@ -393,6 +461,7 @@ export class AgentRunManager {
                 mutating: persistedTerminal ? record.mutating : snapshotMutating,
                 setupFailed: record.setupFailed,
                 workspaceId: record.workspaceId,
+                workspaceResultId: record.workspaceResultId,
                 permissionPending: false,
                 childSessionFile: record.childSessionFile,
                 childSessionLeafId: record.childSessionLeafId,
@@ -510,6 +579,7 @@ export class AgentRunManager {
             signal,
             onProgress,
             onBackgroundUpdate,
+            onWorkspaceCheckpoint,
             title,
             identity,
             background = false,
@@ -519,6 +589,7 @@ export class AgentRunManager {
             if (signal?.aborted) throw new AgentActionError("Agent start was aborted before launch.");
             const { definition, run } = this.createRun(definitionOrName, task, context, true, title, identity);
             run.backgroundCallback = onBackgroundUpdate;
+            run.workspaceCheckpoint = onWorkspaceCheckpoint;
             const taskPromise = this.launchBackground(run, definition, context).catch((error) => {
                 if (isTerminalStatus(run.status)) return run.terminalOutcome!;
                 return this.finishFailure(
@@ -536,6 +607,7 @@ export class AgentRunManager {
         }
 
         const { definition, run } = this.createRun(definitionOrName, task, context, false, title, identity);
+        run.workspaceCheckpoint = onWorkspaceCheckpoint;
         const setupOutcome = await this.setupRun(
             run,
             definition,
@@ -561,11 +633,14 @@ export class AgentRunManager {
             signal,
             onProgress,
             onBackgroundUpdate,
+            onWorkspaceCheckpoint,
             title,
             identity,
+            continuationLease,
         }: AgentContinuationOptions = {},
     ): Promise<AgentRunOutcome> {
-        const { definition, run } = this.createRun(definitionOrName, task, context, false, title, identity);
+        const { definition, run } = this.createRun(definitionOrName, task, context, false, title, identity, continuationLease);
+        run.workspaceCheckpoint = onWorkspaceCheckpoint;
         const setupOutcome = await this.setupRun(
             run,
             definition,
@@ -589,6 +664,7 @@ export class AgentRunManager {
             signal,
             onProgress,
             onBackgroundUpdate,
+            onWorkspaceCheckpoint,
         }: AgentResumeOptions = {},
     ): Promise<AgentRunOutcome> {
         const run = this.runs.get(runId);
@@ -600,6 +676,7 @@ export class AgentRunManager {
                 `Agent run ${runId} is ${run.status}; only waiting or interrupted runs can be resumed.`,
             );
         }
+        if (onWorkspaceCheckpoint) run.workspaceCheckpoint = onWorkspaceCheckpoint;
         const normalizedGuidance = guidance?.trim();
         if (run.status === "waiting_for_parent" && !normalizedGuidance) {
             throw new AgentActionError("Waiting agent runs require parent guidance.");
@@ -709,8 +786,12 @@ export class AgentRunManager {
         return outcome;
     }
 
-    async cancel(runId: string): Promise<AgentRunOutcome> {
+    async cancel(
+        runId: string,
+        { onWorkspaceCheckpoint }: Pick<AgentResumeOptions, "onWorkspaceCheckpoint"> = {},
+    ): Promise<AgentRunOutcome> {
         const run = this.requireRun(runId);
+        if (onWorkspaceCheckpoint) run.workspaceCheckpoint = onWorkspaceCheckpoint;
         if (isTerminalStatus(run.status)) {
             throw new AgentActionError(
                 `Agent run ${runId} is already ${run.status}; collect its result instead.`,
@@ -718,13 +799,17 @@ export class AgentRunManager {
         }
         this.record(run, "cancel.requested", { status: run.status });
         run.cancelRequested = true;
+        let operationOutcome: AgentRunOutcome | undefined;
         if (run.status === "starting" || run.status === "running") {
-            void this.abortRun(run)?.catch(() => {});
+            const operation = run.operationSettled;
+            await this.abortRun(run)?.catch(() => {});
+            if (operation) operationOutcome = await operation.catch(() => undefined);
             if (run.background) await run.backgroundTask?.catch(() => {});
         }
         let terminalOutcome = run.terminalOutcome;
+        terminalOutcome ??= operationOutcome;
         if (!isTerminalStatus(run.status)) {
-            terminalOutcome = this.finishTerminal(
+            terminalOutcome = await this.finishTerminal(
                 run,
                 "canceled",
                 `Agent run ${runId} canceled.`,
@@ -807,6 +892,7 @@ export class AgentRunManager {
         background: boolean,
         requestedTitle?: string,
         requestedIdentity?: AgentRunIdentity,
+        preAcquiredContinuationLease?: AgentContinuationLease,
     ): { definition: AgentDefinition; run: AgentRun } {
         if (this.closing) throw new AgentActionError("Agent runtime is shutting down.");
         const definition = this.resolveDefinition(definitionOrName);
@@ -864,7 +950,11 @@ export class AgentRunManager {
             throw new AgentActionError("Could not reserve the delegated-agent continuation checkpoint.");
         }
         try {
-            this.acquireRunContinuationLease(run);
+            if (preAcquiredContinuationLease) {
+                run.continuationLease = preAcquiredContinuationLease;
+            } else {
+                this.acquireRunContinuationLease(run);
+            }
         } catch (error) {
             this.runs.delete(run.id);
             throw error;
@@ -1134,7 +1224,7 @@ export class AgentRunManager {
                     this.persistRun(run);
                     this.disposeRun(run);
                 } else if (!isTerminalStatus(run.status)) {
-                    this.finishInterrupted(run, "Agent run was interrupted during session shutdown.");
+                    await this.finishInterrupted(run, "Agent run was interrupted during session shutdown.");
                 }
                 this.removeRun(run, "shutdown", false);
                 continue;
@@ -1175,6 +1265,7 @@ export class AgentRunManager {
         });
         run.detachedOutcome = detachedOutcome;
         const operation = this.beginOperation(run, prompt, signal, onProgress);
+        run.operationSettled = operation;
         const releaseAfterOperation = () => {
             run.detachable = false;
             this.releaseRunContinuationLease(run);
@@ -1224,6 +1315,7 @@ export class AgentRunManager {
         });
         const operation = this.drive(run, prompt, signal, onProgress);
         run.operation = operation;
+        run.operationSettled = operation;
         try {
             return await operation;
         } finally {
@@ -1315,8 +1407,21 @@ export class AgentRunManager {
             }
             run.restoredProgress = progress;
             run.restoredMutationReport = this.mutationReport(run);
+            try {
+                await this.checkpointWorkspace(run, "intermediate", "waiting_for_parent");
+            } catch (error) {
+                return this.finalizeInterrupted(
+                    run,
+                    `The waiting workspace checkpoint failed; the run remains interrupted for explicit recovery: ${errorMessage(error)}`,
+                    progress,
+                );
+            }
             if (this.persistence?.usesSnapshotMarkers && !this.persistRun(run)) {
-                return this.finishInterrupted(run, "Could not durably checkpoint the delegated-agent guidance request.");
+                return this.finalizeInterrupted(
+                    run,
+                    "Could not durably checkpoint the delegated-agent guidance request; the run remains interrupted for explicit recovery.",
+                    progress,
+                );
             }
             this.releaseRunContinuationLease(run);
             if (!run.background) onProgress?.(outcome.details);
@@ -1374,17 +1479,28 @@ export class AgentRunManager {
         return sections.join("\n\n");
     }
 
-    private finishFailure(
+    private async checkpointWorkspace(
         run: AgentRun,
-        error: string,
-        progress: ChildProgress = run.handle?.getProgress() ?? { output: "", recentActivity: [] },
-    ): AgentRunOutcome {
-        return this.finishTerminal(run, "failed", error, true, progress);
+        kind: "intermediate" | "terminal",
+        runStatus: "waiting_for_parent" | "interrupted" | "completed" | "failed" | "aborted" | "canceled",
+    ): Promise<void> {
+        if (!run.workspaceId || !run.workspaceCheckpoint) return;
+        await run.workspaceCheckpoint({
+            workspaceId: run.workspaceId,
+            runId: run.id,
+            runInstanceId: run.runInstanceId,
+            kind,
+            runStatus,
+            childSessionFile: run.childSessionFile,
+            childSessionLeafId: run.childSessionLeafId ?? null,
+        });
     }
 
-    private finishInterrupted(run: AgentRun, content: string): AgentRunOutcome {
-        this.captureChildSessionLeaf(run);
-        const progress = run.handle?.getProgress() ?? run.restoredProgress ?? { output: "", recentActivity: [] };
+    private finalizeInterrupted(
+        run: AgentRun,
+        content: string,
+        progress: ChildProgress,
+    ): AgentRunOutcome {
         this.transitionStatus(run, "interrupted");
         run.permissionPending = false;
         run.updatedAt = Date.now();
@@ -1399,15 +1515,61 @@ export class AgentRunManager {
         return outcome;
     }
 
+    private async finishFailure(
+        run: AgentRun,
+        error: string,
+        progress: ChildProgress = run.handle?.getProgress() ?? { output: "", recentActivity: [] },
+    ): Promise<AgentRunOutcome> {
+        return this.finishTerminal(run, "failed", error, true, progress);
+    }
+
+    private async finishInterrupted(run: AgentRun, content: string): Promise<AgentRunOutcome> {
+        this.captureChildSessionLeaf(run);
+        const progress = run.handle?.getProgress() ?? run.restoredProgress ?? { output: "", recentActivity: [] };
+        let checkpointError: string | undefined;
+        try {
+            await this.checkpointWorkspace(run, "intermediate", "interrupted");
+        } catch (error) {
+            checkpointError = errorMessage(error);
+        }
+        const message = checkpointError
+            ? `${content} Workspace checkpoint failed; the run remains interrupted for explicit recovery: ${checkpointError}`
+            : content;
+        return this.finalizeInterrupted(run, message, progress);
+    }
+
     private finishTerminal(
         run: AgentRun,
         status: "completed" | "failed" | "aborted" | "canceled",
         content: string,
         isError: boolean,
         progress: ChildProgress = run.handle?.getProgress() ?? { output: "", recentActivity: [] },
-    ): AgentRunOutcome {
+    ): Promise<AgentRunOutcome> {
+        if (run.terminalOutcome) return Promise.resolve(run.terminalOutcome);
+        if (run.terminalCompletion) return run.terminalCompletion;
+        const completion = this.finishTerminalInternal(run, status, content, isError, progress);
+        run.terminalCompletion = completion;
+        return completion;
+    }
+
+    private async finishTerminalInternal(
+        run: AgentRun,
+        status: "completed" | "failed" | "aborted" | "canceled",
+        content: string,
+        isError: boolean,
+        progress: ChildProgress = run.handle?.getProgress() ?? { output: "", recentActivity: [] },
+    ): Promise<AgentRunOutcome> {
         if (isTerminalStatus(run.status) && run.terminalOutcome) return run.terminalOutcome;
         this.captureChildSessionLeaf(run);
+        try {
+            await this.checkpointWorkspace(run, "terminal", status);
+        } catch (error) {
+            return this.finalizeInterrupted(
+                run,
+                `The ${status} workspace checkpoint failed; the run remains interrupted for explicit recovery: ${errorMessage(error)}`,
+                progress,
+            );
+        }
         this.transitionStatus(run, status);
         run.permissionPending = false;
         run.updatedAt = Date.now();
@@ -1422,6 +1584,7 @@ export class AgentRunManager {
             status === "failed" ? content : undefined,
             status === "completed" && !isError,
         );
+        run.terminalOutcome = outcome;
         if (run.background) {
             run.terminalOutcome = outcome;
             const persisted = this.persistRun(run);
@@ -1671,6 +1834,7 @@ export class AgentRunManager {
         const persisted: PersistedAgentRun = {
             version: 1,
             ownerSessionId: this.persistence.ownerSessionId,
+            ownerPid: process.pid,
             runId: run.id,
             runInstanceId: run.runInstanceId,
             title: run.title,
@@ -1685,6 +1849,7 @@ export class AgentRunManager {
             background: run.background,
             mutating: run.mutating,
             workspaceId: run.workspaceId,
+            workspaceResultId: run.workspaceResultId,
             question: run.question,
             progress: durableProgress,
             usageCheckpoint: cloneUsage(run.usageCheckpoint),

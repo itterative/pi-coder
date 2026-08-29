@@ -21,7 +21,18 @@ import type {
 import { listAgentRunCatalog } from "../storage/run-catalog";
 import { executeWorkspaceAction } from "./actions";
 import { inspectAgentWorkspaceResult } from "./results";
-import { getAgentWorkspace } from "./store";
+import {
+    createAgentWorkspaceCheckpointCallback,
+    latestAgentWorkspaceCheckpoint,
+    restoreAgentWorkspaceCheckpoint,
+} from "./checkpoints";
+import { recycleAgentWorkspaceForReuse } from "./lifecycle";
+import {
+    claimAgentWorkspaceForContinuation,
+    getAgentWorkspace,
+    getAgentWorkspaceResult,
+    getAgentWorkspaceResultById,
+} from "./store";
 import { git, hasAncestor } from "./git";
 
 type ParentCatalogRecord = AgentRunCatalogRecord;
@@ -30,8 +41,10 @@ function parentWorkspaceOutcome(
     record: ParentCatalogRecord,
     workspace: AgentWorkspace,
     content: string,
+    result?: AgentWorkspaceResult,
 ): AgentRunOutcome {
     const now = Date.now();
+    const workspaceResult = result ?? workspace.latestResult;
     return {
         content,
         details: {
@@ -49,7 +62,7 @@ function parentWorkspaceOutcome(
             startedAt: record.startedAt,
             updatedAt: now,
             ...(record.mutationReport ? { mutationReport: record.mutationReport } : {}),
-            ...(workspace.latestResult ? { workspaceResult: workspace.latestResult } : {}),
+            ...(workspaceResult ? { workspaceResult } : {}),
         },
         usage: ZERO_USAGE,
         isError: false,
@@ -75,6 +88,7 @@ function catalogRecordFromPersisted(
         background: record.background,
         mutating: record.mutating,
         workspaceId: record.workspaceId,
+        workspaceResultId: record.workspaceResultId,
         childSessionFile: record.childSessionFile,
         childSessionLeafId: record.childSessionLeafId,
         startedAt: record.startedAt,
@@ -123,33 +137,133 @@ async function resolveParentWorkspaceRun(
     }
     const workspace = await getAgentWorkspace(record.workspaceId);
     if (!workspace) throw new AgentActionError(`Workspace ${record.workspaceId} is missing.`);
-    if (
-        workspace.latestResult
-        && (workspace.latestResult.runId !== record.runId
-            || workspace.latestResult.runInstanceId !== record.runInstanceId)
-    ) {
-        throw new AgentActionError(`Workspace ${workspace.id} has a newer result than run ${record.runId}.`);
-    }
     return workspace;
 }
 
-function requireParentWorkspaceLease(
+async function resolveParentWorkspaceResult(
+    record: ParentCatalogRecord,
+    workspace: AgentWorkspace,
+): Promise<AgentWorkspaceResult | undefined> {
+    if (record.workspaceResultId) {
+        const result = await getAgentWorkspaceResultById(record.workspaceResultId);
+        if (!result
+            || result.workspaceId !== workspace.id
+            || result.runId !== record.runId
+            || (record.runInstanceId !== undefined && result.runInstanceId !== record.runInstanceId)) {
+            throw new AgentActionError(`Workspace result ${record.workspaceResultId} does not belong to run ${record.runId}.`);
+        }
+        return result;
+    }
+    if (workspace.latestResult
+        && workspace.latestResult.workspaceId === workspace.id
+        && workspace.latestResult.runId === record.runId
+        && workspace.latestResult.runInstanceId === record.runInstanceId) {
+        return workspace.latestResult;
+    }
+    if (!record.runInstanceId) return undefined;
+    return await getAgentWorkspaceResult(workspace.id, record.runId, record.runInstanceId);
+}
+
+interface ContinuationWorkspace {
+    workspace: AgentWorkspace;
+    checkpoint: NonNullable<Awaited<ReturnType<typeof latestAgentWorkspaceCheckpoint>>>;
+}
+
+async function acquireContinuationWorkspace(
+    record: ParentCatalogRecord,
     workspace: AgentWorkspace,
     sessionId: string,
-    runId: string,
-    runInstanceId?: string,
-): AgentWorkspaceResult {
-    if (
-        workspace.leaseOwnerSessionId !== sessionId
-        || workspace.leaseRunId !== runId
-        || (workspace.leaseRunInstanceId !== undefined && workspace.leaseRunInstanceId !== runInstanceId)
-    ) {
-        throw new AgentActionError(`Workspace ${workspace.id} is not currently leased by run ${runId}.`);
+): Promise<ContinuationWorkspace> {
+    if (!record.runInstanceId) {
+        throw new AgentActionError(`Run ${record.runId} has no physical run identity; it cannot be continued safely.`);
     }
-    if (workspace.leaseKind !== "task" || !workspace.latestResult || workspace.latestResult.status !== "prepared") {
-        throw new AgentActionError(`Workspace ${workspace.id} has no prepared result for run ${runId}.`);
+    const checkpoint = await latestAgentWorkspaceCheckpoint(workspace.id, record.runInstanceId);
+    if (!checkpoint || checkpoint.runId !== record.runId) {
+        throw new AgentActionError(
+            `Run ${record.runId} has no durable checkpoint in its original workspace; it cannot be continued safely.`,
+        );
     }
-    return workspace.latestResult;
+    if (workspace.status === "recycling") {
+        throw new AgentActionError(`Workspace ${workspace.id} is currently being recycled; try continuing again shortly.`);
+    }
+
+    let acquired = workspace;
+    let recycled = false;
+    const ownsWorkspace = workspace.leaseOwnerSessionId === sessionId
+        && workspace.leaseRunId === record.runId
+        && workspace.leaseRunInstanceId === record.runInstanceId
+        && workspace.leaseKind === "task";
+    if (!ownsWorkspace && workspace.leaseRunId) {
+        if (workspace.leaseActive === true) {
+            throw new AgentActionError(
+                `Workspace ${workspace.id} is currently used by active run ${workspace.leaseRunId}; finish or cancel that run before continuing ${record.runId}.`,
+            );
+        }
+        if (!workspace.leaseOwnerSessionId || !workspace.leaseRunInstanceId) {
+            throw new AgentActionError(
+                `Workspace ${workspace.id} has an incomplete lease and cannot safely resume run ${record.runId}.`,
+            );
+        }
+        const occupantCheckpoint = await latestAgentWorkspaceCheckpoint(
+            workspace.id,
+            workspace.leaseRunInstanceId,
+        );
+        if (!occupantCheckpoint) {
+            throw new AgentActionError(
+                `Workspace ${workspace.id} is occupied by ${workspace.leaseRunId} without a durable checkpoint; disposition that run before continuing ${record.runId}.`,
+            );
+        }
+        if (occupantCheckpoint.runStatus !== "interrupted") {
+            const result = workspace.latestResult;
+            if (
+                !result
+                || result.runId !== workspace.leaseRunId
+                || (result.runInstanceId !== undefined && result.runInstanceId !== workspace.leaseRunInstanceId)
+                || result.status !== "prepared"
+            ) {
+                throw new AgentActionError(
+                    `Workspace ${workspace.id} is occupied by ${workspace.leaseRunId} before its result was finalized; try continuing again after it settles.`,
+                );
+            }
+        }
+        const occupantHead = await git(workspace.repositoryRoot, ["rev-parse", occupantCheckpoint.durableRef]).catch(() => undefined);
+        if (occupantHead !== occupantCheckpoint.headRevision) {
+            throw new AgentActionError(
+                `Workspace ${workspace.id} is occupied by ${workspace.leaseRunId} with an invalid checkpoint; disposition that run explicitly before continuing ${record.runId}.`,
+            );
+        }
+        acquired = await recycleAgentWorkspaceForReuse(workspace.id, {
+            previousOwnerSessionId: workspace.leaseOwnerSessionId,
+            previousLeaseRunId: workspace.leaseRunId,
+            previousLeaseRunInstanceId: workspace.leaseRunInstanceId,
+            ownerSessionId: sessionId,
+            leaseRunId: record.runId,
+            leaseRunInstanceId: record.runInstanceId,
+        });
+        recycled = true;
+    } else if (!ownsWorkspace) {
+        acquired = await claimAgentWorkspaceForContinuation(workspace.id, {
+            ownerSessionId: sessionId,
+            leaseRunId: record.runId,
+            leaseRunInstanceId: record.runInstanceId,
+        });
+    }
+
+    if (!recycled) {
+        const currentHead = await git(acquired.worktreePath, ["rev-parse", "HEAD"]);
+        if (currentHead !== checkpoint.headRevision) {
+            throw new AgentActionError(
+                `Cannot continue workspace ${acquired.id}: its current revision ${currentHead} differs from checkpoint ${checkpoint.headRevision}. Reconcile or reset the workspace explicitly before continuing.`,
+            );
+        }
+    }
+    await restoreAgentWorkspaceCheckpoint(acquired, checkpoint);
+    if (!(await hasAncestor(acquired.worktreePath, checkpoint.baseRevision, checkpoint.headRevision))) {
+        throw new AgentActionError(
+            `Cannot continue workspace ${acquired.id}: checkpoint ${checkpoint.id} is not based on workspace base ${checkpoint.baseRevision}.`,
+        );
+    }
+    return { workspace: acquired, checkpoint };
 }
 
 /** Named dependencies and controls for dispatching a parent workspace action. */
@@ -266,19 +380,22 @@ export async function executeParentWorkspaceAction(
         });
     }
     const workspace = await resolveParentWorkspaceRun(record);
+    const exactResult = params.action === "continue"
+        ? undefined
+        : await resolveParentWorkspaceResult(record, workspace);
     if (params.action === "inspect") {
-        return parentWorkspaceOutcome(record, workspace, await inspectAgentWorkspaceResult(workspace));
+        return parentWorkspaceOutcome(record, workspace, await inspectAgentWorkspaceResult(workspace, exactResult), exactResult);
     }
 
     const sessionId = ctx.sessionManager.getSessionId();
     if (params.action === "discard") {
-        const hadLease = workspace.leaseRunId !== undefined;
         const action = await executeWorkspaceAction({
             action: "discard_result",
             workspace,
             ownerSessionId: sessionId,
             runId: params.runId,
             runInstanceId: record.runInstanceId,
+            resultId: exactResult?.id,
         });
         emitAgentEvent({
             type: "workspace",
@@ -286,10 +403,10 @@ export async function executeParentWorkspaceAction(
             workspaceId: workspace.id,
             reason: "parent_discarded",
         }, { sink: events, cwd: ctx.cwd });
-        const content = hadLease
+        const content = action.effects.includes("lease_changed")
             ? `Discarded workspace result ${action.result?.id ?? params.runId}; the isolated workspace is reusable.`
-            : `Cleaned up the isolated workspace for result ${params.runId}; the parent checkout was unchanged.`;
-        return parentWorkspaceOutcome(record, action.workspace ?? workspace, content);
+            : `Discarded workspace result ${action.result?.id ?? params.runId}; the current workspace lease and worktree were unchanged.`;
+        return parentWorkspaceOutcome(record, action.workspace ?? workspace, content, action.result);
     }
 
     if (params.action === "apply") {
@@ -299,6 +416,7 @@ export async function executeParentWorkspaceAction(
             ownerSessionId: sessionId,
             runId: params.runId,
             runInstanceId: record.runInstanceId,
+            resultId: exactResult?.id,
         });
         emitAgentEvent({
             type: "workspace",
@@ -310,25 +428,16 @@ export async function executeParentWorkspaceAction(
             record,
             action.workspace ?? workspace,
             `Applied workspace result ${action.result?.id ?? params.runId} to the parent checkout.`,
+            action.result,
         );
     }
 
-    // Remaining action is "continue": inspect/discard/apply branches returned above.
-    requireParentWorkspaceLease(workspace, sessionId, params.runId, record.runInstanceId);
-    let workerHead: string;
+    // Remaining action is "continue": reserve the logical run before
+    // reclaiming and restoring its original physical workspace.
+    const continuationLease = manager.reserveContinuationLease?.(params.runId);
     try {
-        workerHead = await git(workspace.worktreePath, ["rev-parse", "HEAD"]);
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new AgentActionError(`Could not inspect isolated workspace ${workspace.id} before revision: ${message}`);
-    }
-    if (!(await hasAncestor(workspace.worktreePath, workspace.baseRevision, workerHead))) {
-        const message = [
-            `Cannot continue workspace ${workspace.id}: worker revision ${workerHead} is not based on workspace base ${workspace.baseRevision}.`,
-            "Reconcile or reset the workspace explicitly before continuing; the existing result was preserved."
-        ].join(" ");
-        throw new AgentActionError(message);
-    }
+        const continuation = await acquireContinuationWorkspace(record, workspace, sessionId);
+        const continuationWorkspace = continuation.workspace;
     const discovered = discover(ctx);
     const definition = record.definitionSnapshot;
     if (!definition) {
@@ -351,15 +460,16 @@ export async function executeParentWorkspaceAction(
         throw new AgentActionError(`Run ${params.runId} has no persisted child session to continue.`);
     }
 
+    const workspaceCheckpoint = createAgentWorkspaceCheckpointCallback(
+        ctx.sessionManager.getSessionId(),
+    );
     const revisionContext = {
-        cwd: workspace.worktreePath,
+        cwd: continuationWorkspace.worktreePath,
         parentCwd: ctx.cwd,
-        workspaceId: workspace.id,
+        workspaceId: continuationWorkspace.id,
         parentContext: ctx,
-        childSessionFile: record.childSessionFile,
-        ...(record.childSessionLeafId !== undefined
-            ? { childSessionLeafId: record.childSessionLeafId }
-            : {}),
+        childSessionFile: continuation.checkpoint.childSessionFile ?? record.childSessionFile,
+        childSessionLeafId: continuation.checkpoint.childSessionLeafId ?? record.childSessionLeafId,
     };
     const runIdentity = manager.reserveRunIdentity(
         definition,
@@ -378,11 +488,22 @@ export async function executeParentWorkspaceAction(
             signal,
             onProgress: progress,
             onBackgroundUpdate,
+            onWorkspaceCheckpoint: workspaceCheckpoint,
             title: `${record.title} revision`,
             identity: runIdentity,
+            continuationLease,
         },
     );
-    const prepared = await prepareForegroundWorkspaceResult(outcome, ctx, events);
-    prepared.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
-    return prepared;
+    const prepared = await prepareForegroundWorkspaceResult(
+        outcome,
+        ctx,
+        events,
+        { baseRevision: continuation.checkpoint.baseRevision },
+    );
+        prepared.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
+        return prepared;
+    } catch (error) {
+        continuationLease?.release();
+        throw error;
+    }
 }

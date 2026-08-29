@@ -7,10 +7,34 @@ import type { AgentTerminalStatus } from "./runs";
 export const WORKSPACE_VERSION = 1 as const;
 
 export type WorkspaceSetupState = "not_started" | "running" | "ready" | "skipped" | "failed";
-export type WorkspaceStatus = "available" | "review_required";
+export type WorkspaceStatus = "available" | "review_required" | "recycling";
 export type WorkspaceLeaseKind = "setup" | "task";
 export type WorkspaceLeaseState = "none" | "setup" | "known" | "orphaned" | "unknown";
-export type WorkspaceResultStatus = "prepared" | "applied" | "discarded";
+export type WorkspaceResultStatus = "prepared" | "applying" | "applied" | "discarded";
+export type WorkspaceCheckpointKind = "intermediate" | "terminal";
+export type WorkspaceCheckpointStatus =
+    | "waiting_for_parent"
+    | "interrupted"
+    | "completed"
+    | "failed"
+    | "aborted"
+    | "canceled";
+
+export interface AgentWorkspaceCheckpoint {
+    id: string;
+    workspaceId: string;
+    runId: string;
+    runInstanceId: string;
+    sequence: number;
+    kind: WorkspaceCheckpointKind;
+    runStatus: WorkspaceCheckpointStatus;
+    baseRevision: string;
+    headRevision: string;
+    durableRef: string;
+    childSessionFile?: string;
+    childSessionLeafId: string | null;
+    createdAt: number;
+}
 
 export interface AgentWorkspaceResult {
     id: string;
@@ -65,6 +89,7 @@ export interface AgentWorkspace {
 
 export interface AgentRunCatalogRecord {
     ownerSessionId: string;
+    ownerPid?: number;
     runId: string;
     runInstanceId?: string;
     parentCwd: string;
@@ -80,6 +105,7 @@ export interface AgentRunCatalogRecord {
     background: boolean;
     mutating: boolean;
     workspaceId?: string;
+    workspaceResultId?: string;
     childSessionFile?: string;
     childSessionLeafId?: string | null;
     latestSnapshotId?: string;

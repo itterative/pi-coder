@@ -18,8 +18,10 @@ import {
     releaseAgentWorkspaceLease,
     transferAgentWorkspaceLease,
 } from "./store";
-import { createAgentWorkspace, updateAgentWorkspace } from "./lifecycle";
+import { createAgentWorkspace, recycleAgentWorkspaceForReuse, updateAgentWorkspace } from "./lifecycle";
 import { reconcileNoChangeAgentWorkspaceLeases } from "./results";
+import { latestAgentWorkspaceCheckpoint } from "./checkpoints";
+import { git } from "./git";
 
 export type WorkspacePromptChoice = "setup" | "skip" | "cancel";
 
@@ -169,6 +171,60 @@ export interface WorkspaceReservation {
 }
 
 /** Named dependencies and UI/event controls for isolated workspace preparation. */
+async function findRecyclableAgentWorkspace(
+    cwd: string,
+    manager: AgentRunManager,
+    workspacesDir?: string,
+): Promise<AgentWorkspace | undefined> {
+    const options = workspacesDir ? { workspacesDir } : {};
+    const candidates = (await listAgentWorkspaces(cwd, options))
+        .filter((workspace) => {
+            const localStatus = workspace.leaseRunId
+                ? manager.getRunStatus(workspace.leaseRunId)
+                : undefined;
+            const locallyParkable = localStatus === "waiting_for_parent"
+                || localStatus === "interrupted"
+                || localStatus === "completed"
+                || localStatus === "failed"
+                || localStatus === "aborted"
+                || localStatus === "canceled";
+            return (
+                workspace.setupState === "ready"
+                || workspace.setupState === "skipped"
+            ) && workspace.leaseKind === "task"
+                && workspace.leaseOwnerSessionId
+                && workspace.leaseRunId
+                && workspace.leaseRunInstanceId
+                && (workspace.leaseActive !== true || locallyParkable)
+                && workspace.status !== "recycling";
+        })
+        .sort((left, right) => left.updatedAt - right.updatedAt);
+
+    for (const workspace of candidates) {
+        const checkpoint = await latestAgentWorkspaceCheckpoint(workspace.id, workspace.leaseRunInstanceId!, options);
+        if (!checkpoint || !["waiting_for_parent", "interrupted", "completed", "failed", "aborted", "canceled"].includes(checkpoint.runStatus)) continue;
+        if (checkpoint.runStatus !== "waiting_for_parent" && checkpoint.runStatus !== "interrupted") {
+            const result = workspace.latestResult;
+            if (
+                !result
+                || result.runId !== workspace.leaseRunId
+                || (result.runInstanceId !== undefined && result.runInstanceId !== workspace.leaseRunInstanceId)
+                || result.status !== "prepared"
+            ) continue;
+        }
+        try {
+            const head = await git(workspace.repositoryRoot, ["rev-parse", checkpoint.durableRef]);
+            if (head !== checkpoint.headRevision) continue;
+            const parked = manager.parkWorkspaceRunForReuse(workspace.id, workspace.leaseRunId!);
+            if (!parked && manager.getRunStatus(workspace.leaseRunId!) !== undefined) continue;
+            return workspace;
+        } catch {
+            // A missing or invalid checkpoint cannot safely authorize reuse.
+        }
+    }
+    return undefined;
+}
+
 export interface PrepareIsolatedWorkspaceOptions {
     definition: AgentDefinition;
     factory: ChildAgentFactory;
@@ -178,6 +234,7 @@ export interface PrepareIsolatedWorkspaceOptions {
     onUiUpdate?: WorkspaceSetupUiCallback;
     events?: AgentEventSink;
     dialogEvents?: EventBus;
+    workspacesDir?: string;
 }
 
 export async function prepareIsolatedWorkspace(
@@ -191,6 +248,7 @@ export async function prepareIsolatedWorkspace(
         onUiUpdate,
         events,
         dialogEvents,
+        workspacesDir,
     }: PrepareIsolatedWorkspaceOptions,
 ): Promise<WorkspaceReservation> {
     if (!agentCanEdit(definition)) {
@@ -200,10 +258,19 @@ export async function prepareIsolatedWorkspace(
         throw new AgentActionError("A same-checkout mutation-capable worker is already active.");
     }
 
+    // TODO(workspace-sharing): replace this conservative guard with a parent
+    // working-tree snapshot/materialization strategy so isolated work can see
+    // intentional uncommitted parent changes.
+    const parentStatus = await git(cwd, ["status", "--porcelain=v1", "--untracked-files=all"]);
+    if (parentStatus) {
+        throw new AgentActionError("Cannot start an isolated worker while the parent checkout has uncommitted changes.");
+    }
+
     const ownerSessionId = ctx.sessionManager.getSessionId();
     const provisionalLeaseRunId = `workspace-provision-${randomUUID()}`;
     const provisionalLeaseRunInstanceId = randomUUID();
-    const released = await reconcileNoChangeAgentWorkspaceLeases(cwd);
+    const workspaceOptions = workspacesDir ? { workspacesDir } : {};
+    const released = await reconcileNoChangeAgentWorkspaceLeases(cwd, workspaceOptions);
     if (released > 0) {
         emitAgentEvent({
             type: "runtime",
@@ -211,13 +278,14 @@ export async function prepareIsolatedWorkspace(
             released,
         }, { sink: events, cwd });
     }
-    const available = await findAvailableAgentWorkspace(cwd);
+    const available = await findAvailableAgentWorkspace(cwd, workspaceOptions);
     if (available) {
         const workspace = await claimAgentWorkspace(available.id, {
             ownerSessionId,
             leaseRunId: provisionalLeaseRunId,
             leaseKind: "task",
             leaseRunInstanceId: provisionalLeaseRunInstanceId,
+            ...workspaceOptions,
         });
         emitAgentEvent({
             type: "workspace",
@@ -228,9 +296,34 @@ export async function prepareIsolatedWorkspace(
         return { workspace, ownerSessionId, provisionalLeaseRunId, provisionalLeaseRunInstanceId };
     }
 
-    const existing = await findUnpreparedAgentWorkspace(cwd);
+    const recyclable = await findRecyclableAgentWorkspace(cwd, manager, workspacesDir);
+    if (recyclable) {
+        const recycled = await recycleAgentWorkspaceForReuse(recyclable.id, {
+            previousOwnerSessionId: recyclable.leaseOwnerSessionId!,
+            previousLeaseRunId: recyclable.leaseRunId!,
+            previousLeaseRunInstanceId: recyclable.leaseRunInstanceId!,
+            ownerSessionId,
+            leaseRunId: provisionalLeaseRunId,
+            leaseRunInstanceId: provisionalLeaseRunInstanceId,
+            ...(workspacesDir ? { workspacesDir } : {}),
+        });
+        emitAgentEvent({
+            type: "workspace",
+            action: "lease_changed",
+            workspaceId: recycled.id,
+            reason: "recycled",
+        }, { sink: events, cwd: ctx.cwd });
+        return {
+            workspace: recycled,
+            ownerSessionId,
+            provisionalLeaseRunId,
+            provisionalLeaseRunInstanceId,
+        };
+    }
+
+    const existing = await findUnpreparedAgentWorkspace(cwd, workspaceOptions);
     if (!existing) {
-        const workspaces = await listAgentWorkspaces(cwd);
+        const workspaces = await listAgentWorkspaces(cwd, workspaceOptions);
         if (workspaces.length >= MAX_AGENT_WORKSPACES) {
             const summary = workspaces.map((workspace) => {
                 const lease = workspace.leaseRunId ? `leased by ${workspace.leaseRunId}` : workspace.status;
@@ -281,7 +374,7 @@ export async function prepareIsolatedWorkspace(
         );
     }
 
-    const workspace = existing ?? await createAgentWorkspace(cwd);
+    const workspace = existing ?? await createAgentWorkspace(cwd, workspaceOptions);
     if (!existing) {
         emitAgentEvent({
             type: "workspace",
@@ -296,6 +389,7 @@ export async function prepareIsolatedWorkspace(
             leaseRunId: provisionalLeaseRunId,
             leaseKind,
             leaseRunInstanceId: provisionalLeaseRunInstanceId,
+            ...workspaceOptions,
         });
         emitAgentEvent({
             type: "workspace",
@@ -318,7 +412,7 @@ export async function prepareIsolatedWorkspace(
             );
         }
         else {
-            const skipped = await updateAgentWorkspace(claimed, { setupState: "skipped" });
+            const skipped = await updateAgentWorkspace(claimed, { setupState: "skipped" }, workspaceOptions);
             emitAgentEvent({
                 type: "workspace",
                 action: "updated",
@@ -338,6 +432,7 @@ export async function prepareIsolatedWorkspace(
                 ownerSessionId,
                 leaseRunId: provisionalLeaseRunId,
                 leaseRunInstanceId: provisionalLeaseRunInstanceId,
+                ...workspaceOptions,
             });
             emitAgentEvent({
                 type: "workspace",

@@ -276,6 +276,54 @@ export const AGENT_METADATA_MIGRATIONS = [{
                 CHECK (terminal_status IS NULL OR terminal_status IN ('removed', 'completed', 'failed', 'aborted', 'canceled'));
         `);
     },
+}, {
+    version: 14,
+    apply(database: AgentMetadataDatabase): void {
+        database.exec(`
+            CREATE TABLE workspace_checkpoints (
+                checkpoint_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                run_instance_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('intermediate', 'terminal')),
+                run_status TEXT NOT NULL CHECK (run_status IN ('waiting_for_parent', 'interrupted', 'completed', 'failed', 'aborted', 'canceled')),
+                base_revision TEXT NOT NULL,
+                head_revision TEXT NOT NULL,
+                durable_ref TEXT NOT NULL UNIQUE,
+                child_session_file TEXT,
+                child_session_leaf_id TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+                UNIQUE (workspace_id, sequence)
+            );
+            CREATE INDEX workspace_checkpoints_workspace_run
+                ON workspace_checkpoints (workspace_id, run_instance_id, sequence DESC);
+        `);
+    },
+}, {
+    version: 15,
+    apply(database: AgentMetadataDatabase): void {
+        database.exec(`
+            ALTER TABLE workspace_results ADD COLUMN reservation_token TEXT;
+            ALTER TABLE workspace_results ADD COLUMN reservation_owner_session_id TEXT;
+            ALTER TABLE workspace_results ADD COLUMN reservation_run_id TEXT;
+            ALTER TABLE workspace_results ADD COLUMN reservation_run_instance_id TEXT;
+            ALTER TABLE workspace_results ADD COLUMN reservation_acquired_at INTEGER;
+            ALTER TABLE agent_runs ADD COLUMN workspace_result_id TEXT;
+            CREATE UNIQUE INDEX workspace_results_reservation
+                ON workspace_results (reservation_token)
+                WHERE reservation_token IS NOT NULL;
+        `);
+    },
+}, {
+    version: 16,
+    apply(database: AgentMetadataDatabase): void {
+        database.exec(`
+            ALTER TABLE workspace_results ADD COLUMN reservation_owner_pid INTEGER;
+            ALTER TABLE agent_runs ADD COLUMN owner_pid INTEGER;
+        `);
+    },
 }] as const;
 
 export function agentWorkspacesRoot(workspacesDir = PI_CODER_WORKSPACES_DIR): string {

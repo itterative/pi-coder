@@ -72,7 +72,7 @@ export interface AgentWorkspaceBrowserItem {
     repositoryRoot: string;
     worktreePath: string;
     baseRevision: string;
-    status: "available" | "review_required";
+    status: "available" | "review_required" | "recycling";
     statusText: string;
     setupText: string;
     setupSummary?: string;
@@ -104,6 +104,7 @@ function workspaceActions(
     currentSessionId?: string,
 ): AgentWorkspaceBrowserAction[] {
     const actions: AgentWorkspaceBrowserAction[] = [];
+    if (workspace.status === "recycling") return actions;
     const ownedByAnotherSession = currentSessionId !== undefined
         && workspace.leaseOwnerSessionId !== undefined
         && workspace.leaseOwnerSessionId !== currentSessionId;
@@ -161,6 +162,9 @@ function workspaceActions(
 }
 
 function workspaceNotice(workspace: AgentWorkspace, currentSessionId?: string): string {
+    if (workspace.status === "recycling") {
+        return "This workspace is being safely recycled and is temporarily unavailable.";
+    }
     const ownedByAnotherSession = currentSessionId !== undefined
         && workspace.leaseOwnerSessionId !== undefined
         && workspace.leaseOwnerSessionId !== currentSessionId;
