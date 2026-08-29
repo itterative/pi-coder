@@ -41,21 +41,21 @@ Before context construction, restoration selects the exact persisted child trans
 
 Checkpoint writes use SQLite continuation leases, expected-head compare-and-swap, and pending head reservations. Leases serialize competing processes and survive marker/head failures. Restoration may reclaim a lease immediately when the recorded Pi-process PID is conclusively dead; uncertain PID checks fall back to lease expiry. The expiry wait has a grace period, is abortable during shutdown or parent resume cancellation, and uses an unref'd timer.
 
-## Revise persistence semantics
+## Continue persistence semantics
 
-`resume` and `revise` use the persisted definition snapshot as the runtime contract. The current definition is compared only for an informational drift diagnostic.
+`continue` uses the persisted definition snapshot as the runtime contract. The current definition is compared only for an informational drift diagnostic.
 
-`revise` continues a collected terminal child without creating a separate child conversation. For isolated workers it also advances workspace-result ownership:
+For a collected terminal child, `continue` continues it without creating a separate child conversation. For isolated workers it also advances workspace-result ownership:
 
 1. Resolve the checkpoint authoritative for the exact parent session and active parent-tree branch.
 2. For an isolated worker, confirm worktree ancestry before starting anything and require its prepared task lease.
 3. Reuse the public run ID and reserve the existing physical run identity for the continued child.
 4. Reopen the original child transcript at its persisted leaf.
-5. Send only revision guidance as the next child message, using the model recorded in that session.
+5. Send only continuation guidance as the next child message, using the model recorded in that session.
 6. For an isolated worker, retain the existing workspace lease for the continued run identity.
 7. For an isolated worker, finalize and persist a new prepared workspace result.
 
-The public run ID remains stable across revision, so repeated `revise` actions continue the latest checkpoint rather than creating confusing new agent IDs. The child session and physical run identity remain the same; isolated workspace results still receive a new result record while retaining the existing lease. Legacy records without a physical `runInstanceId` are accepted for compatibility and receive a synthesized identity when revised. Definition drift does not reject a prepared result: the persisted definition snapshot supplies capabilities and the child session supplies transcript/model continuity.
+The public run ID remains stable across continuation, so repeated `continue` actions continue the latest checkpoint rather than creating confusing new agent IDs. The child session and physical run identity remain the same; isolated workspace results still receive a new result record while retaining the existing lease. Legacy records without a physical `runInstanceId` are accepted for compatibility and receive a synthesized identity when continued. Definition drift does not reject a prepared result: the persisted definition snapshot supplies capabilities and the child session supplies transcript/model continuity.
 
 ## Failure and recovery semantics
 

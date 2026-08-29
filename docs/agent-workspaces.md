@@ -10,7 +10,7 @@ For the short agent-tool overview, see [`src/tools/agent/README.md`](src/tools/a
 2. **Lease** — claim the worktree for a parent session and delegated run.
 3. **Execution** — the isolated worker reads and changes only its worktree.
 4. **Finalization** — collection commits remaining changes, creates a private result ref, and records a prepared result.
-5. **Disposition** — the parent explicitly inspects, applies, retains, revises, resets, or discards the result.
+5. **Disposition** — the parent explicitly inspects, applies, retains, continues, resets, or discards the result.
 
 No-change results create no durable ref and release the workspace for reuse. Changed results remain leased and outside the parent checkout until disposition. Workspaces are not silently merged, reset, rebased, applied, or deleted.
 
@@ -24,9 +24,9 @@ Applying uses the complete base-to-worker tree diff without creating a parent co
 - A no-change result is consumed before its lease is released, so collection failure does not strand an unleased result.
 - Explicit reset returns a workspace to the current parent revision and removes result refs. Explicit discard removes the isolated workspace and saved refs.
 
-## Revise
+## Continue
 
-For isolated workers, `revise` is available only for a prepared changed result whose task lease is still owned by the current parent session. It is not normally available after `retain`, `apply`, `discard`, or no-change release. Collected non-mutating runs such as `reviewer` can be revised without a workspace; revision is restricted to the exact parent session and active parent-tree branch.
+For isolated workers, `continue` is available for a prepared changed result whose task lease is still owned by the current parent session. It is not normally available after `retain`, `apply`, `discard`, or no-change release. Collected non-mutating runs such as `reviewer` can be continued without a workspace; continuation is restricted to the exact parent session and active parent-tree branch.
 
 A revision keeps the same public agent identity:
 
@@ -50,11 +50,11 @@ The chosen policy is **fail early and preserve state**:
 
 Pi-coder does not silently update `baseRevision`, rebase the worktree, discard the old result, or accept an ambiguous divergent diff.
 
-### Revise flow
+### Continue flow
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│ agent(action="revise", runId=old, guidance=feedback)                 │
+│ agent(action="continue", runId=old, guidance=feedback)               │
 └──────────────────────────────────┬───────────────────────────────────┘
                                    │
                                    v
@@ -69,7 +69,7 @@ Pi-coder does not silently update `baseRevision`, rebase the worktree, discard t
                                  v
                  ┌────────────────────────────────┐
                  │ Read worktree HEAD and verify  │
-                 │ baseRevision is its ancestor  │
+                 │ baseRevision is its ancestor   │
                  └───────────────┬────────────────┘
                     divergent    │ descendant
                        v          v
@@ -86,16 +86,16 @@ Pi-coder does not silently update `baseRevision`, rebase the worktree, discard t
                               [Reject; old lease remains]
                                        │ success
                                        v
-                 ┌────────────────────────────────────────────┐
+                 ┌─────────────────────────────────────────────┐
                  │ Retain the existing lease, then finalize    │
-                 │ the revised worktree as a prepared result  │
-                 └─────────────────────┬──────────────────────┘
+                 │ the continued worktree as a prepared result │
+                 └─────────────────────┬───────────────────────┘
                                        │ finalization failure
                                        v
                  [Preserve the prior result and lease; return error]
                                        │ success
                                        v
-                 [Return the same run ID with the revised result]
+                 [Return the same run ID with the continued result]
 ```
 
 The existing lease remains authoritative while the child continuation runs. No ownership transfer is required because the public and physical run identity remain stable. If result finalization fails, the prior prepared result and lease remain available for explicit recovery.

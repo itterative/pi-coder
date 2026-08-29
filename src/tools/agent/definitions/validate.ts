@@ -10,12 +10,11 @@ import type { AgentParameters } from "./prompt";
 export type AgentRequest =
     | { action: "list" }
     | { action: "start"; agent: string; task: string; title?: string; isolation?: "worktree"; context?: AgentContext; background?: boolean }
-    | { action: "resume"; runId: string; guidance?: string }
+    | { action: "continue"; runId: string; guidance?: string }
     | { action: "cancel"; runId: string }
     | { action: "inspect"; runId: string }
     | { action: "apply"; runId: string }
     | { action: "discard"; runId: string }
-    | { action: "revise"; runId: string; guidance: string }
     | { action: "status"; runId: string }
     | { action: "collect"; runId: string };
 
@@ -27,12 +26,11 @@ type ActionSpec = {
 const ACTION_FIELDS: Record<string, ActionSpec> = {
     list: { required: [], optional: [] },
     start: { required: ["agent", "task"], optional: ["title", "isolation", "context", "background"] },
-    resume: { required: ["runId"], optional: ["guidance"] },
+    continue: { required: ["runId"], optional: ["guidance"] },
     cancel: { required: ["runId"], optional: [] },
     inspect: { required: ["runId"], optional: [] },
     apply: { required: ["runId"], optional: [] },
     discard: { required: ["runId"], optional: [] },
-    revise: { required: ["runId", "guidance"], optional: [] },
     status: { required: ["runId"], optional: [] },
     collect: { required: ["runId"], optional: [] },
 };

@@ -160,9 +160,9 @@ export interface ExecuteParentWorkspaceActionOptions {
 
 // Non-mutating runs have no workspace lease to transfer. Reuse the public
 // run ID so a revision remains the same agent in the parent UI.
-async function reviseNonIsolatedRun(
+async function continueNonIsolatedRun(
     record: ParentCatalogRecord,
-    params: Extract<AgentRequest, { action: "revise" }>,
+    params: Extract<AgentRequest, { action: "continue" }>,
     {
         ctx,
         manager,
@@ -172,26 +172,30 @@ async function reviseNonIsolatedRun(
     }: ExecuteParentWorkspaceActionOptions,
 ): Promise<AgentRunOutcome> {
     if (record.status !== "removed") {
-        throw new AgentActionError(`Run ${params.runId} must be collected before it can be revised.`);
+        throw new AgentActionError(`Run ${params.runId} must be collected before it can be continued.`);
+    }
+    const guidance = params.guidance?.trim();
+    if (!guidance) {
+        throw new AgentActionError(`Collected agent run ${params.runId} requires continuation guidance.`);
     }
     if (record.mutating) {
         throw new AgentActionError(
-            `Run ${params.runId} is mutation-capable but has no isolated workspace; it cannot be revised safely.`,
+            `Run ${params.runId} is mutation-capable but has no isolated workspace; it cannot be continued safely.`,
         );
     }
     const definition = record.definitionSnapshot;
     if (!definition) {
         throw new AgentActionError(
-            `Run ${params.runId} has no persisted agent definition snapshot; it cannot be revised. Start a new run instead.`,
+            `Run ${params.runId} has no persisted agent definition snapshot; it cannot be continued. Start a new run instead.`,
         );
     }
     if (agentCanEdit(definition)) {
         throw new AgentActionError(
-            `Run ${params.runId} has an unauthorized persisted mutation capability; it cannot be revised.`,
+            `Run ${params.runId} has an unauthorized persisted mutation capability; it cannot be continued.`,
         );
     }
     if (!record.childSessionFile) {
-        throw new AgentActionError(`Run ${params.runId} has no persisted child session to revise.`);
+        throw new AgentActionError(`Run ${params.runId} has no persisted child session to continue.`);
     }
 
     const discovered = discover(ctx);
@@ -214,7 +218,7 @@ async function reviseNonIsolatedRun(
     const outcome = await manager.startContinuation(
         definition,
         record.task,
-        params.guidance,
+        guidance,
         revisionContext,
         {
             signal,
@@ -228,7 +232,7 @@ async function reviseNonIsolatedRun(
 }
 
 export async function executeParentWorkspaceAction(
-    params: Extract<AgentRequest, { action: "inspect" | "apply" | "discard" | "revise" }>,
+    params: Extract<AgentRequest, { action: "inspect" | "apply" | "discard" | "continue" }>,
     {
         ctx,
         manager,
@@ -239,8 +243,11 @@ export async function executeParentWorkspaceAction(
     }: ExecuteParentWorkspaceActionOptions,
 ): Promise<AgentRunOutcome> {
     const record = await resolveParentRunRecord(params.runId, ctx, manager);
-    if (params.action === "revise" && !record.workspaceId) {
-        return reviseNonIsolatedRun(record, params, {
+    if (params.action === "continue" && !params.guidance?.trim()) {
+        throw new AgentActionError(`Continued agent run ${params.runId} requires guidance.`);
+    }
+    if (params.action === "continue" && !record.workspaceId) {
+        return continueNonIsolatedRun(record, params, {
             ctx,
             manager,
             signal,
@@ -297,7 +304,7 @@ export async function executeParentWorkspaceAction(
         );
     }
 
-    // Remaining action is "revise": inspect/discard/apply branches returned above.
+    // Remaining action is "continue": inspect/discard/apply branches returned above.
     requireParentWorkspaceLease(workspace, sessionId, params.runId, record.runInstanceId);
     let workerHead: string;
     try {
@@ -308,8 +315,8 @@ export async function executeParentWorkspaceAction(
     }
     if (!(await hasAncestor(workspace.worktreePath, workspace.baseRevision, workerHead))) {
         const message = [
-            `Cannot revise workspace ${workspace.id}: worker revision ${workerHead} is not based on workspace base ${workspace.baseRevision}.`,
-            "Reconcile or reset the workspace explicitly before revising; the existing result was preserved.",
+            `Cannot continue workspace ${workspace.id}: worker revision ${workerHead} is not based on workspace base ${workspace.baseRevision}.`,
+            "Reconcile or reset the workspace explicitly before continuing; the existing result was preserved."
         ].join(" ");
         throw new AgentActionError(message);
     }
@@ -317,7 +324,7 @@ export async function executeParentWorkspaceAction(
     const definition = record.definitionSnapshot;
     if (!definition) {
         throw new AgentActionError(
-            `Run ${params.runId} has no persisted agent definition snapshot; it cannot be revised. Start a new run instead.`,
+            `Run ${params.runId} has no persisted agent definition snapshot; it cannot be continued. Start a new run instead.`
         );
     }
     const currentDefinition = discovered.agents.find((agent) => agent.name === record.agent);
@@ -328,11 +335,11 @@ export async function executeParentWorkspaceAction(
         || currentDefinition.source !== "builtin"
     )) {
         throw new AgentActionError(
-            `Run ${params.runId} has an unauthorized persisted mutation capability; it cannot be revised.`,
+            `Run ${params.runId} has an unauthorized persisted mutation capability; it cannot be continued.`,
         );
     }
     if (!record.childSessionFile) {
-        throw new AgentActionError(`Run ${params.runId} has no persisted child session to revise.`);
+        throw new AgentActionError(`Run ${params.runId} has no persisted child session to continue.`);
     }
 
     const revisionContext = {
@@ -352,11 +359,11 @@ export async function executeParentWorkspaceAction(
         record.runId,
         record.runInstanceId,
     );
-    const revisionPrompt = params.guidance;
+    const guidance = params.guidance!.trim();
     const outcome = await manager.startContinuation(
         definition,
         record.task,
-        revisionPrompt,
+        guidance,
         revisionContext,
         {
             signal,

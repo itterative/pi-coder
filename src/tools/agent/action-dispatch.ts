@@ -154,14 +154,30 @@ export async function executeAgentAction(
                     ],
                 };
             }
-        } else if (request.action === "resume") {
-            outcome = await lifecycle.manager.resume(request.runId, {
-                guidance: request.guidance,
-                signal,
-                onProgress: progress,
-            });
-            outcome = await prepareForegroundWorkspaceResult(outcome, ctx, lifecycle.events);
-            lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
+        } else if (request.action === "continue") {
+            const activeStatus = lifecycle.manager.getRunStatus(request.runId);
+            const isTerminal = activeStatus === "completed"
+                || activeStatus === "failed"
+                || activeStatus === "aborted"
+                || activeStatus === "canceled";
+            if (activeStatus !== undefined && !isTerminal) {
+                outcome = await lifecycle.manager.resume(request.runId, {
+                    guidance: request.guidance,
+                    signal,
+                    onProgress: progress,
+                });
+                outcome = await prepareForegroundWorkspaceResult(outcome, ctx, lifecycle.events);
+                lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
+            } else {
+                outcome = await executeParentWorkspaceAction(request, {
+                    ctx,
+                    manager: lifecycle.manager,
+                    signal,
+                    progress,
+                    events: lifecycle.events,
+                    discover: lifecycle.discover.bind(lifecycle),
+                });
+            }
         } else if (request.action === "cancel") {
             outcome = await prepareForegroundWorkspaceResult(
                 await lifecycle.manager.cancel(request.runId),
@@ -172,7 +188,6 @@ export async function executeAgentAction(
             request.action === "inspect"
             || request.action === "apply"
             || request.action === "discard"
-            || request.action === "revise"
         ) {
             outcome = await executeParentWorkspaceAction(request, {
                 ctx,

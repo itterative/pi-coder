@@ -48,7 +48,7 @@ function run(runId: string): AgentRunSummary {
 }
 
 describe("agent list workspace catalog", () => {
-    it("shows a catalog-only lease without suggesting resume or collect", () => {
+    it("shows a catalog-only lease without suggesting continue or collect", () => {
         const result = listOutcome(liveManager(), [workspace({
             leaseOwnerSessionId: "dead-session",
             leaseRunId: "worker-dead",
@@ -60,7 +60,7 @@ describe("agent list workspace catalog", () => {
         expect(result.content).toContain("catalog-only workspace blocker");
         expect(result.content).toContain("interrupted");
         expect(result.content).toContain('inspect workspace "worktree-1"');
-        expect(result.content).not.toContain("resume with guidance");
+        expect(result.content).not.toContain("continue with guidance");
         expect(result.content).not.toContain("collect with runId");
     });
 
@@ -83,7 +83,7 @@ describe("agent list workspace catalog", () => {
         expect(result.content).toContain('"result-1"');
         expect(result.content).toContain("apply, retain, reset, or discard");
         expect(result.content).not.toContain("collect with runId");
-        expect(result.content).not.toContain("resume with guidance");
+        expect(result.content).not.toContain("continue with guidance");
     });
 
     it("does not list a released no-change result as a blocker", () => {

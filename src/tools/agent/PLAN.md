@@ -61,27 +61,26 @@ Runtime context is passed as bounded `context.sections` on `start` (with `backgr
 The `agent` tool exposes:
 
 ```text
-start   — run in the foreground; Ctrl+B in the TUI moves a running start to the background
 start   — run in the foreground by default; `background=true` starts it in the background
 list    — recover tracked runs
 status  — inspect a deliberate snapshot
 collect — consume a terminal background result
-resume  — provide guidance to a waiting/interrupted run
+continue — resume a waiting/interrupted run or continue a collected terminal run
 cancel  — stop a waiting or active run
-inspect/apply/discard — manage an isolated result; revise — continue a collected terminal child run, reusing its persisted session (isolated workers keep the same workspace)
+inspect/apply/discard — manage an isolated result; continue — continue a waiting/interrupted or collected terminal child run, reusing its persisted session (isolated workers keep the same workspace)
 ```
 
 Runs are bounded to four active or interrupted records. At most one may be an edit-capable worker, and its permission-gated calls are serialized. Terminal background results are retained separately until collected or evicted.
 
 `ask_parent` pauses a child and requires explicit guidance. Foreground and background children may use restricted `ask_user` when direct interaction is allowed and the parent is in an interactive TUI; all children may use `ask_parent`, while the advisor always uses `ask_parent`. Cancellation and shutdown abort children and clean up handles. A waiting run is paused, not completed; an interrupted run is never restarted or replayed automatically and requires explicit user action with a safety check.
 
-Background runs report progress in the above-editor widget. Parent-guidance waits and retained terminal outcomes send coalesced, non-interrupting mailbox notifications after parent work settles. The parent should not poll or sleep; it can use `list`, `status`, or `collect` when deliberate recovery is needed.
+Background runs report progress in the above-editor widget. Parent-guidance waits and retained terminal outcomes send coalesced, non-interrupting mailbox notifications after parent work settles. The parent should not poll or sleep; it can use `list`, `status`, `continue`, or `collect` when deliberate recovery is needed.
 
 ### Browser and workspaces
 
-`/agents` shows an Agents list scoped to the active parent session by default; `h` toggles cwd-wide historical sessions. Workspaces are available in the same browser. Session details are read-only and display bounded conversation/tool summaries. Active interrupted runs can be resumed or canceled explicitly; historical and stale checkpoints remain read-only.
+`/agents` shows an Agents list scoped to the active parent session by default; `h` toggles cwd-wide historical sessions. Workspaces are available in the same browser. Session details are read-only and display bounded conversation/tool summaries. Active interrupted runs can be continued or canceled explicitly; historical and stale checkpoints remain read-only.
 
-Isolated workers use a persistent pool of up to three Git worktrees. Setup runs internally with the same permission gate. A completed isolated run is finalized as a workspace result: no-change results release the workspace, while changed results remain leased and outside the parent checkout. Results can be inspected, applied, discarded, retained/reset, or revised explicitly. Revision reopens the original child session with its original model and sends only parent guidance as the next child message; isolated revisions keep the same workspace, while collected non-mutating runs such as reviewer can be revised without a workspace. Revision lookup is authoritative to the exact parent session and active parent-tree branch; the public run ID and physical run identity remain stable so repeated revisions continue the latest checkpoint. Before an isolated revision it verifies that the worktree HEAD descends from the recorded base and rejects divergence without changing state; isolated revisions create a new workspace-result record while retaining the existing lease; failures preserve the prior prepared result for explicit recovery. Workspaces are never merged, reset, or deleted implicitly.
+Isolated workers use a persistent pool of up to three Git worktrees. Setup runs internally with the same permission gate. A completed isolated run is finalized as a workspace result: no-change results release the workspace, while changed results remain leased and outside the parent checkout. Results can be inspected, applied, discarded, retained/reset, or continued explicitly. Continuation of a collected result reopens the original child session with its original model and sends only parent guidance as the next child message; isolated continuations keep the same workspace, while collected non-mutating runs such as reviewer can be continued without a workspace. Continuation lookup is authoritative to the exact parent session and active parent-tree branch; the public run ID and physical run identity remain stable so repeated continuations continue the latest checkpoint. Before an isolated continuation it verifies that the worktree HEAD descends from the recorded base and rejects divergence without changing state; isolated continuations create a new workspace-result record while retaining the existing lease; failures preserve the prior prepared result for explicit recovery. Workspaces are never merged, reset, or deleted implicitly.
 
 ## Safety contract
 
@@ -94,7 +93,7 @@ Isolated workers use a persistent pool of up to three Git worktrees. Setup runs 
 
 ## Persistence and diagnostics
 
-Persisted parent sessions store child transcripts under the extension's private `.state/agent-sessions` area and full run metadata—including the immutable agent definition snapshot required for resume/revise—in the extension's SQLite metadata database. After an abrupt process stop, restoration uses the recorded Pi-process PID to reclaim a conclusively dead continuation lease immediately, falling back to lease expiry when PID liveness is uncertain, while retaining protection against a live competing process. State snapshots are associated with parent-session branch entries, so restore is limited to the exact parent session and active tree branch; new, forked, cloned, or ephemeral sessions do not inherit runs. Waiting and interrupted runs require user action; retained uncollected background terminal outcomes can also be restored. Stale tool calls are marked uncertain before continuation.
+Persisted parent sessions store child transcripts under the extension's private `.state/agent-sessions` area and full run metadata—including the immutable agent definition snapshot required for continuation—in the extension's SQLite metadata database. After an abrupt process stop, restoration uses the recorded Pi-process PID to reclaim a conclusively dead continuation lease immediately, falling back to lease expiry when PID liveness is uncertain, while retaining protection against a live competing process. State snapshots are associated with parent-session branch entries, so restore is limited to the exact parent session and active tree branch; new, forked, cloned, or ephemeral sessions do not inherit runs. Waiting and interrupted runs require user action; retained uncollected background terminal outcomes can also be restored. Stale tool calls are marked uncertain before continuation.
 
 The event bus publishes bounded invalidation events; consumers reload authoritative state. `/agent-trace` retains sanitized, bounded timelines for recent runs. Tracing is temporarily enabled during development and should return to the intended `PI_CODER_AGENT_TRACE=1` opt-in before release.
 

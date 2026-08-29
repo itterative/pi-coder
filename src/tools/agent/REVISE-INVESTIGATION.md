@@ -11,7 +11,7 @@ The `revise` action continues a collected terminal child run after the parent pr
 The main path is:
 
 ```text
-agent(action="revise", runId, guidance)
+agent(action="continue", runId, guidance)
   -> executeAgentAction()
   -> executeParentWorkspaceAction()
   -> resolve the active-branch run checkpoint (and workspace when isolated)
@@ -194,7 +194,7 @@ Also add a focused prompt-rendering assertion so the escaped-newline regression 
 ### Phase 2: Fix prompt and definition resolution
 
 - The revision prompt/session continuation fix is complete.
-- The current path uses lifecycle discovery for diagnostics, then uses the persisted definition snapshot and child transcript. Definition changes intentionally do not invalidate resume/revise; missing snapshots fail clearly.
+- The current path uses lifecycle discovery for diagnostics, then uses the persisted definition snapshot and child transcript. Definition changes intentionally do not invalidate continuation; missing snapshots fail clearly.
 - The current implementation deliberately preserves the public and physical run identity while continuing the old child session. Preserve and document this stable-ID behavior in future changes.
 
 ### Phase 3: Preserve lease ownership during revision

@@ -65,7 +65,7 @@ function workspaceBlockers(workspaces: readonly AgentWorkspace[]): ListedRun[] {
                     ? `review workspace ${JSON.stringify(workspace.slug)} and prepared result ${JSON.stringify(result!.id)} in /agents; apply, retain, reset, or discard it before reusing the workspace`
                     : workspace.status === "review_required"
                         ? `inspect workspace ${JSON.stringify(workspace.slug)} in /agents and review it before reusing the workspace`
-                        : `inspect workspace ${JSON.stringify(workspace.slug)} in /agents; this catalog-only run is unavailable, so do not resume or collect it until the workspace state is confirmed`;
+                        : `inspect workspace ${JSON.stringify(workspace.slug)} in /agents; this catalog-only run is unavailable, so do not continue or collect it until the workspace state is confirmed`;
             listed.push({
                 run: {
                     runId,
@@ -115,7 +115,7 @@ export function listOutcome(
     const content = runs.length
         ? runs.map(({ run, catalogAction, catalogOnly, workspace }) => {
             const nextAction = catalogAction ?? (run.status === "waiting_for_parent" || run.status === "interrupted"
-                ? `resume with guidance using runId=${JSON.stringify(run.runId)}`
+                ? `continue with guidance using runId=${JSON.stringify(run.runId)}`
                 : run.status === "completed" || run.status === "failed" || run.status === "aborted" || run.status === "canceled"
                     ? `collect with runId=${JSON.stringify(run.runId)}`
                     : BACKGROUND_AGENT_WAIT_GUIDANCE);

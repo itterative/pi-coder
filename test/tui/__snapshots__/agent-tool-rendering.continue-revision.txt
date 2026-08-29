@@ -1,8 +1,8 @@
 [simple]
-agent revise worker-1
+agent continue worker-1
 
 [detailed]
-agent revise worker-1
+agent continue worker-1
 
 │ Implement the requested fix.
 

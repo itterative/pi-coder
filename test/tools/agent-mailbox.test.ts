@@ -126,10 +126,10 @@ describe("agent parent mailbox", () => {
             }),
             { deliverAs: "followUp", triggerTurn: true },
         );
-        expect(sendMessage.mock.calls[0]?.[0].content).toContain("Do not respawn or resume");
+        expect(sendMessage.mock.calls[0]?.[0].content).toContain("Do not start or continue");
     });
 
-    it("drops stale updates after collection, resume, or cancellation", () => {
+    it("drops stale updates after collection, continuation, or cancellation", () => {
         const sendMessage = vi.fn();
         const mailbox = new AgentMailbox({ sendMessage });
 

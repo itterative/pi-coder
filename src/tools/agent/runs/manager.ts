@@ -246,6 +246,10 @@ export class AgentRunManager {
         ));
     }
 
+    getRunStatus(runId: string): AgentRunStatus | undefined {
+        return this.runs.get(runId)?.status;
+    }
+
     listRuns(): AgentRunSummary[] {
         return [...this.runs.values()].map((run) => {
             const progress = this.progressSnapshot(run);
@@ -1322,7 +1326,7 @@ export class AgentRunManager {
         if (question.recommendation) {
             sections.push(`Recommendation: ${truncate(question.recommendation, 4_000)}`);
         }
-        sections.push(`Resume with agent(action="resume", runId="${run.id}", guidance="...").`);
+        sections.push(`Continue with agent(action="continue", runId="${run.id}", guidance="...").`);
         return sections.join("\n\n");
     }
 

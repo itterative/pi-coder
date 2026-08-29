@@ -20,7 +20,7 @@ export function workspaceResultMetadata(result: AgentWorkspaceResult, noChanges 
             : "- Outcome: result prepared for review; the parent checkout was unchanged.",
         noChanges
             ? "- Application: not needed."
-            : "- Disposition: the parent can inspect, apply, discard, or revise this result with agent actions; the TUI remains available for manual review.",
+            : "- Disposition: the parent can inspect, apply, discard, or continue this result with agent actions; the TUI remains available for manual review.",
     ].join("\n");
 }
 

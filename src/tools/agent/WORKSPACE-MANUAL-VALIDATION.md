@@ -212,7 +212,7 @@ The earlier interruption test is not the same as reload. This test checks persis
    - the parent checkout was not modified.
 4. Explicitly choose one recovery path:
    - press `r` on the interrupted run in `/agents`; or
-   - use `agent(action="resume", runId="<run-id>")`.
+   - use `agent(action="continue", runId="<run-id>")`.
 5. Verify the resumed worker receives the safety instruction to inspect uncertain state first, continues in the same workspace, and eventually produces a normal terminal result.
 6. Collect and disposition the result using the sections above.
 

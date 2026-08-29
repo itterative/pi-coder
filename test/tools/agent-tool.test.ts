@@ -147,7 +147,7 @@ function configureRevisionAction(fixture: ReturnType<typeof revisionActionFixtur
 
 async function executeRevisionAction(fixture: ReturnType<typeof revisionActionFixture>): Promise<unknown> {
     return executeParentWorkspaceAction(
-        { action: "revise", runId: fixture.record.runId, guidance: "Apply feedback" },
+        { action: "continue", runId: fixture.record.runId, guidance: "Apply feedback" },
         {
             ctx: fixture.ctx as any,
             manager: fixture.manager as any,
@@ -523,7 +523,7 @@ describe("agent extension registration", () => {
         expect(releasedWorkspace.leaseRunId).toBeUndefined();
     });
 
-    it("renders and executes a complete start, wait, resume flow", async () => {
+    it("renders and executes a complete start, wait, continue flow", async () => {
         const handlers: Record<string, Handler[]> = {};
         let tool: any;
         const pi = {
@@ -592,7 +592,7 @@ describe("agent extension registration", () => {
 
         const completed = await tool.execute(
             "call-2",
-            { action: "resume", runId: "scout-1", guidance: "Yes, compare both." },
+            { action: "continue", runId: "scout-1", guidance: "Yes, compare both." },
             undefined,
             undefined,
             ctx,
@@ -965,7 +965,7 @@ describe("agent extension registration", () => {
         vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockResolvedValue(continuationOutcome as any);
 
         const result = await executeParentWorkspaceAction(
-            { action: "revise", runId: "worker-1", guidance: "Apply feedback" },
+            { action: "continue", runId: "worker-1", guidance: "Apply feedback" },
             {
                 ctx: ctx as any,
                 manager: manager as any,
@@ -1063,7 +1063,7 @@ describe("agent extension registration", () => {
         vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record] as any);
 
         const result = await executeParentWorkspaceAction(
-            { action: "revise", runId: "reviewer-1", guidance: "Please re-check the API compatibility findings." },
+            { action: "continue", runId: "reviewer-1", guidance: "Please re-check the API compatibility findings." },
             {
                 ctx: ctx as any,
                 manager: manager as any,
@@ -1127,7 +1127,7 @@ describe("agent extension registration", () => {
         manager.startContinuation.mockResolvedValue(secondOutcome);
 
         const secondResult = await executeParentWorkspaceAction(
-            { action: "revise", runId: "reviewer-1", guidance: "Follow up on the remaining concern." },
+            { action: "continue", runId: "reviewer-1", guidance: "Follow up on the remaining concern." },
             {
                 ctx: ctx as any,
                 manager: manager as any,
@@ -1187,7 +1187,7 @@ describe("agent extension registration", () => {
         const transferSpy = configureRevisionAction(fixture);
 
         await expect(executeRevisionAction(fixture)).rejects.toThrow(
-            "has no persisted agent definition snapshot; it cannot be revised",
+            "has no persisted agent definition snapshot; it cannot be continued",
         );
         expect(fixture.manager.reserveRunIdentity).not.toHaveBeenCalled();
         expect(transferSpy).not.toHaveBeenCalled();

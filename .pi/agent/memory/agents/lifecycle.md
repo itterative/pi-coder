@@ -9,11 +9,11 @@ keep_updated: true
 
 ## Runs
 
-- The sequential parent `agent` tool supports `start` (foreground by default, asynchronous with `background=true`), `list`, `status`, one-shot `collect`, `resume`, `cancel`, and isolated-result actions.
+- The sequential parent `agent` tool supports `start` (foreground by default, asynchronous with `background=true`), `list`, `status`, one-shot `collect`, `continue`, `cancel`, and isolated-result actions.
 - Run states are `starting`, `running`, `waiting_for_parent`, `completed`, `failed`, `aborted`, and `interrupted`. Waiting is paused, not completed; interrupted runs never restart or replay automatically.
 - Up to four starting/running/waiting/interrupted runs consume capacity, with no TTL. Same-checkout mutation-capable workers are single-flight; mutation-capable workers in distinct isolated worktrees may run concurrently, while read-only runs can continue alongside them. Terminal background results are retained separately (latest 20) and do not consume active capacity.
-- Run IDs become stale after cancellation or result eviction; collected terminal runs remain addressable for explicit `revise`, and revisions retain the same public run ID while continuing the latest checkpoint. Ephemeral parent runs also become stale after reload/replacement/restart; persisted runs restore only for the exact parent session and active tree branch.
-- `AgentRunManager` retains its definition/task/context (or run ID) as positional run subjects and uses named options for ancillary signals, callbacks, titles, identities, and resume guidance; its all-optional options objects default to `{}` so no-control calls remain valid. Parent action-dispatch entrypoints likewise accept the request as their positional subject and named dependency options.
+- Run IDs become stale after cancellation or result eviction; collected terminal runs remain addressable for explicit `continue`, and continuations retain the same public run ID while continuing the latest checkpoint. Ephemeral parent runs also become stale after reload/replacement/restart; persisted runs restore only for the exact parent session and active tree branch.
+- `AgentRunManager` retains its definition/task/context (or run ID) as positional run subjects and uses named options for ancillary signals, callbacks, titles, identities, and continuation guidance; its all-optional options objects default to `{}` so no-control calls remain valid. Parent action-dispatch entrypoints likewise accept the request as their positional subject and named dependency options.
 
 ## Interaction and presentation
 
@@ -29,8 +29,8 @@ keep_updated: true
 ## Mailbox and recovery
 
 - Background waiting and retained terminal transitions coalesce by run ID. While the parent is active, delivery waits for `agent_settled`; an idle parent gets an immediate microtask flush.
-- One bounded hidden `pi.sendMessage(..., { deliverAs: "followUp", triggerTurn: true })` starts a mailbox turn after settlement without steering or stopping active work. Non-isolated background worker edits are additionally reported immediately through a hidden `deliverAs: "steer"` message only while the parent is busy when the persisted `notifyBusyWorkerChanges` setting is enabled; when disabled or when the parent is idle, changed paths are coalesced into the worker's terminal notification instead. Change paths are deduplicated per run and only same-checkout workers use the immediate path; isolated workers remain behind workspace-result handling. Markers are ephemeral and are not replayed after restart; reconciliation drops markers made stale by resume, collect, cancel, or eviction.
-- Spawn/background-resume results and incremental mutation messages tell the parent not to poll or sleep. Automatic notifications indicate when to resume or collect; `status` remains an explicit recovery snapshot.
+- One bounded hidden `pi.sendMessage(..., { deliverAs: "followUp", triggerTurn: true })` starts a mailbox turn after settlement without steering or stopping active work. Non-isolated background worker edits are additionally reported immediately through a hidden `deliverAs: "steer"` message only while the parent is busy when the persisted `notifyBusyWorkerChanges` setting is enabled; when disabled or when the parent is idle, changed paths are coalesced into the worker's terminal notification instead. Change paths are deduplicated per run and only same-checkout workers use the immediate path; isolated workers remain behind workspace-result handling. Markers are ephemeral and are not replayed after restart; reconciliation drops markers made stale by continue, collect, cancel, or eviction.
+- Background-start/continue results and incremental mutation messages tell the parent not to poll or sleep. Automatic notifications indicate when to continue or collect; `status` remains an explicit recovery snapshot.
 
 ## Diagnostics
 

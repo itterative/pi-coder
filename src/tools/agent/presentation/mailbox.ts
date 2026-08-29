@@ -90,7 +90,7 @@ function formatUpdate(update: MailboxUpdate): string[] {
     } else {
         lines.push(
             update.status === "waiting_for_parent"
-                ? `  Next action: inspect with agent(action="status", runId=${JSON.stringify(update.runId)}), then resume with grounded guidance or cancel.`
+                ? `  Next action: inspect with agent(action="status", runId=${JSON.stringify(update.runId)}), then continue with grounded guidance or cancel.`
                 : `  Next action: retrieve the retained result with agent(action="collect", runId=${JSON.stringify(update.runId)}).`,
         );
     }
@@ -193,7 +193,7 @@ export class AgentMailbox {
             `  Title: ${JSON.stringify(details.title)}`,
             `  Agent: ${JSON.stringify(details.agent)}`,
             "  Status: canceled_by_user",
-            "  Instruction: Do not respawn or resume this run unless the user explicitly asks.",
+            "  Instruction: Do not start or continue this run unless the user explicitly asks.",
             "</delegated-agent-mailbox>",
         ].join("\n");
         this.pi.sendMessage(

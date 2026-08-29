@@ -48,7 +48,7 @@ afterEach(async () => {
     fs.rmSync(testPaths.root, { recursive: true, force: true });
 });
 
-describe("registered revise lifecycle", () => {
+describe("registered continuation lifecycle", () => {
     it("persists and continues the real isolated background start/collect session", async () => {
         const repository = path.join(testPaths.root, "repo");
         fs.mkdirSync(repository, { recursive: true });
@@ -193,7 +193,7 @@ describe("registered revise lifecycle", () => {
 
         const revised = await tool.execute(
             "e2e-revise",
-            { action: "revise", runId: spawned.details.runId, guidance: "Apply the feedback" },
+            { action: "continue", runId: spawned.details.runId, guidance: "Apply the feedback" },
             undefined,
             undefined,
             ctx,
@@ -244,7 +244,7 @@ describe("registered revise lifecycle", () => {
         failNextSetup = true;
         const setupFailure = await tool.execute(
             "e2e-setup-failure",
-            { action: "revise", runId: revised.details.runId, guidance: "Retry after setup failure" },
+            { action: "continue", runId: revised.details.runId, guidance: "Retry after setup failure" },
             undefined,
             undefined,
             ctx,
@@ -267,7 +267,7 @@ describe("registered revise lifecycle", () => {
 
         const retried = await tool.execute(
             "e2e-setup-retry",
-            { action: "revise", runId: revised.details.runId, guidance: "Retry the review after setup recovers" },
+            { action: "continue", runId: revised.details.runId, guidance: "Retry the review after setup recovers" },
             undefined,
             undefined,
             ctx,
@@ -285,7 +285,7 @@ describe("registered revise lifecycle", () => {
             .mockRejectedValueOnce(finalizationError);
         const finalizationFailure = await tool.execute(
             "e2e-finalization-failure",
-            { action: "revise", runId: revised.details.runId, guidance: "Try finalization failure" },
+            { action: "continue", runId: revised.details.runId, guidance: "Try finalization failure" },
             undefined,
             undefined,
             ctx,
@@ -310,7 +310,7 @@ describe("registered revise lifecycle", () => {
         runGit(provisional.worktreePath, ["commit", "--quiet", "--allow-empty", "-m", "divergent history"]);
         const rejected = await tool.execute(
             "e2e-divergent-revise",
-            { action: "revise", runId: revised.details.runId, guidance: "Try again" },
+            { action: "continue", runId: revised.details.runId, guidance: "Try again" },
             undefined,
             undefined,
             ctx,

@@ -10,16 +10,16 @@ This document contains the detailed reference for pi-coder's delegated-agent too
 | `list` | List tracked runs and available workspaces. |
 | `status` | Inspect a deliberate snapshot of a run. |
 | `collect` | Consume a terminal background result. |
-| `resume` | Continue a waiting or interrupted run. |
+| `continue` | Resume a waiting/interrupted run or continue a collected terminal run. |
 | `cancel` | Stop a waiting or active run. |
 | `inspect` | Read an isolated result without changing it. |
 | `apply` | Apply an isolated result to the parent checkout. |
 | `retain` | Keep a result for review while releasing its task lease. |
 | `reset` | Explicitly reset a workspace for reuse. |
 | `discard` | Discard an isolated result or workspace. |
-| `revise` | Continue a collected terminal child run with parent guidance; isolated workers retain their workspace, while non-mutating runs do not need one. |
 
-There can be up to four active or interrupted runs, and up to three persistent isolated workspaces per project. Terminal background results are retained separately until collected or evicted. Revision lookup is bound to the exact parent session and active parent-tree branch. Revisions retain the same public run ID and physical child identity, so repeated revisions continue the latest checkpoint; isolated workspace results receive new result records while using that same run ID.
+
+There can be up to four active or interrupted runs, and up to three persistent isolated workspaces per project. Terminal background results are retained separately until collected or evicted. Continuation lookup is bound to the exact parent session and active parent-tree branch. Continuations retain the same public run ID and physical child identity, so repeated continuations continue the latest checkpoint; isolated workspace results receive new result records while using that same run ID.
 
 ### Background behavior
 
@@ -31,7 +31,7 @@ Foreground and background children may use `ask_user` when direct user interacti
 
 ### Interaction and recovery
 
-A waiting child is paused, not completed. An interrupted child was starting or running when shutdown/crash occurred; it is never restarted or replayed automatically. Resuming is an explicit user action and adds an instruction to inspect uncertain state first. Unmatched crash-time tool calls receive synthetic uncertain-outcome errors.
+A waiting child is paused, not completed. An interrupted child was starting or running when shutdown/crash occurred; it is never restarted or replayed automatically. Continuing is an explicit user action and adds an instruction to inspect uncertain state first. Unmatched crash-time tool calls receive synthetic uncertain-outcome errors.
 
 Persisted parent sessions restore waiting/interrupted runs and uncollected terminal outcomes. New, forked, cloned, or ephemeral parent sessions do not inherit them. See [Persistence and recovery](docs/agent-persistence.md).
 

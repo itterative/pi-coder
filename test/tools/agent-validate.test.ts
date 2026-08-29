@@ -17,16 +17,16 @@ describe("validateAgentParameters", () => {
         expect(
             validate({ action: "start", agent: "worker", task: "Implement", isolation: "worktree", title: "Impl", background: true }),
         ).toMatchObject({ action: "start", isolation: "worktree", background: true });
-        expect(validate({ action: "resume", runId: "scout-1" })).toEqual({ action: "resume", runId: "scout-1" });
+        expect(validate({ action: "continue", runId: "scout-1" })).toEqual({ action: "continue", runId: "scout-1" });
         expect(
-            validate({ action: "resume", runId: "scout-1", guidance: "Compare both." }),
+            validate({ action: "continue", runId: "scout-1", guidance: "Compare both." }),
         ).toMatchObject({ guidance: "Compare both." });
         expect(validate({ action: "cancel", runId: "scout-1" })).toEqual({ action: "cancel", runId: "scout-1" });
         expect(validate({ action: "inspect", runId: "worker-1" })).toEqual({ action: "inspect", runId: "worker-1" });
         expect(validate({ action: "apply", runId: "worker-1" })).toEqual({ action: "apply", runId: "worker-1" });
         expect(validate({ action: "discard", runId: "worker-1" })).toEqual({ action: "discard", runId: "worker-1" });
         expect(
-            validate({ action: "revise", runId: "worker-1", guidance: "Fix the tests" }),
+            validate({ action: "continue", runId: "worker-1", guidance: "Fix the tests" }),
         ).toMatchObject({ guidance: "Fix the tests" });
         expect(validate({ action: "status", runId: "scout-1" })).toEqual({ action: "status", runId: "scout-1" });
         expect(validate({ action: "collect", runId: "scout-1" })).toEqual({ action: "collect", runId: "scout-1" });
@@ -34,7 +34,7 @@ describe("validateAgentParameters", () => {
 
     it("rejects unknown actions with the valid action list", () => {
         expect(() => validate({ action: "restart" } as AgentParameters)).toThrow(
-            'Unknown action "restart". Valid actions: list, start, resume, cancel, inspect, apply, discard, revise, status, collect.',
+            'Unknown action "restart". Valid actions: list, start, continue, cancel, inspect, apply, discard, status, collect.',
         );
     });
 
@@ -44,9 +44,6 @@ describe("validateAgentParameters", () => {
         );
         expect(() => validate({ action: "start" } as AgentParameters)).toThrow(
             'Action "start" requires "agent" (name of an available delegated agent), and "task" (self-contained task brief for the child agent).',
-        );
-        expect(() => validate({ action: "revise", runId: "worker-1" } as AgentParameters)).toThrow(
-            'Action "revise" requires "guidance" (guidance text for the run).',
         );
         expect(() => validate({ action: "cancel" } as AgentParameters)).toThrow(
             'Action "cancel" requires "runId" (run ID of an existing run, as listed by action "list").',

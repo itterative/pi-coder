@@ -461,6 +461,9 @@ export function registerChildExtension(
                 options: Type.Optional(Type.Array(Type.String({ maxLength: 1_000 }), { maxItems: 8 })),
                 recommendation: Type.Optional(Type.String({ maxLength: 4_000 })),
             }, { additionalProperties: false }),
+            // TODO(agent): Consider returning parent guidance in this tool result
+            // instead of ending the child turn and sending a follow-up prompt.
+            // This requires an asynchronous parent-answer channel and transcript support.
             async execute(_toolCallId, params) {
                 if (tracker.pendingQuestion) {
                     return {

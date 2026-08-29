@@ -66,7 +66,7 @@ function outcome(
         },
         usage: cloneUsage(usage),
         ...((options.hasResponse
-            ?? ((args.action === "start" || args.action === "collect" || args.action === "revise")
+            ?? ((args.action === "start" || args.action === "collect" || args.action === "continue")
                 && status === "completed"))
             ? { hasResponse: true as const }
             : {}),
@@ -111,9 +111,10 @@ const actionCases: AgentRenderCase[] = [
         ),
     },
     {
-        args: { action: "resume", runId: "scout-1", guidance: "Continue with the remaining checks." },
+        snapshotName: "continue-waiting",
+        args: { action: "continue", runId: "scout-1", guidance: "Continue with the remaining checks." },
         outcome: outcome(
-            { action: "resume", runId: "scout-1", guidance: "Continue with the remaining checks." },
+            { action: "continue", runId: "scout-1", guidance: "Continue with the remaining checks." },
             projectTask,
             `Agent scout-1 resumed in the background. ${BACKGROUND_AGENT_WAIT_GUIDANCE}`,
             { runId: "scout-1", title: "Project audit", agent: "scout", background: true, status: "running" },
@@ -166,9 +167,10 @@ const actionCases: AgentRenderCase[] = [
         ),
     },
     {
-        args: { action: "revise", runId: "worker-1", guidance: "Please revisit the test coverage." },
+        snapshotName: "continue-revision",
+        args: { action: "continue", runId: "worker-1", guidance: "Please revisit the test coverage." },
         outcome: outcome(
-            { action: "revise", runId: "worker-1", guidance: "Please revisit the test coverage." },
+            { action: "continue", runId: "worker-1", guidance: "Please revisit the test coverage." },
             workerTask,
             "The revised implementation passes the focused tests.",
             { runId: "worker-1", title: "Implement fix revision", background: false, toolCounts: { read: 2, edit: 1, bash: 1 } },

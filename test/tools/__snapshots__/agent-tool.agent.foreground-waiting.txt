@@ -20,5 +20,5 @@ Implementation A is simpler; B has more callers.
 Partial child output:
 I found two plausible implementations.
 
-Resume with agent(action="resume", runId="scout-1", guidance="...").
+Continue with agent(action="continue", runId="scout-1", guidance="...").
 </metadata>
