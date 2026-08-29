@@ -1,25 +1,32 @@
 import sandboxConfig, { SandboxConfigPermissions } from "../../common/config";
-import {
-    parseBash,
-    isHeredocOperator,
-    isSubshell,
-    isProcessSubstitution,
-    getSubshellContent,
+import { BashAst, parseBashAst } from "./bash";
+import type {
+    BashAstNode,
+    BashCommand,
+    BashStatement,
+    BashSubstitutionNode,
+    BashWordNode,
 } from "./bash";
+
+type PermissionToken = {
+    value: string;
+    word?: BashWordNode;
+    heredocOperator?: boolean;
+};
 
 type PermissionMatcher = PermissionMatcherSimple | PermissionMatcherSubshell;
 
 type PermissionMatcherSimple = {
     type: "literal" | "wildcard" | "heredoc-op" | "heredoc-delim" | "chain-op";
     value: string;
-    test: (value: string) => boolean;
+    test: (value: PermissionToken) => boolean;
 };
 
 type PermissionMatcherSubshell = {
     type: "subshell";
     value: string;
     // note: only a quick test, submatchers should be handled properly
-    test: (value: string) => boolean;
+    test: (value: PermissionToken) => boolean;
     // For subshells: nested matchers for the content inside $() or ``
     subMatchers: PermissionMatcher[];
 };
@@ -43,7 +50,7 @@ const MATCH_WILDCARD = "*";
  * Convert a wildcard pattern to a regex for matching individual arguments.
  * The * wildcard matches zero or more characters within an argument.
  */
-function patternToRegex(pattern: string): RegExp {
+function patternToRegex(pattern: string, allowWildcard = true): RegExp {
     // escape special regex characters
     let escaped = pattern
         .replaceAll("\\", "\\\\")
@@ -60,7 +67,9 @@ function patternToRegex(pattern: string): RegExp {
         .replaceAll("}", "\\}")
         .replaceAll("|", "\\|");
 
-    escaped = escaped.replaceAll(MATCH_WILDCARD, ".*");
+    if (allowWildcard) {
+        escaped = escaped.replaceAll(MATCH_WILDCARD, ".*");
+    }
 
     return new RegExp("^" + escaped + "$");
 }
@@ -69,7 +78,54 @@ function patternToRegex(pattern: string): RegExp {
  * Check if a value is a chain operator (&&, ||, ;, |)
  */
 function isChainOperator(value: string): boolean {
-    return value === "&&" || value === "||" || value === ";" || value === "|" || value === "&";
+    return value === "&&" || value === "||" || value === ";"
+        || value === "|" || value === "|&" || value === "&";
+}
+
+function commandTokens(command: BashCommand["node"]): PermissionToken[] {
+    const tokens: PermissionToken[] = [];
+    for (const commandPart of command.parts) {
+        if (commandPart.type === "word") {
+            tokens.push({ value: commandPart.value, word: commandPart });
+            continue;
+        }
+        tokens.push({
+            value: commandPart.operator,
+            heredocOperator: commandPart.operator === "<<" || commandPart.operator === "<<-",
+        });
+        if (commandPart.target !== undefined) {
+            tokens.push({
+                value: commandPart.target.value,
+                word: commandPart.target,
+            });
+        }
+    }
+    return tokens;
+}
+
+function statementTokens(statement: BashStatement["node"]): PermissionToken[] {
+    const tokens: PermissionToken[] = [];
+    for (const part of statement.parts) {
+        if (part.type === "operator") {
+            tokens.push({ value: part.value });
+            continue;
+        }
+        tokens.push(...commandTokens(part));
+    }
+    return tokens;
+}
+
+function getNestedCommandTokens(argument: PermissionToken): PermissionToken[][] {
+    const substitution = argument.word === undefined
+        ? undefined
+        : BashAst.substitutionFor(argument.word, argument.value);
+    if (substitution !== undefined) {
+        return substitution.ast.statements.map(statementTokens);
+    }
+
+    const parsed = parseBashAst(argument.value);
+    const ast = parsed.singleCommand?.singleSubstitution?.ast ?? parsed.tree;
+    return ast.statements.map(statementTokens);
 }
 
 /**
@@ -84,9 +140,10 @@ function isChainOperator(value: string): boolean {
  * - "cat << *" matches any heredoc
  */
 function matchArgs(
-    commandArgs: string[],
+    commandArgs: readonly PermissionToken[],
     patternMatchers: PermissionMatcher[],
     depth: number = 0,
+    allowHeredocTrailingArg = true,
 ): boolean {
     const MAX_DEPTH = 50;
     const maxIterations = (commandArgs.length + patternMatchers.length) * 2;
@@ -117,6 +174,10 @@ function matchArgs(
         const pattern = patternMatchers[patIdx];
         const argument = commandArgs[cmdIdx];
 
+        if (argument.word?.substitutions.some((substitution) => !substitution.complete)) {
+            return false;
+        }
+
         if (pattern.type === "wildcard") {
             if (lookahead === null) {
                 const remainingPattern = patternMatchers.slice(patIdx + 1);
@@ -127,8 +188,13 @@ function matchArgs(
                 if (nextNonWildcardIdx === -1) {
                     // no lookahead - wildcard matches remaining args except any chain operator
                     const remainingArgs = commandArgs.slice(cmdIdx);
+                    const hasIncompleteSubstitution = remainingArgs.some((value) =>
+                        value.word?.substitutions.some((substitution) => !substitution.complete));
+                    if (hasIncompleteSubstitution) {
+                        return false;
+                    }
                     const hasChainOperator =
-                        remainingArgs.some(isChainOperator);
+                        remainingArgs.some((value) => isChainOperator(value.value));
 
                     if (hasChainOperator) {
                         return false;
@@ -144,7 +210,7 @@ function matchArgs(
                 patIdx++;
             } else {
                 // wildcards should not consume chain operators
-                if (isChainOperator(argument)) {
+                if (isChainOperator(argument.value)) {
                     return false;
                 }
 
@@ -159,15 +225,19 @@ function matchArgs(
 
             // for subshells and process substitutions, match the nested content
             if (pattern.type === "subshell") {
-                const cmdContent = getSubshellContent(argument);
-                const cmdArgsAll = parseBash(cmdContent);
+                const nestedCommands = getNestedCommandTokens(argument);
 
                 // Empty subshell matches empty subshell pattern
-                if (cmdArgsAll.length === 0 && pattern.subMatchers.length === 0) {
+                if (nestedCommands.length === 0 && pattern.subMatchers.length === 0) {
                     // Both empty, match succeeds
                 } else {
-                    for (const cmdArgs of cmdArgsAll) {
-                        if (!matchArgs(cmdArgs, pattern.subMatchers, depth + 1)) {
+                    for (const nestedArgs of nestedCommands) {
+                        if (!matchArgs(
+                            nestedArgs,
+                            pattern.subMatchers,
+                            depth + 1,
+                            false,
+                        )) {
                             return false;
                         }
                     }
@@ -186,7 +256,13 @@ function matchArgs(
             (m) => m.type === "heredoc-op",
         );
 
-        if (hasHeredocOp && cmdIdx === commandArgs.length - 1) {
+        if (allowHeredocTrailingArg
+            && hasHeredocOp
+            && cmdIdx === commandArgs.length - 1) {
+            const trailing = commandArgs[cmdIdx];
+            if (trailing.word?.substitutions.some((substitution) => !substitution.complete)) {
+                return false;
+            }
             return true;
         }
 
@@ -199,8 +275,12 @@ function matchArgs(
 /**
  * Create matchers for a list of arguments, handling subshells recursively.
  */
-function createMatchers(args: string[]): PermissionMatcher[] {
-    return args.map((arg, idx) => {
+function createMatchers(tokens: readonly PermissionToken[]): PermissionMatcher[] {
+    return tokens.map((token, idx) => {
+        const arg = token.value;
+        const substitution = token.word === undefined
+            ? undefined
+            : BashAst.substitutionFor(token.word, arg);
         if (arg === MATCH_WILDCARD) {
             return {
                 type: "wildcard" as const,
@@ -209,16 +289,21 @@ function createMatchers(args: string[]): PermissionMatcher[] {
             };
         }
 
-        if (arg === "<<" || arg === "<<-") {
+        const parsedValue = token.word === undefined ? parseBashAst(arg) : undefined;
+        const valueSubstitution = parsedValue?.singleCommand?.singleSubstitution;
+        const heredocOperator = token.heredocOperator
+            || parsedValue?.singleCommand?.singleRedirection?.operator === "<<"
+            || parsedValue?.singleCommand?.singleRedirection?.operator === "<<-";
+        if (heredocOperator) {
             const regex = patternToRegex(arg);
             return {
                 type: "heredoc-op" as const,
                 value: arg,
-                test: (v: string) => regex.test(v),
+                test: (value: PermissionToken) => regex.test(value.value),
             };
         }
 
-        if (idx > 0 && isHeredocOperator(args[idx - 1])) {
+        if (idx > 0 && tokens[idx - 1].heredocOperator) {
             return {
                 type: "heredoc-delim" as const,
                 value: arg,
@@ -226,51 +311,104 @@ function createMatchers(args: string[]): PermissionMatcher[] {
             };
         }
 
-        if (isSubshell(arg) || isProcessSubstitution(arg)) {
-            // subshell/process substitution content create nested matchers
-            const content = getSubshellContent(arg);
-            const subArgs = parseBash(content);
-
-            // Create a test function that checks type AND prefix
-            const argPrefix = arg.startsWith(">(") ? ">(" : arg.startsWith("<(") ? "<(" : arg.startsWith("`") ? "`" : "$(";
-            const testFn = (v: string) => {
-                // Check same type (subshell vs process substitution)
-                if (!isSubshell(v) && !isProcessSubstitution(v)) return false;
-                // Check same prefix ($(), ``, <(, >()
-                return v.startsWith(argPrefix);
-            };
-
-            // Empty subshell is valid
-            if (subArgs.length === 0) {
+        const commandSubstitution = substitution?.kind === "command"
+            || substitution?.kind === "backtick"
+            || valueSubstitution?.kind === "command"
+            || valueSubstitution?.kind === "backtick";
+        const processSubstitution = substitution?.kind === "process-input"
+            || substitution?.kind === "process-output"
+            || valueSubstitution?.kind === "process-input"
+            || valueSubstitution?.kind === "process-output";
+        if (commandSubstitution || processSubstitution) {
+            // Subshell/process-substitution content creates nested matchers.
+            const nestedAst = substitution?.ast
+                ?? valueSubstitution?.ast
+                ?? parseBashAst(arg).tree;
+            if (nestedAst.statements.length === 0) {
                 return {
                     type: "subshell" as const,
                     value: arg,
-                    test: testFn,
+                    test: (value: PermissionToken) =>
+                        isMatchingSubstitution(value, substitution),
                     subMatchers: [],
                 };
             }
-
-            if (subArgs.length !== 1) {
-                throw new Error(`expected a single subshell bash command, found ${subArgs.length}`);
+            if (nestedAst.statements.length !== 1) {
+                throw new Error(`expected a single subshell bash command, found ${nestedAst.statements.length}`);
             }
 
-            const subMatchers = createMatchers(subArgs[0]);
-
+            const subMatchers = createMatchers(statementTokens(
+                nestedAst.statements[0],
+            ));
             return {
                 type: "subshell" as const,
                 value: arg,
-                test: testFn,
+                test: (value: PermissionToken) =>
+                    isMatchingSubstitution(value, substitution),
                 subMatchers,
             };
         }
 
         const regex = patternToRegex(arg);
+        const patternHasSubstitution = token.word !== undefined
+            && token.word.substitutions.length > 0;
         return {
             type: "literal" as const,
             value: arg,
-            test: (v: string) => regex.test(v),
+            test: (value: PermissionToken) => {
+                const inputHasSubstitution = value.word !== undefined
+                    && value.word.substitutions.length > 0;
+                if (patternHasSubstitution !== inputHasSubstitution) {
+                    return false;
+                }
+                return regex.test(value.value);
+            },
         };
     });
+}
+
+function isMatchingSubstitution(
+    token: PermissionToken,
+    patternSubstitution?: BashSubstitutionNode,
+): boolean {
+    const value = token.value;
+    const inputSubstitution = token.word === undefined
+        ? parseBashAst(value).singleCommand?.singleSubstitution
+        : BashAst.substitutionFor(token.word, value);
+    if (patternSubstitution !== undefined && inputSubstitution !== undefined) {
+        if (!patternSubstitution.complete || !inputSubstitution.complete) {
+            return false;
+        }
+        return inputSubstitution.kind === patternSubstitution.kind;
+    }
+
+    const commandSubstitution = inputSubstitution?.kind === "command"
+        || inputSubstitution?.kind === "backtick";
+    const processSubstitution = inputSubstitution?.kind === "process-input"
+        || inputSubstitution?.kind === "process-output";
+    if (!commandSubstitution && !processSubstitution) {
+        return false;
+    }
+
+    let prefix: string;
+    if (patternSubstitution?.kind === "process-output") {
+        prefix = ">(";
+    } else if (patternSubstitution?.kind === "process-input") {
+        prefix = "<(";
+    } else if (patternSubstitution?.kind === "backtick") {
+        prefix = "`";
+    } else if (patternSubstitution?.kind === "command") {
+        prefix = "$(";
+    } else if (value.startsWith(">(")) {
+        prefix = ">(";
+    } else if (value.startsWith("<(")) {
+        prefix = "<(";
+    } else if (value.startsWith("`")) {
+        prefix = "`";
+    } else {
+        prefix = "$(";
+    }
+    return value.startsWith(prefix);
 }
 
 function getPermissions(
@@ -302,21 +440,26 @@ function getPermissions(
 
               // Handle empty permission key specially
               if (permission[0] === "" || permission[0].trim() === "") {
+                  const emptyMatcher = {
+                      type: "literal" as const,
+                      value: "",
+                      test: (value: PermissionToken) => value.value === "",
+                  };
                   _permissions.push({
                       wildcard: permission[0],
                       value: permission[1] as Permission,
-                      matchers: [{ type: "literal", value: "", test: (v: string) => v === "" }],
+                      matchers: [emptyMatcher],
                   });
                   continue;
               }
 
-              const permissionArguments = parseBash(permission[0]);
-
-              if (permissionArguments.length !== 1) {
-                  throw new Error(`expected the rules to contain only one bash syntax, found ${permissionArguments.length}`);
+              const parsed = parseBashAst(permission[0]);
+              if (parsed.statements.length !== 1) {
+                  throw new Error(`expected the rules to contain only one bash syntax, found ${parsed.statements.length}`);
               }
 
-              const matchers = createMatchers(permissionArguments[0]);
+              const statement = parsed.statements[0];
+              const matchers = createMatchers(statementTokens(statement.node));
 
               _permissions.push({
                   wildcard: permission[0],
@@ -344,6 +487,14 @@ function getSingleCommandPermission(
     permissions: PermissionMatch[],
     fallback: Permission = "ask",
 ): { permission: Permission; matched: boolean } {
+    if (permissions.length === 0) {
+        return { permission: fallback, matched: false };
+    }
+
+    const tokens = commands.map((value) => ({
+        value,
+        word: parseBashAst(value).singleCommand?.singleWord,
+    }));
     let match: Permission = fallback;
     let matched = false;
 
@@ -351,7 +502,36 @@ function getSingleCommandPermission(
     //       could also try a specificity approach
     for (const permission of permissions) {
         try {
-            if (!matchArgs(commands, permission.matchers)) {
+            if (!matchArgs(tokens, permission.matchers)) {
+                continue;
+            }
+
+            match = permission.value;
+            matched = true;
+        } catch {
+            continue;
+        }
+    }
+
+    return { permission: match, matched };
+}
+
+function getSingleAstCommandPermission(
+    statement: BashStatement,
+    permissions: PermissionMatch[],
+    fallback: Permission = "ask",
+): { permission: Permission; matched: boolean } {
+    if (permissions.length === 0) {
+        return { permission: fallback, matched: false };
+    }
+
+    const tokens = statementTokens(statement.node);
+    let match: Permission = fallback;
+    let matched = false;
+
+    for (const permission of permissions) {
+        try {
+            if (!matchArgs(tokens, permission.matchers, 0, false)) {
                 continue;
             }
 
@@ -391,17 +571,17 @@ export function getPermissionMatch(
         return getSingleCommandPermission([""], permissions, defaultPermission);
     }
 
-    const parsedCommands = parseBash(command);
+    const parsed = parseBashAst(command);
 
-    if (parsedCommands.length === 0) {
+    if (parsed.statements.length === 0) {
         return { permission: defaultPermission, matched: false };
     }
 
     // Return the most restrictive permission across all commands
-    return parsedCommands.reduce<{ permission: Permission; matched: boolean }>(
-        (result, cmd) => {
-            const { permission, matched } = getSingleCommandPermission(
-                cmd,
+    return parsed.statements.reduce<{ permission: Permission; matched: boolean }>(
+        (result, statement) => {
+            const { permission, matched } = getSingleAstCommandPermission(
+                statement,
                 permissions,
                 defaultPermission,
             );
@@ -412,6 +592,55 @@ export function getPermissionMatch(
         },
         { permission: "allow", matched: false },
     );
+}
+
+export function getBashStatementPermissionMatch(
+    statement: BashStatement,
+    configPermissions?: SandboxConfigPermissions,
+): { permission: Permission; matched: boolean } {
+    let parsedPermissions: PermissionMatch[];
+    try {
+        parsedPermissions = getPermissions(configPermissions);
+    } catch {
+        return { permission: "ask", matched: false };
+    }
+    return getSingleAstCommandPermission(
+        statement,
+        parsedPermissions,
+        defaultPermission,
+    );
+}
+
+export function getBashCommandPermissionMatch(
+    command: BashCommand,
+    configPermissions?: SandboxConfigPermissions,
+): { permission: Permission; matched: boolean } {
+    let parsedPermissions: PermissionMatch[];
+    try {
+        parsedPermissions = getPermissions(configPermissions);
+    } catch {
+        return { permission: "ask", matched: false };
+    }
+
+    if (parsedPermissions.length === 0) {
+        return { permission: defaultPermission, matched: false };
+    }
+
+    const tokens = commandTokens(command.node);
+    let match: Permission = defaultPermission;
+    let matched = false;
+    for (const permission of parsedPermissions) {
+        try {
+            if (!matchArgs(tokens, permission.matchers, 0, false)) {
+                continue;
+            }
+            match = permission.value;
+            matched = true;
+        } catch {
+            continue;
+        }
+    }
+    return { permission: match, matched };
 }
 
 export default function getPermission(

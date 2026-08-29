@@ -12,6 +12,11 @@ For a manual permission-prompt check, run `cat /etc/hostname`; without a matchin
 
 Database-backed agent tests must use an explicit temporary state/workspaces directory; integration tests that only exercise agent action presentation should mock catalog access rather than allowing the default `.state/meta.sqlite` path. The project-local `.state/` directory is runtime state and must not be mutated by the test suite.
 
+Parser benchmarks:
+
+- `npm run bench` runs `test/modules/sandbox/bash.bench.ts`, measuring `parseBashAst()` across simple, medium, and high-complexity command corpora. Benchmarks are separate from `npm run test:run`.
+- Benchmark output is machine-specific and intended as a future AST-parser performance baseline, not a hard threshold.
+
 Relevant test locations:
 
 - `test/ask-user.test.ts`, `test/select-with-message.test.ts`, and `test/inline-editor.test.ts` for TUI editing.

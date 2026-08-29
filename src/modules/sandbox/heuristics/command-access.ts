@@ -1,9 +1,9 @@
-import {
-    parseBash,
-    isHeredocOperator,
-    isProcessSubstitution,
-    isSubshell,
-    getSubshellContent,
+import { BashAst, parseBashAst } from "../bash";
+import type {
+    BashAstNode,
+    BashCommand,
+    BashSubstitutionNode,
+    BashWordNode,
 } from "../bash";
 import { CommandTag } from "../commands";
 import type { CommandSpec, FlagSpec } from "../commands";
@@ -45,35 +45,38 @@ export function matchesCustomSafeBashCommand(
 
 export function parseCustomSafeBashCommands(commands: readonly string[]): string[][] {
     const patterns: string[][] = [];
-    const chainOperators = new Set(["&&", "||", "|", ";", "&"]);
     for (const command of commands) {
         try {
-            const lines = parseBash(command);
-            if (lines.length !== 1) continue;
-            const segments: { args: string[]; operatorAfter: string | null }[] = [];
-            let current: string[] = [];
-            for (const arg of lines[0]) {
-                if (chainOperators.has(arg)) {
-                    if (current.length > 0) {
-                        segments.push({ args: current, operatorAfter: arg });
-                        current = [];
-                    }
-                } else {
-                    current.push(arg);
-                }
+            const parsed = parseBashAst(command);
+            if (parsed.statements.length !== 1) {
+                continue;
             }
-            if (current.length > 0) {
-                segments.push({ args: current, operatorAfter: null });
+            const statement = parsed.statements[0];
+            if (statement.parts.length !== 1 || statement.commands.length !== 1) {
+                continue;
             }
-            if (segments.length !== 1 || segments[0].operatorAfter !== null) continue;
-            const args = segments[0].args;
-            if (args.length === 0) continue;
-            if (args.some((arg) => REDIRECTION_OPERATORS.has(arg))) continue;
-            const wildcard = args[args.length - 1] === "*";
+            const [simpleCommand] = statement.commands;
+            if (simpleCommand.redirections.length > 0) {
+                continue;
+            }
+
+            const words = simpleCommand.words;
+            const args = words.map((word) => word.value);
+            if (args.length === 0) {
+                continue;
+            }
+            const wildcard = args[args.length - 1] === "*"
+                && !words[words.length - 1].quoted;
             const fixedArgs = wildcard ? args.slice(0, -1) : args;
-            if (fixedArgs.includes("*")) continue;
-            if (args.some((arg) => arg !== "*" && hasDynamicShellExpansion(arg))) continue;
-            if (args[0].includes("/") || args[0].includes("\\")) continue;
+            if (fixedArgs.includes("*")) {
+                continue;
+            }
+            if (args.some((arg) => arg !== "*" && hasDynamicShellExpansion(arg))) {
+                continue;
+            }
+            if (args[0].includes("/") || args[0].includes("\\")) {
+                continue;
+            }
             patterns.push(args);
         } catch {
             // Invalid patterns are ignored and remain permission-gated.
@@ -159,13 +162,14 @@ function handleShortCluster(
     writes: { value: boolean },
     diagnostics?: ConfinementDiagnostics,
     context?: CommandAccessContext,
+    wordAt?: (index: number) => BashWordNode | undefined,
 ): number | null {
     const cluster = args[index].slice(1);
 
-    const inspectValue = (value: string, pathContext: boolean): boolean => {
+    const inspectValue = (value: string, pathContext: boolean, word?: BashWordNode): boolean => {
         if (
             (spec.additionalRootOnly && hasDynamicShellExpansion(value))
-            || (pathContext && hasUnmodeledPathExpansion(value))
+            || (pathContext && hasUnmodeledPathExpansion(value, word))
         ) {
             addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
             return false;
@@ -178,6 +182,7 @@ function handleShortCluster(
             pathContext,
             diagnostics,
             context,
+            word,
         );
         if (substitution === null) return false;
         if (substitution !== undefined) {
@@ -211,12 +216,17 @@ function handleShortCluster(
             // inline value is the rest of the cluster, otherwise next arg
             if (j === cluster.length - 1) {
                 const value = args[index + 1];
-                if (value === undefined || !inspectValue(value, hasPathSlot(flagSpec, 0))) {
+                if (value === undefined
+                    || !inspectValue(value, hasPathSlot(flagSpec, 0), wordAt?.(index + 1))) {
                     return null;
                 }
                 return index + 1;
             }
-            if (!inspectValue(cluster.slice(j + 1), hasPathSlot(flagSpec, 0))) {
+            if (!inspectValue(
+                cluster.slice(j + 1),
+                hasPathSlot(flagSpec, 0),
+                wordAt?.(index),
+            )) {
                 return null;
             }
             return index;
@@ -248,9 +258,9 @@ function hasShellSubstitution(value: string): boolean {
 }
 
 /**
- * Shell syntax that can turn one parser token into different filesystem
- * operands after confinement has been checked. parseBash intentionally strips
- * quote/escape provenance, so rejecting these forms may produce safe false
+ * Shell syntax that can turn one parsed-argument value into different
+ * filesystem operands after confinement has been checked. The parsed-argument
+ * path has no AST provenance, so rejecting these forms may produce safe false
  * negatives; that is preferable to guessing at Bash expansion semantics.
  */
 export function hasDynamicShellExpansion(value: string): boolean {
@@ -267,8 +277,23 @@ export function hasDynamicShellExpansion(value: string): boolean {
         || /[@+!]\(/.test(value);
 }
 
-export function hasUnmodeledPathExpansion(value: string): boolean {
-    if (isSubshell(value) || isProcessSubstitution(value)) {
+export function hasUnmodeledPathExpansion(
+    value: string,
+    word?: BashWordNode,
+): boolean {
+    if (word !== undefined) {
+        const substitution = BashAst.substitutionFor(word, value);
+        if (substitution?.complete) {
+            return false;
+        }
+        if (word.substitutions.length > 0) {
+            return true;
+        }
+        return hasDynamicShellExpansion(value);
+    }
+
+    const substitution = parseBashAst(value).singleCommand?.singleSubstitution;
+    if (substitution !== undefined) {
         return false;
     }
     return hasDynamicShellExpansion(value);
@@ -280,31 +305,70 @@ export function hasUnmodeledPathExpansion(value: string): boolean {
  * not enough: `$(echo /etc/passwd)` is safe to execute but unsafe as `cat`'s
  * path argument.
  */
-function getStaticSubstitutionPaths(
-    value: string,
+function getStaticSubstitutionPathsFromAst(
+    ast: BashAstNode,
     cwd: string,
 ): string[] | null {
-    if (!isSubshell(value)) return null;
-
-    let parsed: string[][];
-    try {
-        parsed = parseBash(getSubshellContent(value));
-    } catch {
+    if (ast.statements.length !== 1) {
+        return null;
+    }
+    const statement = ast.statements[0];
+    if (statement.parts.length !== 1 || statement.commands.length !== 1) {
+        return null;
+    }
+    if (statement.commands[0].redirections.length > 0) {
         return null;
     }
 
-    if (parsed.length !== 1 || parsed[0].length === 0) return null;
-    const args = parsed[0];
-    if (args.length === 1 && args[0] === "pwd") return [cwd];
-    if (args.length !== 2 || (args[0] !== "echo" && args[0] !== "printf")) return null;
-
-    const output = args[1];
-    if (isSubshell(output)) {
-        return getStaticSubstitutionPaths(output, cwd);
+    const words = statement.commands[0].words;
+    if (words.some((word) => word.assignment !== undefined)) {
+        return null;
     }
-    if (!/^[A-Za-z0-9._+@/:-]+$/.test(output)) return null;
-    if (output.includes("%")) return null;
+    const args = words.map((word) => word.value);
+    if (args.length === 1 && args[0] === "pwd") {
+        return [cwd];
+    }
+    if (args.length !== 2 || (args[0] !== "echo" && args[0] !== "printf")) {
+        return null;
+    }
+
+    const outputWord = words[1];
+    const nested = BashAst.substitutionFor(outputWord);
+    if (nested?.kind === "command" || nested?.kind === "backtick") {
+        return getStaticSubstitutionPathsFromAst(nested.ast, cwd);
+    }
+    if (outputWord.substitutions.length > 0) {
+        return null;
+    }
+    const output = outputWord.value;
+    if (!/^[A-Za-z0-9._+@/:-]+$/.test(output)) {
+        return null;
+    }
+    if (output.includes("%")) {
+        return null;
+    }
     return [output];
+}
+
+function getStaticSubstitutionPaths(
+    substitution: BashSubstitutionNode,
+    cwd: string,
+): string[] | null {
+    if (substitution.kind !== "command" && substitution.kind !== "backtick") {
+        return null;
+    }
+    return getStaticSubstitutionPathsFromAst(substitution.ast, cwd);
+}
+
+function getStaticSubstitutionPathsFromValue(
+    value: string,
+    cwd: string,
+): string[] | null {
+    const substitution = parseBashAst(value).singleCommand?.singleSubstitution;
+    if (substitution?.kind !== "command" && substitution?.kind !== "backtick") {
+        return null;
+    }
+    return getStaticSubstitutionPathsFromAst(substitution.ast, cwd);
 }
 
 interface ShellSubstitutionAccess {
@@ -327,19 +391,36 @@ function inspectShellSubstitution(
     pathContext: boolean,
     diagnostics?: ConfinementDiagnostics,
     context?: CommandAccessContext,
+    word?: BashWordNode,
 ): ShellSubstitutionAccess | null | undefined {
-    const processSubstitution = isProcessSubstitution(value);
-    const commandSubstitution = isSubshell(value);
+    const substitution = word === undefined
+        ? undefined
+        : BashAst.substitutionFor(word, value);
+    const valueSubstitution = substitution
+        ?? (word === undefined
+            ? parseBashAst(value).singleCommand?.singleSubstitution
+            : undefined);
+    const processSubstitution = valueSubstitution?.kind === "process-input"
+        || valueSubstitution?.kind === "process-output";
+    const commandSubstitution = valueSubstitution?.kind === "command"
+        || valueSubstitution?.kind === "backtick";
+
+    if (valueSubstitution !== undefined && !valueSubstitution.complete) {
+        addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+        return null;
+    }
 
     if (!processSubstitution && !commandSubstitution) {
-        if (hasShellSubstitution(value)) {
+        if ((word !== undefined && word.substitutions.length > 0)
+            || (word === undefined && hasShellSubstitution(value))) {
             addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
             return null;
         }
         return undefined;
     }
 
-    const inner = context?.evaluateNested(getSubshellContent(value), cwd, options, diagnostics);
+    const content = valueSubstitution?.content ?? value;
+    const inner = context?.evaluateNested(content, cwd, options, diagnostics);
     if (inner === undefined) {
         if (diagnostics?.reasons.length === 0) {
             addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
@@ -355,7 +436,9 @@ function inspectShellSubstitution(
         return { heuristic: inner, paths: [] };
     }
 
-    const paths = getStaticSubstitutionPaths(value, cwd);
+    const paths = word === undefined
+        ? getStaticSubstitutionPathsFromValue(value, cwd)
+        : getStaticSubstitutionPaths(valueSubstitution, cwd);
     if (paths === null) {
         addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
         return null;
@@ -383,8 +466,11 @@ export function extractCommandPaths(
     options: ConfinementOptions,
     diagnostics?: ConfinementDiagnostics,
     context?: CommandAccessContext,
+    astCommand?: BashCommand,
 ): ExtractedCommandAccess | null {
     const paths: string[] = [];
+    const commandWords = astCommand?.words.slice(astCommand.environment.length);
+    const wordAt = (index: number): BashWordNode | undefined => commandWords?.[index];
     const positionalPaths: string[] = [];
     const tags = new Set<CommandTag>(spec.tags);
     let writes = spec.writes === true;
@@ -399,7 +485,10 @@ export function extractCommandPaths(
     // e.g. `git log -C` means detect-copies, not change directory).
     const subcommands = spec.subcommands;
     let activeSpec = spec;
-    let activeStart = 0;
+    // Index in the normalized argv where the active spec begins. For a
+    // regular command this is 0; for `git diff`, it points at `diff`, so the
+    // diff validator receives ["diff", ...] rather than ["git", "diff", ...].
+    let activeArgvStart = 0;
     let dispatched = subcommands === undefined;
     let positionals = activeSpec.positionals ?? "paths";
     let patternProvided =
@@ -413,10 +502,14 @@ export function extractCommandPaths(
             positionals !== "first-pattern" || hasPatternBypass(args, s);
     };
 
-    const inspectValue = (value: string, pathContext: boolean): boolean => {
+    const inspectValue = (
+        value: string,
+        pathContext: boolean,
+        word?: BashWordNode,
+    ): boolean => {
         if (
             (activeSpec.additionalRootOnly && hasDynamicShellExpansion(value))
-            || (pathContext && hasUnmodeledPathExpansion(value))
+            || (pathContext && hasUnmodeledPathExpansion(value, word))
         ) {
             addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
             return false;
@@ -429,6 +522,7 @@ export function extractCommandPaths(
             pathContext,
             diagnostics,
             context,
+            word,
         );
         if (substitution === null) return false;
         if (substitution !== undefined) {
@@ -440,9 +534,9 @@ export function extractCommandPaths(
         return true;
     };
 
-    const inspectPositionalPath = (value: string): boolean => {
+    const inspectPositionalPath = (value: string, word?: BashWordNode): boolean => {
         const pathCount = paths.length;
-        if (!inspectValue(value, true)) {
+        if (!inspectValue(value, true, word)) {
             return false;
         }
         positionalPaths.push(...paths.slice(pathCount));
@@ -451,18 +545,24 @@ export function extractCommandPaths(
 
     for (let i = 1; i < args.length; i++) {
         const arg = args[i];
+        const argWord = wordAt(i);
 
         // Shell redirections and substitutions retain their meaning after a
-        // command's `--`; only command flag parsing stops there.
-        if (isHeredocOperator(arg)) {
-            // parseBash does not retain heredoc body expansion metadata.
-            // Falling back prevents hidden substitutions from executing
+        // command's `--`; only command flag parsing stops there. AST commands
+        // expose redirections separately, so the legacy token handling is
+        // only needed for the parsed-arguments entrypoint.
+        if (astCommand === undefined && (
+            parseBashAst(arg).singleCommand?.singleRedirection?.operator === "<<"
+            || parseBashAst(arg).singleCommand?.singleRedirection?.operator === "<<-"
+        )) {
+            // Parsed-argument input does not retain heredoc body expansion
+            // metadata. Falling back prevents hidden substitutions from executing
             // under an otherwise safe outer command.
             addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
             return null;
         }
 
-        if (REDIRECTION_OPERATORS.has(arg)) {
+        if (astCommand === undefined && REDIRECTION_OPERATORS.has(arg)) {
             const target = args[++i];
             if (target === undefined) {
                 return null;
@@ -474,15 +574,25 @@ export function extractCommandPaths(
             // File-descriptor duplication (for example 2>&1) is not
             // a filesystem write. All other non-special redirection
             // targets can create or overwrite a file.
-            if (!isProcessSubstitution(target) && arg !== "<" &&
-                !target.startsWith("&") && !SPECIAL_ALLOWED_PATHS.has(target)) {
+            const targetSubstitution = parseBashAst(target).singleCommand?.singleSubstitution;
+            const processTarget = targetSubstitution?.kind === "process-input"
+                || targetSubstitution?.kind === "process-output";
+            if (!processTarget && arg !== "<" && !target.startsWith("&")
+                && !SPECIAL_ALLOWED_PATHS.has(target)) {
                 writes = true;
             }
             continue;
         }
 
-        if (isProcessSubstitution(arg)) {
-            if (!inspectValue(arg, false)) {
+        const processSubstitution = argWord === undefined
+            ? (() => {
+                const substitution = parseBashAst(arg).singleCommand?.singleSubstitution;
+                return substitution?.kind === "process-input"
+                    || substitution?.kind === "process-output";
+            })()
+            : argWord.kind === "process-substitution";
+        if (processSubstitution) {
+            if (!inspectValue(arg, false, argWord)) {
                 return null;
             }
             continue;
@@ -523,7 +633,7 @@ export function extractCommandPaths(
                         if (values > 1) {
                             return null;
                         }
-                        if (!inspectValue(inline, hasPathSlot(flagSpec, 0))) {
+                        if (!inspectValue(inline, hasPathSlot(flagSpec, 0), argWord)) {
                             return null;
                         }
                         continue;
@@ -533,7 +643,11 @@ export function extractCommandPaths(
                         if (value === undefined) {
                             return null;
                         }
-                        if (!inspectValue(value, hasPathSlot(flagSpec, slot))) {
+                        if (!inspectValue(
+                            value,
+                            hasPathSlot(flagSpec, slot),
+                            wordAt(i + 1 + slot),
+                        )) {
                             return null;
                         }
                     }
@@ -542,7 +656,7 @@ export function extractCommandPaths(
                 }
 
                 // unknown long flag with inline value: treat value as path
-                if (inline !== undefined && !inspectValue(inline, true)) {
+                if (inline !== undefined && !inspectValue(inline, true, argWord)) {
                     return null;
                 }
                 continue;
@@ -582,6 +696,7 @@ export function extractCommandPaths(
                     writeState,
                     diagnostics,
                     context,
+                    wordAt,
                 );
                 writes = writeState.value;
                 if (next === null) {
@@ -600,7 +715,7 @@ export function extractCommandPaths(
                 return null;
             }
             adoptSpec(sub);
-            activeStart = i;
+            activeArgvStart = i;
             dispatched = true;
             continue;
         }
@@ -609,29 +724,29 @@ export function extractCommandPaths(
             case "none":
                 return null;
             case "ignore":
-                if (!inspectValue(arg, false)) {
+                if (!inspectValue(arg, false, argWord)) {
                     return null;
                 }
                 continue;
             case "first-pattern":
                 if (!positionalSeen && !patternProvided) {
                     positionalSeen = true;
-                    if (!inspectValue(arg, false)) {
+                    if (!inspectValue(arg, false, argWord)) {
                         return null;
                     }
                     continue;
                 }
-                if (!inspectPositionalPath(arg)) {
+                if (!inspectPositionalPath(arg, argWord)) {
                     return null;
                 }
                 continue;
             case "first-path":
                 if (!positionalSeen) {
                     positionalSeen = true;
-                    if (!inspectPositionalPath(arg)) {
+                    if (!inspectPositionalPath(arg, argWord)) {
                         return null;
                     }
-                } else if (!inspectValue(arg, false)) {
+                } else if (!inspectValue(arg, false, argWord)) {
                     return null;
                 }
                 continue;
@@ -654,16 +769,52 @@ export function extractCommandPaths(
                 if (isDangerousEnvName(name)) {
                     return null;
                 }
-                if (!inspectValue(arg.slice(eq + 1), true)) {
+                if (!inspectValue(arg.slice(eq + 1), true, argWord)) {
                     return null;
                 }
                 continue;
             }
             default:
-                if (!inspectPositionalPath(arg)) {
+                if (!inspectPositionalPath(arg, argWord)) {
                     return null;
                 }
                 continue;
+        }
+    }
+
+    if (astCommand !== undefined) {
+        for (const redirection of astCommand.redirections) {
+            const operator = redirection.operator;
+            if (
+                operator === "<<"
+                || operator === "<<-"
+                || redirection.heredoc !== undefined
+            ) {
+                // Falling back prevents hidden substitutions from executing
+                // under an otherwise safe outer command.
+                addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+                return null;
+            }
+
+            const target = redirection.target;
+            if (target === undefined) {
+                if (operator === "2>&1") {
+                    continue;
+                }
+                return null;
+            }
+            if (!inspectValue(target.value, true, target)) {
+                return null;
+            }
+
+            if (
+                target.kind !== "process-substitution"
+                && operator !== "<"
+                && !operator.includes(">&")
+                && !SPECIAL_ALLOWED_PATHS.has(target.value)
+            ) {
+                writes = true;
+            }
         }
     }
 
@@ -672,14 +823,15 @@ export function extractCommandPaths(
         return null;
     }
 
-    // Subcommands may have their own invocation-level safety check (the
-    // parent check is performed by isCommandConfined before extraction).
-    if (
-        activeSpec !== spec &&
-        activeSpec.validate &&
-        !activeSpec.validate(args.slice(activeStart))
-    ) {
-        return null;
+    // Subcommands may have their own invocation-level safety check. Their
+    // spec receives a subcommand-relative normalized argv vector, with the
+    // subcommand name at argv[0]. The parent check is performed by
+    // isCommandConfined before extraction.
+    if (activeSpec !== spec && activeSpec.validate) {
+        const activeArgv = args.slice(activeArgvStart);
+        if (!activeSpec.validate(activeArgv)) {
+            return null;
+        }
     }
 
     // default mode is unsafe unless a read-only mode flag is present

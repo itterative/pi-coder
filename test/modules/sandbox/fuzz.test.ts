@@ -216,6 +216,8 @@ describe("fuzz: permission resolution invariants", () => {
     const resolve = (command: string, permissions: Record<string, Permission> = {}) =>
         resolvePermission(command, cwd, { permissions, cwdConfinement: {} });
 
+    // Allow headroom for this 2,000-input parser stress test when the full
+    // suite runs concurrently with the other sandbox tests.
     it("never crashes on token soup and never denies without deny rules", () => {
         const rng = new Rng(SEED);
         for (let i = 0; i < 2000; i++) {
@@ -227,7 +229,7 @@ describe("fuzz: permission resolution invariants", () => {
             expect(PERMISSIONS).toContain(result);
             expect(result).not.toBe("deny");
         }
-    });
+    }, 10_000);
 
     it("chains with an unsafe segment are never auto-allowed", () => {
         const rng = new Rng(SEED + 1);

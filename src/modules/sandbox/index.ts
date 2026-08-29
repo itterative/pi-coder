@@ -1,0 +1,25 @@
+export {
+    BashAst,
+    BashCommand,
+    BashStatement,
+    parseBashAst,
+} from "./bash";
+export type {
+    BashAstNode,
+    BashChainOperator,
+    BashCommandAst,
+    BashCommandNode,
+    BashCommandPart,
+    BashEnvironmentAssignment,
+    BashHeredocNode,
+    BashOperatorNode,
+    BashRedirectionNode,
+    BashRedirectionOperator,
+    BashScriptNode,
+    BashStatementAst,
+    BashStatementNode,
+    BashSubstitutionNode,
+    BashWordAst,
+    BashWordKind,
+    BashWordNode,
+} from "./bash";

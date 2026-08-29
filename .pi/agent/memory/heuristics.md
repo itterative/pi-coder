@@ -15,6 +15,7 @@ The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` a
 - A non-`ask` `**` default is authoritative: heuristics do not relax `deny` or downgrade `allow`.
 - `deny` dominates; unresolved segments force `ask`; policy permissions combine most-restrictively; heuristic-only chains resolve to the configured heuristic permission (normally `allow:sandbox`). The heuristic classifiers return `Heuristic.SAFE_READONLY`, `Heuristic.SAFE_EDIT`, or `Heuristic.UNSAFE`; the resolver only treats the two SAFE variants as grants and maps them to the configured execution permission. `getCwdConfinementAssessment()`, `getArgsConfinementAssessment()`, and `getPathConfinementAssessment()` additionally return structured `UnsafeReason` codes and deduplicated semantic `CommandTag`s for future scout/review agents. Tags are emitted only by successfully classified command specs and let runtime policy apply contextual safeguards without reparsing shell text; `CommandTag.GIT_STATUS` currently drives the child fsmonitor check.
 - Chain operators remain parser arguments and must be present in whole-command patterns.
+- Bash parsing is implemented in `src/modules/sandbox/bash.ts`: `parseBashAst()` returns a structured `BashAst` with statement/command nodes, lexer roles/provenance, chain operators, redirections/heredocs, recursive substitutions with delimiter-completeness metadata, ordered command parts, and convenience command views for command name, environment assignments, flags, arguments, and positional arguments. `BashAst.substitutionFor()` is the centralized lookup for whole or inline substitution values. Sandbox callers use AST nodes directly; unresolved command displays use an AST-derived ordered token view. Standalone parsed-argument compatibility values are reparsed conservatively because they lack original provenance.
 
 ## Module layout
 
@@ -23,7 +24,7 @@ The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` a
 - `heuristics/types.ts` — public classifications, unsafe reasons, assessment/diagnostics helpers, and cwd-state contracts.
 - `heuristics/path-policy.ts` — lexical/canonical path checks, sensitive patterns, additional-root pairing, symlink containment, directory/hard-link checks, and `buildConfinementOptions`.
 - `heuristics/command-access.ts` — `CommandSpec` flag/positional interpretation, shell substitution handling (via an injected evaluator callback to avoid cycles), redirections, and custom safe-Bash parsing.
-- `heuristics/evaluator.ts` — shell parsing, chain splitting, modeled `cd`/`pushd`/`popd` state, leading environment checks, and command-confinement evaluation.
+- `heuristics/evaluator.ts` — AST statement/command traversal, modeled `cd`/`pushd`/`popd` state, leading environment checks, and command-confinement evaluation.
 
 Existing callers import from `./heuristics`; no other module should depend on the internal split files directly. Its path, command-string, and parsed-args entrypoints (`getPathConfinement*`, `getCwdConfinement*`, and `getArgsConfinement*`) take the primary target positionally, with `cwd` plus ancillary controls in one named options object. The facade exports `PathConfinementOptions`, `CwdConfinementOptions`, and `ArgsConfinementOptions`; config, access, roots, state, and custom safe-command controls are named optional fields.
 

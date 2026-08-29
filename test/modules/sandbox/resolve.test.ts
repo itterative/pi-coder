@@ -127,6 +127,23 @@ describe("resolvePermissionDetails: unresolved segments", () => {
         ]);
     });
 
+    it("does not let heredoc compatibility authorize an extra nested operand", () => {
+        expect(resolvePermission(
+            "echo $(cat <<EOF /etc/passwd\nbody\nEOF\n)",
+            CWD,
+            {
+                permissions: { "echo $(cat << EOF)": "allow" },
+                cwdConfinement: {},
+            },
+        )).toBe("ask");
+    });
+
+    it("keeps extended redirection tokens in unresolved command output", () => {
+        const details = check("nc host &> out");
+        expect(details.permission).toBe("ask");
+        expect(details.unresolved).toEqual([["nc", "host", "&>", "out"]]);
+    });
+
     it("heuristic-covered chain: none unresolved", () => {
         const d = check("cat file.txt && ls src");
         expect(d.permission).toBe("allow:sandbox");

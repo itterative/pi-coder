@@ -1,20 +1,21 @@
 import { type SandboxConfigCwdConfinement, type SandboxConfigPermissions } from "../../common/config";
 import {
+    getBashCommandPermissionMatch,
+    getBashStatementPermissionMatch,
     getPermissionMatch,
-    getArgsPermissionMatch,
     moreRestrictive,
     type Permission,
 } from "./permissions";
-import { parseBash } from "./bash";
+import { parseBashAst } from "./bash";
+import type { BashAst, BashStatement } from "./bash";
 import {
     cloneCwdConfinementState,
     createCwdConfinementState,
-    getArgsConfinementPermission,
+    getBashCommandConfinementPermission,
     getConfiguredCwdConfinementPermission,
     isSafeHeuristic,
     isNonPersistentChainOperator,
     restoreCwdConfinementState,
-    splitAtChainOperatorsWithOperators,
 } from "./heuristics";
 
 export interface ResolvePermissionOptions {
@@ -52,8 +53,8 @@ export interface ResolvePermissionDetails {
 /**
  * Resolve the effective permission for a command.
  *
- * The command is split into lines (parseBash) and each line into chain
- * segments (&&, ||, ;, |, &). Resolution rules:
+ * The command is split into AST statements and each statement into chain
+ * commands (&&, ||, ;, |, |&, &). Resolution rules:
  *
  * 1. A permission pattern matching a whole line (chain operators included)
  *    wins for that line.
@@ -80,14 +81,14 @@ export function resolvePermissionDetails(
         };
     }
 
-    let lines: string[][];
+    let parsed: BashAst;
     try {
-        lines = parseBash(command);
+        parsed = parseBashAst(command);
     } catch {
         return { permission: "ask", unresolved: [] };
     }
 
-    if (lines.length === 0) {
+    if (parsed.statements.length === 0) {
         return {
             permission: getPermissionMatch(command, options?.permissions).permission,
             unresolved: [],
@@ -99,8 +100,8 @@ export function resolvePermissionDetails(
     let hasUnresolved = false;
     const unresolved: string[][] = [];
 
-    for (const line of lines) {
-        const result = resolveLine(line, cwd, options);
+    for (const statement of parsed.statements) {
+        const result = resolveLine(statement, cwd, options);
         unresolved.push(...result.unresolved);
 
         if (result.source === "policy") {
@@ -135,24 +136,21 @@ export default function resolvePermission(
 }
 
 function resolveLine(
-    lineArgs: string[],
+    statement: BashStatement,
     cwd: string,
     options?: ResolvePermissionOptions,
 ): SegmentResult {
     // 1. whole-line match (chain-aware patterns work here)
-    const whole = getArgsPermissionMatch(lineArgs, options?.permissions);
+    const whole = getBashStatementPermissionMatch(statement, options?.permissions);
     if (whole.matched) {
         // a matching whole-line rule covers every segment on the line
         return { permission: whole.permission, source: "policy", unresolved: [] };
     }
 
     // 2. per-segment resolution
-    const segments = splitAtChainOperatorsWithOperators(lineArgs);
-
-    if (segments.length === 0) {
+    if (statement.commands.length === 0) {
         return { permission: whole.permission, source: "policy", unresolved: [] };
     }
-
     let policy: Permission | null = null;
     let heuristic: Permission | null = null;
     let hasUnresolved = false;
@@ -160,7 +158,17 @@ function resolveLine(
     const confinementState = createCwdConfinementState(cwd);
     let nonPersistentBase: ReturnType<typeof cloneCwdConfinementState> | null = null;
 
-    for (const { args: segment, operatorAfter } of segments) {
+    for (let commandIndex = 0; commandIndex < statement.commands.length; commandIndex++) {
+        const segmentCommand = statement.commands[commandIndex];
+        const partIndex = statement.node.parts.findIndex((part) =>
+            part.type === "command"
+            && part === segmentCommand.node,
+        );
+        const nextPart = statement.node.parts[partIndex + 1];
+        const operatorAfter = nextPart?.type === "operator"
+            ? nextPart.value
+            : null;
+        const segmentTokens = segmentCommand.toTokens();
         const beforeSegment = cloneCwdConfinementState(confinementState);
         if (nonPersistentBase === null && isNonPersistentChainOperator(operatorAfter)) {
             nonPersistentBase = beforeSegment;
@@ -172,7 +180,7 @@ function resolveLine(
         // Advance modeled shell-directory state even when an explicit policy
         // handles this segment; later heuristic segments still need the
         // correct current directory.
-        const grant = getArgsConfinementPermission(segment, {
+        const grant = getBashCommandConfinementPermission(segmentCommand, {
             cwd,
             config: options?.cwdConfinement,
             state: segmentState,
@@ -181,7 +189,10 @@ function resolveLine(
             readOnlyAdditionalRoots: options?.readOnlyAdditionalRoots,
             customSafeBashCommands: options?.safeBashCommands,
         });
-        const match = getArgsPermissionMatch(segment, options?.permissions);
+        const match = getBashCommandPermissionMatch(
+            segmentCommand,
+            options?.permissions,
+        );
 
         if (match.matched) {
             policy = policy === null ? match.permission : moreRestrictive(policy, match.permission);
@@ -205,7 +216,7 @@ function resolveLine(
                     : moreRestrictive(heuristic, grantPermission);
             } else {
                 hasUnresolved = true;
-                unresolved.push(segment);
+                unresolved.push(segmentTokens);
             }
         }
 

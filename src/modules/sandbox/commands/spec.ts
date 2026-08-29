@@ -82,9 +82,12 @@ export interface CommandSpec {
     /**
      * Additional whole-invocation safety check for commands whose positional
      * arguments are not enough to describe their behavior (e.g. sed scripts).
-     * It receives args with the command name at index 0.
+     * The value is a normalized argv vector: argv[0] is the command being
+     * validated (or the selected subcommand for a command such as `git diff`).
+     * Shell syntax outside argv, such as redirections and substitutions, is
+     * validated separately from the AST by the confinement evaluator.
      */
-    validate?: (args: readonly string[]) => boolean;
+    validate?: (argv: readonly string[]) => boolean;
     /** For "first-pattern": flags that provide the pattern, making all positionals paths. */
     patternBypassFlags?: string[];
     /**

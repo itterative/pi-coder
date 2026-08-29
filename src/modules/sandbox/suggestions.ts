@@ -1,4 +1,4 @@
-import { parseBash } from "./bash";
+import { parseBashAst } from "./bash";
 
 /**
  * Suggested session rules for the permission prompt.
@@ -27,8 +27,8 @@ export interface SuggestionRule {
     suggest: (tokens: string[]) => string | null;
 }
 
-// A token can be reused in a pattern only if it round-trips through
-// parseBash unharmed: plain printable text, no whitespace, quotes, globs,
+// A token can be reused in a generated pattern only when it is plain
+// printable text with no whitespace, quotes, globs,
 // shell operators, or command-substitution characters. Colons and @ are
 // included for npm script names (test:unit) and scoped packages
 // (@scope/pkg), which have no shell meaning inside a token.
@@ -190,9 +190,22 @@ export function suggestRule(tokens: string[]): string | null {
         // getPermissions throw and disable ALL rule matching — including
         // the user's own config rules.
         try {
-            const parsed = parseBash(pattern);
-            if (parsed.length !== 1) continue;
-            if (parsed[0].some((t) => t !== "*" && !SAFE_TOKEN.test(t))) continue;
+            const parsed = parseBashAst(pattern);
+            if (parsed.statements.length !== 1) {
+                continue;
+            }
+            const statement = parsed.statements[0];
+            if (statement.parts.length !== 1 || statement.commands.length !== 1) {
+                continue;
+            }
+            const [command] = statement.commands;
+            if (command.redirections.length > 0) {
+                continue;
+            }
+            if (command.words.some((word) =>
+                word.value !== "*" && !SAFE_TOKEN.test(word.value))) {
+                continue;
+            }
         } catch {
             continue;
         }

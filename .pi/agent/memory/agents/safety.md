@@ -44,9 +44,9 @@ The hardening invariants are:
   splitting from injecting additional operands. For example,
   `touch /tmp/scratch/{ok,../outside/owned}`, `touch $TARGET`, and
   `truncate -s "$SIZE" /tmp/scratch/out` fall back to permission handling.
-- Every heredoc falls back from the heuristic. `parseBash()` does not preserve
-  body expansion or quoted-delimiter metadata, so even an apparently safe
-  outer `cat`/`tee` cannot hide `$(...)` execution in a skipped body.
+- Every heredoc falls back from the heuristic. The AST does not model enough
+  body expansion semantics to prove safety, so even an apparently safe outer
+  `cat`/`tee` cannot hide `$(...)` execution in a skipped body.
 - Canonicalization processes components left to right, resolving a symlink
   before a following `..`, matching kernel lookup order. Existing dangling
   symlinks are rejected; nonexistent trailing write components remain usable.
@@ -83,12 +83,12 @@ symlinks, cross-root symlinks, reference options, unknown and abbreviated
 flags, copy/move destination semantics, recursive-copy rejection, hard links,
 chmod modes, audited sed in-place forms, and resolver fallback.
 
-Residual limitations are deliberately fail-closed: because `parseBash()` strips
-quote and escape provenance, a literal filename containing expansion
-metacharacters may prompt even when quoted. Filesystem checks also retain an
-unavoidable time-of-check/time-of-use race; bubblewrap is defense in depth and
-currently mounts broader writable locations than the scratchpad. Do not broaden
-the mutator list without dedicated argument/side-effect models and equivalent
-negative tests. Keep `find -delete`, recursive/multi-source copy, archive
-extraction, `ln`, `install`, and similar complex commands behind normal
-permission handling.
+Residual limitations are deliberately fail-closed: parsed-argument entrypoints
+without AST provenance may prompt for a literal filename containing expansion
+metacharacters even when the original shell text quoted it. Filesystem checks
+also retain an unavoidable time-of-check/time-of-use race; bubblewrap is defense
+in depth and currently mounts broader writable locations than the scratchpad.
+Do not broaden the mutator list without dedicated argument/side-effect models
+and equivalent negative tests. Keep `find -delete`, recursive/multi-source
+copy, archive extraction, `ln`, `install`, and similar complex commands behind
+normal permission handling.

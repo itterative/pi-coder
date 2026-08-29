@@ -60,6 +60,22 @@ describe("heuristic assessments", () => {
         }
     });
 
+    it.each([
+        "inspect \\*",
+        "inspect '*'",
+        "inspect \"*\"",
+        "inspect * > output.txt",
+        "inspect * && other",
+    ])("rejects unsafe custom pattern structure: %s", (pattern) => {
+        const state = createCwdConfinementState(CWD);
+        expect(getArgsConfinementAssessment(["inspect", "notes.txt"], {
+            cwd: CWD,
+            config: {},
+            state,
+            customSafeBashCommands: [pattern],
+        }).classification).toBe(Heuristic.UNSAFE);
+    });
+
     it("reports a useful reason for unsafe commands", () => {
         expect(getCwdConfinementAssessment("cat /etc/passwd", { cwd: CWD, config: {} })).toEqual({
             classification: Heuristic.UNSAFE,
@@ -515,6 +531,11 @@ describe("getCwdConfinementPermission", () => {
                 expected: Heuristic.UNSAFE,
             },
             {
+                desc: "pipe-and-merge cd does not change the following command cwd",
+                command: "cd src |& cat ../README.md",
+                expected: Heuristic.UNSAFE,
+            },
+            {
                 desc: "background cd does not change the following command cwd",
                 command: "cd src & cat ../README.md",
                 expected: Heuristic.UNSAFE,
@@ -554,6 +575,8 @@ describe("getCwdConfinementPermission", () => {
             { desc: "tracked cwd still checks sensitive paths", command: "cd src && cat ../.env", expected: Heuristic.UNSAFE },
             { desc: "benign assignment before cd", command: "FOO=bar cd src && cat file.ts", expected: Heuristic.SAFE_READONLY },
             { desc: "dangerous assignment before cd", command: "PATH=/tmp cd src && cat file.ts", expected: Heuristic.UNSAFE },
+            { desc: "outside command substitution in environment assignment", command: "FOO=$(cat /etc/passwd) cat file.txt", expected: Heuristic.UNSAFE },
+            { desc: "mutating command substitution in environment assignment", command: "FOO=$(touch /tmp/outside) cat file.txt", expected: Heuristic.UNSAFE },
         ]);
     });
 
@@ -566,6 +589,12 @@ describe("getCwdConfinementPermission", () => {
             { desc: "flag path value outside", command: "sort -o /tmp/out.txt file.txt", expected: Heuristic.UNSAFE },
             { desc: "unknown long flag with path value", command: "ls --foo=/etc/passwd", expected: Heuristic.UNSAFE },
             { desc: "path flag value outside (inline)", command: "sort --output=/tmp/out file", expected: Heuristic.UNSAFE },
+            { desc: "quoted long-flag process-looking path", command: "sort --output '<(echo ../../../../etc/passwd)' file.txt", expected: Heuristic.UNSAFE },
+            { desc: "escaped long-flag process-looking path", command: String.raw`sort --output \<(echo ../../../../etc/passwd) file.txt`, expected: Heuristic.UNSAFE },
+            { desc: "quoted inline long-flag process-looking path", command: "sort --output='<(echo ../../../../etc/passwd)' file.txt", expected: Heuristic.UNSAFE },
+            { desc: "escaped inline long-flag process-looking path", command: String.raw`sort --output=\<(echo ../../../../etc/passwd) file.txt`, expected: Heuristic.UNSAFE },
+            { desc: "quoted process-substitution-looking path", command: "cat '<(echo ../../../../etc/passwd)'", expected: Heuristic.UNSAFE },
+            { desc: "quoted command-substitution-looking path", command: "cat '$(echo ../../../../etc/passwd)'", expected: Heuristic.UNSAFE },
         ]);
     });
 
@@ -935,12 +964,16 @@ describe("getCwdConfinementPermission", () => {
             { desc: "subshell output from an unmodeled reader", command: "cat $(cat file.txt)", expected: Heuristic.UNSAFE },
             { desc: "nested subshells", command: "cat $(echo $(echo file.txt))", expected: Heuristic.SAFE_READONLY },
             { desc: "edit in command substitution propagates", command: "grep $(echo pattern > nested.txt) file.txt", expected: Heuristic.SAFE_EDIT },
+            { desc: "safe command substitution in inline long flag", command: "sort --output=$(echo out) file.txt", expected: Heuristic.SAFE_EDIT },
+            { desc: "safe command substitution in inline short flag", command: "sort -o$(echo out) file.txt", expected: Heuristic.SAFE_EDIT },
+            { desc: "subshell output redirection is not statically modeled", command: "cat $(echo file.txt > nested.txt)", expected: Heuristic.UNSAFE },
             { desc: "process substitution known", command: "cat <(echo hi)", expected: Heuristic.SAFE_READONLY },
             { desc: "process substitution after double dash", command: "cat -- <(echo hi)", expected: Heuristic.SAFE_READONLY },
             { desc: "process substitution unknown", command: "cat <(curl example.com)", expected: Heuristic.UNSAFE },
             { desc: "redirection into process substitution", command: "echo hi > >(cat)", expected: Heuristic.SAFE_READONLY },
             { desc: "edit in process substitution propagates", command: "echo hi > >(cat > nested.txt)", expected: Heuristic.SAFE_EDIT },
             { desc: "redirection into unknown process substitution", command: "echo hi > >(nc host 80)", expected: Heuristic.UNSAFE },
+            { desc: "incomplete command substitution", command: "cat $(echo file.txt", expected: Heuristic.UNSAFE },
         ]);
     });
 

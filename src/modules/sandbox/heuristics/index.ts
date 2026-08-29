@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 
 import sandboxConfig, { type SandboxConfigCwdConfinement } from "../../../common/config";
+import type { BashCommand } from "../bash";
 import { type Permission } from "../permissions";
 import {
     Heuristic, UnsafeReason, HeuristicAssessment,
@@ -25,7 +26,7 @@ export type {
     CwdConfinementOptions,
     ArgsConfinementOptions,
 } from "./types";
-export { ChainSegment, splitAtChainOperatorsWithOperators, splitAtChainOperators, isNonPersistentChainOperator } from "./evaluator";
+export { isNonPersistentChainOperator } from "./evaluator";
 export { isPathWithinDirectory } from "./path-policy";
 export { CommandTag, KNOWN_COMMANDS } from "../commands";
 export type { CommandSpec, FlagSpec } from "../commands";
@@ -274,6 +275,63 @@ export function getArgsConfinementAssessment(
             : [UnsafeReason.UNSAFE_COMMAND],
         diagnostics.tags,
     );
+}
+
+export function getBashCommandConfinementAssessment(
+    command: BashCommand,
+    options: ArgsConfinementOptions,
+): HeuristicAssessment {
+    const {
+        cwd,
+        config,
+        state,
+        additionalRoots = [],
+        sensitiveAdditionalRoots,
+        readOnlyAdditionalRoots = [],
+        customSafeBashCommands = [],
+    } = options;
+    const confinement = resolveConfinementConfig(config);
+
+    if (confinement?.enabled === false) {
+        return assessment(Heuristic.UNSAFE, [UnsafeReason.HEURISTIC_DISABLED]);
+    }
+
+    const diagnostics: ConfinementDiagnostics = { reasons: [], tags: [] };
+    const resolvedCwd = path.resolve(cwd);
+    const confinementState = state ?? createCwdConfinementState(resolvedCwd);
+    const classification = isCommandConfined(
+        command,
+        confinementState.currentCwd,
+        resolvedCwd,
+        buildConfinementOptions(
+            confinement,
+            resolvedCwd,
+            additionalRoots,
+            sensitiveAdditionalRoots,
+            readOnlyAdditionalRoots,
+            customSafeBashCommands,
+        ),
+        confinementState,
+        diagnostics,
+    ) ?? Heuristic.UNSAFE;
+    if (isSafeHeuristic(classification)) {
+        return assessment(classification, [], diagnostics.tags);
+    }
+
+    return assessment(
+        Heuristic.UNSAFE,
+        diagnostics.reasons.length > 0
+            ? diagnostics.reasons
+            : [UnsafeReason.UNSAFE_COMMAND],
+        diagnostics.tags,
+    );
+}
+
+export function getBashCommandConfinementPermission(
+    command: BashCommand,
+    options: ArgsConfinementOptions,
+): Heuristic {
+    return getBashCommandConfinementAssessment(command, options).classification;
 }
 
 export function getArgsConfinementPermission(

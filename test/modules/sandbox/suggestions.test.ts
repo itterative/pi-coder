@@ -125,6 +125,14 @@ describe("suggestRule: curated table", () => {
         it("scoped packages are safe (@scope/pkg)", () => {
             expect(suggestRule(t("npx @typescript-eslint/eslint"))).toBe("npx @typescript-eslint/eslint");
         });
+
+        it("rejects a generated pattern containing multiple statements", () => {
+            expect(suggestRule(["npx", "runner", "script.ts\nother.ts"])).toBeNull();
+        });
+
+        it("rejects a generated pattern containing a redirection", () => {
+            expect(suggestRule(["npx", "runner", "script>out.ts"])).toBeNull();
+        });
     });
 
     describe("no matching row", () => {

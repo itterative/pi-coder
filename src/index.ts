@@ -11,6 +11,8 @@ import registerReadToolHook from "./tools/read";
 import registerWriteToolHook from "./tools/write";
 import { registerStatusWidget } from "./tui/status";
 
+export * from "./modules/sandbox/bash";
+
 export default function (pi: ExtensionAPI) {
     registerStatusWidget(pi);
     registerMemoryExtension(pi);

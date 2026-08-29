@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import getPermission, { Permission } from "../../../src/modules/sandbox/permissions";
+import getPermission, {
+    getArgsPermissionMatch,
+    Permission,
+} from "../../../src/modules/sandbox/permissions";
 
 interface PermissionTest {
     desc: string;
@@ -15,6 +18,15 @@ const testPermission = (test: PermissionTest) => {
 const runTests = (tests: PermissionTest[]) => {
     it.each(tests)("$desc", testPermission);
 };
+
+describe("parsed argument permission matching", () => {
+    it("does not authorize an incomplete substitution as a heredoc terminator", () => {
+        expect(getArgsPermissionMatch(
+            ["cat", "<<", "EOF", "$(cat /etc/passwd"],
+            { "cat << EOF": "allow" },
+        )).toEqual({ permission: "ask", matched: false });
+    });
+});
 
 describe("getPermission", () => {
     describe("default behavior", () => {
@@ -115,6 +127,8 @@ describe("getPermission", () => {
             { desc: "single-quoted with wildcard", command: "git commit -am 'test commit'", permissions: { "git commit -am '*'": "allow" }, expected: "allow" },
             { desc: "wildcard matches quoted argument", command: 'npm run "dev server"', permissions: { "npm run *": "allow" }, expected: "allow" },
             { desc: "escaped space", command: "echo hello\\ world", permissions: { "echo hello\\ world": "allow" }, expected: "allow" },
+            { desc: "quoted process-looking literal does not match live substitution", command: "echo <(cat /etc/passwd)", permissions: { 'echo "<(cat /etc/passwd)"': "allow" }, expected: "ask" },
+            { desc: "quoted command-looking literal does not match live substitution", command: "echo $(cat /etc/passwd)", permissions: { "echo '$(cat /etc/passwd)'": "allow" }, expected: "ask" },
         ]);
     });
 
@@ -183,6 +197,8 @@ describe("getPermission", () => {
             { desc: "nested subshells with wildcards", command: "echo $(cat $(echo file.txt))", permissions: { "echo $(cat $(echo *))": "allow" }, expected: "allow" },
             { desc: "different nested subshell", command: "echo $(cat $(echo file.txt))", permissions: { "echo $(cat $(cat *))": "allow" }, expected: "ask" },
             { desc: "backtick subshell with wildcard", command: "echo `cat file.txt`", permissions: { "echo `cat *`": "allow" }, expected: "allow" },
+            { desc: "incomplete command substitution does not match", command: "echo $(cat /etc/passwd", permissions: { "echo $(cat *)": "allow" }, expected: "ask" },
+            { desc: "trailing wildcard does not consume incomplete substitution", command: "echo safe $(cat /etc/passwd", permissions: { "echo *": "allow" }, expected: "ask" },
         ]);
     });
 
@@ -206,6 +222,7 @@ describe("getPermission", () => {
             { desc: "any delimiter matches", command: "cat <<EOF\ncontent\nEOF", permissions: { "cat << OTHER": "allow" }, expected: "allow" },
             { desc: "different heredoc operators don't match", command: "cat <<EOF\ncontent\nEOF", permissions: { "cat <<- EOF": "allow" }, expected: "ask" },
             { desc: "heredoc with content and matching delimiter", command: "cat <<EOF\nhello world\nEOF", permissions: { "cat <<EOF": "allow" }, expected: "allow" },
+            { desc: "heredoc rule does not consume an extra command argument", command: "cat <<EOF /etc/passwd\nbody\nEOF", permissions: { "cat << EOF": "allow" }, expected: "ask" },
             { desc: "delimiter in content doesn't close heredoc", command: "cat <<EOF\nnot the EOF\nreal line\nEOF", permissions: { "cat << EOF": "allow" }, expected: "allow" },
             { desc: "unclosed heredoc", command: "cat <<EOF\nno close", permissions: { "cat << EOF": "allow" }, expected: "allow" },
         ]);
@@ -270,6 +287,7 @@ describe("getPermission", () => {
             { desc: "explicit ; chain with wildcards", command: "cat file.txt; rm file.txt", permissions: { "cat *; rm *": "allow" }, expected: "allow" },
             { desc: "explicit | pipe with wildcards", command: "cat file.txt | grep foo", permissions: { "cat * | grep *": "allow" }, expected: "allow" },
             { desc: "wildcard doesn't match multiple chained commands", command: "a && b && c", permissions: { "a *": "allow" }, expected: "ask" },
+            { desc: "wildcard doesn't match pipe-and-merge chains", command: "echo hi |& rm -rf x", permissions: { "echo *": "allow" }, expected: "ask" },
             { desc: "multiple explicit chain operators with wildcards", command: "a && b && c", permissions: { "a * && b && *": "allow" }, expected: "allow" },
             { desc: "different first command in chain", command: "cat file.txt && rm file.txt", permissions: { "dog * && rm *": "allow" }, expected: "ask" },
             { desc: "chain operator mismatch with wildcard", command: "cat file.txt && rm file.txt", permissions: { "cat * || rm *": "allow" }, expected: "ask" },

@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 
-import { parseBash } from "../bash";
+import { parseBashAst } from "../bash";
+import type { BashAst, BashCommand } from "../bash";
 import { CommandTag, KNOWN_COMMANDS } from "../commands";
 import type { CommandSpec } from "../commands";
 import {
@@ -24,46 +25,8 @@ import {
     matchesCustomSafeBashCommand,
 } from "./command-access";
 
-const CHAIN_OPERATORS = new Set(["&&", "||", "|", ";", "&"]);
-
-/**
- * Split a parsed command at chain operators. parseBash keeps operators like
- * && and | as arguments of a single command, so each segment between them
- * must be evaluated as its own command.
- */
-export interface ChainSegment {
-    args: string[];
-    operatorAfter: string | null;
-}
-
-export function splitAtChainOperatorsWithOperators(args: string[]): ChainSegment[] {
-    const segments: ChainSegment[] = [];
-    let current: string[] = [];
-
-    for (const arg of args) {
-        if (CHAIN_OPERATORS.has(arg)) {
-            if (current.length > 0) {
-                segments.push({ args: current, operatorAfter: arg });
-                current = [];
-            }
-        } else {
-            current.push(arg);
-        }
-    }
-
-    if (current.length > 0) {
-        segments.push({ args: current, operatorAfter: null });
-    }
-
-    return segments;
-}
-
-export function splitAtChainOperators(args: string[]): string[][] {
-    return splitAtChainOperatorsWithOperators(args).map((segment) => segment.args);
-}
-
 export function isNonPersistentChainOperator(operator: string | null): boolean {
-    return operator === "|" || operator === "&";
+    return operator === "|" || operator === "|&" || operator === "&";
 }
 
 function isDynamicDirectoryPath(value: string): boolean {
@@ -205,13 +168,18 @@ function applyDirectoryCommand(
  * accesses all stay within the working directory.
  */
 export function isCommandConfined(
-    args: string[],
+    input: string[] | BashCommand,
     cwd: string,
     rootCwd: string,
     options: ConfinementOptions,
     state: CwdConfinementState,
     diagnostics?: ConfinementDiagnostics,
 ): Heuristic | undefined {
+    const astCommand = Array.isArray(input) ? undefined : input;
+    const args = Array.isArray(input)
+        ? input
+        : input.words.map((word) => word.value);
+
     if (state.blocked) {
         addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_CWD);
         return undefined;
@@ -221,15 +189,43 @@ export function isCommandConfined(
     // ...) and path-check the values of the rest
     let idx = 0;
     const envValues: string[] = [];
-    while (idx < args.length && ENV_ASSIGNMENT.test(args[idx])) {
-        const eq = args[idx].indexOf("=");
-        const name = args[idx].slice(0, eq);
-        if (isDangerousEnvName(name)) {
-            addUnsafeReason(diagnostics, UnsafeReason.DANGEROUS_ENVIRONMENT);
-            return undefined;
+    let envWrites = false;
+    if (astCommand !== undefined) {
+        idx = astCommand.environment.length;
+        for (const { name, value, word } of astCommand.environment) {
+            if (isDangerousEnvName(name)) {
+                addUnsafeReason(diagnostics, UnsafeReason.DANGEROUS_ENVIRONMENT);
+                return undefined;
+            }
+            for (const substitution of word.substitutions) {
+                if (!substitution.complete) {
+                    addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+                    return undefined;
+                }
+                const nested = isConfined(
+                    substitution.content,
+                    cwd,
+                    options,
+                    diagnostics,
+                );
+                if (nested === undefined) {
+                    return undefined;
+                }
+                envWrites = envWrites || nested === Heuristic.SAFE_EDIT;
+            }
+            envValues.push(value);
         }
-        envValues.push(args[idx].slice(eq + 1));
-        idx++;
+    } else {
+        while (idx < args.length && ENV_ASSIGNMENT.test(args[idx])) {
+            const eq = args[idx].indexOf("=");
+            const name = args[idx].slice(0, eq);
+            if (isDangerousEnvName(name)) {
+                addUnsafeReason(diagnostics, UnsafeReason.DANGEROUS_ENVIRONMENT);
+                return undefined;
+            }
+            envValues.push(args[idx].slice(eq + 1));
+            idx++;
+        }
     }
 
     if (idx >= args.length) {
@@ -237,7 +233,7 @@ export function isCommandConfined(
         return undefined;
     }
 
-    const commandName = args[idx];
+    const commandName = astCommand?.command ?? args[idx];
 
     // commands invoked by path are not trusted to be the real binary
     if (commandName.includes("/") || commandName.includes("\\")) {
@@ -256,9 +252,16 @@ export function isCommandConfined(
         return undefined;
     }
 
-    const commandArgs = args.slice(idx);
-    const directoryResult = applyDirectoryCommand(commandArgs, state, rootCwd, options);
+    // Build the normalized argv seen by command specs. The AST has already
+    // separated leading environment assignments from the executable; argv[0]
+    // is therefore the trusted command name.
+    const commandArgv = args.slice(idx);
+    const directoryResult = applyDirectoryCommand(commandArgv, state, rootCwd, options);
     if (directoryResult !== undefined) {
+        if (astCommand?.redirections.length) {
+            addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
+            return undefined;
+        }
         const home = os.homedir();
         const envConfined = envValues.every((p) =>
             isAllowedPath(p, cwd, home, options, rootCwd) &&
@@ -270,9 +273,10 @@ export function isCommandConfined(
         if (!directoryResult) addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_CWD);
         if (!envConfined) addUnsafeReason(diagnostics, UnsafeReason.OUTSIDE_CWD);
         if (!commandAllowed) addUnsafeReason(diagnostics, UnsafeReason.COMMAND_NOT_ALLOWED);
-        return directoryResult && envConfined && commandAllowed
-            ? Heuristic.SAFE_READONLY
-            : undefined;
+        if (!directoryResult || !envConfined || !commandAllowed) {
+            return undefined;
+        }
+        return envWrites ? Heuristic.SAFE_EDIT : Heuristic.SAFE_READONLY;
     }
 
     if (options.allowedCommands !== null && !options.allowedCommands.has(commandName)) {
@@ -280,15 +284,15 @@ export function isCommandConfined(
         return undefined;
     }
 
-    if (spec.validate && !spec.validate(commandArgs)) {
+    if (spec.validate && !spec.validate(commandArgv)) {
         addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
         return undefined;
     }
 
-    const access = extractCommandPaths(commandArgs, spec, cwd, options, diagnostics, {
+    const access = extractCommandPaths(commandArgv, spec, cwd, options, diagnostics, {
         evaluateNested: (nested, nestedCwd, nestedOptions, nestedDiagnostics) =>
             isConfined(nested, nestedCwd, nestedOptions, nestedDiagnostics),
-    });
+    }, astCommand);
     if (access === null) {
         if (diagnostics?.reasons.length === 0) {
             addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
@@ -328,7 +332,7 @@ export function isCommandConfined(
         || access.requiresAdditionalRoot;
     if (
         hasAdditionalRootPolicy
-        && commandArgs.slice(1).some(hasDynamicShellExpansion)
+        && commandArgv.slice(1).some(hasDynamicShellExpansion)
     ) {
         addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
         return undefined;
@@ -373,7 +377,7 @@ export function isCommandConfined(
     }
 
     addCommandTags(diagnostics, access.tags);
-    return access.writes ? Heuristic.SAFE_EDIT : Heuristic.SAFE_READONLY;
+    return access.writes || envWrites ? Heuristic.SAFE_EDIT : Heuristic.SAFE_READONLY;
 }
 
 /**
@@ -386,31 +390,42 @@ export function isConfined(
     options: ConfinementOptions,
     diagnostics?: ConfinementDiagnostics,
 ): Heuristic | undefined {
-    let parsed: string[][];
+    let parsed: BashAst;
     try {
-        parsed = parseBash(command);
+        parsed = parseBashAst(command);
     } catch {
         addUnsafeReason(diagnostics, UnsafeReason.PARSE_ERROR);
         return undefined;
     }
 
-    if (parsed.length === 0) {
+    if (parsed.statements.length === 0) {
         addUnsafeReason(diagnostics, UnsafeReason.EMPTY_INPUT);
         return undefined;
     }
 
     const state = createCwdConfinementState(cwd);
     let heuristic: Heuristic | null = null;
-    for (const cmdArgs of parsed) {
-        const segments = splitAtChainOperatorsWithOperators(cmdArgs);
+    for (const statement of parsed.statements) {
         let nonPersistentBase: CwdConfinementState | null = null;
+        let commandIndex = 0;
+        let hasCommand = false;
 
-        if (segments.length === 0) {
-            addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
-            return undefined;
-        }
+        for (let partIndex = 0; partIndex < statement.node.parts.length; partIndex++) {
+            const part = statement.node.parts[partIndex];
+            if (part.type === "operator") {
+                continue;
+            }
 
-        for (const { args, operatorAfter } of segments) {
+            hasCommand = true;
+            const astCommand = statement.commands[commandIndex++];
+            if (astCommand === undefined) {
+                addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
+                return undefined;
+            }
+            const nextPart = statement.node.parts[partIndex + 1];
+            const operatorAfter = nextPart?.type === "operator"
+                ? nextPart.value
+                : null;
             const beforeSegment = cloneCwdConfinementState(state);
             if (nonPersistentBase === null && isNonPersistentChainOperator(operatorAfter)) {
                 nonPersistentBase = beforeSegment;
@@ -419,7 +434,7 @@ export function isConfined(
                 ? cloneCwdConfinementState(nonPersistentBase)
                 : state;
             const result = isCommandConfined(
-                args,
+                astCommand,
                 segmentState.currentCwd,
                 cwd,
                 options,
@@ -441,6 +456,11 @@ export function isConfined(
             }
             heuristic = combineHeuristics(heuristic ?? Heuristic.SAFE_READONLY, result)
                 ?? Heuristic.SAFE_READONLY;
+        }
+
+        if (!hasCommand) {
+            addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
+            return undefined;
         }
     }
 
