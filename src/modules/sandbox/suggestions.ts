@@ -56,6 +56,35 @@ const fixed =
         return tokens.length > 1 ? pattern : pattern.replace(/ \*$/, "");
     };
 
+/**
+ * Do not offer a remembered rule for npx invocations that carry inline code.
+ * Package and file arguments remain eligible, but `npx -c`, `npx --call`, and
+ * evaluator flags such as `npx tsx -e` would turn a wildcard into a rule for
+ * arbitrary script contents.
+ *
+ * TODO: Use a Bash lexer here when one is available so inline-code forms can
+ * be identified from command structure rather than token spelling.
+ */
+const INLINE_SCRIPT_FLAG = /^(?:-[cep]|--(?:call|eval|print)(?:=|$))/;
+const FILE_ARGUMENT = /(?:^|\/)[^/]+\.(?:[cm]?[jt]sx?|json)$/i;
+
+const suggestNpx = (tokens: string[]): string | null => {
+    for (const token of tokens.slice(1)) {
+        if (INLINE_SCRIPT_FLAG.test(token)) {
+            return null;
+        }
+    }
+
+    // A file argument identifies the concrete script being run. Keep that
+    // path exact, while allowing additional arguments to vary.
+    if (FILE_ARGUMENT.test(tokens[2] ?? "")) {
+        const scriptInvocation = tokens.slice(0, 3).join(" ");
+        return tokens.length > 3 ? `${scriptInvocation} *` : scriptInvocation;
+    }
+
+    return scoped("npx", 1)(tokens);
+};
+
 // Most-specific prefixes first: a row whose scoped token is unsafe falls
 // through to the broader row for the same runner (e.g. docker compose →
 // docker).
@@ -65,7 +94,7 @@ const SUGGESTIONS: SuggestionRule[] = [
     { match: ["npm", "run"], suggest: scoped("npm run", 2) },
     { match: ["poetry", "run"], suggest: scoped("poetry run", 2) },
     { match: ["uv", "run"], suggest: scoped("uv run", 2) },
-    { match: ["npx"], suggest: scoped("npx", 1) },
+    { match: ["npx"], suggest: suggestNpx },
     { match: ["yarn"], suggest: scoped("yarn", 1) },
     { match: ["pnpm"], suggest: scoped("pnpm", 1) },
     { match: ["bun"], suggest: scoped("bun", 1) },

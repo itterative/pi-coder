@@ -7,6 +7,8 @@ describe("suggestRule: curated table", () => {
     describe("scoped rows (rule remembers the command identity)", () => {
         it.each([
             [[...t("npx vitest run")], "npx vitest *"],
+            [[...t("npx tsx script.ts")], "npx tsx script.ts"],
+            [[...t("npx tsx script.ts --help")], "npx tsx script.ts *"],
             [[...t("npx eslint")], "npx eslint"],
             [[...t("npm run build")], "npm run build"],
             [[...t("npm run test -- --watch")], "npm run test *"],
@@ -67,6 +69,18 @@ describe("suggestRule: curated table", () => {
 
         it("single-token runner (nothing to scope on): no suggestion", () => {
             expect(suggestRule(["npx"])).toBeNull();
+        });
+
+        it.each([
+            ["npx -c echo hello"],
+            ["npx --call echo hello"],
+            ["npx tsx -e console.log(1)"],
+            ["npx tsx --eval console.log(1)"],
+            ["npx node -p console.log(1)"],
+            ["npx node --print console.log(1)"],
+            ["npx --call=echo hello"],
+        ])("inline script is not remembered: %s", (command) => {
+            expect(suggestRule(t(command))).toBeNull();
         });
 
         it("dots and slashes are safe (paths, script names)", () => {
