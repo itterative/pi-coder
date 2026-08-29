@@ -1,0 +1,12 @@
+╭──────────────────────────────────────────────────────────────╮
+│   Reset workspace?                                           │
+│                                                              │
+│   Permanently remove all changes made in                     │
+│   "quiet-lantern-7k3", including saved agent results, and    │
+│   restore it to the latest version of your current           │
+│   project. It will then be available for a new task. Your    │
+│   current project will not be changed.                       │
+│                                                              │
+│   y/Enter confirm · n/Esc cancel                             │
+│                                                              │
+╰──────────────────────────────────────────────────────────────╯

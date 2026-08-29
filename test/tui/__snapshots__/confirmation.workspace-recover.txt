@@ -1,0 +1,11 @@
+╭──────────────────────────────────────────────────────────────╮
+│   Recover workspace?                                         │
+│                                                              │
+│   Assign the abandoned workspace "quiet-lantern-7k3" to      │
+│   your current session so you can manage its saved result.   │
+│   Nothing will be changed or copied into your current        │
+│   project.                                                   │
+│                                                              │
+│   y/Enter confirm · n/Esc cancel                             │
+│                                                              │
+╰──────────────────────────────────────────────────────────────╯

@@ -33,7 +33,6 @@ export class AgentWorkspaceDetailComponent implements Component {
     private showingDiff = false;
     private diffText = "";
     private errorText = "";
-    private pendingAction: WorkspaceDispositionAction | null = null;
     private confirmationOpen = false;
     private busy = false;
     private contentWidth = 80;
@@ -80,7 +79,6 @@ export class AgentWorkspaceDetailComponent implements Component {
         this.pager.state.items[0] = { value: workspace, label: "" };
         this.pager.updateTitle(`Workspace · ${workspace.slug}`);
         this.pager.updateHelpText(workspaceDetailHelpText(workspace));
-        this.pendingAction = null;
         this.confirmationOpen = false;
         this.invalidate();
     }
@@ -110,9 +108,6 @@ export class AgentWorkspaceDetailComponent implements Component {
             ...(this.errorText ? [theme.fg("error", `Action failed: ${this.errorText}`), ""] : []),
             workspaceDetailText(workspace, theme, this.contentWidth),
             ...(this.busy ? ["", theme.fg("muted", "Working…")] : []),
-            ...(this.pendingAction
-                ? ["", theme.fg("warning", `Confirm ${this.pendingAction}? y/Enter confirm · n/Esc cancel`)]
-                : []),
         ].join("\n");
     }
 
@@ -129,32 +124,17 @@ export class AgentWorkspaceDetailComponent implements Component {
             }
             return false;
         }
-        if (this.pendingAction) {
-            if (key === "y" || matchesKey(key, "enter")) {
-                const action = this.pendingAction;
-                this.pendingAction = null;
-                this.runAction(action);
-                return true;
-            }
-            if (key === "n" || matchesKey(key, "escape")) {
-                this.pendingAction = null;
-                this.invalidate();
-                return true;
-            }
-            return true;
-        }
-
         const action = this.currentWorkspace.actions.find((item) => item.key === key)?.action;
         if (!action) return false;
         if (action === "inspect") {
             this.runAction(action);
-        } else if (this.callbacks.onConfirmAction) {
-            this.confirmationOpen = true;
-            void this.confirmAction(action);
-        } else {
-            this.pendingAction = action;
-            this.invalidate();
+            return true;
         }
+        if (!this.callbacks.onConfirmAction) {
+            return true;
+        }
+        this.confirmationOpen = true;
+        void this.confirmAction(action);
         return true;
     }
 

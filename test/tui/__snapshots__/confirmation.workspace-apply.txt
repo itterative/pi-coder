@@ -1,0 +1,12 @@
+╭──────────────────────────────────────────────────────────────╮
+│   Apply agent changes?                                       │
+│                                                              │
+│   Copy every change made by the agent in                     │
+│   "quiet-lantern-7k3" into your current project. Files in    │
+│   your current project may be added, changed, or removed.    │
+│   The workspace will remain available for review and will    │
+│   not be reused automatically.                               │
+│                                                              │
+│   y/Enter confirm · n/Esc cancel                             │
+│                                                              │
+╰──────────────────────────────────────────────────────────────╯

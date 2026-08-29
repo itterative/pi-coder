@@ -88,6 +88,7 @@ describe("AgentWorkspaceBrowserComponent", () => {
 
         ui.press("d");
         await vi.waitFor(() => expect(confirmationCalls).toBe(1));
+        expect(ui.render()).not.toContain("Confirm discard?");
         expect(actionRun).toBe(false);
         resolveConfirmation(false);
         await vi.waitFor(() => expect(actionRun).toBe(false));
@@ -102,7 +103,10 @@ describe("AgentWorkspaceBrowserComponent", () => {
         const component = new AgentWorkspaceDetailComponent(
             workspaceBrowserItem(available),
             undefined,
-            { onAction: async () => { throw new Error("workspace action failed"); } },
+            {
+                onConfirmAction: () => true,
+                onAction: async () => { throw new Error("workspace action failed"); },
+            },
         );
         component.initialize(mockTheme);
         const ui = interact(component, 100);

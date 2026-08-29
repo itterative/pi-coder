@@ -1020,6 +1020,7 @@ Keep the notes with the TODO list.
             cwd: workspace.cwd,
             eventBus,
             onRefresh: async () => ({ current: [], past: [], workspaces: [refreshed] }),
+            onConfirmWorkspaceAction: () => true,
             onWorkspaceAction: async (selected) => {
                 actionWorkspaceUpdatedAt = selected.updatedAt;
                 return null;
@@ -1060,13 +1061,23 @@ Keep the notes with the TODO list.
         );
     });
 
-    it("confirms workspace discard and removes the workspace", async () => {
+    it("delegates workspace confirmation and removes the workspace", async () => {
+        let confirmationCalls = 0;
+        let resolveConfirmation!: (confirmed: boolean) => void;
         let discarded = false;
         const value = new AgentSessionBrowserComponent({
             current: [],
             past: [],
             workspaces: [workspaceBrowserItem(workspace)],
             fixedHeight: () => 27,
+            onConfirmWorkspaceAction: (selected, action) => {
+                expect(selected.id).toBe(workspace.id);
+                expect(action).toBe("discard");
+                confirmationCalls++;
+                return new Promise<boolean>((resolve) => {
+                    resolveConfirmation = resolve;
+                });
+            },
             onWorkspaceAction: async (selected, action) => {
                 expect(selected.id).toBe(workspace.id);
                 expect(action).toBe("discard");
@@ -1081,14 +1092,17 @@ Keep the notes with the TODO list.
         await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspace-detail.txt");
 
         ui.press("d");
-        expect(snapshotText(ui.render())).toContain("Confirm discard? y/Enter confirm · n/Esc cancel");
+        await vi.waitFor(() => expect(confirmationCalls).toBe(1));
+        expect(snapshotText(ui.render())).not.toContain("Confirm discard?");
         await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspace-discard-confirmation.txt");
 
-        ui.press("n");
+        resolveConfirmation(false);
+        await vi.waitFor(() => expect(discarded).toBe(false));
         await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspace-discard-cancelled.txt");
-        expect(discarded).toBe(false);
 
-        ui.press("d", "y");
+        ui.press("d");
+        await vi.waitFor(() => expect(confirmationCalls).toBe(2));
+        resolveConfirmation(true);
         await vi.waitFor(() => {
             expect(discarded).toBe(true);
             expect(snapshotText(ui.render())).toContain("No isolated workspaces have been created for this cwd.");

@@ -1,0 +1,11 @@
+╭──────────────────────────────────────────────────────────────╮
+│   Delete workspace?                                          │
+│                                                              │
+│   Permanently delete the "quiet-lantern-7k3" workspace,      │
+│   including its isolated files and all saved agent           │
+│   changes. This frees a workspace slot. Your current         │
+│   project will not be changed.                               │
+│                                                              │
+│   y/Enter confirm · n/Esc cancel                             │
+│                                                              │
+╰──────────────────────────────────────────────────────────────╯

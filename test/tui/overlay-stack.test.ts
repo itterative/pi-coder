@@ -81,6 +81,7 @@ describe("withOverlayStack", () => {
             workspaceBrowserItem(workspace),
             () => 27,
             {
+                onConfirmAction: () => true,
                 onAction: async (action) => {
                     expect(action).toBe("discard");
                     return null;

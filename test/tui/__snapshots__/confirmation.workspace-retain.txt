@@ -1,0 +1,12 @@
+╭──────────────────────────────────────────────────────────────╮
+│   Keep agent changes?                                        │
+│                                                              │
+│   Keep the changes made by the agent in                      │
+│   "quiet-lantern-7k3" aside for you to review later,         │
+│   without copying them into your current project. The        │
+│   workspace will stay reserved until you reset or delete     │
+│   it.                                                        │
+│                                                              │
+│   y/Enter confirm · n/Esc cancel                             │
+│                                                              │
+╰──────────────────────────────────────────────────────────────╯

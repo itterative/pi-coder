@@ -1,0 +1,10 @@
+╭──────────────────────────────────────────────────────────────╮
+│   Free workspace?                                            │
+│                                                              │
+│   Remove the old lock from "quiet-lantern-7k3" without       │
+│   changing or deleting any files. The workspace and its      │
+│   contents will stay as they are and can be used again.      │
+│                                                              │
+│   y/Enter confirm · n/Esc cancel                             │
+│                                                              │
+╰──────────────────────────────────────────────────────────────╯

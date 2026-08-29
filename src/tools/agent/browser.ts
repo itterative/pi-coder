@@ -11,6 +11,7 @@ import type { AgentWorkspace } from "./contracts/workspaces";
 import { emitAgentEvent } from "./observability/events";
 import {
     type AgentSessionBrowserItem,
+    type WorkspaceDispositionAction,
     workspaceBrowserItem,
 } from "./presentation/browser-models";
 import {
@@ -35,6 +36,44 @@ import { handleWorkspaceAction } from "./workspaces/tui-actions";
 
 function capitalize(text: string): string {
     return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+export function workspaceActionConfirmation(
+    action: WorkspaceDispositionAction,
+    slug: string,
+): { title: string; message: string } {
+    switch (action) {
+        case "apply":
+            return {
+                title: "Apply agent changes?",
+                message: `Copy every change made by the agent in "${slug}" into your current project. Files in your current project may be added, changed, or removed. The workspace will remain available for review and will not be reused automatically.`,
+            };
+        case "retain":
+            return {
+                title: "Keep agent changes?",
+                message: `Keep the changes made by the agent in "${slug}" aside for you to review later, without copying them into your current project. The workspace will stay reserved until you reset or delete it.`,
+            };
+        case "reset":
+            return {
+                title: "Reset workspace?",
+                message: `Permanently remove all changes made in "${slug}", including saved agent results, and restore it to the latest version of your current project. It will then be available for a new task. Your current project will not be changed.`,
+            };
+        case "discard":
+            return {
+                title: "Delete workspace?",
+                message: `Permanently delete the "${slug}" workspace, including its isolated files and all saved agent changes. This frees a workspace slot. Your current project will not be changed.`,
+            };
+        case "release":
+            return {
+                title: "Free workspace?",
+                message: `Remove the old lock from "${slug}" without changing or deleting any files. The workspace and its contents will stay as they are and can be used again.`,
+            };
+        case "recover":
+            return {
+                title: "Recover workspace?",
+                message: `Assign the abandoned workspace "${slug}" to your current session so you can manage its saved result. Nothing will be changed or copied into your current project.`,
+            };
+    }
 }
 
 export function mergeHistoricalAgentSessions(
@@ -260,10 +299,10 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                 }
             },
             onWorkspaceInspect: async (item) => inspectAgentWorkspaceResult(requireWorkspace(item.id)),
-            onConfirmWorkspaceAction: (item, action) => confirm({
-                title: `${capitalize(action)} workspace?`,
-                message: `${capitalize(action)} the isolated workspace "${item.slug}"?`,
-            }, ctx),
+            onConfirmWorkspaceAction: (item, action) => confirm(
+                workspaceActionConfirmation(action, item.slug),
+                ctx,
+            ),
             onLoadTranscript: (item) => loadAgentSessionTranscriptForItem(item),
             onModelChange: (agent, model) => {
                 agentConfig.setModel(agent, model, ctx.cwd);

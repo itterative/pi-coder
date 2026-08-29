@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TUI } from "@earendil-works/pi-tui";
 
+import { workspaceActionConfirmation } from "../../src/tools/agent/browser";
 import { confirm, ConfirmationComponent } from "../../src/tui/confirmation";
 import { KEY, interact, mockTheme, renderText, snapshotText } from "../helpers";
+
+const workspaceActions = ["apply", "retain", "reset", "discard", "release", "recover"] as const;
 
 function fakeHandle() {
     let focused = false;
@@ -26,6 +29,17 @@ describe("ConfirmationComponent", () => {
 
         await expect(snapshotText(renderText(component, 64))).toMatchFileSnapshot(
             "__snapshots__/confirmation.dialog.txt",
+        );
+    });
+
+    it.each(workspaceActions)("renders the plain-language workspace %s description", async (action) => {
+        const component = new ConfirmationComponent(
+            workspaceActionConfirmation(action, "quiet-lantern-7k3"),
+        );
+        component.initialize(mockTheme);
+
+        await expect(snapshotText(renderText(component, 64))).toMatchFileSnapshot(
+            `__snapshots__/confirmation.workspace-${action}.txt`,
         );
     });
 
