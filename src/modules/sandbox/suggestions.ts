@@ -68,8 +68,12 @@ const fixed =
 const INLINE_SCRIPT_FLAG = /^(?:-[cep]|--(?:call|eval|print)(?:=|$))/;
 const FILE_ARGUMENT = /(?:^|\/)[^/]+\.(?:[cm]?[jt]sx?|json)$/i;
 
-const suggestNpx = (tokens: string[]): string | null => {
-    for (const token of tokens.slice(1)) {
+const suggestPackageRunner = (
+    prefix: string,
+    packageIndex: number,
+    tokens: string[],
+): string | null => {
+    for (const token of tokens.slice(packageIndex)) {
         if (INLINE_SCRIPT_FLAG.test(token)) {
             return null;
         }
@@ -77,12 +81,38 @@ const suggestNpx = (tokens: string[]): string | null => {
 
     // A file argument identifies the concrete script being run. Keep that
     // path exact, while allowing additional arguments to vary.
-    if (FILE_ARGUMENT.test(tokens[2] ?? "")) {
-        const scriptInvocation = tokens.slice(0, 3).join(" ");
-        return tokens.length > 3 ? `${scriptInvocation} *` : scriptInvocation;
+    if (FILE_ARGUMENT.test(tokens[packageIndex + 1] ?? "")) {
+        const scriptEnd = packageIndex + 2;
+        const scriptInvocation = tokens.slice(0, scriptEnd).join(" ");
+        return tokens.length > scriptEnd ? `${scriptInvocation} *` : scriptInvocation;
     }
 
-    return scoped("npx", 1)(tokens);
+    return scoped(prefix, packageIndex)(tokens);
+};
+
+const suggestNpx = (tokens: string[]): string | null =>
+    suggestPackageRunner("npx", 1, tokens);
+const suggestBunx = (tokens: string[]): string | null =>
+    suggestPackageRunner("bunx", 1, tokens);
+const suggestPnpmDlx = (tokens: string[]): string | null =>
+    suggestPackageRunner("pnpm dlx", 2, tokens);
+const suggestYarnDlx = (tokens: string[]): string | null =>
+    suggestPackageRunner("yarn dlx", 2, tokens);
+
+const suggestPnpm = (tokens: string[]): string | null => {
+    if (tokens[1] === "dlx") {
+        return null;
+    }
+
+    return scoped("pnpm", 1)(tokens);
+};
+
+const suggestYarn = (tokens: string[]): string | null => {
+    if (tokens[1] === "dlx") {
+        return null;
+    }
+
+    return scoped("yarn", 1)(tokens);
 };
 
 // Most-specific prefixes first: a row whose scoped token is unsafe falls
@@ -95,12 +125,39 @@ const SUGGESTIONS: SuggestionRule[] = [
     { match: ["poetry", "run"], suggest: scoped("poetry run", 2) },
     { match: ["uv", "run"], suggest: scoped("uv run", 2) },
     { match: ["npx"], suggest: suggestNpx },
-    { match: ["yarn"], suggest: scoped("yarn", 1) },
-    { match: ["pnpm"], suggest: scoped("pnpm", 1) },
+    { match: ["yarn", "dlx"], suggest: suggestYarnDlx },
+    { match: ["yarn"], suggest: suggestYarn },
+    { match: ["pnpm", "dlx"], suggest: suggestPnpmDlx },
+    { match: ["pnpm"], suggest: suggestPnpm },
+    { match: ["bunx"], suggest: suggestBunx },
     { match: ["bun"], suggest: scoped("bun", 1) },
     { match: ["uvx"], suggest: scoped("uvx", 1) },
     { match: ["cargo"], suggest: scoped("cargo", 1) },
+    { match: ["go", "test"], suggest: scoped("go", 1) },
+    { match: ["go", "vet"], suggest: scoped("go", 1) },
+    { match: ["go", "fmt"], suggest: scoped("go", 1) },
+    { match: ["go", "generate"], suggest: scoped("go", 1) },
+    { match: ["dotnet", "test"], suggest: scoped("dotnet", 1) },
+    { match: ["mvn", "test"], suggest: scoped("mvn", 1) },
+    { match: ["gradle", "test"], suggest: scoped("gradle", 1) },
+    { match: ["bazel", "test"], suggest: scoped("bazel", 1) },
+    { match: ["flutter", "test"], suggest: scoped("flutter", 1) },
+    { match: ["dart", "test"], suggest: scoped("dart", 1) },
+    { match: ["swift", "test"], suggest: scoped("swift", 1) },
+    { match: ["mix", "test"], suggest: scoped("mix", 1) },
+    { match: ["deno", "test"], suggest: scoped("deno", 1) },
+    { match: ["deno", "fmt"], suggest: scoped("deno", 1) },
+    { match: ["deno", "lint"], suggest: scoped("deno", 1) },
+    { match: ["cmake", "--build"], suggest: scoped("cmake", 1) },
     { match: ["make"], suggest: fixed("make *") }, // targets vary; no scoping
+    { match: ["just"], suggest: fixed("just *") },
+    { match: ["task"], suggest: fixed("task *") },
+    { match: ["ninja"], suggest: fixed("ninja *") },
+    { match: ["eslint"], suggest: fixed("eslint *") },
+    { match: ["prettier"], suggest: fixed("prettier *") },
+    { match: ["biome"], suggest: fixed("biome *") },
+    { match: ["tsc"], suggest: fixed("tsc *") },
+    { match: ["stylelint"], suggest: fixed("stylelint *") },
     { match: ["tox"], suggest: fixed("tox *") },
     { match: ["ruff"], suggest: fixed("ruff *") },
     { match: ["pytest"], suggest: fixed("pytest *") },
