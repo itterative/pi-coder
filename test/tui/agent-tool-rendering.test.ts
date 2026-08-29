@@ -245,7 +245,7 @@ function renderCallAndResult(
 }
 
 describe("agent tool TUI rendering", () => {
-    it("does not retain the Ctrl+B hint after a foreground start is backgrounded", () => {
+    it("does not retain the Ctrl+Alt+B hint after a foreground start is backgrounded", () => {
         const tool = setupAgentTool(
             outcome(
                 { action: "start", agent: "scout", task: projectTask },
@@ -264,11 +264,11 @@ describe("agent tool TUI rendering", () => {
         );
 
         return result.then((renderedResult) => {
-            expect(renderText(tool.renderCall(args, mockTheme) as any, 120)).not.toContain("Ctrl+B");
+            expect(renderText(tool.renderCall(args, mockTheme) as any, 120)).not.toContain("Ctrl+Alt+B");
             expect(renderText(
                 tool.renderResult(renderedResult, { expanded: false, isPartial: true }, mockTheme) as any,
                 120,
-            )).not.toContain("Ctrl+B");
+            )).not.toContain("Ctrl+Alt+B");
         });
     });
 

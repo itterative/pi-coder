@@ -18,7 +18,7 @@ agent(action="discard", runId="worker-1")
 agent(action="continue", runId="worker-1", guidance="...")
 ```
 
-- `start` runs a child in the foreground by default; set `background=true` for asynchronous execution. While a foreground `start` is running in the TUI, press Ctrl+B to move it to the background. Background start results explain how to collect the eventual result.
+- `start` runs a child in the foreground by default; set `background=true` for asynchronous execution. While a foreground `start` is running in the TUI, press Ctrl+Alt+B to move it to the background. Background start results explain how to collect the eventual result.
 - `scout` is read-only, `reviewer` can run permission-gated commands, and only the built-in `worker` can edit.
 - Background `start` returns immediately. Collect terminal background results explicitly; do not poll or sleep while waiting.
 - Isolated workers use persistent Git worktrees. Changed results remain outside the parent checkout until an explicit `apply`.

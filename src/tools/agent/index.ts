@@ -22,7 +22,7 @@ export default function registerAgentTool(
     const traceStore = isAgentTraceEnabled() ? new AgentTraceStore() : undefined;
     const lifecycle = new AgentLifecycle(pi, factory, traceStore);
 
-    pi.registerShortcut?.("ctrl+b", {
+    pi.registerShortcut?.("ctrl+alt+b", {
         description: "Move foreground delegated agent to background",
         handler: () => {
             lifecycle.manager.moveForegroundToBackground();

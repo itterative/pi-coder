@@ -239,7 +239,7 @@ describe("agent extension registration", () => {
         expect(tool.name).toBe("agent");
         expect(tool.executionMode).toBe("sequential");
         expect(shortcut).toEqual({
-            key: "ctrl+b",
+            key: "ctrl+alt+b",
             description: "Move foreground delegated agent to background",
         });
         await expect([
@@ -316,7 +316,7 @@ describe("agent extension registration", () => {
         await handlers.session_shutdown?.[0]?.({}, {});
     });
 
-    it("snapshots the Ctrl+B foreground-to-background result", async () => {
+    it("snapshots the Ctrl+Alt+B foreground-to-background result", async () => {
         const handlers: Record<string, Handler[]> = {};
         let tool: any;
         let shortcutHandler: ((ctx: any) => void | Promise<void>) | undefined;

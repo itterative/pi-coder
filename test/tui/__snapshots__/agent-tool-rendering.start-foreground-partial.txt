@@ -1,10 +1,10 @@
 [simple]
 agent start (scout) — Project audit
-(Ctrl+B to move to background)
+(Ctrl+Alt+B to move to background)
 
 [detailed]
 agent start (scout) — Project audit
-(Ctrl+B to move to background)
+(Ctrl+Alt+B to move to background)
 
 │ Inspect the project structure.
 

@@ -65,7 +65,7 @@ function responseResult(result: AgentToolResult, expanded: boolean, theme: Param
     return markdownResult(resultResponse(result), expanded, theme);
 }
 
-const BACKGROUND_SHORTCUT_HINT = "(Ctrl+B to move to background)";
+const BACKGROUND_SHORTCUT_HINT = "(Ctrl+Alt+B to move to background)";
 
 function startResult(
     result: AgentToolResult,
