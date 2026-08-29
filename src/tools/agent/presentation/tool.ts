@@ -119,7 +119,10 @@ export function registerAgentTool(pi: ExtensionAPI, executeAction: AgentToolExec
                     theme.fg("toolTitle", theme.bold(`agent ${args.action} `))
                     + theme.fg("muted", `(${args.agent ?? "unknown"})`)
                     + " — "
-                    + theme.fg("accent", args.title ?? args.agent ?? args.action),
+                    + theme.fg("accent", args.title ?? args.agent ?? args.action)
+                    + (args.action === "start"
+                        ? ` ${theme.fg("muted", "(Ctrl+B to move to background)")}`
+                        : ""),
                     0,
                     0,
                 );

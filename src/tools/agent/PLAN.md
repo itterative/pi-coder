@@ -61,7 +61,7 @@ Runtime context is passed as bounded `context.sections` on `start` and `spawn`. 
 The `agent` tool exposes:
 
 ```text
-start   — run in the foreground
+start   — run in the foreground; Ctrl+B in the TUI moves a running start to the background
 spawn   — start in the background
 list    — recover tracked runs
 status  — inspect a deliberate snapshot

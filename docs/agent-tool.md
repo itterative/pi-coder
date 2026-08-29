@@ -26,7 +26,9 @@ There can be up to four active or interrupted runs, and up to three persistent i
 
 `spawn` returns immediately. Progress appears in the above-editor activity widget and terminal changes are delivered through a coalesced parent mailbox after parent work settles. The mailbox contains only run IDs, statuses, and short previews; use `collect` for the full result. Do not routinely poll with `status` or wait by sleeping.
 
-A background child cannot open `ask_user`; it pauses through `ask_parent` instead. Foreground children may use the restricted `ask_user` tool, except the advisor, which always uses `ask_parent`. Cancellation and shutdown abort active children and close dialogs.
+A running foreground `start` can be moved to the background with **Ctrl+B**. The foreground call returns a short control message immediately; progress and the terminal result are then delivered asynchronously. Retrieve the retained result with `collect` after the terminal notification. This shortcut applies when exactly one detachable foreground start is active; parallel foreground-call selection is not supported yet.
+
+A background child cannot open `ask_user`; it pauses through `ask_parent` instead. Foreground children may use the restricted `ask_user` tool, except the advisor, which always uses `ask_parent`. If supplied context sections are not accepted by the selected agent, the tool emits a non-blocking warning inside its metadata and continues without that context. Cancellation and shutdown abort active children and close dialogs.
 
 ### Interaction and recovery
 

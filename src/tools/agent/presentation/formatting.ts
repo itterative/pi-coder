@@ -78,6 +78,9 @@ export function toolMetadataBlock(
         ));
     }
     if (details.error) lines.push("", `Error: ${details.error}`);
+    if (outcome.additionalMetadata?.length) {
+        lines.push("", ...outcome.additionalMetadata);
+    }
     if (!responseFollows) lines.push("", "Tool message:", outcome.content);
     lines.push("</metadata>");
     return lines.join("\n");
@@ -87,15 +90,7 @@ export function formatAgentToolContent(
     action: AgentParameters["action"],
     outcome: AgentRunOutcome,
 ): string {
-    const responseFollows = (
-        action === "start"
-        || action === "collect"
-        || action === "revise"
-        || (action === "resume" && !outcome.details.background)
-    )
-        && outcome.details.status !== "waiting_for_parent"
-        && outcome.details.runId !== "unstarted"
-        && outcome.details.runId !== "unknown";
-    const metadata = toolMetadataBlock(action, outcome, responseFollows);
-    return responseFollows ? `${metadata}\n\n${outcome.content}` : metadata;
+    const hasResponse = outcome.hasResponse === true;
+    const metadata = toolMetadataBlock(action, outcome, hasResponse);
+    return hasResponse ? `${metadata}\n\n${outcome.content}` : metadata;
 }

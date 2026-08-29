@@ -43,16 +43,18 @@ function outcome(
         background?: boolean;
         toolCounts?: Record<string, number>;
         failedToolCalls?: number;
+        hasResponse?: boolean;
     } = {},
 ): AgentRunOutcome {
     const usage = cloneUsage(ZERO_USAGE);
+    const status = options.status ?? "completed";
     return {
         content,
         details: {
             runId: options.runId ?? (args.action === "list" ? "list" : "worker-1"),
             title: options.title ?? "Implement fix",
             agent: options.agent ?? "worker",
-            status: options.status ?? "completed",
+            status,
             background: options.background ?? false,
             task,
             recentActivity: [],
@@ -63,6 +65,11 @@ function outcome(
             ...(options.failedToolCalls !== undefined ? { failedToolCalls: options.failedToolCalls } : {}),
         },
         usage: cloneUsage(usage),
+        ...((options.hasResponse
+            ?? ((args.action === "start" || args.action === "collect" || args.action === "revise")
+                && status === "completed"))
+            ? { hasResponse: true as const }
+            : {}),
         isError: false,
     };
 }

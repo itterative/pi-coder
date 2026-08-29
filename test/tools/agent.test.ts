@@ -204,6 +204,56 @@ describe("AgentRunManager", () => {
         await waitingManager.shutdown();
     });
 
+    it("moves a running foreground start to the background", async () => {
+        let promptStarted = false;
+        let releasePrompt: (() => void) | undefined;
+        let output = "";
+        let abortCount = 0;
+        const backgroundUpdates: AgentRunSummary[] = [];
+        const child: ChildAgentHandle = {
+            prompt: async () => {
+                promptStarted = true;
+                await new Promise<void>((resolve) => {
+                    releasePrompt = resolve;
+                });
+                output = "Finished in the background.";
+            },
+            abort: async () => {
+                abortCount++;
+                releasePrompt?.();
+            },
+            dispose: () => {},
+            takeParentQuestion: () => undefined,
+            getProgress: () => ({ output, recentActivity: [] }),
+            getFinalOutput: () => output,
+            getError: () => undefined,
+            getUsage: () => usage(),
+        };
+        const manager = managerWith(child);
+        const controller = new AbortController();
+        const start = manager.start("scout", "Investigate", context(), {
+            signal: controller.signal,
+            onBackgroundUpdate: (details) => backgroundUpdates.push(details as AgentRunSummary),
+        });
+
+        await vi.waitFor(() => expect(promptStarted).toBe(true));
+        const moved = manager.moveForegroundToBackground();
+        expect(moved).toMatchObject({
+            content: expect.stringContaining("manually moved to the background by the user"),
+            details: { background: true, status: "running" },
+        });
+        await expect(start).resolves.toMatchObject({
+            details: { background: true, status: "running" },
+        });
+
+        controller.abort();
+        releasePrompt?.();
+        await vi.waitFor(() => expect(manager.status("scout-1").details.status).toBe("completed"));
+        expect(abortCount).toBe(0);
+        expect(backgroundUpdates.some((details) => details.background === true)).toBe(true);
+        expect(manager.collect("scout-1").content).toBe("Finished in the background.");
+    });
+
     it("assigns a durable human-readable title to each run", async () => {
         const child = new FakeChild([{ output: "Found it." }]);
         const manager = managerWith(child);
@@ -305,6 +355,7 @@ describe("AgentRunManager", () => {
         const result = await manager.start("scout", "Investigate", context(), {});
 
         expect(result.details.status).toBe("completed");
+        expect(result.hasResponse).toBe(true);
         expect(result.content).toBe("Found the answer.");
         expect(result.usage).toMatchObject({ input: 10, output: 4 });
         expect(manager.activeCount).toBe(0);
@@ -498,6 +549,7 @@ describe("AgentRunManager", () => {
         const result = await pending;
 
         expect(result.details.status).toBe("interrupted");
+        expect(result.hasResponse).toBeUndefined();
         expect(result.isError).toBe(true);
         expect(child.abortCount).toBe(1);
         expect(manager.listRuns()[0]).toMatchObject({ status: "interrupted" });
@@ -529,6 +581,7 @@ describe("AgentRunManager", () => {
         const result = await pending;
 
         expect(result.details.status).toBe("aborted");
+        expect(result.hasResponse).toBeUndefined();
         expect(result.isError).toBe(true);
         expect(child.abortCount).toBeGreaterThan(0);
         expect(child.disposed).toBe(true);

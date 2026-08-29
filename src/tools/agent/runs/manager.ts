@@ -63,6 +63,7 @@ export interface AgentRunIdentity {
 export interface AgentStartOptions {
     signal?: AbortSignal;
     onProgress?: AgentProgressCallback;
+    onBackgroundUpdate?: AgentBackgroundCallback;
     title?: string;
     identity?: AgentRunIdentity;
 }
@@ -133,6 +134,10 @@ interface AgentRun {
     operation?: Promise<AgentRunOutcome>;
     backgroundTask?: Promise<AgentRunOutcome>;
     backgroundCallback?: AgentBackgroundCallback;
+    onBackgroundUpdate?: AgentBackgroundCallback;
+    detachable?: boolean;
+    detachedOutcome?: Promise<AgentRunOutcome>;
+    resolveDetachedOutcome?: (outcome: AgentRunOutcome) => void;
     continuationLease?: AgentContinuationLease;
     continuationLeaseLost?: boolean;
     terminalOutcome?: AgentRunOutcome;
@@ -416,6 +421,7 @@ export class AgentRunManager {
                     record.terminalIsError ?? record.status !== "completed",
                     record.progress,
                     record.terminalError,
+                    record.status === "completed" && record.terminalIsError !== true,
                 );
                 if (run.background) {
                     this.terminalOrder.push(run.id);
@@ -504,11 +510,14 @@ export class AgentRunManager {
         {
             signal,
             onProgress,
+            onBackgroundUpdate,
             title,
             identity,
         }: AgentStartOptions = {},
     ): Promise<AgentRunOutcome> {
         const { definition, run } = this.createRun(definitionOrName, task, context, false, title, identity);
+        run.detachable = true;
+        run.onBackgroundUpdate = onBackgroundUpdate;
         const setupOutcome = await this.setupRun(
             run,
             definition,
@@ -517,7 +526,17 @@ export class AgentRunManager {
             onProgress,
         );
         if (setupOutcome) return setupOutcome;
-        return this.beginOperation(run, run.initialPrompt ?? task, signal, onProgress);
+
+        const detachedOutcome = new Promise<AgentRunOutcome>((resolve) => {
+            run.resolveDetachedOutcome = resolve;
+        });
+        run.detachedOutcome = detachedOutcome;
+        const operation = this.beginOperation(run, run.initialPrompt ?? task, signal, onProgress);
+        return Promise.race([operation, detachedOutcome]).finally(() => {
+            if (run.detachedOutcome !== detachedOutcome) return;
+            run.detachedOutcome = undefined;
+            run.resolveDetachedOutcome = undefined;
+        });
     }
 
     spawn(
@@ -665,6 +684,38 @@ export class AgentRunManager {
         );
     }
 
+    moveForegroundToBackground(): AgentRunOutcome | undefined {
+        // TODO(agent): Revisit run selection if parallel foreground agent calls become supported.
+        const candidates = [...this.runs.values()].filter((run) => (
+            run.detachable === true
+            && !run.background
+            && run.status === "running"
+            && run.operation !== undefined
+        ));
+        if (candidates.length !== 1) return undefined;
+
+        const run = candidates[0]!;
+        run.background = true;
+        run.backgroundCallback = run.onBackgroundUpdate;
+        const progress = run.handle?.getProgress() ?? { output: "", recentActivity: [] };
+        const backgroundMessage = [
+            `Agent ${run.id} was manually moved to the background by the user.`,
+            "Its progress and final result will be delivered asynchronously.",
+            `After a terminal notification, retrieve the full result with agent(action="collect", runId="${run.id}").`,
+        ].join(" ");
+        const outcome = this.checkpointOutcome(
+            run,
+            backgroundMessage,
+            false,
+            progress,
+        );
+        this.trackBackgroundTask(run, run.operation!);
+        this.emitBackgroundUpdate(run, outcome.details);
+        run.resolveDetachedOutcome?.(outcome);
+        run.resolveDetachedOutcome = undefined;
+        return outcome;
+    }
+
     async cancel(runId: string): Promise<AgentRunOutcome> {
         const run = this.requireRun(runId);
         if (isTerminalStatus(run.status)) {
@@ -749,6 +800,7 @@ export class AgentRunManager {
             run.terminalOutcome.isError,
             progress,
             run.terminalOutcome.details.error,
+            run.terminalOutcome.hasResponse,
         );
         this.record(run, "result.collected");
         this.removeRun(run, "collected");
@@ -990,7 +1042,7 @@ export class AgentRunManager {
                         this.emitRunStatusChanged(run, previousStatus, details.status);
                     }
                     this.emitBackgroundUpdate(run, details);
-                    onProgress?.(details);
+                    if (!run.background) onProgress?.(details);
                 },
                 onTrace: (type, data) => this.record(run, `child.${type}`, data),
             });
@@ -1156,6 +1208,7 @@ export class AgentRunManager {
         const handle = run.handle!;
         let aborted = signal?.aborted ?? false;
         const abort = () => {
+            if (run.background) return;
             aborted = true;
             this.record(run, "operation.abort_requested");
             this.abortRun(run);
@@ -1234,7 +1287,7 @@ export class AgentRunManager {
                 return this.finishInterrupted(run, "Could not durably checkpoint the delegated-agent guidance request.");
             }
             this.releaseRunContinuationLease(run);
-            onProgress?.(outcome.details);
+            if (!run.background) onProgress?.(outcome.details);
             return outcome;
         }
 
@@ -1329,7 +1382,14 @@ export class AgentRunManager {
         const report = this.mutationReport(run);
         run.restoredProgress = progress;
         run.restoredMutationReport = report;
-        const outcome = this.outcome(run, content, isError, progress, status === "failed" ? content : undefined);
+        const outcome = this.outcome(
+            run,
+            content,
+            isError,
+            progress,
+            status === "failed" ? content : undefined,
+            status === "completed" && !isError,
+        );
         if (run.background) {
             run.terminalOutcome = outcome;
             const persisted = this.persistRun(run);
@@ -1381,11 +1441,18 @@ export class AgentRunManager {
         isError: boolean,
         progress: ChildProgress,
         error?: string,
+        hasResponse = false,
     ): AgentRunOutcome {
         const cumulative = this.readUsage(run);
         const usage = subtractUsage(cumulative, run.usageCheckpoint);
         const details = this.details(run, progress, error, cumulative);
-        return { content, details, usage, isError };
+        return {
+            content,
+            details,
+            usage,
+            ...(hasResponse ? { hasResponse: true as const } : {}),
+            isError,
+        };
     }
 
     private checkpointOutcome(
@@ -1394,8 +1461,9 @@ export class AgentRunManager {
         isError: boolean,
         progress: ChildProgress,
         error?: string,
+        hasResponse = false,
     ): AgentRunOutcome {
-        const outcome = this.outcome(run, content, isError, progress, error);
+        const outcome = this.outcome(run, content, isError, progress, error, hasResponse);
         run.usageCheckpoint = cloneUsage(outcome.details.usage);
         this.persistRun(run);
         return outcome;

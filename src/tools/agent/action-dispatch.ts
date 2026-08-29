@@ -135,6 +135,7 @@ export async function executeAgentAction(
                     {
                         signal,
                         onProgress: progress,
+                        onBackgroundUpdate: workspaceBackground,
                         title: request.title,
                         identity: runIdentity,
                     },
@@ -158,7 +159,10 @@ export async function executeAgentAction(
             if (contextWarning) {
                 outcome = {
                     ...outcome,
-                    content: `${outcome.content}\n\n${contextWarning}`,
+                    additionalMetadata: [
+                        ...(outcome.additionalMetadata ?? []),
+                        contextWarning,
+                    ],
                 };
             }
         } else if (request.action === "resume") {

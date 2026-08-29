@@ -185,6 +185,7 @@ describe("agent extension registration", () => {
     it("registers the tool, advertises agents, and marks failed results as errors", async () => {
         const handlers: Record<string, Handler[]> = {};
         let tool: any;
+        let shortcut: { key: string; description?: string } | undefined;
         const events: Array<{ channel: string; data: unknown }> = [];
         const pi = {
             events: {
@@ -197,6 +198,9 @@ describe("agent extension registration", () => {
             },
             registerTool(definition: any) {
                 tool = definition;
+            },
+            registerShortcut(key: string, options: { description?: string }) {
+                shortcut = { key, description: options.description };
             },
             registerCommand() {},
         } as any;
@@ -234,6 +238,10 @@ describe("agent extension registration", () => {
 
         expect(tool.name).toBe("agent");
         expect(tool.executionMode).toBe("sequential");
+        expect(shortcut).toEqual({
+            key: "ctrl+b",
+            description: "Move foreground delegated agent to background",
+        });
         await expect([
             tool.description,
             ...tool.promptGuidelines,
@@ -258,7 +266,7 @@ describe("agent extension registration", () => {
         await handlers.session_shutdown[0]({}, ctx);
     });
 
-    it("warns the parent when an agent ignores additional context", async () => {
+    it("keeps an ignored-context warning in metadata", async () => {
         let tool: any;
         const handlers: Record<string, Handler[]> = {};
         const pi = {
@@ -304,11 +312,79 @@ describe("agent extension registration", () => {
         );
 
         expect(result.details.status).toBe("completed");
-        expect(result.content[0].text).toContain(
-            'Warning: Agent "scout" does not accept additional context; ignored section: "parent_summary".',
-        );
-        expect(result.content[0].text).toContain("Done");
+        await expect(result.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.ignored-context-response.txt");
         await handlers.session_shutdown?.[0]?.({}, {});
+    });
+
+    it("snapshots the Ctrl+B foreground-to-background result", async () => {
+        const handlers: Record<string, Handler[]> = {};
+        let tool: any;
+        let shortcutHandler: ((ctx: any) => void | Promise<void>) | undefined;
+        const pi = {
+            events: createEventBus(),
+            on(event: string, handler: Handler) {
+                (handlers[event] ??= []).push(handler);
+            },
+            registerTool(definition: any) {
+                tool = definition;
+            },
+            registerShortcut(_key: string, options: { handler: (ctx: any) => void | Promise<void> }) {
+                shortcutHandler = options.handler;
+            },
+            registerCommand() {},
+        } as any;
+        let promptStarted = false;
+        let releasePrompt: (() => void) | undefined;
+        let output = "";
+        const child: ChildAgentHandle = {
+            prompt: async () => {
+                promptStarted = true;
+                await new Promise<void>((resolve) => {
+                    releasePrompt = resolve;
+                });
+                output = "Finished after manual backgrounding.";
+            },
+            abort: async () => {
+                releasePrompt?.();
+            },
+            dispose: () => {},
+            takeParentQuestion: () => undefined,
+            getProgress: () => ({ output, recentActivity: [] }),
+            getFinalOutput: () => output,
+            getError: () => undefined,
+            getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
+        };
+        registerAgentTool(pi, async () => child);
+
+        const ctx = {
+            cwd: process.cwd(),
+            mode: "tui",
+            hasUI: true,
+            isProjectTrusted: () => false,
+            isIdle: () => false,
+            sessionManager: { getSessionId: () => "parent-session", getSessionFile: () => undefined },
+            ui: { notify: () => {}, setWidget: () => {} },
+        };
+        const start = tool.execute(
+            "call-manual-background",
+            { action: "start", agent: "scout", task: "Inspect before continuing" },
+            undefined,
+            undefined,
+            ctx,
+        );
+
+        await vi.waitFor(() => expect(promptStarted).toBe(true));
+        await shortcutHandler?.(ctx);
+        const moved = await start;
+
+        expect(moved.details).toMatchObject({ status: "running", background: true });
+        await expect(moved.content[0].text).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.manual-background.txt",
+        );
+
+        releasePrompt?.();
+        await vi.waitFor(() => expect(output).toBe("Finished after manual backgrounding."));
+        await handlers.session_shutdown?.[0]?.({}, ctx);
     });
 
     it("renders the full prompt and preserves response whitespace without metadata", async () => {

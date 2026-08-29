@@ -129,6 +129,10 @@ export interface AgentRunOutcome {
     content: string;
     details: AgentRunDetails;
     usage: Usage;
+    /** Set when content is the delegated child response rather than a lifecycle message. */
+    hasResponse?: true;
+    /** Parent-generated lines to append inside the tool metadata block. */
+    additionalMetadata?: string[];
     isError: boolean;
 }
 

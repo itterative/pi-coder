@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 
-import { BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
+import {
+    BUILTIN_ADVISOR,
+    BUILTIN_WORKER,
+} from "../../src/tools/agent/definitions/discovery";
 import {
     AGENT_EVENT_CHANNEL,
     AGENT_STATUS_EVENT,
@@ -29,6 +32,10 @@ class BlockingChild implements ChildAgentHandle {
     }
 
     async abort(): Promise<void> {
+        this.releasePrompt?.();
+    }
+
+    release(): void {
         this.releasePrompt?.();
     }
 
@@ -147,6 +154,55 @@ afterEach(async () => {
 });
 
 describe("agent lifecycle worker-change notifications", () => {
+    it("delivers a detached advisor completion through the parent mailbox", async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-advisor-mailbox-"));
+        const events = createEventBus();
+        const messages = vi.fn();
+        const child = new BlockingChild();
+        const lifecycle = new AgentLifecycle({ events, sendMessage: messages } as any, async () => child);
+        const ctx = {
+            cwd: root,
+            isIdle: () => true,
+            ui: { notify: vi.fn(), setWidget: vi.fn() },
+        } as any;
+
+        try {
+            const pending = lifecycle.manager.start(
+                BUILTIN_ADVISOR,
+                "Advise on the implementation",
+                { cwd: root, parentContext: ctx },
+                { onBackgroundUpdate: lifecycle.backgroundUpdate(ctx) },
+            );
+            await vi.waitFor(() => expect(lifecycle.manager.listRuns()[0]?.status).toBe("running"));
+            await flushBackground();
+
+            const moved = lifecycle.manager.moveForegroundToBackground();
+            expect(moved).toMatchObject({
+                details: { agent: "advisor", background: true, status: "running" },
+            });
+
+            child.release();
+            await expect(pending).resolves.toMatchObject({
+                details: { agent: "advisor", background: true, status: "running" },
+            });
+            await vi.waitFor(() => expect(
+                lifecycle.manager.status("advisor-1").details.status,
+            ).toBe("completed"));
+            await vi.waitFor(() => expect(messages).toHaveBeenCalledTimes(1));
+
+            expect(messages.mock.calls[0]?.[1]).toEqual({
+                deliverAs: "followUp",
+                triggerTurn: true,
+            });
+            await expect(messages.mock.calls[0]?.[0].content).toMatchFileSnapshot(
+                "__snapshots__/agent-lifecycle.advisor-mailbox-completion.txt",
+            );
+        } finally {
+            await lifecycle.manager.shutdown();
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
     it("publishes status for isolated run events using the parent cwd", async () => {
         const events = createEventBus();
         const statusSnapshots: unknown[] = [];
