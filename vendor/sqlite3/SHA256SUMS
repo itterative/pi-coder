@@ -1,0 +1,7 @@
+ba14c3b1975cb0f70321b38c9fea614ef09b27e996aec58794d4e210d2ee91f2  lib/binding/napi-v6-darwin-arm64/node_sqlite3.node
+3e256bf5a51b06346197d545770e495be3baf20ca92b94017ae96ce388fe4e8e  lib/binding/napi-v6-darwin-x64/node_sqlite3.node
+1d5fe65d1be6ce9927aa1fd1d2bb5e71c81c015c04239ca3a8eed00e8cdf4b89  lib/binding/napi-v6-linux-arm64/node_sqlite3.node
+92319a6b5f025ed2003e4865889137714417b8a7c463ee475e88c1f3340359ce  lib/binding/napi-v6-linux-x64/node_sqlite3.node
+cc56ac512b0b57160bad60235759aaf9222e05b9e3cec0aa2d0808986b36813c  lib/binding/napi-v6-linuxmusl-arm64/node_sqlite3.node
+5e1ad6cd482d1e4226d49ed77628328eeb7c169e56fd7387c6ae93b798b8f0bb  lib/binding/napi-v6-linuxmusl-x64/node_sqlite3.node
+5e1d1275e126c3fc584bcf5752fbf747bff89454bfcf8bc76c982b24e7815057  lib/binding/napi-v6-win32-x64/node_sqlite3.node

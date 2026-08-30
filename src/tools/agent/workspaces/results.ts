@@ -37,14 +37,14 @@ function isProcessAlive(pid: number): boolean {
     }
 }
 
-function requireMatchingWorkspaceResult(
+async function requireMatchingWorkspaceResult(
     database: AgentMetadataDatabase,
     workspace: AgentWorkspace,
     { leaseRunId, leaseRunInstanceId, resultId }: AgentWorkspaceLeaseOptions,
-): AgentWorkspaceResult {
+): Promise<AgentWorkspaceResult> {
     const result = resultId
-        ? workspaceResultById(database, resultId)
-        : workspaceResultForRun(database, workspace.id, leaseRunId, leaseRunInstanceId);
+        ? await workspaceResultById(database, resultId)
+        : await workspaceResultForRun(database, workspace.id, leaseRunId, leaseRunInstanceId);
     if (
         !result
         || result.workspaceId !== workspace.id
@@ -56,42 +56,41 @@ function requireMatchingWorkspaceResult(
     return result;
 }
 
-function requirePreparedResult(
+async function requirePreparedResult(
     database: AgentMetadataDatabase,
     workspace: AgentWorkspace,
     options: AgentWorkspaceLeaseOptions,
-): AgentWorkspaceResult {
-    const result = requireMatchingWorkspaceResult(database, workspace, options);
+): Promise<AgentWorkspaceResult> {
+    const result = await requireMatchingWorkspaceResult(database, workspace, options);
     if (result.status !== "prepared") {
         throw new Error(`Workspace ${workspace.id} has no prepared result for run ${options.leaseRunId}.`);
     }
     return result;
 }
 
-function clearResultReservation(database: AgentMetadataDatabase, resultId: string, token: string): void {
-    database.prepare(`
+async function clearResultReservation(database: AgentMetadataDatabase, resultId: string, token: string): Promise<void> {
+    await database.run(`
         UPDATE workspace_results
         SET reservation_token = NULL, reservation_owner_session_id = NULL,
             reservation_run_id = NULL, reservation_run_instance_id = NULL,
             reservation_owner_pid = NULL, reservation_acquired_at = NULL
         WHERE id = ? AND reservation_token = ?
-    `).run(resultId, token);
+    `, resultId, token);
 }
 
-function reserveResult(
+async function reserveResult(
     database: AgentMetadataDatabase,
     result: AgentWorkspaceResult,
     options: AgentWorkspaceLeaseOptions,
-): string {
+): Promise<string> {
     const token = randomUUID();
     const now = Date.now();
-    database.exec("BEGIN IMMEDIATE");
-    try {
-        const existing = database.prepare(`
+    return await database.transaction(async (transaction) => {
+        const existing = await transaction.get(`
             SELECT reservation_token, reservation_owner_pid, reservation_acquired_at
             FROM workspace_results
             WHERE id = ? AND workspace_id = ? AND status = 'prepared'
-        `).get(result.id, result.workspaceId) as {
+        `, result.id, result.workspaceId) as {
             reservation_token?: string;
             reservation_owner_pid?: number;
             reservation_acquired_at?: number;
@@ -104,108 +103,82 @@ function reserveResult(
                 && existing.reservation_acquired_at + RESULT_RESERVATION_TIMEOUT_MS + RESULT_RESERVATION_RECOVERY_GRACE_MS < now
                 && (ownerDead || existing.reservation_owner_pid === undefined);
             if (!expired) throw new Error(`Workspace result ${result.id} is already reserved or no longer prepared.`);
-            database.prepare("UPDATE workspace_results SET reservation_token = NULL WHERE id = ? AND reservation_token = ?")
-                .run(result.id, existing.reservation_token);
+            await transaction.run("UPDATE workspace_results SET reservation_token = NULL WHERE id = ? AND reservation_token = ?", result.id, existing.reservation_token);
         }
-        const reservation = database.prepare(`
+        const reservation = await transaction.run(`
             UPDATE workspace_results
             SET reservation_token = ?, reservation_owner_session_id = ?, reservation_run_id = ?,
                 reservation_run_instance_id = ?, reservation_owner_pid = ?, reservation_acquired_at = ?
             WHERE id = ? AND workspace_id = ? AND status = 'prepared' AND reservation_token IS NULL
-        `).run(
-            token,
+        `, token,
             options.ownerSessionId,
             options.leaseRunId,
             options.leaseRunInstanceId ?? null,
             process.pid,
             now,
             result.id,
-            result.workspaceId,
-        );
+            result.workspaceId,);
         if (reservation.changes !== 1) throw new Error(`Workspace result ${result.id} is already reserved or no longer prepared.`);
-        database.exec("COMMIT");
         return token;
-    } catch (error) {
-        rollback(database);
-        throw error;
-    }
+    }, "IMMEDIATE");
 }
 
-function rollback(database: AgentMetadataDatabase): void {
-    try {
-        database.exec("ROLLBACK");
-    } catch {
-        // Preserve the original result operation error.
-    }
-}
-
-function releaseResultReservation(
+async function releaseResultReservation(
     database: AgentMetadataDatabase,
     resultId: string,
     token: string,
-): void {
-    clearResultReservation(database, resultId, token);
+): Promise<void> {
+    await clearResultReservation(database, resultId, token);
 }
 
-function markResultApplying(
+async function markResultApplying(
     database: AgentMetadataDatabase,
     resultId: string,
     workspaceId: string,
     parentRevision: string,
     reservationToken: string,
-): void {
-    database.exec("BEGIN IMMEDIATE");
-    try {
-        const updated = database.prepare(`
+): Promise<void> {
+    await database.transaction(async (transaction) => {
+        const updated = await transaction.run(`
             UPDATE workspace_results
             SET status = 'applying', parent_revision = ?, applied_at = NULL
             WHERE id = ? AND workspace_id = ? AND status = 'prepared' AND reservation_token = ?
-        `).run(parentRevision, resultId, workspaceId, reservationToken);
+        `, parentRevision, resultId, workspaceId, reservationToken);
         if (updated.changes !== 1) throw new Error(`Workspace result ${resultId} changed before application could begin.`);
-        database.exec("COMMIT");
-    } catch (error) {
-        rollback(database);
-        throw error;
-    }
+    }, "IMMEDIATE");
 }
 
-function markResultPrepared(
+async function markResultPrepared(
     database: AgentMetadataDatabase,
     resultId: string,
     reservationToken: string,
-): void {
-    database.exec("BEGIN IMMEDIATE");
-    try {
-        const updated = database.prepare(`
+): Promise<void> {
+    await database.transaction(async (transaction) => {
+        const updated = await transaction.run(`
             UPDATE workspace_results
             SET status = 'prepared', parent_revision = NULL, applied_at = NULL
             WHERE id = ? AND status = 'applying' AND reservation_token = ?
-        `).run(resultId, reservationToken);
+        `, resultId, reservationToken);
         if (updated.changes !== 1) throw new Error(`Workspace result ${resultId} changed during recovery.`);
-        clearResultReservation(database, resultId, reservationToken);
-        database.exec("COMMIT");
-    } catch (error) {
-        rollback(database);
-        throw error;
-    }
+        await clearResultReservation(transaction, resultId, reservationToken);
+    }, "IMMEDIATE");
 }
 
-function claimApplyingResultRecovery(
+async function claimApplyingResultRecovery(
     database: AgentMetadataDatabase,
     resultId: string,
     options: AgentWorkspaceLeaseOptions,
-): string {
+): Promise<string> {
     if (activeApplyingResultIds.has(resultId)) {
         throw new Error(`Workspace result ${resultId} is still being applied.`);
     }
 
-    database.exec("BEGIN IMMEDIATE");
-    try {
-        const reservation = database.prepare(`
+    return await database.transaction(async (transaction) => {
+        const reservation = await transaction.get(`
             SELECT reservation_token, reservation_owner_session_id, reservation_run_id,
                    reservation_run_instance_id, reservation_owner_pid
             FROM workspace_results WHERE id = ? AND status = 'applying'
-        `).get(resultId) as {
+        `, resultId) as {
             reservation_token?: string;
             reservation_owner_session_id?: string;
             reservation_run_id?: string;
@@ -227,48 +200,42 @@ function claimApplyingResultRecovery(
         }
 
         const recoveryToken = randomUUID();
-        const claimed = database.prepare(`
+        const claimed = await transaction.run(`
             UPDATE workspace_results
             SET reservation_token = ?, reservation_owner_session_id = ?,
                 reservation_run_id = ?, reservation_run_instance_id = ?,
                 reservation_owner_pid = ?, reservation_acquired_at = ?
             WHERE id = ? AND status = 'applying' AND reservation_token = ?
-        `).run(
-            recoveryToken,
+        `, recoveryToken,
             options.ownerSessionId,
             options.leaseRunId,
             options.leaseRunInstanceId ?? null,
             process.pid,
             Date.now(),
             resultId,
-            reservation.reservation_token,
-        );
+            reservation.reservation_token,);
         if (claimed.changes !== 1) throw new Error(`Workspace result ${resultId} changed before recovery could begin.`);
-        database.exec("COMMIT");
         return recoveryToken;
-    } catch (error) {
-        rollback(database);
-        throw error;
-    }
+    }, "IMMEDIATE");
 }
 
-function markResultApplied(
+async function markResultApplied(
     database: AgentMetadataDatabase,
     resultId: string,
     workspaceId: string,
     parentRevision: string,
     reservationToken: string,
-): AgentWorkspaceResult {
+): Promise<AgentWorkspaceResult> {
     const appliedAt = Date.now();
-    const updated = database.prepare(`
+    const updated = await database.run(`
         UPDATE workspace_results SET status = 'applied', parent_revision = ?, applied_at = ?,
             reservation_token = NULL, reservation_owner_session_id = NULL,
             reservation_run_id = NULL, reservation_run_instance_id = NULL,
             reservation_owner_pid = NULL, reservation_acquired_at = NULL
         WHERE id = ? AND workspace_id = ? AND status = 'applying' AND reservation_token = ?
-    `).run(parentRevision, appliedAt, resultId, workspaceId, reservationToken);
+    `, parentRevision, appliedAt, resultId, workspaceId, reservationToken);
     if (updated.changes !== 1) throw new Error(`Workspace result ${resultId} changed during application recovery.`);
-    const result = workspaceResultById(database, resultId);
+    const result = await workspaceResultById(database, resultId);
     if (!result) throw new Error(`Workspace result ${resultId} disappeared during application recovery.`);
     return result;
 }
@@ -306,9 +273,9 @@ async function recoverApplyingWorkspaceResult(
     result: AgentWorkspaceResult,
     options: AgentWorkspaceLeaseOptions,
 ): Promise<AgentWorkspaceResult> {
-    const recoveryToken = claimApplyingResultRecovery(database, result.id, options);
+    const recoveryToken = await claimApplyingResultRecovery(database, result.id, options);
     if (!result.parentRevision) {
-        clearResultReservation(database, result.id, recoveryToken);
+        await clearResultReservation(database, result.id, recoveryToken);
         throw new Error(`Workspace result ${result.id} has no recorded parent revision for recovery.`);
     }
     activeApplyingResultIds.add(result.id);
@@ -320,16 +287,16 @@ async function recoverApplyingWorkspaceResult(
 
         return await withWorkspaceResultPatch(workspace, result, async (patch, patchPath) => {
             if (!patch) {
-                return markResultApplied(database, result.id, workspace.id, result.parentRevision!, recoveryToken);
+                return await markResultApplied(database, result.id, workspace.id, result.parentRevision!, recoveryToken);
             }
             const reverseApplies = await canApplyPatch(workspace.repositoryRoot, patchPath, true);
             const forwardApplies = await canApplyPatch(workspace.repositoryRoot, patchPath);
             if (reverseApplies && !forwardApplies) {
-                return markResultApplied(database, result.id, workspace.id, result.parentRevision!, recoveryToken);
+                return await markResultApplied(database, result.id, workspace.id, result.parentRevision!, recoveryToken);
             }
             if (forwardApplies && !reverseApplies) {
-                markResultPrepared(database, result.id, recoveryToken);
-                const prepared = workspaceResultById(database, result.id);
+                await markResultPrepared(database, result.id, recoveryToken);
+                const prepared = await workspaceResultById(database, result.id);
                 if (!prepared) throw new Error(`Workspace result ${result.id} disappeared during recovery.`);
                 return prepared;
             }
@@ -402,19 +369,19 @@ export async function prepareAgentWorkspaceApplication(
             preparedAt: Date.now(),
             status: "prepared",
         };
-        database.prepare(`
+        await database.run(`
             INSERT INTO workspace_results (
                 id, workspace_id, run_id, run_instance_id, base_revision, worker_head, commit_range,
                 commits_json, durable_ref, prepared_at, status, parent_revision, applied_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-        `).run(result.id, result.workspaceId, result.runId, result.runInstanceId ?? null, result.baseRevision, result.workerHead,
+        `, result.id, result.workspaceId, result.runId, result.runInstanceId ?? null, result.baseRevision, result.workerHead,
             result.commitRange, JSON.stringify(result.commits), result.durableRef ?? null, result.preparedAt, result.status);
         return result;
     } catch (error) {
         if (durableRef) await git(current.worktreePath, ["update-ref", "-d", durableRef]).catch(() => {});
         throw error;
     } finally {
-        database.close();
+        await database.close();
     }
 }
 
@@ -428,9 +395,9 @@ export async function applyAgentWorkspaceApplication(
     let reservedResultId: string | undefined;
     let applying = false;
     try {
-        const current = workspaceById(database, workspace.id);
+        const current = await workspaceById(database, workspace.id);
         if (!current) throw new Error(`Workspace ${workspace.id} was not found.`);
-        let result = requireMatchingWorkspaceResult(database, current, options);
+        let result = await requireMatchingWorkspaceResult(database, current, options);
         if (result.status === "applied") return result;
         if (result.status === "applying") {
             result = await recoverApplyingWorkspaceResult(database, current, result, options);
@@ -442,7 +409,7 @@ export async function applyAgentWorkspaceApplication(
         if (current.leaseRunId === options.leaseRunId && !matchingLease(current, options)) {
             throw new Error(`Workspace ${workspace.id} is currently leased by another owner.`);
         }
-        reservationToken = reserveResult(database, result, options);
+        reservationToken = await reserveResult(database, result, options);
         reservedResultId = result.id;
         const workerHead = result.durableRef
             ? await git(current.repositoryRoot, ["rev-parse", result.durableRef])
@@ -463,14 +430,14 @@ export async function applyAgentWorkspaceApplication(
             if (patch) {
                 await git(current.repositoryRoot, ["apply", "--check", "--binary", patchPath]);
             }
-            markResultApplying(database, result.id, current.id, parentRevision, reservationToken!);
+            await markResultApplying(database, result.id, current.id, parentRevision, reservationToken!);
             applying = true;
             activeApplyingResultIds.add(result.id);
             try {
                 if (patch) {
                     await git(current.repositoryRoot, ["apply", "--binary", patchPath]);
                 }
-                const applied = markResultApplied(database, result.id, current.id, parentRevision, reservationToken!);
+                const applied = await markResultApplied(database, result.id, current.id, parentRevision, reservationToken!);
                 reservationToken = undefined;
                 applying = false;
                 return applied;
@@ -482,11 +449,11 @@ export async function applyAgentWorkspaceApplication(
         // Once the durable state is `applying`, retain the reservation so a
         // later invocation can reconcile the parent checkout before retrying.
         if (reservationToken && reservedResultId && !applying) {
-            releaseResultReservation(database, reservedResultId, reservationToken);
+            await releaseResultReservation(database, reservedResultId, reservationToken);
         }
         throw error;
     } finally {
-        database.close();
+        await database.close();
     }
 }
 
@@ -499,9 +466,9 @@ export async function retainAgentWorkspaceResult(
     let reservationToken: string | undefined;
     let reservedResultId: string | undefined;
     try {
-        const workspace = workspaceById(database, workspaceId);
+        const workspace = await workspaceById(database, workspaceId);
         if (!workspace) throw new Error(`Workspace ${workspaceId} was not found.`);
-        const result = requirePreparedResult(database, workspace, options);
+        const result = await requirePreparedResult(database, workspace, options);
         if (result.commits.length === 0) {
             throw new Error(`Workspace ${workspaceId} has no changed prepared result to retain.`);
         }
@@ -515,33 +482,32 @@ export async function retainAgentWorkspaceResult(
                 throw new Error(`Workspace ${workspaceId} changed after its result was prepared.`);
             }
         }
-        reservationToken = reserveResult(database, result, options);
+        reservationToken = await reserveResult(database, result, options);
         reservedResultId = result.id;
-        database.exec("BEGIN IMMEDIATE");
-        const updated = database.prepare(`
-            UPDATE workspace_results
-            SET reservation_token = NULL, reservation_owner_session_id = NULL,
-                reservation_run_id = NULL, reservation_run_instance_id = NULL,
-                reservation_owner_pid = NULL, reservation_acquired_at = NULL
-            WHERE id = ? AND status = 'prepared' AND reservation_token = ?
-        `).run(result.id, reservationToken);
-        if (updated.changes !== 1) throw new Error(`Workspace result ${result.id} changed during retention.`);
-        if (matchingLease(workspace, options)) {
-            database.prepare(`
-                UPDATE workspaces SET workspace_status = 'review_required', lease_owner_session_id = NULL,
-                    lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
-                WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
-                  AND (? IS NULL OR lease_run_instance_id = ?) AND lease_kind = 'task'
-            `).run(Date.now(), workspaceId, options.ownerSessionId, options.leaseRunId, options.leaseRunInstanceId ?? null, options.leaseRunInstanceId ?? null);
-        }
-        database.exec("COMMIT");
+        await database.transaction(async (transaction) => {
+            const updated = await transaction.run(`
+                UPDATE workspace_results
+                SET reservation_token = NULL, reservation_owner_session_id = NULL,
+                    reservation_run_id = NULL, reservation_run_instance_id = NULL,
+                    reservation_owner_pid = NULL, reservation_acquired_at = NULL
+                WHERE id = ? AND status = 'prepared' AND reservation_token = ?
+            `, result.id, reservationToken);
+            if (updated.changes !== 1) throw new Error(`Workspace result ${result.id} changed during retention.`);
+            if (matchingLease(workspace, options)) {
+                await transaction.run(`
+                    UPDATE workspaces SET workspace_status = 'review_required', lease_owner_session_id = NULL,
+                        lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
+                    WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
+                      AND (? IS NULL OR lease_run_instance_id = ?) AND lease_kind = 'task'
+                `, Date.now(), workspaceId, options.ownerSessionId, options.leaseRunId, options.leaseRunInstanceId ?? null, options.leaseRunInstanceId ?? null);
+            }
+        }, "IMMEDIATE");
         reservationToken = undefined;
     } catch (error) {
-        rollback(database);
-        if (reservationToken && reservedResultId) releaseResultReservation(database, reservedResultId, reservationToken);
+        if (reservationToken && reservedResultId) await releaseResultReservation(database, reservedResultId, reservationToken);
         throw error;
     } finally {
-        database.close();
+        await database.close();
     }
 }
 
@@ -554,9 +520,9 @@ export async function discardAgentWorkspaceResult(
     let reservationToken: string | undefined;
     let reservedResultId: string | undefined;
     try {
-        const workspace = workspaceById(database, workspaceId);
+        const workspace = await workspaceById(database, workspaceId);
         if (!workspace) throw new Error(`Workspace ${workspaceId} was not found.`);
-        const result = requirePreparedResult(database, workspace, options);
+        const result = await requirePreparedResult(database, workspace, options);
         const ownsLease = matchingLease(workspace, options);
         if (workspace.leaseRunId && workspace.leaseRunId === options.leaseRunId && !ownsLease) {
             throw new Error(`Workspace ${workspaceId} is currently leased by another owner.`);
@@ -570,19 +536,19 @@ export async function discardAgentWorkspaceResult(
                 throw new Error(`Workspace ${workspaceId} changed after its result was prepared; inspect it before discarding.`);
             }
         }
-        reservationToken = reserveResult(database, result, options);
+        reservationToken = await reserveResult(database, result, options);
         reservedResultId = result.id;
         if (result.durableRef) {
             await git(workspace.repositoryRoot, ["update-ref", "-d", result.durableRef]);
         }
-        const updated = database.prepare(`
+        const updated = await database.run(`
             UPDATE workspace_results
             SET status = 'discarded', durable_ref = NULL, reservation_token = NULL,
                 reservation_owner_session_id = NULL, reservation_run_id = NULL,
                 reservation_run_instance_id = NULL, reservation_owner_pid = NULL,
                 reservation_acquired_at = NULL
             WHERE id = ? AND workspace_id = ? AND status = 'prepared' AND reservation_token = ?
-        `).run(result.id, workspaceId, reservationToken);
+        `, result.id, workspaceId, reservationToken);
         if (updated.changes !== 1) throw new Error(`Workspace result ${result.id} changed during discard.`);
         reservationToken = undefined;
         if (ownsLease) {
@@ -590,19 +556,19 @@ export async function discardAgentWorkspaceResult(
             // this result still owns the lease. Historical results never touch
             // the worktree currently assigned to another worker.
             const targetRevision = await resetReusableWorkspace(workspace);
-            database.prepare(`
+            await database.run(`
                 UPDATE workspaces SET workspace_status = 'available', base_revision = ?,
                     lease_owner_session_id = NULL, lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL,
                     lease_acquired_at = NULL, updated_at = ?
                 WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
                   AND (? IS NULL OR lease_run_instance_id = ?) AND lease_kind = 'task'
-            `).run(targetRevision, Date.now(), workspaceId, options.ownerSessionId, options.leaseRunId, options.leaseRunInstanceId ?? null, options.leaseRunInstanceId ?? null);
+            `, targetRevision, Date.now(), workspaceId, options.ownerSessionId, options.leaseRunId, options.leaseRunInstanceId ?? null, options.leaseRunInstanceId ?? null);
         }
     } catch (error) {
-        if (reservationToken && reservedResultId) releaseResultReservation(database, reservedResultId, reservationToken);
+        if (reservationToken && reservedResultId) await releaseResultReservation(database, reservedResultId, reservationToken);
         throw error;
     } finally {
-        database.close();
+        await database.close();
     }
 }
 
@@ -614,7 +580,7 @@ export async function releaseAgentWorkspaceAfterApplication(
     const { ownerSessionId, leaseRunId, workspacesDir = PI_CODER_WORKSPACES_DIR, leaseRunInstanceId } = options;
     const database = await openDatabase(workspacesDir);
     try {
-        const workspace = workspaceById(database, workspaceId);
+        const workspace = await workspaceById(database, workspaceId);
         if (
             workspace?.leaseOwnerSessionId !== ownerSessionId
             || workspace.leaseRunId !== leaseRunId
@@ -622,18 +588,18 @@ export async function releaseAgentWorkspaceAfterApplication(
         ) {
             throw new Error(`Workspace ${workspaceId} is not leased by ${leaseRunId}.`);
         }
-        const result = requireMatchingWorkspaceResult(database, workspace, options);
+        const result = await requireMatchingWorkspaceResult(database, workspace, options);
         if (workspace.leaseKind !== "task" || result.status !== "applied") {
             throw new Error(`Workspace ${workspaceId} can be released only after successful application.`);
         }
-        database.prepare(`
+        await database.run(`
             UPDATE workspaces SET workspace_status = 'review_required', lease_owner_session_id = NULL,
                 lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL, lease_acquired_at = NULL, updated_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
               AND (? IS NULL OR lease_run_instance_id = ?)
-        `).run(Date.now(), workspaceId, ownerSessionId, leaseRunId, leaseRunInstanceId ?? null, leaseRunInstanceId ?? null);
+        `, Date.now(), workspaceId, ownerSessionId, leaseRunId, leaseRunInstanceId ?? null, leaseRunInstanceId ?? null);
     } finally {
-        database.close();
+        await database.close();
     }
 }
 
@@ -647,7 +613,7 @@ export async function releaseAgentWorkspaceAfterNoChanges(
     let reservationToken: string | undefined;
     let reservedResultId: string | undefined;
     try {
-        const workspace = workspaceById(database, workspaceId);
+        const workspace = await workspaceById(database, workspaceId);
         if (
             workspace?.leaseOwnerSessionId !== ownerSessionId
             || workspace.leaseRunId !== leaseRunId
@@ -655,7 +621,7 @@ export async function releaseAgentWorkspaceAfterNoChanges(
         ) {
             throw new Error(`Workspace ${workspaceId} is not leased by ${leaseRunId}.`);
         }
-        const result = requireMatchingWorkspaceResult(database, workspace, options);
+        const result = await requireMatchingWorkspaceResult(database, workspace, options);
         if (
             workspace.leaseKind !== "task"
             || result.status !== "prepared"
@@ -668,35 +634,34 @@ export async function releaseAgentWorkspaceAfterNoChanges(
         if (state.kind !== "available" || state.dirty || state.headRevision !== result.baseRevision) {
             throw new Error(`Workspace ${workspaceId} changed after its no-change result was prepared.`);
         }
-        reservationToken = reserveResult(database, result, options);
+        reservationToken = await reserveResult(database, result, options);
         reservedResultId = result.id;
         const targetRevision = await resetReusableWorkspace(workspace);
         if (result.durableRef) {
             await git(workspace.worktreePath, ["update-ref", "-d", result.durableRef]);
         }
-        const updated = database.prepare(`
+        const updated = await database.run(`
             UPDATE workspace_results
             SET status = 'discarded', durable_ref = NULL, reservation_token = NULL,
                 reservation_owner_session_id = NULL, reservation_run_id = NULL,
                 reservation_run_instance_id = NULL, reservation_owner_pid = NULL,
                 reservation_acquired_at = NULL
             WHERE id = ? AND workspace_id = ? AND status = 'prepared' AND reservation_token = ?
-        `).run(result.id, workspaceId, reservationToken);
+        `, result.id, workspaceId, reservationToken);
         if (updated.changes !== 1) throw new Error(`Workspace result ${result.id} changed during no-change release.`);
         reservationToken = undefined;
-        database.prepare(`
+        await database.run(`
             UPDATE workspaces SET workspace_status = 'available', base_revision = ?,
                 lease_owner_session_id = NULL, lease_run_id = NULL, lease_run_instance_id = NULL, lease_kind = NULL,
                 lease_acquired_at = NULL, updated_at = ?
             WHERE id = ? AND lease_owner_session_id = ? AND lease_run_id = ?
               AND (? IS NULL OR lease_run_instance_id = ?)
-        `).run(targetRevision, Date.now(), workspaceId, ownerSessionId, leaseRunId, leaseRunInstanceId ?? null, leaseRunInstanceId ?? null);
+        `, targetRevision, Date.now(), workspaceId, ownerSessionId, leaseRunId, leaseRunInstanceId ?? null, leaseRunInstanceId ?? null);
     } catch (error) {
-        rollback(database);
-        if (reservationToken && reservedResultId) releaseResultReservation(database, reservedResultId, reservationToken);
+        if (reservationToken && reservedResultId) await releaseResultReservation(database, reservedResultId, reservationToken);
         throw error;
     } finally {
-        database.close();
+        await database.close();
     }
 }
 

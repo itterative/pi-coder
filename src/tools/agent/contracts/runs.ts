@@ -197,7 +197,7 @@ export interface PersistedAgentRun {
 }
 
 export interface AgentContinuationLease {
-    release(): void;
+    release(): void | Promise<void>;
 }
 
 export class AgentContinuationLeaseBusyError extends Error {
@@ -215,11 +215,11 @@ export interface AgentRunPersistence {
     /** True when records are V2 marker/snapshot checkpoints. */
     usesSnapshotMarkers?: boolean;
     childSessionDir: string;
-    save(record: PersistedAgentRun): boolean;
+    save(record: PersistedAgentRun): Promise<boolean>;
     /** Acquires a renewable CAS lease for the physical run's active operation. */
-    acquireContinuationLease?: (runInstanceId: string, onLost?: () => void) => AgentContinuationLease;
+    acquireContinuationLease?: (runInstanceId: string, onLost?: () => void) => Promise<AgentContinuationLease>;
     flush?: () => Promise<void>;
-    close?: () => void;
+    close?: () => void | Promise<void>;
     deleteChildSession(sessionFile: string): void;
 }
 

@@ -116,9 +116,9 @@ describe("isolated workspace restart e2e", () => {
             childSessionFile: childFile,
             childSessionLeafId: child.getLeafId(),
         };
-        expect(loaded.persistence.save(record)).toBe(true);
-        await withE2EMetadataDatabase(paths, (catalogDatabase) => {
-            catalogDatabase.prepare("UPDATE agent_runs SET status = 'removed' WHERE run_instance_id = ?").run("scout-1-instance");
+        expect(await loaded.persistence.save(record)).toBe(true);
+        await withE2EMetadataDatabase(paths, async (catalogDatabase) => {
+            await catalogDatabase.run("UPDATE agent_runs SET status = 'removed' WHERE run_instance_id = ?", "scout-1-instance");
         });
         const records = (await loadE2EPersistence(paths, parent))?.records ?? [];
 

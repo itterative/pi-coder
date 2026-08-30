@@ -59,7 +59,7 @@ export async function withE2EMetadataDatabase<T>(
     try {
         return await callback(database);
     } finally {
-        database.close();
+        await database.close();
     }
 }
 
@@ -201,8 +201,8 @@ export async function insertE2EAgentRun(
         usageSnapshot: zeroUsage(),
         ...overrides,
     };
-    await withE2EMetadataDatabase(paths, (database) => {
-        upsertAgentRunCatalogRecordInDatabase(database, record);
+    await withE2EMetadataDatabase(paths, async (database) => {
+        await upsertAgentRunCatalogRecordInDatabase(database, record);
     });
 }
 

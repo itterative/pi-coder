@@ -123,10 +123,10 @@ function responsePreview(record: PersistedAgentRun): string | undefined {
 
 
 export interface AgentRunStateWriter {
-    save(record: PersistedAgentRun): { ok: true } | { ok: false; error: unknown };
-    acquireContinuationLease?(runInstanceId: string, onLost?: () => void): AgentContinuationLease;
+    save(record: PersistedAgentRun): Promise<{ ok: true } | { ok: false; error: unknown }>;
+    acquireContinuationLease?(runInstanceId: string, onLost?: () => void): Promise<AgentContinuationLease>;
     flush(): Promise<void>;
-    close(): void;
+    close(): Promise<void>;
 }
 
 const CONTINUATION_LEASE_MS = 30_000;
@@ -154,46 +154,36 @@ type ContinuationHead = {
     createdSequence: number;
 };
 
-export function initializeAgentRunContinuationHeads(
+export async function initializeAgentRunContinuationHeads(
     database: AgentMetadataDatabase,
     heads: ReadonlyMap<string, ContinuationHead>,
-): void {
+): Promise<void> {
     if (heads.size === 0) return;
-    database.exec("BEGIN IMMEDIATE");
-    try {
-        const insert = database.prepare(`
-            INSERT INTO agent_run_continuation_heads (
-                run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence, pending
-            ) VALUES (?, ?, ?, ?, ?, ?, 0)
-            ON CONFLICT (run_instance_id) DO UPDATE SET
-                owner_session_id = excluded.owner_session_id,
-                run_id = excluded.run_id,
-                snapshot_id = excluded.snapshot_id,
-                updated_at = excluded.updated_at,
-                created_sequence = excluded.created_sequence,
-                pending = 0
-            WHERE excluded.created_sequence > agent_run_continuation_heads.created_sequence
-               OR (
-                   agent_run_continuation_heads.pending = 1
-                   AND NOT EXISTS (
-                       SELECT 1 FROM agent_run_continuation_leases
-                       WHERE run_instance_id = agent_run_continuation_heads.run_instance_id
-                         AND lease_until > ?
-                   )
-               )
-        `);
+    await database.transaction(async (transaction) => {
         for (const [runInstanceId, head] of heads) {
-            insert.run(runInstanceId, head.ownerSessionId, head.runId, head.snapshotId, head.updatedAt, head.createdSequence, Date.now());
+            await transaction.run(`
+                INSERT INTO agent_run_continuation_heads (
+                    run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence, pending
+                ) VALUES (?, ?, ?, ?, ?, ?, 0)
+                ON CONFLICT (run_instance_id) DO UPDATE SET
+                    owner_session_id = excluded.owner_session_id,
+                    run_id = excluded.run_id,
+                    snapshot_id = excluded.snapshot_id,
+                    updated_at = excluded.updated_at,
+                    created_sequence = excluded.created_sequence,
+                    pending = 0
+                WHERE excluded.created_sequence > agent_run_continuation_heads.created_sequence
+                   OR (
+                       agent_run_continuation_heads.pending = 1
+                       AND NOT EXISTS (
+                           SELECT 1 FROM agent_run_continuation_leases
+                           WHERE run_instance_id = agent_run_continuation_heads.run_instance_id
+                             AND lease_until > ?
+                       )
+                   )
+            `, runInstanceId, head.ownerSessionId, head.runId, head.snapshotId, head.updatedAt, head.createdSequence, Date.now());
         }
-        database.exec("COMMIT");
-    } catch (error) {
-        try {
-            database.exec("ROLLBACK");
-        } catch {
-            // Preserve the initialization error.
-        }
-        throw error;
-    }
+    }, "IMMEDIATE");
 }
 
 function catalogRecord(record: PersistedAgentRun, parentCwd: string): AgentRunCatalogRecord {
@@ -240,6 +230,8 @@ export function createAgentRunStateWriter(
     }: AgentRunStateWriterOptions = {},
 ): AgentRunStateWriter {
     let closed = false;
+    let acceptingAcquisitions = true;
+    const pendingAcquisitions = new Set<Promise<AgentContinuationLease>>();
     const processToken = randomUUID();
     const expectedHeads = new Map<string, string | undefined>(initialHeads);
     const knownHeads = new Set(initialHeads.keys());
@@ -255,65 +247,64 @@ export function createAgentRunStateWriter(
         active.onLost?.();
     };
 
-    const renewLease = (runInstanceId: string, token: string): void => {
+    const renewLease = async (runInstanceId: string, token: string): Promise<void> => {
         let lost = false;
         try {
-            database.exec("BEGIN IMMEDIATE");
-            const result = database.prepare(`
-                UPDATE agent_run_continuation_leases
-                SET lease_until = ?
-                WHERE run_instance_id = ? AND process_token = ?
-            `).run(Date.now() + CONTINUATION_LEASE_MS, runInstanceId, token);
-            database.exec("COMMIT");
+            const result = await database.transaction(
+                (transaction) => transaction.run(`
+                    UPDATE agent_run_continuation_leases
+                    SET lease_until = ?
+                    WHERE run_instance_id = ? AND process_token = ?
+                `, Date.now() + CONTINUATION_LEASE_MS, runInstanceId, token),
+                "IMMEDIATE",
+            );
             lost = result.changes === 0;
         } catch {
-            try {
-                database.exec("ROLLBACK");
-            } catch {
-                // Treat an unavailable database as a lost lease.
-            }
             lost = true;
         }
         if (!lost) return;
         markLeaseLost(runInstanceId, token);
     };
 
-    const releaseLease = (runInstanceId: string, token: string): void => {
+    const releaseLease = async (runInstanceId: string, token: string): Promise<void> => {
         const active = activeLeases.get(runInstanceId);
         if (!active || active.token !== token) return;
         clearInterval(active.timer);
         try {
-            database.exec("BEGIN IMMEDIATE");
-            database.prepare(`
-                DELETE FROM agent_run_continuation_leases
-                WHERE run_instance_id = ? AND process_token = ?
-            `).run(runInstanceId, token);
-            database.exec("COMMIT");
+            await database.transaction(
+                (transaction) => transaction.run(`
+                    DELETE FROM agent_run_continuation_leases
+                    WHERE run_instance_id = ? AND process_token = ?
+                `, runInstanceId, token).then(() => undefined),
+                "IMMEDIATE",
+            );
         } catch {
-            try {
-                database.exec("ROLLBACK");
-            } catch {
-                // Lease expiry remains the recovery path after a release failure.
-            }
+            // Lease expiry remains the recovery path after a release failure.
         } finally {
             activeLeases.delete(runInstanceId);
         }
     };
 
-    const acquireContinuationLease = (runInstanceId: string, onLost?: () => void): AgentContinuationLease => {
-        if (closed) throw new Error("Agent run state storage is closed.");
+    const acquireContinuationLease = async (
+        runInstanceId: string,
+        onLost?: () => void,
+        allowDuringClose = false,
+    ): Promise<AgentContinuationLease> => {
+        if (closed || (!acceptingAcquisitions && !allowDuringClose)) {
+            throw new Error("Agent run state storage is closed.");
+        }
         if (lostLeases.has(runInstanceId)) {
             throw new Error("Delegated run continuation lease was lost; reload the parent session before retrying.");
         }
+        const acquisition = (async () => {
         const now = Date.now();
         const leaseToken = `${processToken}:${randomUUID()}`;
-        database.exec("BEGIN IMMEDIATE");
-        try {
-            const current = database.prepare(`
+        await database.transaction(async (transaction) => {
+            const current = await transaction.get(`
                 SELECT snapshot_id, owner_session_id
                 FROM agent_run_continuation_heads
                 WHERE run_instance_id = ?
-            `).get(runInstanceId) as { snapshot_id?: string; owner_session_id?: string } | undefined;
+            `, runInstanceId) as { snapshot_id?: string; owner_session_id?: string } | undefined;
             if (!knownHeads.has(runInstanceId)) {
                 expectedHeads.set(runInstanceId, typeof current?.snapshot_id === "string" ? current.snapshot_id : undefined);
                 knownHeads.add(runInstanceId);
@@ -323,11 +314,11 @@ export function createAgentRunStateWriter(
             if (actual !== expected) {
                 throw new Error("Delegated run continuation is stale; another process has already continued it.");
             }
-            const existingLease = database.prepare(`
+            const existingLease = await transaction.get(`
                 SELECT process_token, owner_pid, lease_until
                 FROM agent_run_continuation_leases
                 WHERE run_instance_id = ?
-            `).get(runInstanceId) as {
+            `, runInstanceId) as {
                 process_token?: string;
                 owner_pid?: number;
                 lease_until?: number;
@@ -341,7 +332,7 @@ export function createAgentRunStateWriter(
             if (activeLease && !ownerIsDead) {
                 throw new AgentContinuationLeaseBusyError(existingLease.lease_until!);
             }
-            database.prepare(`
+            await transaction.run(`
                 INSERT INTO agent_run_continuation_leases (
                     run_instance_id, owner_session_id, process_token, owner_pid, lease_until
                 ) VALUES (?, ?, ?, ?, ?)
@@ -350,30 +341,48 @@ export function createAgentRunStateWriter(
                     process_token = excluded.process_token,
                     owner_pid = excluded.owner_pid,
                     lease_until = excluded.lease_until
-            `).run(
-                runInstanceId,
+            `, runInstanceId,
                 typeof current?.owner_session_id === "string" ? current.owner_session_id : "",
                 leaseToken,
                 process.pid,
-                now + CONTINUATION_LEASE_MS,
-            );
-            database.exec("COMMIT");
-        } catch (error) {
-            try {
-                database.exec("ROLLBACK");
-            } catch {
-                // Preserve the stale/ownership error.
-            }
-            throw error;
-        }
+                now + CONTINUATION_LEASE_MS,);
+        }, "IMMEDIATE");
         const timer = setInterval(() => renewLease(runInstanceId, leaseToken), CONTINUATION_LEASE_MS / 3);
         timer.unref?.();
         activeLeases.set(runInstanceId, { token: leaseToken, timer, onLost });
         return { release: () => releaseLease(runInstanceId, leaseToken) };
+        })();
+        pendingAcquisitions.add(acquisition);
+        try {
+            return await acquisition;
+        } finally {
+            pendingAcquisitions.delete(acquisition);
+        }
+    };
+
+    let acceptingSaves = true;
+    let closePromise: Promise<void> | undefined;
+    let saveTail = Promise.resolve();
+    const serializeSave = async <T>(operation: () => Promise<T>): Promise<T> => {
+        const previous = saveTail;
+        let release!: () => void;
+        saveTail = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        await previous;
+        try {
+            return await operation();
+        } finally {
+            release();
+        }
     };
 
     return {
-        save(record) {
+        async save(record) {
+            if (!acceptingSaves) {
+                return { ok: false, error: new Error("Agent run state storage is closed.") };
+            }
+            return serializeSave(async () => {
             if (closed) {
                 return { ok: false, error: new Error("Agent run state storage is closed.") };
             }
@@ -384,91 +393,73 @@ export function createAgentRunStateWriter(
             let automaticLease: AgentContinuationLease | undefined;
             if (!activeLeases.has(runInstanceId)) {
                 try {
-                    automaticLease = acquireContinuationLease(runInstanceId);
+                    automaticLease = await acquireContinuationLease(runInstanceId, undefined, true);
                 } catch (error) {
                     return { ok: false, error };
                 }
             }
-            const finishSave = <T extends { ok: boolean }>(result: T): T => {
-                automaticLease?.release();
+            const finishSave = async <T extends { ok: boolean }>(result: T): Promise<T> => {
+                await automaticLease?.release();
                 return result;
             };
-            let snapshot: ReturnType<typeof insertAgentRunSnapshotInDatabase>;
+            let snapshot: Awaited<ReturnType<typeof insertAgentRunSnapshotInDatabase>>;
             try {
-                database.exec("BEGIN IMMEDIATE");
-                const current = database.prepare(`
-                    SELECT snapshot_id
-                    FROM agent_run_continuation_heads
-                    WHERE run_instance_id = ?
-                `).get(runInstanceId) as { snapshot_id?: string } | undefined;
-                if (!knownHeads.has(runInstanceId)) {
-                    expectedHeads.set(runInstanceId, typeof current?.snapshot_id === "string" ? current.snapshot_id : undefined);
-                    knownHeads.add(runInstanceId);
-                }
-                const expected = expectedHeads.get(runInstanceId);
-                const actual = typeof current?.snapshot_id === "string" ? current.snapshot_id : undefined;
-                if (actual !== expected) {
-                    database.exec("ROLLBACK");
-                    return finishSave({
-                        ok: false,
-                        error: new Error("Delegated run continuation is stale; another process has already continued it."),
-                    });
-                }
-                const lease = database.prepare(`
-                    SELECT process_token, lease_until
-                    FROM agent_run_continuation_leases
-                    WHERE run_instance_id = ?
-                `).get(runInstanceId) as { process_token?: string; lease_until?: number } | undefined;
-                const activeLease = activeLeases.get(runInstanceId);
-                if (typeof lease?.lease_until === "number" && lease.lease_until > Date.now()) {
-                    if (!activeLease || lease.process_token !== activeLease.token) {
-                        database.exec("ROLLBACK");
-                        return finishSave({
-                            ok: false,
-                            error: new Error("Delegated run continuation is already owned by another process."),
-                        });
+                snapshot = await database.transaction(async (transaction) => {
+                    const current = await transaction.get(`
+                        SELECT snapshot_id
+                        FROM agent_run_continuation_heads
+                        WHERE run_instance_id = ?
+                    `, runInstanceId) as { snapshot_id?: string } | undefined;
+                    if (!knownHeads.has(runInstanceId)) {
+                        expectedHeads.set(runInstanceId, typeof current?.snapshot_id === "string" ? current.snapshot_id : undefined);
+                        knownHeads.add(runInstanceId);
                     }
-                } else if (activeLease) {
-                    database.exec("ROLLBACK");
-                    markLeaseLost(runInstanceId, activeLease.token);
-                    return finishSave({
-                        ok: false,
-                        error: new Error("Delegated run continuation lease expired or was lost."),
-                    });
-                } else if (typeof lease?.process_token === "string") {
-                    database.prepare(`
-                        DELETE FROM agent_run_continuation_leases
-                        WHERE run_instance_id = ? AND process_token = ?
-                    `).run(runInstanceId, lease.process_token);
-                }
-                snapshot = insertAgentRunSnapshotInDatabase(database, record);
-                database.prepare(`
-                    INSERT INTO agent_run_continuation_heads (
-                        run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence, pending
-                    ) VALUES (?, ?, ?, ?, ?, ?, 1)
-                    ON CONFLICT (run_instance_id) DO UPDATE SET
-                        owner_session_id = excluded.owner_session_id,
-                        run_id = excluded.run_id,
-                        snapshot_id = excluded.snapshot_id,
-                        updated_at = excluded.updated_at,
-                        created_sequence = excluded.created_sequence,
-                        pending = 1
-                `).run(
-                    runInstanceId,
-                    record.ownerSessionId,
-                    record.runId,
-                    snapshot.snapshotId,
-                    record.updatedAt,
-                    snapshot.createdSequence,
-                );
-                database.exec("COMMIT");
+                    const expected = expectedHeads.get(runInstanceId);
+                    const actual = typeof current?.snapshot_id === "string" ? current.snapshot_id : undefined;
+                    if (actual !== expected) {
+                        throw new Error("Delegated run continuation is stale; another process has already continued it.");
+                    }
+                    const lease = await transaction.get(`
+                        SELECT process_token, lease_until
+                        FROM agent_run_continuation_leases
+                        WHERE run_instance_id = ?
+                    `, runInstanceId) as { process_token?: string; lease_until?: number } | undefined;
+                    const activeLease = activeLeases.get(runInstanceId);
+                    if (typeof lease?.lease_until === "number" && lease.lease_until > Date.now()) {
+                        if (!activeLease || lease.process_token !== activeLease.token) {
+                            throw new Error("Delegated run continuation is already owned by another process.");
+                        }
+                    } else if (activeLease) {
+                        markLeaseLost(runInstanceId, activeLease.token);
+                        throw new Error("Delegated run continuation lease expired or was lost.");
+                    } else if (typeof lease?.process_token === "string") {
+                        await transaction.run(`
+                            DELETE FROM agent_run_continuation_leases
+                            WHERE run_instance_id = ? AND process_token = ?
+                        `, runInstanceId, lease.process_token);
+                    }
+                    const nextSnapshot = await insertAgentRunSnapshotInDatabase(transaction, record);
+                    await transaction.run(`
+                        INSERT INTO agent_run_continuation_heads (
+                            run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence, pending
+                        ) VALUES (?, ?, ?, ?, ?, ?, 1)
+                        ON CONFLICT (run_instance_id) DO UPDATE SET
+                            owner_session_id = excluded.owner_session_id,
+                            run_id = excluded.run_id,
+                            snapshot_id = excluded.snapshot_id,
+                            updated_at = excluded.updated_at,
+                            created_sequence = excluded.created_sequence,
+                            pending = 1
+                    `, runInstanceId,
+                        record.ownerSessionId,
+                        record.runId,
+                        nextSnapshot.snapshotId,
+                        record.updatedAt,
+                        nextSnapshot.createdSequence,);
+                    return nextSnapshot;
+                }, "IMMEDIATE");
             } catch (error) {
-                try {
-                    database.exec("ROLLBACK");
-                } catch {
-                    // Preserve the original write failure.
-                }
-                return finishSave({ ok: false, error });
+                return await finishSave({ ok: false, error });
             }
 
             // Hold the SQLite write lock while renewing ownership, appending the
@@ -476,104 +467,121 @@ export function createAgentRunStateWriter(
             // acquire the expired lease between those operations.
             let markerAppended = false;
             try {
-                database.exec("BEGIN IMMEDIATE");
-                const activeLease = activeLeases.get(runInstanceId);
-                if (!activeLease) {
-                    database.exec("ROLLBACK");
-                    return finishSave({
-                        ok: false,
-                        error: new Error("Delegated run continuation lease was lost."),
+                await database.transaction(async (transaction) => {
+                    const activeLease = activeLeases.get(runInstanceId);
+                    if (!activeLease) {
+                        throw new Error("Delegated run continuation lease was lost.");
+                    }
+                    const renewed = await transaction.run(`
+                        UPDATE agent_run_continuation_leases
+                        SET lease_until = ?
+                        WHERE run_instance_id = ? AND process_token = ?
+                    `, Date.now() + CONTINUATION_LEASE_MS, runInstanceId, activeLease.token);
+                    if (renewed.changes === 0) {
+                        markLeaseLost(runInstanceId, activeLease.token);
+                        throw new Error("Delegated run continuation lease expired or was lost.");
+                    }
+                    const current = await transaction.get(`
+                        SELECT snapshot_id, pending
+                        FROM agent_run_continuation_heads
+                        WHERE run_instance_id = ?
+                    `, runInstanceId) as { snapshot_id?: string; pending?: number } | undefined;
+                    if (current?.snapshot_id !== snapshot.snapshotId || current.pending !== 1) {
+                        throw new Error("Delegated run continuation reservation was lost before its marker was committed.");
+                    }
+                    const markerEntryId = appendMarker({
+                        version: 2,
+                        snapshotId: snapshot.snapshotId,
+                        runInstanceId,
+                        runId: record.runId,
                     });
-                }
-                const renewed = database.prepare(`
-                    UPDATE agent_run_continuation_leases
-                    SET lease_until = ?
-                    WHERE run_instance_id = ? AND process_token = ?
-                `).run(Date.now() + CONTINUATION_LEASE_MS, runInstanceId, activeLease.token);
-                if (renewed.changes === 0) {
-                    database.exec("ROLLBACK");
-                    markLeaseLost(runInstanceId, activeLease.token);
-                    return finishSave({
-                        ok: false,
-                        error: new Error("Delegated run continuation lease expired or was lost."),
-                    });
-                }
-                const current = database.prepare(`
-                    SELECT snapshot_id, pending
-                    FROM agent_run_continuation_heads
-                    WHERE run_instance_id = ?
-                `).get(runInstanceId) as { snapshot_id?: string; pending?: number } | undefined;
-                if (current?.snapshot_id !== snapshot.snapshotId || current.pending !== 1) {
-                    database.exec("ROLLBACK");
-                    return finishSave({
-                        ok: false,
-                        error: new Error("Delegated run continuation reservation was lost before its marker was committed."),
-                    });
-                }
-                const markerEntryId = appendMarker({
-                    version: 2,
-                    snapshotId: snapshot.snapshotId,
-                    runInstanceId,
-                    runId: record.runId,
-                });
-                if (requireMarker && typeof markerEntryId !== "string") {
-                    throw new Error("Parent session marker could not be appended.");
-                }
-                markerAppended = true;
-                database.prepare(`
-                    INSERT INTO agent_run_continuation_heads (
-                        run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence, pending
-                    ) VALUES (?, ?, ?, ?, ?, ?, 0)
-                    ON CONFLICT (run_instance_id) DO UPDATE SET
-                        owner_session_id = excluded.owner_session_id,
-                        run_id = excluded.run_id,
-                        snapshot_id = excluded.snapshot_id,
-                        updated_at = excluded.updated_at,
-                        created_sequence = excluded.created_sequence,
-                        pending = 0
-                `).run(
-                    runInstanceId,
-                    record.ownerSessionId,
-                    record.runId,
-                    snapshot.snapshotId,
-                    record.updatedAt,
-                    snapshot.createdSequence,
-                );
-                try {
-                    upsertAgentRunCatalogRecordInDatabase(database, {
-                        ...catalogRecord(record, parentCwd),
-                        latestSnapshotId: snapshot.snapshotId,
-                    });
-                } catch {
-                    // Catalog is a lossy projection. The marker/snapshot remains authoritative.
-                }
-                database.exec("COMMIT");
+                    if (requireMarker && typeof markerEntryId !== "string") {
+                        throw new Error("Parent session marker could not be appended.");
+                    }
+                    markerAppended = true;
+                    await transaction.run(`
+                        INSERT INTO agent_run_continuation_heads (
+                            run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence, pending
+                        ) VALUES (?, ?, ?, ?, ?, ?, 0)
+                        ON CONFLICT (run_instance_id) DO UPDATE SET
+                            owner_session_id = excluded.owner_session_id,
+                            run_id = excluded.run_id,
+                            snapshot_id = excluded.snapshot_id,
+                            updated_at = excluded.updated_at,
+                            created_sequence = excluded.created_sequence,
+                            pending = 0
+                    `, runInstanceId,
+                        record.ownerSessionId,
+                        record.runId,
+                        snapshot.snapshotId,
+                        record.updatedAt,
+                        snapshot.createdSequence,);
+                    try {
+                        await upsertAgentRunCatalogRecordInDatabase(transaction, {
+                            ...catalogRecord(record, parentCwd),
+                            latestSnapshotId: snapshot.snapshotId,
+                        });
+                    } catch {
+                        // Catalog is a lossy projection. The marker/snapshot remains authoritative.
+                    }
+                }, "IMMEDIATE");
                 expectedHeads.set(runInstanceId, snapshot.snapshotId);
-                return finishSave({ ok: true });
+                return await finishSave({ ok: true });
             } catch (error) {
-                try {
-                    database.exec("ROLLBACK");
-                } catch {
-                    // Preserve the marker as the authoritative recovery record.
-                }
                 if (markerAppended) {
                     expectedHeads.set(runInstanceId, snapshot.snapshotId);
-                    return finishSave({ ok: true });
+                    return await finishSave({ ok: true });
                 }
-                return finishSave({ ok: false, error });
+                return await finishSave({ ok: false, error });
             }
+            });
         },
-        acquireContinuationLease,
-        async flush() {},
+        async acquireContinuationLease(runInstanceId, onLost) {
+            return acquireContinuationLease(runInstanceId, onLost);
+        },
+        async flush() {
+            let observedTail: Promise<void>;
+            do {
+                observedTail = saveTail;
+                await observedTail;
+            } while (observedTail !== saveTail);
+        },
         close() {
-            if (closed) return;
-            for (const [runInstanceId, active] of activeLeases) {
-                releaseLease(runInstanceId, active.token);
-            }
-            closed = true;
-            database.close();
+            if (closePromise) return closePromise;
+            acceptingSaves = false;
+            acceptingAcquisitions = false;
+            closePromise = (async () => {
+                await saveTail;
+                while (pendingAcquisitions.size > 0) {
+                    await Promise.allSettled([...pendingAcquisitions]);
+                }
+                await Promise.all(
+                    [...activeLeases].map(([runInstanceId, active]) => (
+                        releaseLease(runInstanceId, active.token)
+                    )),
+                );
+                closed = true;
+                await database.close();
+            })();
+            return closePromise;
         },
     };
+}
+
+async function withDatabaseFailureCleanup<T>(
+    database: AgentMetadataDatabase,
+    operation: () => Promise<T>,
+): Promise<T> {
+    try {
+        return await operation();
+    } catch (error) {
+        try {
+            await database.close();
+        } catch {
+            // Preserve the original load failure; the connection is best-effort cleanup.
+        }
+        throw error;
+    }
 }
 
 function safeExistingChildFile(childSessionDir: string, candidate: string): string | undefined {
@@ -730,6 +738,12 @@ export interface LoadedAgentRunPersistence {
     diagnostics?: string[];
 }
 
+/**
+ * Loads durable run state and retains the metadata connection for the lifetime
+ * of the persistence writer. Keeping one WAL connection active avoids closing
+ * and recreating the -wal/-shm sidecars between ordinary persistence calls;
+ * the writer closes it during session shutdown or tree switching.
+ */
 export async function loadAgentRunPersistence(
     ctx: ExtensionContext,
     agentSessionsDir = PI_CODER_AGENT_SESSIONS_DIR,
@@ -749,7 +763,10 @@ export async function loadAgentRunPersistence(
     const workspacesDir = path.join(path.dirname(path.resolve(agentSessionsDir)), "workspaces");
     const database = await openAgentMetadataDatabase(workspacesDir);
     const snapshotIds = [...new Set(allMarkers.map((entry) => entry.marker.snapshotId))];
-    const snapshots = listAgentRunSnapshotsInDatabase(database, snapshotIds);
+    const snapshots = await withDatabaseFailureCleanup(
+        database,
+        () => listAgentRunSnapshotsInDatabase(database, snapshotIds),
+    );
     const snapshotsById = new Map(snapshots.map((snapshot) => [snapshot.snapshotId, snapshot]));
     const diagnostics: string[] = [];
     const validSnapshot = (
@@ -779,7 +796,10 @@ export async function loadAgentRunPersistence(
             createdSequence: snapshot.createdSequence,
         });
     }
-    initializeAgentRunContinuationHeads(database, sessionHeads);
+    await withDatabaseFailureCleanup(
+        database,
+        () => initializeAgentRunContinuationHeads(database, sessionHeads),
+    );
     const branchHeads = new Map<string, { snapshotId: string; order: number }>();
     for (const entry of activeMarkers) {
         const snapshot = snapshotsById.get(entry.marker.snapshotId);
@@ -797,8 +817,21 @@ export async function loadAgentRunPersistence(
     // sessions always expose getEntries(), so legacy rows never become restore
     // authority in production.
     if (!hasEntryIndex) {
-        const legacyIds = ["root", ...ctx.sessionManager.getBranch().map((entry) => entry.id)];
-        const legacy = listAgentRunStatesInDatabase(database, ownerSessionId, legacyIds);
+        let legacyIds: string[];
+        try {
+            legacyIds = ["root", ...ctx.sessionManager.getBranch().map((entry) => entry.id)];
+        } catch (error) {
+            try {
+                await database.close();
+            } catch {
+                // Preserve the load failure; the connection is best-effort cleanup.
+            }
+            throw error;
+        }
+        const legacy = await withDatabaseFailureCleanup(
+            database,
+            () => listAgentRunStatesInDatabase(database, ownerSessionId, legacyIds),
+        );
         for (const stored of legacy) {
             const parsed = parseRecord(stored.state, ownerSessionId, childSessionDir);
             if (parsed) latest.set(parsed.runId, parsed);
@@ -826,33 +859,43 @@ export async function loadAgentRunPersistence(
         latest.set(runInstanceId, parsed);
     }
 
-    const catalog = createAgentRunStateWriter(
-        ctx.cwd,
-        database,
-        (marker) => {
-            const sessionManager = ctx.sessionManager as unknown as {
-                appendCustomEntry?: (type: string, data: unknown) => string;
-            };
-            return sessionManager.appendCustomEntry?.(AGENT_RUN_SNAPSHOT_MARKER, marker);
-        },
-        {
-            initialHeads: new Map([...sessionHeads].map(([runInstanceId, head]) => [runInstanceId, head.snapshotId])),
-            requireMarker: hasEntryIndex,
-        },
-    );
+    let catalog: AgentRunStateWriter;
+    try {
+        catalog = createAgentRunStateWriter(
+            ctx.cwd,
+            database,
+            (marker) => {
+                const sessionManager = ctx.sessionManager as unknown as {
+                    appendCustomEntry?: (type: string, data: unknown) => string;
+                };
+                return sessionManager.appendCustomEntry?.(AGENT_RUN_SNAPSHOT_MARKER, marker);
+            },
+            {
+                initialHeads: new Map([...sessionHeads].map(([runInstanceId, head]) => [runInstanceId, head.snapshotId])),
+                requireMarker: hasEntryIndex,
+            },
+        );
+    } catch (error) {
+        try {
+            await database.close();
+        } catch {
+            // Preserve the load failure; the connection is best-effort cleanup.
+        }
+        throw error;
+    }
 
     let persistenceWarningShown = false;
     const persistence: AgentRunPersistence = {
         ownerSessionId,
         usesSnapshotMarkers: hasEntryIndex,
         childSessionDir,
-        save(record) {
+        async save(record) {
             const durableRecord = record.runInstanceId
                 ? record
                 : { ...record, runInstanceId: `legacy-${record.ownerSessionId}-${record.runId}` };
-            const result = catalog.save(durableRecord);
+            const result = await catalog.save(durableRecord);
             if (result.ok && !hasEntryIndex) {
-                upsertAgentRunStateInDatabase(
+                await upsertAgentRunStateInDatabase(
                     database,
                     durableRecord,
                     ctx.sessionManager.getLeafId() ?? "root",
@@ -868,7 +911,7 @@ export async function loadAgentRunPersistence(
         },
         flush: () => catalog.flush(),
         close: () => catalog.close(),
-        acquireContinuationLease: (runInstanceId, onLost) => {
+        acquireContinuationLease: async (runInstanceId, onLost) => {
             if (!catalog.acquireContinuationLease) {
                 return { release: () => {} };
             }

@@ -69,12 +69,12 @@ function rowToAgentRunCatalogRecord(row: CatalogRow): AgentRunCatalogRecord | un
     };
 }
 
-export function upsertAgentRunCatalogRecordInDatabase(
+export async function upsertAgentRunCatalogRecordInDatabase(
     database: AgentMetadataDatabase,
     record: AgentRunCatalogRecord,
-): void {
+): Promise<void> {
     const runInstanceId = record.runInstanceId ?? `${record.ownerSessionId}:${record.runId}`;
-    database.prepare(`
+    await database.run(`
             INSERT INTO agent_runs (
                 owner_session_id, owner_pid, run_id, run_instance_id, parent_cwd, execution_cwd, title, agent,
                 agent_source, task, status, terminal_status, background, mutating, workspace_id, workspace_result_id,
@@ -106,8 +106,7 @@ export function upsertAgentRunCatalogRecordInDatabase(
                 mutation_report_json = excluded.mutation_report_json,
                 definition_snapshot_json = excluded.definition_snapshot_json
             WHERE excluded.updated_at >= agent_runs.updated_at
-        `).run(
-        record.ownerSessionId,
+        `, record.ownerSessionId,
         record.ownerPid ?? null,
         record.runId,
         runInstanceId,
@@ -131,8 +130,7 @@ export function upsertAgentRunCatalogRecordInDatabase(
         JSON.stringify(record.usageSnapshot),
         record.responsePreview ?? null,
         record.mutationReport ? JSON.stringify(record.mutationReport) : null,
-        record.definitionSnapshot ? JSON.stringify(record.definitionSnapshot) : null,
-    );
+        record.definitionSnapshot ? JSON.stringify(record.definitionSnapshot) : null,);
 }
 
 export async function upsertAgentRunCatalogRecord(
@@ -141,9 +139,9 @@ export async function upsertAgentRunCatalogRecord(
 ): Promise<void> {
     const database = await openAgentMetadataDatabase(workspacesDir);
     try {
-        upsertAgentRunCatalogRecordInDatabase(database, record);
+        await upsertAgentRunCatalogRecordInDatabase(database, record);
     } finally {
-        database.close();
+        await database.close();
     }
 }
 
@@ -153,7 +151,7 @@ export async function listAgentRunCatalog(
 ): Promise<AgentRunCatalogRecord[]> {
     const database = await openAgentMetadataDatabase(workspacesDir);
     try {
-        const rows = database.prepare(`
+        const rows = await database.all(`
             SELECT owner_session_id, owner_pid, run_id, run_instance_id, parent_cwd, execution_cwd, title, agent,
                    agent_source, task, status, terminal_status, background, mutating, workspace_id, workspace_result_id,
                    child_session_file, child_session_leaf_id, latest_snapshot_id, started_at, updated_at, usage_json,
@@ -161,11 +159,11 @@ export async function listAgentRunCatalog(
             FROM agent_runs
             WHERE parent_cwd = ?
             ORDER BY updated_at DESC, run_id ASC
-        `).all(path.resolve(cwd)) as CatalogRow[];
+        `, path.resolve(cwd)) as CatalogRow[];
         return rows
             .map(rowToAgentRunCatalogRecord)
             .filter((record): record is AgentRunCatalogRecord => record !== undefined);
     } finally {
-        database.close();
+        await database.close();
     }
 }

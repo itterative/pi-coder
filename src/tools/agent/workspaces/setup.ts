@@ -332,7 +332,7 @@ async function findRecyclableAgentWorkspace(
         try {
             const head = await git(workspace.repositoryRoot, ["rev-parse", checkpoint.durableRef]);
             if (head !== checkpoint.headRevision) continue;
-            const parked = manager.parkWorkspaceRunForReuse(workspace.id, workspace.leaseRunId!);
+            const parked = await manager.parkWorkspaceRunForReuse(workspace.id, workspace.leaseRunId!);
             if (!parked && manager.getRunStatus(workspace.leaseRunId!) !== undefined) continue;
             return workspace;
         } catch {

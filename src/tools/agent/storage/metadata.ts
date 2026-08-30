@@ -2,16 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { PI_CODER_WORKSPACES_DIR } from "../../../common/constants";
-import { loadSqlite, migrateSqliteDatabase } from "../../../common/sqlite";
+import { migrateSqliteDatabase, SqliteDatabase } from "../../../common/sqlite";
 
 const DATABASE_NAME = "meta.sqlite";
 
-export type AgentMetadataDatabase = import("node:sqlite").DatabaseSync;
+export type AgentMetadataDatabase = SqliteDatabase;
 
 export const AGENT_METADATA_MIGRATIONS = [{
     version: 1,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             CREATE TABLE IF NOT EXISTS workspaces (
                 version INTEGER NOT NULL,
                 id TEXT PRIMARY KEY,
@@ -31,8 +31,8 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 2,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             ALTER TABLE workspaces ADD COLUMN lease_owner_session_id TEXT;
             ALTER TABLE workspaces ADD COLUMN lease_run_id TEXT;
             ALTER TABLE workspaces ADD COLUMN lease_kind TEXT;
@@ -43,8 +43,8 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 3,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             ALTER TABLE workspaces ADD COLUMN workspace_status TEXT NOT NULL DEFAULT 'available';
             CREATE INDEX IF NOT EXISTS workspaces_status
                 ON workspaces (workspace_status, setup_state, created_at);
@@ -52,8 +52,8 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 4,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             CREATE TABLE workspace_results (
                 id TEXT PRIMARY KEY,
                 workspace_id TEXT NOT NULL,
@@ -75,8 +75,8 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 5,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             CREATE TABLE IF NOT EXISTS agent_runs (
                 owner_session_id TEXT NOT NULL,
                 run_id TEXT NOT NULL,
@@ -106,8 +106,8 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 6,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             CREATE TABLE IF NOT EXISTS agent_run_states (
                 owner_session_id TEXT NOT NULL,
                 run_id TEXT NOT NULL,
@@ -122,8 +122,8 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 7,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             CREATE TABLE IF NOT EXISTS agent_run_instances (
                 run_instance_id TEXT PRIMARY KEY,
                 owner_session_id TEXT NOT NULL,
@@ -163,8 +163,8 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 8,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             ALTER TABLE agent_runs ADD COLUMN run_instance_id TEXT;
             ALTER TABLE agent_runs ADD COLUMN child_session_leaf_id TEXT;
             ALTER TABLE agent_runs ADD COLUMN latest_snapshot_id TEXT;
@@ -219,8 +219,8 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 9,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             ALTER TABLE workspaces ADD COLUMN lease_run_instance_id TEXT;
             ALTER TABLE workspace_results ADD COLUMN run_instance_id TEXT;
             CREATE INDEX IF NOT EXISTS workspaces_lease_instance
@@ -231,8 +231,8 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 10,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             CREATE TABLE IF NOT EXISTS agent_run_continuation_heads (
                 run_instance_id TEXT PRIMARY KEY,
                 owner_session_id TEXT NOT NULL,
@@ -256,30 +256,30 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 11,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             ALTER TABLE agent_run_continuation_leases ADD COLUMN owner_pid INTEGER;
         `);
     },
 }, {
     version: 12,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             ALTER TABLE agent_runs ADD COLUMN definition_snapshot_json TEXT;
         `);
     },
 }, {
     version: 13,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             ALTER TABLE agent_runs ADD COLUMN terminal_status TEXT DEFAULT 'removed'
                 CHECK (terminal_status IS NULL OR terminal_status IN ('removed', 'completed', 'failed', 'aborted', 'canceled'));
         `);
     },
 }, {
     version: 14,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             CREATE TABLE workspace_checkpoints (
                 checkpoint_id TEXT PRIMARY KEY,
                 workspace_id TEXT NOT NULL,
@@ -303,8 +303,8 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 15,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             ALTER TABLE workspace_results ADD COLUMN reservation_token TEXT;
             ALTER TABLE workspace_results ADD COLUMN reservation_owner_session_id TEXT;
             ALTER TABLE workspace_results ADD COLUMN reservation_run_id TEXT;
@@ -318,8 +318,8 @@ export const AGENT_METADATA_MIGRATIONS = [{
     },
 }, {
     version: 16,
-    apply(database: AgentMetadataDatabase): void {
-        database.exec(`
+    async apply(database: AgentMetadataDatabase): Promise<void> {
+        await database.exec(`
             ALTER TABLE workspace_results ADD COLUMN reservation_owner_pid INTEGER;
             ALTER TABLE agent_runs ADD COLUMN owner_pid INTEGER;
         `);
@@ -333,18 +333,19 @@ export function agentWorkspacesRoot(workspacesDir = PI_CODER_WORKSPACES_DIR): st
 export async function openAgentMetadataDatabase(
     workspacesDir = PI_CODER_WORKSPACES_DIR,
 ): Promise<AgentMetadataDatabase> {
-    // Load lazily so users who do not use delegated-agent persistence do not
-    // receive the node:sqlite experimental warning during normal startup.
-    const { DatabaseSync } = await loadSqlite();
     const directory = agentWorkspacesRoot(workspacesDir);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     fs.chmodSync(directory, 0o700);
     const databasePath = path.join(path.dirname(directory), DATABASE_NAME);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
     fs.chmodSync(path.dirname(databasePath), 0o700);
-    const database = new DatabaseSync(databasePath);
-    database.exec("PRAGMA busy_timeout = 5000");
-    migrateSqliteDatabase(database, AGENT_METADATA_MIGRATIONS);
-    fs.chmodSync(databasePath, 0o600);
-    return database;
+    const database = await SqliteDatabase.open(databasePath);
+    try {
+        await migrateSqliteDatabase(database, AGENT_METADATA_MIGRATIONS);
+        fs.chmodSync(databasePath, 0o600);
+        return database;
+    } catch (error) {
+        await database.close();
+        throw error;
+    }
 }

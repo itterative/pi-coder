@@ -94,22 +94,20 @@ describe("isolated workspace recovery e2e", () => {
         });
         const parentRevision = gitOutput(paths.repository, ["rev-parse", "HEAD"]);
         fs.writeFileSync(path.join(paths.repository, "worker-x.txt"), "x\n");
-        await withE2EMetadataDatabase(paths, (database) => {
-            database.prepare(`
+        await withE2EMetadataDatabase(paths, async (database) => {
+            await database.run(`
                 UPDATE workspace_results
                 SET status = 'applying', parent_revision = ?, reservation_token = ?,
                     reservation_owner_session_id = ?, reservation_run_id = ?,
                     reservation_run_instance_id = ?, reservation_owner_pid = ?
                 WHERE id = ?
-            `).run(
-                parentRevision,
+            `, parentRevision,
                 "apply-token",
                 "owner",
                 "worker-x",
                 "worker-x-instance",
                 123_456,
-                result.id,
-            );
+                result.id,);
         });
         vi.spyOn(process, "kill").mockImplementation(() => {
             const error = new Error("process not found") as NodeJS.ErrnoException;
@@ -130,8 +128,8 @@ describe("isolated workspace recovery e2e", () => {
 
         expect(recovered).toMatchObject({ id: result.id, status: "applied", parentRevision });
         expect(fs.readFileSync(path.join(paths.repository, "worker-x.txt"), "utf8")).toBe("x\n");
-        await withE2EMetadataDatabase(paths, (database) => {
-            expect(database.prepare("SELECT status, reservation_token FROM workspace_results WHERE id = ?").get(result.id))
+        await withE2EMetadataDatabase(paths, async (database) => {
+            expect(await database.get("SELECT status, reservation_token FROM workspace_results WHERE id = ?", result.id))
                 .toEqual({ status: "applied", reservation_token: null });
         });
     });
@@ -197,22 +195,20 @@ describe("isolated workspace recovery e2e", () => {
             workspacesDir: paths.state,
         });
         const parentRevision = gitOutput(paths.repository, ["rev-parse", "HEAD"]);
-        await withE2EMetadataDatabase(paths, (database) => {
-            database.prepare(`
+        await withE2EMetadataDatabase(paths, async (database) => {
+            await database.run(`
                 UPDATE workspace_results
                 SET status = 'applying', parent_revision = ?, reservation_token = ?,
                     reservation_owner_session_id = ?, reservation_run_id = ?,
                     reservation_run_instance_id = ?, reservation_owner_pid = ?
                 WHERE id = ?
-            `).run(
-                parentRevision,
+            `, parentRevision,
                 "foreign-apply-token",
                 "owner",
                 "worker-x",
                 "worker-x-instance",
                 123_456,
-                result.id,
-            );
+                result.id,);
         });
         vi.spyOn(process, "kill").mockReturnValue(true);
 
@@ -224,8 +220,8 @@ describe("isolated workspace recovery e2e", () => {
             workspacesDir: paths.state,
         })).rejects.toThrow("live process");
 
-        await withE2EMetadataDatabase(paths, (database) => {
-            expect(database.prepare("SELECT status, reservation_token FROM workspace_results WHERE id = ?").get(result.id))
+        await withE2EMetadataDatabase(paths, async (database) => {
+            expect(await database.get("SELECT status, reservation_token FROM workspace_results WHERE id = ?", result.id))
                 .toEqual({ status: "applying", reservation_token: "foreign-apply-token" });
         });
         expect(fs.existsSync(path.join(paths.repository, "worker-x.txt"))).toBe(false);
@@ -252,10 +248,11 @@ describe("isolated workspace recovery e2e", () => {
             resultId: result.id,
             workspacesDir: paths.state,
         })).rejects.toThrow("uncommitted changes");
-        await withE2EMetadataDatabase(paths, (failedDatabase) => {
-            const stored = failedDatabase.prepare(
+        await withE2EMetadataDatabase(paths, async (failedDatabase) => {
+            const stored = await failedDatabase.get<{ status: string; reservation_token?: string }>(
                 "SELECT status, reservation_token FROM workspace_results WHERE id = ?",
-            ).get(result.id) as { status: string; reservation_token?: string };
+                result.id,
+            );
             expect(stored).toEqual({ status: "prepared", reservation_token: null });
         });
 
@@ -279,9 +276,7 @@ describe("isolated workspace recovery e2e", () => {
             .rejects.toThrow("parent checkout has uncommitted changes");
     });
 
-    // TODO: Re-enable when metadata access is asynchronous or isolated from
-    // this event loop; DatabaseSync blocks concurrent Promise.all callers.
-    it.skip("enforces workspace capacity across concurrent allocations", async () => {
+    it("enforces workspace capacity across concurrent allocations", async () => {
         const paths = createE2EPaths();
         pathsInUse.push(paths);
         initializeRepository(paths.repository);
@@ -310,12 +305,12 @@ describe("isolated workspace recovery e2e", () => {
             workspacesDir: paths.state,
         });
 
-        await withE2EMetadataDatabase(paths, (database) => {
-            database.prepare(`
+        await withE2EMetadataDatabase(paths, async (database) => {
+            await database.run(`
                 UPDATE workspace_results
                 SET reservation_token = ?, reservation_owner_pid = ?, reservation_acquired_at = ?
                 WHERE id = ?
-            `).run("live-token", process.pid, Date.now(), result.id);
+            `, "live-token", process.pid, Date.now(), result.id);
         });
         await expect(retainAgentWorkspaceResult(workspace.id, {
             ownerSessionId: "owner",
@@ -326,12 +321,12 @@ describe("isolated workspace recovery e2e", () => {
         await expect(resetAgentWorkspaceForReuse(workspace.id, { workspacesDir: paths.state }))
             .rejects.toThrow("result disposition in progress");
 
-        await withE2EMetadataDatabase(paths, (staleDatabase) => {
-            staleDatabase.prepare(`
+        await withE2EMetadataDatabase(paths, async (staleDatabase) => {
+            await staleDatabase.run(`
                 UPDATE workspace_results
                 SET reservation_token = ?, reservation_owner_pid = ?, reservation_acquired_at = ?
                 WHERE id = ?
-            `).run("dead-token", 999_999_999, Date.now() - 10 * 60_000, result.id);
+            `, "dead-token", 999_999_999, Date.now() - 10 * 60_000, result.id);
         });
         await expect(retainAgentWorkspaceResult(workspace.id, {
             ownerSessionId: "owner",
@@ -340,10 +335,11 @@ describe("isolated workspace recovery e2e", () => {
             workspacesDir: paths.state,
         })).resolves.toBeUndefined();
 
-        await withE2EMetadataDatabase(paths, (finalDatabase) => {
-            const reservation = finalDatabase.prepare(
+        await withE2EMetadataDatabase(paths, async (finalDatabase) => {
+            const reservation = await finalDatabase.get<{ reservation_token?: string }>(
                 "SELECT reservation_token FROM workspace_results WHERE id = ?",
-            ).get(result.id) as { reservation_token?: string };
+                result.id,
+            );
             expect(reservation.reservation_token).toBeNull();
         });
     });

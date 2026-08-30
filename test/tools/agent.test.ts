@@ -196,7 +196,7 @@ describe("AgentRunManager", () => {
         const spawnedManager = managerWith(new FakeChild([{ output: "Spawned" }]));
         await spawnedManager.start("scout", "Investigate", context(), { background: true });
         await flushBackground();
-        expect(spawnedManager.collect("scout-1").content).toBe("Spawned");
+        expect((await spawnedManager.collect("scout-1")).content).toBe("Spawned");
 
         const waitingManager = managerWith(new FakeChild([{ question: { question: "Which path?" } }]));
         await waitingManager.start("scout", "Investigate", context());
@@ -251,7 +251,7 @@ describe("AgentRunManager", () => {
         await vi.waitFor(() => expect(manager.status("scout-1").details.status).toBe("completed"));
         expect(abortCount).toBe(0);
         expect(backgroundUpdates.some((details) => details.background === true)).toBe(true);
-        expect(manager.collect("scout-1").content).toBe("Finished in the background.");
+        expect((await manager.collect("scout-1")).content).toBe("Finished in the background.");
     });
 
     it("moves a resumed foreground run to the background", async () => {
@@ -329,7 +329,7 @@ describe("AgentRunManager", () => {
         await vi.waitFor(() => expect(manager.status("scout-1").details.status).toBe("completed"));
         expect(releaseCount).toBe(2);
         expect(backgroundUpdates).toContain("completed");
-        expect(manager.collect("scout-1").content).toBe("Finished after resuming.");
+        expect((await manager.collect("scout-1")).content).toBe("Finished after resuming.");
     });
 
     it("moves a foreground continuation to the background", async () => {
@@ -374,7 +374,7 @@ describe("AgentRunManager", () => {
 
         releasePrompt?.();
         await vi.waitFor(() => expect(manager.status("scout-1").details.status).toBe("completed"));
-        expect(manager.collect("scout-1").content).toBe("Finished after continuing.");
+        expect((await manager.collect("scout-1")).content).toBe("Finished after continuing.");
     });
 
     it("assigns a durable human-readable title to each run", async () => {
@@ -628,7 +628,7 @@ describe("AgentRunManager", () => {
             { ...context(), workspaceId: "workspace-1" },
         );
 
-        expect(manager.parkWorkspaceRunForReuse("workspace-1", "scout-1")).toBe(true);
+        expect(await manager.parkWorkspaceRunForReuse("workspace-1", "scout-1")).toBe(true);
         expect(manager.activeCount).toBe(0);
         expect(child.disposed).toBe(true);
         expect(() => manager.status("scout-1")).toThrow("Unknown or stale agent run ID");
@@ -689,7 +689,7 @@ describe("AgentRunManager", () => {
         const child = new FakeChild([{ waitForAbort: true }]);
         const manager = managerWith(child);
         const pending = manager.start("scout", "Investigate", { ...context(), workspaceId: "workspace-1" });
-        await Promise.resolve();
+        await vi.waitFor(() => expect(child.prompts).toHaveLength(1));
         const checkpoints: string[] = [];
 
         const canceled = await manager.cancel("scout-1", {
@@ -783,7 +783,7 @@ describe("AgentRunManager", () => {
         const controller = new AbortController();
 
         const pending = manager.start("scout", "Investigate", context(), { signal: controller.signal });
-        await Promise.resolve();
+        await vi.waitFor(() => expect(child.prompts).toHaveLength(1));
         controller.abort();
         const result = await pending;
 
@@ -819,7 +819,7 @@ describe("AgentRunManager", () => {
         const manager = managerWith(child);
 
         const pending = manager.start("scout", "Investigate", context(), {});
-        await Promise.resolve();
+        await vi.waitFor(() => expect(child.prompts).toHaveLength(1));
         await manager.shutdown();
         const result = await pending;
 
@@ -852,10 +852,14 @@ describe("AgentRunManager", () => {
         const factory = new Promise<ChildAgentHandle>((resolve) => {
             resolveFactory = resolve;
         });
-        const manager = new AgentRunManager(async () => factory);
+        let factoryStarted = false;
+        const manager = new AgentRunManager(async () => {
+            factoryStarted = true;
+            return factory;
+        });
 
         const start = manager.start("scout", "Investigate", context(), {});
-        await Promise.resolve();
+        await vi.waitFor(() => expect(factoryStarted).toBe(true));
         const shutdown = manager.shutdown();
         resolveFactory(child);
 
@@ -892,14 +896,14 @@ describe("AgentRunManager", () => {
         expect(manager.activeCount).toBe(0);
         expect(contexts).toEqual([true, true]);
 
-        const collected = manager.collect("scout-1");
+        const collected = await manager.collect("scout-1");
         expect(collected.content).toBe("First result");
         expect(collected.usage).toMatchObject({ input: 10, output: 2 });
-        expect(() => manager.collect("scout-1")).toThrow("Unknown or stale");
+        await expect(manager.collect("scout-1")).rejects.toThrow("Unknown or stale");
 
         const status = manager.status("scout-2");
         expect(status.usage).toMatchObject({ input: 20, output: 4 });
-        const secondCollected = manager.collect("scout-2");
+        const secondCollected = await manager.collect("scout-2");
         expect(secondCollected.content).toBe("Second result");
         expect(secondCollected.usage).toMatchObject({ input: 0, output: 0 });
         await manager.shutdown();
@@ -940,7 +944,7 @@ describe("AgentRunManager", () => {
         await flushBackground();
         expect(notifications[notifications.length - 1]).toBe("completed");
 
-        const collected = manager.collect("scout-1");
+        const collected = await manager.collect("scout-1");
         expect(collected.details.status).toBe("completed");
         expect(collected.content).toBe("Final answer");
         expect(collected.usage).toMatchObject({ input: 5, output: 2 });
@@ -972,7 +976,7 @@ describe("AgentRunManager", () => {
         await flushBackground();
 
         expect(manager.listRuns()[0]?.status).toBe("failed");
-        const collected = manager.collect("scout-1");
+        const collected = await manager.collect("scout-1");
         expect(collected.isError).toBe(true);
         expect(collected.content).toContain("provider unavailable");
         expect(manager.listRuns()).toEqual([]);
@@ -1020,7 +1024,7 @@ describe("AgentRunManager", () => {
         await flushBackground();
 
         expect(manager.listRuns().map((run) => run.runId)).toEqual(["scout-2", "scout-3"]);
-        expect(() => manager.collect("scout-1")).toThrow("Unknown or stale");
+        await expect(manager.collect("scout-1")).rejects.toThrow("Unknown or stale");
         expect(manager.activeCount).toBe(0);
     });
 
@@ -1129,7 +1133,7 @@ describe("AgentRunManager", () => {
 
         await manager.start(BUILTIN_SCOUT, "Inspect", context(), { background: true });
         await flushBackground();
-        manager.collect("scout-1");
+        await manager.collect("scout-1");
 
         expect(store.deletedChildSessions).toEqual([]);
     });
@@ -1255,7 +1259,7 @@ describe("AgentRunManager", () => {
         secondManager.setPersistence(store.persistence);
         const restoration = await secondManager.restore(latestRecords(store.records), [], context());
         expect(restoration).toEqual({ restored: 1, diagnostics: [] });
-        const collected = secondManager.collect("scout-1");
+        const collected = await secondManager.collect("scout-1");
         expect(collected.content).toBe("Persisted result");
         expect(collected.usage).toMatchObject({ input: 6, output: 2 });
     });

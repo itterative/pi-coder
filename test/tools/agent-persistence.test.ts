@@ -59,9 +59,9 @@ async function seedState(
 ): Promise<void> {
     const database = await openAgentMetadataDatabase(workspacesDir);
     try {
-        upsertAgentRunStateInDatabase(database, state, branchEntryId);
+        await upsertAgentRunStateInDatabase(database, state, branchEntryId);
     } finally {
-        database.close();
+        await database.close();
     }
 }
 
@@ -233,7 +233,7 @@ describe("durable agent run persistence", () => {
         expect(loaded?.records).toHaveLength(1);
         expect(loaded?.records[0]).toMatchObject({ status: "interrupted", childSessionFile: childFile });
         expect(fs.statSync(childDir).mode & 0o777).toBe(0o700);
-        loaded?.persistence.save(newer);
+        await loaded?.persistence.save(newer);
         await loaded?.persistence.flush?.();
         expect(await listAgentRunCatalog(process.cwd(), workspacesDir)).toMatchObject([{
             ownerSessionId: "parent-1",
@@ -244,7 +244,7 @@ describe("durable agent run persistence", () => {
         }]);
     });
 
-    it("saves synchronously, rejects closed storage, and preserves newer snapshots", async () => {
+    it("saves asynchronously, rejects closed storage, and preserves newer snapshots", async () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
@@ -253,8 +253,8 @@ describe("durable agent run persistence", () => {
         const older = record("parent-1");
         const newer = { ...older, status: "interrupted" as const, updatedAt: 3 };
 
-        expect(loaded?.persistence.save(newer)).toBe(true);
-        expect(loaded?.persistence.save(older)).toBe(true);
+        expect(await loaded?.persistence.save(newer)).toBe(true);
+        expect(await loaded?.persistence.save(older)).toBe(true);
         const restored = await loadAgentRunPersistence(
             context([{ id: "entry-1" }], "/parent.jsonl"),
             sessionsDir,
@@ -262,7 +262,7 @@ describe("durable agent run persistence", () => {
         expect(restored?.records[0]).toMatchObject({ status: "interrupted", updatedAt: 3 });
 
         loaded?.persistence.close?.();
-        expect(loaded?.persistence.save(newer)).toBe(false);
+        expect(await loaded?.persistence.save(newer)).toBe(false);
         expect(parentContext.ui.notify).toHaveBeenCalledOnce();
         restored?.persistence.close?.();
     });

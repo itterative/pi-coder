@@ -1,0 +1,18 @@
+{
+  "name": "sqlite3",
+  "version": "6.0.1",
+  "description": "Asynchronous, non-blocking SQLite3 bindings for Node.js with vendored prebuilt binaries",
+  "main": "./lib/sqlite3.js",
+  "types": "./lib/sqlite3.d.ts",
+  "engines": {
+    "node": ">=20.17.0"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "VENDORED.md",
+    "SHA256SUMS",
+    "lib/"
+  ],
+  "license": "BSD-3-Clause"
+}

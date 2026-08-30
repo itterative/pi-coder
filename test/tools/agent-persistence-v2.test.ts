@@ -76,16 +76,16 @@ describe("delegated-agent V2 persistence", () => {
         expect(loaded).toBeDefined();
 
         const ownerSessionId = parent.getSessionId();
-        expect(loaded!.persistence.save(record("instance-1", ownerSessionId))).toBe(true);
+        expect(await loaded!.persistence.save(record("instance-1", ownerSessionId))).toBe(true);
         const firstMarker = parent.getLeafId();
         expect(parent.getEntry(firstMarker!)?.customType).toBe(AGENT_RUN_SNAPSHOT_MARKER);
-        expect(loaded!.persistence.save({ ...record("instance-1", ownerSessionId), updatedAt: Date.now() + 1 })).toBe(true);
+        expect(await loaded!.persistence.save({ ...record("instance-1", ownerSessionId), updatedAt: Date.now() + 1 })).toBe(true);
         const secondMarker = parent.getLeafId();
         expect(secondMarker).not.toBe(firstMarker);
 
         const database = await openAgentMetadataDatabase(path.join(stateDir, "workspaces"));
-        const snapshotCount = (database.prepare("SELECT COUNT(*) AS count FROM agent_run_snapshots").get() as { count: number }).count;
-        database.close();
+        const snapshotCount = (await database.get("SELECT COUNT(*) AS count FROM agent_run_snapshots") as { count: number }).count;
+        await database.close();
         expect(snapshotCount).toBe(2);
 
         parent.branch(firstMarker!);
@@ -152,10 +152,10 @@ describe("delegated-agent V2 persistence", () => {
         const loaded = await loadAgentRunPersistence(context, sessionsDir);
         expect(loaded).toBeDefined();
 
-        expect(loaded!.persistence.save({ ...record("instance-a", parent.getSessionId()), updatedAt: 2 })).toBe(true);
+        expect(await loaded!.persistence.save({ ...record("instance-a", parent.getSessionId()), updatedAt: 2 })).toBe(true);
         const branchAMarker = parent.getLeafId();
         parent.branch(commonLeaf!);
-        expect(loaded!.persistence.save({ ...record("instance-b", parent.getSessionId()), updatedAt: 3 })).toBe(true);
+        expect(await loaded!.persistence.save({ ...record("instance-b", parent.getSessionId()), updatedAt: 3 })).toBe(true);
         const branchBMarker = parent.getLeafId();
         expect(branchBMarker).not.toBe(branchAMarker);
 
@@ -169,7 +169,7 @@ describe("delegated-agent V2 persistence", () => {
         expect(branchA?.records[0]).toMatchObject({ runId: "scout-1", runInstanceId: "instance-a", resumable: true });
 
         parent.branch(commonLeaf!);
-        expect(loaded!.persistence.save({ ...record("instance-a", parent.getSessionId()), updatedAt: 4 })).toBe(true);
+        expect(await loaded!.persistence.save({ ...record("instance-a", parent.getSessionId()), updatedAt: 4 })).toBe(true);
         const staleSiblingMarker = parent.getLeafId();
         expect(staleSiblingMarker).not.toBe(branchAMarker);
         parent.branch(branchAMarker!);
@@ -365,9 +365,9 @@ describe("delegated-agent V2 persistence", () => {
         expect(loaded).toBeDefined();
         const ownerSessionId = parent.getSessionId();
         const base = record("instance-1", ownerSessionId, childFile, firstLeaf);
-        expect(loaded!.persistence.save(base)).toBe(true);
+        expect(await loaded!.persistence.save(base)).toBe(true);
         const firstMarker = parent.getLeafId();
-        expect(loaded!.persistence.save({
+        expect(await loaded!.persistence.save({
             ...base,
             childSessionLeafId: secondLeaf,
             updatedAt: 2,
@@ -456,6 +456,77 @@ describe("delegated-agent V2 persistence", () => {
         expect(loaded?.transcript).toBe("Transcript unavailable for the selected child checkpoint.");
     });
 
+    it("flushes queued saves before close", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-flush-"));
+        tempDirs.push(stateDir);
+        const database = await openAgentMetadataDatabase(path.join(stateDir, "workspaces"));
+        const writer = createAgentRunStateWriter(
+            process.cwd(),
+            database,
+            () => "marker-flush",
+        );
+        let releaseBlocker!: () => void;
+        let blockerStarted = false;
+        const blocker = database.transaction(async () => {
+            blockerStarted = true;
+            await new Promise<void>((resolve) => {
+                releaseBlocker = resolve;
+            });
+        }, "IMMEDIATE");
+        await vi.waitFor(() => expect(blockerStarted).toBe(true));
+
+        const save = writer.save(record("instance-flush", "parent-1"));
+        let flushed = false;
+        const flush = writer.flush().then(() => {
+            flushed = true;
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(flushed).toBe(false);
+
+        releaseBlocker();
+        await blocker;
+        await flush;
+        expect(await save).toMatchObject({ ok: true });
+        expect((await database.get("SELECT COUNT(*) AS count FROM agent_run_snapshots") as { count: number }).count).toBe(1);
+        await writer.close();
+    });
+
+    it("waits for queued lease acquisition before closing", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-lease-close-"));
+        tempDirs.push(stateDir);
+        const workspacesDir = path.join(stateDir, "workspaces");
+        const database = await openAgentMetadataDatabase(workspacesDir);
+        const writer = createAgentRunStateWriter(
+            process.cwd(),
+            database,
+            () => "marker-lease-close",
+        );
+        let releaseBlocker!: () => void;
+        const blocker = database.transaction(async () => {
+            await new Promise<void>((resolve) => {
+                releaseBlocker = resolve;
+            });
+        }, "IMMEDIATE");
+        await vi.waitFor(() => expect(releaseBlocker).toBeTypeOf("function"));
+
+        const acquisition = writer.acquireContinuationLease!("instance-lease-close");
+        const closing = writer.close();
+        releaseBlocker();
+        await expect(acquisition).resolves.toBeDefined();
+        await closing;
+
+        const reopened = await openAgentMetadataDatabase(workspacesDir);
+        try {
+            const lease = await reopened.get(
+                "SELECT 1 AS present FROM agent_run_continuation_leases WHERE run_instance_id = ?",
+                "instance-lease-close",
+            );
+            expect(lease).toBeUndefined();
+        } finally {
+            await reopened.close();
+        }
+    });
+
     it("preserves commit ordering when snapshot, marker, or catalog writes fail", async () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-failures-"));
         tempDirs.push(stateDir);
@@ -470,26 +541,26 @@ describe("delegated-agent V2 persistence", () => {
             },
         );
         const firstFailure = record("instance-snapshot-failure", "parent-1");
-        database.exec(`
+        await database.exec(`
             CREATE TRIGGER fail_snapshot_insert
             BEFORE INSERT ON agent_run_snapshots
             BEGIN SELECT RAISE(ABORT, 'snapshot failure'); END;
         `);
-        expect(writer.save(firstFailure).ok).toBe(false);
+        expect((await writer.save(firstFailure)).ok).toBe(false);
         expect(markers).toHaveLength(0);
-        expect((database.prepare("SELECT COUNT(*) AS count FROM agent_run_snapshots").get() as { count: number }).count).toBe(0);
-        database.exec("DROP TRIGGER fail_snapshot_insert");
+        expect((await database.get("SELECT COUNT(*) AS count FROM agent_run_snapshots") as { count: number }).count).toBe(0);
+        await database.exec("DROP TRIGGER fail_snapshot_insert");
 
-        database.exec(`
+        await database.exec(`
             CREATE TRIGGER fail_catalog_insert
             BEFORE INSERT ON agent_runs
             BEGIN SELECT RAISE(ABORT, 'catalog failure'); END;
         `);
-        expect(writer.save(record("instance-catalog-failure", "parent-1"))).toMatchObject({ ok: true });
+        expect(await writer.save(record("instance-catalog-failure", "parent-1"))).toMatchObject({ ok: true });
         expect(markers).toHaveLength(1);
-        expect((database.prepare("SELECT COUNT(*) AS count FROM agent_run_snapshots").get() as { count: number }).count).toBe(1);
-        expect((database.prepare("SELECT COUNT(*) AS count FROM agent_runs").get() as { count: number }).count).toBe(0);
-        writer.close();
+        expect((await database.get("SELECT COUNT(*) AS count FROM agent_run_snapshots") as { count: number }).count).toBe(1);
+        expect((await database.get("SELECT COUNT(*) AS count FROM agent_runs") as { count: number }).count).toBe(0);
+        await writer.close();
 
         const markerFailureDatabase = await openAgentMetadataDatabase(path.join(stateDir, "marker-state", "workspaces"));
         const markerFailureWriter = createAgentRunStateWriter(
@@ -497,10 +568,10 @@ describe("delegated-agent V2 persistence", () => {
             markerFailureDatabase,
             () => { throw new Error("marker failure"); },
         );
-        expect(markerFailureWriter.save(record("instance-marker-failure", "parent-1")).ok).toBe(false);
-        expect((markerFailureDatabase.prepare("SELECT COUNT(*) AS count FROM agent_run_snapshots").get() as { count: number }).count).toBe(1);
-        expect((markerFailureDatabase.prepare("SELECT COUNT(*) AS count FROM agent_runs").get() as { count: number }).count).toBe(0);
-        markerFailureWriter.close();
+        expect((await markerFailureWriter.save(record("instance-marker-failure", "parent-1"))).ok).toBe(false);
+        expect((await markerFailureDatabase.get("SELECT COUNT(*) AS count FROM agent_run_snapshots") as { count: number }).count).toBe(1);
+        expect((await markerFailureDatabase.get("SELECT COUNT(*) AS count FROM agent_runs") as { count: number }).count).toBe(0);
+        await markerFailureWriter.close();
 
         const optionalMarkerDatabase = await openAgentMetadataDatabase(path.join(stateDir, "optional-marker", "workspaces"));
         const optionalMarkerWriter = createAgentRunStateWriter(
@@ -509,15 +580,15 @@ describe("delegated-agent V2 persistence", () => {
             () => undefined,
             { requireMarker: false },
         );
-        expect(optionalMarkerWriter.save(record("instance-optional-marker", "parent-1"))).toMatchObject({ ok: true });
-        optionalMarkerWriter.close();
+        expect(await optionalMarkerWriter.save(record("instance-optional-marker", "parent-1"))).toMatchObject({ ok: true });
+        await optionalMarkerWriter.close();
     });
 
     it("keeps a committed snapshot when head projection commit fails after marker append", async () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-head-failure-"));
         tempDirs.push(stateDir);
         const database = await openAgentMetadataDatabase(path.join(stateDir, "workspaces"));
-        database.exec(`
+        await database.exec(`
             CREATE TRIGGER fail_continuation_head_insert
             BEFORE INSERT ON agent_run_continuation_heads
             WHEN NEW.pending = 0
@@ -533,11 +604,11 @@ describe("delegated-agent V2 persistence", () => {
             },
         );
 
-        expect(writer.save(record("instance-head-failure", "parent-1"))).toMatchObject({ ok: true });
+        expect(await writer.save(record("instance-head-failure", "parent-1"))).toMatchObject({ ok: true });
         expect(markers).toHaveLength(1);
-        expect((database.prepare("SELECT COUNT(*) AS count FROM agent_run_snapshots").get() as { count: number }).count).toBe(1);
-        expect((database.prepare("SELECT COUNT(*) AS count FROM agent_run_continuation_heads WHERE pending = 1").get() as { count: number }).count).toBe(1);
-        writer.close();
+        expect((await database.get("SELECT COUNT(*) AS count FROM agent_run_snapshots") as { count: number }).count).toBe(1);
+        expect((await database.get("SELECT COUNT(*) AS count FROM agent_run_continuation_heads WHERE pending = 1") as { count: number }).count).toBe(1);
+        await writer.close();
     });
 
     it("serializes continuation leases and rejects a stale writer after another process advances the head", async () => {
@@ -546,11 +617,11 @@ describe("delegated-agent V2 persistence", () => {
         const workspacesDir = path.join(stateDir, "workspaces");
         const databaseA = await openAgentMetadataDatabase(workspacesDir);
         const databaseB = await openAgentMetadataDatabase(workspacesDir);
-        databaseA.prepare(`
+        await databaseA.run(`
             INSERT INTO agent_run_continuation_heads (
                 run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence
             ) VALUES (?, ?, ?, ?, ?, ?)
-        `).run("instance-contention", "parent-1", "scout-1", "old-snapshot", 1, 1);
+        `, "instance-contention", "parent-1", "scout-1", "old-snapshot", 1, 1);
         const markersA: unknown[] = [];
         const markersB: unknown[] = [];
         const initialHead = new Map([["instance-contention", "old-snapshot"]]);
@@ -562,20 +633,20 @@ describe("delegated-agent V2 persistence", () => {
             markersB.push(marker);
             return `marker-${markersB.length}`;
         }, { initialHeads: initialHead });
-        const releaseA = writerA.acquireContinuationLease?.("instance-contention");
-        expect(() => writerB.acquireContinuationLease?.("instance-contention")).toThrow("already owned");
-        expect(writerB.save({ ...record("instance-contention", "parent-1"), updatedAt: 2 })).toMatchObject({ ok: false });
+        const releaseA = await writerA.acquireContinuationLease?.("instance-contention");
+        await expect(writerB.acquireContinuationLease?.("instance-contention")).rejects.toThrow("already owned");
+        expect(await writerB.save({ ...record("instance-contention", "parent-1"), updatedAt: 2 })).toMatchObject({ ok: false });
         expect(markersB).toHaveLength(0);
 
-        expect(writerA.save({ ...record("instance-contention", "parent-1"), updatedAt: 2 })).toMatchObject({ ok: true });
-        releaseA?.release();
-        expect((databaseA.prepare("SELECT COUNT(*) AS count FROM agent_run_continuation_leases").get() as { count: number }).count).toBe(0);
-        expect(writerB.save({ ...record("instance-contention", "parent-1"), updatedAt: 3 })).toMatchObject({ ok: false });
+        expect(await writerA.save({ ...record("instance-contention", "parent-1"), updatedAt: 2 })).toMatchObject({ ok: true });
+        await releaseA?.release();
+        expect((await databaseA.get("SELECT COUNT(*) AS count FROM agent_run_continuation_leases") as { count: number }).count).toBe(0);
+        expect(await writerB.save({ ...record("instance-contention", "parent-1"), updatedAt: 3 })).toMatchObject({ ok: false });
         expect(markersA).toHaveLength(1);
         expect(markersB).toHaveLength(0);
-        expect((databaseA.prepare("SELECT COUNT(*) AS count FROM agent_run_snapshots").get() as { count: number }).count).toBe(1);
-        writerA.close();
-        writerB.close();
+        expect((await databaseA.get("SELECT COUNT(*) AS count FROM agent_run_snapshots") as { count: number }).count).toBe(1);
+        await writerA.close();
+        await writerB.close();
     });
 
     it("reclaims an active lease when its recorded owner PID is dead", async () => {
@@ -584,31 +655,31 @@ describe("delegated-agent V2 persistence", () => {
         const workspacesDir = path.join(stateDir, "workspaces");
         const databaseA = await openAgentMetadataDatabase(workspacesDir);
         const databaseB = await openAgentMetadataDatabase(workspacesDir);
-        databaseA.prepare(`
+        await databaseA.run(`
             INSERT INTO agent_run_continuation_heads (
                 run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence
             ) VALUES (?, ?, ?, ?, ?, ?)
-        `).run("instance-pid-recovery", "parent-1", "scout-1", "old-snapshot", 1, 1);
+        `, "instance-pid-recovery", "parent-1", "scout-1", "old-snapshot", 1, 1);
         const initialHead = new Map([["instance-pid-recovery", "old-snapshot"]]);
         const writerA = createAgentRunStateWriter(process.cwd(), databaseA, () => "marker-a", { initialHeads: initialHead });
         const writerB = createAgentRunStateWriter(process.cwd(), databaseB, () => "marker-b", { initialHeads: initialHead });
-        const leaseA = writerA.acquireContinuationLease?.("instance-pid-recovery");
-        databaseA.prepare(`
+        const leaseA = await writerA.acquireContinuationLease?.("instance-pid-recovery");
+        await databaseA.run(`
             UPDATE agent_run_continuation_leases SET owner_pid = ? WHERE run_instance_id = ?
-        `).run(424242, "instance-pid-recovery");
+        `, 424242, "instance-pid-recovery");
 
         const kill = vi.spyOn(process, "kill").mockImplementation(((pid: number) => {
             if (pid === 424242) throw Object.assign(new Error("process missing"), { code: "ESRCH" });
         }) as typeof process.kill);
         try {
-            const leaseB = writerB.acquireContinuationLease?.("instance-pid-recovery");
+            const leaseB = await writerB.acquireContinuationLease?.("instance-pid-recovery");
             expect(leaseB).toBeDefined();
             leaseB?.release();
         } finally {
             kill.mockRestore();
-            leaseA?.release();
-            writerA.close();
-            writerB.close();
+            await leaseA?.release();
+            await writerA.close();
+            await writerB.close();
         }
     });
 
@@ -624,17 +695,17 @@ describe("delegated-agent V2 persistence", () => {
                 database,
                 () => "marker-1",
             );
-            const lease = writer.acquireContinuationLease?.("instance-lease-loss", () => { lost++; });
+            const lease = await writer.acquireContinuationLease?.("instance-lease-loss", () => { lost++; });
 
-            database.prepare("DELETE FROM agent_run_continuation_leases WHERE run_instance_id = ?")
-                .run("instance-lease-loss");
+            await database.run("DELETE FROM agent_run_continuation_leases WHERE run_instance_id = ?", "instance-lease-loss");
             await vi.advanceTimersByTimeAsync(10_000);
+            await vi.waitFor(() => expect(lost).toBe(1));
 
             expect(lost).toBe(1);
-            expect(() => writer.acquireContinuationLease?.("instance-lease-loss"))
-                .toThrow("lease was lost");
-            lease?.release();
-            writer.close();
+            await expect(writer.acquireContinuationLease?.("instance-lease-loss"))
+                .rejects.toThrow("lease was lost");
+            await lease?.release();
+            await writer.close();
         } finally {
             vi.useRealTimers();
         }
@@ -656,7 +727,7 @@ describe("delegated-agent V2 persistence", () => {
             },
         } as any;
         const loaded = await loadAgentRunPersistence(context, sessionsDir);
-        expect(loaded?.persistence.save(record("instance-no-marker", "parent-1"))).toBe(false);
+        expect(await loaded?.persistence.save(record("instance-no-marker", "parent-1"))).toBe(false);
         loaded?.persistence.close?.();
     });
 

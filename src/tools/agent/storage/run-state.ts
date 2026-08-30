@@ -10,12 +10,12 @@ export interface AgentRunStateRow {
     state: unknown;
 }
 
-export function upsertAgentRunStateInDatabase(
+export async function upsertAgentRunStateInDatabase(
     database: AgentMetadataDatabase,
     record: PersistedAgentRun,
     branchEntryId: string,
-): void {
-    database.prepare(`
+): Promise<void> {
+    await database.run(`
         INSERT INTO agent_run_states (
             owner_session_id, run_id, branch_entry_id, updated_at, state_json
         ) VALUES (?, ?, ?, ?, ?)
@@ -23,30 +23,28 @@ export function upsertAgentRunStateInDatabase(
             updated_at = excluded.updated_at,
             state_json = excluded.state_json
         WHERE excluded.updated_at >= agent_run_states.updated_at
-    `).run(
-        record.ownerSessionId,
+    `, record.ownerSessionId,
         record.runId,
         branchEntryId,
         record.updatedAt,
-        JSON.stringify(record),
-    );
+        JSON.stringify(record),);
 }
 
-export function listAgentRunStatesInDatabase(
+export async function listAgentRunStatesInDatabase(
     database: AgentMetadataDatabase,
     ownerSessionId: string,
     branchEntryIds: string[],
-): AgentRunStateRow[] {
+): Promise<AgentRunStateRow[]> {
     if (branchEntryIds.length === 0) return [];
 
     const placeholders = branchEntryIds.map(() => "?").join(", ");
-    const rows = database.prepare(`
+    const rows = await database.all(`
         SELECT branch_entry_id, updated_at, state_json
         FROM agent_run_states
         WHERE owner_session_id = ?
           AND branch_entry_id IN (${placeholders})
         ORDER BY updated_at ASC, rowid ASC
-    `).all(ownerSessionId, ...branchEntryIds) as Array<Record<string, unknown>>;
+    `, ownerSessionId, ...branchEntryIds) as Array<Record<string, unknown>>;
 
     return rows.flatMap((row) => {
         if (
@@ -73,9 +71,9 @@ export async function listAgentRunStates(
 ): Promise<AgentRunStateRow[]> {
     const database = await openAgentMetadataDatabase(workspacesDir);
     try {
-        return listAgentRunStatesInDatabase(database, ownerSessionId, branchEntryIds);
+        return await listAgentRunStatesInDatabase(database, ownerSessionId, branchEntryIds);
     } finally {
-        database.close();
+        await database.close();
     }
 }
 

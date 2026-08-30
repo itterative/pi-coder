@@ -283,7 +283,7 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                         lifecycle.events,
                     );
                     if (outcome.details.workspaceResult) {
-                        lifecycle.manager.setWorkspaceResultId(
+                        await lifecycle.manager.setWorkspaceResultId(
                             outcome.details.runId,
                             outcome.details.workspaceResult.id,
                         );
@@ -307,7 +307,7 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                         lifecycle.events,
                     );
                     if (outcome.details.workspaceResult) {
-                        lifecycle.manager.setWorkspaceResultId(
+                        await lifecycle.manager.setWorkspaceResultId(
                             outcome.details.runId,
                             outcome.details.workspaceResult.id,
                         );

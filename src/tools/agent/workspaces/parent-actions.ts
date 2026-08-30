@@ -434,76 +434,80 @@ export async function executeParentWorkspaceAction(
 
     // Remaining action is "continue": reserve the logical run before
     // reclaiming and restoring its original physical workspace.
-    const continuationLease = manager.reserveContinuationLease?.(params.runId);
+    const continuationLease = await manager.reserveContinuationLease?.(params.runId);
     try {
         const continuation = await acquireContinuationWorkspace(record, workspace, sessionId);
         const continuationWorkspace = continuation.workspace;
-    const discovered = discover(ctx);
-    const definition = record.definitionSnapshot;
-    if (!definition) {
-        throw new AgentActionError(
-            `Run ${params.runId} has no persisted agent definition snapshot; it cannot be continued. Start a new run instead.`
-        );
-    }
-    const currentDefinition = discovered.agents.find((agent) => agent.name === record.agent);
-    if (agentCanEdit(definition) && (
-        !currentDefinition
-        || !agentCanEdit(currentDefinition)
-        || currentDefinition.name !== "worker"
-        || currentDefinition.source !== "builtin"
-    )) {
-        throw new AgentActionError(
-            `Run ${params.runId} has an unauthorized persisted mutation capability; it cannot be continued.`,
-        );
-    }
-    if (!record.childSessionFile) {
-        throw new AgentActionError(`Run ${params.runId} has no persisted child session to continue.`);
-    }
+        const discovered = discover(ctx);
+        const definition = record.definitionSnapshot;
+        if (!definition) {
+            throw new AgentActionError(
+                `Run ${params.runId} has no persisted agent definition snapshot; it cannot be continued. Start a new run instead.`,
+            );
+        }
+        const currentDefinition = discovered.agents.find((agent) => agent.name === record.agent);
+        if (agentCanEdit(definition) && (
+            !currentDefinition
+            || !agentCanEdit(currentDefinition)
+            || currentDefinition.name !== "worker"
+            || currentDefinition.source !== "builtin"
+        )) {
+            throw new AgentActionError(
+                `Run ${params.runId} has an unauthorized persisted mutation capability; it cannot be continued.`,
+            );
+        }
+        if (!record.childSessionFile) {
+            throw new AgentActionError(`Run ${params.runId} has no persisted child session to continue.`);
+        }
 
-    const workspaceCheckpoint = createAgentWorkspaceCheckpointCallback(
-        ctx.sessionManager.getSessionId(),
-    );
-    const revisionContext = {
-        cwd: continuationWorkspace.worktreePath,
-        parentCwd: ctx.cwd,
-        workspaceId: continuationWorkspace.id,
-        parentContext: ctx,
-        childSessionFile: continuation.checkpoint.childSessionFile ?? record.childSessionFile,
-        childSessionLeafId: continuation.checkpoint.childSessionLeafId ?? record.childSessionLeafId,
-    };
-    const runIdentity = manager.reserveRunIdentity(
-        definition,
-        record.task,
-        revisionContext,
-        record.runId,
-        record.runInstanceId,
-    );
-    const guidance = params.guidance!.trim();
-    const outcome = await manager.startContinuation(
-        definition,
-        record.task,
-        guidance,
-        revisionContext,
-        {
-            signal,
-            onProgress: progress,
-            onBackgroundUpdate,
-            onWorkspaceCheckpoint: workspaceCheckpoint,
-            title: `${record.title} revision`,
-            identity: runIdentity,
-            continuationLease,
-        },
-    );
-    const prepared = await prepareForegroundWorkspaceResult(
-        outcome,
-        ctx,
-        events,
-        { baseRevision: continuation.checkpoint.baseRevision },
-    );
+        const workspaceCheckpoint = createAgentWorkspaceCheckpointCallback(
+            ctx.sessionManager.getSessionId(),
+        );
+        const revisionContext = {
+            cwd: continuationWorkspace.worktreePath,
+            parentCwd: ctx.cwd,
+            workspaceId: continuationWorkspace.id,
+            parentContext: ctx,
+            childSessionFile: continuation.checkpoint.childSessionFile ?? record.childSessionFile,
+            childSessionLeafId: continuation.checkpoint.childSessionLeafId ?? record.childSessionLeafId,
+        };
+        const runIdentity = manager.reserveRunIdentity(
+            definition,
+            record.task,
+            revisionContext,
+            record.runId,
+            record.runInstanceId,
+        );
+        const guidance = params.guidance!.trim();
+        const outcome = await manager.startContinuation(
+            definition,
+            record.task,
+            guidance,
+            revisionContext,
+            {
+                signal,
+                onProgress: progress,
+                onBackgroundUpdate,
+                onWorkspaceCheckpoint: workspaceCheckpoint,
+                title: `${record.title} revision`,
+                identity: runIdentity,
+                continuationLease,
+            },
+        );
+        const prepared = await prepareForegroundWorkspaceResult(
+            outcome,
+            ctx,
+            events,
+            { baseRevision: continuation.checkpoint.baseRevision },
+        );
         prepared.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
         return prepared;
     } catch (error) {
-        continuationLease?.release();
+        try {
+            await continuationLease?.release();
+        } catch {
+            // Preserve the original continuation error.
+        }
         throw error;
     }
 }

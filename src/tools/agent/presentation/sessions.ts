@@ -384,7 +384,7 @@ async function activeBranchChildCheckpoints(
         const activeMarkers = collectAgentRunSnapshotMarkers(activeEntries);
         const database = await openAgentMetadataDatabase(workspacesDir);
         try {
-            const snapshots = listAgentRunSnapshotsInDatabase(
+            const snapshots = await listAgentRunSnapshotsInDatabase(
                 database,
                 allMarkers.map((entry) => entry.marker.snapshotId),
             );
@@ -426,7 +426,7 @@ async function activeBranchChildCheckpoints(
                 }]),
             );
         } finally {
-            database.close();
+            await database.close();
         }
     } catch {
         return new Map();

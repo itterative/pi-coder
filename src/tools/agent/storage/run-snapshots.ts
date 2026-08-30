@@ -19,24 +19,23 @@ export interface AgentRunSnapshotRow {
     createdSequence: number;
 }
 
-export function insertAgentRunSnapshotInDatabase(
+export async function insertAgentRunSnapshotInDatabase(
     database: AgentMetadataDatabase,
     record: PersistedAgentRun,
-): AgentRunSnapshotRow {
+): Promise<AgentRunSnapshotRow> {
     const runInstanceId = record.runInstanceId;
     if (!runInstanceId) {
         throw new Error("Cannot persist a delegated run without runInstanceId.");
     }
     const snapshotId = randomUUID();
-    database.prepare(`
+    await database.run(`
         INSERT INTO agent_run_instances (
             run_instance_id, owner_session_id, run_id, title, agent, agent_source,
             agent_file_path, definition_fingerprint, task, background, mutating,
             workspace_id, parent_cwd, execution_cwd, started_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (run_instance_id) DO NOTHING
-    `).run(
-        runInstanceId,
+    `, runInstanceId,
         record.ownerSessionId,
         record.runId,
         record.title ?? "Delegated task",
@@ -50,23 +49,21 @@ export function insertAgentRunSnapshotInDatabase(
         record.workspaceId ?? null,
         record.parentCwd ?? "",
         record.cwd ?? null,
-        record.startedAt,
-    );
-    const sequenceRow = database.prepare(`
+        record.startedAt,);
+    const sequenceRow = await database.get(`
         SELECT COALESCE(MAX(created_sequence), 0) + 1 AS next_sequence
         FROM agent_run_snapshots
-    `).get() as { next_sequence?: unknown } | undefined;
+    `) as { next_sequence?: unknown } | undefined;
     if (typeof sequenceRow?.next_sequence !== "number") {
         throw new Error("Could not allocate an agent snapshot sequence.");
     }
-    database.prepare(`
+    await database.run(`
         INSERT INTO agent_run_snapshots (
             snapshot_id, run_instance_id, owner_session_id, run_id,
             payload_version, status, child_session_file, child_session_leaf_id,
             updated_at, payload_json, created_sequence
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-        snapshotId,
+    `, snapshotId,
         runInstanceId,
         record.ownerSessionId,
         record.runId,
@@ -76,8 +73,7 @@ export function insertAgentRunSnapshotInDatabase(
         record.childSessionLeafId ?? null,
         record.updatedAt,
         JSON.stringify(record),
-        sequenceRow.next_sequence,
-    );
+        sequenceRow.next_sequence,);
     return {
         snapshotId,
         runInstanceId,
@@ -126,19 +122,19 @@ function rowToSnapshot(row: Record<string, unknown>): AgentRunSnapshotRow | unde
     };
 }
 
-export function listAgentRunSnapshotsInDatabase(
+export async function listAgentRunSnapshotsInDatabase(
     database: AgentMetadataDatabase,
     snapshotIds: string[],
-): AgentRunSnapshotRow[] {
+): Promise<AgentRunSnapshotRow[]> {
     if (snapshotIds.length === 0) return [];
     const placeholders = snapshotIds.map(() => "?").join(", ");
-    const rows = database.prepare(`
+    const rows = await database.all(`
         SELECT snapshot_id, run_instance_id, owner_session_id, run_id, payload_version,
                status, child_session_file, child_session_leaf_id, updated_at,
                payload_json, created_sequence
         FROM agent_run_snapshots
         WHERE snapshot_id IN (${placeholders})
-    `).all(...snapshotIds) as Array<Record<string, unknown>>;
+    `, ...snapshotIds) as Array<Record<string, unknown>>;
     return rows.flatMap((row) => {
         const snapshot = rowToSnapshot(row);
         return snapshot ? [snapshot] : [];

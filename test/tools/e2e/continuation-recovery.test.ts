@@ -101,7 +101,7 @@ describe("isolated continuation recovery e2e", () => {
         expect(waiting.details.status).toBe("waiting_for_parent");
         expect((await getAgentWorkspace(ready.id, { workspacesDir: paths.state }))?.leaseActive).toBe(true);
 
-        expect(manager.parkWorkspaceRunForReuse(ready.id, identity.runId)).toBe(true);
+        expect(await manager.parkWorkspaceRunForReuse(ready.id, identity.runId)).toBe(true);
         const parked = await getAgentWorkspace(ready.id, { workspacesDir: paths.state });
         expect(parked?.leaseRunId).toBe(identity.runId);
         expect(parked?.leaseActive).toBe(false);

@@ -196,8 +196,8 @@ describe("agent workspaces", () => {
         const historicalInspection = await inspectAgentWorkspaceResult(recycled, result);
         expect(historicalInspection).toContain("tracked.txt");
         const metadata = await openAgentMetadataDatabase(state);
-        metadata.prepare("UPDATE workspace_results SET reservation_token = ? WHERE id = ?").run("held-by-other", result.id);
-        metadata.close();
+        await metadata.run("UPDATE workspace_results SET reservation_token = ? WHERE id = ?", "held-by-other", result.id);
+        await metadata.close();
         await expect(applyAgentWorkspaceApplication(recycled, {
             ownerSessionId: "session-1",
             leaseRunId: "worker-1",
@@ -206,8 +206,8 @@ describe("agent workspaces", () => {
             workspacesDir: state,
         })).rejects.toThrow("already reserved");
         const releasedMetadata = await openAgentMetadataDatabase(state);
-        releasedMetadata.prepare("UPDATE workspace_results SET reservation_token = NULL WHERE id = ?").run(result.id);
-        releasedMetadata.close();
+        await releasedMetadata.run("UPDATE workspace_results SET reservation_token = NULL WHERE id = ?", result.id);
+        await releasedMetadata.close();
         await applyAgentWorkspaceApplication(recycled, {
             ownerSessionId: "session-1",
             leaseRunId: "worker-1",
@@ -490,13 +490,12 @@ describe("agent workspaces", () => {
         const resetTarget = await createClaimedWorkspace(repository, state);
         await fs.writeFile(path.join(resetTarget.workspace.worktreePath, "reset-me.txt"), "reset\n");
         const database = await openAgentMetadataDatabase(state);
-        database.prepare(`
+        await database.run(`
             INSERT INTO agent_runs (
                 run_instance_id, owner_session_id, run_id, parent_cwd, title, agent, agent_source,
                 task, status, background, mutating, started_at, updated_at, usage_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-            "session-1:worker-1",
+        `, "session-1:worker-1",
             "session-1",
             "worker-1",
             repository,
@@ -509,9 +508,8 @@ describe("agent workspaces", () => {
             1,
             1,
             1,
-            "{}",
-        );
-        database.close();
+            "{}",);
+        await database.close();
         await expect(resetAgentWorkspaceForReuse(resetTarget.workspace.id, {
             ownerSessionId: "session-2",
             leaseRunId: "worker-1",
@@ -519,9 +517,8 @@ describe("agent workspaces", () => {
         })).rejects.toThrow("still used by active run worker-1");
 
         const completedDatabase = await openAgentMetadataDatabase(state);
-        completedDatabase.prepare("UPDATE agent_runs SET status = 'completed' WHERE run_instance_id = ?")
-            .run("session-1:worker-1");
-        completedDatabase.close();
+        await completedDatabase.run("UPDATE agent_runs SET status = 'completed' WHERE run_instance_id = ?", "session-1:worker-1");
+        await completedDatabase.close();
         const reset = await resetAgentWorkspaceForReuse(resetTarget.workspace.id, {
             ownerSessionId: "session-2",
             leaseRunId: "worker-1",

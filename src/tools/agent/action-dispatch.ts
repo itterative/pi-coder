@@ -239,7 +239,7 @@ export async function executeAgentAction(
             // Keep a no-change lease held until the retained agent result has
             // actually been consumed. If collect rejects, the caller must be
             // able to retry and the lease must remain protected.
-            outcome = lifecycle.manager.collect(request.runId);
+            outcome = await lifecycle.manager.collect(request.runId);
             if (workspaceResult && noWorkspaceChanges) {
                 await releaseAgentWorkspaceAfterNoChanges(workspaceResult.workspaceId, {
                     ownerSessionId: ctx.sessionManager.getSessionId(),
@@ -280,7 +280,7 @@ export async function executeAgentAction(
     }
 
     if (outcome.details.workspaceResult) {
-        lifecycle.manager.setWorkspaceResultId(
+        await lifecycle.manager.setWorkspaceResultId(
             outcome.details.runId,
             outcome.details.workspaceResult.id,
         );

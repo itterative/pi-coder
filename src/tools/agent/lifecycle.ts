@@ -132,7 +132,7 @@ export class AgentLifecycle {
             // Drain old-branch writes before detaching persistence. Shutdown must not
             // append records at the newly selected branch leaf.
             await this.manager.flushPersistence();
-            this.manager.closePersistence();
+            await this.manager.closePersistence();
             this.manager.setPersistence(undefined);
             await this.manager.shutdown();
             emitAgentEvent({ type: "runtime", action: "reset" }, { sink: this.events, cwd: ctx.cwd });
@@ -149,7 +149,7 @@ export class AgentLifecycle {
             this.setupRuns.clear();
             await this.manager.shutdown();
             await this.manager.flushPersistence();
-            this.manager.closePersistence();
+            await this.manager.closePersistence();
             emitAgentEvent({ type: "runtime", action: "shutdown" }, { sink: this.events, cwd: ctx.cwd });
             this.activeContext = undefined;
             this.unsubscribeAgentUiEvents();
