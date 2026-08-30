@@ -31,9 +31,7 @@ export function getScratchpadRuntime(
     return runtimes.get(sessionManager);
 }
 
-export function getScratchpadPath(
-    sessionManager: object | undefined,
-): string | undefined {
+export function getScratchpadPath(sessionManager: object | undefined): string | undefined {
     return getScratchpadRuntime(sessionManager)?.path;
 }
 
@@ -45,15 +43,15 @@ export function scratchpadPrompt(pathname: string): string {
         "",
         `\`${pathname}\``,
         "",
-        "Use it for notes, intermediate artifacts, generated reports, and other "
-            + "work that should not modify the project checkout.",
-        "Use this directory with the tools available in this runtime; access "
-            + "remains subject to the runtime's capability policy.",
-        "It is an additional confined root, equivalent to the current working "
-            + "directory for path safety.",
-        "Scratchpad contents are temporary and are not managed or deleted by "
-            + "pi-coder; the operating system owns eventual cleanup of the /tmp "
-            + "directory.",
+        "Use it for notes, intermediate artifacts, generated reports, and other " +
+            "work that should not modify the project checkout.",
+        "Use this directory with the tools available in this runtime; access " +
+            "remains subject to the runtime's capability policy.",
+        "It is an additional confined root, equivalent to the current working " +
+            "directory for path safety.",
+        "Scratchpad contents are temporary and are not managed or deleted by " +
+            "pi-coder; the operating system owns eventual cleanup of the /tmp " +
+            "directory.",
         "When returning to this session, the recorded scratchpad path is reused while the directory still exists; do not rely on contents surviving OS cleanup or manual deletion.",
     ].join("\n");
 }
@@ -70,11 +68,13 @@ function appendScratchpadPrompt(systemPrompt: string, pathname: string): string 
         return `${systemPrompt}\n\n${scratchpadBlock}`;
     }
 
-    return systemPrompt.slice(0, index + projectContextEnd.length)
-        + "\n\n"
-        + scratchpadBlock
-        + "\n"
-        + systemPrompt.slice(index + projectContextEnd.length);
+    return (
+        systemPrompt.slice(0, index + projectContextEnd.length) +
+        "\n\n" +
+        scratchpadBlock +
+        "\n" +
+        systemPrompt.slice(index + projectContextEnd.length)
+    );
 }
 
 async function createScratchpad(): Promise<ScratchpadRuntime> {
@@ -88,7 +88,8 @@ function markerFromSession(ctx: ExtensionContext): ScratchpadMarker | undefined 
     for (const entry of [...branch].reverse()) {
         if (!entry || typeof entry !== "object") continue;
         const candidate = entry as { type?: unknown; customType?: unknown; data?: unknown };
-        if (candidate.type !== "custom" || candidate.customType !== SCRATCHPAD_MARKER_TYPE) continue;
+        if (candidate.type !== "custom" || candidate.customType !== SCRATCHPAD_MARKER_TYPE)
+            continue;
         if (!candidate.data || typeof candidate.data !== "object") return undefined;
         const data = candidate.data as { version?: unknown; path?: unknown };
         if (data.version !== 1 || typeof data.path !== "string" || !path.isAbsolute(data.path)) {
@@ -106,13 +107,16 @@ async function isReusableScratchpad(pathname: string): Promise<boolean> {
 
     try {
         const entry = await lstat(lexicalPath);
-        if (!entry.isDirectory() || entry.isSymbolicLink() || (entry.mode & 0o777) !== 0o700) return false;
+        if (!entry.isDirectory() || entry.isSymbolicLink() || (entry.mode & 0o777) !== 0o700)
+            return false;
         const [realPath, realRoot] = await Promise.all([
             realpath(lexicalPath),
             realpath(lexicalRoot),
         ]);
-        return path.dirname(realPath) === realRoot
-            && path.basename(realPath).startsWith(SCRATCHPAD_PREFIX);
+        return (
+            path.dirname(realPath) === realRoot &&
+            path.basename(realPath).startsWith(SCRATCHPAD_PREFIX)
+        );
     } catch {
         return false;
     }
@@ -123,7 +127,7 @@ async function restoreOrCreateScratchpad(
     ctx: ExtensionContext,
 ): Promise<ScratchpadRuntime> {
     const marker = markerFromSession(ctx);
-    if (marker && await isReusableScratchpad(marker.path)) return { path: marker.path };
+    if (marker && (await isReusableScratchpad(marker.path))) return { path: marker.path };
 
     const runtime = await createScratchpad();
     pi.appendEntry<ScratchpadMarker>(SCRATCHPAD_MARKER_TYPE, {

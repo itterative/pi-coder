@@ -168,11 +168,10 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
     // ── Completion callback ──
     private done!: (result: SelectWithMessageResult<T> | undefined) => void;
 
-    constructor(
-        private readonly options: SelectWithMessageOptions<T>,
-    ) {
-        this.selectHelpText = options.selectHelpText
-            ?? "↑/↓ navigate | Enter select | Tab add message | j/k scroll | Esc cancel";
+    constructor(private readonly options: SelectWithMessageOptions<T>) {
+        this.selectHelpText =
+            options.selectHelpText ??
+            "↑/↓ navigate | Enter select | Tab add message | j/k scroll | Esc cancel";
         this.editHelpText = options.editHelpText ?? "Enter confirm | Esc back";
         this.messageSeparator = options.messageSeparator ?? ", ";
         this.messagePlaceholder = options.messagePlaceholder ?? "type a message...";
@@ -192,9 +191,10 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
     initialize(theme: Theme): void {
         this.theme = theme;
         const borderColor = (s: string) => {
-            const tone = typeof this.borderTone === "function"
-                ? this.borderTone()
-                : (this.borderTone ?? "border");
+            const tone =
+                typeof this.borderTone === "function"
+                    ? this.borderTone()
+                    : (this.borderTone ?? "border");
             return theme.fg(tone, s);
         };
 
@@ -323,12 +323,9 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
     private rebuildContent(width: number): void {
         // Re-evaluate the title (it may be a function of live dialog
         // state, e.g. the prompt mode)
-        const title = typeof this.options.title === "function"
-            ? this.options.title()
-            : this.options.title;
-        this.titleText.setText(
-            this.theme!.fg("accent", this.theme!.bold(`  ${title}`)),
-        );
+        const title =
+            typeof this.options.title === "function" ? this.options.title() : this.options.title;
+        this.titleText.setText(this.theme!.fg("accent", this.theme!.bold(`  ${title}`)));
 
         this.contentBox.clear();
 
@@ -352,7 +349,10 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
             const numPrefix = (idx: number) =>
                 this.theme!.fg("dim", String(idx + 1).padStart(lineNumWidth) + " │ ");
             const contPrefix = this.theme!.fg("dim", " ".repeat(lineNumWidth) + " │ ");
-            const ellipsisPrefix = this.theme!.fg("dim", " ".repeat(Math.max(0, lineNumWidth - 1)) + "… │ ");
+            const ellipsisPrefix = this.theme!.fg(
+                "dim",
+                " ".repeat(Math.max(0, lineNumWidth - 1)) + "… │ ",
+            );
 
             for (let vi = start; vi < end; vi++) {
                 const entry = flatIndex[vi]!;
@@ -376,7 +376,10 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
                 this.contentBox.addChild(new Spacer(1));
                 this.contentBox.addChild(
                     new Text(
-                        this.theme!.fg("dim", `  Showing lines ${firstLogical}-${lastLogical} of ${totalLogicalLines} (j/k to scroll)`),
+                        this.theme!.fg(
+                            "dim",
+                            `  Showing lines ${firstLogical}-${lastLogical} of ${totalLogicalLines} (j/k to scroll)`,
+                        ),
                         1,
                         0,
                     ),
@@ -397,16 +400,12 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
             const isCursor = i === this.cursor;
             const isEditing = isCursor && this.editing;
 
-            const prefix = isCursor
-                ? this.theme!.fg("accent", "→ ")
-                : "  ";
+            const prefix = isCursor ? this.theme!.fg("accent", "→ ") : "  ";
 
             if (isEditing) {
                 this.renderEditArea(item, prefix, width);
             } else {
-                const label = isCursor
-                    ? this.theme!.fg("accent", item.label)
-                    : item.label;
+                const label = isCursor ? this.theme!.fg("accent", item.label) : item.label;
                 const content = item.description
                     ? `${label}${this.theme!.fg("muted", ` - ${item.description}`)}`
                     : label;
@@ -418,9 +417,7 @@ export class SelectWithMessageComponent<T> implements Component, Focusable {
 
         // Help text
         const helpText = this.editing ? this.editHelpText : this.selectHelpText;
-        this.contentBox.addChild(
-            new Text(this.theme!.fg("muted", `  ${helpText}`), 1, 0),
-        );
+        this.contentBox.addChild(new Text(this.theme!.fg("muted", `  ${helpText}`), 1, 0));
     }
 
     // ── Edit area rendering ─────────────────────────────────────────
@@ -524,35 +521,41 @@ export async function selectWithMessage<T>(
     if (!ctx.hasUI || signal?.aborted) return undefined;
     if (options.items.length === 0) return undefined;
 
-    return withDialogQueue(signal, async () => {
-        // Hide the working indicator spinner to prevent flickering while the
-        // custom component is displayed (the spinner's animation frames cause
-        // constant re-renders that fight with the component on short terminals).
-        ctx.ui.setWorkingVisible(false);
+    return withDialogQueue(
+        signal,
+        async () => {
+            // Hide the working indicator spinner to prevent flickering while the
+            // custom component is displayed (the spinner's animation frames cause
+            // constant re-renders that fight with the component on short terminals).
+            ctx.ui.setWorkingVisible(false);
 
-        let finish: ((result: SelectWithMessageResult<T> | undefined) => void) | undefined;
-        const abort = () => finish?.(undefined);
-        signal?.addEventListener("abort", abort, { once: true });
-        try {
-            return await ctx.ui.custom<SelectWithMessageResult<T> | undefined>((_tui, theme, _kb, done) => {
-                let settled = false;
-                finish = (result) => {
-                    if (settled) return;
-                    settled = true;
-                    done(result);
-                };
-                const component = new SelectWithMessageComponent(options);
-                component.setDoneCallback(finish);
-                component.initialize(theme);
-                if (signal?.aborted) queueMicrotask(abort);
-                return component;
-            });
-        } finally {
-            signal?.removeEventListener("abort", abort);
-            finish = undefined;
-            if (!hasQueuedDialog(ctx.events)) {
-                ctx.ui.setWorkingVisible(true);
+            let finish: ((result: SelectWithMessageResult<T> | undefined) => void) | undefined;
+            const abort = () => finish?.(undefined);
+            signal?.addEventListener("abort", abort, { once: true });
+            try {
+                return await ctx.ui.custom<SelectWithMessageResult<T> | undefined>(
+                    (_tui, theme, _kb, done) => {
+                        let settled = false;
+                        finish = (result) => {
+                            if (settled) return;
+                            settled = true;
+                            done(result);
+                        };
+                        const component = new SelectWithMessageComponent(options);
+                        component.setDoneCallback(finish);
+                        component.initialize(theme);
+                        if (signal?.aborted) queueMicrotask(abort);
+                        return component;
+                    },
+                );
+            } finally {
+                signal?.removeEventListener("abort", abort);
+                finish = undefined;
+                if (!hasQueuedDialog(ctx.events)) {
+                    ctx.ui.setWorkingVisible(true);
+                }
             }
-        }
-    }, ctx.events);
+        },
+        ctx.events,
+    );
 }

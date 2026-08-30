@@ -43,14 +43,13 @@ function isWhitespaceSegment(segment: string): boolean {
 
 // Edit buffer segment: typed text or a large paste shown as placeholder
 export type EditSegment =
-    | { type: "text"; content: string }
-    | { type: "paste"; content: string; display: string };
+    { type: "text"; content: string } | { type: "paste"; content: string; display: string };
 
 // Visual line info for cursor navigation
 export interface EditVisLine {
-    dispStart: number;  // start offset in display string
-    dispEnd: number;    // end offset (exclusive) in display string
-    text: string;       // visible text (plain, no prefix)
+    dispStart: number; // start offset in display string
+    dispEnd: number; // end offset (exclusive) in display string
+    text: string; // visible text (plain, no prefix)
 }
 
 // Result of handling an edit-mode key
@@ -134,7 +133,7 @@ export class InlineEditor {
 
     /** The full text content (paste placeholders expanded to real content). */
     get text(): string {
-        return this.segments.map(s => s.content).join("");
+        return this.segments.map((s) => s.content).join("");
     }
 
     get isEmpty(): boolean {
@@ -203,9 +202,10 @@ export class InlineEditor {
             const isLarge = cleanText.includes("\n") || cleanText.length > LARGE_PASTE_THRESHOLD;
             if (isLarge) {
                 const lineCount = cleanText.split("\n").length;
-                const display = lineCount > 1
-                    ? `[Pasted ${lineCount} lines]`
-                    : `[Pasted ${cleanText.length} chars]`;
+                const display =
+                    lineCount > 1
+                        ? `[Pasted ${lineCount} lines]`
+                        : `[Pasted ${cleanText.length} chars]`;
                 this.insertSegmentAtCursor({ type: "paste", content: cleanText, display });
             } else {
                 this.insertAtCursor(cleanText);
@@ -213,9 +213,7 @@ export class InlineEditor {
             changed = true;
         }
 
-        return remaining
-            ? { consumed: true, changed, remaining }
-            : { consumed: true, changed };
+        return remaining ? { consumed: true, changed, remaining } : { consumed: true, changed };
     }
 
     /**
@@ -330,9 +328,7 @@ export class InlineEditor {
             this.dispToContent = [];
             this.cursorDispOff = 0;
             this.cursorVisLineIdx = 0;
-            return [
-                `${linePrefixFor(0)}${firstLinePrefix}${marker}${visualCursor}${placeholder}`,
-            ];
+            return [`${linePrefixFor(0)}${firstLinePrefix}${marker}${visualCursor}${placeholder}`];
         }
 
         // Build display buffer with content↔display mapping
@@ -357,10 +353,7 @@ export class InlineEditor {
         if (allVisLines.length <= maxLines) {
             startLine = 0;
         } else {
-            startLine = Math.max(0, Math.min(
-                cursorVisLineIdx - 1,
-                allVisLines.length - maxLines,
-            ));
+            startLine = Math.max(0, Math.min(cursorVisLineIdx - 1, allVisLines.length - maxLines));
         }
         const endLine = Math.min(allVisLines.length, startLine + maxLines);
         const visibleVisLines = allVisLines.slice(startLine, endLine);
@@ -376,7 +369,7 @@ export class InlineEditor {
 
         for (let vi = 0; vi < visibleVisLines.length; vi++) {
             const vl = visibleVisLines[vi]!;
-            const isCursorLine = (startLine + vi) === cursorVisLineIdx;
+            const isCursorLine = startLine + vi === cursorVisLineIdx;
             const isFirst = vi === 0;
             const isLast = vi === visibleVisLines.length - 1;
 
@@ -396,7 +389,8 @@ export class InlineEditor {
                 // full text of the visual line
                 const displayText = vl.text;
                 const cursorColInText = this.cursorDispOff - vl.dispStart;
-                const insertAt = beforeCursor.length + Math.min(cursorColInText, displayText.length);
+                const insertAt =
+                    beforeCursor.length + Math.min(cursorColInText, displayText.length);
 
                 if (isAtEnd) {
                     // Cursor at end of buffer — append marker + visual cursor + suffix
@@ -502,7 +496,7 @@ export class InlineEditor {
         }
 
         const curVl = this.allVisLines[curLine]!;
-        const curCol = this.desiredCol ?? (this.cursorDispOff - curVl.dispStart);
+        const curCol = this.desiredCol ?? this.cursorDispOff - curVl.dispStart;
         this.desiredCol = curCol;
 
         const prev = this.allVisLines[curLine - 1]!;
@@ -527,7 +521,7 @@ export class InlineEditor {
         }
 
         const curVl = this.allVisLines[curLine]!;
-        const curCol = this.desiredCol ?? (this.cursorDispOff - curVl.dispStart);
+        const curCol = this.desiredCol ?? this.cursorDispOff - curVl.dispStart;
         this.desiredCol = curCol;
 
         const nextIdx = curLine + 1;
@@ -537,8 +531,11 @@ export class InlineEditor {
         // nextnext.dispStart, which the visual line finder (< dispEnd) assigns to
         // the line after next. On the last line, dispEnd is a valid end-of-buffer
         // position (finder uses fallback) — don't step back.
-        if (nextIdx < this.allVisLines.length - 1
-            && targetDispOff === next.dispEnd && next.dispEnd > next.dispStart) {
+        if (
+            nextIdx < this.allVisLines.length - 1 &&
+            targetDispOff === next.dispEnd &&
+            next.dispEnd > next.dispStart
+        ) {
             targetDispOff--;
         }
         this.cursorPos = this.dispToContent[targetDispOff] ?? this.getContentLength();
@@ -558,10 +555,7 @@ export class InlineEditor {
         let newCursor = cursor;
 
         // Skip trailing whitespace.
-        while (
-            segments.length > 0 &&
-            isWhitespaceSegment(segments[segments.length - 1]!.segment)
-        ) {
+        while (segments.length > 0 && isWhitespaceSegment(segments[segments.length - 1]!.segment)) {
             newCursor -= segments.pop()!.segment.length;
         }
         if (segments.length === 0) return newCursor;
@@ -633,10 +627,7 @@ export class InlineEditor {
      * Snap a flat position to the edge of any paste segment it lands inside.
      * Paste markers are atomic, so word movement never stops within one.
      */
-    private clampPosToPasteBoundary(
-        pos: number,
-        direction: "backward" | "forward",
-    ): number {
+    private clampPosToPasteBoundary(pos: number, direction: "backward" | "forward"): number {
         for (const b of this.getSegmentFlatBounds()) {
             if (b.type === "paste" && pos > b.start && pos < b.end) {
                 return direction === "backward" ? b.start : b.end;
@@ -746,9 +737,8 @@ export class InlineEditor {
             this.segments.splice(segIdx, 1, ...spliceArgs);
         } else {
             // At a paste boundary — insert adjacent to it
-            const insertIdx = (seg?.type === "paste" && offset === seg.content.length)
-                ? segIdx + 1
-                : segIdx;
+            const insertIdx =
+                seg?.type === "paste" && offset === seg.content.length ? segIdx + 1 : segIdx;
             this.segments.splice(insertIdx, 0, segment);
         }
 
@@ -771,9 +761,8 @@ export class InlineEditor {
             seg.content = seg.content.slice(0, offset) + text + seg.content.slice(offset);
         } else {
             // At a paste boundary — create new text segment
-            const insertIdx = (seg?.type === "paste" && offset === seg.content.length)
-                ? segIdx + 1
-                : segIdx;
+            const insertIdx =
+                seg?.type === "paste" && offset === seg.content.length ? segIdx + 1 : segIdx;
             // Try to merge with adjacent text segment
             const prev = insertIdx > 0 ? this.segments[insertIdx - 1] : undefined;
             if (prev && prev.type === "text" && offset === 0) {
@@ -931,8 +920,8 @@ export class InlineEditor {
         }
 
         // Find cursor's visual line (use < for exclusive dispEnd)
-        let cursorVisLineIdx = allVisLines.findIndex(vl =>
-            cursorDispOff >= vl.dispStart && cursorDispOff < vl.dispEnd,
+        let cursorVisLineIdx = allVisLines.findIndex(
+            (vl) => cursorDispOff >= vl.dispStart && cursorDispOff < vl.dispEnd,
         );
         if (cursorVisLineIdx === -1) {
             // Cursor at end of buffer (past all dispEnds) — use last line

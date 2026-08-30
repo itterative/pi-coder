@@ -65,9 +65,12 @@ describe("temporary scratchpad extension", () => {
         expect(fs.statSync(scratchpadPath!).mode & 0o777).toBe(0o700);
         temporaryDirectories.push(scratchpadPath!);
 
-        const result = handler("before_agent_start")({
-            systemPrompt: "<project_context>\nProject\n</project_context>",
-        }, runtimeContext) as { systemPrompt: string };
+        const result = handler("before_agent_start")(
+            {
+                systemPrompt: "<project_context>\nProject\n</project_context>",
+            },
+            runtimeContext,
+        ) as { systemPrompt: string };
         expect(result.systemPrompt).toContain("<scratchpad_system>");
         expect(result.systemPrompt).toContain(scratchpadPath!);
         expect(result.systemPrompt).toContain("are not managed or deleted by pi-coder");
@@ -91,11 +94,13 @@ describe("temporary scratchpad extension", () => {
         await second.handler("session_start")({}, runtimeContext);
 
         expect(getScratchpadPath(sessionManager)).toBe(scratchpadPath);
-        expect(entries).toEqual([{
-            type: "custom",
-            customType: SCRATCHPAD_MARKER_TYPE,
-            data: { version: 1, path: scratchpadPath },
-        }]);
+        expect(entries).toEqual([
+            {
+                type: "custom",
+                customType: SCRATCHPAD_MARKER_TYPE,
+                data: { version: 1, path: scratchpadPath },
+            },
+        ]);
     });
 
     it("keeps parent and child runtime scratchpads isolated", async () => {

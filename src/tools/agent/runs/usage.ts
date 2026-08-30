@@ -23,12 +23,14 @@ export function cloneUsage(usage: Usage): Usage {
 }
 
 export function subtractUsage(current: Usage, previous: Usage): Usage {
-    const reasoning = current.reasoning === undefined && previous.reasoning === undefined
-        ? undefined
-        : Math.max(0, (current.reasoning ?? 0) - (previous.reasoning ?? 0));
-    const cacheWrite1h = current.cacheWrite1h === undefined && previous.cacheWrite1h === undefined
-        ? undefined
-        : Math.max(0, (current.cacheWrite1h ?? 0) - (previous.cacheWrite1h ?? 0));
+    const reasoning =
+        current.reasoning === undefined && previous.reasoning === undefined
+            ? undefined
+            : Math.max(0, (current.reasoning ?? 0) - (previous.reasoning ?? 0));
+    const cacheWrite1h =
+        current.cacheWrite1h === undefined && previous.cacheWrite1h === undefined
+            ? undefined
+            : Math.max(0, (current.cacheWrite1h ?? 0) - (previous.cacheWrite1h ?? 0));
     return {
         input: Math.max(0, current.input - previous.input),
         output: Math.max(0, current.output - previous.output),

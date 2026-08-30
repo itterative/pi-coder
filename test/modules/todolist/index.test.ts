@@ -2,19 +2,26 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createEventBus, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+    createEventBus,
+    type ExtensionAPI,
+    type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
 import { renderText } from "../../helpers";
 
 import registerTodoListExtension from "../../../src/modules/todolist";
 import { TODO_SNAPSHOT_TYPE } from "../../../src/modules/todolist/persistence";
 import registerScratchpadExtension, { getScratchpadPath } from "../../../src/modules/scratchpad";
-import { PiCoderStatusWidget, registerStatusWidget, STATUS_WIDGET_ID } from "../../../src/tui/status";
+import {
+    PiCoderStatusWidget,
+    registerStatusWidget,
+    STATUS_WIDGET_ID,
+} from "../../../src/tui/status";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
 const temporaryDirectories: string[] = [];
-
 
 afterEach(() => {
     for (const directory of temporaryDirectories.splice(0)) {
@@ -96,22 +103,35 @@ describe("TODO runtime extension", () => {
         temporaryDirectories.push(scratchpadPath);
         const todoPath = path.join(scratchpadPath, "TODO.md");
 
-        const prompt = await handler("before_agent_start")({
-            systemPrompt: "<project_context>\nProject\n</project_context>",
-        }, ctx) as { systemPrompt: string };
+        const prompt = (await handler("before_agent_start")(
+            {
+                systemPrompt: "<project_context>\nProject\n</project_context>",
+            },
+            ctx,
+        )) as { systemPrompt: string };
         await expect(prompt.systemPrompt.replace(todoPath, "<TODO_PATH>")).toMatchFileSnapshot(
             "./__snapshots__/todolist.prompt.txt",
         );
 
-        await expect(handler("tool_call")({
-            toolName: "write",
-            input: { path: todoPath, content: validDocument },
-        }, ctx)).resolves.toEqual({ block: false });
+        await expect(
+            handler("tool_call")(
+                {
+                    toolName: "write",
+                    input: { path: todoPath, content: validDocument },
+                },
+                ctx,
+            ),
+        ).resolves.toEqual({ block: false });
 
-        await expect(handler("tool_call")({
-            toolName: "write",
-            input: { path: todoPath, content: "---\nversion: 1\ntodos: nope\n---\n" },
-        }, ctx)).resolves.toMatchObject({
+        await expect(
+            handler("tool_call")(
+                {
+                    toolName: "write",
+                    input: { path: todoPath, content: "---\nversion: 1\ntodos: nope\n---\n" },
+                },
+                ctx,
+            ),
+        ).resolves.toMatchObject({
             block: true,
             reason: expect.stringContaining("todos"),
         });
@@ -132,10 +152,12 @@ describe("TODO runtime extension", () => {
         fs.writeFileSync(todoPath, validDocument);
         await first.handler("tool_result")({ toolName: "write" }, ctx);
 
-        expect(entries).toContainEqual(expect.objectContaining({
-            customType: TODO_SNAPSHOT_TYPE,
-            data: { version: 1, content: validDocument },
-        }));
+        expect(entries).toContainEqual(
+            expect.objectContaining({
+                customType: TODO_SNAPSHOT_TYPE,
+                data: { version: 1, content: validDocument },
+            }),
+        );
 
         await first.handler("session_shutdown")({}, ctx);
         fs.rmSync(scratchpadPath, { recursive: true, force: true });
@@ -148,7 +170,9 @@ describe("TODO runtime extension", () => {
         const restoredScratchpadPath = getScratchpadPath(sessionManager)!;
         temporaryDirectories.push(restoredScratchpadPath);
         expect(restoredScratchpadPath).not.toBe(scratchpadPath);
-        expect(fs.readFileSync(path.join(restoredScratchpadPath, "TODO.md"), "utf8")).toBe(validDocument);
+        expect(fs.readFileSync(path.join(restoredScratchpadPath, "TODO.md"), "utf8")).toBe(
+            validDocument,
+        );
     });
 
     it("restores the TODO snapshot belonging to the active session branch", async () => {
@@ -201,37 +225,60 @@ describe("TODO runtime extension", () => {
         const todoPath = path.join(scratchpadPath, "TODO.md");
         fs.writeFileSync(todoPath, validDocument);
 
-        await expect(handler("tool_call")({
-            toolName: "edit",
-            input: {
-                path: todoPath,
-                edits: [{ oldText: "# Notes", newText: "# Updated notes" }],
-            },
-        }, ctx)).resolves.toEqual({ block: false });
+        await expect(
+            handler("tool_call")(
+                {
+                    toolName: "edit",
+                    input: {
+                        path: todoPath,
+                        edits: [{ oldText: "# Notes", newText: "# Updated notes" }],
+                    },
+                },
+                ctx,
+            ),
+        ).resolves.toEqual({ block: false });
 
-        await expect(handler("tool_call")({
-            toolName: "edit",
-            input: {
-                path: todoPath,
-                edits: [{ oldText: "status: pending", newText: "status: invalid" }],
-            },
-        }, ctx)).resolves.toMatchObject({
+        await expect(
+            handler("tool_call")(
+                {
+                    toolName: "edit",
+                    input: {
+                        path: todoPath,
+                        edits: [{ oldText: "status: pending", newText: "status: invalid" }],
+                    },
+                },
+                ctx,
+            ),
+        ).resolves.toMatchObject({
             block: true,
             reason: expect.stringContaining("status"),
         });
 
-        await expect(handler("tool_call")({
-            toolName: "edit",
-            input: {
-                path: todoPath,
-                edits: [{ oldText: "not present", newText: "replacement" }],
-            },
-        }, ctx)).resolves.toEqual({ block: false });
+        await expect(
+            handler("tool_call")(
+                {
+                    toolName: "edit",
+                    input: {
+                        path: todoPath,
+                        edits: [{ oldText: "not present", newText: "replacement" }],
+                    },
+                },
+                ctx,
+            ),
+        ).resolves.toEqual({ block: false });
 
-        await expect(handler("tool_call")({
-            toolName: "write",
-            input: { path: path.join(process.cwd(), "TODO.md"), content: "not managed here" },
-        }, ctx)).resolves.toEqual({ block: false });
+        await expect(
+            handler("tool_call")(
+                {
+                    toolName: "write",
+                    input: {
+                        path: path.join(process.cwd(), "TODO.md"),
+                        content: "not managed here",
+                    },
+                },
+                ctx,
+            ),
+        ).resolves.toEqual({ block: false });
     });
 
     it("initializes an empty TODO and recreates it when Bash deletes it", async () => {
@@ -248,22 +295,28 @@ describe("TODO runtime extension", () => {
         expect(fs.readFileSync(todoPath, "utf8")).toBe("---\nversion: 1\ntodos: []\n---\n");
         fs.writeFileSync(todoPath, validDocument);
 
-        await handler("tool_execution_start")({
-            type: "tool_execution_start",
-            toolCallId: "bash-delete",
-            toolName: "bash",
-            args: { command: "rm TODO.md" },
-        }, ctx);
+        await handler("tool_execution_start")(
+            {
+                type: "tool_execution_start",
+                toolCallId: "bash-delete",
+                toolName: "bash",
+                args: { command: "rm TODO.md" },
+            },
+            ctx,
+        );
         fs.unlinkSync(todoPath);
-        const result = await handler("tool_result")({
-            type: "tool_result",
-            toolCallId: "bash-delete",
-            toolName: "bash",
-            input: { command: "rm TODO.md" },
-            content: [{ type: "text", text: "deleted" }],
-            isError: false,
-            details: undefined,
-        }, ctx) as { content: Array<{ type: "text"; text: string }> };
+        const result = (await handler("tool_result")(
+            {
+                type: "tool_result",
+                toolCallId: "bash-delete",
+                toolName: "bash",
+                input: { command: "rm TODO.md" },
+                content: [{ type: "text", text: "deleted" }],
+                isError: false,
+                details: undefined,
+            },
+            ctx,
+        )) as { content: Array<{ type: "text"; text: string }> };
 
         expect(fs.readFileSync(todoPath, "utf8")).toBe("---\nversion: 1\ntodos: []\n---\n");
         expect(result.content).toEqual([{ type: "text", text: "deleted" }]);
@@ -283,63 +336,83 @@ describe("TODO runtime extension", () => {
         fs.writeFileSync(todoPath, validDocument);
         const updatedDocument = validDocument.replace("status: pending", "status: completed");
 
-        await handler("tool_execution_start")({
-            type: "tool_execution_start",
-            toolCallId: "bash-valid",
-            toolName: "bash",
-            args: { command: "update TODO.md" },
-        }, ctx);
+        await handler("tool_execution_start")(
+            {
+                type: "tool_execution_start",
+                toolCallId: "bash-valid",
+                toolName: "bash",
+                args: { command: "update TODO.md" },
+            },
+            ctx,
+        );
         fs.writeFileSync(todoPath, updatedDocument);
-        await expect(handler("tool_result")({
-            type: "tool_result",
-            toolCallId: "bash-valid",
-            toolName: "bash",
-            input: { command: "update TODO.md" },
-            content: [{ type: "text", text: "updated" }],
-            isError: false,
-            details: undefined,
-        }, ctx)).resolves.toMatchObject({
+        await expect(
+            handler("tool_result")(
+                {
+                    type: "tool_result",
+                    toolCallId: "bash-valid",
+                    toolName: "bash",
+                    input: { command: "update TODO.md" },
+                    content: [{ type: "text", text: "updated" }],
+                    isError: false,
+                    details: undefined,
+                },
+                ctx,
+            ),
+        ).resolves.toMatchObject({
             content: [{ type: "text", text: "updated" }],
         });
         expect(fs.readFileSync(todoPath, "utf8")).toBe(updatedDocument);
 
-        await handler("tool_execution_start")({
-            type: "tool_execution_start",
-            toolCallId: "bash-existing",
-            toolName: "bash",
-            args: { command: "printf invalid > TODO.md" },
-        }, ctx);
+        await handler("tool_execution_start")(
+            {
+                type: "tool_execution_start",
+                toolCallId: "bash-existing",
+                toolName: "bash",
+                args: { command: "printf invalid > TODO.md" },
+            },
+            ctx,
+        );
         fs.writeFileSync(todoPath, "---\nversion: 1\ntodos: invalid\n---\n");
-        const restored = await handler("tool_result")({
-            type: "tool_result",
-            toolCallId: "bash-existing",
-            toolName: "bash",
-            input: { command: "printf invalid > TODO.md" },
-            content: [{ type: "text", text: "stdout" }],
-            isError: false,
-            details: undefined,
-        }, ctx) as { content: Array<{ type: "text"; text: string }> };
+        const restored = (await handler("tool_result")(
+            {
+                type: "tool_result",
+                toolCallId: "bash-existing",
+                toolName: "bash",
+                input: { command: "printf invalid > TODO.md" },
+                content: [{ type: "text", text: "stdout" }],
+                isError: false,
+                details: undefined,
+            },
+            ctx,
+        )) as { content: Array<{ type: "text"; text: string }> };
         expect(fs.readFileSync(todoPath, "utf8")).toBe(updatedDocument);
         expect(restored.content[0]?.text).toContain("previous valid TODO.md was restored");
         expect(restored.content[1]?.text).toBe("stdout");
 
         fs.unlinkSync(todoPath);
-        await handler("tool_execution_start")({
-            type: "tool_execution_start",
-            toolCallId: "bash-create",
-            toolName: "bash",
-            args: { command: "printf invalid > TODO.md" },
-        }, ctx);
+        await handler("tool_execution_start")(
+            {
+                type: "tool_execution_start",
+                toolCallId: "bash-create",
+                toolName: "bash",
+                args: { command: "printf invalid > TODO.md" },
+            },
+            ctx,
+        );
         fs.writeFileSync(todoPath, "not TODO frontmatter");
-        const removed = await handler("tool_result")({
-            type: "tool_result",
-            toolCallId: "bash-create",
-            toolName: "bash",
-            input: { command: "printf invalid > TODO.md" },
-            content: [{ type: "text", text: "created" }],
-            isError: true,
-            details: undefined,
-        }, ctx) as { content: Array<{ type: "text"; text: string }> };
+        const removed = (await handler("tool_result")(
+            {
+                type: "tool_result",
+                toolCallId: "bash-create",
+                toolName: "bash",
+                input: { command: "printf invalid > TODO.md" },
+                content: [{ type: "text", text: "created" }],
+                isError: true,
+                details: undefined,
+            },
+            ctx,
+        )) as { content: Array<{ type: "text"; text: string }> };
         expect(fs.existsSync(todoPath)).toBe(false);
         expect(removed.content[0]?.text).toContain("was removed");
     });
@@ -358,28 +431,37 @@ describe("TODO runtime extension", () => {
         fs.writeFileSync(todoPath, validDocument);
         const bashInput = { command: "printf invalid > TODO.md" };
 
-        await handler("tool_execution_start")({
-            type: "tool_execution_start",
-            toolCallId: "bash-concurrent-a",
-            toolName: "bash",
-            args: bashInput,
-        }, ctx);
-        await handler("tool_execution_start")({
-            type: "tool_execution_start",
-            toolCallId: "bash-concurrent-b",
-            toolName: "bash",
-            args: bashInput,
-        }, ctx);
+        await handler("tool_execution_start")(
+            {
+                type: "tool_execution_start",
+                toolCallId: "bash-concurrent-a",
+                toolName: "bash",
+                args: bashInput,
+            },
+            ctx,
+        );
+        await handler("tool_execution_start")(
+            {
+                type: "tool_execution_start",
+                toolCallId: "bash-concurrent-b",
+                toolName: "bash",
+                args: bashInput,
+            },
+            ctx,
+        );
         fs.writeFileSync(todoPath, "---\nversion: 1\ntodos: invalid\n---\n");
-        const result = await handler("tool_result")({
-            type: "tool_result",
-            toolCallId: "bash-concurrent-a",
-            toolName: "bash",
-            input: bashInput,
-            content: [{ type: "text", text: "stdout" }],
-            isError: false,
-            details: undefined,
-        }, ctx) as { content: Array<{ type: "text"; text: string }> };
+        const result = (await handler("tool_result")(
+            {
+                type: "tool_result",
+                toolCallId: "bash-concurrent-a",
+                toolName: "bash",
+                input: bashInput,
+                content: [{ type: "text", text: "stdout" }],
+                isError: false,
+                details: undefined,
+            },
+            ctx,
+        )) as { content: Array<{ type: "text"; text: string }> };
 
         expect(fs.readFileSync(todoPath, "utf8")).toContain("todos: invalid");
         expect(result.content[0]?.text).toContain("could not be safely restored");
@@ -399,31 +481,40 @@ describe("TODO runtime extension", () => {
         fs.writeFileSync(todoPath, validDocument);
         const bashInput = { command: "printf invalid > TODO.md" };
 
-        await handler("tool_execution_start")({
-            type: "tool_execution_start",
-            toolCallId: "bash-aborted",
-            toolName: "bash",
-            args: bashInput,
-        }, ctx);
-        await handler("tool_execution_end")({
-            type: "tool_execution_end",
-            toolCallId: "bash-aborted",
-            toolName: "bash",
-            args: bashInput,
-            result: undefined,
-            isError: true,
-        }, ctx);
+        await handler("tool_execution_start")(
+            {
+                type: "tool_execution_start",
+                toolCallId: "bash-aborted",
+                toolName: "bash",
+                args: bashInput,
+            },
+            ctx,
+        );
+        await handler("tool_execution_end")(
+            {
+                type: "tool_execution_end",
+                toolCallId: "bash-aborted",
+                toolName: "bash",
+                args: bashInput,
+                result: undefined,
+                isError: true,
+            },
+            ctx,
+        );
         fs.writeFileSync(todoPath, "---\nversion: 1\ntodos: invalid\n---\n");
 
-        await handler("tool_result")({
-            type: "tool_result",
-            toolCallId: "bash-aborted",
-            toolName: "bash",
-            input: bashInput,
-            content: [{ type: "text", text: "stdout" }],
-            isError: true,
-            details: undefined,
-        }, ctx);
+        await handler("tool_result")(
+            {
+                type: "tool_result",
+                toolCallId: "bash-aborted",
+                toolName: "bash",
+                input: bashInput,
+                content: [{ type: "text", text: "stdout" }],
+                isError: true,
+                details: undefined,
+            },
+            ctx,
+        );
         expect(fs.readFileSync(todoPath, "utf8")).toContain("todos: invalid");
     });
 
@@ -490,10 +581,15 @@ describe("TODO runtime extension", () => {
         temporaryDirectories.push(outsidePath);
         fs.symlinkSync(outsidePath, todoPath);
 
-        await expect(handler("tool_call")({
-            toolName: "write",
-            input: { path: todoPath, content: validDocument },
-        }, ctx)).resolves.toMatchObject({
+        await expect(
+            handler("tool_call")(
+                {
+                    toolName: "write",
+                    input: { path: todoPath, content: validDocument },
+                },
+                ctx,
+            ),
+        ).resolves.toMatchObject({
             block: true,
             reason: expect.stringContaining("canonical"),
         });

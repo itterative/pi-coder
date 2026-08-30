@@ -105,13 +105,13 @@ function workspaceActions(
 ): AgentWorkspaceBrowserAction[] {
     const actions: AgentWorkspaceBrowserAction[] = [];
     if (workspace.status === "recycling") return actions;
-    const ownedByAnotherSession = currentSessionId !== undefined
-        && workspace.leaseOwnerSessionId !== undefined
-        && workspace.leaseOwnerSessionId !== currentSessionId;
+    const ownedByAnotherSession =
+        currentSessionId !== undefined &&
+        workspace.leaseOwnerSessionId !== undefined &&
+        workspace.leaseOwnerSessionId !== currentSessionId;
     const orphanedByAnotherSession = workspace.leaseState === "orphaned" && ownedByAnotherSession;
-    const clearableForeignTaskLease = ownedByAnotherSession
-        && workspace.leaseKind === "task"
-        && workspace.leaseActive !== true;
+    const clearableForeignTaskLease =
+        ownedByAnotherSession && workspace.leaseKind === "task" && workspace.leaseActive !== true;
     if (orphanedByAnotherSession) {
         actions.push({ action: "recover", key: "x", label: "recover orphaned lease" });
     }
@@ -126,18 +126,17 @@ function workspaceActions(
     }
     if (ownedByAnotherSession) return actions;
 
-    const currentResult = workspace.leaseRunId
-        && workspace.latestResult?.runId === workspace.leaseRunId
-        && (workspace.leaseRunInstanceId === undefined
-            || workspace.latestResult.runInstanceId === workspace.leaseRunInstanceId)
-        ? workspace.latestResult
-        : undefined;
+    const currentResult =
+        workspace.leaseRunId &&
+        workspace.latestResult?.runId === workspace.leaseRunId &&
+        (workspace.leaseRunInstanceId === undefined ||
+            workspace.latestResult.runInstanceId === workspace.leaseRunInstanceId)
+            ? workspace.latestResult
+            : undefined;
     const changed = Boolean(
-        currentResult?.status === "prepared"
-        && (
-            currentResult.workerHead !== currentResult.baseRevision
-            || currentResult.commits.length > 0
-        )
+        currentResult?.status === "prepared" &&
+        (currentResult.workerHead !== currentResult.baseRevision ||
+            currentResult.commits.length > 0),
     );
     if (changed) {
         actions.push(
@@ -165,12 +164,12 @@ function workspaceNotice(workspace: AgentWorkspace, currentSessionId?: string): 
     if (workspace.status === "recycling") {
         return "This workspace is being safely recycled and is temporarily unavailable.";
     }
-    const ownedByAnotherSession = currentSessionId !== undefined
-        && workspace.leaseOwnerSessionId !== undefined
-        && workspace.leaseOwnerSessionId !== currentSessionId;
-    const clearableForeignTaskLease = ownedByAnotherSession
-        && workspace.leaseKind === "task"
-        && workspace.leaseActive !== true;
+    const ownedByAnotherSession =
+        currentSessionId !== undefined &&
+        workspace.leaseOwnerSessionId !== undefined &&
+        workspace.leaseOwnerSessionId !== currentSessionId;
+    const clearableForeignTaskLease =
+        ownedByAnotherSession && workspace.leaseKind === "task" && workspace.leaseActive !== true;
     if (workspace.leaseState === "orphaned" && clearableForeignTaskLease) {
         return "The recorded run is no longer active. You can reset or discard this old lease manually.";
     }
@@ -194,10 +193,7 @@ function workspaceNotice(workspace: AgentWorkspace, currentSessionId?: string): 
 
 export function workspaceBrowserItem(
     workspace: AgentWorkspace,
-    {
-        gitState,
-        currentSessionId,
-    }: AgentWorkspaceBrowserOptions = {},
+    { gitState, currentSessionId }: AgentWorkspaceBrowserOptions = {},
 ): AgentWorkspaceBrowserItem {
     const leaseKind = workspace.leaseKind ?? "unknown";
     const orphaned = workspace.leaseState === "orphaned" ? " · orphaned" : "";
@@ -210,11 +206,12 @@ export function workspaceBrowserItem(
         worktreePath: workspace.worktreePath,
         baseRevision: workspace.baseRevision,
         status: workspace.status,
-        statusText: workspace.leaseState === "orphaned"
-            ? "orphaned lease"
-            : workspace.leaseRunId
-                ? "leased"
-                : workspace.status.replaceAll("_", " "),
+        statusText:
+            workspace.leaseState === "orphaned"
+                ? "orphaned lease"
+                : workspace.leaseRunId
+                  ? "leased"
+                  : workspace.status.replaceAll("_", " "),
         setupText: workspace.setupState.replaceAll("_", " "),
         setupSummary: workspace.setupSummary,
         leaseRunId: workspace.leaseRunId,
@@ -227,11 +224,13 @@ export function workspaceBrowserItem(
         leased: Boolean(workspace.leaseRunId),
         createdAt: workspace.createdAt,
         updatedAt: workspace.updatedAt,
-        git: gitState ? {
-            ...gitState,
-            dirty: gitState.dirty ?? false,
-            text: gitText(gitState),
-        } : undefined,
+        git: gitState
+            ? {
+                  ...gitState,
+                  dirty: gitState.dirty ?? false,
+                  text: gitText(gitState),
+              }
+            : undefined,
         actions: workspaceActions(workspace, currentSessionId),
         notice: workspaceNotice(workspace, currentSessionId),
     };

@@ -4,7 +4,9 @@ import { TUI_DIALOG_EVENT, withDialogQueue } from "../src/tui/dialog-queue";
 
 function deferred() {
     let resolve!: () => void;
-    const promise = new Promise<void>((done) => { resolve = done; });
+    const promise = new Promise<void>((done) => {
+        resolve = done;
+    });
     return { promise, resolve };
 }
 
@@ -62,10 +64,14 @@ describe("shared dialog queue", () => {
             },
         } as any;
 
-        const first = withDialogQueue(undefined, async () => {
-            await firstDone.promise;
-            return "first";
-        }, events);
+        const first = withDialogQueue(
+            undefined,
+            async () => {
+                await firstDone.promise;
+                return "first";
+            },
+            events,
+        );
         const second = withDialogQueue(undefined, async () => "second", events);
 
         for (let index = 0; index < 4; index++) await Promise.resolve();

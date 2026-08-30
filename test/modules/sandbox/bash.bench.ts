@@ -9,13 +9,7 @@ interface BenchmarkCorpus {
 const corpora: readonly BenchmarkCorpus[] = [
     {
         level: "simple",
-        commands: [
-            "ls -la",
-            "cat README.md",
-            "echo hello",
-            "git status --short",
-            "npm test",
-        ],
+        commands: ["ls -la", "cat README.md", "echo hello", "git status --short", "npm test"],
     },
     {
         level: "medium",
@@ -34,7 +28,7 @@ const corpora: readonly BenchmarkCorpus[] = [
 $(printf '%s\\n' "$(git status --short)")
 EOF
 printf '%s\\n' done`,
-            "cd src && git diff --name-only | while read file; do grep -n \"parseBashAst\" \"$file\"; done | sort -u",
+            'cd src && git diff --name-only | while read file; do grep -n "parseBashAst" "$file"; done | sort -u',
             "result=$(printf '%s' \"$(printf '%s' nested.txt)\") && cat \"$(printf '%s' \"$result\")\" 2>&1 | tee >(sort > sorted.txt)",
             "FOO=$(printf '%s' value) BAR=$(printf '%s' other) echo \"$(printf '%s' \"$FOO-$BAR\")\" > output.txt 2>> errors.txt",
             `git log --format='%H %s' --all -- src | head -100 && git show --stat --oneline HEAD | cat 2>&1`,

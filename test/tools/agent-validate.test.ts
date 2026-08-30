@@ -15,21 +15,49 @@ describe("validateAgentParameters", () => {
             validate({ action: "start", agent: "scout", task: "Inspect the repo" }),
         ).toMatchObject({ action: "start", agent: "scout", task: "Inspect the repo" });
         expect(
-            validate({ action: "start", agent: "worker", task: "Implement", isolation: "worktree", title: "Impl", background: true }),
+            validate({
+                action: "start",
+                agent: "worker",
+                task: "Implement",
+                isolation: "worktree",
+                title: "Impl",
+                background: true,
+            }),
         ).toMatchObject({ action: "start", isolation: "worktree", background: true });
-        expect(validate({ action: "continue", runId: "scout-1" })).toEqual({ action: "continue", runId: "scout-1" });
+        expect(validate({ action: "continue", runId: "scout-1" })).toEqual({
+            action: "continue",
+            runId: "scout-1",
+        });
         expect(
             validate({ action: "continue", runId: "scout-1", guidance: "Compare both." }),
         ).toMatchObject({ guidance: "Compare both." });
-        expect(validate({ action: "cancel", runId: "scout-1" })).toEqual({ action: "cancel", runId: "scout-1" });
-        expect(validate({ action: "inspect", runId: "worker-1" })).toEqual({ action: "inspect", runId: "worker-1" });
-        expect(validate({ action: "apply", runId: "worker-1" })).toEqual({ action: "apply", runId: "worker-1" });
-        expect(validate({ action: "discard", runId: "worker-1" })).toEqual({ action: "discard", runId: "worker-1" });
+        expect(validate({ action: "cancel", runId: "scout-1" })).toEqual({
+            action: "cancel",
+            runId: "scout-1",
+        });
+        expect(validate({ action: "inspect", runId: "worker-1" })).toEqual({
+            action: "inspect",
+            runId: "worker-1",
+        });
+        expect(validate({ action: "apply", runId: "worker-1" })).toEqual({
+            action: "apply",
+            runId: "worker-1",
+        });
+        expect(validate({ action: "discard", runId: "worker-1" })).toEqual({
+            action: "discard",
+            runId: "worker-1",
+        });
         expect(
             validate({ action: "continue", runId: "worker-1", guidance: "Fix the tests" }),
         ).toMatchObject({ guidance: "Fix the tests" });
-        expect(validate({ action: "status", runId: "scout-1" })).toEqual({ action: "status", runId: "scout-1" });
-        expect(validate({ action: "collect", runId: "scout-1" })).toEqual({ action: "collect", runId: "scout-1" });
+        expect(validate({ action: "status", runId: "scout-1" })).toEqual({
+            action: "status",
+            runId: "scout-1",
+        });
+        expect(validate({ action: "collect", runId: "scout-1" })).toEqual({
+            action: "collect",
+            runId: "scout-1",
+        });
     });
 
     it("rejects unknown actions with the valid action list", () => {
@@ -51,15 +79,19 @@ describe("validateAgentParameters", () => {
     });
 
     it("rejects fields that do not belong to the action", () => {
-        expect(() => validate({ action: "cancel", runId: "scout-1", task: "x" } as AgentParameters)).toThrow(
+        expect(() =>
+            validate({ action: "cancel", runId: "scout-1", task: "x" } as AgentParameters),
+        ).toThrow(
             'Action "cancel" does not accept "task". Parameters for action "cancel": "runId".',
         );
         expect(() => validate({ action: "list", task: "x" } as AgentParameters)).toThrow(
             'Action "list" does not accept "task". Action "list" takes no parameters.',
         );
-        expect(
-            () => validate({ action: "status", runId: "scout-1", guidance: "nope" } as AgentParameters),
-        ).toThrow('Action "status" does not accept "guidance". Parameters for action "status": "runId".');
+        expect(() =>
+            validate({ action: "status", runId: "scout-1", guidance: "nope" } as AgentParameters),
+        ).toThrow(
+            'Action "status" does not accept "guidance". Parameters for action "status": "runId".',
+        );
     });
 
     it("preserves context sections for start", () => {
@@ -74,25 +106,48 @@ describe("validateAgentParameters", () => {
     it("warns when an agent ignores additional context", () => {
         const context = {
             sections: [
-                { id: "parent_summary", title: "Summary", content: "Known", source: "parent" as const },
-                { id: "recent_context", title: "Recent", content: "Recent", source: "parent" as const },
+                {
+                    id: "parent_summary",
+                    title: "Summary",
+                    content: "Known",
+                    source: "parent" as const,
+                },
+                {
+                    id: "recent_context",
+                    title: "Recent",
+                    content: "Recent",
+                    source: "parent" as const,
+                },
             ],
         };
 
         expect(unusedAgentContextWarning("scout", context, undefined)).toBe(
             'Warning: Agent "scout" does not accept additional context; ignored sections: "parent_summary", "recent_context".',
         );
-        expect(unusedAgentContextWarning("advisor", context, {
-            sectionIds: ["parent_summary"],
-            maxChars: 1_000,
-        })).toBe(
-            'Warning: Agent "advisor" ignored additional context section: "recent_context".',
-        );
-        expect(unusedAgentContextWarning("advisor", {
-            sections: [{ id: "parent_summary", title: "Summary", content: "Known", source: "parent" }],
-        }, {
-            sectionIds: ["parent_summary"],
-            maxChars: 1_000,
-        })).toBeUndefined();
+        expect(
+            unusedAgentContextWarning("advisor", context, {
+                sectionIds: ["parent_summary"],
+                maxChars: 1_000,
+            }),
+        ).toBe('Warning: Agent "advisor" ignored additional context section: "recent_context".');
+        expect(
+            unusedAgentContextWarning(
+                "advisor",
+                {
+                    sections: [
+                        {
+                            id: "parent_summary",
+                            title: "Summary",
+                            content: "Known",
+                            source: "parent",
+                        },
+                    ],
+                },
+                {
+                    sectionIds: ["parent_summary"],
+                    maxChars: 1_000,
+                },
+            ),
+        ).toBeUndefined();
     });
 });

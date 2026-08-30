@@ -52,13 +52,16 @@ function contentText(content: DisplayContent): string {
     if (typeof content === "string") {
         return content;
     }
-    return content.map((block) => (
-        block.type === "text" ? block.text : `[image: ${block.mimeType}]`
-    )).join("\n");
+    return content
+        .map((block) => (block.type === "text" ? block.text : `[image: ${block.mimeType}]`))
+        .join("\n");
 }
 
 export function quoteText(text: string): string {
-    return text.split("\n").map((line) => `> ${line}`).join("\n");
+    return text
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n");
 }
 
 function stringArgument(args: ToolArguments, name: string): string | undefined {
@@ -96,10 +99,12 @@ function editChanges(args: ToolArguments): EditChange[] {
             return [];
         }
         const { oldText, newText } = edit as { oldText?: unknown; newText?: unknown };
-        return [{
-            ...(typeof oldText === "string" ? { oldText } : {}),
-            ...(typeof newText === "string" ? { newText } : {}),
-        }];
+        return [
+            {
+                ...(typeof oldText === "string" ? { oldText } : {}),
+                ...(typeof newText === "string" ? { newText } : {}),
+            },
+        ];
     });
 }
 
@@ -159,7 +164,9 @@ function toolCallText(call: ToolCallDisplay): string {
         case "grep": {
             const pattern = stringArgument(call.args, "pattern");
             const path = stringArgument(call.args, "path");
-            return [prefix, call.name, pattern, path].filter((value) => value !== undefined).join(" ");
+            return [prefix, call.name, pattern, path]
+                .filter((value) => value !== undefined)
+                .join(" ");
         }
         default: {
             const path = stringArgument(call.args, "path");
@@ -204,9 +211,13 @@ function collapsedToolCalls(calls: ToolCallDisplay[]): string {
     const failed = calls.filter((call) => call.failed).length;
     const descriptions = calls.map(toolCallDescription);
     const previewLimit = 4;
-    const preview = descriptions.length <= previewLimit
-        ? descriptions
-        : [...descriptions.slice(0, previewLimit), `+${descriptions.length - previewLimit} more`];
+    const preview =
+        descriptions.length <= previewLimit
+            ? descriptions
+            : [
+                  ...descriptions.slice(0, previewLimit),
+                  `+${descriptions.length - previewLimit} more`,
+              ];
     return `▸ ${formatToolCallSummary(count, failed, false)}: ${preview.join("; ")}`;
 }
 
@@ -257,19 +268,23 @@ function messageParts(
             // potentially large read/bash output already available elsewhere.
             return [];
         case "bashExecution":
-            return [{
-                kind: "tool",
-                text: toolCallText({
-                    name: "bash",
-                    args: { command: message.command },
-                    failed: message.exitCode !== undefined && message.exitCode !== 0,
-                }),
-                toolCalls: [{
-                    name: "bash",
-                    args: { command: message.command },
-                    failed: message.exitCode !== undefined && message.exitCode !== 0,
-                }],
-            }];
+            return [
+                {
+                    kind: "tool",
+                    text: toolCallText({
+                        name: "bash",
+                        args: { command: message.command },
+                        failed: message.exitCode !== undefined && message.exitCode !== 0,
+                    }),
+                    toolCalls: [
+                        {
+                            name: "bash",
+                            args: { command: message.command },
+                            failed: message.exitCode !== undefined && message.exitCode !== 0,
+                        },
+                    ],
+                },
+            ];
         case "custom":
             return [{ kind: "custom", text: quoteText(contentText(message.content)) }];
         case "branchSummary":
@@ -282,7 +297,11 @@ function messageParts(
 function failedToolCallIds(entries: SessionEntry[]): Set<string> {
     const failed = new Set<string>();
     for (const entry of entries) {
-        if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.isError) {
+        if (
+            entry.type === "message" &&
+            entry.message.role === "toolResult" &&
+            entry.message.isError
+        ) {
             failed.add(entry.message.toolCallId);
         }
     }
@@ -325,9 +344,7 @@ function collectTodoEntry(entries: SessionEntry[]): TodoTranscriptEntry | undefi
         return undefined;
     }
 
-    const detailed = todo.body
-        ? `${todo.collapsed}\n\n${quoteText(todo.body)}`
-        : todo.collapsed;
+    const detailed = todo.body ? `${todo.collapsed}\n\n${quoteText(todo.body)}` : todo.collapsed;
     return { collapsed: todo.collapsed, detailed };
 }
 
@@ -384,10 +401,12 @@ function joinTranscriptParts(parts: TranscriptPart[]): string {
     return transcript;
 }
 
-function transcriptParts(transcript: CollectedTranscript, view: AgentTranscriptView): TranscriptPart[] {
-    const conversation = view === "collapsed"
-        ? collapseToolCalls(transcript.conversation)
-        : transcript.conversation;
+function transcriptParts(
+    transcript: CollectedTranscript,
+    view: AgentTranscriptView,
+): TranscriptPart[] {
+    const conversation =
+        view === "collapsed" ? collapseToolCalls(transcript.conversation) : transcript.conversation;
     if (!transcript.todo) {
         return conversation;
     }
@@ -415,7 +434,9 @@ function displayTranscriptParts(
 }
 
 /** Formats an agent conversation in both compact and detailed forms. */
-export function formatAgentSessionTranscripts(entries: SessionEntry[]): AgentSessionTranscriptViews {
+export function formatAgentSessionTranscripts(
+    entries: SessionEntry[],
+): AgentSessionTranscriptViews {
     const transcript = collectTranscript(entries);
     return {
         detailed: renderTranscript(transcript, "detailed"),

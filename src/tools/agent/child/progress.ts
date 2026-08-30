@@ -24,12 +24,13 @@ export function textFromAssistantMessage(message: unknown): string {
     const content = (message as { content?: unknown }).content;
     if (!Array.isArray(content)) return "";
     return content
-        .filter((part): part is { type: "text"; text: string } => (
-            typeof part === "object"
-            && part !== null
-            && (part as { type?: unknown }).type === "text"
-            && typeof (part as { text?: unknown }).text === "string"
-        ))
+        .filter(
+            (part): part is { type: "text"; text: string } =>
+                typeof part === "object" &&
+                part !== null &&
+                (part as { type?: unknown }).type === "text" &&
+                typeof (part as { text?: unknown }).text === "string",
+        )
         .map((part) => part.text)
         .join("");
 }
@@ -47,7 +48,10 @@ export function aggregateUsage(session: AgentSession): Usage {
         let usage: Usage | undefined;
         if (entry.type === "message" && "usage" in entry.message) {
             usage = entry.message.usage;
-        } else if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage) {
+        } else if (
+            (entry.type === "compaction" || entry.type === "branch_summary") &&
+            entry.usage
+        ) {
             usage = entry.usage;
         }
         if (!usage) continue;
@@ -84,7 +88,9 @@ export function childError(session: AgentSession): string | undefined {
     if (!assistant || assistant.role !== "assistant") return session.state.errorMessage;
 
     if (assistant.stopReason === "error") {
-        return assistant.errorMessage ?? session.state.errorMessage ?? "Child model request failed.";
+        return (
+            assistant.errorMessage ?? session.state.errorMessage ?? "Child model request failed."
+        );
     }
     if (assistant.stopReason === "length") return "Child response hit the model output limit.";
     if (assistant.stopReason === "aborted") return "Child model request was aborted.";
@@ -124,7 +130,10 @@ function traceToolArgs(toolName: string, args: unknown): AgentTraceData {
         };
     }
     if (toolName === "write") {
-        return { path: pathValue, contentChars: typeof input.content === "string" ? input.content.length : 0 };
+        return {
+            path: pathValue,
+            contentChars: typeof input.content === "string" ? input.content.length : 0,
+        };
     }
     if (toolName === "bash") {
         return { commandChars: typeof input.command === "string" ? input.command.length : 0 };
@@ -161,7 +170,11 @@ function traceResultChars(result: unknown): number {
 export function traceSessionEvent(
     event: AgentSessionEvent,
 ): { type: string; data?: AgentTraceData } | undefined {
-    if (event.type === "agent_start" || event.type === "turn_start" || event.type === "agent_settled") {
+    if (
+        event.type === "agent_start" ||
+        event.type === "turn_start" ||
+        event.type === "agent_settled"
+    ) {
         return { type: `session.${event.type}` };
     }
     if (event.type === "agent_end") {
@@ -201,9 +214,10 @@ export function traceSessionEvent(
     }
     if (event.type === "tool_execution_end") {
         const result = event.result as { terminate?: unknown; details?: unknown } | undefined;
-        const details = result?.details && typeof result.details === "object"
-            ? result.details as Record<string, unknown>
-            : undefined;
+        const details =
+            result?.details && typeof result.details === "object"
+                ? (result.details as Record<string, unknown>)
+                : undefined;
         return {
             type: "session.tool_end",
             data: {
@@ -223,7 +237,7 @@ export function traceSessionEvent(
 }
 
 function toolActivity(toolName: string, args: unknown): string {
-    const input = args && typeof args === "object" ? args as Record<string, unknown> : {};
+    const input = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const filePath = tracePreview(typeof input.path === "string" ? input.path : ".", 80);
     if (toolName === "read") return `Reading ${filePath}`;
     if (toolName === "grep") {
@@ -254,7 +268,9 @@ export function reportProgress(
             : {}),
         recentActivity: [...tracker.progress.recentActivity],
         ...(tracker.progress.phase ? { phase: tracker.progress.phase } : {}),
-        ...(tracker.progress.lastToolActivity ? { lastToolActivity: tracker.progress.lastToolActivity } : {}),
+        ...(tracker.progress.lastToolActivity
+            ? { lastToolActivity: tracker.progress.lastToolActivity }
+            : {}),
         ...(tracker.progress.toolCounts ? { toolCounts: { ...tracker.progress.toolCounts } } : {}),
         ...(tracker.progress.failedToolCalls !== undefined
             ? { failedToolCalls: tracker.progress.failedToolCalls }
@@ -278,18 +294,19 @@ export function updateTracker(
         tracker.progress.output = textFromAssistantMessage(event.message);
         tracker.progress.phase = "Thinking";
         tracker.progress.recentActivity.push("Thinking");
-        tracker.progress.recentActivity = tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
+        tracker.progress.recentActivity =
+            tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
     } else if (
-        event.type === "message_update"
-        && event.message.role === "assistant"
-        && event.assistantMessageEvent.type === "thinking_start"
+        event.type === "message_update" &&
+        event.message.role === "assistant" &&
+        event.assistantMessageEvent.type === "thinking_start"
     ) {
         forceUpdate = true;
         tracker.progress.phase = "Thinking";
     } else if (
-        event.type === "message_update"
-        && event.message.role === "assistant"
-        && event.assistantMessageEvent.type === "text_delta"
+        event.type === "message_update" &&
+        event.message.role === "assistant" &&
+        event.assistantMessageEvent.type === "text_delta"
     ) {
         tracker.progress.output += event.assistantMessageEvent.delta;
     } else if (event.type === "message_end" && event.message.role === "assistant") {
@@ -302,9 +319,11 @@ export function updateTracker(
         const activity = toolActivity(event.toolName, event.args);
         tracker.progress.lastToolActivity = activity;
         tracker.progress.toolCounts ??= {};
-        tracker.progress.toolCounts[event.toolName] = (tracker.progress.toolCounts[event.toolName] ?? 0) + 1;
+        tracker.progress.toolCounts[event.toolName] =
+            (tracker.progress.toolCounts[event.toolName] ?? 0) + 1;
         tracker.progress.recentActivity.push(activity);
-        tracker.progress.recentActivity = tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
+        tracker.progress.recentActivity =
+            tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
     } else if (event.type === "tool_execution_end" && event.isError) {
         tracker.progress.failedToolCalls = (tracker.progress.failedToolCalls ?? 0) + 1;
         forceUpdate = true;
@@ -318,4 +337,3 @@ export function updateTracker(
         reportProgress(tracker, onProgress);
     }
 }
-

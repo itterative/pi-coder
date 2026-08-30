@@ -3,11 +3,18 @@ import { CommandTag, UNSAFE, VALUE, type CommandSpec } from "./spec";
 // shared by log and whatchanged (an alias of log)
 const LOG_SPEC: CommandSpec = {
     flags: {
-        "-n": VALUE, "--max-count": VALUE,
-        "--since": VALUE, "--until": VALUE, "--after": VALUE, "--before": VALUE,
-        "--author": VALUE, "--grep": VALUE,
-        "-S": VALUE, "-G": VALUE,
-        "--format": VALUE, "--pretty": VALUE,
+        "-n": VALUE,
+        "--max-count": VALUE,
+        "--since": VALUE,
+        "--until": VALUE,
+        "--after": VALUE,
+        "--before": VALUE,
+        "--author": VALUE,
+        "--grep": VALUE,
+        "-S": VALUE,
+        "-G": VALUE,
+        "--format": VALUE,
+        "--pretty": VALUE,
         "--diff-filter": VALUE,
         // Historical patches are normal read-only project access in the
         // trusted local environment assumed by safe-bash.
@@ -25,12 +32,21 @@ const BRANCH_SPEC: CommandSpec = {
     // copying, and upstream/description changes must remain explicit.
     positionals: "none",
     flags: {
-        "-d": UNSAFE, "--delete": UNSAFE, "-D": UNSAFE,
-        "-m": UNSAFE, "--move": UNSAFE, "-M": UNSAFE,
-        "-c": UNSAFE, "--copy": UNSAFE, "-C": UNSAFE,
-        "-u": UNSAFE, "--set-upstream-to": UNSAFE,
-        "--unset-upstream": UNSAFE, "--edit-description": UNSAFE,
-        "--track": UNSAFE, "--no-track": UNSAFE,
+        "-d": UNSAFE,
+        "--delete": UNSAFE,
+        "-D": UNSAFE,
+        "-m": UNSAFE,
+        "--move": UNSAFE,
+        "-M": UNSAFE,
+        "-c": UNSAFE,
+        "--copy": UNSAFE,
+        "-C": UNSAFE,
+        "-u": UNSAFE,
+        "--set-upstream-to": UNSAFE,
+        "--unset-upstream": UNSAFE,
+        "--edit-description": UNSAFE,
+        "--track": UNSAFE,
+        "--no-track": UNSAFE,
     },
 };
 
@@ -39,11 +55,19 @@ const TAG_SPEC: CommandSpec = {
     // movement, and reflog changes are not heuristic-safe.
     positionals: "none",
     flags: {
-        "-d": UNSAFE, "--delete": UNSAFE, "-D": UNSAFE,
-        "-a": UNSAFE, "--annotate": UNSAFE,
-        "-s": UNSAFE, "--sign": UNSAFE, "-u": UNSAFE, "--local-user": UNSAFE,
-        "-f": UNSAFE, "--force": UNSAFE,
-        "-m": UNSAFE, "--move": UNSAFE,
+        "-d": UNSAFE,
+        "--delete": UNSAFE,
+        "-D": UNSAFE,
+        "-a": UNSAFE,
+        "--annotate": UNSAFE,
+        "-s": UNSAFE,
+        "--sign": UNSAFE,
+        "-u": UNSAFE,
+        "--local-user": UNSAFE,
+        "-f": UNSAFE,
+        "--force": UNSAFE,
+        "-m": UNSAFE,
+        "--move": UNSAFE,
         "--create-reflog": UNSAFE,
     },
 };
@@ -115,8 +139,11 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
         // -C/--git-dir/--work-tree relocate the repo, --exec-path changes
         // which helpers git runs
         flags: {
-            "-c": UNSAFE, "-C": UNSAFE,
-            "--git-dir": UNSAFE, "--work-tree": UNSAFE, "--exec-path": UNSAFE,
+            "-c": UNSAFE,
+            "-C": UNSAFE,
+            "--git-dir": UNSAFE,
+            "--work-tree": UNSAFE,
+            "--exec-path": UNSAFE,
             // Can inject arbitrary git config through an inherited env var,
             // including helper and external-diff settings.
             "--config-env": UNSAFE,
@@ -137,25 +164,37 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
             },
             describe: {
                 flags: {
-                    "--abbrev": VALUE, "--candidates": VALUE,
-                    "--matches": VALUE, "--exclude": VALUE,
+                    "--abbrev": VALUE,
+                    "--candidates": VALUE,
+                    "--matches": VALUE,
+                    "--exclude": VALUE,
                 },
             },
             // positionals are revisions, not paths
             "rev-parse": {
                 positionals: "ignore",
                 flags: {
-                    "--short": VALUE, "--abbrev": VALUE, "--abbrev-ref": VALUE,
-                    "--git-path": VALUE, "--verify": VALUE,
+                    "--short": VALUE,
+                    "--abbrev": VALUE,
+                    "--abbrev-ref": VALUE,
+                    "--git-path": VALUE,
+                    "--verify": VALUE,
                 },
             },
             shortlog: {
                 flags: {
-                    "-n": VALUE, "--max-count": VALUE,
-                    "--since": VALUE, "--until": VALUE, "--after": VALUE, "--before": VALUE,
-                    "--author": VALUE, "--grep": VALUE,
-                    "--format": VALUE, "--pretty": VALUE,
-                    "-p": UNSAFE, "--patch": UNSAFE,
+                    "-n": VALUE,
+                    "--max-count": VALUE,
+                    "--since": VALUE,
+                    "--until": VALUE,
+                    "--after": VALUE,
+                    "--before": VALUE,
+                    "--author": VALUE,
+                    "--grep": VALUE,
+                    "--format": VALUE,
+                    "--pretty": VALUE,
+                    "-p": UNSAFE,
+                    "--patch": UNSAFE,
                 },
             },
             // alias of log

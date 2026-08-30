@@ -109,23 +109,29 @@ export class BorderBox implements Component {
 
         const innerWidth = width - 2;
         const topHorizontal = this.characters.horizontal.repeat(innerWidth);
-        const bottomHorizontal = (this.characters.bottomHorizontal ?? this.characters.horizontal).repeat(innerWidth);
+        const bottomHorizontal = (
+            this.characters.bottomHorizontal ?? this.characters.horizontal
+        ).repeat(innerWidth);
         const leftVertical = this.characters.vertical;
         const rightVertical = this.characters.rightVertical ?? this.characters.vertical;
         const childLines = this.child.render(innerWidth);
-        const innerHeight = this.height === undefined ? childLines.length : Math.max(0, this.height - 2);
+        const innerHeight =
+            this.height === undefined ? childLines.length : Math.max(0, this.height - 2);
         const contentLines = childLines.slice(0, innerHeight);
         while (contentLines.length < innerHeight) contentLines.push("");
-        const lines = contentLines.map((line) =>
-            this.borderColor(leftVertical)
-            + truncateToWidth(line, innerWidth, "", true)
-            + this.borderColor(rightVertical),
+        const lines = contentLines.map(
+            (line) =>
+                this.borderColor(leftVertical) +
+                truncateToWidth(line, innerWidth, "", true) +
+                this.borderColor(rightVertical),
         );
 
         return [
             this.borderColor(this.characters.topLeft + topHorizontal + this.characters.topRight),
             ...lines,
-            this.borderColor(this.characters.bottomLeft + bottomHorizontal + this.characters.bottomRight),
+            this.borderColor(
+                this.characters.bottomLeft + bottomHorizontal + this.characters.bottomRight,
+            ),
         ];
     }
 

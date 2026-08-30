@@ -31,10 +31,7 @@ export interface SelectOptions<T> {
     // Maximum visible items before scrolling
     maxVisible?: number;
     // Custom render function for item content (cursor marker is added automatically)
-    renderItem?: (
-        item: PagerItem<T>,
-        options: SelectRenderItemOptions<T>,
-    ) => string;
+    renderItem?: (item: PagerItem<T>, options: SelectRenderItemOptions<T>) => string;
     // Optional header content rendered after title
     headerContent?: (container: Container, theme: Theme) => void;
     // Whether to add a blank row between the title and header content (default: true)
@@ -87,9 +84,7 @@ export class SelectComponent<T> extends ListViewComponent<T, T | undefined, Sele
     private readonly searchIndicator = new SearchIndicator();
     private searchQuery = "";
 
-    constructor(
-        public readonly options: SelectOptions<T>,
-    ) {
+    constructor(public readonly options: SelectOptions<T>) {
         super(
             {
                 title: options.title,
@@ -97,11 +92,11 @@ export class SelectComponent<T> extends ListViewComponent<T, T | undefined, Sele
                 headerContent: options.headerContent,
                 headerSpacing: options.headerSpacing,
                 footerContent: options.footerContent,
-                helpText: options.helpText ?? (
-                    options.enableSearch
+                helpText:
+                    options.helpText ??
+                    (options.enableSearch
                         ? "Type to search · ↑/↓ navigate · Enter confirm · Esc cancel"
-                        : "↑/↓ navigate · Enter confirm · Esc cancel"
-                ),
+                        : "↑/↓ navigate · Enter confirm · Esc cancel"),
                 onKey: options.onKey,
             },
             {
@@ -145,7 +140,9 @@ export class SelectComponent<T> extends ListViewComponent<T, T | undefined, Sele
         this.searchIndicator.setQuery(query);
         const normalizedQuery = query.toLocaleLowerCase();
         this.state.items = normalizedQuery
-            ? this.allItems.filter((item) => item.label.toLocaleLowerCase().includes(normalizedQuery))
+            ? this.allItems.filter((item) =>
+                  item.label.toLocaleLowerCase().includes(normalizedQuery),
+              )
             : [...this.allItems];
         this.state.cursor = 0;
         this.state.scrollOffset = 0;

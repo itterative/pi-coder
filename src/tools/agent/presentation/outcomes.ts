@@ -2,11 +2,7 @@ import fs from "node:fs";
 
 import type { Usage } from "@earendil-works/pi-ai";
 
-import {
-    AgentRunManager,
-    BACKGROUND_AGENT_WAIT_GUIDANCE,
-    deriveAgentTitle,
-} from "../runs/manager";
+import { AgentRunManager, BACKGROUND_AGENT_WAIT_GUIDANCE, deriveAgentTitle } from "../runs/manager";
 import { ZERO_USAGE } from "../runs/usage";
 import type { AgentRunDetails, AgentRunOutcome, AgentRunSummary } from "../contracts/runs";
 import type { AgentParameters } from "../definitions/prompt";
@@ -30,10 +26,11 @@ function workspaceBlockers(workspaces: readonly AgentWorkspace[]): ListedRun[] {
         const result = workspace.latestResult;
         const hasPreparedResult = result?.status === "prepared";
         const missingWorktree = !fs.existsSync(workspace.worktreePath);
-        const isUnavailable = Boolean(workspace.leaseRunId)
-            || hasPreparedResult
-            || workspace.status === "review_required"
-            || missingWorktree;
+        const isUnavailable =
+            Boolean(workspace.leaseRunId) ||
+            hasPreparedResult ||
+            workspace.status === "review_required" ||
+            missingWorktree;
         if (!isUnavailable) continue;
 
         const runIds = [
@@ -41,8 +38,9 @@ function workspaceBlockers(workspaces: readonly AgentWorkspace[]): ListedRun[] {
             ...(result && (hasPreparedResult || workspace.status === "review_required")
                 ? [result.runId]
                 : []),
-            ...(missingWorktree && !workspace.leaseRunId
-                && !(result && (hasPreparedResult || workspace.status === "review_required"))
+            ...(missingWorktree &&
+            !workspace.leaseRunId &&
+            !(result && (hasPreparedResult || workspace.status === "review_required"))
                 ? [`workspace-${workspace.id}`]
                 : []),
         ];
@@ -51,21 +49,21 @@ function workspaceBlockers(workspaces: readonly AgentWorkspace[]): ListedRun[] {
             if (seen.has(key)) continue;
             seen.add(key);
             const hasResult = result?.runId === runId;
-            const status: AgentRunSummary["status"] = hasResult || workspace.status === "review_required"
-                ? "completed"
-                : "interrupted";
-            const agent = workspace.leaseKind === "setup" && !hasResult
-                ? "workspace-setup"
-                : missingWorktree && !workspace.leaseRunId && !result
-                    ? "workspace-registry"
-                    : "worker";
+            const status: AgentRunSummary["status"] =
+                hasResult || workspace.status === "review_required" ? "completed" : "interrupted";
+            const agent =
+                workspace.leaseKind === "setup" && !hasResult
+                    ? "workspace-setup"
+                    : missingWorktree && !workspace.leaseRunId && !result
+                      ? "workspace-registry"
+                      : "worker";
             const nextAction = missingWorktree
                 ? `inspect workspace ${JSON.stringify(workspace.slug)} in /agents; its worktree is missing and may be consuming workspace capacity`
                 : hasPreparedResult
-                    ? `review workspace ${JSON.stringify(workspace.slug)} and prepared result ${JSON.stringify(result!.id)} in /agents; apply, retain, reset, or discard it before reusing the workspace`
-                    : workspace.status === "review_required"
-                        ? `inspect workspace ${JSON.stringify(workspace.slug)} in /agents and review it before reusing the workspace`
-                        : `inspect workspace ${JSON.stringify(workspace.slug)} in /agents; this catalog-only run is unavailable, so do not continue or collect it until the workspace state is confirmed`;
+                  ? `review workspace ${JSON.stringify(workspace.slug)} and prepared result ${JSON.stringify(result!.id)} in /agents; apply, retain, reset, or discard it before reusing the workspace`
+                  : workspace.status === "review_required"
+                    ? `inspect workspace ${JSON.stringify(workspace.slug)} in /agents and review it before reusing the workspace`
+                    : `inspect workspace ${JSON.stringify(workspace.slug)} in /agents; this catalog-only run is unavailable, so do not continue or collect it until the workspace state is confirmed`;
             listed.push({
                 run: {
                     runId,
@@ -95,15 +93,16 @@ export function listOutcome(
 ): AgentRunOutcome {
     const runs: ListedRun[] = manager.listRuns().map((run) => ({ run }));
     for (const listed of workspaceBlockers(workspaces)) {
-        const existing = runs.find((candidate) => (
-            candidate.run.runId === listed.run.runId
-            && (
-                candidate.run.workspaceId === listed.run.workspaceId
-            )
-        ));
+        const existing = runs.find(
+            (candidate) =>
+                candidate.run.runId === listed.run.runId &&
+                candidate.run.workspaceId === listed.run.workspaceId,
+        );
         if (existing) {
-            if (listed.workspace?.latestResult?.status === "prepared"
-                || listed.workspace?.status === "review_required") {
+            if (
+                listed.workspace?.latestResult?.status === "prepared" ||
+                listed.workspace?.status === "review_required"
+            ) {
                 existing.catalogAction = listed.catalogAction;
                 existing.workspace = listed.workspace;
             }
@@ -113,17 +112,24 @@ export function listOutcome(
     }
 
     const content = runs.length
-        ? runs.map(({ run, catalogAction, catalogOnly, workspace }) => {
-            const nextAction = catalogAction ?? (run.status === "waiting_for_parent" || run.status === "interrupted"
-                ? `continue with guidance using runId=${JSON.stringify(run.runId)}`
-                : run.status === "completed" || run.status === "failed" || run.status === "aborted" || run.status === "canceled"
-                    ? `collect with runId=${JSON.stringify(run.runId)}`
-                    : BACKGROUND_AGENT_WAIT_GUIDANCE);
-            const catalogNote = workspace
-                ? `\n  Workspace: ${JSON.stringify(workspace.slug)} · ${JSON.stringify(workspace.worktreePath)}`
-                : "";
-            return `- ${JSON.stringify(run.runId)} · ${JSON.stringify(run.title)} · ${run.agent} · ${run.status}${catalogOnly ? " · catalog-only workspace blocker" : ""}\n  Task: ${JSON.stringify(run.task)}${catalogNote}\n  Next: ${nextAction}`;
-        }).join("\n")
+        ? runs
+              .map(({ run, catalogAction, catalogOnly, workspace }) => {
+                  const nextAction =
+                      catalogAction ??
+                      (run.status === "waiting_for_parent" || run.status === "interrupted"
+                          ? `continue with guidance using runId=${JSON.stringify(run.runId)}`
+                          : run.status === "completed" ||
+                              run.status === "failed" ||
+                              run.status === "aborted" ||
+                              run.status === "canceled"
+                            ? `collect with runId=${JSON.stringify(run.runId)}`
+                            : BACKGROUND_AGENT_WAIT_GUIDANCE);
+                  const catalogNote = workspace
+                      ? `\n  Workspace: ${JSON.stringify(workspace.slug)} · ${JSON.stringify(workspace.worktreePath)}`
+                      : "";
+                  return `- ${JSON.stringify(run.runId)} · ${JSON.stringify(run.title)} · ${run.agent} · ${run.status}${catalogOnly ? " · catalog-only workspace blocker" : ""}\n  Task: ${JSON.stringify(run.task)}${catalogNote}\n  Next: ${nextAction}`;
+              })
+              .join("\n")
         : "No delegated agent runs are currently tracked.";
     const now = Date.now();
     return {

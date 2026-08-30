@@ -23,7 +23,9 @@ export class SqliteTransactionCompletedError extends Error {
 
 export class SqliteInactiveTransactionViewError extends Error {
     constructor() {
-        super("SQLite transaction view is not the active innermost transaction; use the database passed to the current transaction callback.");
+        super(
+            "SQLite transaction view is not the active innermost transaction; use the database passed to the current transaction callback.",
+        );
         this.name = "SqliteInactiveTransactionViewError";
     }
 }
@@ -36,9 +38,11 @@ function isSqliteBusyError(error: unknown): boolean {
     const candidate = error as { code?: unknown; message?: unknown };
     const code = typeof candidate.code === "string" ? candidate.code : "";
     const message = typeof candidate.message === "string" ? candidate.message : "";
-    return code === "SQLITE_BUSY"
-        || code === "SQLITE_LOCKED"
-        || /database is locked|database table is locked/i.test(message);
+    return (
+        code === "SQLITE_BUSY" ||
+        code === "SQLITE_LOCKED" ||
+        /database is locked|database table is locked/i.test(message)
+    );
 }
 
 async function retrySqliteBusy<T>(operation: () => Promise<T>): Promise<T> {
@@ -86,9 +90,9 @@ function trackTransactionOperation<T>(
     const tracked = retainRejection
         ? operationResult
         : operationResult.then(
-            () => undefined,
-            () => undefined,
-        );
+              () => undefined,
+              () => undefined,
+          );
     scope.pending.add(tracked);
     void tracked.then(
         () => scope.pending.delete(tracked),
@@ -100,7 +104,9 @@ function trackTransactionOperation<T>(
 async function drainTransactionScope(scope: TransactionScope): Promise<void> {
     while (scope.pending.size > 0) {
         const results = await Promise.allSettled([...scope.pending]);
-        const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+        const failure = results.find(
+            (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
         if (failure) throw failure.reason;
     }
 }
@@ -156,7 +162,10 @@ export class SqliteDatabase {
         return this.execute(() => this.database.run(sql, ...params));
     }
 
-    get<T extends SqliteRow = SqliteRow>(sql: string, ...params: unknown[]): Promise<T | undefined> {
+    get<T extends SqliteRow = SqliteRow>(
+        sql: string,
+        ...params: unknown[]
+    ): Promise<T | undefined> {
         return this.execute(() => this.database.get<T>(sql, ...params));
     }
 
@@ -178,10 +187,10 @@ export class SqliteDatabase {
 
         const active = SqliteDatabase.transactions.getStore();
         if (
-            this.transactionScope
-            && active?.database === this.root
-            && active.active
-            && active.scope !== this.transactionScope
+            this.transactionScope &&
+            active?.database === this.root &&
+            active.active &&
+            active.scope !== this.transactionScope
         ) {
             return Promise.reject(new SqliteInactiveTransactionViewError());
         }
@@ -202,7 +211,9 @@ export class SqliteDatabase {
         }
 
         return this.root.enqueue(async () => {
-            await retrySqliteBusy(() => this.execDirect(`BEGIN${mode === "DEFERRED" ? "" : ` ${mode}`}`));
+            await retrySqliteBusy(() =>
+                this.execDirect(`BEGIN${mode === "DEFERRED" ? "" : ` ${mode}`}`),
+            );
             const scope: TransactionScope = {
                 active: true,
                 pending: new Set(),
@@ -211,7 +222,9 @@ export class SqliteDatabase {
             const context: TransactionContext = { database: this.root, active: true, scope };
             return SqliteDatabase.transactions.run(context, async () => {
                 try {
-                    const result = await callback(new SqliteDatabase(this.database, scope, this.root));
+                    const result = await callback(
+                        new SqliteDatabase(this.database, scope, this.root),
+                    );
                     scope.active = false;
                     context.active = false;
                     await drainTransactionScope(scope);
@@ -259,18 +272,24 @@ export class SqliteDatabase {
                 return Promise.reject(new SqliteTransactionCompletedError());
             }
             if (
-                active?.database === this.root
-                && active.active
-                && active.scope !== this.transactionScope
+                active?.database === this.root &&
+                active.active &&
+                active.scope !== this.transactionScope
             ) {
                 return Promise.reject(new SqliteInactiveTransactionViewError());
             }
-            return trackTransactionOperation(this.transactionScope, () => retrySqliteBusy(operation));
+            return trackTransactionOperation(this.transactionScope, () =>
+                retrySqliteBusy(operation),
+            );
         }
 
         if (this.root.closed) return Promise.reject(new SqliteDatabaseClosedError());
         if (active?.database === this.root && active.active) {
-            return Promise.reject(new Error("Use the transaction callback database for operations inside a transaction."));
+            return Promise.reject(
+                new Error(
+                    "Use the transaction callback database for operations inside a transaction.",
+                ),
+            );
         }
         if (this.root.closing) return Promise.reject(new SqliteDatabaseClosedError());
         return this.root.enqueue(async () => {
@@ -307,8 +326,12 @@ export class SqliteDatabase {
                     // Preserve the callback error if a detached operation failed.
                 }
                 try {
-                    await retrySqliteBusy(() => this.root.execDirect(`ROLLBACK TO SAVEPOINT ${savepoint}`));
-                    await retrySqliteBusy(() => this.root.execDirect(`RELEASE SAVEPOINT ${savepoint}`));
+                    await retrySqliteBusy(() =>
+                        this.root.execDirect(`ROLLBACK TO SAVEPOINT ${savepoint}`),
+                    );
+                    await retrySqliteBusy(() =>
+                        this.root.execDirect(`RELEASE SAVEPOINT ${savepoint}`),
+                    );
                 } catch {
                     // Preserve the callback error if savepoint cleanup fails.
                 }
@@ -338,13 +361,16 @@ export async function migrateSqliteDatabase(
 ): Promise<void> {
     const versions = migrations.map((migration) => migration.version);
     if (
-        versions.some((version, index) => (
-            !Number.isInteger(version)
-            || version <= 0
-            || (index > 0 && version <= versions[index - 1]!)
-        ))
+        versions.some(
+            (version, index) =>
+                !Number.isInteger(version) ||
+                version <= 0 ||
+                (index > 0 && version <= versions[index - 1]!),
+        )
     ) {
-        throw new Error("SQLite migrations must have strictly increasing positive integer versions.");
+        throw new Error(
+            "SQLite migrations must have strictly increasing positive integer versions.",
+        );
     }
 
     const latestVersion = versions[versions.length - 1] ?? 0;
@@ -355,10 +381,14 @@ export async function migrateSqliteDatabase(
         const row = await transaction.get<{ user_version?: unknown }>("PRAGMA user_version");
         const currentVersion = typeof row?.user_version === "number" ? row.user_version : 0;
         if (currentVersion > latestVersion) {
-            throw new Error(`SQLite database version ${currentVersion} is newer than supported version ${latestVersion}.`);
+            throw new Error(
+                `SQLite database version ${currentVersion} is newer than supported version ${latestVersion}.`,
+            );
         }
 
-        for (const migration of migrations.filter((candidate) => candidate.version > currentVersion)) {
+        for (const migration of migrations.filter(
+            (candidate) => candidate.version > currentVersion,
+        )) {
             await migration.apply(transaction);
             await transaction.exec(`PRAGMA user_version = ${migration.version}`);
         }

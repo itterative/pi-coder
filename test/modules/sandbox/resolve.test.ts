@@ -39,49 +39,47 @@ describe("resolvePermissionDetails: unresolved segments", () => {
         const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-resolve-root-"));
         temporaryDirectories.push(scratchpad);
 
-        expect(resolvePermission(
-            `cat ${path.join(scratchpad, "notes.txt")}`,
-            CWD,
-            {
+        expect(
+            resolvePermission(`cat ${path.join(scratchpad, "notes.txt")}`, CWD, {
                 permissions: {},
                 cwdConfinement: {},
                 additionalRoots: [scratchpad],
-            },
-        )).toBe("allow:sandbox");
-        expect(resolvePermission(
-            `rm -rf ${path.join(scratchpad, "notes.txt")}`,
-            CWD,
-            {
+            }),
+        ).toBe("allow:sandbox");
+        expect(
+            resolvePermission(`rm -rf ${path.join(scratchpad, "notes.txt")}`, CWD, {
                 permissions: {},
                 cwdConfinement: {},
                 additionalRoots: [scratchpad],
-            },
-        )).toBe("allow:sandbox");
+            }),
+        ).toBe("allow:sandbox");
         for (const command of [
             `cp ${path.join(CWD, "source.txt")} ${path.join(scratchpad, "copied.txt")}`,
             `mv ${path.join(scratchpad, "source.txt")} ${path.join(scratchpad, "moved.txt")}`,
             `chmod +x ${path.join(scratchpad, "script.sh")}`,
             `sed -i s/before/after/ ${path.join(scratchpad, "input.txt")}`,
         ]) {
-            expect(resolvePermission(command, CWD, {
-                permissions: {},
-                cwdConfinement: {},
-                additionalRoots: [scratchpad],
-            })).toBe("allow:sandbox");
+            expect(
+                resolvePermission(command, CWD, {
+                    permissions: {},
+                    cwdConfinement: {},
+                    additionalRoots: [scratchpad],
+                }),
+            ).toBe("allow:sandbox");
         }
-        expect(resolvePermission(
-            `touch ${scratchpad}/{ok,../outside/owned}`,
-            CWD,
-            {
+        expect(
+            resolvePermission(`touch ${scratchpad}/{ok,../outside/owned}`, CWD, {
                 permissions: {},
                 cwdConfinement: {},
                 additionalRoots: [scratchpad],
-            },
-        )).toBe("ask");
-        expect(resolvePermission("rm -rf file.txt", CWD, {
-            permissions: {},
-            cwdConfinement: {},
-        })).toBe("ask");
+            }),
+        ).toBe("ask");
+        expect(
+            resolvePermission("rm -rf file.txt", CWD, {
+                permissions: {},
+                cwdConfinement: {},
+            }),
+        ).toBe("ask");
     });
 
     it("keeps read-only additional roots writable only through explicit permission", () => {
@@ -94,10 +92,12 @@ describe("resolvePermissionDetails: unresolved segments", () => {
             additionalRoots: [memory],
             readOnlyAdditionalRoots: [memory],
         };
-        expect(resolvePermission(`cat ${path.join(memory, "notes.md")}`, CWD, options))
-            .toBe("allow:sandbox");
-        expect(resolvePermission(`echo changed > ${path.join(memory, "notes.md")}`, CWD, options))
-            .toBe("ask");
+        expect(resolvePermission(`cat ${path.join(memory, "notes.md")}`, CWD, options)).toBe(
+            "allow:sandbox",
+        );
+        expect(
+            resolvePermission(`echo changed > ${path.join(memory, "notes.md")}`, CWD, options),
+        ).toBe("ask");
     });
 
     const check = (
@@ -113,9 +113,7 @@ describe("resolvePermissionDetails: unresolved segments", () => {
     it("single unknown segment in a heuristic chain", () => {
         const d = check("cd /project && npx vitest run | tail -5");
         expect(d.permission).toBe("ask");
-        expect(d.unresolved).toEqual([[
-            "npx", "vitest", "run",
-        ]]);
+        expect(d.unresolved).toEqual([["npx", "vitest", "run"]]);
     });
 
     it("two unknown segments", () => {
@@ -128,14 +126,12 @@ describe("resolvePermissionDetails: unresolved segments", () => {
     });
 
     it("does not let heredoc compatibility authorize an extra nested operand", () => {
-        expect(resolvePermission(
-            "echo $(cat <<EOF /etc/passwd\nbody\nEOF\n)",
-            CWD,
-            {
+        expect(
+            resolvePermission("echo $(cat <<EOF /etc/passwd\nbody\nEOF\n)", CWD, {
                 permissions: { "echo $(cat << EOF)": "allow" },
                 cwdConfinement: {},
-            },
-        )).toBe("ask");
+            }),
+        ).toBe("ask");
     });
 
     it("keeps extended redirection tokens in unresolved command output", () => {
@@ -165,9 +161,7 @@ describe("resolvePermissionDetails: unresolved segments", () => {
     it("allow rule on one segment does not hide the other", () => {
         const d = check("npx vitest && nc host 80", { "npx *": "allow" });
         expect(d.permission).toBe("ask");
-        expect(d.unresolved).toEqual([[
-            "nc", "host", "80",
-        ]]);
+        expect(d.unresolved).toEqual([["nc", "host", "80"]]);
     });
 
     it("deny: permission deny (unresolved list not used for the dialog)", () => {

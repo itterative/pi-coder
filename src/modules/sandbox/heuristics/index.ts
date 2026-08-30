@@ -5,19 +5,38 @@ import sandboxConfig, { type SandboxConfigCwdConfinement } from "../../../common
 import type { BashCommand } from "../bash";
 import { type Permission } from "../permissions";
 import {
-    Heuristic, UnsafeReason, HeuristicAssessment,
-    assessment, isSafeHeuristic, createCwdConfinementState,
-    type FileAccess, type CwdConfinementState, type ConfinementDiagnostics,
-    type PathConfinementOptions, type CwdConfinementOptions, type ArgsConfinementOptions,
+    Heuristic,
+    UnsafeReason,
+    HeuristicAssessment,
+    assessment,
+    isSafeHeuristic,
+    createCwdConfinementState,
+    type FileAccess,
+    type CwdConfinementState,
+    type ConfinementDiagnostics,
+    type PathConfinementOptions,
+    type CwdConfinementOptions,
+    type ArgsConfinementOptions,
 } from "./types";
 import {
-    buildConfinementOptions, isAllowedPath, isSensitivePath, isRealPathConfined,
-    hasSymlinkComponent, resolvePath,
+    buildConfinementOptions,
+    isAllowedPath,
+    isSensitivePath,
+    isRealPathConfined,
+    hasSymlinkComponent,
+    resolvePath,
 } from "./path-policy";
 import { isCommandConfined, isConfined } from "./evaluator";
 
-export { Heuristic, UnsafeReason, describeUnsafeReason, isSafeHeuristic,
-    createCwdConfinementState, cloneCwdConfinementState, restoreCwdConfinementState } from "./types";
+export {
+    Heuristic,
+    UnsafeReason,
+    describeUnsafeReason,
+    isSafeHeuristic,
+    createCwdConfinementState,
+    cloneCwdConfinementState,
+    restoreCwdConfinementState,
+} from "./types";
 export type {
     FileAccess,
     HeuristicAssessment,
@@ -91,8 +110,10 @@ export function getPathConfinementPermission(
         return Heuristic.UNSAFE;
     }
 
-    if ((confinement?.resolveSymlinks ?? true) &&
-        !isRealPathConfined(filePath, resolvedCwd, home, confinementOptions)) {
+    if (
+        (confinement?.resolveSymlinks ?? true) &&
+        !isRealPathConfined(filePath, resolvedCwd, home, confinementOptions)
+    ) {
         return Heuristic.UNSAFE;
     }
 
@@ -137,8 +158,8 @@ export function getPathConfinementAssessment(
     }
     if (!isAllowedPath(filePath, resolvedCwd, home, confinementOptions, resolvedCwd)) {
         if (
-            (confinement?.resolveSymlinks ?? true)
-            && hasSymlinkComponent(resolvePath(filePath, resolvedCwd, home))
+            (confinement?.resolveSymlinks ?? true) &&
+            hasSymlinkComponent(resolvePath(filePath, resolvedCwd, home))
         ) {
             return assessment(Heuristic.UNSAFE, [UnsafeReason.SYMLINK_ESCAPE]);
         }
@@ -182,28 +203,27 @@ export function getCwdConfinementAssessment(
 
     const diagnostics: ConfinementDiagnostics = { reasons: [], tags: [] };
     const resolvedCwd = path.resolve(cwd);
-    const classification = isConfined(
-        command,
-        resolvedCwd,
-        buildConfinementOptions(
-            confinement,
+    const classification =
+        isConfined(
+            command,
             resolvedCwd,
-            additionalRoots,
-            sensitiveAdditionalRoots,
-            readOnlyAdditionalRoots,
-            customSafeBashCommands,
-        ),
-        diagnostics,
-    ) ?? Heuristic.UNSAFE;
+            buildConfinementOptions(
+                confinement,
+                resolvedCwd,
+                additionalRoots,
+                sensitiveAdditionalRoots,
+                readOnlyAdditionalRoots,
+                customSafeBashCommands,
+            ),
+            diagnostics,
+        ) ?? Heuristic.UNSAFE;
     if (isSafeHeuristic(classification)) {
         return assessment(classification, [], diagnostics.tags);
     }
 
     return assessment(
         Heuristic.UNSAFE,
-        diagnostics.reasons.length > 0
-            ? diagnostics.reasons
-            : [UnsafeReason.UNSAFE_COMMAND],
+        diagnostics.reasons.length > 0 ? diagnostics.reasons : [UnsafeReason.UNSAFE_COMMAND],
         diagnostics.tags,
     );
 }
@@ -249,30 +269,29 @@ export function getArgsConfinementAssessment(
     const diagnostics: ConfinementDiagnostics = { reasons: [], tags: [] };
     const resolvedCwd = path.resolve(cwd);
     const confinementState = state ?? createCwdConfinementState(resolvedCwd);
-    const classification = isCommandConfined(
-        args,
-        confinementState.currentCwd,
-        resolvedCwd,
-        buildConfinementOptions(
-            confinement,
+    const classification =
+        isCommandConfined(
+            args,
+            confinementState.currentCwd,
             resolvedCwd,
-            additionalRoots,
-            sensitiveAdditionalRoots,
-            readOnlyAdditionalRoots,
-            customSafeBashCommands,
-        ),
-        confinementState,
-        diagnostics,
-    ) ?? Heuristic.UNSAFE;
+            buildConfinementOptions(
+                confinement,
+                resolvedCwd,
+                additionalRoots,
+                sensitiveAdditionalRoots,
+                readOnlyAdditionalRoots,
+                customSafeBashCommands,
+            ),
+            confinementState,
+            diagnostics,
+        ) ?? Heuristic.UNSAFE;
     if (isSafeHeuristic(classification)) {
         return assessment(classification, [], diagnostics.tags);
     }
 
     return assessment(
         Heuristic.UNSAFE,
-        diagnostics.reasons.length > 0
-            ? diagnostics.reasons
-            : [UnsafeReason.UNSAFE_COMMAND],
+        diagnostics.reasons.length > 0 ? diagnostics.reasons : [UnsafeReason.UNSAFE_COMMAND],
         diagnostics.tags,
     );
 }
@@ -299,30 +318,29 @@ export function getBashCommandConfinementAssessment(
     const diagnostics: ConfinementDiagnostics = { reasons: [], tags: [] };
     const resolvedCwd = path.resolve(cwd);
     const confinementState = state ?? createCwdConfinementState(resolvedCwd);
-    const classification = isCommandConfined(
-        command,
-        confinementState.currentCwd,
-        resolvedCwd,
-        buildConfinementOptions(
-            confinement,
+    const classification =
+        isCommandConfined(
+            command,
+            confinementState.currentCwd,
             resolvedCwd,
-            additionalRoots,
-            sensitiveAdditionalRoots,
-            readOnlyAdditionalRoots,
-            customSafeBashCommands,
-        ),
-        confinementState,
-        diagnostics,
-    ) ?? Heuristic.UNSAFE;
+            buildConfinementOptions(
+                confinement,
+                resolvedCwd,
+                additionalRoots,
+                sensitiveAdditionalRoots,
+                readOnlyAdditionalRoots,
+                customSafeBashCommands,
+            ),
+            confinementState,
+            diagnostics,
+        ) ?? Heuristic.UNSAFE;
     if (isSafeHeuristic(classification)) {
         return assessment(classification, [], diagnostics.tags);
     }
 
     return assessment(
         Heuristic.UNSAFE,
-        diagnostics.reasons.length > 0
-            ? diagnostics.reasons
-            : [UnsafeReason.UNSAFE_COMMAND],
+        diagnostics.reasons.length > 0 ? diagnostics.reasons : [UnsafeReason.UNSAFE_COMMAND],
         diagnostics.tags,
     );
 }

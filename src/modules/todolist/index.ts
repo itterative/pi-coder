@@ -75,11 +75,13 @@ function appendTodoPrompt(systemPrompt: string, pathname: string): string {
     const index = systemPrompt.indexOf(projectContextEnd);
     if (index === -1) return `${systemPrompt}\n\n${block}`;
 
-    return systemPrompt.slice(0, index + projectContextEnd.length)
-        + "\n\n"
-        + block
-        + "\n"
-        + systemPrompt.slice(index + projectContextEnd.length);
+    return (
+        systemPrompt.slice(0, index + projectContextEnd.length) +
+        "\n\n" +
+        block +
+        "\n" +
+        systemPrompt.slice(index + projectContextEnd.length)
+    );
 }
 
 function resolveToolPath(rawPath: string, cwd: string): string {
@@ -159,15 +161,18 @@ function applyTodoEdits(content: string, edits: TodoEdit[], filePath: string): s
         const previous = matches[index - 1];
         const current = matches[index];
         if (previous.matchIndex + previous.matchLength > current.matchIndex) {
-            throw new Error(`edits[${previous.index}] and edits[${current.index}] overlap in ${filePath}`);
+            throw new Error(
+                `edits[${previous.index}] and edits[${current.index}] overlap in ${filePath}`,
+            );
         }
     }
 
     let result = normalizedContent;
     for (const match of [...matches].reverse()) {
-        result = result.slice(0, match.matchIndex)
-            + match.newText
-            + result.slice(match.matchIndex + match.matchLength);
+        result =
+            result.slice(0, match.matchIndex) +
+            match.newText +
+            result.slice(match.matchIndex + match.matchLength);
     }
     return result;
 }
@@ -191,10 +196,7 @@ async function initializeTodoFile(ctx: ExtensionContext): Promise<void> {
     }
 }
 
-async function restoreTodoDocument(
-    ctx: ExtensionContext,
-    content: string,
-): Promise<boolean> {
+async function restoreTodoDocument(ctx: ExtensionContext, content: string): Promise<boolean> {
     const scratchpadPath = getScratchpadPath(ctx.sessionManager);
     if (!scratchpadPath) return false;
 
@@ -208,11 +210,7 @@ async function restoreTodoDocument(
     }
 }
 
-function persistTodoIfChanged(
-    pi: ExtensionAPI,
-    ctx: ExtensionContext,
-    content: string,
-): void {
+function persistTodoIfChanged(pi: ExtensionAPI, ctx: ExtensionContext, content: string): void {
     const sessionManager = ctx.sessionManager;
     if (!sessionManager) return;
 
@@ -272,9 +270,7 @@ export default function registerTodoListExtension(
         await initializeTodoFile(ctx);
 
         const snapshot = getTodoSnapshot(ctx);
-        const restored = snapshot
-            ? await restoreTodoDocument(ctx, snapshot.content)
-            : false;
+        const restored = snapshot ? await restoreTodoDocument(ctx, snapshot.content) : false;
         if (ctx.sessionManager) {
             todoRuntimeStates.set(ctx.sessionManager, {
                 persistedContent: restored ? snapshot?.content : undefined,
@@ -304,7 +300,10 @@ export default function registerTodoListExtension(
         if (!scratchpadPath) return;
 
         return {
-            systemPrompt: appendTodoPrompt(event.systemPrompt, path.join(scratchpadPath, "TODO.md")),
+            systemPrompt: appendTodoPrompt(
+                event.systemPrompt,
+                path.join(scratchpadPath, "TODO.md"),
+            ),
         };
     });
 
@@ -320,7 +319,7 @@ export default function registerTodoListExtension(
         if (resolveToolPath(input.path, ctx.cwd) !== path.resolve(todoPath)) {
             return { block: false };
         }
-        if (!await isManagedTodoPath(input.path, ctx.cwd, scratchpadPath)) {
+        if (!(await isManagedTodoPath(input.path, ctx.cwd, scratchpadPath))) {
             return {
                 block: true,
                 reason: "TODO.md path is not the runtime's canonical scratchpad file.",
@@ -353,7 +352,8 @@ export default function registerTodoListExtension(
     });
 
     pi.on("tool_result", async (event, ctx) => {
-        if (event.toolName !== "write" && event.toolName !== "edit" && event.toolName !== "bash") return;
+        if (event.toolName !== "write" && event.toolName !== "edit" && event.toolName !== "bash")
+            return;
 
         // A failed write/edit did not complete a TODO mutation. Leave the
         // existing widget and persisted snapshot alone; the tool owns its
@@ -364,21 +364,9 @@ export default function registerTodoListExtension(
     });
 }
 
-export {
-    appendTodoPrompt,
-    applyTodoEdits,
-    isManagedTodoPath,
-};
-export {
-    parseTodoList,
-    type TodoItem,
-    type TodoList,
-    type TodoStatus,
-} from "./parser";
-export {
-    summarizeTodoList,
-    type TodoProgress,
-} from "./progress";
+export { appendTodoPrompt, applyTodoEdits, isManagedTodoPath };
+export { parseTodoList, type TodoItem, type TodoList, type TodoStatus } from "./parser";
+export { summarizeTodoList, type TodoProgress } from "./progress";
 export {
     TODO_SNAPSHOT_TYPE,
     appendTodoSnapshot,

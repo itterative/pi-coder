@@ -1,10 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 
-import {
-    CommandTag,
-    type HeuristicAssessment,
-} from "../../../modules/sandbox/heuristics";
+import { CommandTag, type HeuristicAssessment } from "../../../modules/sandbox/heuristics";
 
 const execFile = promisify(execFileCallback);
 

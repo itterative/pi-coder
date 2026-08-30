@@ -32,7 +32,10 @@ import {
 } from "../../tui/agents";
 import type { AgentLifecycle } from "./lifecycle";
 import { prepareForegroundWorkspaceResult } from "./workspaces/finalization";
-import { inspectAgentWorkspaceResult, reconcileNoChangeAgentWorkspaceLeases } from "./workspaces/results";
+import {
+    inspectAgentWorkspaceResult,
+    reconcileNoChangeAgentWorkspaceLeases,
+} from "./workspaces/results";
 import { inspectAgentWorkspaceGitState, listAgentWorkspaces } from "./workspaces/store";
 import { createAgentWorkspaceManually } from "./workspaces/setup";
 import { handleWorkspaceAction } from "./workspaces/tui-actions";
@@ -90,11 +93,9 @@ export function mergeHistoricalAgentSessions(
             .map((item) => [path.resolve(item.sessionFile!), item]),
     );
     return removeCurrentAgentTranscripts(
-        allPast.map((item) => (
-            item.sessionFile
-                ? activeByFile.get(path.resolve(item.sessionFile)) ?? item
-                : item
-        )),
+        allPast.map((item) =>
+            item.sessionFile ? (activeByFile.get(path.resolve(item.sessionFile)) ?? item) : item,
+        ),
         current,
     );
 }
@@ -109,19 +110,22 @@ function buildSettings(cwd: string): AgentSetting[] {
         {
             id: "notifyBusyWorkerChanges" as const,
             label: "Busy worker change notifications",
-            description: "Get an immediate update when a worker changes your files while the main assistant is still working. Turn this off to receive the update only when the worker finishes.",
+            description:
+                "Get an immediate update when a worker changes your files while the main assistant is still working. Turn this off to receive the update only when the worker finishes.",
             enabled: shouldNotifyBusyWorkerChanges(config),
         },
         {
             id: "maxWorkspacesPerRepo" as const,
             label: "Maximum workspaces per repository",
-            description: "Maximum number of persistent isolated workspaces that can exist for one Git repository.",
+            description:
+                "Maximum number of persistent isolated workspaces that can exist for one Git repository.",
             value: maxWorkspacesPerRepo(config),
         },
         {
             id: "advisorEnabled" as const,
             label: "Advisor availability",
-            description: "Allow the parent agent to consult the read-only senior advisor. Configure its model separately below.",
+            description:
+                "Allow the parent agent to consult the read-only senior advisor. Configure its model separately below.",
             enabled: isAdvisorEnabled(config),
         },
         ...BUILTIN_AGENT_NAMES.map((id) => ({
@@ -135,10 +139,14 @@ function buildSettings(cwd: string): AgentSetting[] {
 
 function buildModelOptions(ctx: ExtensionCommandContext, cwd: string): AgentModelOption[] {
     const config = agentConfig.get(cwd);
-    const options: AgentModelOption[] = [{
-        label: "Parent model",
-        description: ctx.model ? `Use ${ctx.model.provider}/${ctx.model.id}` : "Use the current pi model",
-    }];
+    const options: AgentModelOption[] = [
+        {
+            label: "Parent model",
+            description: ctx.model
+                ? `Use ${ctx.model.provider}/${ctx.model.id}`
+                : "Use the current pi model",
+        },
+    ];
     const models = new Map<string, AgentModelOption>();
     for (const model of ctx.modelRegistry.getAvailable()) {
         const id = `${model.provider}/${model.id}`;
@@ -157,7 +165,9 @@ function buildModelOptions(ctx: ExtensionCommandContext, cwd: string): AgentMode
             });
         }
     }
-    options.push(...[...models.values()].sort((left, right) => left.label.localeCompare(right.label)));
+    options.push(
+        ...[...models.values()].sort((left, right) => left.label.localeCompare(right.label)),
+    );
     return options;
 }
 
@@ -198,14 +208,21 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                 const sessionPastRecords = pastLists.all.filter(
                     (item) => item.parentSessionId === currentSessionId,
                 );
-                sessionPast = mergeHistoricalAgentSessions(sessionPastRecords, pastLists.activeBranch, current);
+                sessionPast = mergeHistoricalAgentSessions(
+                    sessionPastRecords,
+                    pastLists.activeBranch,
+                    current,
+                );
                 past = mergeHistoricalAgentSessions(pastLists.all, pastLists.activeBranch, current);
             } catch (error) {
                 if (signal?.aborted) {
                     throw error;
                 }
                 const message = error instanceof Error ? error.message : String(error);
-                ctx.ui.notify(`Could not browse persisted delegated-agent sessions: ${message}`, "warning");
+                ctx.ui.notify(
+                    `Could not browse persisted delegated-agent sessions: ${message}`,
+                    "warning",
+                );
                 sessionPast = [];
                 past = [];
             }
@@ -221,11 +238,14 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                         `Released ${released} verified no-change workspace lease${released === 1 ? "" : "s"}.`,
                         "info",
                     );
-                    emitAgentEvent({
-                        type: "runtime",
-                        action: "reconciled",
-                        released,
-                    }, { sink: lifecycle.events, cwd: ctx.cwd });
+                    emitAgentEvent(
+                        {
+                            type: "runtime",
+                            action: "reconciled",
+                            released,
+                        },
+                        { sink: lifecycle.events, cwd: ctx.cwd },
+                    );
                 }
                 workspaceRecords = await listAgentWorkspaces(ctx.cwd);
                 signal?.throwIfAborted();
@@ -238,14 +258,17 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                 workspaceRecords = [];
             }
             signal?.throwIfAborted();
-            workspaceDomains = new Map(workspaceRecords.map((workspace) => [workspace.id, workspace]));
-            const workspaces = await Promise.all(workspaceRecords.map(async (workspace) => workspaceBrowserItem(
-                workspace,
-                {
-                    gitState: await inspectAgentWorkspaceGitState(workspace),
-                    currentSessionId,
-                },
-            )));
+            workspaceDomains = new Map(
+                workspaceRecords.map((workspace) => [workspace.id, workspace]),
+            );
+            const workspaces = await Promise.all(
+                workspaceRecords.map(async (workspace) =>
+                    workspaceBrowserItem(workspace, {
+                        gitState: await inspectAgentWorkspaceGitState(workspace),
+                        currentSessionId,
+                    }),
+                ),
+            );
             signal?.throwIfAborted();
             return {
                 current,
@@ -265,163 +288,182 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             settings: buildSettings(ctx.cwd),
             models: buildModelOptions(ctx, ctx.cwd),
         };
-        await showAgentSessionBrowser({
-            ...initial,
-            loadingAgents: true,
-            loadingWorkspaces: true,
-            onInitialLoad: loadBrowserData,
-            cwd: ctx.cwd,
-            eventBus: pi.events,
-            onRefresh: loadBrowserData,
-            onResume: async (item) => {
-                try {
-                    const outcome = await prepareForegroundWorkspaceResult(
-                        await lifecycle.manager.resume(item.id, {
-                            onProgress: lifecycle.backgroundUpdate(ctx),
-                        }),
-                        ctx,
-                        lifecycle.events,
-                    );
-                    if (outcome.details.workspaceResult) {
-                        await lifecycle.manager.setWorkspaceResultId(
-                            outcome.details.runId,
-                            outcome.details.workspaceResult.id,
+        await showAgentSessionBrowser(
+            {
+                ...initial,
+                loadingAgents: true,
+                loadingWorkspaces: true,
+                onInitialLoad: loadBrowserData,
+                cwd: ctx.cwd,
+                eventBus: pi.events,
+                onRefresh: loadBrowserData,
+                onResume: async (item) => {
+                    try {
+                        const outcome = await prepareForegroundWorkspaceResult(
+                            await lifecycle.manager.resume(item.id, {
+                                onProgress: lifecycle.backgroundUpdate(ctx),
+                            }),
+                            ctx,
+                            lifecycle.events,
                         );
+                        if (outcome.details.workspaceResult) {
+                            await lifecycle.manager.setWorkspaceResultId(
+                                outcome.details.runId,
+                                outcome.details.workspaceResult.id,
+                            );
+                        }
+                        lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
+                        lifecycle.publishAgentStatus();
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        ctx.ui.notify(`Could not resume ${item.id}: ${message}`, "warning");
                     }
-                    lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
-                    lifecycle.publishAgentStatus();
-                } catch (error) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    ctx.ui.notify(`Could not resume ${item.id}: ${message}`, "warning");
-                }
-            },
-            onCancelConfirmation: (item) => confirm({
-                title: "Cancel delegated agent?",
-                message: `Cancel "${item.title || item.id}"? The agent will stop as soon as its current operation allows.`,
-            }, ctx),
-            onCancel: async (item) => {
-                try {
-                    const outcome = await prepareForegroundWorkspaceResult(
-                        await lifecycle.manager.cancel(item.id),
-                        ctx,
-                        lifecycle.events,
-                    );
-                    if (outcome.details.workspaceResult) {
-                        await lifecycle.manager.setWorkspaceResultId(
-                            outcome.details.runId,
-                            outcome.details.workspaceResult.id,
-                        );
-                    }
-                    lifecycle.notifyUserCanceled(outcome.details);
-                    lifecycle.publishAgentStatus();
-                } catch (error) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    ctx.ui.notify(`Could not cancel ${item.id}: ${message}`, "warning");
-                }
-            },
-            onWorkspaceInspect: async (item) => inspectAgentWorkspaceResult(requireWorkspace(item.id)),
-            onCreateWorkspace: async () => {
-                const definition = lifecycle.discover(ctx).agents.find((agent) => agent.name === "worker");
-                if (!definition) {
-                    ctx.ui.notify("The mutation-capable worker is not available.", "warning");
-                    return;
-                }
-                let setupRunId: string | undefined;
-                try {
-                    const workspace = await createAgentWorkspaceManually(ctx.cwd, {
-                        definition,
-                        factory: lifecycle.factory,
-                        ctx,
-                        onUiUpdate: (runId, workspaceItem, update) => {
-                            setupRunId = runId;
-                            lifecycle.updateSetupRun(ctx, runId, workspaceItem, update);
+                },
+                onCancelConfirmation: (item) =>
+                    confirm(
+                        {
+                            title: "Cancel delegated agent?",
+                            message: `Cancel "${item.title || item.id}"? The agent will stop as soon as its current operation allows.`,
                         },
-                        events: lifecycle.events,
-                        dialogEvents: lifecycle.eventBus,
-                        maxWorkspaces: maxWorkspacesPerRepo(agentConfig.get(ctx.cwd)),
-                    });
-                    if (workspace) {
-                        ctx.ui.notify(`Created isolated workspace ${workspace.slug}.`, "info");
+                        ctx,
+                    ),
+                onCancel: async (item) => {
+                    try {
+                        const outcome = await prepareForegroundWorkspaceResult(
+                            await lifecycle.manager.cancel(item.id),
+                            ctx,
+                            lifecycle.events,
+                        );
+                        if (outcome.details.workspaceResult) {
+                            await lifecycle.manager.setWorkspaceResultId(
+                                outcome.details.runId,
+                                outcome.details.workspaceResult.id,
+                            );
+                        }
+                        lifecycle.notifyUserCanceled(outcome.details);
+                        lifecycle.publishAgentStatus();
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        ctx.ui.notify(`Could not cancel ${item.id}: ${message}`, "warning");
                     }
-                } catch (error) {
+                },
+                onWorkspaceInspect: async (item) =>
+                    inspectAgentWorkspaceResult(requireWorkspace(item.id)),
+                onCreateWorkspace: async () => {
+                    const definition = lifecycle
+                        .discover(ctx)
+                        .agents.find((agent) => agent.name === "worker");
+                    if (!definition) {
+                        ctx.ui.notify("The mutation-capable worker is not available.", "warning");
+                        return;
+                    }
+                    let setupRunId: string | undefined;
+                    try {
+                        const workspace = await createAgentWorkspaceManually(ctx.cwd, {
+                            definition,
+                            factory: lifecycle.factory,
+                            ctx,
+                            onUiUpdate: (runId, workspaceItem, update) => {
+                                setupRunId = runId;
+                                lifecycle.updateSetupRun(ctx, runId, workspaceItem, update);
+                            },
+                            events: lifecycle.events,
+                            dialogEvents: lifecycle.eventBus,
+                            maxWorkspaces: maxWorkspacesPerRepo(agentConfig.get(ctx.cwd)),
+                        });
+                        if (workspace) {
+                            ctx.ui.notify(`Created isolated workspace ${workspace.slug}.`, "info");
+                        }
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        ctx.ui.notify(`Could not create isolated workspace: ${message}`, "warning");
+                    } finally {
+                        if (setupRunId) lifecycle.clearSetupRun(setupRunId);
+                        lifecycle.publishAgentStatus();
+                    }
+                },
+                onConfirmWorkspaceAction: (item, action) =>
+                    confirm(workspaceActionConfirmation(action, item.slug), ctx),
+                onLoadTranscript: (item) => loadAgentSessionTranscriptForItem(item),
+                onModelChange: (agent, model) => {
+                    agentConfig.setModel(agent, model, ctx.cwd);
+                },
+                onMaxWorkspacesInput: (currentValue) =>
+                    numericInput(
+                        {
+                            title: "Maximum workspaces per repository",
+                            description: "Maximum number of persistent workspaces per repository.",
+                            initialValue: currentValue,
+                            parse: parsePositiveInteger,
+                            helpText: "Enter save · Esc cancel",
+                        },
+                        ctx,
+                    ),
+                onMaxWorkspacesChange: (value) => {
+                    agentConfig.setMaxWorkspacesPerRepo(value, ctx.cwd);
+                },
+                onToggleChange: (setting, enabled) => {
+                    if (setting === "advisorEnabled") {
+                        agentConfig.setAdvisorEnabled(enabled, ctx.cwd);
+                        lifecycle.refreshAgentPrompt(ctx);
+                        return;
+                    }
+                    agentConfig.setNotifyBusyWorkerChanges(enabled, ctx.cwd);
+                },
+                onModelChangeError: (error) => {
                     const message = error instanceof Error ? error.message : String(error);
-                    ctx.ui.notify(`Could not create isolated workspace: ${message}`, "warning");
-                } finally {
-                    if (setupRunId) lifecycle.clearSetupRun(setupRunId);
-                    lifecycle.publishAgentStatus();
-                }
-            },
-            onConfirmWorkspaceAction: (item, action) => confirm(
-                workspaceActionConfirmation(action, item.slug),
-                ctx,
-            ),
-            onLoadTranscript: (item) => loadAgentSessionTranscriptForItem(item),
-            onModelChange: (agent, model) => {
-                agentConfig.setModel(agent, model, ctx.cwd);
-            },
-            onMaxWorkspacesInput: (currentValue) => numericInput({
-                title: "Maximum workspaces per repository",
-                description: "Maximum number of persistent workspaces per repository.",
-                initialValue: currentValue,
-                parse: parsePositiveInteger,
-                helpText: "Enter save · Esc cancel",
-            }, ctx),
-            onMaxWorkspacesChange: (value) => {
-                agentConfig.setMaxWorkspacesPerRepo(value, ctx.cwd);
-            },
-            onToggleChange: (setting, enabled) => {
-                if (setting === "advisorEnabled") {
-                    agentConfig.setAdvisorEnabled(enabled, ctx.cwd);
-                    lifecycle.refreshAgentPrompt(ctx);
-                    return;
-                }
-                agentConfig.setNotifyBusyWorkerChanges(enabled, ctx.cwd);
-            },
-            onModelChangeError: (error) => {
-                const message = error instanceof Error ? error.message : String(error);
-                ctx.ui.notify(`Could not save agent settings: ${message}`, "warning");
-            },
-            onWorkspaceAction: async (item, action) => {
-                const workspace = requireWorkspace(item.id);
-                const replacement = await handleWorkspaceAction(
-                    workspace,
-                    action,
-                    ctx,
-                    lifecycle.manager,
-                );
-                if (replacement !== workspace) {
-                    if (action === "discard") {
-                        lifecycle.emitWorkspaceEvent(ctx, workspace.id, "removed", action);
-                    } else {
-                        lifecycle.emitWorkspaceEvent(ctx, workspace.id, "updated", action);
-                        if (action === "apply" || action === "retain") {
-                            lifecycle.emitWorkspaceEvent(ctx, workspace.id, "result_changed", action);
-                        }
-                        if (
-                            action === "apply"
-                            || action === "retain"
-                            || action === "reset"
-                            || action === "release"
-                            || action === "recover"
-                        ) {
-                            lifecycle.emitWorkspaceEvent(ctx, workspace.id, "lease_changed", action);
+                    ctx.ui.notify(`Could not save agent settings: ${message}`, "warning");
+                },
+                onWorkspaceAction: async (item, action) => {
+                    const workspace = requireWorkspace(item.id);
+                    const replacement = await handleWorkspaceAction(
+                        workspace,
+                        action,
+                        ctx,
+                        lifecycle.manager,
+                    );
+                    if (replacement !== workspace) {
+                        if (action === "discard") {
+                            lifecycle.emitWorkspaceEvent(ctx, workspace.id, "removed", action);
+                        } else {
+                            lifecycle.emitWorkspaceEvent(ctx, workspace.id, "updated", action);
+                            if (action === "apply" || action === "retain") {
+                                lifecycle.emitWorkspaceEvent(
+                                    ctx,
+                                    workspace.id,
+                                    "result_changed",
+                                    action,
+                                );
+                            }
+                            if (
+                                action === "apply" ||
+                                action === "retain" ||
+                                action === "reset" ||
+                                action === "release" ||
+                                action === "recover"
+                            ) {
+                                lifecycle.emitWorkspaceEvent(
+                                    ctx,
+                                    workspace.id,
+                                    "lease_changed",
+                                    action,
+                                );
+                            }
                         }
                     }
-                }
-                if (!replacement) {
-                    workspaceDomains.delete(workspace.id);
-                    return replacement;
-                }
-                workspaceDomains.set(replacement.id, replacement);
-                return workspaceBrowserItem(
-                    replacement,
-                    {
+                    if (!replacement) {
+                        workspaceDomains.delete(workspace.id);
+                        return replacement;
+                    }
+                    workspaceDomains.set(replacement.id, replacement);
+                    return workspaceBrowserItem(replacement, {
                         gitState: await inspectAgentWorkspaceGitState(replacement),
                         currentSessionId,
-                    },
-                );
+                    });
+                },
             },
-        }, ctx);
+            ctx,
+        );
     };
 
     pi.registerCommand("agents", {

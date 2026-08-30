@@ -8,10 +8,11 @@ const DATABASE_NAME = "meta.sqlite";
 
 export type AgentMetadataDatabase = SqliteDatabase;
 
-export const AGENT_METADATA_MIGRATIONS = [{
-    version: 1,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+export const AGENT_METADATA_MIGRATIONS = [
+    {
+        version: 1,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             CREATE TABLE IF NOT EXISTS workspaces (
                 version INTEGER NOT NULL,
                 id TEXT PRIMARY KEY,
@@ -28,11 +29,12 @@ export const AGENT_METADATA_MIGRATIONS = [{
             CREATE INDEX IF NOT EXISTS workspaces_cwd_state_created
                 ON workspaces (cwd, setup_state, created_at);
         `);
+        },
     },
-}, {
-    version: 2,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 2,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             ALTER TABLE workspaces ADD COLUMN lease_owner_session_id TEXT;
             ALTER TABLE workspaces ADD COLUMN lease_run_id TEXT;
             ALTER TABLE workspaces ADD COLUMN lease_kind TEXT;
@@ -40,20 +42,22 @@ export const AGENT_METADATA_MIGRATIONS = [{
             CREATE INDEX IF NOT EXISTS workspaces_lease_run
                 ON workspaces (lease_run_id);
         `);
+        },
     },
-}, {
-    version: 3,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 3,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             ALTER TABLE workspaces ADD COLUMN workspace_status TEXT NOT NULL DEFAULT 'available';
             CREATE INDEX IF NOT EXISTS workspaces_status
                 ON workspaces (workspace_status, setup_state, created_at);
         `);
+        },
     },
-}, {
-    version: 4,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 4,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             CREATE TABLE workspace_results (
                 id TEXT PRIMARY KEY,
                 workspace_id TEXT NOT NULL,
@@ -72,11 +76,12 @@ export const AGENT_METADATA_MIGRATIONS = [{
             CREATE INDEX IF NOT EXISTS workspace_results_workspace_prepared
                 ON workspace_results (workspace_id, prepared_at DESC);
         `);
+        },
     },
-}, {
-    version: 5,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 5,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             CREATE TABLE IF NOT EXISTS agent_runs (
                 owner_session_id TEXT NOT NULL,
                 run_id TEXT NOT NULL,
@@ -103,11 +108,12 @@ export const AGENT_METADATA_MIGRATIONS = [{
             CREATE INDEX IF NOT EXISTS agent_runs_child_session
                 ON agent_runs (child_session_file);
         `);
+        },
     },
-}, {
-    version: 6,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 6,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             CREATE TABLE IF NOT EXISTS agent_run_states (
                 owner_session_id TEXT NOT NULL,
                 run_id TEXT NOT NULL,
@@ -119,11 +125,12 @@ export const AGENT_METADATA_MIGRATIONS = [{
             CREATE INDEX IF NOT EXISTS agent_run_states_branch
                 ON agent_run_states (owner_session_id, branch_entry_id, updated_at DESC);
         `);
+        },
     },
-}, {
-    version: 7,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 7,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             CREATE TABLE IF NOT EXISTS agent_run_instances (
                 run_instance_id TEXT PRIMARY KEY,
                 owner_session_id TEXT NOT NULL,
@@ -160,11 +167,12 @@ export const AGENT_METADATA_MIGRATIONS = [{
             CREATE INDEX IF NOT EXISTS agent_run_snapshots_instance
                 ON agent_run_snapshots (run_instance_id, created_sequence);
         `);
+        },
     },
-}, {
-    version: 8,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 8,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             ALTER TABLE agent_runs ADD COLUMN run_instance_id TEXT;
             ALTER TABLE agent_runs ADD COLUMN child_session_leaf_id TEXT;
             ALTER TABLE agent_runs ADD COLUMN latest_snapshot_id TEXT;
@@ -216,11 +224,12 @@ export const AGENT_METADATA_MIGRATIONS = [{
             CREATE INDEX agent_runs_instance
                 ON agent_runs (run_instance_id);
         `);
+        },
     },
-}, {
-    version: 9,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 9,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             ALTER TABLE workspaces ADD COLUMN lease_run_instance_id TEXT;
             ALTER TABLE workspace_results ADD COLUMN run_instance_id TEXT;
             CREATE INDEX IF NOT EXISTS workspaces_lease_instance
@@ -228,11 +237,12 @@ export const AGENT_METADATA_MIGRATIONS = [{
             CREATE INDEX IF NOT EXISTS workspace_results_instance
                 ON workspace_results (run_instance_id);
         `);
+        },
     },
-}, {
-    version: 10,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 10,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             CREATE TABLE IF NOT EXISTS agent_run_continuation_heads (
                 run_instance_id TEXT PRIMARY KEY,
                 owner_session_id TEXT NOT NULL,
@@ -253,33 +263,37 @@ export const AGENT_METADATA_MIGRATIONS = [{
             CREATE INDEX IF NOT EXISTS agent_run_continuation_leases_owner
                 ON agent_run_continuation_leases (owner_session_id, lease_until);
         `);
+        },
     },
-}, {
-    version: 11,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 11,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             ALTER TABLE agent_run_continuation_leases ADD COLUMN owner_pid INTEGER;
         `);
+        },
     },
-}, {
-    version: 12,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 12,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             ALTER TABLE agent_runs ADD COLUMN definition_snapshot_json TEXT;
         `);
+        },
     },
-}, {
-    version: 13,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 13,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             ALTER TABLE agent_runs ADD COLUMN terminal_status TEXT DEFAULT 'removed'
                 CHECK (terminal_status IS NULL OR terminal_status IN ('removed', 'completed', 'failed', 'aborted', 'canceled'));
         `);
+        },
     },
-}, {
-    version: 14,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 14,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             CREATE TABLE workspace_checkpoints (
                 checkpoint_id TEXT PRIMARY KEY,
                 workspace_id TEXT NOT NULL,
@@ -300,11 +314,12 @@ export const AGENT_METADATA_MIGRATIONS = [{
             CREATE INDEX workspace_checkpoints_workspace_run
                 ON workspace_checkpoints (workspace_id, run_instance_id, sequence DESC);
         `);
+        },
     },
-}, {
-    version: 15,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 15,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             ALTER TABLE workspace_results ADD COLUMN reservation_token TEXT;
             ALTER TABLE workspace_results ADD COLUMN reservation_owner_session_id TEXT;
             ALTER TABLE workspace_results ADD COLUMN reservation_run_id TEXT;
@@ -315,16 +330,18 @@ export const AGENT_METADATA_MIGRATIONS = [{
                 ON workspace_results (reservation_token)
                 WHERE reservation_token IS NOT NULL;
         `);
+        },
     },
-}, {
-    version: 16,
-    async apply(database: AgentMetadataDatabase): Promise<void> {
-        await database.exec(`
+    {
+        version: 16,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
             ALTER TABLE workspace_results ADD COLUMN reservation_owner_pid INTEGER;
             ALTER TABLE agent_runs ADD COLUMN owner_pid INTEGER;
         `);
+        },
     },
-}] as const;
+] as const;
 
 export function agentWorkspacesRoot(workspacesDir = PI_CODER_WORKSPACES_DIR): string {
     return path.resolve(workspacesDir);

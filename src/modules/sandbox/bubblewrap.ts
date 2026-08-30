@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import config, { type SandboxConfig, DEFAULT_HOME_MOUNTS, type SandboxConfigHomeMounts } from "../../common/config";
+import config, {
+    type SandboxConfig,
+    DEFAULT_HOME_MOUNTS,
+    type SandboxConfigHomeMounts,
+} from "../../common/config";
 
 export interface SandboxOptions {
     env?: NodeJS.ProcessEnv;
@@ -88,7 +92,7 @@ function buildMountCmd(sandboxConfig: SandboxConfig, options?: SandboxOptions): 
 
     cmd.push("--proc", "/proc");
     cmd.push("--dev", "/dev");
-    cmd.push("--bind", escapeArg("/tmp"), escapeArg("/tmp"))
+    cmd.push("--bind", escapeArg("/tmp"), escapeArg("/tmp"));
 
     // Minimal system mounts (no /etc - too much sensitive data)
     const systemMounts = ["/usr", "/bin", "/lib", "/lib64"];
@@ -220,9 +224,17 @@ export default function sandbox(bwrap: string, command: string, options?: Sandbo
         const dest = source;
 
         if (mode === "readonly") {
-            cmd.push("--ro-bind-try", escapeArgWithSubstitution(source, homeDir), escapeArgWithSubstitution(dest, homeDir));
+            cmd.push(
+                "--ro-bind-try",
+                escapeArgWithSubstitution(source, homeDir),
+                escapeArgWithSubstitution(dest, homeDir),
+            );
         } else if (mode === "readwrite") {
-            cmd.push("--bind-try", escapeArgWithSubstitution(source, homeDir), escapeArgWithSubstitution(dest, homeDir));
+            cmd.push(
+                "--bind-try",
+                escapeArgWithSubstitution(source, homeDir),
+                escapeArgWithSubstitution(dest, homeDir),
+            );
         }
     }
 
@@ -236,8 +248,11 @@ export default function sandbox(bwrap: string, command: string, options?: Sandbo
 
     // Mount additional roots after broad mounts such as /tmp so nested roots
     // remain visible if the broad mount is narrowed or reordered later.
-    const readOnlyRoots = new Set((options?.readOnlyAdditionalRoots ?? []).map((root) =>
-        path.resolve(root.replace(/^~/, homeDir))));
+    const readOnlyRoots = new Set(
+        (options?.readOnlyAdditionalRoots ?? []).map((root) =>
+            path.resolve(root.replace(/^~/, homeDir)),
+        ),
+    );
     for (const root of options?.additionalRoots ?? []) {
         const resolvedRoot = path.resolve(root.replace(/^~/, homeDir));
         if (resolvedRoot === cwd) continue;

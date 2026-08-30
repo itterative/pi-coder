@@ -33,14 +33,7 @@
 import type { EventBus, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable } from "@earendil-works/pi-tui";
-import {
-    Box,
-    Container,
-    matchesKey,
-    Spacer,
-    Text,
-    visibleWidth,
-} from "@earendil-works/pi-tui";
+import { Box, Container, matchesKey, Spacer, Text, visibleWidth } from "@earendil-works/pi-tui";
 import { hasQueuedDialog, withDialogQueue } from "./dialog-queue";
 import { InlineEditor } from "./inline-editor";
 
@@ -116,9 +109,7 @@ export class AskUserComponent implements Component, Focusable {
     // Completion callback
     private done!: (result: AskUserResult | undefined) => void;
 
-    constructor(
-        private readonly options: AskUserOptions,
-    ) {
+    constructor(private readonly options: AskUserOptions) {
         this.customOptionLabel = options.customOptionLabel ?? "Type a custom reply";
         this.messagePlaceholder = options.messagePlaceholder ?? "type your reply...";
         this.container = new Container();
@@ -150,7 +141,9 @@ export class AskUserComponent implements Component, Focusable {
 
     // ── Component & Focusable ────────────────────────────────────────
 
-    get focused(): boolean { return this._focused; }
+    get focused(): boolean {
+        return this._focused;
+    }
     set focused(value: boolean) {
         this._focused = value;
         this.editor.focused = value;
@@ -228,9 +221,7 @@ export class AskUserComponent implements Component, Focusable {
         }
 
         const message = this.editor.text.trim() || undefined;
-        const answer = message
-            ? `${option.label}: ${message}`
-            : option.label;
+        const answer = message ? `${option.label}: ${message}` : option.label;
 
         this.done({ answer, isCustom: false, optionIndex: this.cursor });
     }
@@ -256,9 +247,7 @@ export class AskUserComponent implements Component, Focusable {
             const isCursor = i === this.cursor;
             const isEditing = isCursor && this.editing;
 
-            const prefix = isCursor
-                ? this.theme!.fg("accent", "→ ")
-                : "  ";
+            const prefix = isCursor ? this.theme!.fg("accent", "→ ") : "  ";
 
             if (isCustom) {
                 // "Type custom reply" option
@@ -275,9 +264,7 @@ export class AskUserComponent implements Component, Focusable {
                 if (isEditing) {
                     this.renderEditArea(option.label, prefix, width);
                 } else {
-                    const label = isCursor
-                        ? this.theme!.fg("accent", option.label)
-                        : option.label;
+                    const label = isCursor ? this.theme!.fg("accent", option.label) : option.label;
                     const content = option.description
                         ? `${label}${this.theme!.fg("muted", ` - ${option.description}`)}`
                         : label;
@@ -292,9 +279,7 @@ export class AskUserComponent implements Component, Focusable {
         const helpText = this.editing
             ? "Enter confirm | Esc back"
             : "↑/↓ navigate | Enter select | Tab add message | Esc cancel";
-        this.contentBox.addChild(
-            new Text(this.theme!.fg("muted", `  ${helpText}`), 1, 0),
-        );
+        this.contentBox.addChild(new Text(this.theme!.fg("muted", `  ${helpText}`), 1, 0));
     }
 
     // ── Edit area rendering ──────────────────────────────────────────
@@ -324,9 +309,7 @@ export class AskUserComponent implements Component, Focusable {
         //   Stacked layout: every edit line nests a little deeper than the
         //                   arrow column so it reads as the message for the
         //                   label above, not as the next option.
-        const contIndent = isStacked
-            ? prefixVisWidth + STACKED_INDENT
-            : totalPrefixVisWidth;
+        const contIndent = isStacked ? prefixVisWidth + STACKED_INDENT : totalPrefixVisWidth;
         const editLineWidth = isStacked
             ? Math.max(1, contentWidth - contIndent - 1)
             : Math.max(1, inlineEditLineWidth);
@@ -401,35 +384,39 @@ export async function askUser(
     if (!ctx.hasUI || signal?.aborted) return undefined;
     if (options.options.length === 0) return undefined;
 
-    return withDialogQueue(signal, async () => {
-        // Hide the working indicator spinner to prevent flickering while the
-        // custom component is displayed (the spinner's animation frames cause
-        // constant re-renders that fight with the component on short terminals).
-        ctx.ui.setWorkingVisible(false);
+    return withDialogQueue(
+        signal,
+        async () => {
+            // Hide the working indicator spinner to prevent flickering while the
+            // custom component is displayed (the spinner's animation frames cause
+            // constant re-renders that fight with the component on short terminals).
+            ctx.ui.setWorkingVisible(false);
 
-        let finish: ((result: AskUserResult | undefined) => void) | undefined;
-        const abort = () => finish?.(undefined);
-        signal?.addEventListener("abort", abort, { once: true });
-        try {
-            return await ctx.ui.custom<AskUserResult | undefined>((_tui, theme, _kb, done) => {
-                let settled = false;
-                finish = (result) => {
-                    if (settled) return;
-                    settled = true;
-                    done(result);
-                };
-                const component = new AskUserComponent(options);
-                component.setDoneCallback(finish);
-                component.initialize(theme);
-                if (signal?.aborted) queueMicrotask(abort);
-                return component;
-            });
-        } finally {
-            signal?.removeEventListener("abort", abort);
-            finish = undefined;
-            if (!hasQueuedDialog(ctx.events)) {
-                ctx.ui.setWorkingVisible(true);
+            let finish: ((result: AskUserResult | undefined) => void) | undefined;
+            const abort = () => finish?.(undefined);
+            signal?.addEventListener("abort", abort, { once: true });
+            try {
+                return await ctx.ui.custom<AskUserResult | undefined>((_tui, theme, _kb, done) => {
+                    let settled = false;
+                    finish = (result) => {
+                        if (settled) return;
+                        settled = true;
+                        done(result);
+                    };
+                    const component = new AskUserComponent(options);
+                    component.setDoneCallback(finish);
+                    component.initialize(theme);
+                    if (signal?.aborted) queueMicrotask(abort);
+                    return component;
+                });
+            } finally {
+                signal?.removeEventListener("abort", abort);
+                finish = undefined;
+                if (!hasQueuedDialog(ctx.events)) {
+                    ctx.ui.setWorkingVisible(true);
+                }
             }
-        }
-    }, ctx.events);
+        },
+        ctx.events,
+    );
 }

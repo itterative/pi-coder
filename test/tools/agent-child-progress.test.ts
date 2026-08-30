@@ -17,15 +17,23 @@ describe("child progress", () => {
         const state = tracker();
         const updates: unknown[] = [];
 
-        updateTracker({
-            type: "message_start",
-            message: { role: "assistant", content: [] },
-        } as any, state, (progress) => updates.push(progress));
-        updateTracker({
-            type: "message_update",
-            message: { role: "assistant" },
-            assistantMessageEvent: { type: "thinking_delta", delta: "private reasoning" },
-        } as any, state, (progress) => updates.push(progress));
+        updateTracker(
+            {
+                type: "message_start",
+                message: { role: "assistant", content: [] },
+            } as any,
+            state,
+            (progress) => updates.push(progress),
+        );
+        updateTracker(
+            {
+                type: "message_update",
+                message: { role: "assistant" },
+                assistantMessageEvent: { type: "thinking_delta", delta: "private reasoning" },
+            } as any,
+            state,
+            (progress) => updates.push(progress),
+        );
 
         expect(state.progress.phase).toBe("Thinking");
         expect(state.progress.output).toBe("");
@@ -35,31 +43,54 @@ describe("child progress", () => {
 
     it("counts tool calls and preserves the last assistant response", () => {
         const state = tracker();
-        updateTracker({
-            type: "message_start",
-            message: { role: "assistant", content: [] },
-        } as any, state, () => {});
-        updateTracker({
-            type: "message_update",
-            message: { role: "assistant" },
-            assistantMessageEvent: { type: "text_delta", delta: "I will inspect this.\nMore detail." },
-        } as any, state, () => {});
-        updateTracker({
-            type: "tool_execution_start",
-            toolName: "read",
-            args: { path: "src/index.ts" },
-        } as any, state, () => {});
-        updateTracker({
-            type: "tool_execution_start",
-            toolName: "grep",
-            args: { path: "src", pattern: "widget" },
-        } as any, state, () => {});
+        updateTracker(
+            {
+                type: "message_start",
+                message: { role: "assistant", content: [] },
+            } as any,
+            state,
+            () => {},
+        );
+        updateTracker(
+            {
+                type: "message_update",
+                message: { role: "assistant" },
+                assistantMessageEvent: {
+                    type: "text_delta",
+                    delta: "I will inspect this.\nMore detail.",
+                },
+            } as any,
+            state,
+            () => {},
+        );
+        updateTracker(
+            {
+                type: "tool_execution_start",
+                toolName: "read",
+                args: { path: "src/index.ts" },
+            } as any,
+            state,
+            () => {},
+        );
+        updateTracker(
+            {
+                type: "tool_execution_start",
+                toolName: "grep",
+                args: { path: "src", pattern: "widget" },
+            } as any,
+            state,
+            () => {},
+        );
 
-        updateTracker({
-            type: "tool_execution_end",
-            toolName: "read",
-            isError: true,
-        } as any, state, () => {});
+        updateTracker(
+            {
+                type: "tool_execution_end",
+                toolName: "read",
+                isError: true,
+            } as any,
+            state,
+            () => {},
+        );
 
         expect(state.progress.output).toBe("I will inspect this.\nMore detail.");
         expect(state.progress.toolCounts).toEqual({ read: 1, grep: 1 });

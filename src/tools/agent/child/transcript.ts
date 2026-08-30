@@ -69,10 +69,12 @@ export function repairInterruptedToolCalls(sessionManager: SessionManager): numb
             role: "toolResult",
             toolCallId,
             toolName,
-            content: [{
-                type: "text",
-                text: "This tool execution was interrupted before its result was durably recorded. Its outcome is uncertain; inspect current state before deciding whether to retry.",
-            }],
+            content: [
+                {
+                    type: "text",
+                    text: "This tool execution was interrupted before its result was durably recorded. Its outcome is uncertain; inspect current state before deciding whether to retry.",
+                },
+            ],
             isError: true,
             timestamp: Date.now(),
         };

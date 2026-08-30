@@ -123,7 +123,9 @@ describe("suggestRule: curated table", () => {
         });
 
         it("scoped packages are safe (@scope/pkg)", () => {
-            expect(suggestRule(t("npx @typescript-eslint/eslint"))).toBe("npx @typescript-eslint/eslint");
+            expect(suggestRule(t("npx @typescript-eslint/eslint"))).toBe(
+                "npx @typescript-eslint/eslint",
+            );
         });
 
         it("rejects a generated pattern containing multiple statements", () => {

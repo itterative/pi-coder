@@ -13,15 +13,22 @@ describe("parseBashAst", () => {
     describe("basic commands", () => {
         it.each([
             ["simple command", "echo hello", ["echo", "hello"]],
-            ["command with multiple args", "git commit -m message", ["git", "commit", "-m", "message"]],
+            [
+                "command with multiple args",
+                "git commit -m message",
+                ["git", "commit", "-m", "message"],
+            ],
             ["multiple spaces between args", "cmd  arg", ["cmd", "arg"]],
             ["leading/trailing whitespace", "  ls -la  ", ["ls", "-la"]],
             ["tabs as separators", "cmd\targ", ["cmd", "arg"]],
             ["empty input", "", []],
             ["whitespace only", "   \t  ", []],
         ])("parses %s", (_description, input, expected) => {
-            expect(parseBashAst(input).commands.flatMap((command) => command.words.map((word) => word.value)))
-                .toEqual(expected);
+            expect(
+                parseBashAst(input).commands.flatMap((command) =>
+                    command.words.map((word) => word.value),
+                ),
+            ).toEqual(expected);
         });
 
         it("handles very long arguments", () => {
@@ -32,13 +39,30 @@ describe("parseBashAst", () => {
 
     describe("multiple commands", () => {
         it.each([
-            ["splits by newline", "echo hello\necho world", [["echo", "hello"], ["echo", "world"]]],
-            ["filters out empty lines", "echo hello\n\necho world\n", [["echo", "hello"], ["echo", "world"]]],
+            [
+                "splits by newline",
+                "echo hello\necho world",
+                [
+                    ["echo", "hello"],
+                    ["echo", "world"],
+                ],
+            ],
+            [
+                "filters out empty lines",
+                "echo hello\n\necho world\n",
+                [
+                    ["echo", "hello"],
+                    ["echo", "world"],
+                ],
+            ],
             ["leading newlines", "\n\necho hello", [["echo", "hello"]]],
             ["trailing newlines", "echo hello\n\n", [["echo", "hello"]]],
         ])("%s", (_description, input, expected) => {
-            expect(parseBashAst(input).commands.map((command) => command.words.map((word) => word.value)))
-                .toEqual(expected);
+            expect(
+                parseBashAst(input).commands.map((command) =>
+                    command.words.map((word) => word.value),
+                ),
+            ).toEqual(expected);
         });
     });
 
@@ -46,12 +70,20 @@ describe("parseBashAst", () => {
         it.each([
             ["strips double quotes", 'echo "hello world"', ["echo", "hello world"]],
             ["strips single quotes", "echo 'hello world'", ["echo", "hello world"]],
-            ["mixed quotes", 'echo "hello" \'world\'', ["echo", "hello", "world"]],
+            ["mixed quotes", "echo \"hello\" 'world'", ["echo", "hello", "world"]],
             ["adjacent quoted strings", 'echo "hello""world"', ["echo", "helloworld"]],
-            ["quote in middle of unquoted", 'echo hello"world"goodbye', ["echo", "helloworldgoodbye"]],
+            [
+                "quote in middle of unquoted",
+                'echo hello"world"goodbye',
+                ["echo", "helloworldgoodbye"],
+            ],
             ["empty double quotes", 'echo ""', ["echo", ""]],
             ["empty single quotes", "echo ''", ["echo", ""]],
-            ["escaped chars in double quotes", String.raw`echo "hello \"world\""`, ["echo", String.raw`hello \"world\"`]],
+            [
+                "escaped chars in double quotes",
+                String.raw`echo "hello \"world\""`,
+                ["echo", String.raw`hello \"world\"`],
+            ],
             ["unclosed double quote", 'echo "hello', ["echo", "hello"]],
             ["unclosed single quote", "echo 'hello", ["echo", "hello"]],
         ])("%s", (_description, input, expected) => {
@@ -106,9 +138,11 @@ describe("parseBashAst", () => {
             expect(ast.statements).toHaveLength(1);
             expect(ast.statements[0]?.operators).toEqual(["&&", "|&"]);
             expect(ast.commands.map((command) => command.command)).toEqual(["cd", "cat", "tee"]);
-            expect(ast.statements[0]?.parts.map((part) =>
-                typeof part === "string" ? part : part.command,
-            )).toEqual(["cd", "&&", "cat", "|&", "tee"]);
+            expect(
+                ast.statements[0]?.parts.map((part) =>
+                    typeof part === "string" ? part : part.command,
+                ),
+            ).toEqual(["cd", "&&", "cat", "|&", "tee"]);
         });
     });
 
@@ -117,7 +151,9 @@ describe("parseBashAst", () => {
             const command = commandFor("cat file > out");
 
             expect(command.words.map((word) => word.value)).toEqual(["cat", "file"]);
-            expect(command.redirections).toMatchObject([{ operator: ">", target: { value: "out" } }]);
+            expect(command.redirections).toMatchObject([
+                { operator: ">", target: { value: "out" } },
+            ]);
             expect(command.toTokens()).toEqual(["cat", "file", ">", "out"]);
         });
 
@@ -129,7 +165,9 @@ describe("parseBashAst", () => {
             ["combined output", "echo &>out", "&>", "out"],
             ["multi-digit fd", "echo 10>out", "10>", "out"],
         ])("recognizes %s redirection", (_description, input, operator, target) => {
-            expect(commandFor(input).redirections).toMatchObject([{ operator, target: { value: target } }]);
+            expect(commandFor(input).redirections).toMatchObject([
+                { operator, target: { value: target } },
+            ]);
         });
 
         it.each([
@@ -147,7 +185,9 @@ describe("parseBashAst", () => {
             const command = commandFor("cat2>out");
 
             expect(command.command).toBe("cat2");
-            expect(command.redirections).toMatchObject([{ operator: ">", target: { value: "out" } }]);
+            expect(command.redirections).toMatchObject([
+                { operator: ">", target: { value: "out" } },
+            ]);
         });
 
         it("includes substitutions in redirection targets", () => {
@@ -174,9 +214,13 @@ describe("parseBashAst", () => {
             const command = commandFor('echo pre$(echo "$(pwd)")post');
 
             expect(command.args).toEqual(['pre$(echo "$(pwd)")post']);
-            expect(command.subshells).toMatchObject([{ kind: "command", content: 'echo "$(pwd)"' }]);
-            expect(command.subshells[0]?.ast.statements[0]?.commands[0]?.words[1]?.substitutions[0]?.content)
-                .toBe("pwd");
+            expect(command.subshells).toMatchObject([
+                { kind: "command", content: 'echo "$(pwd)"' },
+            ]);
+            expect(
+                command.subshells[0]?.ast.statements[0]?.commands[0]?.words[1]?.substitutions[0]
+                    ?.content,
+            ).toBe("pwd");
         });
 
         it("handles quoted and escaped parentheses inside substitutions", () => {
@@ -218,8 +262,9 @@ describe("parseBashAst", () => {
             expect(assignment.envs).toEqual({ FOO: "$(pwd)" });
             expect(assignment.command).toBe("echo");
             expect(quoted.words[1]?.kind).toBe("subshell");
-            expect(quoted.words[1]?.substitutions[0]?.ast.statements[0]?.commands[0]?.words[0]?.value)
-                .toBe("pwd");
+            expect(
+                quoted.words[1]?.substitutions[0]?.ast.statements[0]?.commands[0]?.words[0]?.value,
+            ).toBe("pwd");
         });
 
         it("represents incomplete substitutions without recursing forever", () => {
@@ -269,8 +314,11 @@ describe("parseBashAst", () => {
         });
 
         it("retains incomplete heredoc metadata", () => {
-            expect(commandFor("cat <<EOF\nhello").redirections[0]?.heredoc)
-                .toMatchObject({ delimiter: "EOF", body: "hello", complete: false });
+            expect(commandFor("cat <<EOF\nhello").redirections[0]?.heredoc).toMatchObject({
+                delimiter: "EOF",
+                body: "hello",
+                complete: false,
+            });
         });
     });
 
@@ -327,9 +375,9 @@ describe("AST syntax views", () => {
         const word = parseBashAst(value).singleCommand?.singleWord;
         const substitution = word?.substitutions[0];
 
-        expect(word?.kind).toBe(kind === "command" || kind === "backtick"
-            ? "subshell"
-            : "process-substitution");
+        expect(word?.kind).toBe(
+            kind === "command" || kind === "backtick" ? "subshell" : "process-substitution",
+        );
         expect(substitution).toMatchObject({ kind, content, complete });
     });
 

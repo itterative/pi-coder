@@ -8,7 +8,9 @@ const testPaths = vi.hoisted(() => {
     const fsModule = process.getBuiltinModule("node:fs") as typeof import("node:fs");
     const osModule = process.getBuiltinModule("node:os") as typeof import("node:os");
     const pathModule = process.getBuiltinModule("node:path") as typeof import("node:path");
-    const root = fsModule.mkdtempSync(pathModule.join(osModule.tmpdir(), "pi-coder-agent-restart-e2e-"));
+    const root = fsModule.mkdtempSync(
+        pathModule.join(osModule.tmpdir(), "pi-coder-agent-restart-e2e-"),
+    );
     return {
         root,
         repository: pathModule.join(root, "repo"),
@@ -19,7 +21,9 @@ const testPaths = vi.hoisted(() => {
 const testRoot = testPaths.root;
 
 vi.mock("../../../src/common/constants", async () => {
-    const actual = await vi.importActual<typeof import("../../../src/common/constants")>("../../../src/common/constants");
+    const actual = await vi.importActual<typeof import("../../../src/common/constants")>(
+        "../../../src/common/constants",
+    );
     return {
         ...actual,
         PI_CODER_STATE_DIR: testPaths.root,
@@ -28,13 +32,30 @@ vi.mock("../../../src/common/constants", async () => {
     };
 });
 
-import { BUILTIN_SCOUT, fingerprintAgentDefinition } from "../../../src/tools/agent/definitions/discovery";
+import {
+    BUILTIN_SCOUT,
+    fingerprintAgentDefinition,
+} from "../../../src/tools/agent/definitions/discovery";
 import { createAgentWorkspaceCheckpoint } from "../../../src/tools/agent/workspaces/checkpoints";
 import { recycleAgentWorkspaceForReuse } from "../../../src/tools/agent/workspaces/lifecycle";
-import { AgentRunManager, type ChildAgentHandle, type PersistedAgentRun } from "../../../src/tools/agent/runs/manager";
+import {
+    AgentRunManager,
+    type ChildAgentHandle,
+    type PersistedAgentRun,
+} from "../../../src/tools/agent/runs/manager";
 import { getAgentCwdSessionDir } from "../../../src/tools/agent/runs/persistence";
 import { getAgentWorkspace } from "../../../src/tools/agent/workspaces/store";
-import { createClaimedTaskWorkspace, createE2EContext, createE2EPathsAtRoot, initializeRepository, loadE2EPersistence, removeE2EPaths, withE2EMetadataDatabase, zeroUsage, type E2EPaths } from "./helpers";
+import {
+    createClaimedTaskWorkspace,
+    createE2EContext,
+    createE2EPathsAtRoot,
+    initializeRepository,
+    loadE2EPersistence,
+    removeE2EPaths,
+    withE2EMetadataDatabase,
+    zeroUsage,
+    type E2EPaths,
+} from "./helpers";
 
 let paths: E2EPaths;
 
@@ -64,7 +85,11 @@ describe("isolated workspace restart e2e", () => {
         );
         fs.mkdirSync(childDir, { recursive: true });
         const child = SessionManager.create(leased.worktreePath, childDir);
-        const userLeaf = child.appendMessage({ role: "user", content: "Inspect the workspace", timestamp: Date.now() });
+        const userLeaf = child.appendMessage({
+            role: "user",
+            content: "Inspect the workspace",
+            timestamp: Date.now(),
+        });
         child.appendMessage({
             role: "assistant",
             content: [{ type: "text", text: "Waiting" }],
@@ -118,7 +143,10 @@ describe("isolated workspace restart e2e", () => {
         };
         expect(await loaded.persistence.save(record)).toBe(true);
         await withE2EMetadataDatabase(paths, async (catalogDatabase) => {
-            await catalogDatabase.run("UPDATE agent_runs SET status = 'removed' WHERE run_instance_id = ?", "scout-1-instance");
+            await catalogDatabase.run(
+                "UPDATE agent_runs SET status = 'removed' WHERE run_instance_id = ?",
+                "scout-1-instance",
+            );
         });
         const records = (await loadE2EPersistence(paths, parent))?.records ?? [];
 
@@ -140,15 +168,23 @@ describe("isolated workspace restart e2e", () => {
         });
         const persistence = await loadE2EPersistence(paths, parent);
         manager.setPersistence(persistence?.persistence);
-        const restoration = await manager.restore(records, [BUILTIN_SCOUT], createE2EContext(paths));
+        const restoration = await manager.restore(
+            records,
+            [BUILTIN_SCOUT],
+            createE2EContext(paths),
+        );
 
         expect(restoration.restored).toBe(0);
         expect(restoration.diagnostics).toContain(
             `Could not restore scout-1: its original workspace is parked or occupied; continue it explicitly after reclaiming that workspace.`,
         );
         expect(factoryCalls).toBe(0);
-        expect(fs.readFileSync(path.join(recycled.worktreePath, "worker-2.txt"), "utf8")).toBe("occupant\n");
-        expect((await getAgentWorkspace(leased.id, { workspacesDir: paths.state }))?.leaseRunId).toBe("worker-2");
+        expect(fs.readFileSync(path.join(recycled.worktreePath, "worker-2.txt"), "utf8")).toBe(
+            "occupant\n",
+        );
+        expect(
+            (await getAgentWorkspace(leased.id, { workspacesDir: paths.state }))?.leaseRunId,
+        ).toBe("worker-2");
 
         loaded.persistence.close?.();
         persistence?.persistence.close?.();

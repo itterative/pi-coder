@@ -68,9 +68,10 @@ export function truncateLines(text: string, options: TruncateLinesOptions = {}):
         if (!line) continue;
 
         // First line may have less available space due to prefix/suffix
-        const maxLen = i === 0
-            ? (maxLineLength ?? Infinity) - firstLineLengthReduction
-            : maxLineLength ?? Infinity;
+        const maxLen =
+            i === 0
+                ? (maxLineLength ?? Infinity) - firstLineLengthReduction
+                : (maxLineLength ?? Infinity);
 
         if (maxLen !== Infinity && visibleWidth(line) > maxLen) {
             line = truncateToWidth(line, maxLen, truncationSuffix);

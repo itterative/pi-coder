@@ -90,10 +90,8 @@ const suggestPackageRunner = (
     return scoped(prefix, packageIndex)(tokens);
 };
 
-const suggestNpx = (tokens: string[]): string | null =>
-    suggestPackageRunner("npx", 1, tokens);
-const suggestBunx = (tokens: string[]): string | null =>
-    suggestPackageRunner("bunx", 1, tokens);
+const suggestNpx = (tokens: string[]): string | null => suggestPackageRunner("npx", 1, tokens);
+const suggestBunx = (tokens: string[]): string | null => suggestPackageRunner("bunx", 1, tokens);
 const suggestPnpmDlx = (tokens: string[]): string | null =>
     suggestPackageRunner("pnpm dlx", 2, tokens);
 const suggestYarnDlx = (tokens: string[]): string | null =>
@@ -202,8 +200,7 @@ export function suggestRule(tokens: string[]): string | null {
             if (command.redirections.length > 0) {
                 continue;
             }
-            if (command.words.some((word) =>
-                word.value !== "*" && !SAFE_TOKEN.test(word.value))) {
+            if (command.words.some((word) => word.value !== "*" && !SAFE_TOKEN.test(word.value))) {
                 continue;
             }
         } catch {

@@ -1,9 +1,4 @@
-export {
-    BashAst,
-    BashCommand,
-    BashStatement,
-    parseBashAst,
-} from "./bash";
+export { BashAst, BashCommand, BashStatement, parseBashAst } from "./bash";
 export type {
     BashAstNode,
     BashChainOperator,

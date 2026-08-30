@@ -2,13 +2,13 @@ import { lookpath } from "lookpath";
 
 import { isToolCallEventType, isBashToolResult } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
-import type {
-    ExtensionAPI,
-    BashToolInput,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, BashToolInput } from "@earendil-works/pi-coding-agent";
 
 import sandboxConfig, { type SandboxConfig } from "../../common/config";
-import { getUserMemoryDirectory, PERMISSION_PROMPT_CONFIRMATION_DELAY_MS } from "../../common/constants";
+import {
+    getUserMemoryDirectory,
+    PERMISSION_PROMPT_CONFIRMATION_DELAY_MS,
+} from "../../common/constants";
 import { getScratchpadPath } from "../../modules/scratchpad";
 import { ALLOWED_COMMAND_ENTRY_TYPE, type AllowedCommandEntry } from "../../common/audit";
 import sandbox from "../../modules/sandbox/bubblewrap";
@@ -25,10 +25,7 @@ import {
 // A prompt choice. The yes-actions are resolved at confirm time (the mode
 // can change while the dialog is open); "remember" additionally saves a
 // session rule whose value is the action chosen.
-type PromptChoice =
-    | { kind: "remember"; saveRule: string }
-    | { kind: "yes" }
-    | { kind: "no" };
+type PromptChoice = { kind: "remember"; saveRule: string } | { kind: "yes" } | { kind: "no" };
 
 // FIXME: use the import instead of this (where is it exported from though? ide complains of @earendil-works/pi-coding-agent/core/extensions)
 interface ToolCallEventResult {
@@ -39,8 +36,7 @@ interface ToolCallEventResult {
 export default function registerBashToolHook(pi: ExtensionAPI) {
     // Runtime-local state must not leak into another parent or child extension
     // instance. Remembered rules are still cleared on each session start.
-    let hasSupport =
-        process.platform === "linux" || process.platform === "freebsd";
+    let hasSupport = process.platform === "linux" || process.platform === "freebsd";
 
     let bwrap: string = "";
     const localPermissionState = createPermissionState();
@@ -68,17 +64,17 @@ export default function registerBashToolHook(pi: ExtensionAPI) {
         }
 
         if (config !== null) {
-          ctx.ui.notify(
-              `pi-bash-sandbox: loaded config has ${Object.entries(config.sandbox.mounts).length} mount(s) and ${Object.entries(config.permissions).length} permission(s).\n`,
-              "info",
-          );
+            ctx.ui.notify(
+                `pi-bash-sandbox: loaded config has ${Object.entries(config.sandbox.mounts).length} mount(s) and ${Object.entries(config.permissions).length} permission(s).\n`,
+                "info",
+            );
         }
 
         const sandboxEnabled = config?.sandbox.enabled !== false;
 
         if (!sandboxEnabled) {
             ctx.ui.notify(
-                "pi-bash-sandbox: sandboxing disabled by config (sandbox.enabled = false); \"allow:sandbox\" commands will run unsandboxed\n",
+                'pi-bash-sandbox: sandboxing disabled by config (sandbox.enabled = false); "allow:sandbox" commands will run unsandboxed\n',
                 "info",
             );
 
@@ -157,10 +153,7 @@ Pay attention to these notes as they provide context about the user's preference
         const permissionState = permissionStateFor(ctx);
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
         const userMemoryDirectory = getUserMemoryDirectory();
-        const additionalRoots = [
-            ...(scratchpadPath ? [scratchpadPath] : []),
-            userMemoryDirectory,
-        ];
+        const additionalRoots = [...(scratchpadPath ? [scratchpadPath] : []), userMemoryDirectory];
         const readOnlyAdditionalRoots = [userMemoryDirectory];
         try {
             const details = resolvePermissionDetails(
@@ -169,7 +162,10 @@ Pay attention to these notes as they provide context about the user's preference
                 // session rules come after config rules, so on identical
                 // patterns they win (last-match-wins semantics)
                 {
-                    permissions: { ...sandboxConfig.current?.permissions, ...permissionState.bashRules },
+                    permissions: {
+                        ...sandboxConfig.current?.permissions,
+                        ...permissionState.bashRules,
+                    },
                     additionalRoots,
                     readOnlyAdditionalRoots,
                 },
@@ -185,9 +181,7 @@ Pay attention to these notes as they provide context about the user's preference
             // uncovered by rules/heuristics and the suggestion table has a
             // row for it. Multiple uncovered segments keep the plain
             // dialog (manual patterns are the tool for those).
-            const suggestion = unresolved.length === 1
-                ? suggestRule(unresolved[0])
-                : null;
+            const suggestion = unresolved.length === 1 ? suggestRule(unresolved[0]) : null;
 
             const items: SelectMessageItem<PromptChoice>[] = [
                 {
@@ -220,7 +214,9 @@ Pay attention to these notes as they provide context about the user's preference
                     title: () => {
                         const mode = !sandboxEnabled
                             ? "direct (sandbox off)"
-                            : (permissionState.bashSandboxed ? "sandbox" : "direct");
+                            : permissionState.bashSandboxed
+                              ? "sandbox"
+                              : "direct";
                         return `pi-bash-sandbox: allow command? — mode: ${mode} (s)`;
                     },
                     contentLines: event.input.command.split("\n"),
@@ -278,7 +274,7 @@ Pay attention to these notes as they provide context about the user's preference
 
         let blocked: boolean = true;
         let sandboxed: boolean = true;
-        const originalCommand = event.input.command;  // Save before sandbox wrapping
+        const originalCommand = event.input.command; // Save before sandbox wrapping
 
         switch (permission) {
             case "allow:sandbox":
@@ -355,10 +351,7 @@ Pay attention to these notes as they provide context about the user's preference
             ? `<user_note>\nThe user has made a note: ${trimmed}\n</user_note>\n`
             : `<user_note>The user has made a note: ${trimmed}</user_note>\n`;
         return {
-            content: [
-                { type: "text", text: note },
-                ...event.content,
-            ],
+            content: [{ type: "text", text: note }, ...event.content],
         };
     });
 }

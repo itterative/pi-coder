@@ -8,27 +8,36 @@ export default function registerAskUserTool(pi: ExtensionAPI) {
         name: "ask_user",
         label: "Ask User",
         description:
-            "Ask the user a question with predefined options and get their feedback. "
-            + "Use this when you need the user's input, preference, or decision. "
-            + "The user can select one of the provided options or type a custom reply. "
-            + "Proactively ask when you are uncertain about the user's intent, "
-            + "when multiple reasonable approaches exist, or when user guidance "
-            + "could improve the outcome. It is better to ask than to guess wrong.",
+            "Ask the user a question with predefined options and get their feedback. " +
+            "Use this when you need the user's input, preference, or decision. " +
+            "The user can select one of the provided options or type a custom reply. " +
+            "Proactively ask when you are uncertain about the user's intent, " +
+            "when multiple reasonable approaches exist, or when user guidance " +
+            "could improve the outcome. It is better to ask than to guess wrong.",
         promptSnippet:
-            "Use ask_user to get feedback, preferences, or decisions from the user. "
-            + "Prefer asking over assuming when the task is ambiguous or "
-            + "multiple valid approaches exist.",
+            "Use ask_user to get feedback, preferences, or decisions from the user. " +
+            "Prefer asking over assuming when the task is ambiguous or " +
+            "multiple valid approaches exist.",
         promptGuidelines: [
             "When asking the user a question, indicate your recommendation in the option's `description` field with 'Recommended because …' or '(recommended)'",
             "In questions to the user, include an 'Unsure' or 'You decide' option when the user may not have a strong preference, so you can fall back to your own judgment instead of stalling",
         ],
         parameters: Type.Object({
             title: Type.String({ description: "A short title for the question" }),
-            description: Type.Optional(Type.String({ description: "Additional context or details about the question (rendered as plain text)" })),
+            description: Type.Optional(
+                Type.String({
+                    description:
+                        "Additional context or details about the question (rendered as plain text)",
+                }),
+            ),
             options: Type.Array(
                 Type.Object({
                     label: Type.String({ description: "The option text shown to the user" }),
-                    description: Type.Optional(Type.String({ description: "Optional explanation of what this option means" })),
+                    description: Type.Optional(
+                        Type.String({
+                            description: "Optional explanation of what this option means",
+                        }),
+                    ),
                 }),
                 { description: "Predefined options for the user to choose from" },
             ),
@@ -71,9 +80,7 @@ export default function registerAskUserTool(pi: ExtensionAPI) {
                 const opt = args.options[i]!;
                 const selected = i === details.optionIndex;
                 const marker = selected ? "●" : "○";
-                const label = selected
-                    ? theme.fg("accent", theme.bold(opt.label))
-                    : opt.label;
+                const label = selected ? theme.fg("accent", theme.bold(opt.label)) : opt.label;
 
                 let line = `\n  ${marker} ${label}`;
                 if (opt.description) {

@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-    AgentActivityWidget,
-    firstLinePreview,
-    formatToolCounts,
-} from "../../src/tui/status";
+import { AgentActivityWidget, firstLinePreview, formatToolCounts } from "../../src/tui/status";
 
 const runningRun = {
     runId: "scout-1",
@@ -16,7 +12,7 @@ const runningRun = {
     updatedAt: Date.now(),
     phase: "Thinking",
     responsePreview: "I found the entry points.\nThe next section is less relevant.",
-    activity: "Searching \"widget\" in src",
+    activity: 'Searching "widget" in src',
     lastToolActivity: "Reading src/index.ts",
     todo: { completed: 2, total: 5, current: "Implement the feature" },
     toolCounts: { read: 4, grep: 2 },

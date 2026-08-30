@@ -29,7 +29,9 @@ export class ConfirmationComponent implements Component {
         this.theme = theme;
         const borderColor = (text: string) => theme.fg("border", text);
 
-        this.container.addChild(new Text(theme.fg("accent", theme.bold(`  ${this.options.title}`)), 1, 0));
+        this.container.addChild(
+            new Text(theme.fg("accent", theme.bold(`  ${this.options.title}`)), 1, 0),
+        );
         this.container.addChild(new Spacer(1));
 
         this.content.clear();
@@ -39,7 +41,9 @@ export class ConfirmationComponent implements Component {
         this.content.addChild(new Spacer(1));
         const confirmLabel = this.options.confirmLabel ?? "y/Enter confirm";
         const cancelLabel = this.options.cancelLabel ?? "n/Esc cancel";
-        this.content.addChild(new Text(theme.fg("muted", `${confirmLabel} · ${cancelLabel}`), 1, 0));
+        this.content.addChild(
+            new Text(theme.fg("muted", `${confirmLabel} · ${cancelLabel}`), 1, 0),
+        );
         this.container.addChild(this.content);
         this.container.addChild(new Spacer(1));
         this.borderedContainer = new BorderBox(this.container, {
@@ -50,7 +54,9 @@ export class ConfirmationComponent implements Component {
 
     render(width: number): string[] {
         if (!this.theme || !this.borderedContainer) {
-            throw new Error("ConfirmationComponent must be initialized with a theme before rendering");
+            throw new Error(
+                "ConfirmationComponent must be initialized with a theme before rendering",
+            );
         }
         return this.borderedContainer.render(width);
     }
@@ -90,21 +96,26 @@ export async function confirm(
         return false;
     }
 
-    return withOverlayStack((overlay) => ctx.ui.custom<boolean>((tui, theme, _keybindings, done) => {
-        const component = new ConfirmationComponent(options);
-        component.setDoneCallback(done);
-        component.initialize(theme);
-        overlay.bind(tui);
-        return component;
-    }, {
-        overlay: true,
-        overlayOptions: {
-            width: "50%",
-            minWidth: 48,
-            maxHeight: "50%",
-            anchor: "center",
-            margin: 1,
-        },
-        onHandle: overlay.setHandle,
-    }));
+    return withOverlayStack((overlay) =>
+        ctx.ui.custom<boolean>(
+            (tui, theme, _keybindings, done) => {
+                const component = new ConfirmationComponent(options);
+                component.setDoneCallback(done);
+                component.initialize(theme);
+                overlay.bind(tui);
+                return component;
+            },
+            {
+                overlay: true,
+                overlayOptions: {
+                    width: "50%",
+                    minWidth: 48,
+                    maxHeight: "50%",
+                    anchor: "center",
+                    margin: 1,
+                },
+                onHandle: overlay.setHandle,
+            },
+        ),
+    );
 }

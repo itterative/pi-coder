@@ -42,7 +42,11 @@ function emitDialogState(events: EventBus | undefined, active: boolean): void {
 }
 
 function waitForTurn(turn: Promise<void>, signal?: AbortSignal): Promise<boolean> {
-    if (!signal) return turn.then(() => true, () => true);
+    if (!signal)
+        return turn.then(
+            () => true,
+            () => true,
+        );
     if (signal.aborted) return Promise.resolve(false);
 
     return new Promise((resolve) => {
@@ -56,7 +60,10 @@ function waitForTurn(turn: Promise<void>, signal?: AbortSignal): Promise<boolean
         };
         abort = () => finish(false);
         signal.addEventListener("abort", abort, { once: true });
-        void turn.then(() => finish(true), () => finish(true));
+        void turn.then(
+            () => finish(true),
+            () => finish(true),
+        );
     });
 }
 
@@ -75,7 +82,9 @@ export async function withDialogQueue<T>(
     incrementPending(events);
 
     let release!: () => void;
-    const completed = new Promise<void>((resolve) => { release = resolve; });
+    const completed = new Promise<void>((resolve) => {
+        release = resolve;
+    });
     const previous = dialogQueue;
     dialogQueue = previous.catch(() => {}).then(() => completed);
 

@@ -6,10 +6,21 @@ import type {
     WorkspaceDispositionAction,
 } from "../../tools/agent/presentation/browser-models";
 import { BORDER_STYLES } from "../border-box";
-import { ListViewComponent, type ListItem, type ListViewRenderItemOptions, type ListViewState } from "../list-view";
+import {
+    ListViewComponent,
+    type ListItem,
+    type ListViewRenderItemOptions,
+    type ListViewState,
+} from "../list-view";
 import { PagerComponent } from "../pager";
 import { withOverlayStack } from "../overlay-stack";
-import { agentWorkspaceItemText, asWorkspaceListItems, workspaceDetailHelpText, workspaceDetailText, type WorkspaceListItem } from "./formatting";
+import {
+    agentWorkspaceItemText,
+    asWorkspaceListItems,
+    workspaceDetailHelpText,
+    workspaceDetailText,
+    type WorkspaceListItem,
+} from "./formatting";
 import type { AgentWorkspaceActionCallbacks, AgentWorkspaceBrowserOptions } from "./types";
 
 export type { AgentWorkspaceAction } from "../../tools/agent/presentation/browser-models";
@@ -53,7 +64,8 @@ export class AgentWorkspaceDetailComponent implements Component {
             compactFooter: true,
             helpText: workspaceDetailHelpText(workspace),
             onKey: (key) => this.handleKey(key),
-            renderItem: (item, renderOptions) => this.renderContent(item.value, renderOptions.theme),
+            renderItem: (item, renderOptions) =>
+                this.renderContent(item.value, renderOptions.theme),
         });
     }
 
@@ -161,9 +173,10 @@ export class AgentWorkspaceDetailComponent implements Component {
             try {
                 if (action === "inspect") {
                     const diff = this.callbacks.onInspect?.();
-                    this.diffText = typeof diff === "string"
-                        ? diff
-                        : await diff ?? "No saved worker result is available.";
+                    this.diffText =
+                        typeof diff === "string"
+                            ? diff
+                            : ((await diff) ?? "No saved worker result is available.");
                     this.showingDiff = true;
                 } else {
                     const replacement = await this.callbacks.onAction?.(action);
@@ -202,23 +215,45 @@ export class AgentWorkspaceBrowserComponent implements Component {
                 itemSpacing: 1,
                 helpText: "↑/↓ navigate · Enter inspect · Esc close",
                 headerContent: (container, theme) => {
-                    const available = options.workspaces.filter((workspace) => workspace.status === "available").length;
-                    const reviewRequired = options.workspaces.filter((workspace) => workspace.status === "review_required").length;
-                    const leased = options.workspaces.filter((workspace) => workspace.leased).length;
+                    const available = options.workspaces.filter(
+                        (workspace) => workspace.status === "available",
+                    ).length;
+                    const reviewRequired = options.workspaces.filter(
+                        (workspace) => workspace.status === "review_required",
+                    ).length;
+                    const leased = options.workspaces.filter(
+                        (workspace) => workspace.leased,
+                    ).length;
                     container.addChild(new Text(theme.fg("muted", `Cwd: ${options.cwd}`), 5, 0));
-                    container.addChild(new Text(
-                        theme.fg("muted", `${available} available · ${reviewRequired} review required · ${leased} leased`),
-                        5,
-                        0,
-                    ));
+                    container.addChild(
+                        new Text(
+                            theme.fg(
+                                "muted",
+                                `${available} available · ${reviewRequired} review required · ${leased} leased`,
+                            ),
+                            5,
+                            0,
+                        ),
+                    );
                 },
-                renderItem: (item: ListItem<WorkspaceListItem>, renderOptions: ListViewRenderItemOptions<WorkspaceListItem, WorkspaceBrowserState>) => {
+                renderItem: (
+                    item: ListItem<WorkspaceListItem>,
+                    renderOptions: ListViewRenderItemOptions<
+                        WorkspaceListItem,
+                        WorkspaceBrowserState
+                    >,
+                ) => {
                     const content = itemText(item.value, renderOptions.theme);
-                    return renderOptions.isCursor ? content : renderOptions.theme.fg("text", content);
+                    return renderOptions.isCursor
+                        ? content
+                        : renderOptions.theme.fg("text", content);
                 },
                 itemPrefix: (index, isCursor, theme) => {
-                    if (this.list.state.items[index]?.disabled) return { first: "  ", continuation: "  " };
-                    return isCursor ? { first: theme.fg("accent", "→ "), continuation: "  " } : { first: "  ", continuation: "  " };
+                    if (this.list.state.items[index]?.disabled)
+                        return { first: "  ", continuation: "  " };
+                    return isCursor
+                        ? { first: theme.fg("accent", "→ "), continuation: "  " }
+                        : { first: "  ", continuation: "  " };
                 },
                 onKey: (key) => {
                     if (matchesKey(key, "escape") || key === "q") {
@@ -231,11 +266,16 @@ export class AgentWorkspaceBrowserComponent implements Component {
                 },
                 footerContent: (container, theme) => {
                     container.addChild(new Spacer(1));
-                    container.addChild(new Text(
-                        theme.fg("dim", "Review-required workspaces are not selected automatically."),
-                        1,
-                        0,
-                    ));
+                    container.addChild(
+                        new Text(
+                            theme.fg(
+                                "dim",
+                                "Review-required workspaces are not selected automatically.",
+                            ),
+                            1,
+                            0,
+                        ),
+                    );
                 },
             },
             {
@@ -257,7 +297,8 @@ export class AgentWorkspaceBrowserComponent implements Component {
     }
 
     render(width: number): string[] {
-        if (this.detail) return this.detail.render(width).map((line) => truncateToWidth(line, width, ""));
+        if (this.detail)
+            return this.detail.render(width).map((line) => truncateToWidth(line, width, ""));
         const height = this.options.fixedHeight?.();
         if (height !== undefined) this.list.state.maxVisibleLines = Math.max(1, height - 12);
         return this.list.render(width).map((line) => truncateToWidth(line, width, ""));
@@ -295,7 +336,6 @@ export class AgentWorkspaceBrowserComponent implements Component {
             this.invalidate();
         });
     }
-
 }
 
 export async function showAgentWorkspaceBrowser(
@@ -304,28 +344,34 @@ export async function showAgentWorkspaceBrowser(
 ): Promise<void> {
     if (!ctx.hasUI || ctx.mode !== "tui") return;
 
-    await withOverlayStack((overlay) => ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
-        overlay.bind(tui);
-        const fixedHeight = () => Math.max(
-            2,
-            Math.min(
-                Math.floor(tui.terminal.rows * 0.82),
-                Math.max(2, tui.terminal.rows - 2),
-            ),
-        );
-        const component = new AgentWorkspaceBrowserComponent({ ...options, fixedHeight });
-        component.setDoneCallback(done);
-        component.initialize(theme);
-        return component;
-    }, {
-        overlay: true,
-        overlayOptions: {
-            width: "84%",
-            minWidth: 64,
-            maxHeight: "82%",
-            anchor: "center",
-            margin: 1,
-        },
-        onHandle: overlay.setHandle,
-    }));
+    await withOverlayStack((overlay) =>
+        ctx.ui.custom<void>(
+            (tui, theme, _keybindings, done) => {
+                overlay.bind(tui);
+                const fixedHeight = () =>
+                    Math.max(
+                        2,
+                        Math.min(
+                            Math.floor(tui.terminal.rows * 0.82),
+                            Math.max(2, tui.terminal.rows - 2),
+                        ),
+                    );
+                const component = new AgentWorkspaceBrowserComponent({ ...options, fixedHeight });
+                component.setDoneCallback(done);
+                component.initialize(theme);
+                return component;
+            },
+            {
+                overlay: true,
+                overlayOptions: {
+                    width: "84%",
+                    minWidth: 64,
+                    maxHeight: "82%",
+                    anchor: "center",
+                    margin: 1,
+                },
+                onHandle: overlay.setHandle,
+            },
+        ),
+    );
 }

@@ -48,14 +48,7 @@ class Rng {
     }
 }
 
-const SAFE_PATHS = [
-    "file.txt",
-    "src/index.ts",
-    "./README.md",
-    "sub/dir/f.md",
-    "a b.txt",
-    ".",
-];
+const SAFE_PATHS = ["file.txt", "src/index.ts", "./README.md", "sub/dir/f.md", "a b.txt", "."];
 
 const ESCAPE_PATHS = [
     "/etc/passwd",
@@ -77,7 +70,18 @@ function quoteMaybe(rng: Rng, s: string): string {
 }
 
 function safeSegment(rng: Rng): string {
-    const kind = rng.pick(["cat", "ls", "head", "tail", "wc", "grep", "sort", "find", "echo", "pwd"] as const);
+    const kind = rng.pick([
+        "cat",
+        "ls",
+        "head",
+        "tail",
+        "wc",
+        "grep",
+        "sort",
+        "find",
+        "echo",
+        "pwd",
+    ] as const);
     const parts: string[] = [];
 
     if (rng.chance(0.2)) {
@@ -184,13 +188,45 @@ function chain(rng: Rng, segments: string[]): string {
 
 function safeChain(rng: Rng): string {
     const n = 1 + rng.int(3);
-    return chain(rng, Array.from({ length: n }, () => safeSegment(rng)));
+    return chain(
+        rng,
+        Array.from({ length: n }, () => safeSegment(rng)),
+    );
 }
 
 const TOKEN_SOUP = [
-    "cat", "nc", "rm", "&&", "||", "|", ";", "&", ">", ">>", "2>", "<<",
-    "EOF", '"', "'", "\\", "$(", ")", "`", "/etc/passwd", ".", "..", "~",
-    "-", "--", "-rf", "file.txt", "2>&1", "=", "FOO=bar", "\n", "x",
+    "cat",
+    "nc",
+    "rm",
+    "&&",
+    "||",
+    "|",
+    ";",
+    "&",
+    ">",
+    ">>",
+    "2>",
+    "<<",
+    "EOF",
+    '"',
+    "'",
+    "\\",
+    "$(",
+    ")",
+    "`",
+    "/etc/passwd",
+    ".",
+    "..",
+    "~",
+    "-",
+    "--",
+    "-rf",
+    "file.txt",
+    "2>&1",
+    "=",
+    "FOO=bar",
+    "\n",
+    "x",
 ] as const;
 
 function tokenSoup(rng: Rng): string {

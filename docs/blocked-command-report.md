@@ -6,18 +6,18 @@ Read-only `scout` and `reviewer` agents reviewed recent Git changes in this repo
 
 ## Blocked commands
 
-| Agent | Command | Result |
-| --- | --- | --- |
-| scout | `npx vitest ...` | Blocked as `UNKNOWN_COMMAND` |
-| scout | `npx tsc --noEmit` | Blocked as `UNKNOWN_COMMAND` |
-| scout | `npm run test:run` | Blocked as `UNKNOWN_COMMAND` |
-| scout | `./node_modules/.bin/vitest ...` | Blocked as `COMMAND_PATH` |
-| scout | `./node_modules/.bin/tsc --noEmit` | Blocked as `COMMAND_PATH` |
-| scout | `vitest ...` | Blocked as `UNKNOWN_COMMAND` |
-| scout | `tsc --noEmit` | Blocked as `UNKNOWN_COMMAND` |
-| reviewer | `npx tsc --noEmit` | Blocked as `UNKNOWN_COMMAND` |
-| reviewer | `npx vitest run ...` | Blocked as `UNKNOWN_COMMAND` |
-| reviewer | `npm run test:run` | Blocked as `UNKNOWN_COMMAND` |
+| Agent    | Command                            | Result                       |
+| -------- | ---------------------------------- | ---------------------------- |
+| scout    | `npx vitest ...`                   | Blocked as `UNKNOWN_COMMAND` |
+| scout    | `npx tsc --noEmit`                 | Blocked as `UNKNOWN_COMMAND` |
+| scout    | `npm run test:run`                 | Blocked as `UNKNOWN_COMMAND` |
+| scout    | `./node_modules/.bin/vitest ...`   | Blocked as `COMMAND_PATH`    |
+| scout    | `./node_modules/.bin/tsc --noEmit` | Blocked as `COMMAND_PATH`    |
+| scout    | `vitest ...`                       | Blocked as `UNKNOWN_COMMAND` |
+| scout    | `tsc --noEmit`                     | Blocked as `UNKNOWN_COMMAND` |
+| reviewer | `npx tsc --noEmit`                 | Blocked as `UNKNOWN_COMMAND` |
+| reviewer | `npx vitest run ...`               | Blocked as `UNKNOWN_COMMAND` |
+| reviewer | `npm run test:run`                 | Blocked as `UNKNOWN_COMMAND` |
 
 ## Additional blocked Git commands
 

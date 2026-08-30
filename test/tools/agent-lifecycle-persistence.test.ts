@@ -17,15 +17,23 @@ vi.mock("../../src/tools/agent/runs/persistence", async () => {
 
 import { BUILTIN_SCOUT } from "../../src/tools/agent/definitions/discovery";
 import { AgentLifecycle } from "../../src/tools/agent/lifecycle";
-import type { AgentRunPersistence, ChildAgentHandle, PersistedAgentRun } from "../../src/tools/agent/contracts/runs";
+import type {
+    AgentRunPersistence,
+    ChildAgentHandle,
+    PersistedAgentRun,
+} from "../../src/tools/agent/contracts/runs";
 import { ZERO_USAGE } from "../../src/tools/agent/runs/usage";
-import { collectAgentRunSnapshotMarkers, AGENT_RUN_SNAPSHOT_MARKER } from "../../src/tools/agent/storage/run-markers";
+import {
+    collectAgentRunSnapshotMarkers,
+    AGENT_RUN_SNAPSHOT_MARKER,
+} from "../../src/tools/agent/storage/run-markers";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
     persistenceMock.load.mockReset();
-    for (const directory of tempDirs.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+    for (const directory of tempDirs.splice(0))
+        fs.rmSync(directory, { recursive: true, force: true });
 });
 
 function child(sessionFile: string, leafId: string, question?: string): ChildAgentHandle {
@@ -92,7 +100,8 @@ describe("delegated-agent session tree persistence", () => {
             const latest = new Map<string, PersistedAgentRun>();
             for (const entry of branchMarkers) {
                 const record = recordsBySnapshot.get(entry.marker.snapshotId);
-                if (record?.runInstanceId) latest.set(record.runInstanceId, structuredClone(record));
+                if (record?.runInstanceId)
+                    latest.set(record.runInstanceId, structuredClone(record));
             }
             const persistence = persistenceFor(ctx);
             return {
@@ -129,7 +138,9 @@ describe("delegated-agent session tree persistence", () => {
 
         await handlers.get("session_start")?.[0]?.({}, ctx);
         expect(persistenceMock.load).toHaveBeenCalledOnce();
-        const scout = lifecycle.discover(ctx).agents.find((agent) => agent.name === BUILTIN_SCOUT.name)!;
+        const scout = lifecycle
+            .discover(ctx)
+            .agents.find((agent) => agent.name === BUILTIN_SCOUT.name)!;
         const waiting = await lifecycle.manager.start(
             scout,
             "Investigate the persistence boundary",

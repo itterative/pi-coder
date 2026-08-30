@@ -22,7 +22,9 @@ export interface AgentConfig {
 }
 
 function globalConfigPath(): string {
-    return process.env.AGENT_CONFIG_PATH_GLOBAL ?? path.join(os.homedir(), ".pi", "agent-config.json");
+    return (
+        process.env.AGENT_CONFIG_PATH_GLOBAL ?? path.join(os.homedir(), ".pi", "agent-config.json")
+    );
 }
 
 function projectConfigPath(cwd: string): string | undefined {
@@ -63,9 +65,9 @@ function parseConfig(filePath: string | undefined): AgentConfig | null {
             ...(typeof record.notifyBusyWorkerChanges === "boolean"
                 ? { notifyBusyWorkerChanges: record.notifyBusyWorkerChanges }
                 : {}),
-            ...(typeof record.maxWorkspacesPerRepo === "number"
-                && Number.isInteger(record.maxWorkspacesPerRepo)
-                && record.maxWorkspacesPerRepo > 0
+            ...(typeof record.maxWorkspacesPerRepo === "number" &&
+            Number.isInteger(record.maxWorkspacesPerRepo) &&
+            record.maxWorkspacesPerRepo > 0
                 ? { maxWorkspacesPerRepo: record.maxWorkspacesPerRepo }
                 : {}),
         };
@@ -79,12 +81,10 @@ function mergeConfigs(global: AgentConfig | null, project: AgentConfig | null): 
         ...(global?.models ?? {}),
         ...(project?.models ?? {}),
     };
-    const advisorEnabled = project?.advisorEnabled
-        ?? global?.advisorEnabled;
-    const notifyBusyWorkerChanges = project?.notifyBusyWorkerChanges
-        ?? global?.notifyBusyWorkerChanges;
-    const maxWorkspacesPerRepo = project?.maxWorkspacesPerRepo
-        ?? global?.maxWorkspacesPerRepo;
+    const advisorEnabled = project?.advisorEnabled ?? global?.advisorEnabled;
+    const notifyBusyWorkerChanges =
+        project?.notifyBusyWorkerChanges ?? global?.notifyBusyWorkerChanges;
+    const maxWorkspacesPerRepo = project?.maxWorkspacesPerRepo ?? global?.maxWorkspacesPerRepo;
     return {
         ...(Object.keys(models).length ? { models } : {}),
         ...(advisorEnabled === undefined ? {} : { advisorEnabled }),
@@ -180,42 +180,55 @@ const agentConfig = {
         const next: BuiltinAgentModels = { ...current.models };
         if (model) next[name] = model;
         else delete next[name];
-        return this.save({
-            ...(Object.keys(next).length ? { models: next } : {}),
-            ...(current.advisorEnabled === undefined ? {} : { advisorEnabled: current.advisorEnabled }),
-            ...(current.notifyBusyWorkerChanges === undefined
-                ? {}
-                : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
-            ...(current.maxWorkspacesPerRepo === undefined
-                ? {}
-                : { maxWorkspacesPerRepo: current.maxWorkspacesPerRepo }),
-        }, cwd);
+        return this.save(
+            {
+                ...(Object.keys(next).length ? { models: next } : {}),
+                ...(current.advisorEnabled === undefined
+                    ? {}
+                    : { advisorEnabled: current.advisorEnabled }),
+                ...(current.notifyBusyWorkerChanges === undefined
+                    ? {}
+                    : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
+                ...(current.maxWorkspacesPerRepo === undefined
+                    ? {}
+                    : { maxWorkspacesPerRepo: current.maxWorkspacesPerRepo }),
+            },
+            cwd,
+        );
     },
 
     setAdvisorEnabled(enabled: boolean, cwd = process.cwd()): AgentConfig {
         const current = targetConfig(cwd);
-        return this.save({
-            ...(current.models ? { models: { ...current.models } } : {}),
-            advisorEnabled: enabled,
-            ...(current.notifyBusyWorkerChanges === undefined
-                ? {}
-                : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
-            ...(current.maxWorkspacesPerRepo === undefined
-                ? {}
-                : { maxWorkspacesPerRepo: current.maxWorkspacesPerRepo }),
-        }, cwd);
+        return this.save(
+            {
+                ...(current.models ? { models: { ...current.models } } : {}),
+                advisorEnabled: enabled,
+                ...(current.notifyBusyWorkerChanges === undefined
+                    ? {}
+                    : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
+                ...(current.maxWorkspacesPerRepo === undefined
+                    ? {}
+                    : { maxWorkspacesPerRepo: current.maxWorkspacesPerRepo }),
+            },
+            cwd,
+        );
     },
 
     setNotifyBusyWorkerChanges(enabled: boolean, cwd = process.cwd()): AgentConfig {
         const current = targetConfig(cwd);
-        return this.save({
-            ...(current.models ? { models: { ...current.models } } : {}),
-            ...(current.advisorEnabled === undefined ? {} : { advisorEnabled: current.advisorEnabled }),
-            ...(current.maxWorkspacesPerRepo === undefined
-                ? {}
-                : { maxWorkspacesPerRepo: current.maxWorkspacesPerRepo }),
-            notifyBusyWorkerChanges: enabled,
-        }, cwd);
+        return this.save(
+            {
+                ...(current.models ? { models: { ...current.models } } : {}),
+                ...(current.advisorEnabled === undefined
+                    ? {}
+                    : { advisorEnabled: current.advisorEnabled }),
+                ...(current.maxWorkspacesPerRepo === undefined
+                    ? {}
+                    : { maxWorkspacesPerRepo: current.maxWorkspacesPerRepo }),
+                notifyBusyWorkerChanges: enabled,
+            },
+            cwd,
+        );
     },
 
     setMaxWorkspacesPerRepo(value: number, cwd = process.cwd()): AgentConfig {
@@ -223,14 +236,19 @@ const agentConfig = {
             throw new Error("Maximum workspaces per repository must be a positive whole number.");
         }
         const current = targetConfig(cwd);
-        return this.save({
-            ...(current.models ? { models: { ...current.models } } : {}),
-            ...(current.advisorEnabled === undefined ? {} : { advisorEnabled: current.advisorEnabled }),
-            ...(current.notifyBusyWorkerChanges === undefined
-                ? {}
-                : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
-            maxWorkspacesPerRepo: value,
-        }, cwd);
+        return this.save(
+            {
+                ...(current.models ? { models: { ...current.models } } : {}),
+                ...(current.advisorEnabled === undefined
+                    ? {}
+                    : { advisorEnabled: current.advisorEnabled }),
+                ...(current.notifyBusyWorkerChanges === undefined
+                    ? {}
+                    : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
+                maxWorkspacesPerRepo: value,
+            },
+            cwd,
+        );
     },
 };
 

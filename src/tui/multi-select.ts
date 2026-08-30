@@ -33,10 +33,7 @@ export interface MultiSelectOptions<T> {
     // Maximum visible items before scrolling
     maxVisible?: number;
     // Custom render function for item content (cursor marker and checkbox are added automatically)
-    renderItem?: (
-        item: MultiSelectItem<T>,
-        options: MultiSelectRenderOptions<T>,
-    ) => string;
+    renderItem?: (item: MultiSelectItem<T>, options: MultiSelectRenderOptions<T>) => string;
     // Optional header content rendered after title
     headerContent?: (container: Container, theme: Theme) => void;
     // Optional footer content rendered before help text
@@ -69,24 +66,25 @@ export interface MultiSelectState<T> extends ListViewState<T> {
 export class MultiSelectComponent<T> extends ListViewComponent<T, T[], MultiSelectState<T>> {
     private confirmed = false;
 
-    constructor(
-        public readonly options: MultiSelectOptions<T>,
-    ) {
+    constructor(public readonly options: MultiSelectOptions<T>) {
         super(
             {
                 title: options.title,
                 renderItem: options.renderItem
-                    ? (item, renderOptions) => options.renderItem!(item, {
-                        index: renderOptions.index,
-                        isSelected: renderOptions.state.selected.has(renderOptions.index),
-                        isCursor: renderOptions.isCursor,
-                        theme: renderOptions.theme,
-                        state: renderOptions.state,
-                    })
+                    ? (item, renderOptions) =>
+                          options.renderItem!(item, {
+                              index: renderOptions.index,
+                              isSelected: renderOptions.state.selected.has(renderOptions.index),
+                              isCursor: renderOptions.isCursor,
+                              theme: renderOptions.theme,
+                              state: renderOptions.state,
+                          })
                     : undefined,
                 headerContent: options.headerContent,
                 footerContent: options.footerContent,
-                helpText: options.helpText ?? "↑/↓ navigate | Space toggle | a all | Enter confirm | Esc cancel",
+                helpText:
+                    options.helpText ??
+                    "↑/↓ navigate | Space toggle | a all | Enter confirm | Esc cancel",
             },
             {
                 items: options.items,
@@ -117,9 +115,10 @@ export class MultiSelectComponent<T> extends ListViewComponent<T, T[], MultiSele
     protected override getItemPrefix(index: number, isCursor: boolean): ItemPrefix {
         const checkbox = this.state.selected.has(index) ? "[x]" : "[ ]";
         return {
-            first: isCursor && this.theme
-                ? this.theme.fg("accent", `→ ${checkbox} `)
-                : `  ${checkbox} `,
+            first:
+                isCursor && this.theme
+                    ? this.theme.fg("accent", `→ ${checkbox} `)
+                    : `  ${checkbox} `,
             continuation: "     ", // Align with checkbox
         };
     }

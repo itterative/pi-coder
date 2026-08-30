@@ -2,7 +2,11 @@ import type { EventBus, ExtensionAPI, ExtensionContext } from "@earendil-works/p
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
 import type { TodoList } from "../../modules/todolist/parser";
-import { TODO_STATUS_EVENT, type TodoStatusEvent, isTodoStatusEvent } from "../../modules/todolist/events";
+import {
+    TODO_STATUS_EVENT,
+    type TodoStatusEvent,
+    isTodoStatusEvent,
+} from "../../modules/todolist/events";
 import type { AgentRunSummary } from "../../tools/agent/contracts/runs";
 import {
     AGENT_STATUS_EVENT,

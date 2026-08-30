@@ -33,6 +33,8 @@ describe("delegated-agent event emission", () => {
     });
 
     it("does nothing when no sink is provided", () => {
-        expect(() => emitAgentEvent({ type: "runtime", action: "reset" }, { cwd: "/tmp/project" })).not.toThrow();
+        expect(() =>
+            emitAgentEvent({ type: "runtime", action: "reset" }, { cwd: "/tmp/project" }),
+        ).not.toThrow();
     });
 });

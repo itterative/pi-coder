@@ -1,18 +1,8 @@
 import { BashAst, parseBashAst } from "../bash";
-import type {
-    BashAstNode,
-    BashCommand,
-    BashSubstitutionNode,
-    BashWordNode,
-} from "../bash";
+import type { BashAstNode, BashCommand, BashSubstitutionNode, BashWordNode } from "../bash";
 import { CommandTag } from "../commands";
 import type { CommandSpec, FlagSpec } from "../commands";
-import {
-    Heuristic,
-    UnsafeReason,
-    addUnsafeReason,
-    type ConfinementDiagnostics,
-} from "./types";
+import { Heuristic, UnsafeReason, addUnsafeReason, type ConfinementDiagnostics } from "./types";
 import {
     SPECIAL_ALLOWED_PATHS,
     REDIRECTION_OPERATORS,
@@ -33,7 +23,10 @@ export function matchesCustomSafeBashCommand(
     return customSafeBashCommands.some((pattern) => {
         const wildcard = pattern[pattern.length - 1] === "*";
         const fixedLength = wildcard ? pattern.length - 1 : pattern.length;
-        if ((!wildcard && args.length !== pattern.length) || (wildcard && args.length <= fixedLength)) {
+        if (
+            (!wildcard && args.length !== pattern.length) ||
+            (wildcard && args.length <= fixedLength)
+        ) {
             return false;
         }
         for (let index = 0; index < fixedLength; index++) {
@@ -65,8 +58,7 @@ export function parseCustomSafeBashCommands(commands: readonly string[]): string
             if (args.length === 0) {
                 continue;
             }
-            const wildcard = args[args.length - 1] === "*"
-                && !words[words.length - 1].quoted;
+            const wildcard = args[args.length - 1] === "*" && !words[words.length - 1].quoted;
             const fixedArgs = wildcard ? args.slice(0, -1) : args;
             if (fixedArgs.includes("*")) {
                 continue;
@@ -87,9 +79,7 @@ export function parseCustomSafeBashCommands(commands: readonly string[]): string
 
 function hasPatternBypass(args: string[], spec: CommandSpec): boolean {
     const bypass = spec.patternBypassFlags ?? [];
-    const shortBypass = bypass
-        .filter((f) => !f.startsWith("--"))
-        .map((f) => f[1]);
+    const shortBypass = bypass.filter((f) => !f.startsWith("--")).map((f) => f[1]);
     const longBypass = bypass.filter((f) => f.startsWith("--"));
 
     for (let i = 1; i < args.length; i++) {
@@ -121,9 +111,7 @@ function hasPatternBypass(args: string[], spec: CommandSpec): boolean {
  */
 function hasSafeModeFlag(args: string[], spec: CommandSpec): boolean {
     const safe = spec.safeModeFlags ?? [];
-    const shortSafe = safe
-        .filter((f) => !f.startsWith("--"))
-        .map((f) => f[1]);
+    const shortSafe = safe.filter((f) => !f.startsWith("--")).map((f) => f[1]);
     const longSafe = safe.filter((f) => f.startsWith("--"));
 
     for (let i = 1; i < args.length; i++) {
@@ -168,8 +156,8 @@ function handleShortCluster(
 
     const inspectValue = (value: string, pathContext: boolean, word?: BashWordNode): boolean => {
         if (
-            (spec.additionalRootOnly && hasDynamicShellExpansion(value))
-            || (pathContext && hasUnmodeledPathExpansion(value, word))
+            (spec.additionalRootOnly && hasDynamicShellExpansion(value)) ||
+            (pathContext && hasUnmodeledPathExpansion(value, word))
         ) {
             addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
             return false;
@@ -216,17 +204,15 @@ function handleShortCluster(
             // inline value is the rest of the cluster, otherwise next arg
             if (j === cluster.length - 1) {
                 const value = args[index + 1];
-                if (value === undefined
-                    || !inspectValue(value, hasPathSlot(flagSpec, 0), wordAt?.(index + 1))) {
+                if (
+                    value === undefined ||
+                    !inspectValue(value, hasPathSlot(flagSpec, 0), wordAt?.(index + 1))
+                ) {
                     return null;
                 }
                 return index + 1;
             }
-            if (!inspectValue(
-                cluster.slice(j + 1),
-                hasPathSlot(flagSpec, 0),
-                wordAt?.(index),
-            )) {
+            if (!inspectValue(cluster.slice(j + 1), hasPathSlot(flagSpec, 0), wordAt?.(index))) {
                 return null;
             }
             return index;
@@ -253,8 +239,9 @@ export function combineHeuristics(
 }
 
 function hasShellSubstitution(value: string): boolean {
-    return value.includes("$(") || value.includes("`") ||
-        value.includes("<(") || value.includes(">(");
+    return (
+        value.includes("$(") || value.includes("`") || value.includes("<(") || value.includes(">(")
+    );
 }
 
 /**
@@ -264,23 +251,22 @@ function hasShellSubstitution(value: string): boolean {
  * negatives; that is preferable to guessing at Bash expansion semantics.
  */
 export function hasDynamicShellExpansion(value: string): boolean {
-    return hasShellSubstitution(value)
-        || value.includes("$")
-        || value.includes("`")
-        || value.includes("{")
-        || value.includes("}")
-        || value.includes("*")
-        || value.includes("?")
-        || value.includes("[")
-        || value.includes("]")
-        || value.startsWith("~")
-        || /[@+!]\(/.test(value);
+    return (
+        hasShellSubstitution(value) ||
+        value.includes("$") ||
+        value.includes("`") ||
+        value.includes("{") ||
+        value.includes("}") ||
+        value.includes("*") ||
+        value.includes("?") ||
+        value.includes("[") ||
+        value.includes("]") ||
+        value.startsWith("~") ||
+        /[@+!]\(/.test(value)
+    );
 }
 
-export function hasUnmodeledPathExpansion(
-    value: string,
-    word?: BashWordNode,
-): boolean {
+export function hasUnmodeledPathExpansion(value: string, word?: BashWordNode): boolean {
     if (word !== undefined) {
         const substitution = BashAst.substitutionFor(word, value);
         if (substitution?.complete) {
@@ -305,10 +291,7 @@ export function hasUnmodeledPathExpansion(
  * not enough: `$(echo /etc/passwd)` is safe to execute but unsafe as `cat`'s
  * path argument.
  */
-function getStaticSubstitutionPathsFromAst(
-    ast: BashAstNode,
-    cwd: string,
-): string[] | null {
+function getStaticSubstitutionPathsFromAst(ast: BashAstNode, cwd: string): string[] | null {
     if (ast.statements.length !== 1) {
         return null;
     }
@@ -360,10 +343,7 @@ function getStaticSubstitutionPaths(
     return getStaticSubstitutionPathsFromAst(substitution.ast, cwd);
 }
 
-function getStaticSubstitutionPathsFromValue(
-    value: string,
-    cwd: string,
-): string[] | null {
+function getStaticSubstitutionPathsFromValue(value: string, cwd: string): string[] | null {
     const substitution = parseBashAst(value).singleCommand?.singleSubstitution;
     if (substitution?.kind !== "command" && substitution?.kind !== "backtick") {
         return null;
@@ -381,7 +361,12 @@ interface ShellSubstitutionAccess {
  * is not safely classifiable; `undefined` means it contains no substitution.
  */
 export interface CommandAccessContext {
-    evaluateNested: (command: string, cwd: string, options: ConfinementOptions, diagnostics?: ConfinementDiagnostics) => Heuristic | undefined;
+    evaluateNested: (
+        command: string,
+        cwd: string,
+        options: ConfinementOptions,
+        diagnostics?: ConfinementDiagnostics,
+    ) => Heuristic | undefined;
 }
 
 function inspectShellSubstitution(
@@ -393,17 +378,14 @@ function inspectShellSubstitution(
     context?: CommandAccessContext,
     word?: BashWordNode,
 ): ShellSubstitutionAccess | null | undefined {
-    const substitution = word === undefined
-        ? undefined
-        : BashAst.substitutionFor(word, value);
-    const valueSubstitution = substitution
-        ?? (word === undefined
-            ? parseBashAst(value).singleCommand?.singleSubstitution
-            : undefined);
-    const processSubstitution = valueSubstitution?.kind === "process-input"
-        || valueSubstitution?.kind === "process-output";
-    const commandSubstitution = valueSubstitution?.kind === "command"
-        || valueSubstitution?.kind === "backtick";
+    const substitution = word === undefined ? undefined : BashAst.substitutionFor(word, value);
+    const valueSubstitution =
+        substitution ??
+        (word === undefined ? parseBashAst(value).singleCommand?.singleSubstitution : undefined);
+    const processSubstitution =
+        valueSubstitution?.kind === "process-input" || valueSubstitution?.kind === "process-output";
+    const commandSubstitution =
+        valueSubstitution?.kind === "command" || valueSubstitution?.kind === "backtick";
 
     if (valueSubstitution !== undefined && !valueSubstitution.complete) {
         addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
@@ -411,8 +393,10 @@ function inspectShellSubstitution(
     }
 
     if (!processSubstitution && !commandSubstitution) {
-        if ((word !== undefined && word.substitutions.length > 0)
-            || (word === undefined && hasShellSubstitution(value))) {
+        if (
+            (word !== undefined && word.substitutions.length > 0) ||
+            (word === undefined && hasShellSubstitution(value))
+        ) {
             addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
             return null;
         }
@@ -436,9 +420,10 @@ function inspectShellSubstitution(
         return { heuristic: inner, paths: [] };
     }
 
-    const paths = word === undefined
-        ? getStaticSubstitutionPathsFromValue(value, cwd)
-        : getStaticSubstitutionPaths(valueSubstitution, cwd);
+    const paths =
+        word === undefined
+            ? getStaticSubstitutionPathsFromValue(value, cwd)
+            : getStaticSubstitutionPaths(valueSubstitution, cwd);
     if (paths === null) {
         addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
         return null;
@@ -491,25 +476,19 @@ export function extractCommandPaths(
     let activeArgvStart = 0;
     let dispatched = subcommands === undefined;
     let positionals = activeSpec.positionals ?? "paths";
-    let patternProvided =
-        positionals !== "first-pattern" || hasPatternBypass(args, activeSpec);
+    let patternProvided = positionals !== "first-pattern" || hasPatternBypass(args, activeSpec);
 
     const adoptSpec = (s: CommandSpec) => {
         activeSpec = s;
         s.tags?.forEach((tag) => tags.add(tag));
         positionals = s.positionals ?? "paths";
-        patternProvided =
-            positionals !== "first-pattern" || hasPatternBypass(args, s);
+        patternProvided = positionals !== "first-pattern" || hasPatternBypass(args, s);
     };
 
-    const inspectValue = (
-        value: string,
-        pathContext: boolean,
-        word?: BashWordNode,
-    ): boolean => {
+    const inspectValue = (value: string, pathContext: boolean, word?: BashWordNode): boolean => {
         if (
-            (activeSpec.additionalRootOnly && hasDynamicShellExpansion(value))
-            || (pathContext && hasUnmodeledPathExpansion(value, word))
+            (activeSpec.additionalRootOnly && hasDynamicShellExpansion(value)) ||
+            (pathContext && hasUnmodeledPathExpansion(value, word))
         ) {
             addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
             return false;
@@ -551,10 +530,11 @@ export function extractCommandPaths(
         // command's `--`; only command flag parsing stops there. AST commands
         // expose redirections separately, so the legacy token handling is
         // only needed for the parsed-arguments entrypoint.
-        if (astCommand === undefined && (
-            parseBashAst(arg).singleCommand?.singleRedirection?.operator === "<<"
-            || parseBashAst(arg).singleCommand?.singleRedirection?.operator === "<<-"
-        )) {
+        if (
+            astCommand === undefined &&
+            (parseBashAst(arg).singleCommand?.singleRedirection?.operator === "<<" ||
+                parseBashAst(arg).singleCommand?.singleRedirection?.operator === "<<-")
+        ) {
             // Parsed-argument input does not retain heredoc body expansion
             // metadata. Falling back prevents hidden substitutions from executing
             // under an otherwise safe outer command.
@@ -575,22 +555,30 @@ export function extractCommandPaths(
             // a filesystem write. All other non-special redirection
             // targets can create or overwrite a file.
             const targetSubstitution = parseBashAst(target).singleCommand?.singleSubstitution;
-            const processTarget = targetSubstitution?.kind === "process-input"
-                || targetSubstitution?.kind === "process-output";
-            if (!processTarget && arg !== "<" && !target.startsWith("&")
-                && !SPECIAL_ALLOWED_PATHS.has(target)) {
+            const processTarget =
+                targetSubstitution?.kind === "process-input" ||
+                targetSubstitution?.kind === "process-output";
+            if (
+                !processTarget &&
+                arg !== "<" &&
+                !target.startsWith("&") &&
+                !SPECIAL_ALLOWED_PATHS.has(target)
+            ) {
                 writes = true;
             }
             continue;
         }
 
-        const processSubstitution = argWord === undefined
-            ? (() => {
-                const substitution = parseBashAst(arg).singleCommand?.singleSubstitution;
-                return substitution?.kind === "process-input"
-                    || substitution?.kind === "process-output";
-            })()
-            : argWord.kind === "process-substitution";
+        const processSubstitution =
+            argWord === undefined
+                ? (() => {
+                      const substitution = parseBashAst(arg).singleCommand?.singleSubstitution;
+                      return (
+                          substitution?.kind === "process-input" ||
+                          substitution?.kind === "process-output"
+                      );
+                  })()
+                : argWord.kind === "process-substitution";
         if (processSubstitution) {
             if (!inspectValue(arg, false, argWord)) {
                 return null;
@@ -643,11 +631,9 @@ export function extractCommandPaths(
                         if (value === undefined) {
                             return null;
                         }
-                        if (!inspectValue(
-                            value,
-                            hasPathSlot(flagSpec, slot),
-                            wordAt(i + 1 + slot),
-                        )) {
+                        if (
+                            !inspectValue(value, hasPathSlot(flagSpec, slot), wordAt(i + 1 + slot))
+                        ) {
                             return null;
                         }
                     }
@@ -785,11 +771,7 @@ export function extractCommandPaths(
     if (astCommand !== undefined) {
         for (const redirection of astCommand.redirections) {
             const operator = redirection.operator;
-            if (
-                operator === "<<"
-                || operator === "<<-"
-                || redirection.heredoc !== undefined
-            ) {
+            if (operator === "<<" || operator === "<<-" || redirection.heredoc !== undefined) {
                 // Falling back prevents hidden substitutions from executing
                 // under an otherwise safe outer command.
                 addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
@@ -808,10 +790,10 @@ export function extractCommandPaths(
             }
 
             if (
-                target.kind !== "process-substitution"
-                && operator !== "<"
-                && !operator.includes(">&")
-                && !SPECIAL_ALLOWED_PATHS.has(target.value)
+                target.kind !== "process-substitution" &&
+                operator !== "<" &&
+                !operator.includes(">&") &&
+                !SPECIAL_ALLOWED_PATHS.has(target.value)
             ) {
                 writes = true;
             }

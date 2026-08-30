@@ -19,7 +19,11 @@ export async function gitRaw(cwd: string, args: string[]): Promise<string> {
     return result.stdout;
 }
 
-export async function hasAncestor(cwd: string, baseRevision: string, revision: string): Promise<boolean> {
+export async function hasAncestor(
+    cwd: string,
+    baseRevision: string,
+    revision: string,
+): Promise<boolean> {
     try {
         await git(cwd, ["merge-base", "--is-ancestor", baseRevision, revision]);
         return true;

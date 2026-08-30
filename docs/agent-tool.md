@@ -4,20 +4,19 @@ This document contains the detailed reference for pi-coder's delegated-agent too
 
 ## Actions and lifecycle
 
-| Action | Behavior |
-| --- | --- |
-| `start` | Run an agent in the foreground by default; set `background=true` to start it in the background and return immediately. |
-| `list` | List tracked runs and available workspaces. |
-| `status` | Inspect a deliberate snapshot of a run. |
-| `collect` | Consume a terminal background result. |
-| `continue` | Resume a waiting/interrupted run or continue a collected terminal run. |
-| `cancel` | Stop a waiting or active run. |
-| `inspect` | Read an isolated result without changing it. |
-| `apply` | Apply an isolated result to the parent checkout. |
-| `retain` | Keep a result for review while releasing its task lease. |
-| `reset` | Explicitly reset a workspace for reuse. |
-| `discard` | Discard an isolated result or workspace. |
-
+| Action     | Behavior                                                                                                               |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `start`    | Run an agent in the foreground by default; set `background=true` to start it in the background and return immediately. |
+| `list`     | List tracked runs and available workspaces.                                                                            |
+| `status`   | Inspect a deliberate snapshot of a run.                                                                                |
+| `collect`  | Consume a terminal background result.                                                                                  |
+| `continue` | Resume a waiting/interrupted run or continue a collected terminal run.                                                 |
+| `cancel`   | Stop a waiting or active run.                                                                                          |
+| `inspect`  | Read an isolated result without changing it.                                                                           |
+| `apply`    | Apply an isolated result to the parent checkout.                                                                       |
+| `retain`   | Keep a result for review while releasing its task lease.                                                               |
+| `reset`    | Explicitly reset a workspace for reuse.                                                                                |
+| `discard`  | Discard an isolated result or workspace.                                                                               |
 
 There can be up to four active or interrupted runs, and up to three persistent isolated workspaces per repository by default (the limit is configurable in `/agents` Settings). Terminal background results are retained separately until collected or evicted. Continuation lookup is bound to the exact parent session and active parent-tree branch. Continuations retain the same public run ID and physical child identity, so repeated continuations continue the latest checkpoint; isolated workspace results receive new result records while using that same run ID.
 

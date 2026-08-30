@@ -24,7 +24,9 @@ describe("parseFrontmatter", () => {
     });
 
     it("throws when frontmatter is missing", () => {
-        expect(() => parseFrontmatter("# Just a regular markdown file", "notes.md")).toThrow(FrontmatterParseError);
+        expect(() => parseFrontmatter("# Just a regular markdown file", "notes.md")).toThrow(
+            FrontmatterParseError,
+        );
     });
 
     it("throws when name is missing", () => {

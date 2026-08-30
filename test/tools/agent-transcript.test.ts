@@ -46,7 +46,12 @@ describe("delegated-agent transcript formatting", () => {
             content: [
                 { type: "thinking", thinking: "private reasoning must not be shown" },
                 { type: "text", text: "I will inspect the entry point." },
-                { type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/index.ts" } },
+                {
+                    type: "toolCall",
+                    id: "call-1",
+                    name: "read",
+                    arguments: { path: "src/index.ts" },
+                },
             ],
             api: "test",
             provider: "test",
@@ -91,7 +96,11 @@ describe("delegated-agent transcript formatting", () => {
             content: "Inspect the project",
             timestamp: 1,
         });
-        session.appendCustomMessageEntry("pi-coder-agent-mailbox", "Background mailbox update for the parent agent.", false);
+        session.appendCustomMessageEntry(
+            "pi-coder-agent-mailbox",
+            "Background mailbox update for the parent agent.",
+            false,
+        );
         session.appendCustomMessageEntry("note", "A visible custom note.", true);
 
         const transcript = formatAgentSessionTranscript(session.getBranch());
@@ -133,10 +142,20 @@ todos:
                     name: "edit",
                     arguments: {
                         path: "src/index.ts",
-                        edits: [{ oldText: "const oldValue = true;", newText: "const newValue = true;" }],
+                        edits: [
+                            {
+                                oldText: "const oldValue = true;",
+                                newText: "const newValue = true;",
+                            },
+                        ],
                     },
                 },
-                { type: "toolCall", id: "call-bash", name: "bash", arguments: { command: "npm test" } },
+                {
+                    type: "toolCall",
+                    id: "call-bash",
+                    name: "bash",
+                    arguments: { command: "npm test" },
+                },
             ],
             api: "test",
             provider: "test",
@@ -173,7 +192,14 @@ todos:
         });
         session.appendMessage({
             role: "assistant",
-            content: [{ type: "toolCall", id: "call-read", name: "read", arguments: { path: "README.md" } }],
+            content: [
+                {
+                    type: "toolCall",
+                    id: "call-read",
+                    name: "read",
+                    arguments: { path: "README.md" },
+                },
+            ],
             api: "test",
             provider: "test",
             model: "test",
@@ -242,7 +268,14 @@ todos:
         });
         session.appendMessage({
             role: "assistant",
-            content: [{ type: "toolCall", id: "call-read", name: "read", arguments: { path: "src/index.ts" } }],
+            content: [
+                {
+                    type: "toolCall",
+                    id: "call-read",
+                    name: "read",
+                    arguments: { path: "src/index.ts" },
+                },
+            ],
             api: "test",
             provider: "test",
             model: "test",
@@ -306,8 +339,18 @@ todos:
         session.appendMessage({
             role: "assistant",
             content: [
-                { type: "toolCall", id: "call-find", name: "find", arguments: { pattern: "*.test.ts", path: "test" } },
-                { type: "toolCall", id: "call-grep", name: "grep", arguments: { pattern: "AgentSession", path: "src/tui" } },
+                {
+                    type: "toolCall",
+                    id: "call-find",
+                    name: "find",
+                    arguments: { pattern: "*.test.ts", path: "test" },
+                },
+                {
+                    type: "toolCall",
+                    id: "call-grep",
+                    name: "grep",
+                    arguments: { pattern: "AgentSession", path: "src/tui" },
+                },
             ],
             api: "test",
             provider: "test",

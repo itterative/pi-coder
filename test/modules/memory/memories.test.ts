@@ -45,7 +45,10 @@ describe("scanMemories", () => {
 
             const result = await scanMemories(dir);
 
-            expect(result.memories.map((m) => m.name).sort()).toEqual(["architecture", "conventions"]);
+            expect(result.memories.map((m) => m.name).sort()).toEqual([
+                "architecture",
+                "conventions",
+            ]);
             expect(result.errors.map((e) => e.filePath).sort()).toEqual([
                 join(dir, "incomplete.md"),
                 join(dir, "notes.md"),

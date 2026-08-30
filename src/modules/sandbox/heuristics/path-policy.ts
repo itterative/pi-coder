@@ -22,16 +22,36 @@ export const SPECIAL_ALLOWED_PATHS = new Set([
  */
 const DEFAULT_SENSITIVE_PATTERNS = [
     // environment files
-    ".env", ".env.*",
+    ".env",
+    ".env.*",
     // VCS internals (e.g. .git/config may embed tokens in remote URLs)
     ".git",
     // credential directories
-    ".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".gcloud",
+    ".ssh",
+    ".aws",
+    ".azure",
+    ".gnupg",
+    ".kube",
+    ".docker",
+    ".gcloud",
     // credential files
-    ".netrc", ".npmrc", ".pypirc", ".pgpass", ".my.cnf", ".htpasswd",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".pgpass",
+    ".my.cnf",
+    ".htpasswd",
     // private keys
-    "id_rsa*", "id_ed25519*", "id_ecdsa*", "id_dsa*",
-    "*.pem", "*.key", "*.p12", "*.pfx", "*.keystore", "*.jks",
+    "id_rsa*",
+    "id_ed25519*",
+    "id_ecdsa*",
+    "id_dsa*",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "*.keystore",
+    "*.jks",
     // infra secrets
     "*.tfvars",
     "credentials",
@@ -64,16 +84,24 @@ export const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * sandbox can instead apply an explicit inheritEnv policy when needed).
  */
 const DANGEROUS_ENV_NAMES = new Set([
-    "PATH", "IFS", "CDPATH",
-    "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PROMPT_COMMAND",
+    "PATH",
+    "IFS",
+    "CDPATH",
+    "BASH_ENV",
+    "ENV",
+    "SHELLOPTS",
+    "BASHOPTS",
+    "PROMPT_COMMAND",
     "GCONV_PATH",
     // rg config file can inject flags, including --pre (program execution)
     "RIPGREP_CONFIG_PATH",
     // pagers pipe file contents through a user script
-    "LESSOPEN", "LESSCLOSE",
+    "LESSOPEN",
+    "LESSCLOSE",
     // relocate tool config/state to an attacker-chosen file (git reads the
     // XDG config; a crafted config can select programs via core.fsmonitor)
-    "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
 ]);
 
 export function isDangerousEnvName(name: string): boolean {
@@ -118,9 +146,7 @@ export function resolvePath(p: string, cwd: string, home: string): string {
  * Check whether a resolved path touches a sensitive segment.
  */
 function hasSensitiveSegment(resolved: string, options: ConfinementOptions): boolean {
-    const segments = resolved
-        .split(path.sep)
-        .filter((s) => s !== "" && s !== "." && s !== "..");
+    const segments = resolved.split(path.sep).filter((s) => s !== "" && s !== "." && s !== "..");
 
     for (const segment of segments) {
         if (options.blockDotfiles && segment.startsWith(".")) {
@@ -151,9 +177,12 @@ export function isSensitivePath(
     options: ConfinementOptions,
 ): boolean {
     const resolved = resolvePath(p, cwd, home);
-    if (options.additionalRoots.some((root) =>
-        root.sensitiveExempt
-        && isLexicallyWithin(resolved, root.lexical, resolved, home))) {
+    if (
+        options.additionalRoots.some(
+            (root) =>
+                root.sensitiveExempt && isLexicallyWithin(resolved, root.lexical, resolved, home),
+        )
+    ) {
         return false;
     }
     return hasSensitiveSegment(resolved, options);
@@ -163,12 +192,7 @@ export function isSensitivePath(
  * Check whether a path stays within the working directory, using lexical
  * resolution only (symlinks are not followed).
  */
-export function isLexicallyWithin(
-    p: string,
-    root: string,
-    cwd: string,
-    home: string,
-): boolean {
+export function isLexicallyWithin(p: string, root: string, cwd: string, home: string): boolean {
     const resolved = resolvePath(p, cwd, home);
     const resolvedRoot = resolvePath(root, cwd, home);
     return resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep);
@@ -189,9 +213,12 @@ export function isAllowedPath(
         return true;
     }
 
-    return isLexicallyWithin(p, root, cwd, home)
-        || options.additionalRoots.some((additionalRoot) =>
-            isLexicallyWithin(p, additionalRoot.lexical, cwd, home));
+    return (
+        isLexicallyWithin(p, root, cwd, home) ||
+        options.additionalRoots.some((additionalRoot) =>
+            isLexicallyWithin(p, additionalRoot.lexical, cwd, home),
+        )
+    );
 }
 
 export function findAdditionalRoot(
@@ -201,7 +228,8 @@ export function findAdditionalRoot(
     options: ConfinementOptions,
 ): AdditionalRoot | undefined {
     const matches = options.additionalRoots.filter((root) =>
-        isLexicallyWithin(p, root.lexical, cwd, home));
+        isLexicallyWithin(p, root.lexical, cwd, home),
+    );
 
     return matches.reduce<AdditionalRoot | undefined>((mostSpecific, root) => {
         if (!mostSpecific || root.lexical.length > mostSpecific.lexical.length) {
@@ -224,16 +252,18 @@ export function makeAbsolutePath(p: string, cwd: string, home: string): string {
 
 export function isWithinRoot(candidate: string, root: string): boolean {
     const relative = path.relative(root, candidate);
-    return relative === ""
-        || (!relative.startsWith(".." + path.sep)
-            && relative !== ".."
-            && !path.isAbsolute(relative));
+    return (
+        relative === "" ||
+        (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative))
+    );
 }
 
 function hasDotPathComponent(value: string): boolean {
     const root = path.parse(value).root;
-    return value.slice(root.length).split(path.sep).some((component) =>
-        component === "." || component === "..");
+    return value
+        .slice(root.length)
+        .split(path.sep)
+        .some((component) => component === "." || component === "..");
 }
 
 export function isExistingDirectoryOperand(value: string, cwd: string, home: string): boolean {
@@ -363,9 +393,7 @@ export function isPathWithinDirectory(
     if (confinement?.resolveSymlinks ?? true) {
         const resolvedDirectory = resolvePath(directory, resolvedCwd, home);
         const realFile = canonicalizePath(makeAbsolutePath(filePath, resolvedCwd, home));
-        const realDirectory = canonicalizePath(
-            makeAbsolutePath(directory, resolvedCwd, home),
-        );
+        const realDirectory = canonicalizePath(makeAbsolutePath(directory, resolvedCwd, home));
 
         if (realFile === null || realDirectory === null) {
             return false;
@@ -451,19 +479,21 @@ export function buildConfinementOptions(
     }
 
     const home = os.homedir();
-    const resolveAdditionalRoots = (roots: readonly string[]): string[] => roots
-        .flatMap((root) => {
-            const absolute = makeAbsolutePath(root, cwd, home);
-            if (hasDotPathComponent(absolute)) {
-                return [];
-            }
-            return [path.resolve(absolute)];
-        })
-        .filter((root, index, roots) => roots.indexOf(root) === index);
+    const resolveAdditionalRoots = (roots: readonly string[]): string[] =>
+        roots
+            .flatMap((root) => {
+                const absolute = makeAbsolutePath(root, cwd, home);
+                if (hasDotPathComponent(absolute)) {
+                    return [];
+                }
+                return [path.resolve(absolute)];
+            })
+            .filter((root, index, roots) => roots.indexOf(root) === index);
     const resolvedAdditionalRoots = resolveAdditionalRoots(additionalRoots);
-    const sensitiveRoots = sensitiveAdditionalRoots === undefined
-        ? new Set(resolvedAdditionalRoots)
-        : new Set(resolveAdditionalRoots(sensitiveAdditionalRoots));
+    const sensitiveRoots =
+        sensitiveAdditionalRoots === undefined
+            ? new Set(resolvedAdditionalRoots)
+            : new Set(resolveAdditionalRoots(sensitiveAdditionalRoots));
     const readOnlyRoots = new Set(resolveAdditionalRoots(readOnlyAdditionalRoots));
     const pairedAdditionalRoots = resolvedAdditionalRoots.map((lexical): AdditionalRoot => {
         const rootPolicy = {

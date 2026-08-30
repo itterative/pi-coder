@@ -14,16 +14,26 @@ function fakeHandle(): OverlayHandle & { focusCount: number } {
     let focused = false;
     let focusCount = 0;
     return {
-        get focusCount() { return focusCount; },
+        get focusCount() {
+            return focusCount;
+        },
         focus() {
             focused = true;
             focusCount++;
         },
-        unfocus() { focused = false; },
-        isFocused() { return focused; },
-        isHidden() { return false; },
+        unfocus() {
+            focused = false;
+        },
+        isFocused() {
+            return focused;
+        },
+        isHidden() {
+            return false;
+        },
         setHidden() {},
-        hide() { focused = false; },
+        hide() {
+            focused = false;
+        },
     };
 }
 
@@ -105,7 +115,9 @@ describe("withOverlayStack", () => {
             tui.setFocus(permissionDialog);
             (tui as TUI & { handleTerminalInput(data: string): void }).handleTerminalInput("d");
             expect(tui.getFocusedComponent()).toBe(detail);
-            await expect(renderText(detail, 100)).toMatchFileSnapshot("__snapshots__/overlay-stack.workspace-discard-confirmation.txt");
+            await expect(renderText(detail, 100)).toMatchFileSnapshot(
+                "__snapshots__/overlay-stack.workspace-discard-confirmation.txt",
+            );
 
             (tui as TUI & { handleTerminalInput(data: string): void }).handleTerminalInput("y");
             await vi.waitFor(() => expect(closed).toBe(true));
@@ -119,10 +131,16 @@ describe("withOverlayStack", () => {
         const tui = {
             addInputListener(next: InputListener) {
                 listener = next;
-                return () => { removed = true; };
+                return () => {
+                    removed = true;
+                };
             },
-            getFocusedComponent() { return focusedComponent; },
-            setFocus(component: object) { focusedComponent = component; },
+            getFocusedComponent() {
+                return focusedComponent;
+            },
+            setFocus(component: object) {
+                focusedComponent = component;
+            },
         } as unknown as TUI;
         const outer = fakeHandle();
         const inner = fakeHandle();

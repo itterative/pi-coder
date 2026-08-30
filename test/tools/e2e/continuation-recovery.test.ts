@@ -38,9 +38,13 @@ describe("isolated continuation recovery e2e", () => {
         expect(secondPersistence).toBeDefined();
 
         let enteredFactory: (() => void) | undefined;
-        const factoryEntered = new Promise<void>((resolve) => { enteredFactory = resolve; });
+        const factoryEntered = new Promise<void>((resolve) => {
+            enteredFactory = resolve;
+        });
         let releaseFactory: (() => void) | undefined;
-        const factoryRelease = new Promise<void>((resolve) => { releaseFactory = resolve; });
+        const factoryRelease = new Promise<void>((resolve) => {
+            releaseFactory = resolve;
+        });
         const childFactory = async (): Promise<ChildAgentHandle> => {
             enteredFactory?.();
             await factoryRelease;
@@ -53,14 +57,25 @@ describe("isolated continuation recovery e2e", () => {
         firstManager.setPersistence(firstPersistence!.persistence);
         secondManager.setPersistence(secondPersistence!.persistence);
         const context = createE2EContext(paths);
-        const identity = firstManager.reserveRunIdentity(BUILTIN_SCOUT, "shared identity", context, "scout-1", "shared-instance");
-        const firstStart = firstManager.start(BUILTIN_SCOUT, "shared identity", context, { identity });
+        const identity = firstManager.reserveRunIdentity(
+            BUILTIN_SCOUT,
+            "shared identity",
+            context,
+            "scout-1",
+            "shared-instance",
+        );
+        const firstStart = firstManager.start(BUILTIN_SCOUT, "shared identity", context, {
+            identity,
+        });
         await factoryEntered;
 
-        await expect(secondManager.start(BUILTIN_SCOUT, "shared identity", context, { identity }))
-            .rejects.toThrow(/continuation|reserve/i);
+        await expect(
+            secondManager.start(BUILTIN_SCOUT, "shared identity", context, { identity }),
+        ).rejects.toThrow(/continuation|reserve/i);
         releaseFactory?.();
-        await expect(firstStart).resolves.toMatchObject({ details: { status: "completed", runInstanceId: "shared-instance" } });
+        await expect(firstStart).resolves.toMatchObject({
+            details: { status: "completed", runInstanceId: "shared-instance" },
+        });
 
         firstPersistence!.persistence.close?.();
         secondPersistence!.persistence.close?.();
@@ -93,13 +108,24 @@ describe("isolated continuation recovery e2e", () => {
         expect(persistence).toBeDefined();
         manager.setPersistence(persistence!.persistence);
         const context = createE2EContext(paths, { workspaceId: ready.id });
-        const identity = manager.reserveRunIdentity(BUILTIN_SCOUT, "Inspect the workspace", context, "scout-1", "scout-1-instance");
+        const identity = manager.reserveRunIdentity(
+            BUILTIN_SCOUT,
+            "Inspect the workspace",
+            context,
+            "scout-1",
+            "scout-1-instance",
+        );
         const waiting = await manager.start(BUILTIN_SCOUT, "Inspect the workspace", context, {
             identity,
-            onWorkspaceCheckpoint: createAgentWorkspaceCheckpointCallback(ownerSessionId, paths.state),
+            onWorkspaceCheckpoint: createAgentWorkspaceCheckpointCallback(
+                ownerSessionId,
+                paths.state,
+            ),
         });
         expect(waiting.details.status).toBe("waiting_for_parent");
-        expect((await getAgentWorkspace(ready.id, { workspacesDir: paths.state }))?.leaseActive).toBe(true);
+        expect(
+            (await getAgentWorkspace(ready.id, { workspacesDir: paths.state }))?.leaseActive,
+        ).toBe(true);
 
         expect(await manager.parkWorkspaceRunForReuse(ready.id, identity.runId)).toBe(true);
         const parked = await getAgentWorkspace(ready.id, { workspacesDir: paths.state });
@@ -117,7 +143,9 @@ describe("isolated continuation recovery e2e", () => {
         });
         expect(recycled.leaseRunId).toBe("worker-2");
         expect(recycled.leaseOwnerSessionId).toBe("new-parent");
-        expect(fs.existsSync(path.join(recycled.worktreePath, "unexpected-worker-file"))).toBe(false);
+        expect(fs.existsSync(path.join(recycled.worktreePath, "unexpected-worker-file"))).toBe(
+            false,
+        );
 
         persistence!.persistence.close?.();
         await manager.shutdown();

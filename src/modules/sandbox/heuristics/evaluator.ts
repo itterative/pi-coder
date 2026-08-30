@@ -6,15 +6,27 @@ import type { BashAst, BashCommand } from "../bash";
 import { CommandTag, KNOWN_COMMANDS } from "../commands";
 import type { CommandSpec } from "../commands";
 import {
-    Heuristic, UnsafeReason,
-    addCommandTags, addUnsafeReason,
-    createCwdConfinementState, cloneCwdConfinementState, restoreCwdConfinementState,
-    type CwdConfinementState, type ConfinementDiagnostics,
+    Heuristic,
+    UnsafeReason,
+    addCommandTags,
+    addUnsafeReason,
+    createCwdConfinementState,
+    cloneCwdConfinementState,
+    restoreCwdConfinementState,
+    type CwdConfinementState,
+    type ConfinementDiagnostics,
 } from "./types";
 import {
-    isAllowedPath, isSensitivePath, isRealPathConfined, isPathWithinAdditionalRoot,
-    isExistingDirectoryOperand, isHardLinkedFileOperand, resolvePath, isLexicallyWithin,
-    ENV_ASSIGNMENT, isDangerousEnvName,
+    isAllowedPath,
+    isSensitivePath,
+    isRealPathConfined,
+    isPathWithinAdditionalRoot,
+    isExistingDirectoryOperand,
+    isHardLinkedFileOperand,
+    resolvePath,
+    isLexicallyWithin,
+    ENV_ASSIGNMENT,
+    isDangerousEnvName,
     type ConfinementOptions,
 } from "./path-policy";
 import {
@@ -176,9 +188,7 @@ export function isCommandConfined(
     diagnostics?: ConfinementDiagnostics,
 ): Heuristic | undefined {
     const astCommand = Array.isArray(input) ? undefined : input;
-    const args = Array.isArray(input)
-        ? input
-        : input.words.map((word) => word.value);
+    const args = Array.isArray(input) ? input : input.words.map((word) => word.value);
 
     if (state.blocked) {
         addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_CWD);
@@ -202,12 +212,7 @@ export function isCommandConfined(
                     addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
                     return undefined;
                 }
-                const nested = isConfined(
-                    substitution.content,
-                    cwd,
-                    options,
-                    diagnostics,
-                );
+                const nested = isConfined(substitution.content, cwd, options, diagnostics);
                 if (nested === undefined) {
                     return undefined;
                 }
@@ -241,12 +246,9 @@ export function isCommandConfined(
         return undefined;
     }
 
-    const customCommand = matchesCustomSafeBashCommand(
-        args,
-        options.customSafeBashCommands,
-    );
-    const spec = KNOWN_COMMANDS[commandName]
-        ?? (customCommand ? CUSTOM_SAFE_COMMAND_SPEC : undefined);
+    const customCommand = matchesCustomSafeBashCommand(args, options.customSafeBashCommands);
+    const spec =
+        KNOWN_COMMANDS[commandName] ?? (customCommand ? CUSTOM_SAFE_COMMAND_SPEC : undefined);
     if (!spec) {
         addUnsafeReason(diagnostics, UnsafeReason.UNKNOWN_COMMAND);
         return undefined;
@@ -263,10 +265,11 @@ export function isCommandConfined(
             return undefined;
         }
         const home = os.homedir();
-        const envConfined = envValues.every((p) =>
-            isAllowedPath(p, cwd, home, options, rootCwd) &&
-            !isSensitivePath(p, cwd, home, options) &&
-            isRealPathConfined(p, cwd, home, options),
+        const envConfined = envValues.every(
+            (p) =>
+                isAllowedPath(p, cwd, home, options, rootCwd) &&
+                !isSensitivePath(p, cwd, home, options) &&
+                isRealPathConfined(p, cwd, home, options),
         );
         const commandAllowed =
             options.allowedCommands === null || options.allowedCommands.has(commandName);
@@ -289,10 +292,18 @@ export function isCommandConfined(
         return undefined;
     }
 
-    const access = extractCommandPaths(commandArgv, spec, cwd, options, diagnostics, {
-        evaluateNested: (nested, nestedCwd, nestedOptions, nestedDiagnostics) =>
-            isConfined(nested, nestedCwd, nestedOptions, nestedDiagnostics),
-    }, astCommand);
+    const access = extractCommandPaths(
+        commandArgv,
+        spec,
+        cwd,
+        options,
+        diagnostics,
+        {
+            evaluateNested: (nested, nestedCwd, nestedOptions, nestedDiagnostics) =>
+                isConfined(nested, nestedCwd, nestedOptions, nestedDiagnostics),
+        },
+        astCommand,
+    );
     if (access === null) {
         if (diagnostics?.reasons.length === 0) {
             addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_COMMAND);
@@ -320,29 +331,32 @@ export function isCommandConfined(
 
     if (!confined) return undefined;
 
-    if (access.writes && allPaths.some((p) =>
-        options.additionalRoots.some((root) =>
-            root.readOnly && isLexicallyWithin(p, root.lexical, cwd, home)))) {
+    if (
+        access.writes &&
+        allPaths.some((p) =>
+            options.additionalRoots.some(
+                (root) => root.readOnly && isLexicallyWithin(p, root.lexical, cwd, home),
+            ),
+        )
+    ) {
         addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_MODE);
         return undefined;
     }
 
-    const hasAdditionalRootPolicy = spec.additionalRootOnly
-        || spec.additionalRootLastPositional
-        || access.requiresAdditionalRoot;
-    if (
-        hasAdditionalRootPolicy
-        && commandArgv.slice(1).some(hasDynamicShellExpansion)
-    ) {
+    const hasAdditionalRootPolicy =
+        spec.additionalRootOnly ||
+        spec.additionalRootLastPositional ||
+        access.requiresAdditionalRoot;
+    if (hasAdditionalRootPolicy && commandArgv.slice(1).some(hasDynamicShellExpansion)) {
         addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
         return undefined;
     }
 
     const destination = access.positionalPaths[access.positionalPaths.length - 1];
     if (
-        spec.rejectDirectoryDestination
-        && destination !== undefined
-        && isExistingDirectoryOperand(destination, cwd, home)
+        spec.rejectDirectoryDestination &&
+        destination !== undefined &&
+        isExistingDirectoryOperand(destination, cwd, home)
     ) {
         addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_MODE);
         return undefined;
@@ -366,12 +380,12 @@ export function isCommandConfined(
         additionalRootPaths = [destination];
     }
 
-    if (hasAdditionalRootPolicy && (
-        options.additionalRoots.length === 0
-        || additionalRootPaths.length === 0
-        || !additionalRootPaths.every((p) =>
-            isPathWithinAdditionalRoot(p, cwd, home, options))
-    )) {
+    if (
+        hasAdditionalRootPolicy &&
+        (options.additionalRoots.length === 0 ||
+            additionalRootPaths.length === 0 ||
+            !additionalRootPaths.every((p) => isPathWithinAdditionalRoot(p, cwd, home, options)))
+    ) {
         addUnsafeReason(diagnostics, UnsafeReason.OUTSIDE_CWD);
         return undefined;
     }
@@ -423,9 +437,7 @@ export function isConfined(
                 return undefined;
             }
             const nextPart = statement.node.parts[partIndex + 1];
-            const operatorAfter = nextPart?.type === "operator"
-                ? nextPart.value
-                : null;
+            const operatorAfter = nextPart?.type === "operator" ? nextPart.value : null;
             const beforeSegment = cloneCwdConfinementState(state);
             if (nonPersistentBase === null && isNonPersistentChainOperator(operatorAfter)) {
                 nonPersistentBase = beforeSegment;
@@ -454,8 +466,9 @@ export function isConfined(
                 }
                 return undefined;
             }
-            heuristic = combineHeuristics(heuristic ?? Heuristic.SAFE_READONLY, result)
-                ?? Heuristic.SAFE_READONLY;
+            heuristic =
+                combineHeuristics(heuristic ?? Heuristic.SAFE_READONLY, result) ??
+                Heuristic.SAFE_READONLY;
         }
 
         if (!hasCommand) {

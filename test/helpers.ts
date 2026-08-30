@@ -72,9 +72,7 @@ export function renderText(component: Component, width = 50): string {
     return component
         .render(width)
         .map((line) =>
-            line
-                .replaceAll(CURSOR_MARKER, "")
-                .replace(/\x1b\[7m([\s\S])\x1b\[27m/g, "[$1]"),
+            line.replaceAll(CURSOR_MARKER, "").replace(/\x1b\[7m([\s\S])\x1b\[27m/g, "[$1]"),
         )
         .join("\n");
 }

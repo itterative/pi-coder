@@ -31,7 +31,10 @@ export function parseFrontmatter(content: string, filePath: string): MemoryMeta 
         throw new FrontmatterParseError(filePath, "missing required `name` field in frontmatter");
     }
     if (description === undefined) {
-        throw new FrontmatterParseError(filePath, "missing required `description` field in frontmatter");
+        throw new FrontmatterParseError(
+            filePath,
+            "missing required `description` field in frontmatter",
+        );
     }
 
     const meta: MemoryMeta = { name, description };

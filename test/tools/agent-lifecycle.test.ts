@@ -4,10 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 
-import {
-    BUILTIN_ADVISOR,
-    BUILTIN_WORKER,
-} from "../../src/tools/agent/definitions/discovery";
+import { BUILTIN_ADVISOR, BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
 import {
     AGENT_EVENT_CHANNEL,
     AGENT_STATUS_EVENT,
@@ -160,7 +157,10 @@ describe("agent lifecycle worker-change notifications", () => {
         const events = createEventBus();
         const messages = vi.fn();
         const child = new BlockingChild();
-        const lifecycle = new AgentLifecycle({ events, sendMessage: messages } as any, async () => child);
+        const lifecycle = new AgentLifecycle(
+            { events, sendMessage: messages } as any,
+            async () => child,
+        );
         const ctx = {
             cwd: root,
             isIdle: () => true,
@@ -186,9 +186,9 @@ describe("agent lifecycle worker-change notifications", () => {
             await expect(pending).resolves.toMatchObject({
                 details: { agent: "advisor", background: true, status: "running" },
             });
-            await vi.waitFor(() => expect(
-                lifecycle.manager.status("advisor-1").details.status,
-            ).toBe("completed"));
+            await vi.waitFor(() =>
+                expect(lifecycle.manager.status("advisor-1").details.status).toBe("completed"),
+            );
             await vi.waitFor(() => expect(messages).toHaveBeenCalledTimes(1));
 
             expect(messages.mock.calls[0]?.[1]).toEqual({
@@ -253,10 +253,15 @@ describe("agent lifecycle worker-change notifications", () => {
             isIdle: () => true,
             ui: { notify: vi.fn(), setWidget: vi.fn() },
         } as any;
-        lifecycle.updateSetupRun(ctx, "workspace-setup-1", { id: "workspace-1", slug: "workspace" } as any, {
-            status: "completed",
-            activity: "Setup complete",
-        });
+        lifecycle.updateSetupRun(
+            ctx,
+            "workspace-setup-1",
+            { id: "workspace-1", slug: "workspace" } as any,
+            {
+                status: "completed",
+                activity: "Setup complete",
+            },
+        );
         expect(statusSnapshots.at(-1)?.runs).toHaveLength(1);
 
         await handlers.get("session_tree")?.[0]?.({}, ctx);
@@ -265,7 +270,6 @@ describe("agent lifecycle worker-change notifications", () => {
         await lifecycle.manager.shutdown();
         events.clear();
     });
-
 
     it("notifies a busy parent once per newly changed path", async () => {
         const value = await fixture(true, false);

@@ -17,15 +17,10 @@ import {
 import { Type } from "typebox";
 
 import type { SandboxConfigCwdConfinement } from "../../../common/config";
-import {
-    getPathConfinementPermission,
-    Heuristic,
-} from "../../../modules/sandbox/heuristics";
+import { getPathConfinementPermission, Heuristic } from "../../../modules/sandbox/heuristics";
 import { askUser } from "../../../tui/ask-user";
 import { getScratchpadPath } from "../../../modules/scratchpad";
-import registerFileToolHook, {
-    isFileAccessApproved,
-} from "../../file-permissions";
+import registerFileToolHook, { isFileAccessApproved } from "../../file-permissions";
 import { getPermissionState } from "../../../modules/sandbox/permission-state";
 import { guardSafeBashCommand } from "./safe-bash";
 import { registerCommandPermissionHooks } from "./command-permissions";
@@ -76,9 +71,11 @@ export function childProtocolPrompt({
         if (additionalPaths.length > 0) {
             allowedPathScope += ", or an exact full-output file reported by Bash";
         } else if (hasScratchpad) {
-            allowedPathScope = "the current working directory, the temporary scratchpad, or an exact full-output file reported by Bash";
+            allowedPathScope =
+                "the current working directory, the temporary scratchpad, or an exact full-output file reported by Bash";
         } else {
-            allowedPathScope = "the current working directory or an exact full-output file reported by Bash";
+            allowedPathScope =
+                "the current working directory or an exact full-output file reported by Bash";
         }
     }
     const sensitivePathRule = hasScratchpad
@@ -87,25 +84,30 @@ export function childProtocolPrompt({
     const readPathRule = hasScratchpad
         ? sensitivePathRule
         : "Sensitive paths and paths that escape through symlinks are always blocked.";
-    const customSafeBashPrompt = safeBashCommands.length > 0
-        ? `The definition also permits these exact safe-Bash command patterns: ${safeBashCommands.map((command) => JSON.stringify(command)).join(", ")}. These executables are trusted as read-only by the definition author. A trailing \`*\` matches one or more trailing arguments; matched commands still undergo path-confinement and sensitive-path checks.`
-        : undefined;
+    const customSafeBashPrompt =
+        safeBashCommands.length > 0
+            ? `The definition also permits these exact safe-Bash command patterns: ${safeBashCommands.map((command) => JSON.stringify(command)).join(", ")}. These executables are trusted as read-only by the definition author. A trailing \`*\` matches one or more trailing arguments; matched commands still undergo path-confinement and sensitive-path checks.`
+            : undefined;
     const interaction = !allowUserInteraction
         ? "If guidance from the parent is necessary, make reasonable progress first, then use `ask_parent` with the evidence you found and your recommended course. Call `ask_parent` by itself, not alongside other tools."
         : [
-            "Use `ask_user` when you need a preference, clarification, or decision from the end user. Call it by itself, not alongside other tools, and continue after the answer is returned.",
-            "Use `ask_parent` instead when the parent can answer or make the decision. Before asking, make reasonable progress and include the evidence you found and your recommendation. Do not leave a blocking question only in prose when an interaction tool applies.",
-        ].join(" ");
+              "Use `ask_user` when you need a preference, clarification, or decision from the end user. Call it by itself, not alongside other tools, and continue after the answer is returned.",
+              "Use `ask_parent` instead when the parent can answer or make the decision. Before asking, make reasonable progress and include the evidence you found and your recommendation. Do not leave a blocking question only in prose when an interaction tool applies.",
+          ].join(" ");
     let capability: string;
     if (canEdit && isolated) {
         capability = [
             "Run mode: mutation-capable worker in a separate Git worktree.",
             "This worktree is your current working directory. Changes you make there do not affect the parent's checkout unless the parent later applies your result.",
             ...(hasScratchpad
-                ? ["This run also has a private temporary scratchpad as an additional root. You may use `edit` and `write` there without an additional approval request."]
+                ? [
+                      "This run also has a private temporary scratchpad as an additional root. You may use `edit` and `write` there without an additional approval request.",
+                  ]
                 : []),
             ...(hasBashOutputAccess
-                ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
+                ? [
+                      "When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access.",
+                  ]
                 : []),
             "Direct edit/write calls inside this worktree are already authorized; sensitive paths and symlink escapes remain blocked. Bash commands use this run's own permission state and may pause while the end user decides whether to approve them; do not assume an approval granted to the parent also applies to you.",
             ...(customSafeBashPrompt ? [customSafeBashPrompt] : []),
@@ -116,7 +118,9 @@ export function childProtocolPrompt({
             "Run mode: mutation-capable worker in the parent's current checkout. That checkout is your current working directory.",
             `You may call \`edit\` and \`write\` directly for paths inside ${mutationPathScope}; that access is already authorized and does not require an additional approval request. Eligible file access outside it may pause while the end user approves or denies the request. ${sensitivePathRule}`,
             ...(hasBashOutputAccess
-                ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
+                ? [
+                      "When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access.",
+                  ]
                 : []),
             "A Bash command covered by an existing parent permission rule runs immediately. Any other eligible command may pause while the end user approves or denies it. A denied command or one rejected by the safety checks remains blocked.",
             ...(customSafeBashPrompt ? [customSafeBashPrompt] : []),
@@ -127,7 +131,9 @@ export function childProtocolPrompt({
             "Run mode: delegated agent with permission-gated command execution.",
             `You may use \`read\`, \`grep\`, \`find\`, and \`ls\`. Every direct file path, after resolving symlinks, must remain inside ${allowedPathScope}. ${readPathRule} You cannot use direct edit or write tools.`,
             ...(hasBashOutputAccess
-                ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
+                ? [
+                      "When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access.",
+                  ]
                 : []),
             "You may use `bash`. Commands recognized as local read-only inspection run directly; other eligible commands may pause while the end user approves or denies them. Approved commands can have project side effects, so keep them relevant to validation and do not assume a command is harmless because it has a test-like name.",
             ...(customSafeBashPrompt ? [customSafeBashPrompt] : []),
@@ -141,7 +147,9 @@ export function childProtocolPrompt({
             "Run mode: read-only delegated agent.",
             `You may use \`read\`, \`grep\`, \`find\`, and \`ls\`. Every path, after resolving symlinks, must remain inside ${allowedPathScope}. ${readPathRule} You cannot modify files.`,
             ...(hasBashOutputAccess
-                ? ["When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access."]
+                ? [
+                      "When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access.",
+                  ]
                 : []),
             bashAccess,
             ...(customSafeBashPrompt ? [customSafeBashPrompt] : []),
@@ -153,7 +161,6 @@ export function childProtocolPrompt({
         : "When finished, give the parent a self-contained report with your findings, supporting evidence, limitations, and useful next steps.";
 
     return `${capability}\n\n${interaction}\n\n${reporting}`;
-
 }
 
 /** Named options for child read-path confinement checks. */
@@ -167,18 +174,17 @@ export function isChildPathAllowed(
     cwd: string,
     options: ChildPathOptions = {},
 ): boolean {
-    const {
-        additionalRoots = [],
-        sensitiveAdditionalRoots = [],
-    } = options;
+    const { additionalRoots = [], sensitiveAdditionalRoots = [] } = options;
     const effectivePath = filePath?.trim() || cwd;
-    return getPathConfinementPermission(effectivePath, {
-        cwd,
-        config: CHILD_CONFINEMENT,
-        access: "read",
-        additionalRoots,
-        sensitiveAdditionalRoots,
-    }) === Heuristic.SAFE_READONLY;
+    return (
+        getPathConfinementPermission(effectivePath, {
+            cwd,
+            config: CHILD_CONFINEMENT,
+            access: "read",
+            additionalRoots,
+            sensitiveAdditionalRoots,
+        }) === Heuristic.SAFE_READONLY
+    );
 }
 
 export {
@@ -219,19 +225,25 @@ export async function askChildUser(
 ): Promise<ChildUserAnswerResult> {
     if (!parentContext.hasUI || parentContext.mode !== "tui") {
         return {
-            content: [{
-                type: "text" as const,
-                text: "Direct user interaction is unavailable in this mode. Use ask_parent for guidance instead.",
-            }],
+            content: [
+                {
+                    type: "text" as const,
+                    text: "Direct user interaction is unavailable in this mode. Use ask_parent for guidance instead.",
+                },
+            ],
             details: { unavailable: true },
         };
     }
 
-    const result = await askUser({
-        title: `${agentName} asks: ${question.title}`,
-        description: question.description,
-        options: question.options,
-    }, { hasUI: parentContext.hasUI, ui: parentContext.ui, events }, signal);
+    const result = await askUser(
+        {
+            title: `${agentName} asks: ${question.title}`,
+            description: question.description,
+            options: question.options,
+        },
+        { hasUI: parentContext.hasUI, ui: parentContext.ui, events },
+        signal,
+    );
 
     if (signal?.aborted) {
         throw signal.reason instanceof Error
@@ -240,10 +252,12 @@ export async function askChildUser(
     }
     if (!result) {
         return {
-            content: [{
-                type: "text" as const,
-                text: "The user cancelled the question. Continue with a reasonable default or use ask_parent if guidance is required.",
-            }],
+            content: [
+                {
+                    type: "text" as const,
+                    text: "The user cancelled the question. Continue with a reasonable default or use ask_parent if guidance is required.",
+                },
+            ],
             details: { canceled: true },
         };
     }
@@ -305,9 +319,8 @@ export function registerChildExtension(
 ) {
     return (pi: ExtensionAPI): void => {
         const bashOutputPaths = new Map<string, BashOutputPath>();
-        const canAskUser = allowUserInteraction
-            && parentContext.hasUI === true
-            && parentContext.mode === "tui";
+        const canAskUser =
+            allowUserInteraction && parentContext.hasUI === true && parentContext.mode === "tui";
         const readRoots = (ctx: ExtensionContext): readonly string[] => [
             ...additionalPaths,
             ...getScratchpadRoots(ctx),
@@ -336,15 +349,17 @@ export function registerChildExtension(
         const isolatedChild = isolated || workspaceId !== undefined;
         const nonIsolated = !isolatedChild;
         const parentSessionManager = parentContext.sessionManager;
-        const parentPermissionState = parentSessionManager && (canEdit || commandRunner)
-            ? getPermissionState(parentSessionManager)
-            : undefined;
+        const parentPermissionState =
+            parentSessionManager && (canEdit || commandRunner)
+                ? getPermissionState(parentSessionManager)
+                : undefined;
         const permissionState = nonIsolated ? parentPermissionState : undefined;
         const childRunLabel = runTitle ? `${runTitle} · ${runId}` : runId;
         const reportPermissionPending = (pending: boolean, activity: string): void => {
             tracker.progress.permissionPending = pending;
             tracker.progress.recentActivity.push(activity);
-            tracker.progress.recentActivity = tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
+            tracker.progress.recentActivity =
+                tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
             onTrace?.("mutation.permission", { pending, activity });
             onProgress({
                 output: tracker.progress.output,
@@ -353,8 +368,12 @@ export function registerChildExtension(
                     : {}),
                 recentActivity: [...tracker.progress.recentActivity],
                 ...(tracker.progress.phase ? { phase: tracker.progress.phase } : {}),
-                ...(tracker.progress.lastToolActivity ? { lastToolActivity: tracker.progress.lastToolActivity } : {}),
-                ...(tracker.progress.toolCounts ? { toolCounts: { ...tracker.progress.toolCounts } } : {}),
+                ...(tracker.progress.lastToolActivity
+                    ? { lastToolActivity: tracker.progress.lastToolActivity }
+                    : {}),
+                ...(tracker.progress.toolCounts
+                    ? { toolCounts: { ...tracker.progress.toolCounts } }
+                    : {}),
                 ...(tracker.progress.failedToolCalls !== undefined
                     ? { failedToolCalls: tracker.progress.failedToolCalls }
                     : {}),
@@ -387,65 +406,84 @@ export function registerChildExtension(
             });
         }
 
-        if (canAskUser) pi.registerTool({
-            name: "ask_user",
-            label: "Ask User",
-            description:
-                "Ask the end user for a preference, clarification, or decision, then continue this child turn. "
-                + "Use ask_parent instead when the parent agent can investigate or decide.",
-            promptSnippet: "Use ask_user for decisions that require direct end-user input.",
-            promptGuidelines: [
-                "Use ask_user only when the end user's input materially affects the work, and call it alone in its tool batch",
-                "Include a recommendation and an Unsure or You decide option when appropriate",
-                "Continue the task after receiving the user's answer",
-            ],
-            executionMode: "sequential",
-            parameters: Type.Object({
-                title: Type.String({ minLength: 1, maxLength: 200 }),
-                description: Type.Optional(Type.String({ maxLength: 4_000 })),
-                options: Type.Array(Type.Object({
-                    label: Type.String({ minLength: 1, maxLength: 500 }),
-                    // Keep bounded string repeats under llama.cpp's grammar
-                    // parser threshold (max repetition 2000): char{0,N} with
-                    // N >= 2000 fails grammar parsing and 400s the request.
-                    description: Type.Optional(Type.String({ maxLength: 1_000 })),
-                }, { additionalProperties: false }), { minItems: 2, maxItems: 8 }),
-            }, { additionalProperties: false }),
-            async execute(_toolCallId, params, signal) {
-                onTrace?.("interaction.user.opened", {
-                    titleChars: params.title.length,
-                    optionCount: params.options.length,
-                });
-                try {
-                    const result = await askChildUser(params, parentContext, agentName, signal, events);
-                    const outcome = result.details.unavailable
-                        ? "unavailable"
-                        : result.details.canceled
-                            ? "canceled"
-                            : result.details.isCustom
+        if (canAskUser)
+            pi.registerTool({
+                name: "ask_user",
+                label: "Ask User",
+                description:
+                    "Ask the end user for a preference, clarification, or decision, then continue this child turn. " +
+                    "Use ask_parent instead when the parent agent can investigate or decide.",
+                promptSnippet: "Use ask_user for decisions that require direct end-user input.",
+                promptGuidelines: [
+                    "Use ask_user only when the end user's input materially affects the work, and call it alone in its tool batch",
+                    "Include a recommendation and an Unsure or You decide option when appropriate",
+                    "Continue the task after receiving the user's answer",
+                ],
+                executionMode: "sequential",
+                parameters: Type.Object(
+                    {
+                        title: Type.String({ minLength: 1, maxLength: 200 }),
+                        description: Type.Optional(Type.String({ maxLength: 4_000 })),
+                        options: Type.Array(
+                            Type.Object(
+                                {
+                                    label: Type.String({ minLength: 1, maxLength: 500 }),
+                                    // Keep bounded string repeats under llama.cpp's grammar
+                                    // parser threshold (max repetition 2000): char{0,N} with
+                                    // N >= 2000 fails grammar parsing and 400s the request.
+                                    description: Type.Optional(Type.String({ maxLength: 1_000 })),
+                                },
+                                { additionalProperties: false },
+                            ),
+                            { minItems: 2, maxItems: 8 },
+                        ),
+                    },
+                    { additionalProperties: false },
+                ),
+                async execute(_toolCallId, params, signal) {
+                    onTrace?.("interaction.user.opened", {
+                        titleChars: params.title.length,
+                        optionCount: params.options.length,
+                    });
+                    try {
+                        const result = await askChildUser(
+                            params,
+                            parentContext,
+                            agentName,
+                            signal,
+                            events,
+                        );
+                        const outcome = result.details.unavailable
+                            ? "unavailable"
+                            : result.details.canceled
+                              ? "canceled"
+                              : result.details.isCustom
                                 ? "custom_answer"
                                 : "option_selected";
-                    onTrace?.("interaction.user.closed", {
-                        outcome,
-                        optionIndex: result.details.optionIndex ?? -1,
-                        answerChars: result.details.answer?.length ?? 0,
-                    });
-                    return result;
-                } catch (error) {
-                    onTrace?.("interaction.user.aborted", {
-                        error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
-                    });
-                    throw error;
-                }
-            },
-        });
+                        onTrace?.("interaction.user.closed", {
+                            outcome,
+                            optionIndex: result.details.optionIndex ?? -1,
+                            answerChars: result.details.answer?.length ?? 0,
+                        });
+                        return result;
+                    } catch (error) {
+                        onTrace?.("interaction.user.aborted", {
+                            error:
+                                error instanceof Error
+                                    ? error.message.slice(0, 500)
+                                    : String(error).slice(0, 500),
+                        });
+                        throw error;
+                    }
+                },
+            });
 
         pi.registerTool({
             name: "ask_parent",
             label: "Ask Parent",
             description:
-                "Pause and request guidance from the parent agent. "
-                + "Use only after making reasonable progress and include evidence and a recommendation.",
+                "Pause and request guidance from the parent agent. " +
+                "Use only after making reasonable progress and include evidence and a recommendation.",
             promptSnippet: "Use ask_parent to pause and request guidance from the parent agent.",
             promptGuidelines: [
                 "Call ask_parent alone in a tool batch and only when parent guidance materially improves the result",
@@ -455,19 +493,26 @@ export function registerChildExtension(
                     : []),
             ],
             executionMode: "sequential",
-            parameters: Type.Object({
-                question: Type.String({ minLength: 1, maxLength: 4_000 }),
-                context: Type.Optional(Type.String({ maxLength: 12_000 })),
-                options: Type.Optional(Type.Array(Type.String({ maxLength: 1_000 }), { maxItems: 8 })),
-                recommendation: Type.Optional(Type.String({ maxLength: 4_000 })),
-            }, { additionalProperties: false }),
+            parameters: Type.Object(
+                {
+                    question: Type.String({ minLength: 1, maxLength: 4_000 }),
+                    context: Type.Optional(Type.String({ maxLength: 12_000 })),
+                    options: Type.Optional(
+                        Type.Array(Type.String({ maxLength: 1_000 }), { maxItems: 8 }),
+                    ),
+                    recommendation: Type.Optional(Type.String({ maxLength: 4_000 })),
+                },
+                { additionalProperties: false },
+            ),
             // TODO(agent): Consider returning parent guidance in this tool result
             // instead of ending the child turn and sending a follow-up prompt.
             // This requires an asynchronous parent-answer channel and transcript support.
             async execute(_toolCallId, params) {
                 if (tracker.pendingQuestion) {
                     return {
-                        content: [{ type: "text", text: "A parent-guidance request is already pending." }],
+                        content: [
+                            { type: "text", text: "A parent-guidance request is already pending." },
+                        ],
                         details: tracker.pendingQuestion,
                         terminate: true,
                     };
@@ -524,7 +569,11 @@ export function registerChildExtension(
         }
 
         pi.on("tool_call", (event, ctx) => {
-            if (!canEdit && !commandRunner && isToolCallEventType<"bash", BashToolInput>("bash", event)) {
+            if (
+                !canEdit &&
+                !commandRunner &&
+                isToolCallEventType<"bash", BashToolInput>("bash", event)
+            ) {
                 return guardSafeBashCommand(event.input.command, ctx.cwd, {
                     safeBash,
                     onTrace,
@@ -537,10 +586,12 @@ export function registerChildExtension(
             const filePath = readToolPath(event);
             if (filePath === undefined) return;
             const additionalRoots = readRoots(ctx);
-            if (!isChildPathAllowed(filePath, ctx.cwd, {
-                additionalRoots,
-                sensitiveAdditionalRoots: getScratchpadRoots(ctx),
-            })) {
+            if (
+                !isChildPathAllowed(filePath, ctx.cwd, {
+                    additionalRoots,
+                    sensitiveAdditionalRoots: getScratchpadRoots(ctx),
+                })
+            ) {
                 if (!isFileAccessApproved(event)) {
                     return {
                         block: true,
@@ -562,10 +613,9 @@ interface BashOutputPath {
 
 function isWithinDirectory(filePath: string, directory: string): boolean {
     const relative = path.relative(directory, filePath);
-    return relative === "" || (
-        relative !== ".."
-        && !relative.startsWith(`..${path.sep}`)
-        && !path.isAbsolute(relative)
+    return (
+        relative === "" ||
+        (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
     );
 }
 
@@ -595,10 +645,7 @@ function bashOutputPath(value: unknown): BashOutputPath | undefined {
     }
 }
 
-function rememberBashOutputPath(
-    paths: Map<string, BashOutputPath>,
-    details: unknown,
-): void {
+function rememberBashOutputPath(paths: Map<string, BashOutputPath>, details: unknown): void {
     if (!details || typeof details !== "object") return;
     const value = (details as { fullOutputPath?: unknown }).fullOutputPath;
     const outputPath = bashOutputPath(value);
@@ -616,10 +663,10 @@ function activeBashOutputPaths(paths: Map<string, BashOutputPath>): string[] {
     for (const [lexical, expected] of paths) {
         const current = bashOutputPath(lexical);
         if (
-            !current
-            || current.real !== expected.real
-            || current.device !== expected.device
-            || current.inode !== expected.inode
+            !current ||
+            current.real !== expected.real ||
+            current.device !== expected.device ||
+            current.inode !== expected.inode
         ) {
             paths.delete(lexical);
             continue;
@@ -646,4 +693,3 @@ function relativeReadPath(filePath: string | undefined, cwd: string): string {
     const resolved = path.resolve(cwd, filePath?.trim() || ".");
     return path.relative(cwd, resolved) || ".";
 }
-

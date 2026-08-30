@@ -33,7 +33,9 @@ type ConfigLineType =
     | { type: "blank" };
 
 // Build config display lines as items for the pager
-function buildConfigItems(config: NonNullable<typeof sandboxConfig.current>): PagerItem<ConfigLineType>[] {
+function buildConfigItems(
+    config: NonNullable<typeof sandboxConfig.current>,
+): PagerItem<ConfigLineType>[] {
     const items: PagerItem<ConfigLineType>[] = [];
 
     // Sandbox section
@@ -60,9 +62,15 @@ function buildConfigItems(config: NonNullable<typeof sandboxConfig.current>): Pa
 
     // Inherit env filter
     if (config.sandbox.inheritEnv && Object.keys(config.sandbox.inheritEnv).length > 0) {
-        items.push({ value: { type: "dim", text: "Inherit env filter:" }, label: "Inherit env filter:" });
+        items.push({
+            value: { type: "dim", text: "Inherit env filter:" },
+            label: "Inherit env filter:",
+        });
         for (const [key, action] of Object.entries(config.sandbox.inheritEnv)) {
-            items.push({ value: { type: "inherit-env", key, action }, label: `${key} → ${action}` });
+            items.push({
+                value: { type: "inherit-env", key, action },
+                label: `${key} → ${action}`,
+            });
         }
     }
 
@@ -81,7 +89,10 @@ function buildConfigItems(config: NonNullable<typeof sandboxConfig.current>): Pa
             });
         }
     } else {
-        items.push({ value: { type: "dim", text: "(no permissions defined)" }, label: "(no permissions defined)" });
+        items.push({
+            value: { type: "dim", text: "(no permissions defined)" },
+            label: "(no permissions defined)",
+        });
     }
 
     items.push({ value: { type: "blank" }, label: "" });
@@ -90,18 +101,28 @@ function buildConfigItems(config: NonNullable<typeof sandboxConfig.current>): Pa
     items.push({ value: { type: "header", text: "Audit:" }, label: "Audit:" });
     if (config.audit?.provider && config.audit?.model) {
         items.push({
-            value: { type: "audit-model", provider: config.audit.provider, model: config.audit.model },
+            value: {
+                type: "audit-model",
+                provider: config.audit.provider,
+                model: config.audit.model,
+            },
             label: `Model: ${config.audit.provider}/${config.audit.model}`,
         });
     } else {
-        items.push({ value: { type: "audit-default" }, label: "Model: (using current session model)" });
+        items.push({
+            value: { type: "audit-default" },
+            label: "Model: (using current session model)",
+        });
     }
 
     return items;
 }
 
 // Render a config line with theme styling
-function renderConfigLine(item: PagerItem<ConfigLineType>, theme: { fg: (color: ThemeColor, text: string) => string }): string {
+function renderConfigLine(
+    item: PagerItem<ConfigLineType>,
+    theme: { fg: (color: ThemeColor, text: string) => string },
+): string {
     const line = item.value;
 
     switch (line.type) {
@@ -154,19 +175,13 @@ async function showConfig(_args: string, ctx: ExtensionCommandContext) {
     const config = sandboxConfig.current;
 
     if (!config) {
-        ctx.ui.notify(
-            "pi-bash-sandbox: No config loaded (using defaults)",
-            "info",
-        );
+        ctx.ui.notify("pi-bash-sandbox: No config loaded (using defaults)", "info");
         return;
     }
 
     if (!ctx.hasUI) {
         // Non-UI mode: just print the config
-        ctx.ui.notify(
-            `pi-bash-sandbox config:\n${JSON.stringify(config, null, 2)}`,
-            "info",
-        );
+        ctx.ui.notify(`pi-bash-sandbox config:\n${JSON.stringify(config, null, 2)}`, "info");
         return;
     }
 
@@ -252,10 +267,7 @@ export default function registerConfigCommand(pi: ExtensionAPI) {
                 case "reload":
                     try {
                         sandboxConfig.load(ctx.cwd);
-                        ctx.ui.notify(
-                            "pi-bash-sandbox: Configuration reloaded from disk",
-                            "info",
-                        );
+                        ctx.ui.notify("pi-bash-sandbox: Configuration reloaded from disk", "info");
                     } catch (e) {
                         const error = e as Error;
                         ctx.ui.notify(
@@ -271,10 +283,7 @@ export default function registerConfigCommand(pi: ExtensionAPI) {
                     break;
 
                 default:
-                    ctx.ui.notify(
-                        `pi-bash-sandbox: Unknown subcommand: ${args}.`,
-                        "warning",
-                    );
+                    ctx.ui.notify(`pi-bash-sandbox: Unknown subcommand: ${args}.`, "warning");
             }
         },
     });

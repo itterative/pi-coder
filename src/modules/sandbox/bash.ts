@@ -1,8 +1,19 @@
 export type BashChainOperator = "&&" | "||" | "|" | "|&" | ";" | "&";
 export type BashRedirectionOperator =
-    | "<" | ">" | ">>" | "2>" | "2>>" | "2>&1" | "<<" | "<<-"
-    | "&>" | "&>>" | `${number}>` | `${number}>>`
-    | `${number}>&${number}` | `>&${number}`;
+    | "<"
+    | ">"
+    | ">>"
+    | "2>"
+    | "2>>"
+    | "2>&1"
+    | "<<"
+    | "<<-"
+    | "&>"
+    | "&>>"
+    | `${number}>`
+    | `${number}>>`
+    | `${number}>&${number}`
+    | `>&${number}`;
 
 interface BashLexedSubstitution {
     kind: "command" | "backtick" | "process-input" | "process-output";
@@ -82,9 +93,10 @@ function tokenizeBash(input: string): BashLexedCommand[] {
             return undefined;
         }
 
-        const assignment = assignmentState === "invalid"
-            ? undefined
-            : /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(currentArg);
+        const assignment =
+            assignmentState === "invalid"
+                ? undefined
+                : /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(currentArg);
         const token: BashLexedWordToken = {
             type: "word",
             value: currentArg,
@@ -103,21 +115,21 @@ function tokenizeBash(input: string): BashLexedCommand[] {
     };
 
     const pushSyntaxToken = (
-        token: {
-            type: "operator";
-            value: BashChainOperator;
-        } | {
-            type: "redirection";
-            value: BashRedirectionOperator;
-        },
+        token:
+            | {
+                  type: "operator";
+                  value: BashChainOperator;
+              }
+            | {
+                  type: "redirection";
+                  value: BashRedirectionOperator;
+              },
     ): void => {
         pushArg();
         currentArgs.push(token as BashLexedToken);
     };
 
-    const appendSubstitution = (
-        substitution: BashLexedSubstitution,
-    ): void => {
+    const appendSubstitution = (substitution: BashLexedSubstitution): void => {
         currentArg += substitution.value;
         currentSubstitutions.push(substitution);
     };
@@ -126,13 +138,12 @@ function tokenizeBash(input: string): BashLexedCommand[] {
         if (assignmentState === "candidate") {
             if (char === "=") {
                 const prefix = currentArg;
-                assignmentState = /^[A-Za-z_][A-Za-z0-9_]*$/.test(prefix)
-                    ? "value"
-                    : "invalid";
+                assignmentState = /^[A-Za-z_][A-Za-z0-9_]*$/.test(prefix) ? "value" : "invalid";
             } else {
-                const validNameChar = currentArg.length === 0
-                    ? /^[A-Za-z_]$/.test(char)
-                    : /^[A-Za-z0-9_]$/.test(char);
+                const validNameChar =
+                    currentArg.length === 0
+                        ? /^[A-Za-z_]$/.test(char)
+                        : /^[A-Za-z0-9_]$/.test(char);
                 if (!validNameChar) {
                     assignmentState = "invalid";
                 }
@@ -169,8 +180,7 @@ function tokenizeBash(input: string): BashLexedCommand[] {
                     }
                     continue;
                 }
-                if ((quote === '"' || quote === "`")
-                    && c === "\\" && i + 1 < input.length) {
+                if ((quote === '"' || quote === "`") && c === "\\" && i + 1 < input.length) {
                     result += c + input[i + 1];
                     i += 2;
                     continue;
@@ -252,7 +262,10 @@ function tokenizeBash(input: string): BashLexedCommand[] {
                     while (i < input.length) {
                         const lineStart = i;
                         const lineEnd = input.indexOf("\n", lineStart);
-                        const line = lineEnd === -1 ? input.slice(lineStart) : input.slice(lineStart, lineEnd);
+                        const line =
+                            lineEnd === -1
+                                ? input.slice(lineStart)
+                                : input.slice(lineStart, lineEnd);
                         const lineToCheck = current.stripTabs ? line.replace(/^\t+/, "") : line;
 
                         if (lineToCheck === current.delimiter) {
@@ -310,14 +323,22 @@ function tokenizeBash(input: string): BashLexedCommand[] {
                 appendSubstitution({
                     kind: "backtick",
                     value: backtick.value,
-                    content: backtick.complete ? backtick.value.slice(1, -1) : backtick.value.slice(1),
+                    content: backtick.complete
+                        ? backtick.value.slice(1, -1)
+                        : backtick.value.slice(1),
                     complete: backtick.complete,
                 });
                 continue;
             }
             if (char === "\\" && quote === '"' && i + 1 < input.length) {
                 const next = input[i + 1];
-                if (next === '"' || next === "\\" || next === "$" || next === "`" || next === "\n") {
+                if (
+                    next === '"' ||
+                    next === "\\" ||
+                    next === "$" ||
+                    next === "`" ||
+                    next === "\n"
+                ) {
                     currentArgProtected = true;
                     if (next !== "\n") {
                         currentArg += "\\" + next;
@@ -488,12 +509,12 @@ function tokenizeBash(input: string): BashLexedCommand[] {
 
         // Redirections: < > >> 2> 2>> 2>&1
         if (
-            currentArg === ""
-            && char === "2"
-            && input[i + 1] === ">"
-            && input[i + 2] === "&"
-            && input[i + 3] === "1"
-            && (input[i + 4] === undefined || /[\s;&|<>()]/.test(input[i + 4]))
+            currentArg === "" &&
+            char === "2" &&
+            input[i + 1] === ">" &&
+            input[i + 2] === "&" &&
+            input[i + 3] === "1" &&
+            (input[i + 4] === undefined || /[\s;&|<>()]/.test(input[i + 4]))
         ) {
             pushSyntaxToken({ type: "redirection", value: "2>&1" });
             i += 4;
@@ -509,8 +530,8 @@ function tokenizeBash(input: string): BashLexedCommand[] {
                 while (/^\d$/.test(input[targetEnd] ?? "")) {
                     targetEnd++;
                 }
-                const targetBoundary = input[targetEnd] === undefined
-                    || /[\s;&|<>()]/.test(input[targetEnd] ?? "");
+                const targetBoundary =
+                    input[targetEnd] === undefined || /[\s;&|<>()]/.test(input[targetEnd] ?? "");
                 if (targetEnd > fdEnd + 2 && targetBoundary) {
                     const fd = input.slice(i, fdEnd);
                     const target = input.slice(fdEnd + 2, targetEnd);
@@ -545,8 +566,9 @@ function tokenizeBash(input: string): BashLexedCommand[] {
                 targetEnd++;
             }
             const target = input.slice(i + 2, targetEnd + 1);
-            const targetBoundary = input[targetEnd + 1] === undefined
-                || /[\s;&|<>()]/.test(input[targetEnd + 1] ?? "");
+            const targetBoundary =
+                input[targetEnd + 1] === undefined ||
+                /[\s;&|<>()]/.test(input[targetEnd + 1] ?? "");
             if (!targetBoundary) {
                 pushSyntaxToken({ type: "redirection", value: ">" });
                 i++;
@@ -800,8 +822,7 @@ export class BashAst {
         word: BashWordNode,
         value: string = word.value,
     ): BashSubstitutionNode | undefined {
-        const matches = word.substitutions.filter((substitution) =>
-            substitution.value === value);
+        const matches = word.substitutions.filter((substitution) => substitution.value === value);
         return matches.length === 1 ? matches[0] : undefined;
     }
     public readonly tree: BashScriptNode;
@@ -843,7 +864,8 @@ export class BashStatement {
 
     public constructor(public readonly node: BashStatementNode) {
         this.parts = node.parts.map((part) =>
-            part.type === "command" ? new BashCommand(part) : part.value);
+            part.type === "command" ? new BashCommand(part) : part.value,
+        );
         this.commands = node.commands.map((command) => new BashCommand(command));
         this.operatorNodes = node.operators;
         this.operators = node.operators.map((operator) => operator.value);
@@ -991,14 +1013,16 @@ export class BashCommand {
     public get substitutions(): readonly BashSubstitutionNode[] {
         return [
             ...this.node.words.flatMap((word) => word.substitutions),
-            ...this.node.redirections.flatMap((redirection) =>
-                redirection.target?.substitutions ?? []),
+            ...this.node.redirections.flatMap(
+                (redirection) => redirection.target?.substitutions ?? [],
+            ),
         ];
     }
 
     public get subshells(): readonly BashSubstitutionNode[] {
-        return this.substitutions.filter((substitution) =>
-            substitution.kind === "command" || substitution.kind === "backtick");
+        return this.substitutions.filter(
+            (substitution) => substitution.kind === "command" || substitution.kind === "backtick",
+        );
     }
 
     public get redirections(): readonly BashRedirectionNode[] {

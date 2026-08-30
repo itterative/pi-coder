@@ -65,14 +65,17 @@ export const SYSTEM_COMMANDS: Record<string, CommandSpec> = {
             // -f exports shell functions as environment (code via env);
             // -p prints the whole environment (inherited secrets would
             // reach the output)
-            "-f": UNSAFE, "-p": UNSAFE,
+            "-f": UNSAFE,
+            "-p": UNSAFE,
         },
     },
 
     date: {
         flags: {
-            "-d": VALUE, "--date": VALUE,
-            "-f": PATH_VALUE, "--file": PATH_VALUE,
+            "-d": VALUE,
+            "--date": VALUE,
+            "-f": PATH_VALUE,
+            "--file": PATH_VALUE,
         },
     },
     sleep: { positionals: "ignore" },
@@ -83,13 +86,17 @@ export const SYSTEM_COMMANDS: Record<string, CommandSpec> = {
     hostname: {
         positionals: "ignore",
         flags: {
-            "-F": PATH_VALUE, "--file": PATH_VALUE,
+            "-F": PATH_VALUE,
+            "--file": PATH_VALUE,
             // -f/-i/-I resolve names via DNS; the sandbox has no network
             // isolation, so these are ineligible (audit: observed connect()
             // to the system resolver)
-            "-f": UNSAFE, "--fqdn": UNSAFE,
-            "-i": UNSAFE, "--ip-address": UNSAFE,
-            "-I": UNSAFE, "--all-ip-addresses": UNSAFE,
+            "-f": UNSAFE,
+            "--fqdn": UNSAFE,
+            "-i": UNSAFE,
+            "--ip-address": UNSAFE,
+            "-I": UNSAFE,
+            "--all-ip-addresses": UNSAFE,
         },
     },
     nproc: { positionals: "none", flags: { "--ignore": VALUE } },

@@ -21,7 +21,10 @@ function normalizeNewlines(content: string): string {
     return content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-function extractFrontmatter(content: string, filePath: string): { yaml: string; body: string } | undefined {
+function extractFrontmatter(
+    content: string,
+    filePath: string,
+): { yaml: string; body: string } | undefined {
     const normalized = normalizeNewlines(content);
     const openingEnd = normalized.indexOf("\n");
     const openingLine = openingEnd === -1 ? normalized : normalized.slice(0, openingEnd);
@@ -31,7 +34,10 @@ function extractFrontmatter(content: string, filePath: string): { yaml: string; 
     }
 
     if (openingEnd === -1) {
-        throw new FrontmatterParseError(filePath, "missing closing YAML frontmatter delimiter (---)");
+        throw new FrontmatterParseError(
+            filePath,
+            "missing closing YAML frontmatter delimiter (---)",
+        );
     }
 
     let lineStart = openingEnd + 1;
@@ -60,7 +66,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function unquoteLegacyValue(value: string): string {
-    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+    if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+    ) {
         return value.slice(1, -1);
     }
     return value;
@@ -83,9 +92,9 @@ function parseLegacyMultilineScalars(yaml: string): Record<string, unknown> | un
 
         const key = line.slice(0, colonIndex).trim();
         const value = line.slice(colonIndex + 1).trim();
-        let quote: "\"" | "'" | undefined;
-        if (value.startsWith("\"")) {
-            quote = "\"";
+        let quote: '"' | "'" | undefined;
+        if (value.startsWith('"')) {
+            quote = '"';
         } else if (value.startsWith("'")) {
             quote = "'";
         }

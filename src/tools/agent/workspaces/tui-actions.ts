@@ -16,14 +16,20 @@ export async function handleWorkspaceAction(
         const sessionId = ctx.sessionManager.getSessionId();
         const leaseRunId = workspace.leaseRunId;
         const activeLeaseRun = workspace.leaseRunId
-            ? manager.listRuns().find((run) => (
-                run.runId === workspace.leaseRunId
-                && (workspace.leaseRunInstanceId === undefined || run.runInstanceId === workspace.leaseRunInstanceId)
-                && !["completed", "failed", "aborted", "canceled"].includes(run.status)
-            ))
+            ? manager
+                  .listRuns()
+                  .find(
+                      (run) =>
+                          run.runId === workspace.leaseRunId &&
+                          (workspace.leaseRunInstanceId === undefined ||
+                              run.runInstanceId === workspace.leaseRunInstanceId) &&
+                          !["completed", "failed", "aborted", "canceled"].includes(run.status),
+                  )
             : undefined;
         if (activeLeaseRun && action !== "apply" && action !== "retain") {
-            throw new Error(`Workspace ${workspace.slug} is still used by active run ${activeLeaseRun.runId}; finish or cancel that run first.`);
+            throw new Error(
+                `Workspace ${workspace.slug} is still used by active run ${activeLeaseRun.runId}; finish or cancel that run first.`,
+            );
         }
         if (action === "apply") {
             if (!leaseRunId) throw new Error("The workspace result is not currently leased.");
@@ -80,7 +86,8 @@ export async function handleWorkspaceAction(
             ownerSessionId: sessionId,
             runId: leaseRunId,
             runInstanceId: workspace.leaseRunInstanceId,
-            allowStaleLeaseWithoutResult: workspace.leaseRunId !== undefined && !workspace.latestResult,
+            allowStaleLeaseWithoutResult:
+                workspace.leaseRunId !== undefined && !workspace.latestResult,
         });
         ctx.ui.notify(`Discarded workspace ${workspace.slug}.`, "info");
         return result.workspace;

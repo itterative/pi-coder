@@ -67,19 +67,17 @@ export interface PagerState<T> extends ListViewState<T> {
  * and optional header/footer content.
  */
 export class PagerComponent<T> extends ListViewComponent<T, void, PagerState<T>> {
-    constructor(
-        public readonly options: PagerOptions<T>,
-    ) {
+    constructor(public readonly options: PagerOptions<T>) {
         super(
             {
                 title: options.title,
                 renderItem: options.renderItem
                     ? (item, renderOptions: ListViewRenderItemOptions<T, PagerState<T>>) =>
-                        options.renderItem!(item, {
-                            index: renderOptions.index,
-                            theme: renderOptions.theme,
-                            state: renderOptions.state,
-                        })
+                          options.renderItem!(item, {
+                              index: renderOptions.index,
+                              theme: renderOptions.theme,
+                              state: renderOptions.state,
+                          })
                     : undefined,
                 headerContent: options.headerContent,
                 footerContent: options.footerContent,

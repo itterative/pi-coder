@@ -8,7 +8,10 @@ import registerScratchpadExtension, { getScratchpadPath } from "../../src/module
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
 import registerFileToolHook from "../../src/tools/file-permissions";
 import { registerCommandPermissionHooks } from "../../src/tools/agent/child/command-permissions";
-import { createPermissionState, getPermissionState } from "../../src/modules/sandbox/permission-state";
+import {
+    createPermissionState,
+    getPermissionState,
+} from "../../src/modules/sandbox/permission-state";
 import { KEY, mockTheme } from "../helpers";
 
 interface Handler {
@@ -37,11 +40,14 @@ describe("command and edit permission gate", () => {
         tempDirs.length = 0;
     });
 
-    function setup(cwd: string, options: {
-        isolated?: boolean;
-        permissionState?: ReturnType<typeof createPermissionState>;
-        registerFileHook?: boolean;
-    } = {}) {
+    function setup(
+        cwd: string,
+        options: {
+            isolated?: boolean;
+            permissionState?: ReturnType<typeof createPermissionState>;
+            registerFileHook?: boolean;
+        } = {},
+    ) {
         const handlers: Record<string, Handler[]> = {};
         const dialogs: any[] = [];
         const changedFiles: string[] = [];
@@ -91,8 +97,12 @@ describe("command and edit permission gate", () => {
             isolated: options.isolated ?? false,
             permissionState,
             agentName: "worker",
-            permissionPending(value: boolean) { pending.push(value); },
-            fileChanged(filePath: string) { changedFiles.push(filePath); },
+            permissionPending(value: boolean) {
+                pending.push(value);
+            },
+            fileChanged(filePath: string) {
+                changedFiles.push(filePath);
+            },
             bashApproved() {},
         });
         return {
@@ -159,7 +169,9 @@ describe("command and edit permission gate", () => {
         const runtime = setup(cwd);
         const event = editEvent("edit-1", "src/example.ts");
 
-        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toEqual({ block: false });
+        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toEqual({
+            block: false,
+        });
         expect(runtime.dialogs).toHaveLength(0);
         await runtime.handlers.tool_result[0]({
             type: "tool_result",
@@ -179,7 +191,9 @@ describe("command and edit permission gate", () => {
         const runtime = setup(cwd, { isolated: true });
         const event = writeEvent("write-1", "src/example.ts");
 
-        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toEqual({ block: false });
+        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toEqual({
+            block: false,
+        });
         expect(runtime.dialogs).toHaveLength(0);
     });
 
@@ -193,7 +207,9 @@ describe("command and edit permission gate", () => {
         tempDirs.push(scratchpad);
 
         const event = writeEvent("write-scratchpad-1", path.join(scratchpad, ".env"));
-        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toEqual({ block: false });
+        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toEqual({
+            block: false,
+        });
         expect(runtime.dialogs).toHaveLength(0);
     });
 
@@ -236,24 +252,19 @@ describe("command and edit permission gate", () => {
             bashApproved: false,
             interrupted: false,
         } as any;
-        registerChildExtension(
-            tracker,
-            parentContext,
-            cwd,
-            {
-                agentName: "worker",
-                background: false,
-                canEdit: true,
-                safeBash: true,
-                runId: "worker-restored-1",
-                runTitle: "Restored worker",
-                onProgress: () => {},
-                allowUserInteraction: true,
-                workspaceId: "workspace-1",
-                isolated: false,
-                commandRunner: true,
-            },
-        )(pi);
+        registerChildExtension(tracker, parentContext, cwd, {
+            agentName: "worker",
+            background: false,
+            canEdit: true,
+            safeBash: true,
+            runId: "worker-restored-1",
+            runTitle: "Restored worker",
+            onProgress: () => {},
+            allowUserInteraction: true,
+            workspaceId: "workspace-1",
+            isolated: false,
+            commandRunner: true,
+        })(pi);
 
         const permission = handlers.tool_call[0](
             bashEvent("bash-restored-1", "unrecognized-command"),
@@ -272,7 +283,9 @@ describe("command and edit permission gate", () => {
         const runtime = setup(cwd, { isolated: false });
 
         const edit = editEvent("edit-1", "src/example.ts");
-        await expect(runtime.handlers.tool_call[0](edit, runtime.ctx)).resolves.toEqual({ block: false });
+        await expect(runtime.handlers.tool_call[0](edit, runtime.ctx)).resolves.toEqual({
+            block: false,
+        });
         expect(runtime.dialogs).toHaveLength(0);
         await runtime.handlers.tool_result[0]({
             type: "tool_result",
@@ -284,7 +297,9 @@ describe("command and edit permission gate", () => {
         });
 
         const write = writeEvent("write-1", "src/example.ts");
-        await expect(runtime.handlers.tool_call[0](write, runtime.ctx)).resolves.toEqual({ block: false });
+        await expect(runtime.handlers.tool_call[0](write, runtime.ctx)).resolves.toEqual({
+            block: false,
+        });
         expect(runtime.dialogs).toHaveLength(0);
         await runtime.handlers.tool_result[0]({
             type: "tool_result",
@@ -309,7 +324,9 @@ describe("command and edit permission gate", () => {
         await waitForPermissionInput();
         runtime.dialogs[0].handleInput(KEY.enter);
         await expect(filePermission).resolves.toEqual({ block: false });
-        await expect(runtime.handlers.tool_call[1](event, runtime.ctx)).resolves.toEqual({ block: false });
+        await expect(runtime.handlers.tool_call[1](event, runtime.ctx)).resolves.toEqual({
+            block: false,
+        });
         expect(runtime.dialogs).toHaveLength(1);
     });
 
@@ -324,8 +341,12 @@ describe("command and edit permission gate", () => {
         const runtime = setup(cwd, { isolated: false, registerFileHook: true });
         const event = writeEvent("write-1", link);
 
-        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toMatchObject({ block: true });
-        await expect(runtime.handlers.tool_call[1](event, runtime.ctx)).resolves.toMatchObject({ block: true });
+        await expect(runtime.handlers.tool_call[0](event, runtime.ctx)).resolves.toMatchObject({
+            block: true,
+        });
+        await expect(runtime.handlers.tool_call[1](event, runtime.ctx)).resolves.toMatchObject({
+            block: true,
+        });
         expect(runtime.dialogs).toHaveLength(0);
     });
 
@@ -336,12 +357,17 @@ describe("command and edit permission gate", () => {
         state.bashRules["echo *"] = "allow";
         const runtime = setup(cwd, { isolated: false, permissionState: state });
 
-        await expect(runtime.handlers.tool_call[0]({
-            type: "tool_call",
-            toolName: "bash",
-            toolCallId: "bash-1",
-            input: { command: "echo hello" },
-        }, runtime.ctx)).resolves.toEqual({ block: false });
+        await expect(
+            runtime.handlers.tool_call[0](
+                {
+                    type: "tool_call",
+                    toolName: "bash",
+                    toolCallId: "bash-1",
+                    input: { command: "echo hello" },
+                },
+                runtime.ctx,
+            ),
+        ).resolves.toEqual({ block: false });
     });
 
     it("closes an active Bash permission gate when the child run is aborted", async () => {
@@ -394,5 +420,4 @@ describe("command and edit permission gate", () => {
         runtime.dialogs[1].handleInput(KEY.escape);
         await expect(second).resolves.toMatchObject({ block: true });
     });
-
 });

@@ -74,20 +74,22 @@ export async function createAgentChild(
     const parentContext = context.parentContext as ExtensionContext;
     if (!parentContext.model) throw new Error("No parent model is selected.");
 
-    const initialMutation: WorkerMutationReport = context.initialMutationReport
-        ?? { changedFiles: [], bashApproved: false };
+    const initialMutation: WorkerMutationReport = context.initialMutationReport ?? {
+        changedFiles: [],
+        bashApproved: false,
+    };
     const tracker: ProgressTracker = {
         progress: context.initialProgress
             ? {
-                ...context.initialProgress,
-                recentActivity: [...context.initialProgress.recentActivity],
-                ...(context.initialProgress.toolCounts
-                    ? { toolCounts: { ...context.initialProgress.toolCounts } }
-                    : {}),
-                ...(context.initialProgress.todo
-                    ? { todo: { ...context.initialProgress.todo } }
-                    : {}),
-            }
+                  ...context.initialProgress,
+                  recentActivity: [...context.initialProgress.recentActivity],
+                  ...(context.initialProgress.toolCounts
+                      ? { toolCounts: { ...context.initialProgress.toolCounts } }
+                      : {}),
+                  ...(context.initialProgress.todo
+                      ? { todo: { ...context.initialProgress.todo } }
+                      : {}),
+              }
             : { output: "", recentActivity: [], toolCounts: {} },
         lastUpdateAt: 0,
         changedFiles: new Set(initialMutation.changedFiles),
@@ -106,19 +108,18 @@ export async function createAgentChild(
     const additionalPaths = agentAdditionalPaths(context.definition);
     const safeBashCommands = context.definition.safeBashCommands ?? [];
     const allowUserInteraction = context.definition.allowUserInteraction !== false;
-    const canAskUser = allowUserInteraction
-        && parentContext.hasUI === true
-        && parentContext.mode === "tui";
+    const canAskUser =
+        allowUserInteraction && parentContext.hasUI === true && parentContext.mode === "tui";
     const agentDir = getAgentDir();
     let sessionManager = context.childSessionFile
         ? SessionManager.open(context.childSessionFile, context.childSessionDir, cwd)
         : context.childSessionDir
-            ? materializePersistentSession(
+          ? materializePersistentSession(
                 SessionManager.create(cwd, context.childSessionDir),
                 context.childSessionDir,
                 cwd,
             )
-            : SessionManager.inMemory(cwd);
+          : SessionManager.inMemory(cwd);
     // SessionManager.open() points at the latest physical leaf by default.
     // Restoration must replace that unsafe default before building context.
     if (context.childSessionFile && context.childSessionLeafId !== undefined) {
@@ -140,58 +141,60 @@ export async function createAgentChild(
                 name: canEdit
                     ? "pi-coder-worker-child"
                     : canRunCommands
-                        ? "pi-coder-command-child"
-                        : "pi-coder-readonly-child",
+                      ? "pi-coder-command-child"
+                      : "pi-coder-readonly-child",
                 hidden: true,
-                factory: registerChildExtension(
-                    tracker,
-                    parentContext,
-                    cwd,
-                    {
-                        agentName: context.definition.name,
-                        background: context.background === true,
-                        canEdit,
-                        safeBash,
-                        runId: context.runId ?? context.definition.name,
-                        runTitle: context.runTitle ?? context.runId ?? context.definition.name,
-                        onProgress: context.onProgress,
-                        onFileChanged: context.onFileChanged,
-                        onTrace: context.onTrace,
-                        events: context.events,
-                        allowUserInteraction: canAskUser,
-                        workspaceId: context.workspaceId,
-                        isolated: context.isolated,
-                        commandRunner: canRunCommands,
-                        additionalPaths,
-                        safeBashCommands,
-                    },
-                ),
+                factory: registerChildExtension(tracker, parentContext, cwd, {
+                    agentName: context.definition.name,
+                    background: context.background === true,
+                    canEdit,
+                    safeBash,
+                    runId: context.runId ?? context.definition.name,
+                    runTitle: context.runTitle ?? context.runId ?? context.definition.name,
+                    onProgress: context.onProgress,
+                    onFileChanged: context.onFileChanged,
+                    onTrace: context.onTrace,
+                    events: context.events,
+                    allowUserInteraction: canAskUser,
+                    workspaceId: context.workspaceId,
+                    isolated: context.isolated,
+                    commandRunner: canRunCommands,
+                    additionalPaths,
+                    safeBashCommands,
+                }),
             },
             ...(hasMemories
-                ? [{
-                    name: "pi-coder-memory-child",
-                    hidden: true,
-                    factory: registerMemoryExtension,
-                }]
+                ? [
+                      {
+                          name: "pi-coder-memory-child",
+                          hidden: true,
+                          factory: registerMemoryExtension,
+                      },
+                  ]
                 : []),
             ...(hasScratchpad
-                ? [{
-                    name: "pi-coder-scratchpad-child",
-                    hidden: true,
-                    factory: registerScratchpadExtension,
-                }]
+                ? [
+                      {
+                          name: "pi-coder-scratchpad-child",
+                          hidden: true,
+                          factory: registerScratchpadExtension,
+                      },
+                  ]
                 : []),
             ...(hasTodolist
-                ? [{
-                    name: "pi-coder-todolist-child",
-                    hidden: true,
-                    factory: (pi: ExtensionAPI) => registerTodoListExtension(pi, {
-                        onTodoProgress: (todo) => {
-                            tracker.progress.todo = todo ? { ...todo } : undefined;
-                            reportProgress(tracker, context.onProgress);
-                        },
-                    }),
-                }]
+                ? [
+                      {
+                          name: "pi-coder-todolist-child",
+                          hidden: true,
+                          factory: (pi: ExtensionAPI) =>
+                              registerTodoListExtension(pi, {
+                                  onTodoProgress: (todo) => {
+                                      tracker.progress.todo = todo ? { ...todo } : undefined;
+                                      reportProgress(tracker, context.onProgress);
+                                  },
+                              }),
+                      },
+                  ]
                 : []),
         ],
         appendSystemPrompt: [
@@ -218,9 +221,7 @@ export async function createAgentChild(
         readOnlyToolCount: canEdit ? READ_ONLY_AGENT_TOOLS.length : tools.length,
         directUserUI: canAskUser,
         background: context.background === true,
-        ...(canEdit
-            ? { configuredToolCount: tools.length, mutating: true }
-            : {}),
+        ...(canEdit ? { configuredToolCount: tools.length, mutating: true } : {}),
     });
 
     const restoredContext = context.childSessionFile
@@ -240,8 +241,8 @@ export async function createAgentChild(
         restored: context.childSessionFile !== undefined,
     });
     const modelRuntime = await createChildModelRuntime(parentContext, requestedModel);
-    const model = modelRuntime.getModel(requestedModel.provider, requestedModel.id)
-        ?? requestedModel;
+    const model =
+        modelRuntime.getModel(requestedModel.provider, requestedModel.id) ?? requestedModel;
     const { session } = await createAgentSession({
         cwd,
         agentDir,
@@ -251,11 +252,7 @@ export async function createAgentChild(
         resourceLoader,
         settingsManager,
         sessionManager,
-        tools: [
-            ...tools,
-            ...(canAskUser ? ["ask_user"] : []),
-            "ask_parent",
-        ],
+        tools: [...tools, ...(canAskUser ? ["ask_user"] : []), "ask_parent"],
     });
     // Worker mutation permission is implemented in beforeToolCall. The SDK
     // preflights every tool in a parallel batch before executing any of them;
@@ -287,7 +284,8 @@ export async function createAgentChild(
 
     let disposed = false;
     return {
-        prompt: (text) => session.prompt(text, { expandPromptTemplates: false, source: "extension" }),
+        prompt: (text) =>
+            session.prompt(text, { expandPromptTemplates: false, source: "extension" }),
         abort: () => session.abort(),
         dispose() {
             if (disposed) return;

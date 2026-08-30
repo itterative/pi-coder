@@ -10,12 +10,22 @@ const workspaceActions = ["apply", "retain", "reset", "discard", "release", "rec
 function fakeHandle() {
     let focused = false;
     return {
-        focus() { focused = true; },
-        unfocus() { focused = false; },
-        isFocused() { return focused; },
-        isHidden() { return false; },
+        focus() {
+            focused = true;
+        },
+        unfocus() {
+            focused = false;
+        },
+        isFocused() {
+            return focused;
+        },
+        isHidden() {
+            return false;
+        },
         setHidden() {},
-        hide() { focused = false; },
+        hide() {
+            focused = false;
+        },
     };
 }
 
@@ -23,7 +33,7 @@ describe("ConfirmationComponent", () => {
     it("renders a reusable confirmation dialog", async () => {
         const component = new ConfirmationComponent({
             title: "Cancel delegated agent?",
-            message: "Cancel \"Project structure audit\"?",
+            message: 'Cancel "Project structure audit"?',
         });
         component.initialize(mockTheme);
 
@@ -32,16 +42,19 @@ describe("ConfirmationComponent", () => {
         );
     });
 
-    it.each(workspaceActions)("renders the plain-language workspace %s description", async (action) => {
-        const component = new ConfirmationComponent(
-            workspaceActionConfirmation(action, "quiet-lantern-7k3"),
-        );
-        component.initialize(mockTheme);
+    it.each(workspaceActions)(
+        "renders the plain-language workspace %s description",
+        async (action) => {
+            const component = new ConfirmationComponent(
+                workspaceActionConfirmation(action, "quiet-lantern-7k3"),
+            );
+            component.initialize(mockTheme);
 
-        await expect(snapshotText(renderText(component, 64))).toMatchFileSnapshot(
-            `__snapshots__/confirmation.workspace-${action}.txt`,
-        );
-    });
+            await expect(snapshotText(renderText(component, 64))).toMatchFileSnapshot(
+                `__snapshots__/confirmation.workspace-${action}.txt`,
+            );
+        },
+    );
 
     it("returns true for confirmation and false for cancellation", () => {
         const results: boolean[] = [];
@@ -57,15 +70,18 @@ describe("ConfirmationComponent", () => {
 
     it("shows as a focused overlay through the helper", async () => {
         let component: ConfirmationComponent | undefined;
-        const custom = vi.fn((factory: any, options: any) => new Promise<boolean>((resolve) => {
-            const tui = {
-                addInputListener: () => () => {},
-                getFocusedComponent: () => null,
-                setFocus: () => {},
-            } as unknown as TUI;
-            component = factory(tui, mockTheme, {}, resolve);
-            options.onHandle(fakeHandle());
-        }));
+        const custom = vi.fn(
+            (factory: any, options: any) =>
+                new Promise<boolean>((resolve) => {
+                    const tui = {
+                        addInputListener: () => () => {},
+                        getFocusedComponent: () => null,
+                        setFocus: () => {},
+                    } as unknown as TUI;
+                    component = factory(tui, mockTheme, {}, resolve);
+                    options.onHandle(fakeHandle());
+                }),
+        );
         const resultPromise = confirm({ title: "Confirm", message: "Continue?" }, {
             hasUI: true,
             mode: "tui",
@@ -73,10 +89,13 @@ describe("ConfirmationComponent", () => {
         } as any);
 
         await vi.waitFor(() => expect(component).toBeDefined());
-        expect(custom).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({
-            overlay: true,
-            overlayOptions: expect.objectContaining({ anchor: "center" }),
-        }));
+        expect(custom).toHaveBeenCalledWith(
+            expect.any(Function),
+            expect.objectContaining({
+                overlay: true,
+                overlayOptions: expect.objectContaining({ anchor: "center" }),
+            }),
+        );
         component!.handleInput(KEY.escape);
         await expect(resultPromise).resolves.toBe(false);
     });

@@ -61,7 +61,9 @@ class OverlayStackManager {
         if (this.entries.some((entry) => entry.handle?.isFocused())) return;
         // getFocusedComponent() exists on pi-tui's concrete TUI base but is
         // not part of the structural TUI interface in all supported versions.
-        const focused = (this.tui as TUI & { getFocusedComponent?: () => Component | null }).getFocusedComponent?.();
+        const focused = (
+            this.tui as TUI & { getFocusedComponent?: () => Component | null }
+        ).getFocusedComponent?.();
         if (focused) this.restoreTarget = focused;
     }
 

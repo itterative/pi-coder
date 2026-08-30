@@ -8,7 +8,10 @@ import {
     type AgentSessionBrowserData,
 } from "../../src/tui/agents";
 import type { AgentWorkspace } from "../../src/tools/agent/contracts/workspaces";
-import { workspaceBrowserItem, type AgentSessionBrowserItem } from "../../src/tools/agent/presentation/browser-models";
+import {
+    workspaceBrowserItem,
+    type AgentSessionBrowserItem,
+} from "../../src/tools/agent/presentation/browser-models";
 import { TODO_SNAPSHOT_TYPE } from "../../src/modules/todolist/persistence";
 import { formatAgentSessionTranscripts } from "../../src/tools/agent/presentation/transcript";
 import { KEY, interact, mockTheme, press, renderText, snapshotText } from "../helpers";
@@ -111,7 +114,9 @@ function component() {
 }
 
 function liveTranscript(lineCount: number): string {
-    return Array.from({ length: lineCount }, (_, index) => `Live transcript line ${index}`).join("\n");
+    return Array.from({ length: lineCount }, (_, index) => `Live transcript line ${index}`).join(
+        "\n",
+    );
 }
 
 beforeEach(() => {
@@ -168,7 +173,9 @@ describe("AgentSessionBrowserComponent", () => {
             onRefresh: async () => {
                 refreshes++;
                 return {
-                    current: [{ ...current, transcript, status: completed ? "completed" : "running" }],
+                    current: [
+                        { ...current, transcript, status: completed ? "completed" : "running" },
+                    ],
                     past: [],
                 };
             },
@@ -215,7 +222,9 @@ describe("AgentSessionBrowserComponent", () => {
             previousStatus: "running",
             status: "completed",
         });
-        await vi.waitFor(() => expect(ui.render()).toContain("[scout] Project structure audit · completed"));
+        await vi.waitFor(() =>
+            expect(ui.render()).toContain("[scout] Project structure audit · completed"),
+        );
         value.dispose();
         eventBus.clear();
     });
@@ -341,21 +350,24 @@ describe("AgentSessionBrowserComponent", () => {
             browser = factory(tui, mockTheme, {}, finish);
             return customPromise;
         };
-        const show = showAgentSessionBrowser({
-            current: [],
-            past: [],
-            loadingAgents: true,
-            onInitialLoad: (signal) => {
-                initialSignal = signal;
-                return new Promise<AgentSessionBrowserData>((resolve) => {
-                    resolveInitial = resolve;
-                });
+        const show = showAgentSessionBrowser(
+            {
+                current: [],
+                past: [],
+                loadingAgents: true,
+                onInitialLoad: (signal) => {
+                    initialSignal = signal;
+                    return new Promise<AgentSessionBrowserData>((resolve) => {
+                        resolveInitial = resolve;
+                    });
+                },
             },
-        }, {
-            hasUI: true,
-            mode: "tui",
-            ui: { custom, notify },
-        } as any);
+            {
+                hasUI: true,
+                mode: "tui",
+                ui: { custom, notify },
+            } as any,
+        );
 
         await vi.waitFor(() => expect(browser).toBeDefined());
         browser!.handleInput(KEY.escape);
@@ -429,7 +441,9 @@ describe("AgentSessionBrowserComponent", () => {
     it("renders the current tab", async () => {
         const value = component();
 
-        await expect(snapshotText(renderText(value, 100))).toMatchFileSnapshot("__snapshots__/agent-session-browser.current-tab.txt");
+        await expect(snapshotText(renderText(value, 100))).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.current-tab.txt",
+        );
     });
 
     it("separates multiple session entries with a blank row", () => {
@@ -503,7 +517,9 @@ describe("AgentSessionBrowserComponent", () => {
         const value = new AgentSessionBrowserComponent({
             current: [interrupted],
             past: [],
-            onResume: () => { resumed = true; },
+            onResume: () => {
+                resumed = true;
+            },
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -516,7 +532,9 @@ describe("AgentSessionBrowserComponent", () => {
         const cancelValue = new AgentSessionBrowserComponent({
             current: [{ ...current, status: "waiting_for_parent" }],
             past: [],
-            onCancel: () => { canceled = true; },
+            onCancel: () => {
+                canceled = true;
+            },
         });
         cancelValue.initialize(mockTheme);
         const cancelUi = interact(cancelValue, 100);
@@ -538,7 +556,9 @@ describe("AgentSessionBrowserComponent", () => {
                     resolveConfirmation = resolve;
                 });
             },
-            onCancel: () => { canceled = true; },
+            onCancel: () => {
+                canceled = true;
+            },
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -565,16 +585,21 @@ describe("AgentSessionBrowserComponent", () => {
 
         ui.press(KEY.enter);
 
-        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.session-detail.txt");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.session-detail.txt",
+        );
     });
 
     it("renders Markdown in the transcript detail view", async () => {
         const value = new AgentSessionBrowserComponent({
             current: [],
-            past: [{
-                ...past,
-                transcript: "# Findings\n\nThe **implementation** is sound.\n\n- Preserves the prompt\n- Renders replies as Markdown\n\n```ts\nconst ready = true;\n```",
-            }],
+            past: [
+                {
+                    ...past,
+                    transcript:
+                        "# Findings\n\nThe **implementation** is sound.\n\n- Preserves the prompt\n- Renders replies as Markdown\n\n```ts\nconst ready = true;\n```",
+                },
+            ],
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -620,18 +645,24 @@ describe("AgentSessionBrowserComponent", () => {
             transcript: "The implementation is sound.",
             messageCount: 4,
         });
-        await vi.waitFor(() => expect(renderedOnInvalidate).toContain("The implementation is sound."));
+        await vi.waitFor(() =>
+            expect(renderedOnInvalidate).toContain("The implementation is sound."),
+        );
         expect(renderedOnInvalidate).not.toContain("Loading full transcript…");
     });
 
     it("toggles between collapsed and detailed transcript views", () => {
         const value = new AgentSessionBrowserComponent({
             current: [],
-            past: [{
-                ...past,
-                transcript: "The agent inspected the project.\n\n● read src/index.ts\n● read README.md",
-                transcriptCollapsed: "The agent inspected the project.\n\n▸ 2 tool calls: read src/index.ts; read README.md",
-            }],
+            past: [
+                {
+                    ...past,
+                    transcript:
+                        "The agent inspected the project.\n\n● read src/index.ts\n● read README.md",
+                    transcriptCollapsed:
+                        "The agent inspected the project.\n\n▸ 2 tool calls: read src/index.ts; read README.md",
+                },
+            ],
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -662,17 +693,42 @@ describe("AgentSessionBrowserComponent", () => {
         session.appendMessage({
             role: "assistant",
             content: [
-                { type: "toolCall", id: "call-read", name: "read", arguments: { path: "src/index.ts" } },
-                { type: "toolCall", id: "call-find", name: "find", arguments: { pattern: "*.test.ts", path: "test" } },
-                { type: "toolCall", id: "call-grep", name: "grep", arguments: { pattern: "AgentSession", path: "src/tui" } },
-                { type: "toolCall", id: "call-bash", name: "bash", arguments: { command: "npm test" } },
+                {
+                    type: "toolCall",
+                    id: "call-read",
+                    name: "read",
+                    arguments: { path: "src/index.ts" },
+                },
+                {
+                    type: "toolCall",
+                    id: "call-find",
+                    name: "find",
+                    arguments: { pattern: "*.test.ts", path: "test" },
+                },
+                {
+                    type: "toolCall",
+                    id: "call-grep",
+                    name: "grep",
+                    arguments: { pattern: "AgentSession", path: "src/tui" },
+                },
+                {
+                    type: "toolCall",
+                    id: "call-bash",
+                    name: "bash",
+                    arguments: { command: "npm test" },
+                },
                 {
                     type: "toolCall",
                     id: "call-edit",
                     name: "edit",
                     arguments: {
                         path: "src/index.ts",
-                        edits: [{ oldText: "const oldValue = **literal**;", newText: "const newValue = **literal**;" }],
+                        edits: [
+                            {
+                                oldText: "const oldValue = **literal**;",
+                                newText: "const newValue = **literal**;",
+                            },
+                        ],
                     },
                 },
             ],
@@ -717,7 +773,14 @@ describe("AgentSessionBrowserComponent", () => {
         });
         session.appendMessage({
             role: "assistant",
-            content: [{ type: "toolCall", id: "call-read-2", name: "read", arguments: { path: "README.md" } }],
+            content: [
+                {
+                    type: "toolCall",
+                    id: "call-read-2",
+                    name: "read",
+                    arguments: { path: "README.md" },
+                },
+            ],
             api: "test",
             provider: "test",
             model: "test",
@@ -735,15 +798,17 @@ describe("AgentSessionBrowserComponent", () => {
         const transcript = formatAgentSessionTranscripts(session.getBranch());
         const value = new AgentSessionBrowserComponent({
             current: [],
-            past: [{
-                ...past,
-                title: "Tool call rendering review",
-                task: "Inspect files, search for a symbol, run tests, and update the implementation",
-                transcript: transcript.detailed,
-                transcriptCollapsed: transcript.collapsed,
-                transcriptParts: transcript.detailedParts,
-                transcriptCollapsedParts: transcript.collapsedParts,
-            }],
+            past: [
+                {
+                    ...past,
+                    title: "Tool call rendering review",
+                    task: "Inspect files, search for a symbol, run tests, and update the implementation",
+                    transcript: transcript.detailed,
+                    transcriptCollapsed: transcript.collapsed,
+                    transcriptParts: transcript.detailedParts,
+                    transcriptCollapsedParts: transcript.collapsedParts,
+                },
+            ],
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -797,7 +862,14 @@ Keep the notes with the TODO list.
         });
         session.appendMessage({
             role: "assistant",
-            content: [{ type: "toolCall", id: "call-read", name: "read", arguments: { path: "src/index.ts" } }],
+            content: [
+                {
+                    type: "toolCall",
+                    id: "call-read",
+                    name: "read",
+                    arguments: { path: "src/index.ts" },
+                },
+            ],
             api: "test",
             provider: "test",
             model: "test",
@@ -819,11 +891,13 @@ Keep the notes with the TODO list.
         const transcripts = formatAgentSessionTranscripts(session.getBranch());
         const value = new AgentSessionBrowserComponent({
             current: [],
-            past: [{
-                ...past,
-                transcript: transcripts.detailed,
-                transcriptCollapsed: transcripts.collapsed,
-            }],
+            past: [
+                {
+                    ...past,
+                    transcript: transcripts.detailed,
+                    transcriptCollapsed: transcripts.collapsed,
+                },
+            ],
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -842,16 +916,17 @@ Keep the notes with the TODO list.
         await expect(snapshotText(ui.render())).toMatchFileSnapshot(
             "__snapshots__/agent-session-browser.todo-detailed-scrolled.txt",
         );
-
     });
 
     it("shows changed files but omits read files in session details", () => {
         const value = new AgentSessionBrowserComponent({
-            current: [{
-                ...current,
-                readFiles: ["src/index.ts", "src/tools/agent/runtime.ts"],
-                changedFiles: ["src/tools/agent/index.ts"],
-            }],
+            current: [
+                {
+                    ...current,
+                    readFiles: ["src/index.ts", "src/tools/agent/runtime.ts"],
+                    changedFiles: ["src/tools/agent/index.ts"],
+                },
+            ],
             past: [],
         });
         value.initialize(mockTheme);
@@ -868,7 +943,15 @@ Keep the notes with the TODO list.
     it("scrolls a long transcript in the detail view", () => {
         const value = new AgentSessionBrowserComponent({
             current: [],
-            past: [{ ...past, transcript: Array.from({ length: 30 }, (_, index) => `Transcript line ${index}`).join("\n") }],
+            past: [
+                {
+                    ...past,
+                    transcript: Array.from(
+                        { length: 30 },
+                        (_, index) => `Transcript line ${index}`,
+                    ).join("\n"),
+                },
+            ],
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -884,11 +967,16 @@ Keep the notes with the TODO list.
     it("restores the collapsed viewport after scrolling detailed output", async () => {
         const value = new AgentSessionBrowserComponent({
             current: [],
-            past: [{
-                ...past,
-                transcript: Array.from({ length: 30 }, (_, index) => `Detailed transcript line ${index}`).join("\n"),
-                transcriptCollapsed: "Collapsed transcript summary",
-            }],
+            past: [
+                {
+                    ...past,
+                    transcript: Array.from(
+                        { length: 30 },
+                        (_, index) => `Detailed transcript line ${index}`,
+                    ).join("\n"),
+                    transcriptCollapsed: "Collapsed transcript summary",
+                },
+            ],
             fixedHeight: () => 20,
         });
         value.initialize(mockTheme);
@@ -977,7 +1065,9 @@ Keep the notes with the TODO list.
             },
         });
         value.initialize(mockTheme);
-        value.setDoneCallback(() => { closed = true; });
+        value.setDoneCallback(() => {
+            closed = true;
+        });
         const ui = interact(value, 100);
 
         ui.press(KEY.tab, KEY.down);
@@ -1006,7 +1096,9 @@ Keep the notes with the TODO list.
             workspaces: [workspaceView],
             onWorkspaceInspect: () => "diff text",
             onWorkspaceAction: async () => workspaceView,
-            onInvalidate: () => { invalidations++; },
+            onInvalidate: () => {
+                invalidations++;
+            },
         });
         value.initialize(mockTheme);
         const ui = interact(value, 100);
@@ -1111,25 +1203,35 @@ Keep the notes with the TODO list.
         const ui = interact(value, 100);
 
         ui.press(KEY.tab, KEY.enter);
-        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspace-detail.txt");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.workspace-detail.txt",
+        );
 
         ui.press("d");
         await vi.waitFor(() => expect(confirmationCalls).toBe(1));
         expect(snapshotText(ui.render())).not.toContain("Confirm discard?");
-        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspace-discard-confirmation.txt");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.workspace-discard-confirmation.txt",
+        );
 
         resolveConfirmation(false);
         await vi.waitFor(() => expect(discarded).toBe(false));
-        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspace-discard-cancelled.txt");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.workspace-discard-cancelled.txt",
+        );
 
         ui.press("d");
         await vi.waitFor(() => expect(confirmationCalls).toBe(2));
         resolveConfirmation(true);
         await vi.waitFor(() => {
             expect(discarded).toBe(true);
-            expect(snapshotText(ui.render())).toContain("No isolated workspaces have been created for this cwd.");
+            expect(snapshotText(ui.render())).toContain(
+                "No isolated workspaces have been created for this cwd.",
+            );
         });
-        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.workspaces-empty-after-discard.txt");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.workspaces-empty-after-discard.txt",
+        );
     });
 
     it("renders empty current and past tabs", async () => {
@@ -1137,7 +1239,9 @@ Keep the notes with the TODO list.
         value.initialize(mockTheme);
         const ui = interact(value, 100);
 
-        await expect(snapshotText(ui.render())).toMatchFileSnapshot("__snapshots__/agent-session-browser.current-empty.txt");
+        await expect(snapshotText(ui.render())).toMatchFileSnapshot(
+            "__snapshots__/agent-session-browser.current-empty.txt",
+        );
     });
 
     it("toggles busy worker change notifications in settings", async () => {
@@ -1150,13 +1254,15 @@ Keep the notes with the TODO list.
                 {
                     id: "notifyBusyWorkerChanges",
                     label: "Busy worker change notifications",
-                    description: "Get an immediate update when a worker changes your files while the main assistant is still working. Turn this off to receive the update only when the worker finishes.",
+                    description:
+                        "Get an immediate update when a worker changes your files while the main assistant is still working. Turn this off to receive the update only when the worker finishes.",
                     enabled: true,
                 },
                 {
                     id: "advisorEnabled",
                     label: "Advisor availability",
-                    description: "Allow the parent agent to consult the read-only senior advisor. Configure its model separately below.",
+                    description:
+                        "Allow the parent agent to consult the read-only senior advisor. Configure its model separately below.",
                     enabled: false,
                 },
                 {
@@ -1203,12 +1309,14 @@ Keep the notes with the TODO list.
         const value = new AgentSessionBrowserComponent({
             current: [],
             past: [],
-            settings: [{
-                id: "maxWorkspacesPerRepo",
-                label: "Maximum workspaces per repository",
-                description: "Maximum number of persistent isolated workspaces.",
-                value: 3,
-            }],
+            settings: [
+                {
+                    id: "maxWorkspacesPerRepo",
+                    label: "Maximum workspaces per repository",
+                    description: "Maximum number of persistent isolated workspaces.",
+                    value: 3,
+                },
+            ],
             onMaxWorkspacesChange: (next) => {
                 selected = next;
             },
@@ -1233,7 +1341,9 @@ Keep the notes with the TODO list.
         const value = component();
         const ui = interact(value, 100);
         let closed = false;
-        value.setDoneCallback(() => { closed = true; });
+        value.setDoneCallback(() => {
+            closed = true;
+        });
 
         ui.press(KEY.enter);
         expect(ui.render()).toContain("Run ID: scout-1");
@@ -1247,11 +1357,13 @@ Keep the notes with the TODO list.
         const value = new AgentSessionBrowserComponent({
             current: [],
             past: [],
-            settings: [{
-                id: "scout",
-                label: "Scout model",
-                description: "Model used by scout",
-            }],
+            settings: [
+                {
+                    id: "scout",
+                    label: "Scout model",
+                    description: "Model used by scout",
+                },
+            ],
             models: [],
         });
         value.initialize(mockTheme);
@@ -1269,11 +1381,13 @@ Keep the notes with the TODO list.
         const value = new AgentSessionBrowserComponent({
             current: [],
             past: [],
-            settings: [{
-                id: "scout",
-                label: "Scout model",
-                description: "Model used by scout",
-            }],
+            settings: [
+                {
+                    id: "scout",
+                    label: "Scout model",
+                    description: "Model used by scout",
+                },
+            ],
             models: [
                 { label: "Parent model", description: "Use the current pi model" },
                 { id: "openai/gpt-4.1", label: "openai/gpt-4.1", description: "GPT-4.1" },
@@ -1298,7 +1412,9 @@ Keep the notes with the TODO list.
             "__snapshots__/agent-session-browser.model-selector-filtered.txt",
         );
         ui.press(KEY.enter);
-        await vi.waitFor(() => expect(changed).toEqual({ agent: "scout", model: "openai/gpt-4.1" }));
+        await vi.waitFor(() =>
+            expect(changed).toEqual({ agent: "scout", model: "openai/gpt-4.1" }),
+        );
         await expect(snapshotText(ui.render())).toMatchFileSnapshot(
             "__snapshots__/agent-session-browser.settings-model-selected.txt",
         );

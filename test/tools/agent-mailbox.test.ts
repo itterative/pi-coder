@@ -36,13 +36,17 @@ describe("agent parent mailbox", () => {
         const mailbox = new AgentMailbox({ sendMessage });
 
         mailbox.queue(details("scout-1", "running", { output: "Still working" }));
-        mailbox.queue(details("scout-1", "waiting_for_parent", {
-            question: { question: "Which implementation?", context: "Both are viable." },
-        }));
-        mailbox.queue(details("scout-1", "completed", {
-            output: `Final\nresult ${"x".repeat(300)}`,
-            mutationReport: { changedFiles: ["src/example.ts"], bashApproved: false },
-        }));
+        mailbox.queue(
+            details("scout-1", "waiting_for_parent", {
+                question: { question: "Which implementation?", context: "Both are viable." },
+            }),
+        );
+        mailbox.queue(
+            details("scout-1", "completed", {
+                output: `Final\nresult ${"x".repeat(300)}`,
+                mutationReport: { changedFiles: ["src/example.ts"], bashApproved: false },
+            }),
+        );
 
         expect(sendMessage).not.toHaveBeenCalled();
         expect(mailbox.flush()).toBe(1);
@@ -80,12 +84,14 @@ describe("agent parent mailbox", () => {
                 customType: AGENT_MAILBOX_MESSAGE_TYPE,
                 content: expect.stringContaining('Changed files: "src/example.ts"'),
                 details: {
-                    updates: [{
-                        runId: "worker-1",
-                        agent: "worker",
-                        status: "changed",
-                        changedFiles: ["src/example.ts"],
-                    }],
+                    updates: [
+                        {
+                            runId: "worker-1",
+                            agent: "worker",
+                            status: "changed",
+                            changedFiles: ["src/example.ts"],
+                        },
+                    ],
                 },
             }),
             { deliverAs: "steer", triggerTurn: true },
@@ -114,7 +120,11 @@ describe("agent parent mailbox", () => {
         const sendMessage = vi.fn();
         const mailbox = new AgentMailbox({ sendMessage });
 
-        mailbox.notifyUserCanceled({ runId: "worker-1", title: "Implement change", agent: "worker" });
+        mailbox.notifyUserCanceled({
+            runId: "worker-1",
+            title: "Implement change",
+            agent: "worker",
+        });
 
         expect(sendMessage).toHaveBeenCalledWith(
             expect.objectContaining({
@@ -137,12 +147,12 @@ describe("agent parent mailbox", () => {
         const mailbox = new AgentMailbox({ sendMessage });
 
         mailbox.queue(details("scout-1", "completed", { output: "Done" }));
-        mailbox.queue(details("scout-2", "waiting_for_parent", {
-            question: { question: "Need guidance", context: "Blocked" },
-        }));
-        mailbox.reconcile([
-            { runId: "scout-2", status: "running" },
-        ]);
+        mailbox.queue(
+            details("scout-2", "waiting_for_parent", {
+                question: { question: "Need guidance", context: "Blocked" },
+            }),
+        );
+        mailbox.reconcile([{ runId: "scout-2", status: "running" }]);
 
         expect(mailbox.flush()).toBe(0);
         expect(sendMessage).not.toHaveBeenCalled();

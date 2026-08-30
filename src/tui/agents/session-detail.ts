@@ -1,7 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Markdown, matchesKey, type Component } from "@earendil-works/pi-tui";
 import type { AgentSessionBrowserItem } from "../../tools/agent/presentation/browser-models";
-import type { AgentTranscriptPart, AgentTranscriptView } from "../../tools/agent/presentation/transcript";
+import type {
+    AgentTranscriptPart,
+    AgentTranscriptView,
+} from "../../tools/agent/presentation/transcript";
 import { markdownTheme } from "../markdown-theme";
 import { PagerComponent } from "../pager";
 import { dateText, oneLine, usageText } from "./formatting";
@@ -12,17 +15,21 @@ export interface AgentSessionDetailOptions {
 }
 
 function detailTitle(item: AgentSessionBrowserItem): string {
-    const mode = item.agent === "workspace-setup"
-        ? "workspace setup"
-        : item.mutating ? "worker" : item.agent;
+    const mode =
+        item.agent === "workspace-setup"
+            ? "workspace setup"
+            : item.mutating
+              ? "worker"
+              : item.agent;
     return `[${mode}] ${item.title || "Untitled run"} · ${item.status.replaceAll("_", " ")}`;
 }
 
 function isLiveExecution(item: AgentSessionBrowserItem): boolean {
-    return item.kind === "current" && (
-        item.status === "starting"
-        || item.status === "running"
-        || item.status === "waiting_for_permission"
+    return (
+        item.kind === "current" &&
+        (item.status === "starting" ||
+            item.status === "running" ||
+            item.status === "waiting_for_permission")
     );
 }
 
@@ -57,12 +64,17 @@ function detailText(
 ): string {
     if (item.kind === "empty") return item.task;
 
-    const transcript = transcriptView === "collapsed"
-        ? item.transcriptCollapsed ?? item.transcript ?? item.allMessagesText ?? item.responsePreview
-        : item.transcript ?? item.allMessagesText ?? item.responsePreview;
-    const transcriptParts = transcriptView === "collapsed"
-        ? item.transcriptCollapsedParts ?? item.transcriptParts
-        : item.transcriptParts;
+    const transcript =
+        transcriptView === "collapsed"
+            ? (item.transcriptCollapsed ??
+              item.transcript ??
+              item.allMessagesText ??
+              item.responsePreview)
+            : (item.transcript ?? item.allMessagesText ?? item.responsePreview);
+    const transcriptParts =
+        transcriptView === "collapsed"
+            ? (item.transcriptCollapsedParts ?? item.transcriptParts)
+            : item.transcriptParts;
     const lines = [
         `Run ID: ${item.id}`,
         `Task: ${oneLine(item.task)}`,
@@ -124,12 +136,8 @@ export class AgentSessionDetailComponent implements Component {
             compactFooter: true,
             onKey: (key, state) => this.handleKey(key, state.maxVisibleLines, state),
             onCacheBuilt: (totalLines) => this.updateScrollAfterRender(totalLines),
-            renderItem: (item, renderOptions) => detailText(
-                item.value,
-                renderOptions.theme,
-                this.contentWidth,
-                this.transcriptView,
-            ),
+            renderItem: (item, renderOptions) =>
+                detailText(item.value, renderOptions.theme, this.contentWidth, this.transcriptView),
         });
     }
 

@@ -156,27 +156,30 @@ async function showLines(
     const maxVisibleLines = 20;
     const maxScrollOffset = Math.max(0, lines.length - maxVisibleLines);
     const items: Array<PagerItem<string>> = lines.map((line) => ({ label: line, value: line }));
-    await pager({
-        title,
-        items,
-        scrollOffset,
-        maxVisibleLines,
-        helpText: "↑/↓ scroll | Esc close",
-        renderItem: (item) => item.label,
-        onKey: (key, state) => {
-            if (matchesKey(key, "up") || key === "k") {
-                scrollOffset = Math.max(0, scrollOffset - 1);
-                state.scrollOffset = scrollOffset;
-                return true;
-            }
-            if (matchesKey(key, "down") || key === "j") {
-                scrollOffset = Math.min(maxScrollOffset, scrollOffset + 1);
-                state.scrollOffset = scrollOffset;
-                return true;
-            }
-            return false;
+    await pager(
+        {
+            title,
+            items,
+            scrollOffset,
+            maxVisibleLines,
+            helpText: "↑/↓ scroll | Esc close",
+            renderItem: (item) => item.label,
+            onKey: (key, state) => {
+                if (matchesKey(key, "up") || key === "k") {
+                    scrollOffset = Math.max(0, scrollOffset - 1);
+                    state.scrollOffset = scrollOffset;
+                    return true;
+                }
+                if (matchesKey(key, "down") || key === "j") {
+                    scrollOffset = Math.min(maxScrollOffset, scrollOffset + 1);
+                    state.scrollOffset = scrollOffset;
+                    return true;
+                }
+                return false;
+            },
         },
-    }, ctx);
+        ctx,
+    );
 }
 
 function saveTrace(trace: AgentTraceSnapshot): string {
@@ -185,10 +188,18 @@ function saveTrace(trace: AgentTraceSnapshot): string {
     const timestamp = new Date().toISOString().replaceAll(":", "-");
     const safeRunId = trace.runId.replace(/[^a-zA-Z0-9_-]/g, "_");
     const filePath = path.join(dir, `${timestamp}-${safeRunId}.json`);
-    fs.writeFileSync(filePath, `${JSON.stringify({
-        savedAt: new Date().toISOString(),
-        trace,
-    }, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    fs.writeFileSync(
+        filePath,
+        `${JSON.stringify(
+            {
+                savedAt: new Date().toISOString(),
+                trace,
+            },
+            null,
+            2,
+        )}\n`,
+        { encoding: "utf8", mode: 0o600, flag: "wx" },
+    );
     return filePath;
 }
 
@@ -196,10 +207,7 @@ export function registerAgentTraceCommand(pi: ExtensionAPI, store: AgentTraceSto
     pi.registerCommand("agent-trace", {
         description: "Inspect bounded sanitized traces for delegated agents",
         getArgumentCompletions: (prefix) => {
-            const values = store.list().flatMap((trace) => [
-                trace.runId,
-                `${trace.runId} save`,
-            ]);
+            const values = store.list().flatMap((trace) => [trace.runId, `${trace.runId} save`]);
             values.push("clear");
             return values
                 .filter((value) => value.startsWith(prefix))
@@ -213,17 +221,26 @@ export function registerAgentTraceCommand(pi: ExtensionAPI, store: AgentTraceSto
                     ctx.ui.notify("No delegated-agent traces have been recorded.", "info");
                     return;
                 }
-                await showLines("Delegated agent traces", traces.map((trace) => {
-                    const status = trace.terminalStatus ?? "active";
-                    const dropped = trace.droppedEvents ? `, ${trace.droppedEvents} dropped` : "";
-                    return `${trace.runId}: ${status}, ${trace.events.length} events${dropped}`;
-                }), ctx);
+                await showLines(
+                    "Delegated agent traces",
+                    traces.map((trace) => {
+                        const status = trace.terminalStatus ?? "active";
+                        const dropped = trace.droppedEvents
+                            ? `, ${trace.droppedEvents} dropped`
+                            : "";
+                        return `${trace.runId}: ${status}, ${trace.events.length} events${dropped}`;
+                    }),
+                    ctx,
+                );
                 return;
             }
 
             if (parts[0] === "clear" && parts.length === 1) {
                 const count = store.clear();
-                ctx.ui.notify(`Cleared ${count} delegated-agent trace${count === 1 ? "" : "s"}.`, "info");
+                ctx.ui.notify(
+                    `Cleared ${count} delegated-agent trace${count === 1 ? "" : "s"}.`,
+                    "info",
+                );
                 return;
             }
 
@@ -253,10 +270,11 @@ export function registerAgentTraceCommand(pi: ExtensionAPI, store: AgentTraceSto
                 `${trace.events.length} events; ${trace.droppedEvents} dropped`,
                 "",
             ];
-            await showLines(`Delegated agent trace: ${trace.runId}`, [
-                ...header,
-                ...trace.events.map(eventLine),
-            ], ctx);
+            await showLines(
+                `Delegated agent trace: ${trace.runId}`,
+                [...header, ...trace.events.map(eventLine)],
+                ctx,
+            );
         },
     });
 }

@@ -31,13 +31,7 @@ function tempScope(): string {
     return dir;
 }
 
-function writeAgent(
-    dir: string,
-    file: string,
-    name: string,
-    body: string,
-    extra = "",
-): void {
+function writeAgent(dir: string, file: string, name: string, body: string, extra = ""): void {
     fs.writeFileSync(
         path.join(dir, file),
         `---\nname: ${name}\ndescription: ${name} description\n${extra}---\n\n${body}\n`,
@@ -54,11 +48,13 @@ describe("agent discovery", () => {
         const analyst = result.agents.find((agent) => agent.name === "analyst");
 
         expect(analyst?.systemPrompt).toBe("Definition A");
-        expect(result.diagnostics).toContainEqual(expect.objectContaining({
-            level: "warning",
-            message: expect.stringContaining("first sorted definition wins"),
-            paths: [path.join(userDir, "a.md"), path.join(userDir, "b.md")],
-        }));
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({
+                level: "warning",
+                message: expect.stringContaining("first sorted definition wins"),
+                paths: [path.join(userDir, "a.md"), path.join(userDir, "b.md")],
+            }),
+        );
     });
 
     it("lets a project definition override a user definition with an informational diagnostic", () => {
@@ -72,10 +68,12 @@ describe("agent discovery", () => {
 
         expect(analyst?.source).toBe("project");
         expect(analyst?.systemPrompt).toBe("Project definition");
-        expect(result.diagnostics).toContainEqual(expect.objectContaining({
-            level: "info",
-            message: expect.stringContaining("overrides the user agent"),
-        }));
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({
+                level: "info",
+                message: expect.stringContaining("overrides the user agent"),
+            }),
+        );
     });
 
     it("does not load project definitions when no trusted project directory is supplied", () => {
@@ -86,15 +84,26 @@ describe("agent discovery", () => {
         const untrusted = discoverAgentsInDirectories(userDir);
         const trusted = discoverAgentsInDirectories(userDir, projectDir);
 
-        expect(untrusted.agents.map((agent) => agent.name)).toEqual(["scout", "reviewer", "advisor", "worker"]);
-        expect(trusted.agents.map((agent) => agent.name)).toEqual(["scout", "reviewer", "advisor", "worker", "project-only"]);
+        expect(untrusted.agents.map((agent) => agent.name)).toEqual([
+            "scout",
+            "reviewer",
+            "advisor",
+            "worker",
+        ]);
+        expect(trusted.agents.map((agent) => agent.name)).toEqual([
+            "scout",
+            "reviewer",
+            "advisor",
+            "worker",
+            "project-only",
+        ]);
     });
 
     it("keeps built-in capabilities while applying scout overlays", () => {
         const userDir = tempScope();
         fs.writeFileSync(
             path.join(userDir, "scout.md"),
-            "---\nname: scout\nsafeBashCommands: [\"ast-outline digest *\"]\n---\n\n",
+            '---\nname: scout\nsafeBashCommands: ["ast-outline digest *"]\n---\n\n',
         );
 
         const result = discoverAgentsInDirectories(userDir);
@@ -113,7 +122,7 @@ describe("agent discovery", () => {
         const userDir = tempScope();
         fs.writeFileSync(
             path.join(userDir, "scout.md"),
-            "---\nname: scout\ndescription: Custom scout\ncapabilities: [edit]\nadditionalPaths: [\"/tmp/notes\"]\nsafeBashCommands: [\"ast-outline digest *\"]\nmodel: provider/model\n---\n\nCustom scout role\n",
+            '---\nname: scout\ndescription: Custom scout\ncapabilities: [edit]\nadditionalPaths: ["/tmp/notes"]\nsafeBashCommands: ["ast-outline digest *"]\nmodel: provider/model\n---\n\nCustom scout role\n',
         );
 
         const result = discoverAgentsInDirectories(userDir);
@@ -128,9 +137,13 @@ describe("agent discovery", () => {
             model: "provider/model",
             systemPrompt: "Custom scout role",
         });
-        expect(result.diagnostics).toEqual(expect.arrayContaining([
-            expect.objectContaining({ message: expect.stringContaining("capabilities cannot be overridden") }),
-        ]));
+        expect(result.diagnostics).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    message: expect.stringContaining("capabilities cannot be overridden"),
+                }),
+            ]),
+        );
     });
 
     it("grants only declared capabilities", () => {
@@ -140,7 +153,7 @@ describe("agent discovery", () => {
             "custom.md",
             "custom",
             "Custom",
-            "capabilities: [command-runner, memories]\nadditionalPaths: [\"/tmp/shared-notes\"]\nsafeBashCommands: [\"ast-outline digest *\"]\n",
+            'capabilities: [command-runner, memories]\nadditionalPaths: ["/tmp/shared-notes"]\nsafeBashCommands: ["ast-outline digest *"]\n',
         );
         writeAgent(userDir, "todo.md", "todo", "TODO", "capabilities: [todolist]\n");
         writeAgent(userDir, "stale.md", "stale", "Stale", "tools: [read, bash]\n");
@@ -154,10 +167,20 @@ describe("agent discovery", () => {
         const todo = result.agents.find((agent) => agent.name === "todo");
         const stale = result.agents.find((agent) => agent.name === "stale");
 
-        expect(scout).toMatchObject({ source: "builtin", capabilities: ["read", "search", "memories", "safe-bash"] });
+        expect(scout).toMatchObject({
+            source: "builtin",
+            capabilities: ["read", "search", "memories", "safe-bash"],
+        });
         expect(reviewer).toMatchObject({
             source: "builtin",
-            capabilities: ["read", "search", "memories", "scratchpad", "safe-bash", "command-runner"],
+            capabilities: [
+                "read",
+                "search",
+                "memories",
+                "scratchpad",
+                "safe-bash",
+                "command-runner",
+            ],
         });
         expect(advisor).toBe(BUILTIN_ADVISOR);
         expect(advisor).toMatchObject({
@@ -168,9 +191,26 @@ describe("agent discovery", () => {
         expect(agentTools(scout!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(worker).toMatchObject({
             source: "builtin",
-            capabilities: ["read", "search", "memories", "scratchpad", "todolist", "safe-bash", "command-runner", "edit"],
+            capabilities: [
+                "read",
+                "search",
+                "memories",
+                "scratchpad",
+                "todolist",
+                "safe-bash",
+                "command-runner",
+                "edit",
+            ],
         });
-        expect(agentTools(worker!)).toEqual(["read", "grep", "find", "ls", "edit", "write", "bash"]);
+        expect(agentTools(worker!)).toEqual([
+            "read",
+            "grep",
+            "find",
+            "ls",
+            "edit",
+            "write",
+            "bash",
+        ]);
         expect(custom).toMatchObject({
             source: "user",
             capabilities: ["command-runner", "memories"],
@@ -181,16 +221,25 @@ describe("agent discovery", () => {
             "/tmp/shared-notes",
             path.join(os.homedir(), ".pi", "agent", "memory"),
         ]);
-        expect(agentCapabilities(custom!)).toEqual(["read", "search", "memories", "safe-bash", "command-runner"]);
+        expect(agentCapabilities(custom!)).toEqual([
+            "read",
+            "search",
+            "memories",
+            "safe-bash",
+            "command-runner",
+        ]);
         expect(agentTools(custom!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(todo).toMatchObject({ source: "user", capabilities: ["todolist"] });
         expect(agentCapabilities(todo!)).toEqual(["read", "search", "scratchpad", "todolist"]);
         expect(agentTools(todo!)).toEqual(["read", "grep", "find", "ls"]);
         expect(stale?.capabilities).toEqual([]);
-        expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "warning"))
-            .toEqual(expect.arrayContaining([
-                expect.objectContaining({ message: expect.stringContaining("field \"tools\" is unsupported") }),
-            ]));
+        expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "warning")).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    message: expect.stringContaining('field "tools" is unsupported'),
+                }),
+            ]),
+        );
     });
 
     it("preserves additional paths in durable definition snapshots", () => {
@@ -204,11 +253,10 @@ describe("agent discovery", () => {
             source: "user" as const,
         };
 
-        expect(parseAgentDefinitionSnapshot(snapshotAgentDefinition(definition)))
-            .toMatchObject({
-                additionalPaths: ["/tmp/notes"],
-                safeBashCommands: ["ast-outline digest *"],
-            });
+        expect(parseAgentDefinitionSnapshot(snapshotAgentDefinition(definition))).toMatchObject({
+            additionalPaths: ["/tmp/notes"],
+            safeBashCommands: ["ast-outline digest *"],
+        });
     });
 
     it("rejects malformed or unknown capability lists", () => {
@@ -216,7 +264,7 @@ describe("agent discovery", () => {
         writeAgent(userDir, "not-a-list.md", "not-a-list", "Bad", "capabilities: safe-bash\n");
         writeAgent(userDir, "unknown.md", "unknown", "Bad", "capabilities: [unsafe-bash]\n");
         writeAgent(userDir, "edit.md", "edit-agent", "Bad", "capabilities: [edit]\n");
-        writeAgent(userDir, "paths.md", "bad-paths", "Bad", "additionalPaths: [\"\"]\n");
+        writeAgent(userDir, "paths.md", "bad-paths", "Bad", 'additionalPaths: [""]\n');
 
         const result = discoverAgentsInDirectories(userDir);
 
@@ -224,9 +272,13 @@ describe("agent discovery", () => {
         expect(result.agents.map((agent) => agent.name)).not.toContain("unknown");
         expect(result.agents.map((agent) => agent.name)).not.toContain("edit-agent");
         expect(result.agents.map((agent) => agent.name)).not.toContain("bad-paths");
-        expect(result.diagnostics).toEqual(expect.arrayContaining([
-            expect.objectContaining({ message: expect.stringContaining("capabilities must be an array") }),
-        ]));
+        expect(result.diagnostics).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    message: expect.stringContaining("capabilities must be an array"),
+                }),
+            ]),
+        );
     });
 
     it("reports malformed definitions without hiding valid agents", () => {
@@ -236,10 +288,18 @@ describe("agent discovery", () => {
 
         const result = discoverAgentsInDirectories(userDir);
 
-        expect(result.agents.map((agent) => agent.name)).toEqual(["scout", "reviewer", "advisor", "worker", "valid"]);
-        expect(result.diagnostics).toContainEqual(expect.objectContaining({
-            level: "warning",
-            paths: [path.join(userDir, "bad.md")],
-        }));
+        expect(result.agents.map((agent) => agent.name)).toEqual([
+            "scout",
+            "reviewer",
+            "advisor",
+            "worker",
+            "valid",
+        ]);
+        expect(result.diagnostics).toContainEqual(
+            expect.objectContaining({
+                level: "warning",
+                paths: [path.join(userDir, "bad.md")],
+            }),
+        );
     });
 });

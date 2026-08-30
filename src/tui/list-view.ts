@@ -25,14 +25,7 @@
 
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import {
-    Box,
-    Container,
-    matchesKey,
-    Spacer,
-    Text,
-    wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import { Box, Container, matchesKey, Spacer, Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { indentLines } from "../common/text";
 import { BorderBox, type BorderCharacters } from "./border-box";
 
@@ -156,10 +149,7 @@ export class ListViewComponent<
         readonly state: S,
     ) {
         this.container = new Container();
-        this.contentContainer = new Box(
-            listOptions.paddingX ?? 2,
-            listOptions.paddingY ?? 0,
-        );
+        this.contentContainer = new Box(listOptions.paddingX ?? 2, listOptions.paddingY ?? 0);
         this.configuredMaxVisibleLines = state.maxVisibleLines;
         this.lastRenderedMaxVisibleLines = state.maxVisibleLines;
     }
@@ -234,7 +224,7 @@ export class ListViewComponent<
         this.borderedContainer.setHeight(frameHeight);
         this.restoreConfiguredMaxVisibleLines();
         const paddingX = this.listOptions.paddingX ?? 2;
-        const itemContentWidth = Math.max(1, width - 2 - (paddingX * 2) - 2);
+        const itemContentWidth = Math.max(1, width - 2 - paddingX * 2 - 2);
         const widthChanged = itemContentWidth !== this.itemContentWidth;
         this.itemContentWidth = itemContentWidth;
         if (this.cacheDirty || widthChanged) {
@@ -384,8 +374,9 @@ export class ListViewComponent<
             const renderItem = this.listOptions.renderItem ?? defaultRenderItem;
             const content = renderItem(item, renderOptions);
 
-            const prefix = this.listOptions.itemPrefix?.(i, isCursor, this.theme)
-                ?? this.getItemPrefix(i, isCursor);
+            const prefix =
+                this.listOptions.itemPrefix?.(i, isCursor, this.theme) ??
+                this.getItemPrefix(i, isCursor);
             const indented = indentLines(content, {
                 firstLinePrefix: prefix.first,
                 continuationPrefix: prefix.continuation,
@@ -395,9 +386,14 @@ export class ListViewComponent<
                 return wrapTextWithAnsi(line, this.itemContentWidth);
             });
             if (i < this.state.items.length - 1) {
-                lines.push(...Array.from({
-                    length: Math.max(0, Math.floor(this.listOptions.itemSpacing ?? 0)),
-                }, () => ""));
+                lines.push(
+                    ...Array.from(
+                        {
+                            length: Math.max(0, Math.floor(this.listOptions.itemSpacing ?? 0)),
+                        },
+                        () => "",
+                    ),
+                );
             }
 
             this.cachedItemStartLines.push(totalLines);
@@ -440,9 +436,7 @@ export class ListViewComponent<
             const endLine = this.state.scrollOffset + visibleLines.length;
             const showing = `  Showing lines ${this.state.scrollOffset + 1}-${endLine} of ${totalLines}`;
             this.contentContainer.addChild(new Spacer(1));
-            this.contentContainer.addChild(
-                new Text(this.theme.fg("dim", showing), 1, 0),
-            );
+            this.contentContainer.addChild(new Text(this.theme.fg("dim", showing), 1, 0));
         }
 
         // Status lines (e.g. selection count)

@@ -24,8 +24,20 @@ describe("SqliteDatabase", () => {
         try {
             let applied = 0;
             const migrations = [
-                { version: 1, async apply(db: SqliteDatabase) { applied++; await db.exec("CREATE TABLE one (value TEXT)"); } },
-                { version: 2, async apply(db: SqliteDatabase) { applied++; await db.exec("ALTER TABLE one ADD COLUMN second TEXT"); } },
+                {
+                    version: 1,
+                    async apply(db: SqliteDatabase) {
+                        applied++;
+                        await db.exec("CREATE TABLE one (value TEXT)");
+                    },
+                },
+                {
+                    version: 2,
+                    async apply(db: SqliteDatabase) {
+                        applied++;
+                        await db.exec("ALTER TABLE one ADD COLUMN second TEXT");
+                    },
+                },
             ];
 
             await migrateSqliteDatabase(database, migrations);
@@ -42,13 +54,17 @@ describe("SqliteDatabase", () => {
     it("rolls back a failed migration", async () => {
         const database = await SqliteDatabase.open(":memory:");
         try {
-            await expect(migrateSqliteDatabase(database, [{
-                version: 1,
-                async apply(db) {
-                    await db.exec("CREATE TABLE temporary (value TEXT)");
-                    throw new Error("migration failed");
-                },
-            }])).rejects.toThrow("migration failed");
+            await expect(
+                migrateSqliteDatabase(database, [
+                    {
+                        version: 1,
+                        async apply(db) {
+                            await db.exec("CREATE TABLE temporary (value TEXT)");
+                            throw new Error("migration failed");
+                        },
+                    },
+                ]),
+            ).rejects.toThrow("migration failed");
 
             const version = await database.get<{ user_version: number }>("PRAGMA user_version");
             expect(version?.user_version).toBe(0);
@@ -66,16 +82,20 @@ describe("SqliteDatabase", () => {
 
             await database.transaction(async (outer) => {
                 await outer.run("INSERT INTO values_table (value) VALUES (?)", "outer-before");
-                await expect(outer.transaction(async (inner) => {
-                    nestedDatabase = inner;
-                    await inner.run("INSERT INTO values_table (value) VALUES (?)", "inner");
-                    throw new Error("nested failure");
-                })).rejects.toThrow("nested failure");
+                await expect(
+                    outer.transaction(async (inner) => {
+                        nestedDatabase = inner;
+                        await inner.run("INSERT INTO values_table (value) VALUES (?)", "inner");
+                        throw new Error("nested failure");
+                    }),
+                ).rejects.toThrow("nested failure");
                 await outer.run("INSERT INTO values_table (value) VALUES (?)", "outer-after");
             });
 
             expect(nestedDatabase).not.toBe(database);
-            const rows = await database.all<{ value: string }>("SELECT value FROM values_table ORDER BY rowid");
+            const rows = await database.all<{ value: string }>(
+                "SELECT value FROM values_table ORDER BY rowid",
+            );
             expect(rows.map((row) => row.value)).toEqual(["outer-before", "outer-after"]);
         } finally {
             await database.close();
@@ -116,12 +136,15 @@ describe("SqliteDatabase", () => {
             await database.transaction(async (outer) => {
                 await outer.run("INSERT INTO values_table (value) VALUES (?)", "outer-before");
                 await outer.transaction(async (inner) => {
-                    await expect(outer.run(
-                        "INSERT INTO values_table (value) VALUES (?)",
-                        "invalid-parent-write",
-                    )).rejects.toBeInstanceOf(SqliteInactiveTransactionViewError);
-                    await expect(outer.transaction(async () => {}))
-                        .rejects.toBeInstanceOf(SqliteInactiveTransactionViewError);
+                    await expect(
+                        outer.run(
+                            "INSERT INTO values_table (value) VALUES (?)",
+                            "invalid-parent-write",
+                        ),
+                    ).rejects.toBeInstanceOf(SqliteInactiveTransactionViewError);
+                    await expect(outer.transaction(async () => {})).rejects.toBeInstanceOf(
+                        SqliteInactiveTransactionViewError,
+                    );
                     await inner.run("INSERT INTO values_table (value) VALUES (?)", "inner");
                 });
                 await outer.run("INSERT INTO values_table (value) VALUES (?)", "outer-after");
@@ -143,11 +166,11 @@ describe("SqliteDatabase", () => {
             transactionView = transaction;
         });
 
-        await expect(transactionView!.get("SELECT 1"))
-            .rejects.toBeInstanceOf(SqliteTransactionCompletedError);
+        await expect(transactionView!.get("SELECT 1")).rejects.toBeInstanceOf(
+            SqliteTransactionCompletedError,
+        );
         await database.close();
-        await expect(database.get("SELECT 1"))
-            .rejects.toBeInstanceOf(SqliteDatabaseClosedError);
+        await expect(database.get("SELECT 1")).rejects.toBeInstanceOf(SqliteDatabaseClosedError);
     });
 
     it("does not let detached transaction views use a completed transaction", async () => {
@@ -155,11 +178,16 @@ describe("SqliteDatabase", () => {
         try {
             await database.exec("CREATE TABLE values_table (value TEXT NOT NULL)");
             let detached: Promise<unknown> | undefined;
-            await expect(database.transaction(async (transaction) => {
-                detached = transaction.run("INSERT INTO missing_table (value) VALUES (?)", "detached");
-                void detached.catch(() => {});
-                await new Promise<void>((resolve) => setTimeout(resolve, 25));
-            })).rejects.toThrow("no such table");
+            await expect(
+                database.transaction(async (transaction) => {
+                    detached = transaction.run(
+                        "INSERT INTO missing_table (value) VALUES (?)",
+                        "detached",
+                    );
+                    void detached.catch(() => {});
+                    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+                }),
+            ).rejects.toThrow("no such table");
             await expect(detached).rejects.toThrow("no such table");
             expect(await database.all("SELECT * FROM values_table")).toEqual([]);
         } finally {
@@ -248,10 +276,15 @@ describe("SqliteDatabase", () => {
         const database = await SqliteDatabase.open(":memory:");
         try {
             await database.exec("CREATE TABLE values_table (value TEXT NOT NULL)");
-            await expect(database.transaction(async (transaction) => {
-                await transaction.run("INSERT INTO values_table (value) VALUES (?)", "not-committed");
-                throw new Error("outer failure");
-            })).rejects.toThrow("outer failure");
+            await expect(
+                database.transaction(async (transaction) => {
+                    await transaction.run(
+                        "INSERT INTO values_table (value) VALUES (?)",
+                        "not-committed",
+                    );
+                    throw new Error("outer failure");
+                }),
+            ).rejects.toThrow("outer failure");
 
             expect(await database.all("SELECT value FROM values_table")).toEqual([]);
         } finally {

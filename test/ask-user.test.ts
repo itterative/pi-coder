@@ -20,7 +20,9 @@ import { interact, KEY, mockTheme } from "./helpers";
 function setup(options: AskUserOptions, width = 50) {
     let result: AskUserResult | undefined | "pending" = "pending";
     const component = new AskUserComponent(options);
-    component.setDoneCallback((value) => { result = value; });
+    component.setDoneCallback((value) => {
+        result = value;
+    });
     component.initialize(mockTheme);
     component.focused = true;
     const ui = interact(component, width);
@@ -30,10 +32,7 @@ function setup(options: AskUserOptions, width = 50) {
 const baseOptions: AskUserOptions = {
     title: "Proceed?",
     description: "This will modify files.",
-    options: [
-        { label: "Yes", description: "apply changes" },
-        { label: "No" },
-    ],
+    options: [{ label: "Yes", description: "apply changes" }, { label: "No" }],
 };
 
 describe("AskUserComponent", () => {
@@ -45,13 +44,17 @@ describe("AskUserComponent", () => {
     it("navigates options including the custom entry", async () => {
         const { ui } = setup(baseOptions);
         ui.press(KEY.down, KEY.down);
-        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.navigates-custom-entry.txt");
+        await expect(ui.render()).toMatchFileSnapshot(
+            "__snapshots__/ask-user.navigates-custom-entry.txt",
+        );
     });
 
     it("Tab enters edit mode with placeholder and cursor", async () => {
         const { ui } = setup(baseOptions);
         ui.press(KEY.tab);
-        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.edit-placeholder.txt");
+        await expect(ui.render()).toMatchFileSnapshot(
+            "__snapshots__/ask-user.edit-placeholder.txt",
+        );
     });
 
     it("typing in edit mode renders the message inline", async () => {
@@ -86,7 +89,9 @@ describe("AskUserComponent", () => {
         ui.press(KEY.tab);
         ui.type("draft");
         ui.press(KEY.escape);
-        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.escape-edit-mode.txt");
+        await expect(ui.render()).toMatchFileSnapshot(
+            "__snapshots__/ask-user.escape-edit-mode.txt",
+        );
         ui.press(KEY.escape);
         expect(result()).toBeUndefined();
     });
@@ -117,7 +122,9 @@ describe("AskUserComponent", () => {
         await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.atomic-paste.txt");
         // Backspace removes the whole paste
         ui.press(KEY.backspace);
-        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.atomic-paste-backspace.txt");
+        await expect(ui.render()).toMatchFileSnapshot(
+            "__snapshots__/ask-user.atomic-paste-backspace.txt",
+        );
     });
 
     it("long messages truncate to a windowed view with ellipses", async () => {
@@ -128,7 +135,9 @@ describe("AskUserComponent", () => {
         // Move from the last visual line to a middle one so the window
         // truncates on both sides
         ui.press(KEY.up, KEY.up);
-        await expect(ui.render()).toMatchFileSnapshot("__snapshots__/ask-user.long-message-window.txt");
+        await expect(ui.render()).toMatchFileSnapshot(
+            "__snapshots__/ask-user.long-message-window.txt",
+        );
     });
 });
 
@@ -144,8 +153,9 @@ describe("askUser", () => {
                 },
                 custom(factory: any) {
                     return new Promise<AskUserResult | undefined>((resolve, reject) => {
-                        void Promise.resolve(factory(undefined, mockTheme, undefined, resolve))
-                            .then(() => controller.abort(), reject);
+                        void Promise.resolve(
+                            factory(undefined, mockTheme, undefined, resolve),
+                        ).then(() => controller.abort(), reject);
                     });
                 },
             },

@@ -15,7 +15,8 @@ export async function upsertAgentRunStateInDatabase(
     record: PersistedAgentRun,
     branchEntryId: string,
 ): Promise<void> {
-    await database.run(`
+    await database.run(
+        `
         INSERT INTO agent_run_states (
             owner_session_id, run_id, branch_entry_id, updated_at, state_json
         ) VALUES (?, ?, ?, ?, ?)
@@ -23,11 +24,13 @@ export async function upsertAgentRunStateInDatabase(
             updated_at = excluded.updated_at,
             state_json = excluded.state_json
         WHERE excluded.updated_at >= agent_run_states.updated_at
-    `, record.ownerSessionId,
+    `,
+        record.ownerSessionId,
         record.runId,
         branchEntryId,
         record.updatedAt,
-        JSON.stringify(record),);
+        JSON.stringify(record),
+    );
 }
 
 export async function listAgentRunStatesInDatabase(
@@ -38,26 +41,33 @@ export async function listAgentRunStatesInDatabase(
     if (branchEntryIds.length === 0) return [];
 
     const placeholders = branchEntryIds.map(() => "?").join(", ");
-    const rows = await database.all(`
+    const rows = (await database.all(
+        `
         SELECT branch_entry_id, updated_at, state_json
         FROM agent_run_states
         WHERE owner_session_id = ?
           AND branch_entry_id IN (${placeholders})
         ORDER BY updated_at ASC, rowid ASC
-    `, ownerSessionId, ...branchEntryIds) as Array<Record<string, unknown>>;
+    `,
+        ownerSessionId,
+        ...branchEntryIds,
+    )) as Array<Record<string, unknown>>;
 
     return rows.flatMap((row) => {
         if (
-            typeof row.branch_entry_id !== "string"
-            || typeof row.updated_at !== "number"
-            || typeof row.state_json !== "string"
-        ) return [];
+            typeof row.branch_entry_id !== "string" ||
+            typeof row.updated_at !== "number" ||
+            typeof row.state_json !== "string"
+        )
+            return [];
         try {
-            return [{
-                branchEntryId: row.branch_entry_id,
-                updatedAt: row.updated_at,
-                state: JSON.parse(row.state_json),
-            }];
+            return [
+                {
+                    branchEntryId: row.branch_entry_id,
+                    updatedAt: row.updated_at,
+                    state: JSON.parse(row.state_json),
+                },
+            ];
         } catch {
             return [];
         }

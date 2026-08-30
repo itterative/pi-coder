@@ -8,10 +8,8 @@ export const AGENT_MAILBOX_MESSAGE_TYPE = "pi-coder-agent-mailbox";
 const MAX_PENDING_UPDATES = 24;
 const MAX_PREVIEW_CHARS = 240;
 
-type MailboxStatus = Extract<
-    AgentRunStatus,
-    "waiting_for_parent" | "completed" | "failed" | "aborted"
-> | "changed";
+type MailboxStatus =
+    Extract<AgentRunStatus, "waiting_for_parent" | "completed" | "failed" | "aborted"> | "changed";
 
 interface MailboxUpdate {
     runId: string;
@@ -44,9 +42,9 @@ function toUpdate(details: AgentRunDetails): MailboxUpdate | undefined {
         };
     }
     if (
-        details.status !== "completed"
-        && details.status !== "failed"
-        && details.status !== "aborted"
+        details.status !== "completed" &&
+        details.status !== "failed" &&
+        details.status !== "aborted"
     ) {
         return undefined;
     }
@@ -55,7 +53,9 @@ function toUpdate(details: AgentRunDetails): MailboxUpdate | undefined {
         title: details.title,
         agent: details.agent,
         status: details.status,
-        preview: oneLine(details.status === "completed" ? details.output : details.error ?? details.output),
+        preview: oneLine(
+            details.status === "completed" ? details.output : (details.error ?? details.output),
+        ),
         ...(details.mutationReport?.changedFiles?.length
             ? { changedFiles: [...details.mutationReport.changedFiles] }
             : {}),
@@ -157,12 +157,14 @@ export class AgentMailbox {
                 content: formatMailbox([update]),
                 display: false,
                 details: {
-                    updates: [{
-                        runId: update.runId,
-                        agent: update.agent,
-                        status: update.status,
-                        changedFiles: update.changedFiles,
-                    }],
+                    updates: [
+                        {
+                            runId: update.runId,
+                            agent: update.agent,
+                            status: update.status,
+                            changedFiles: update.changedFiles,
+                        },
+                    ],
                 },
             },
             {
@@ -202,7 +204,9 @@ export class AgentMailbox {
                 content,
                 display: false,
                 details: {
-                    updates: [{ runId: details.runId, agent: details.agent, status: "canceled_by_user" }],
+                    updates: [
+                        { runId: details.runId, agent: details.agent, status: "canceled_by_user" },
+                    ],
                 },
             },
             { deliverAs: "followUp", triggerTurn: true },

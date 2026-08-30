@@ -54,4 +54,3 @@ export function appendTodoSnapshot(pi: ExtensionAPI, content: string): void {
         content,
     });
 }
-

@@ -1,8 +1,13 @@
 import type { EventBus } from "@earendil-works/pi-coding-agent";
-import type { AgentWorkspaceBrowserItem, AgentSessionBrowserItem, WorkspaceDispositionAction } from "../../tools/agent/presentation/browser-models";
+import type {
+    AgentWorkspaceBrowserItem,
+    AgentSessionBrowserItem,
+    WorkspaceDispositionAction,
+} from "../../tools/agent/presentation/browser-models";
 import type { BuiltinAgentName } from "../../tools/agent/config";
 
-export type AgentSettingId = BuiltinAgentName | "advisorEnabled" | "notifyBusyWorkerChanges" | "maxWorkspacesPerRepo";
+export type AgentSettingId =
+    BuiltinAgentName | "advisorEnabled" | "notifyBusyWorkerChanges" | "maxWorkspacesPerRepo";
 
 export interface AgentSetting {
     id: AgentSettingId;
@@ -50,11 +55,17 @@ export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
         action: WorkspaceDispositionAction,
     ) => boolean | Promise<boolean>;
     /** Lazily loads a session transcript when its detail view is opened. */
-    onLoadTranscript?: (item: AgentSessionBrowserItem) => Promise<AgentSessionBrowserItem | undefined>;
+    onLoadTranscript?: (
+        item: AgentSessionBrowserItem,
+    ) => Promise<AgentSessionBrowserItem | undefined>;
     onWorkspaceAction?: (
         workspace: AgentWorkspaceBrowserItem,
         action: WorkspaceDispositionAction,
-    ) => AgentWorkspaceBrowserItem | null | undefined | Promise<AgentWorkspaceBrowserItem | null | undefined>;
+    ) =>
+        | AgentWorkspaceBrowserItem
+        | null
+        | undefined
+        | Promise<AgentWorkspaceBrowserItem | null | undefined>;
     onWorkspaceInspect?: (workspace: AgentWorkspaceBrowserItem) => string | Promise<string>;
     onCreateWorkspace?: () => void | Promise<void>;
     onModelChange?: (agent: BuiltinAgentName, model: string | undefined) => void | Promise<void>;
@@ -62,7 +73,9 @@ export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
         setting: "advisorEnabled" | "notifyBusyWorkerChanges",
         enabled: boolean,
     ) => void | Promise<void>;
-    onMaxWorkspacesInput?: (currentValue: number) => number | undefined | Promise<number | undefined>;
+    onMaxWorkspacesInput?: (
+        currentValue: number,
+    ) => number | undefined | Promise<number | undefined>;
     onMaxWorkspacesChange?: (value: number) => void | Promise<void>;
     onModelChangeError?: (error: unknown) => void;
     onInvalidate?: () => void;
@@ -79,7 +92,10 @@ export interface AgentWorkspaceActionCallbacks {
     onConfirmAction?: (action: WorkspaceDispositionAction) => boolean | Promise<boolean>;
     onAction?: (
         action: WorkspaceDispositionAction,
-    ) => AgentWorkspaceBrowserItem | null | undefined | Promise<AgentWorkspaceBrowserItem | null | undefined>;
+    ) =>
+        | AgentWorkspaceBrowserItem
+        | null
+        | undefined
+        | Promise<AgentWorkspaceBrowserItem | null | undefined>;
     onInvalidate?: () => void;
 }
-

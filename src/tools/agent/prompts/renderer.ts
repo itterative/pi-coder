@@ -1,8 +1,4 @@
-import type {
-    AgentContext,
-    AgentContextPolicy,
-    AgentContextSection,
-} from "../contracts/context";
+import type { AgentContext, AgentContextPolicy, AgentContextSection } from "../contracts/context";
 import type { AgentDefinition } from "../definitions/types";
 
 const MAX_CONTEXT_CHARS = 32_000;

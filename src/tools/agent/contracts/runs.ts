@@ -22,10 +22,9 @@ export type AgentRunStatus =
 export type AgentTerminalStatus = "completed" | "failed" | "aborted" | "canceled";
 
 export function isAgentTerminalStatus(value: unknown): value is AgentTerminalStatus {
-    return value === "completed"
-        || value === "failed"
-        || value === "aborted"
-        || value === "canceled";
+    return (
+        value === "completed" || value === "failed" || value === "aborted" || value === "canceled"
+    );
 }
 
 export interface ParentQuestion {
@@ -94,9 +93,7 @@ export interface ChildAgentFactoryContext {
     onSessionCreated?: (sessionFile: string | undefined, childSessionLeafId: string | null) => void;
 }
 
-export type ChildAgentFactory = (
-    context: ChildAgentFactoryContext,
-) => Promise<ChildAgentHandle>;
+export type ChildAgentFactory = (context: ChildAgentFactoryContext) => Promise<ChildAgentHandle>;
 
 export interface AgentRunDetails {
     runId: string;
@@ -217,7 +214,10 @@ export interface AgentRunPersistence {
     childSessionDir: string;
     save(record: PersistedAgentRun): Promise<boolean>;
     /** Acquires a renewable CAS lease for the physical run's active operation. */
-    acquireContinuationLease?: (runInstanceId: string, onLost?: () => void) => Promise<AgentContinuationLease>;
+    acquireContinuationLease?: (
+        runInstanceId: string,
+        onLost?: () => void,
+    ) => Promise<AgentContinuationLease>;
     flush?: () => Promise<void>;
     close?: () => void | Promise<void>;
     deleteChildSession(sessionFile: string): void;
@@ -228,7 +228,8 @@ export interface AgentWorkspaceCheckpointRequest {
     runId: string;
     runInstanceId: string;
     kind: "intermediate" | "terminal";
-    runStatus: "waiting_for_parent" | "interrupted" | "completed" | "failed" | "aborted" | "canceled";
+    runStatus:
+        "waiting_for_parent" | "interrupted" | "completed" | "failed" | "aborted" | "canceled";
     childSessionFile?: string;
     childSessionLeafId: string | null;
 }

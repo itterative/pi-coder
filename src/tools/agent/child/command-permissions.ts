@@ -33,10 +33,7 @@ import {
     type PermissionState,
 } from "../../../modules/sandbox/permission-state";
 import { resolvePermissionDetails } from "../../../modules/sandbox/resolve";
-import {
-    selectWithMessage,
-    type SelectMessageItem,
-} from "../../../tui/select-with-message";
+import { selectWithMessage, type SelectMessageItem } from "../../../tui/select-with-message";
 import { isFileAccessApproved } from "../../file-permissions";
 
 interface CommandPermissionCallbacks {
@@ -97,7 +94,9 @@ class PermissionQueue {
     async acquire(signal?: AbortSignal): Promise<(() => void) | undefined> {
         if (signal?.aborted) return undefined;
         let release!: () => void;
-        const completed = new Promise<void>((resolve) => { release = resolve; });
+        const completed = new Promise<void>((resolve) => {
+            release = resolve;
+        });
         const previous = this.tail;
         this.tail = previous.catch(() => {}).then(() => completed);
 
@@ -116,7 +115,10 @@ class PermissionQueue {
             };
             const abort = () => finish(false);
             signal.addEventListener("abort", abort, { once: true });
-            void previous.then(() => finish(true), () => finish(true));
+            void previous.then(
+                () => finish(true),
+                () => finish(true),
+            );
         });
         if (!acquired || signal.aborted) {
             release();
@@ -222,16 +224,17 @@ async function promptBash(
     try {
         const result = await selectWithMessage(
             {
-                title: () => `[${runLabel(options)}] ${options.agentName}: allow bash? — mode: ${sandboxed.value ? "sandbox" : "direct"}${canToggle ? " (s)" : ""}`,
+                title: () =>
+                    `[${runLabel(options)}] ${options.agentName}: allow bash? — mode: ${sandboxed.value ? "sandbox" : "direct"}${canToggle ? " (s)" : ""}`,
                 contentLines: command.split("\n"),
                 items,
-                borderTone: () => sandboxed.value ? "border" : "borderAccent",
+                borderTone: () => (sandboxed.value ? "border" : "borderAccent"),
                 handleSelectInput: canToggle
                     ? (key) => {
-                        if (!matchesKey(key, "s")) return false;
-                        sandboxed.value = !sandboxed.value;
-                        return true;
-                    }
+                          if (!matchesKey(key, "s")) return false;
+                          sandboxed.value = !sandboxed.value;
+                          return true;
+                      }
                     : undefined,
             },
             { ...options.parentContext, events: options.events },
@@ -274,22 +277,24 @@ function renderedDiffLines(diff: string): string[] {
 // Build previews only from the proposed payload; permission checks must not read
 // an unapproved target path just to add context to the dialog.
 function editMutationPreview(input: EditToolInput): string[] {
-    const diff = input.edits.flatMap((edit, index) => [
-        `Replacement ${index + 1}`,
-        generateDiffString(edit.oldText, edit.newText).diff,
-    ]).join("\n");
+    const diff = input.edits
+        .flatMap((edit, index) => [
+            `Replacement ${index + 1}`,
+            generateDiffString(edit.oldText, edit.newText).diff,
+        ])
+        .join("\n");
     return [input.path, ...renderedDiffLines(diff)];
 }
 
 function writeMutationPreview(input: WriteToolInput): string[] {
-    const diff = [
-        "New content",
-        generateDiffString("", input.content).diff,
-    ].join("\n");
+    const diff = ["New content", generateDiffString("", input.content).diff].join("\n");
     return [input.path, ...renderedDiffLines(diff)];
 }
 
-function fileMutationPreview(event: { input: EditToolInput | WriteToolInput }, isEdit: boolean): string[] {
+function fileMutationPreview(
+    event: { input: EditToolInput | WriteToolInput },
+    isEdit: boolean,
+): string[] {
     return isEdit
         ? editMutationPreview(event.input as EditToolInput)
         : writeMutationPreview(event.input as WriteToolInput);
@@ -312,7 +317,11 @@ export function registerCommandPermissionHooks(
         if (!isEdit && !isWrite && !isBash) return;
 
         const release = await permissionQueue.acquire(ctx.signal);
-        if (!release) return { block: true, reason: "Agent mutation canceled before permission was granted." };
+        if (!release)
+            return {
+                block: true,
+                reason: "Agent mutation canceled before permission was granted.",
+            };
 
         if (isEdit || isWrite) {
             const action = isEdit ? "edit" : "write";
@@ -320,7 +329,8 @@ export function registerCommandPermissionHooks(
             const additionalRoots = getScratchpadRoots(ctx);
             const cwdPathAllowed = isCommandPathAllowed(input.path, ctx.cwd, additionalRoots);
             const scratchpadPathAllowed = additionalRoots.some((root) =>
-                isPathWithinDirectory(input.path, root, ctx.cwd, COMMAND_CONFINEMENT));
+                isPathWithinDirectory(input.path, root, ctx.cwd, COMMAND_CONFINEMENT),
+            );
             if (cwdPathAllowed || scratchpadPathAllowed) {
                 // This hook is installed only for children with mutation or
                 // command-runner capability. A confined cwd path is already
@@ -340,8 +350,9 @@ export function registerCommandPermissionHooks(
                     access: "write",
                     additionalRoots,
                 });
-                const outsideCwd = assessment.reasons.length === 1
-                    && assessment.reasons[0] === UnsafeReason.OUTSIDE_CWD;
+                const outsideCwd =
+                    assessment.reasons.length === 1 &&
+                    assessment.reasons[0] === UnsafeReason.OUTSIDE_CWD;
                 // The shared file hook handles explicit outside-cwd access for
                 // non-isolated children. Sensitive paths and symlink escapes
                 // remain blocked before any prompt.
@@ -369,10 +380,14 @@ export function registerCommandPermissionHooks(
                 release();
                 throw error;
             }
-            if (result.message) (event.input as Record<string, unknown>)._userMessage = result.message;
+            if (result.message)
+                (event.input as Record<string, unknown>)._userMessage = result.message;
             if (!result.allowed) {
                 release();
-                return { block: true, reason: blockedReason(action, event.input as Record<string, unknown>) };
+                return {
+                    block: true,
+                    reason: blockedReason(action, event.input as Record<string, unknown>),
+                };
             }
             releases.set(event.toolCallId, release);
             return { block: false };
@@ -411,7 +426,7 @@ export function registerCommandPermissionHooks(
         const supported = process.platform === "linux" || process.platform === "freebsd";
         let bwrap = "";
         try {
-            bwrap = sandboxEnabled && supported ? (await lookpath("bwrap")) ?? "" : "";
+            bwrap = sandboxEnabled && supported ? ((await lookpath("bwrap")) ?? "") : "";
         } catch (error) {
             release();
             throw error;
@@ -420,13 +435,17 @@ export function registerCommandPermissionHooks(
         if (permission === "allow:sandbox") {
             sandboxedModeValue = sandboxEnabled;
         } else if (permission === "ask") {
-            sandboxedModeValue = permissionState.bashSandboxed && sandboxEnabled && bwrap.length > 0;
+            sandboxedModeValue =
+                permissionState.bashSandboxed && sandboxEnabled && bwrap.length > 0;
         }
         const sandboxedMode = { value: sandboxedModeValue };
         const sandboxed = sandboxedMode.value;
         if (sandboxed && !bwrap) {
             release();
-            return { block: true, reason: "Agent bash requires sandboxing, but bubblewrap is unavailable." };
+            return {
+                block: true,
+                reason: "Agent bash requires sandboxing, but bubblewrap is unavailable.",
+            };
         }
         const needsPrompt = permission === "ask";
         const canToggle = needsPrompt && sandboxEnabled && bwrap.length > 0;
@@ -453,7 +472,10 @@ export function registerCommandPermissionHooks(
         if (result.message) (event.input as Record<string, unknown>)._userMessage = result.message;
         if (!result.allowed) {
             release();
-            return { block: true, reason: blockedReason("bash", event.input as Record<string, unknown>) };
+            return {
+                block: true,
+                reason: blockedReason("bash", event.input as Record<string, unknown>),
+            };
         }
         permission = result.permission ?? permission;
         if (needsPrompt && canToggle) {
@@ -484,7 +506,8 @@ export function registerCommandPermissionHooks(
         }
         if ((event.toolName === "edit" || event.toolName === "write") && !event.isError) {
             const filePath = event.input.path;
-            if (typeof filePath === "string") options.fileChanged(relativePath(filePath, options.parentContext.cwd));
+            if (typeof filePath === "string")
+                options.fileChanged(relativePath(filePath, options.parentContext.cwd));
         }
 
         const note = userNote(event.input);

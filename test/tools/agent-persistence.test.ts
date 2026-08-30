@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { fingerprintAgentDefinition, BUILTIN_SCOUT } from "../../src/tools/agent/definitions/discovery";
+import {
+    fingerprintAgentDefinition,
+    BUILTIN_SCOUT,
+} from "../../src/tools/agent/definitions/discovery";
 import {
     getAgentCwdSessionDir,
     loadAgentRunPersistence,
@@ -26,7 +29,8 @@ import {
 
 const tempDirs: string[] = [];
 afterEach(() => {
-    for (const directory of tempDirs.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+    for (const directory of tempDirs.splice(0))
+        fs.rmSync(directory, { recursive: true, force: true });
 });
 
 function record(ownerSessionId: string, childSessionFile?: string): PersistedAgentRun {
@@ -83,7 +87,10 @@ describe("durable agent run persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
+        const parentDir = path.join(
+            getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }),
+            "parent-1",
+        );
         fs.mkdirSync(parentDir, { recursive: true });
         const child = SessionManager.create(process.cwd(), parentDir);
         child.appendMessage({
@@ -102,25 +109,30 @@ describe("durable agent run persistence", () => {
             timestamp: Date.now(),
         });
         expect(child.getSessionFile()).toBeDefined();
-        await upsertAgentRunCatalogRecord({
-            ownerSessionId: "parent-1",
-            runId: "scout-1",
-            parentCwd: process.cwd(),
-            title: "Persisted child",
-            agent: "scout",
-            agentSource: "builtin",
-            task: "Review the persisted child session",
-            status: "running",
-            background: false,
-            mutating: false,
-            childSessionFile: child.getSessionFile()!,
-            startedAt: 1,
-            updatedAt: 2,
-            usageSnapshot: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
-        }, path.join(stateDir, "workspaces"));
+        await upsertAgentRunCatalogRecord(
+            {
+                ownerSessionId: "parent-1",
+                runId: "scout-1",
+                parentCwd: process.cwd(),
+                title: "Persisted child",
+                agent: "scout",
+                agentSource: "builtin",
+                task: "Review the persisted child session",
+                status: "running",
+                background: false,
+                mutating: false,
+                childSessionFile: child.getSessionFile()!,
+                startedAt: 1,
+                updatedAt: 2,
+                usageSnapshot: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
+            },
+            path.join(stateDir, "workspaces"),
+        );
         expect(fs.readdirSync(parentDir)).not.toHaveLength(0);
 
-        const sessions = await listPastAgentSessions(process.cwd(), { agentSessionsDir: sessionsDir });
+        const sessions = await listPastAgentSessions(process.cwd(), {
+            agentSessionsDir: sessionsDir,
+        });
         expect(sessions).toHaveLength(1);
         expect(sessions[0]).toMatchObject({
             kind: "past",
@@ -128,7 +140,9 @@ describe("durable agent run persistence", () => {
             title: "Persisted child",
             status: "interrupted",
         });
-        expect(sessions[0]?.transcript).toContain("Transcript unavailable: no exact child transcript leaf is recorded.");
+        expect(sessions[0]?.transcript).toContain(
+            "Transcript unavailable: no exact child transcript leaf is recorded.",
+        );
         // The row comes from the catalog: transcript and message count are
         // loaded lazily, not prebuilt during enumeration.
         expect(sessions[0]?.messageCount).toBeUndefined();
@@ -138,7 +152,10 @@ describe("durable agent run persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const parentDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
+        const parentDir = path.join(
+            getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }),
+            "parent-1",
+        );
         fs.mkdirSync(parentDir, { recursive: true });
         const child = SessionManager.create(process.cwd(), parentDir);
         child.appendMessage({
@@ -157,26 +174,31 @@ describe("durable agent run persistence", () => {
             timestamp: 2,
         });
         const childFile = child.getSessionFile()!;
-        await upsertAgentRunCatalogRecord({
-            ownerSessionId: "parent-1",
-            runId: "scout-2",
-            parentCwd: process.cwd(),
-            title: "Catalog run",
-            agent: "scout",
-            agentSource: "builtin",
-            task: "Inspect the catalog-backed run",
-            status: "removed",
-            terminalStatus: "completed",
-            background: false,
-            mutating: false,
-            childSessionFile: childFile,
-            childSessionLeafId: leaf,
-            startedAt: 1,
-            updatedAt: 3,
-            usageSnapshot: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
-        }, path.join(stateDir, "workspaces"));
+        await upsertAgentRunCatalogRecord(
+            {
+                ownerSessionId: "parent-1",
+                runId: "scout-2",
+                parentCwd: process.cwd(),
+                title: "Catalog run",
+                agent: "scout",
+                agentSource: "builtin",
+                task: "Inspect the catalog-backed run",
+                status: "removed",
+                terminalStatus: "completed",
+                background: false,
+                mutating: false,
+                childSessionFile: childFile,
+                childSessionLeafId: leaf,
+                startedAt: 1,
+                updatedAt: 3,
+                usageSnapshot: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
+            },
+            path.join(stateDir, "workspaces"),
+        );
 
-        const lists = await listAgentPastSessionLists(process.cwd(), { agentSessionsDir: sessionsDir });
+        const lists = await listAgentPastSessionLists(process.cwd(), {
+            agentSessionsDir: sessionsDir,
+        });
         expect(lists.all).toHaveLength(1);
         expect(lists.all[0]).toMatchObject({
             kind: "past",
@@ -200,7 +222,9 @@ describe("durable agent run persistence", () => {
     });
 
     it("normalizes cwd paths with the pi session-directory format", () => {
-        expect(normalizeCwdForSessionDirectory("/home/example/project")).toBe("--home-example-project--");
+        expect(normalizeCwdForSessionDirectory("/home/example/project")).toBe(
+            "--home-example-project--",
+        );
     });
 
     it("is disabled for an ephemeral parent session", async () => {
@@ -212,12 +236,19 @@ describe("durable agent run persistence", () => {
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
         const workspacesDir = path.join(stateDir, "workspaces");
-        const childDir = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
+        const childDir = path.join(
+            getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }),
+            "parent-1",
+        );
         fs.mkdirSync(childDir, { recursive: true });
         const childFile = path.join(childDir, "child.jsonl");
         fs.writeFileSync(childFile, "{}\n");
         const older = record("parent-1", childFile);
-        const newer = { ...record("parent-1", childFile), status: "interrupted" as const, updatedAt: 3 };
+        const newer = {
+            ...record("parent-1", childFile),
+            status: "interrupted" as const,
+            updatedAt: 3,
+        };
         const foreign = { ...record("other-parent", childFile), updatedAt: 4 };
         await seedState(older, "entry-1", workspacesDir);
         await seedState(newer, "entry-2", workspacesDir);
@@ -229,19 +260,26 @@ describe("durable agent run persistence", () => {
         );
 
         expect(loaded?.persistence.childSessionDir).toBe(childDir);
-        expect(path.basename(path.dirname(childDir))).toBe(normalizeCwdForSessionDirectory(process.cwd()));
+        expect(path.basename(path.dirname(childDir))).toBe(
+            normalizeCwdForSessionDirectory(process.cwd()),
+        );
         expect(loaded?.records).toHaveLength(1);
-        expect(loaded?.records[0]).toMatchObject({ status: "interrupted", childSessionFile: childFile });
+        expect(loaded?.records[0]).toMatchObject({
+            status: "interrupted",
+            childSessionFile: childFile,
+        });
         expect(fs.statSync(childDir).mode & 0o777).toBe(0o700);
         await loaded?.persistence.save(newer);
         await loaded?.persistence.flush?.();
-        expect(await listAgentRunCatalog(process.cwd(), workspacesDir)).toMatchObject([{
-            ownerSessionId: "parent-1",
-            runId: "scout-1",
-            title: "Persistence scan",
-            status: "interrupted",
-            responsePreview: "Partial",
-        }]);
+        expect(await listAgentRunCatalog(process.cwd(), workspacesDir)).toMatchObject([
+            {
+                ownerSessionId: "parent-1",
+                runId: "scout-1",
+                title: "Persistence scan",
+                status: "interrupted",
+                responsePreview: "Partial",
+            },
+        ]);
     });
 
     it("saves asynchronously, rejects closed storage, and preserves newer snapshots", async () => {
@@ -289,8 +327,13 @@ describe("durable agent run persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const cwdSessionDir = getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir });
-        for (const [parent, timestamp] of [["parent-1", 1000], ["parent-2", 2000]] as const) {
+        const cwdSessionDir = getAgentCwdSessionDir(process.cwd(), {
+            agentSessionsDir: sessionsDir,
+        });
+        for (const [parent, timestamp] of [
+            ["parent-1", 1000],
+            ["parent-2", 2000],
+        ] as const) {
             const directory = path.join(cwdSessionDir, parent);
             fs.mkdirSync(directory, { recursive: true });
             const child = SessionManager.create(process.cwd(), directory);
@@ -312,23 +355,34 @@ describe("durable agent run persistence", () => {
             });
         }
 
-        const lists = await listAgentPastSessionLists(process.cwd(), { agentSessionsDir: sessionsDir });
+        const lists = await listAgentPastSessionLists(process.cwd(), {
+            agentSessionsDir: sessionsDir,
+        });
 
         expect(lists.all.map((item) => item.parentSessionId)).toEqual(["parent-2", "parent-1"]);
-        expect(lists.all.map((item) => item.firstMessage)).toEqual(["Task for parent-2", "Task for parent-1"]);
+        expect(lists.all.map((item) => item.firstMessage)).toEqual([
+            "Task for parent-2",
+            "Task for parent-1",
+        ]);
         expect(lists.activeBranch).toHaveLength(0);
 
         const scoped = lists.all.filter((item) => item.parentSessionId === "parent-1");
         expect(scoped).toHaveLength(1);
-        expect(await listPastAgentSessions(process.cwd(), {
-            agentSessionsDir: sessionsDir,
-            parentSessionId: "parent-1",
-        })).toEqual(scoped);
-        expect(await listPastAgentSessions(process.cwd(), { agentSessionsDir: sessionsDir })).toEqual(lists.all);
+        expect(
+            await listPastAgentSessions(process.cwd(), {
+                agentSessionsDir: sessionsDir,
+                parentSessionId: "parent-1",
+            }),
+        ).toEqual(scoped);
+        expect(
+            await listPastAgentSessions(process.cwd(), { agentSessionsDir: sessionsDir }),
+        ).toEqual(lists.all);
     });
 
     it("falls back to the latest catalog leaf for visual transcript loading", async () => {
-        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-leaf-fallback-"));
+        const stateDir = fs.mkdtempSync(
+            path.join(os.tmpdir(), "pi-agent-persistence-leaf-fallback-"),
+        );
         tempDirs.push(stateDir);
         const child = SessionManager.create(process.cwd(), stateDir);
         child.appendMessage({ role: "user", content: "Review the changes", timestamp: 1 });
@@ -366,7 +420,10 @@ describe("durable agent run persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-persistence-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const directory = path.join(getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }), "parent-1");
+        const directory = path.join(
+            getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }),
+            "parent-1",
+        );
         fs.mkdirSync(directory, { recursive: true });
         const child = SessionManager.create(process.cwd(), directory);
         child.appendMessage({ role: "user", content: "Live run task", timestamp: 1 });
@@ -436,6 +493,8 @@ describe("durable agent run persistence", () => {
         expect(loaded[0]?.transcript).toContain("Live run response");
         expect(loaded[0]?.transcriptCollapsed).toBeDefined();
         expect(loaded[1]?.transcript).toBeUndefined();
-        expect(loaded[2]?.transcript).toContain("Transcript unavailable: no exact child transcript leaf is recorded.");
+        expect(loaded[2]?.transcript).toContain(
+            "Transcript unavailable: no exact child transcript leaf is recorded.",
+        );
     });
 });

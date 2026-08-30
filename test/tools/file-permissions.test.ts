@@ -17,33 +17,39 @@ interface Handler {
 describe("file permission session entries", () => {
     let temporaryDirectories: string[] = [];
 
-    it.each(["read", "write"] as const)("allows scratchpad %s access without prompting", async (operation) => {
-        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-scratchpad-cwd-"));
-        temporaryDirectories.push(cwd);
+    it.each(["read", "write"] as const)(
+        "allows scratchpad %s access without prompting",
+        async (operation) => {
+            const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-scratchpad-cwd-"));
+            temporaryDirectories.push(cwd);
 
-        const handlers: Record<string, Handler[]> = {};
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            appendEntry() {},
-        } as any;
-        registerScratchpadExtension(pi);
-        registerFileToolHook(pi, operation);
+            const handlers: Record<string, Handler[]> = {};
+            const pi = {
+                on(event: string, handler: Handler) {
+                    (handlers[event] ??= []).push(handler);
+                },
+                appendEntry() {},
+            } as any;
+            registerScratchpadExtension(pi);
+            registerFileToolHook(pi, operation);
 
-        const sessionManager = {};
-        const ctx = { cwd, hasUI: false, sessionManager };
-        await handlers.session_start[0]({}, ctx);
-        const scratchpad = getScratchpadPath(sessionManager)!;
-        temporaryDirectories.push(scratchpad);
+            const sessionManager = {};
+            const ctx = { cwd, hasUI: false, sessionManager };
+            await handlers.session_start[0]({}, ctx);
+            const scratchpad = getScratchpadPath(sessionManager)!;
+            temporaryDirectories.push(scratchpad);
 
-        const result = await handlers.tool_call[0]({
-            toolName: operation,
-            input: { path: path.join(scratchpad, ".env") },
-        }, ctx);
+            const result = await handlers.tool_call[0](
+                {
+                    toolName: operation,
+                    input: { path: path.join(scratchpad, ".env") },
+                },
+                ctx,
+            );
 
-        expect(result).toEqual({ block: false });
-    });
+            expect(result).toEqual({ block: false });
+        },
+    );
 
     afterEach(() => {
         for (const directory of temporaryDirectories) {
@@ -70,10 +76,15 @@ describe("file permission session entries", () => {
         registerFileToolHook(pi, "read", { additionalReadRoots });
         const ctx = { cwd, hasUI: false, sessionManager: {} };
 
-        await expect(handlers.tool_call[0]!({
-            toolName: "read",
-            input: { path: outputPath },
-        }, ctx)).resolves.toEqual({ block: false });
+        await expect(
+            handlers.tool_call[0]!(
+                {
+                    toolName: "read",
+                    input: { path: outputPath },
+                },
+                ctx,
+            ),
+        ).resolves.toEqual({ block: false });
 
         const writeHandlers: Record<string, Handler[]> = {};
         const writePi = {
@@ -83,10 +94,15 @@ describe("file permission session entries", () => {
             appendEntry() {},
         } as any;
         registerFileToolHook(writePi, "write", { additionalReadRoots });
-        await expect(writeHandlers.tool_call[0]!({
-            toolName: "write",
-            input: { path: outputPath },
-        }, ctx)).resolves.toMatchObject({ block: true });
+        await expect(
+            writeHandlers.tool_call[0]!(
+                {
+                    toolName: "write",
+                    input: { path: outputPath },
+                },
+                ctx,
+            ),
+        ).resolves.toMatchObject({ block: true });
     });
 
     it("allows parent reads from user memories but not writes", async () => {
@@ -104,10 +120,15 @@ describe("file permission session entries", () => {
 
         const memoryPath = path.join(getUserMemoryDirectory(), "permission-test.md");
         const ctx = { cwd, hasUI: false, sessionManager: {} };
-        await expect(readHandlers.tool_call[0]!({
-            toolName: "read",
-            input: { path: memoryPath },
-        }, ctx)).resolves.toEqual({ block: false });
+        await expect(
+            readHandlers.tool_call[0]!(
+                {
+                    toolName: "read",
+                    input: { path: memoryPath },
+                },
+                ctx,
+            ),
+        ).resolves.toEqual({ block: false });
 
         const writeHandlers: Record<string, Handler[]> = {};
         const writePi = {
@@ -118,10 +139,15 @@ describe("file permission session entries", () => {
         } as any;
         registerFileToolHook(writePi, "write");
 
-        await expect(writeHandlers.tool_call[0]!({
-            toolName: "write",
-            input: { path: memoryPath },
-        }, ctx)).resolves.toMatchObject({ block: true });
+        await expect(
+            writeHandlers.tool_call[0]!(
+                {
+                    toolName: "write",
+                    input: { path: memoryPath },
+                },
+                ctx,
+            ),
+        ).resolves.toMatchObject({ block: true });
     });
 
     it("keeps remembered folders isolated between extension runtimes", async () => {
@@ -157,10 +183,13 @@ describe("file permission session entries", () => {
 
         await first.session_start[0]({}, firstCtx);
         await second.session_start[0]({}, secondCtx);
-        const result = await first.tool_call[0]({
-            toolName: "read",
-            input: { path: path.join(folder, "notes.txt") },
-        }, firstCtx);
+        const result = await first.tool_call[0](
+            {
+                toolName: "read",
+                input: { path: path.join(folder, "notes.txt") },
+            },
+            firstCtx,
+        );
 
         expect(result).toEqual({ block: false });
     });
@@ -183,19 +212,24 @@ describe("file permission session entries", () => {
             cwd,
             hasUI: false,
             sessionManager: {
-                getBranch: () => [{
-                    type: "custom",
-                    customType: ALLOWED_FILE_ENTRY_TYPE,
-                    data: { operation: "read", folder },
-                }],
+                getBranch: () => [
+                    {
+                        type: "custom",
+                        customType: ALLOWED_FILE_ENTRY_TYPE,
+                        data: { operation: "read", folder },
+                    },
+                ],
             },
         };
 
         await handlers.session_start[0]({}, ctx);
-        const result = await handlers.tool_call[0]({
-            toolName: "read",
-            input: { path: path.join(folder, "notes.txt") },
-        }, ctx);
+        const result = await handlers.tool_call[0](
+            {
+                toolName: "read",
+                input: { path: path.join(folder, "notes.txt") },
+            },
+            ctx,
+        );
 
         expect(result).toEqual({ block: false });
     });
@@ -213,10 +247,13 @@ describe("file permission session entries", () => {
         } as any;
         registerFileToolHook(pi, "read");
 
-        const result = await handlers.tool_call[0]({
-            toolName: "grep",
-            input: { pattern: "needle" },
-        }, { cwd, hasUI: false });
+        const result = await handlers.tool_call[0](
+            {
+                toolName: "grep",
+                input: { pattern: "needle" },
+            },
+            { cwd, hasUI: false },
+        );
 
         expect(result).toEqual({ block: false });
     });
@@ -264,79 +301,91 @@ describe("file permission session entries", () => {
         expect(prompts).toBe(1);
     });
 
-    it.each(["read", "write"] as const)("includes a refusal message in blocked %s reasons", async (operation) => {
-        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-session-"));
-        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-outside-"));
-        temporaryDirectories.push(cwd, outside);
+    it.each(["read", "write"] as const)(
+        "includes a refusal message in blocked %s reasons",
+        async (operation) => {
+            const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-session-"));
+            const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-outside-"));
+            temporaryDirectories.push(cwd, outside);
 
-        const handlers: Record<string, Handler[]> = {};
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            appendEntry() {},
-        } as any;
-        registerFileToolHook(pi, operation);
-        const refusalMessage = "do not access that folder";
-        const ctx = {
-            cwd,
-            hasUI: true,
-            ui: {
-                theme: { bold: (value: string) => value },
-                setWorkingVisible() {},
-                custom: async () => ({
-                    value: { kind: "no" },
-                    message: refusalMessage,
-                    displayText: "No, do not access that folder",
-                }),
-            },
-        };
+            const handlers: Record<string, Handler[]> = {};
+            const pi = {
+                on(event: string, handler: Handler) {
+                    (handlers[event] ??= []).push(handler);
+                },
+                appendEntry() {},
+            } as any;
+            registerFileToolHook(pi, operation);
+            const refusalMessage = "do not access that folder";
+            const ctx = {
+                cwd,
+                hasUI: true,
+                ui: {
+                    theme: { bold: (value: string) => value },
+                    setWorkingVisible() {},
+                    custom: async () => ({
+                        value: { kind: "no" },
+                        message: refusalMessage,
+                        displayText: "No, do not access that folder",
+                    }),
+                },
+            };
 
-        const result = await handlers.tool_call[0]({
-            toolName: operation,
-            input: { path: path.join(outside, "notes.txt") },
-        }, ctx);
+            const result = await handlers.tool_call[0](
+                {
+                    toolName: operation,
+                    input: { path: path.join(outside, "notes.txt") },
+                },
+                ctx,
+            );
 
-        expect(result).toEqual({
-            block: true,
-            reason: `File ${operation} blocked by user; path is outside the allowed working directory. User message: ${refusalMessage}`,
-        });
-    });
+            expect(result).toEqual({
+                block: true,
+                reason: `File ${operation} blocked by user; path is outside the allowed working directory. User message: ${refusalMessage}`,
+            });
+        },
+    );
 
-    it.each(["read", "write"] as const)("keeps the generic blocked %s reason without a refusal message", async (operation) => {
-        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-session-"));
-        const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-outside-"));
-        temporaryDirectories.push(cwd, outside);
+    it.each(["read", "write"] as const)(
+        "keeps the generic blocked %s reason without a refusal message",
+        async (operation) => {
+            const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-session-"));
+            const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-outside-"));
+            temporaryDirectories.push(cwd, outside);
 
-        const handlers: Record<string, Handler[]> = {};
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            appendEntry() {},
-        } as any;
-        registerFileToolHook(pi, operation);
-        const ctx = {
-            cwd,
-            hasUI: true,
-            ui: {
-                theme: { bold: (value: string) => value },
-                setWorkingVisible() {},
-                custom: async () => ({
-                    value: { kind: "no" },
-                    displayText: "No",
-                }),
-            },
-        };
+            const handlers: Record<string, Handler[]> = {};
+            const pi = {
+                on(event: string, handler: Handler) {
+                    (handlers[event] ??= []).push(handler);
+                },
+                appendEntry() {},
+            } as any;
+            registerFileToolHook(pi, operation);
+            const ctx = {
+                cwd,
+                hasUI: true,
+                ui: {
+                    theme: { bold: (value: string) => value },
+                    setWorkingVisible() {},
+                    custom: async () => ({
+                        value: { kind: "no" },
+                        displayText: "No",
+                    }),
+                },
+            };
 
-        const result = await handlers.tool_call[0]({
-            toolName: operation,
-            input: { path: path.join(outside, "notes.txt") },
-        }, ctx);
+            const result = await handlers.tool_call[0](
+                {
+                    toolName: operation,
+                    input: { path: path.join(outside, "notes.txt") },
+                },
+                ctx,
+            );
 
-        expect(result).toEqual({
-            block: true,
-            reason: `File ${operation} blocked by user; path is outside the allowed working directory.`,
-        });
-    });
+            expect(result).toEqual({
+                block: true,
+                reason: `File ${operation} blocked by user; path is outside the allowed working directory.`,
+            });
+        },
+    );
 });

@@ -19,10 +19,7 @@ import {
     getPermissionState,
     type PermissionState,
 } from "../modules/sandbox/permission-state";
-import {
-    ALLOWED_FILE_ENTRY_TYPE,
-    type AllowedFileEntry,
-} from "../common/audit";
+import { ALLOWED_FILE_ENTRY_TYPE, type AllowedFileEntry } from "../common/audit";
 import {
     getPathConfinementAssessment,
     getPathConfinementPermission,
@@ -37,10 +34,7 @@ import {
 } from "../tui/select-with-message";
 
 type FileOperation = "read" | "write";
-type PromptChoice =
-    | { kind: "remember"; folder: string }
-    | { kind: "yes" }
-    | { kind: "no" };
+type PromptChoice = { kind: "remember"; folder: string } | { kind: "yes" } | { kind: "no" };
 
 const approvedToolCalls = new WeakSet<object>();
 
@@ -113,9 +107,8 @@ export function getApprovedFileFolder(
 function sessionFolderFor(filePath: string, cwd: string): string {
     // File tools operate on files, so the containing directory is the narrowest
     // useful scope for the "always allow" choice.
-    const expanded = filePath === "~" || filePath.startsWith("~/")
-        ? os.homedir() + filePath.slice(1)
-        : filePath;
+    const expanded =
+        filePath === "~" || filePath.startsWith("~/") ? os.homedir() + filePath.slice(1) : filePath;
     const resolved = path.resolve(cwd, expanded);
 
     try {
@@ -163,7 +156,8 @@ async function promptForFileAccess(
 
     const result = await selectWithMessage(
         {
-            title: promptTitle ?? `pi-${operation}-sandbox: allow ${operationLabel(operation)} path?`,
+            title:
+                promptTitle ?? `pi-${operation}-sandbox: allow ${operationLabel(operation)} path?`,
             contentLines: [filePath],
             items,
         },
@@ -221,10 +215,11 @@ export default function registerFileToolHook(
     pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult> => {
         let isReadLike = false;
         if (operation === "read") {
-            isReadLike = event.toolName === "read"
-                || event.toolName === "grep"
-                || event.toolName === "find"
-                || event.toolName === "ls";
+            isReadLike =
+                event.toolName === "read" ||
+                event.toolName === "grep" ||
+                event.toolName === "find" ||
+                event.toolName === "ls";
         } else {
             isReadLike = event.toolName === "write" || event.toolName === "edit";
         }
@@ -234,21 +229,26 @@ export default function registerFileToolHook(
         const filePath = input.path?.trim() || ".";
         const cwd = ctx.cwd ?? process.cwd();
         const state = stateFor(ctx);
-        const confinement = options.confinement ?? sandboxConfig.current?.heuristics?.cwdConfinement;
+        const confinement =
+            options.confinement ?? sandboxConfig.current?.heuristics?.cwdConfinement;
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
         const scratchpadRoots = scratchpadPath ? [scratchpadPath] : [];
         const additionalRoots = [
             ...scratchpadRoots,
-            ...(operation === "read" ? options.additionalReadRoots?.(ctx) ?? [] : []),
+            ...(operation === "read" ? (options.additionalReadRoots?.(ctx) ?? []) : []),
         ];
 
-        if (isSafeHeuristic(getPathConfinementPermission(filePath, {
-            cwd,
-            config: confinement,
-            access: operation,
-            additionalRoots,
-            sensitiveAdditionalRoots: scratchpadRoots,
-        }))) {
+        if (
+            isSafeHeuristic(
+                getPathConfinementPermission(filePath, {
+                    cwd,
+                    config: confinement,
+                    access: operation,
+                    additionalRoots,
+                    sensitiveAdditionalRoots: scratchpadRoots,
+                }),
+            )
+        ) {
             return { block: false };
         }
 
@@ -260,7 +260,10 @@ export default function registerFileToolHook(
                 additionalRoots,
                 sensitiveAdditionalRoots: scratchpadRoots,
             });
-            if (assessment.reasons.length !== 1 || assessment.reasons[0] !== UnsafeReason.OUTSIDE_CWD) {
+            if (
+                assessment.reasons.length !== 1 ||
+                assessment.reasons[0] !== UnsafeReason.OUTSIDE_CWD
+            ) {
                 return {
                     block: true,
                     reason: `Child ${operation} access blocked: path is outside the working directory or is sensitive.`,
@@ -332,9 +335,8 @@ export default function registerFileToolHook(
     // Preserve an optional note from the permission dialog in the tool result,
     // matching the bash hook's behavior.
     pi.on("tool_result", async (event) => {
-        const isMatchingTool = operation === "read"
-            ? isReadToolResult(event)
-            : isWriteToolResult(event);
+        const isMatchingTool =
+            operation === "read" ? isReadToolResult(event) : isWriteToolResult(event);
         if (!isMatchingTool) return;
 
         const userMessage = (event.input as any)._userMessage;
@@ -345,10 +347,7 @@ export default function registerFileToolHook(
             ? `<user_note>\nThe user has made a note: ${trimmed}\n</user_note>\n`
             : `<user_note>The user has made a note: ${trimmed}</user_note>\n`;
         return {
-            content: [
-                { type: "text", text: note },
-                ...event.content,
-            ],
+            content: [{ type: "text", text: note }, ...event.content],
         };
     });
 }

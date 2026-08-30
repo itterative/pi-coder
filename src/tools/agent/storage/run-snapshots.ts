@@ -28,14 +28,16 @@ export async function insertAgentRunSnapshotInDatabase(
         throw new Error("Cannot persist a delegated run without runInstanceId.");
     }
     const snapshotId = randomUUID();
-    await database.run(`
+    await database.run(
+        `
         INSERT INTO agent_run_instances (
             run_instance_id, owner_session_id, run_id, title, agent, agent_source,
             agent_file_path, definition_fingerprint, task, background, mutating,
             workspace_id, parent_cwd, execution_cwd, started_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (run_instance_id) DO NOTHING
-    `, runInstanceId,
+    `,
+        runInstanceId,
         record.ownerSessionId,
         record.runId,
         record.title ?? "Delegated task",
@@ -49,21 +51,24 @@ export async function insertAgentRunSnapshotInDatabase(
         record.workspaceId ?? null,
         record.parentCwd ?? "",
         record.cwd ?? null,
-        record.startedAt,);
-    const sequenceRow = await database.get(`
+        record.startedAt,
+    );
+    const sequenceRow = (await database.get(`
         SELECT COALESCE(MAX(created_sequence), 0) + 1 AS next_sequence
         FROM agent_run_snapshots
-    `) as { next_sequence?: unknown } | undefined;
+    `)) as { next_sequence?: unknown } | undefined;
     if (typeof sequenceRow?.next_sequence !== "number") {
         throw new Error("Could not allocate an agent snapshot sequence.");
     }
-    await database.run(`
+    await database.run(
+        `
         INSERT INTO agent_run_snapshots (
             snapshot_id, run_instance_id, owner_session_id, run_id,
             payload_version, status, child_session_file, child_session_leaf_id,
             updated_at, payload_json, created_sequence
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, snapshotId,
+    `,
+        snapshotId,
         runInstanceId,
         record.ownerSessionId,
         record.runId,
@@ -73,7 +78,8 @@ export async function insertAgentRunSnapshotInDatabase(
         record.childSessionLeafId ?? null,
         record.updatedAt,
         JSON.stringify(record),
-        sequenceRow.next_sequence,);
+        sequenceRow.next_sequence,
+    );
     return {
         snapshotId,
         runInstanceId,
@@ -91,16 +97,17 @@ export async function insertAgentRunSnapshotInDatabase(
 
 function rowToSnapshot(row: Record<string, unknown>): AgentRunSnapshotRow | undefined {
     if (
-        typeof row.snapshot_id !== "string"
-        || typeof row.run_instance_id !== "string"
-        || typeof row.owner_session_id !== "string"
-        || typeof row.run_id !== "string"
-        || typeof row.payload_version !== "number"
-        || typeof row.status !== "string"
-        || typeof row.updated_at !== "number"
-        || typeof row.payload_json !== "string"
-        || typeof row.created_sequence !== "number"
-    ) return undefined;
+        typeof row.snapshot_id !== "string" ||
+        typeof row.run_instance_id !== "string" ||
+        typeof row.owner_session_id !== "string" ||
+        typeof row.run_id !== "string" ||
+        typeof row.payload_version !== "number" ||
+        typeof row.status !== "string" ||
+        typeof row.updated_at !== "number" ||
+        typeof row.payload_json !== "string" ||
+        typeof row.created_sequence !== "number"
+    )
+        return undefined;
     let payload: unknown;
     try {
         payload = JSON.parse(row.payload_json);
@@ -114,8 +121,11 @@ function rowToSnapshot(row: Record<string, unknown>): AgentRunSnapshotRow | unde
         runId: row.run_id,
         payloadVersion: row.payload_version,
         status: row.status as AgentRunSnapshotRow["status"],
-        ...(typeof row.child_session_file === "string" ? { childSessionFile: row.child_session_file } : {}),
-        childSessionLeafId: typeof row.child_session_leaf_id === "string" ? row.child_session_leaf_id : null,
+        ...(typeof row.child_session_file === "string"
+            ? { childSessionFile: row.child_session_file }
+            : {}),
+        childSessionLeafId:
+            typeof row.child_session_leaf_id === "string" ? row.child_session_leaf_id : null,
         updatedAt: row.updated_at,
         payload,
         createdSequence: row.created_sequence,
@@ -128,13 +138,16 @@ export async function listAgentRunSnapshotsInDatabase(
 ): Promise<AgentRunSnapshotRow[]> {
     if (snapshotIds.length === 0) return [];
     const placeholders = snapshotIds.map(() => "?").join(", ");
-    const rows = await database.all(`
+    const rows = (await database.all(
+        `
         SELECT snapshot_id, run_instance_id, owner_session_id, run_id, payload_version,
                status, child_session_file, child_session_leaf_id, updated_at,
                payload_json, created_sequence
         FROM agent_run_snapshots
         WHERE snapshot_id IN (${placeholders})
-    `, ...snapshotIds) as Array<Record<string, unknown>>;
+    `,
+        ...snapshotIds,
+    )) as Array<Record<string, unknown>>;
     return rows.flatMap((row) => {
         const snapshot = rowToSnapshot(row);
         return snapshot ? [snapshot] : [];

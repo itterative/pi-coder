@@ -43,7 +43,9 @@ describe("AgentWorkspaceBrowserComponent", () => {
         expect(renderText(component, 100)).toContain("1 available · 1 review required · 0 leased");
         expect(renderText(component, 100)).toContain("quiet-lantern-7k3 · available");
         expect(renderText(component, 100)).toContain("silver-meadow-2p4 · review required");
-        expect(renderText(component, 100)).toContain("Review-required workspaces are not selected automatically.");
+        expect(renderText(component, 100)).toContain(
+            "Review-required workspaces are not selected automatically.",
+        );
     });
 
     it("opens workspace details and returns to the list", () => {
@@ -105,20 +107,29 @@ describe("AgentWorkspaceBrowserComponent", () => {
             undefined,
             {
                 onConfirmAction: () => true,
-                onAction: async () => { throw new Error("workspace action failed"); },
+                onAction: async () => {
+                    throw new Error("workspace action failed");
+                },
             },
         );
         component.initialize(mockTheme);
         const ui = interact(component, 100);
 
         ui.press("d", "y");
-        await vi.waitFor(() => expect(ui.render()).toContain("Action failed: workspace action failed"));
+        await vi.waitFor(() =>
+            expect(ui.render()).toContain("Action failed: workspace action failed"),
+        );
     });
 
     it("renders an empty state", () => {
-        const component = new AgentWorkspaceBrowserComponent({ cwd: "/repo/project", workspaces: [] });
+        const component = new AgentWorkspaceBrowserComponent({
+            cwd: "/repo/project",
+            workspaces: [],
+        });
         component.initialize(mockTheme);
 
-        expect(renderText(component, 100)).toContain("No isolated workspaces have been created for this cwd.");
+        expect(renderText(component, 100)).toContain(
+            "No isolated workspaces have been created for this cwd.",
+        );
     });
 });

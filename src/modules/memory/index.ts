@@ -37,7 +37,8 @@ export function formatMemoryList(memories: MemoryMeta[]): string {
         }
     }
 
-    const sortByPriority = (a: MemoryMeta, b: MemoryMeta) => (a.priority ?? 99) - (b.priority ?? 99);
+    const sortByPriority = (a: MemoryMeta, b: MemoryMeta) =>
+        (a.priority ?? 99) - (b.priority ?? 99);
     for (const group of grouped.values()) {
         group.sort(sortByPriority);
     }
@@ -47,7 +48,9 @@ export function formatMemoryList(memories: MemoryMeta[]): string {
     // categories alphabetically, then uncategorized memories last under "Other".
     // This ensures a memory never disappears just because its category is new.
     const knownCategories = CATEGORY_ORDER.filter((cat) => grouped.has(cat));
-    const unknownCategories = [...grouped.keys()].filter((cat) => !CATEGORY_ORDER.includes(cat)).sort();
+    const unknownCategories = [...grouped.keys()]
+        .filter((cat) => !CATEGORY_ORDER.includes(cat))
+        .sort();
 
     const lines: string[] = [];
     let first = true;
@@ -177,7 +180,10 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
                 } satisfies CachedMemoryIndex);
             }
         } else {
-            const [projectResult, userResult] = await Promise.all([scanMemories(projectDir), scanMemories(userDir)]);
+            const [projectResult, userResult] = await Promise.all([
+                scanMemories(projectDir),
+                scanMemories(userDir),
+            ]);
             projectMemories = projectResult.memories;
             userMemories = userResult.memories;
             allErrors = [...projectResult.errors, ...userResult.errors];
@@ -253,7 +259,10 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
             systemPrompt = systemPrompt + "\n" + memoryBlock;
         }
 
-        const result: { systemPrompt: string; message?: { customType: string; content: string; display: boolean } } = {
+        const result: {
+            systemPrompt: string;
+            message?: { customType: string; content: string; display: boolean };
+        } = {
             systemPrompt,
         };
 

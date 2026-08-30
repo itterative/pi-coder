@@ -7,7 +7,9 @@ const testPaths = vi.hoisted(() => {
     const fsModule = process.getBuiltinModule("node:fs") as typeof import("node:fs");
     const osModule = process.getBuiltinModule("node:os") as typeof import("node:os");
     const pathModule = process.getBuiltinModule("node:path") as typeof import("node:path");
-    const root = fsModule.mkdtempSync(pathModule.join(osModule.tmpdir(), "pi-coder-agent-setup-e2e-"));
+    const root = fsModule.mkdtempSync(
+        pathModule.join(osModule.tmpdir(), "pi-coder-agent-setup-e2e-"),
+    );
     return {
         root,
         repository: pathModule.join(root, "repo"),
@@ -17,7 +19,9 @@ const testPaths = vi.hoisted(() => {
 });
 
 vi.mock("../../../src/common/constants", async () => {
-    const actual = await vi.importActual<typeof import("../../../src/common/constants")>("../../../src/common/constants");
+    const actual = await vi.importActual<typeof import("../../../src/common/constants")>(
+        "../../../src/common/constants",
+    );
     return {
         ...actual,
         PI_CODER_STATE_DIR: testPaths.root,
@@ -30,7 +34,13 @@ import { BUILTIN_WORKER } from "../../../src/tools/agent/definitions/discovery";
 import { runWorkspaceSetup } from "../../../src/tools/agent/workspaces/setup";
 import { createAgentWorkspace } from "../../../src/tools/agent/workspaces/lifecycle";
 import { getAgentWorkspace } from "../../../src/tools/agent/workspaces/store";
-import { createE2EContext, createE2EPathsAtRoot, createScriptedChild, initializeRepository, removeE2EPaths } from "./helpers";
+import {
+    createE2EContext,
+    createE2EPathsAtRoot,
+    createScriptedChild,
+    initializeRepository,
+    removeE2EPaths,
+} from "./helpers";
 
 let paths = createE2EPathsAtRoot(testPaths.root);
 
@@ -46,7 +56,9 @@ afterAll(() => {
 
 describe("isolated workspace setup e2e", () => {
     it("runs setup in the worktree and persists the ready state", async () => {
-        const workspace = await createAgentWorkspace(paths.repository, { workspacesDir: paths.state });
+        const workspace = await createAgentWorkspace(paths.repository, {
+            workspacesDir: paths.state,
+        });
         const factory = vi.fn(async (context: any) => {
             fs.writeFileSync(path.join(context.cwd, "setup-artifact.txt"), "prepared\n");
             return createScriptedChild({ output: "Installed project dependencies" });
@@ -59,30 +71,46 @@ describe("isolated workspace setup e2e", () => {
             setupRunId: "setup-run-1",
         });
 
-        expect(factory).toHaveBeenCalledWith(expect.objectContaining({
-            cwd: workspace.worktreePath,
-            isolated: true,
-            runId: `workspace-setup-${workspace.slug}`,
-        }));
-        expect(fs.readFileSync(path.join(workspace.worktreePath, "setup-artifact.txt"), "utf8")).toBe("prepared\n");
-        expect(ready).toMatchObject({ setupState: "ready", setupSummary: "Installed project dependencies" });
-        expect((await getAgentWorkspace(ready.id, { workspacesDir: paths.state }))?.setupState).toBe("ready");
+        expect(factory).toHaveBeenCalledWith(
+            expect.objectContaining({
+                cwd: workspace.worktreePath,
+                isolated: true,
+                runId: `workspace-setup-${workspace.slug}`,
+            }),
+        );
+        expect(
+            fs.readFileSync(path.join(workspace.worktreePath, "setup-artifact.txt"), "utf8"),
+        ).toBe("prepared\n");
+        expect(ready).toMatchObject({
+            setupState: "ready",
+            setupSummary: "Installed project dependencies",
+        });
+        expect(
+            (await getAgentWorkspace(ready.id, { workspacesDir: paths.state }))?.setupState,
+        ).toBe("ready");
     });
 
     it("persists failed setup without leaving a live setup child", async () => {
-        const workspace = await createAgentWorkspace(paths.repository, { workspacesDir: paths.state });
+        const workspace = await createAgentWorkspace(paths.repository, {
+            workspacesDir: paths.state,
+        });
         const child = createScriptedChild({ error: "dependency unavailable" });
         const factory = vi.fn(async () => child);
 
-        await expect(runWorkspaceSetup(workspace, {
-            definition: BUILTIN_WORKER,
-            factory,
-            ctx: createE2EContext(paths, { ui: { notify: vi.fn() } }),
-            setupRunId: "setup-run-2",
-        })).rejects.toThrow("dependency unavailable");
+        await expect(
+            runWorkspaceSetup(workspace, {
+                definition: BUILTIN_WORKER,
+                factory,
+                ctx: createE2EContext(paths, { ui: { notify: vi.fn() } }),
+                setupRunId: "setup-run-2",
+            }),
+        ).rejects.toThrow("dependency unavailable");
 
         const failed = await getAgentWorkspace(workspace.id, { workspacesDir: paths.state });
-        expect(failed).toMatchObject({ setupState: "failed", setupSummary: "Workspace setup failed: dependency unavailable" });
+        expect(failed).toMatchObject({
+            setupState: "failed",
+            setupSummary: "Workspace setup failed: dependency unavailable",
+        });
         expect(child.isDisposed).toBe(true);
     });
 });

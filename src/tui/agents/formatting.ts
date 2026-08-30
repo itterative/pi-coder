@@ -39,7 +39,8 @@ export interface CreateWorkspaceItem {
     task: string;
 }
 
-export type WorkspaceListItem = AgentWorkspaceBrowserItem | EmptyWorkspaceItem | CreateWorkspaceItem;
+export type WorkspaceListItem =
+    AgentWorkspaceBrowserItem | EmptyWorkspaceItem | CreateWorkspaceItem;
 
 export const EMPTY_WORKSPACES: EmptyWorkspaceItem = {
     kind: "empty",
@@ -139,13 +140,12 @@ export function asWorkspaceListItems(
 
 function settingListLabel(setting: AgentSetting): string {
     if (setting.value !== undefined) return `${setting.label}: ${setting.value}`;
-    if (setting.enabled === undefined) return `${setting.label}: ${setting.model ?? "Parent model"}`;
+    if (setting.enabled === undefined)
+        return `${setting.label}: ${setting.model ?? "Parent model"}`;
     return `${setting.label} · ${setting.enabled ? "On" : "Off"}`;
 }
 
-export function asSettingsListItems(
-    settings: AgentSetting[],
-): ListItem<AgentSetting>[] {
+export function asSettingsListItems(settings: AgentSetting[]): ListItem<AgentSetting>[] {
     return settings.map((setting) => ({
         value: setting,
         label: settingListLabel(setting),
@@ -155,12 +155,15 @@ export function asSettingsListItems(
 export function agentWorkspaceItemText(workspace: AgentWorkspaceBrowserItem, theme: Theme): string {
     const statusColor = workspace.status === "review_required" ? "warning" : "success";
     const leaseColor = workspace.leased ? "warning" : "muted";
-    const gitColor = workspace.git?.kind === "available" && workspace.git.dirty ? "warning" : "muted";
-    return theme.fg("accent", workspace.slug)
-        + ` · ${theme.fg(statusColor, workspace.statusText)}`
-        + `\nSetup: ${workspace.setupText} · Lease: ${theme.fg(leaseColor, workspace.leaseText)}`
-        + ` · Git: ${theme.fg(gitColor, workspace.git?.text ?? "unknown")}`
-        + `\nPath: ${workspace.worktreePath}`;
+    const gitColor =
+        workspace.git?.kind === "available" && workspace.git.dirty ? "warning" : "muted";
+    return (
+        theme.fg("accent", workspace.slug) +
+        ` · ${theme.fg(statusColor, workspace.statusText)}` +
+        `\nSetup: ${workspace.setupText} · Lease: ${theme.fg(leaseColor, workspace.leaseText)}` +
+        ` · Git: ${theme.fg(gitColor, workspace.git?.text ?? "unknown")}` +
+        `\nPath: ${workspace.worktreePath}`
+    );
 }
 
 export function workspaceDetailText(
@@ -171,10 +174,12 @@ export function workspaceDetailText(
     const lines = [
         `Workspace: ${workspace.slug}`,
         `Git: ${workspace.git?.text ?? "unknown"}`,
-        ...(workspace.git?.kind === "available" ? [
-            `Git files: ${workspace.git.changedFiles ?? 0} changed, ${workspace.git.stagedFiles ?? 0} staged, ${workspace.git.unstagedFiles ?? 0} unstaged, ${workspace.git.untrackedFiles ?? 0} untracked`,
-            `HEAD: ${workspace.git.headRevision ?? "unknown"}`,
-        ] : []),
+        ...(workspace.git?.kind === "available"
+            ? [
+                  `Git files: ${workspace.git.changedFiles ?? 0} changed, ${workspace.git.stagedFiles ?? 0} staged, ${workspace.git.unstagedFiles ?? 0} unstaged, ${workspace.git.untrackedFiles ?? 0} untracked`,
+                  `HEAD: ${workspace.git.headRevision ?? "unknown"}`,
+              ]
+            : []),
         `Status: ${workspace.statusText}`,
         `Setup: ${workspace.setupText}`,
         `Lease: ${workspace.leaseText}`,
@@ -188,10 +193,15 @@ export function workspaceDetailText(
         `Base revision: ${workspace.baseRevision}`,
     ];
     if (workspace.leaseOwnerSessionId) lines.push(`Lease owner: ${workspace.leaseOwnerSessionId}`);
-    if (workspace.leaseAcquiredAt !== undefined) lines.push(`Lease acquired: ${dateText(workspace.leaseAcquiredAt)}`);
+    if (workspace.leaseAcquiredAt !== undefined)
+        lines.push(`Lease acquired: ${dateText(workspace.leaseAcquiredAt)}`);
     if (workspace.setupSummary) {
         lines.push("", theme.fg("accent", "Setup summary:"));
-        lines.push(...workspace.setupSummary.split("\n").flatMap((line) => wrapPreservingSpaces(line, width)));
+        lines.push(
+            ...workspace.setupSummary
+                .split("\n")
+                .flatMap((line) => wrapPreservingSpaces(line, width)),
+        );
     }
     const actions = workspace.actions.map(({ key, label }) => `${key} ${label}`);
     if (actions.length > 0) {

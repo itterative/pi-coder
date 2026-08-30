@@ -44,18 +44,27 @@ describe("delegated-agent traces", () => {
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
         };
-        const manager = new AgentRunManager(async (context) => {
-            context.onTrace?.("session.agent_start");
-            context.onTrace?.("session.tool_end", {
-                tool: "ask_user",
-                isError: false,
-                resultChars: 20,
-            });
-            context.onTrace?.("session.agent_settled");
-            return child;
-        }, 4, store);
+        const manager = new AgentRunManager(
+            async (context) => {
+                context.onTrace?.("session.agent_start");
+                context.onTrace?.("session.tool_end", {
+                    tool: "ask_user",
+                    isError: false,
+                    resultChars: 20,
+                });
+                context.onTrace?.("session.agent_settled");
+                return child;
+            },
+            4,
+            store,
+        );
 
-        const result = await manager.start("scout", "Investigate", { cwd: process.cwd(), parentContext: {} }, {});
+        const result = await manager.start(
+            "scout",
+            "Investigate",
+            { cwd: process.cwd(), parentContext: {} },
+            {},
+        );
         const trace = store.get("scout-1");
         const eventTypes = trace?.events.map((event) => event.type);
 
@@ -74,11 +83,14 @@ describe("delegated-agent traces", () => {
         store.record("scout-1", "session.agent_settled");
         store.finish("scout-1", "completed");
         let command: any;
-        registerAgentTraceCommand({
-            registerCommand(_name: string, definition: any) {
-                command = definition;
-            },
-        } as any, store);
+        registerAgentTraceCommand(
+            {
+                registerCommand(_name: string, definition: any) {
+                    command = definition;
+                },
+            } as any,
+            store,
+        );
         const notifications: string[] = [];
         const ctx = {
             hasUI: false,

@@ -1,7 +1,4 @@
-export {
-    AgentSessionBrowserComponent,
-    showAgentSessionBrowser,
-} from "./browser";
+export { AgentSessionBrowserComponent, showAgentSessionBrowser } from "./browser";
 export {
     AgentWorkspaceBrowserComponent,
     AgentWorkspaceDetailComponent,

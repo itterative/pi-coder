@@ -1,7 +1,4 @@
-import {
-    FrontmatterParseError,
-    parseFrontmatter,
-} from "../../common/frontmatter";
+import { FrontmatterParseError, parseFrontmatter } from "../../common/frontmatter";
 
 export type TodoStatus = "pending" | "in_progress" | "completed" | "blocked";
 
@@ -19,12 +16,7 @@ export interface TodoList {
 }
 
 const TODO_ID = /^[a-z][a-z0-9_-]{0,63}$/;
-const TODO_STATUSES = new Set<TodoStatus>([
-    "pending",
-    "in_progress",
-    "completed",
-    "blocked",
-]);
+const TODO_STATUSES = new Set<TodoStatus>(["pending", "in_progress", "completed", "blocked"]);
 const MAX_TODO_ITEMS = 50;
 const MAX_TODO_TITLE_LENGTH = 500;
 const MAX_TODO_DOCUMENT_LENGTH = 256_000;
@@ -38,7 +30,9 @@ function invalidTodo(filePath: string, reason: string): never {
 }
 
 function validateTopLevel(frontmatter: Record<string, unknown>, filePath: string): unknown[] {
-    const unknownFields = Object.keys(frontmatter).filter((key) => key !== "version" && key !== "todos");
+    const unknownFields = Object.keys(frontmatter).filter(
+        (key) => key !== "version" && key !== "todos",
+    );
     if (unknownFields.length > 0) {
         invalidTodo(filePath, `unknown field(s): ${unknownFields.join(", ")}`);
     }
@@ -63,9 +57,14 @@ function parseItem(value: unknown, index: number, filePath: string): TodoItem {
         invalidTodo(filePath, `TODO entry ${index + 1} must be a mapping`);
     }
 
-    const unknownFields = Object.keys(value).filter((key) => !["id", "title", "status"].includes(key));
+    const unknownFields = Object.keys(value).filter(
+        (key) => !["id", "title", "status"].includes(key),
+    );
     if (unknownFields.length > 0) {
-        invalidTodo(filePath, `TODO entry ${index + 1} has unknown field(s): ${unknownFields.join(", ")}`);
+        invalidTodo(
+            filePath,
+            `TODO entry ${index + 1} has unknown field(s): ${unknownFields.join(", ")}`,
+        );
     }
 
     const id = value.id;
@@ -78,7 +77,10 @@ function parseItem(value: unknown, index: number, filePath: string): TodoItem {
         invalidTodo(filePath, `TODO entry ${index + 1} must have a non-empty string \`title\``);
     }
     if (title.trim().length > MAX_TODO_TITLE_LENGTH) {
-        invalidTodo(filePath, `TODO entry ${index + 1} title exceeds ${MAX_TODO_TITLE_LENGTH} characters`);
+        invalidTodo(
+            filePath,
+            `TODO entry ${index + 1} title exceeds ${MAX_TODO_TITLE_LENGTH} characters`,
+        );
     }
 
     const status = value.status;

@@ -13,12 +13,7 @@ export type WorkspaceLeaseState = "none" | "setup" | "known" | "orphaned" | "unk
 export type WorkspaceResultStatus = "prepared" | "applying" | "applied" | "discarded";
 export type WorkspaceCheckpointKind = "intermediate" | "terminal";
 export type WorkspaceCheckpointStatus =
-    | "waiting_for_parent"
-    | "interrupted"
-    | "completed"
-    | "failed"
-    | "aborted"
-    | "canceled";
+    "waiting_for_parent" | "interrupted" | "completed" | "failed" | "aborted" | "canceled";
 
 export interface AgentWorkspaceCheckpoint {
     id: string;
@@ -116,4 +111,5 @@ export interface AgentRunCatalogRecord {
     mutationReport?: WorkerMutationReport;
 }
 
-export type AgentWorkspaceAction = "inspect" | "apply" | "retain" | "reset" | "discard" | "release" | "recover";
+export type AgentWorkspaceAction =
+    "inspect" | "apply" | "retain" | "reset" | "discard" | "release" | "recover";

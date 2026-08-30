@@ -13,12 +13,7 @@ export type SandboxConfigEnvFilter = Record<string, "allow" | "deny">;
 export type SandboxConfigHomeMounts = boolean | string[];
 
 // Default home directory mounts when homeMounts is true
-export const DEFAULT_HOME_MOUNTS = [
-    ".bashrc",
-    ".bash_profile",
-    ".local",
-    ".config",
-];
+export const DEFAULT_HOME_MOUNTS = [".bashrc", ".bash_profile", ".local", ".config"];
 
 export interface SandboxConfigAudit {
     provider?: string;
@@ -26,13 +21,13 @@ export interface SandboxConfigAudit {
 }
 
 export interface SandboxConfigCwdConfinement {
-    enabled?: boolean;  // default: true
+    enabled?: boolean; // default: true
     /** Execution permission used when a heuristic classification succeeds. */
-    permission?: "allow" | "allow:sandbox";  // default: "allow:sandbox"
-    commands?: string[];  // restrict heuristic to these known commands (default: all known)
-    denyPaths?: string[];  // additional sensitive path segment patterns (glob, e.g. "*.secret")
-    blockDotfiles?: boolean;  // treat any dotfile/dotdir segment as sensitive (default: false)
-    resolveSymlinks?: boolean;  // verify paths stay within cwd after symlink resolution (default: true)
+    permission?: "allow" | "allow:sandbox"; // default: "allow:sandbox"
+    commands?: string[]; // restrict heuristic to these known commands (default: all known)
+    denyPaths?: string[]; // additional sensitive path segment patterns (glob, e.g. "*.secret")
+    blockDotfiles?: boolean; // treat any dotfile/dotdir segment as sensitive (default: false)
+    resolveSymlinks?: boolean; // verify paths stay within cwd after symlink resolution (default: true)
 }
 
 export interface SandboxConfigHeuristics {
@@ -41,12 +36,12 @@ export interface SandboxConfigHeuristics {
 
 export interface SandboxConfig {
     sandbox: {
-        enabled?: boolean;  // master switch for bubblewrap sandboxing (default: true)
+        enabled?: boolean; // master switch for bubblewrap sandboxing (default: true)
         mounts: SandboxConfigMounts;
-        env?: Record<string, string>;  // custom env vars
-        inheritEnv?: SandboxConfigEnvFilter;  // filter for existing env vars
-        homeMounts?: SandboxConfigHomeMounts;  // home directory mounts: true (default), false (none), or array of paths
-        gitWorktreeSupport?: boolean;  // auto-mount git worktree dependencies (default: true)
+        env?: Record<string, string>; // custom env vars
+        inheritEnv?: SandboxConfigEnvFilter; // filter for existing env vars
+        homeMounts?: SandboxConfigHomeMounts; // home directory mounts: true (default), false (none), or array of paths
+        gitWorktreeSupport?: boolean; // auto-mount git worktree dependencies (default: true)
     };
     permissions: SandboxConfigPermissions;
     audit?: SandboxConfigAudit;
@@ -75,20 +70,26 @@ function tryLoad(path: string): SandboxConfig | null {
                 gitWorktreeSupport: data.sandbox?.gitWorktreeSupport,
             },
             permissions: data.permissions ?? {},
-            audit: data.audit ? {
-                provider: data.audit.provider,
-                model: data.audit.model,
-            } : undefined,
-            heuristics: data.heuristics ? {
-                cwdConfinement: data.heuristics.cwdConfinement ? {
-                    enabled: data.heuristics.cwdConfinement.enabled,
-                    permission: data.heuristics.cwdConfinement.permission,
-                    commands: data.heuristics.cwdConfinement.commands,
-                    denyPaths: data.heuristics.cwdConfinement.denyPaths,
-                    blockDotfiles: data.heuristics.cwdConfinement.blockDotfiles,
-                    resolveSymlinks: data.heuristics.cwdConfinement.resolveSymlinks,
-                } : undefined,
-            } : undefined,
+            audit: data.audit
+                ? {
+                      provider: data.audit.provider,
+                      model: data.audit.model,
+                  }
+                : undefined,
+            heuristics: data.heuristics
+                ? {
+                      cwdConfinement: data.heuristics.cwdConfinement
+                          ? {
+                                enabled: data.heuristics.cwdConfinement.enabled,
+                                permission: data.heuristics.cwdConfinement.permission,
+                                commands: data.heuristics.cwdConfinement.commands,
+                                denyPaths: data.heuristics.cwdConfinement.denyPaths,
+                                blockDotfiles: data.heuristics.cwdConfinement.blockDotfiles,
+                                resolveSymlinks: data.heuristics.cwdConfinement.resolveSymlinks,
+                            }
+                          : undefined,
+                  }
+                : undefined,
         } as SandboxConfig;
     } catch (e) {
         return null;
@@ -97,7 +98,7 @@ function tryLoad(path: string): SandboxConfig | null {
 
 function mergeRecords<K extends string, V>(
     base: Record<K, V> | undefined,
-    override: Record<K, V> | undefined
+    override: Record<K, V> | undefined,
 ): Record<K, V> | undefined {
     let hasRecords = false;
     const map = new Map<K, V>();
@@ -116,7 +117,7 @@ function mergeRecords<K extends string, V>(
         hasRecords = true;
 
         for (const [key, value] of Object.entries(override) as [K, V][]) {
-            map.delete(key);  // Remove if exists so re-insert places it at end
+            map.delete(key); // Remove if exists so re-insert places it at end
             map.set(key, value);
         }
     }
@@ -131,7 +132,7 @@ function mergeRecords<K extends string, V>(
 function mergeRecordsOrDefault<K extends string, V>(
     base: Record<K, V> | undefined,
     override: Record<K, V> | undefined,
-    _default: Record<K, V>
+    _default: Record<K, V>,
 ): Record<K, V> {
     const merged = mergeRecords(base, override);
 
@@ -144,7 +145,7 @@ function mergeRecordsOrDefault<K extends string, V>(
 
 function mergeHomeMounts(
     base: SandboxConfigHomeMounts | undefined,
-    override: SandboxConfigHomeMounts | undefined
+    override: SandboxConfigHomeMounts | undefined,
 ): SandboxConfigHomeMounts | undefined {
     // If override is false, disable home mounts entirely
     if (override === false) {
@@ -177,7 +178,7 @@ function mergeHomeMounts(
 
 function mergeCwdConfinement(
     base: SandboxConfigCwdConfinement | undefined,
-    override: SandboxConfigCwdConfinement | undefined
+    override: SandboxConfigCwdConfinement | undefined,
 ): SandboxConfigCwdConfinement | undefined {
     if (!base) {
         return override;
@@ -187,9 +188,7 @@ function mergeCwdConfinement(
         return base;
     }
 
-    const denyPaths = [
-        ...new Set([...(base.denyPaths ?? []), ...(override.denyPaths ?? [])]),
-    ];
+    const denyPaths = [...new Set([...(base.denyPaths ?? []), ...(override.denyPaths ?? [])])];
 
     return {
         enabled: override.enabled ?? base.enabled,
@@ -203,7 +202,7 @@ function mergeCwdConfinement(
 
 function mergeHeuristics(
     base: SandboxConfigHeuristics | undefined,
-    override: SandboxConfigHeuristics | undefined
+    override: SandboxConfigHeuristics | undefined,
 ): SandboxConfigHeuristics | undefined {
     if (!base) {
         return override;
@@ -232,7 +231,8 @@ function mergeConfigs(global: SandboxConfig | null, project: SandboxConfig | nul
             env: mergeRecords(base.sandbox.env, project.sandbox.env),
             inheritEnv: mergeRecords(base.sandbox.inheritEnv, project.sandbox.inheritEnv),
             homeMounts: mergeHomeMounts(base.sandbox.homeMounts, project.sandbox.homeMounts),
-            gitWorktreeSupport: project.sandbox.gitWorktreeSupport ?? base.sandbox.gitWorktreeSupport,
+            gitWorktreeSupport:
+                project.sandbox.gitWorktreeSupport ?? base.sandbox.gitWorktreeSupport,
         },
         permissions: mergeRecordsOrDefault(base.permissions, project.permissions, {}),
         audit: project.audit ?? base.audit,
@@ -280,14 +280,14 @@ function findConfigLocations(cwd: string): { global: string | null; project: str
 let _config: SandboxConfig | null = null;
 
 function defaultConfig(): SandboxConfig {
-  return {
-      sandbox: {
-          mounts: {},
-          env: {},
-          inheritEnv: {},
-      },
-      permissions: {},
-  }
+    return {
+        sandbox: {
+            mounts: {},
+            env: {},
+            inheritEnv: {},
+        },
+        permissions: {},
+    };
 }
 
 export default {
@@ -328,7 +328,8 @@ export default {
         cwd = cwd ?? process.cwd();
         const locations = findConfigLocations(cwd);
 
-        const config_path = locations.project ?? locations.global ?? SANDBOX_CONFIG_PATH ?? getGlobalConfigPath();
+        const config_path =
+            locations.project ?? locations.global ?? SANDBOX_CONFIG_PATH ?? getGlobalConfigPath();
 
         if (!config_path) {
             throw new Error("no config path available for saving");

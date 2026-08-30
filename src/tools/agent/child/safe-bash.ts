@@ -39,11 +39,7 @@ export function getSafeBashAssessment(
     cwd: string,
     options: SafeBashOptions = {},
 ): HeuristicAssessment {
-    const {
-        additionalRoots = [],
-        sensitiveAdditionalRoots,
-        safeBashCommands = [],
-    } = options;
+    const { additionalRoots = [], sensitiveAdditionalRoots, safeBashCommands = [] } = options;
 
     return getCwdConfinementAssessment(command, {
         cwd,
@@ -77,13 +73,8 @@ export async function guardSafeBashCommand(
     cwd: string,
     options: SafeBashGuardOptions,
 ): Promise<SafeBashBlock | undefined> {
-    const {
-        safeBash,
-        onTrace,
-        additionalRoots,
-        sensitiveAdditionalRoots,
-        safeBashCommands,
-    } = options;
+    const { safeBash, onTrace, additionalRoots, sensitiveAdditionalRoots, safeBashCommands } =
+        options;
 
     if (!safeBash) {
         return {

@@ -9,20 +9,23 @@ export interface AgentRunSnapshotMarker {
     runId: string;
 }
 
-export function parseAgentRunSnapshotMarker(entry: SessionEntry): AgentRunSnapshotMarker | undefined {
+export function parseAgentRunSnapshotMarker(
+    entry: SessionEntry,
+): AgentRunSnapshotMarker | undefined {
     if (entry.type !== "custom" || entry.customType !== AGENT_RUN_SNAPSHOT_MARKER) return undefined;
     const data = entry.data;
     if (!data || typeof data !== "object") return undefined;
     const marker = data as Partial<AgentRunSnapshotMarker>;
     if (
-        marker.version !== 2
-        || typeof marker.snapshotId !== "string"
-        || marker.snapshotId.length === 0
-        || typeof marker.runInstanceId !== "string"
-        || marker.runInstanceId.length === 0
-        || typeof marker.runId !== "string"
-        || marker.runId.length === 0
-    ) return undefined;
+        marker.version !== 2 ||
+        typeof marker.snapshotId !== "string" ||
+        marker.snapshotId.length === 0 ||
+        typeof marker.runInstanceId !== "string" ||
+        marker.runInstanceId.length === 0 ||
+        typeof marker.runId !== "string" ||
+        marker.runId.length === 0
+    )
+        return undefined;
     return {
         version: 2,
         snapshotId: marker.snapshotId,

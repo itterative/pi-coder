@@ -3,11 +3,7 @@ import { createEventBus, type ExtensionContext } from "@earendil-works/pi-coding
 
 import { snapshotText, renderText } from "../helpers";
 import { TodoListWidget } from "../../src/tui/status";
-import {
-    PiCoderStatusWidget,
-    registerStatusWidget,
-    STATUS_WIDGET_ID,
-} from "../../src/tui/status";
+import { PiCoderStatusWidget, registerStatusWidget, STATUS_WIDGET_ID } from "../../src/tui/status";
 import { emitTodoStatus } from "../../src/modules/todolist/events";
 import { emitAgentStatus } from "../../src/tools/agent/observability/events";
 
@@ -16,7 +12,11 @@ const todo = {
     version: 1 as const,
     items: [
         { id: "inspect", title: "Inspect the implementation", status: "completed" as const },
-        { id: "implement", title: "Implement the feature with careful validation", status: "in_progress" as const },
+        {
+            id: "implement",
+            title: "Implement the feature with careful validation",
+            status: "in_progress" as const,
+        },
         { id: "verify", title: "Verify the result", status: "pending" as const },
         { id: "release", title: "Release the change", status: "blocked" as const },
     ],
@@ -42,8 +42,14 @@ const largeTodo = {
     body: "",
 };
 
-function registerStatusForContext(ctx: ExtensionContext, events: ReturnType<typeof createEventBus>): (name: string, nextContext?: ExtensionContext) => void {
-    const handlers = new Map<string, Array<(event: unknown, context: ExtensionContext) => unknown>>();
+function registerStatusForContext(
+    ctx: ExtensionContext,
+    events: ReturnType<typeof createEventBus>,
+): (name: string, nextContext?: ExtensionContext) => void {
+    const handlers = new Map<
+        string,
+        Array<(event: unknown, context: ExtensionContext) => unknown>
+    >();
     registerStatusWidget({
         events,
         on(name: string, handler: (event: unknown, context: ExtensionContext) => unknown) {
@@ -99,14 +105,20 @@ describe("TODO widget", () => {
         const updated = { ...todo, items: todo.items.slice(0, 2) };
         emitTodoStatus(events, updated);
         expect(registrations).toHaveLength(1);
-        expect(renderText(component, 80)).toContain("TODO 1/2 · Implement the feature with careful validation");
+        expect(renderText(component, 80)).toContain(
+            "TODO 1/2 · Implement the feature with careful validation",
+        );
         emitTodoStatus(events, undefined);
         expect(registrations.at(-1)?.content).toBeUndefined();
         component.dispose();
     });
 
     it("combines agent activity and TODO progress in one widget", async () => {
-        const registrations: Array<{ key: string; content: unknown; options?: { placement?: string } }> = [];
+        const registrations: Array<{
+            key: string;
+            content: unknown;
+            options?: { placement?: string };
+        }> = [];
         const ctx = {
             mode: "tui",
             hasUI: true,
@@ -192,7 +204,9 @@ describe("TODO widget", () => {
 
         widget.setTodo(updated);
 
-        expect(renderText(widget, 80)).toContain("TODO 1/2 · Implement the feature with careful validation");
+        expect(renderText(widget, 80)).toContain(
+            "TODO 1/2 · Implement the feature with careful validation",
+        );
         widget.dispose();
     });
 });

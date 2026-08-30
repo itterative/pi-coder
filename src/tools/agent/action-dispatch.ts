@@ -12,10 +12,7 @@ import {
 import { diagnosticText } from "./presentation/text";
 import { failedOutcome, listOutcome } from "./presentation/outcomes";
 import { unusedAgentContextWarning } from "./prompts/renderer";
-import {
-    prepareIsolatedWorkspace,
-    type WorkspaceReservation,
-} from "./workspaces/setup";
+import { prepareIsolatedWorkspace, type WorkspaceReservation } from "./workspaces/setup";
 import { releaseAgentWorkspaceAfterNoChanges } from "./workspaces/results";
 import { createAgentWorkspaceCheckpointCallback } from "./workspaces/checkpoints";
 import {
@@ -42,12 +39,7 @@ export interface ExecuteAgentActionOptions {
 
 export async function executeAgentAction(
     params: AgentParameters,
-    {
-        signal,
-        progress,
-        ctx,
-        lifecycle,
-    }: ExecuteAgentActionOptions,
+    { signal, progress, ctx, lifecycle }: ExecuteAgentActionOptions,
 ): Promise<AgentRunOutcome> {
     let outcome: AgentRunOutcome;
     let reservation: WorkspaceReservation | undefined;
@@ -87,22 +79,21 @@ export async function executeAgentAction(
                 request.context,
                 definition.contextPolicy,
             );
-            reservation = request.isolation === "worktree"
-                ? await prepareIsolatedWorkspace(
-                    ctx.cwd,
-                    {
-                        definition,
-                        factory: lifecycle.factory,
-                        manager: lifecycle.manager,
-                        ctx,
-                        signal,
-                        onUiUpdate: (runId, workspace, update) => lifecycle.updateSetupRun(ctx, runId, workspace, update),
-                        events: lifecycle.events,
-                        dialogEvents: lifecycle.eventBus,
-                        maxWorkspaces: maxWorkspacesPerRepo(agentConfig.get(ctx.cwd)),
-                    },
-                )
-                : undefined;
+            reservation =
+                request.isolation === "worktree"
+                    ? await prepareIsolatedWorkspace(ctx.cwd, {
+                          definition,
+                          factory: lifecycle.factory,
+                          manager: lifecycle.manager,
+                          ctx,
+                          signal,
+                          onUiUpdate: (runId, workspace, update) =>
+                              lifecycle.updateSetupRun(ctx, runId, workspace, update),
+                          events: lifecycle.events,
+                          dialogEvents: lifecycle.eventBus,
+                          maxWorkspaces: maxWorkspacesPerRepo(agentConfig.get(ctx.cwd)),
+                      })
+                    : undefined;
             const runContext = {
                 cwd: reservation?.workspace.worktreePath ?? ctx.cwd,
                 parentCwd: ctx.cwd,
@@ -135,22 +126,17 @@ export async function executeAgentAction(
                     "transferred",
                 );
             }
-            outcome = await lifecycle.manager.start(
-                definition,
-                request.task,
-                runContext,
-                {
-                    signal,
-                    onProgress: progress,
-                    onBackgroundUpdate: workspaceBackground,
-                    title: request.title,
-                    identity: runIdentity,
-                    background: request.background,
-                    ...(request.isolation === "worktree" && workspaceCheckpoint
-                        ? { onWorkspaceCheckpoint: workspaceCheckpoint }
-                        : {}),
-                },
-            );
+            outcome = await lifecycle.manager.start(definition, request.task, runContext, {
+                signal,
+                onProgress: progress,
+                onBackgroundUpdate: workspaceBackground,
+                title: request.title,
+                identity: runIdentity,
+                background: request.background,
+                ...(request.isolation === "worktree" && workspaceCheckpoint
+                    ? { onWorkspaceCheckpoint: workspaceCheckpoint }
+                    : {}),
+            });
             startCompleted = true;
             if (!request.background) {
                 outcome = await prepareForegroundWorkspaceResult(outcome, ctx, lifecycle.events);
@@ -160,18 +146,16 @@ export async function executeAgentAction(
             if (contextWarning) {
                 outcome = {
                     ...outcome,
-                    additionalMetadata: [
-                        ...(outcome.additionalMetadata ?? []),
-                        contextWarning,
-                    ],
+                    additionalMetadata: [...(outcome.additionalMetadata ?? []), contextWarning],
                 };
             }
         } else if (request.action === "continue") {
             const activeStatus = lifecycle.manager.getRunStatus(request.runId);
-            const isTerminal = activeStatus === "completed"
-                || activeStatus === "failed"
-                || activeStatus === "aborted"
-                || activeStatus === "canceled";
+            const isTerminal =
+                activeStatus === "completed" ||
+                activeStatus === "failed" ||
+                activeStatus === "aborted" ||
+                activeStatus === "canceled";
             if (activeStatus !== undefined && !isTerminal) {
                 outcome = await lifecycle.manager.resume(request.runId, {
                     guidance: request.guidance,
@@ -195,16 +179,17 @@ export async function executeAgentAction(
             }
         } else if (request.action === "cancel") {
             outcome = await prepareForegroundWorkspaceResult(
-                await lifecycle.manager.cancel(request.runId, workspaceCheckpoint
-                    ? { onWorkspaceCheckpoint: workspaceCheckpoint }
-                    : {}),
+                await lifecycle.manager.cancel(
+                    request.runId,
+                    workspaceCheckpoint ? { onWorkspaceCheckpoint: workspaceCheckpoint } : {},
+                ),
                 ctx,
                 lifecycle.events,
             );
         } else if (
-            request.action === "inspect"
-            || request.action === "apply"
-            || request.action === "discard"
+            request.action === "inspect" ||
+            request.action === "apply" ||
+            request.action === "discard"
         ) {
             outcome = await executeParentWorkspaceAction(request, {
                 ctx,
@@ -218,10 +203,11 @@ export async function executeAgentAction(
             outcome = lifecycle.manager.status(request.runId);
         } else {
             const pending = lifecycle.manager.status(request.runId);
-            const terminal = pending.details.status === "completed"
-                || pending.details.status === "failed"
-                || pending.details.status === "aborted"
-                || pending.details.status === "canceled";
+            const terminal =
+                pending.details.status === "completed" ||
+                pending.details.status === "failed" ||
+                pending.details.status === "aborted" ||
+                pending.details.status === "canceled";
             if (!terminal) {
                 throw new AgentActionError(
                     `Agent run ${request.runId} is ${pending.details.status}; wait for its terminal checkpoint before collecting.`,
@@ -233,8 +219,8 @@ export async function executeAgentAction(
                 lifecycle.events,
             );
             const noWorkspaceChanges = workspaceResult
-                ? workspaceResult.workerHead === workspaceResult.baseRevision
-                    && workspaceResult.commits.length === 0
+                ? workspaceResult.workerHead === workspaceResult.baseRevision &&
+                  workspaceResult.commits.length === 0
                 : false;
             // Keep a no-change lease held until the retained agent result has
             // actually been consumed. If collect rejects, the caller must be
@@ -246,12 +232,15 @@ export async function executeAgentAction(
                     leaseRunId: workspaceResult.runId,
                     leaseRunInstanceId: workspaceResult.runInstanceId,
                 });
-                emitAgentEvent({
-                    type: "workspace",
-                    action: "lease_changed",
-                    workspaceId: workspaceResult.workspaceId,
-                    reason: "released_no_changes",
-                }, { sink: lifecycle.events, cwd: ctx.cwd });
+                emitAgentEvent(
+                    {
+                        type: "workspace",
+                        action: "lease_changed",
+                        workspaceId: workspaceResult.workspaceId,
+                        reason: "released_no_changes",
+                    },
+                    { sink: lifecycle.events, cwd: ctx.cwd },
+                );
             }
             if (workspaceResult) {
                 outcome.details.workspaceResult = workspaceResult;
@@ -268,8 +257,7 @@ export async function executeAgentAction(
                 toLeaseRunInstanceId: reservation.provisionalLeaseRunInstanceId,
                 leaseKind: "task",
             }).catch(() => {});
-        }
-        else if (reservation && !transferredLeaseIdentity) {
+        } else if (reservation && !transferredLeaseIdentity) {
             await releaseAgentWorkspaceLease(reservation.workspace.id, {
                 ownerSessionId: reservation.ownerSessionId,
                 leaseRunId: reservation.provisionalLeaseRunId,

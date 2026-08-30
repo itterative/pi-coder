@@ -58,11 +58,11 @@ export function snapshotAgentDefinition(definition: AgentDefinition): AgentDefin
         systemPrompt: definition.systemPrompt,
         ...(definition.contextPolicy
             ? {
-                contextPolicy: {
-                    sectionIds: [...definition.contextPolicy.sectionIds],
-                    maxChars: definition.contextPolicy.maxChars,
-                },
-            }
+                  contextPolicy: {
+                      sectionIds: [...definition.contextPolicy.sectionIds],
+                      maxChars: definition.contextPolicy.maxChars,
+                  },
+              }
             : {}),
         source: definition.source,
         ...(definition.filePath !== undefined ? { filePath: definition.filePath } : {}),
@@ -77,33 +77,42 @@ export function parseAgentDefinitionSnapshot(value: unknown): AgentDefinition | 
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
     const candidate = value as Partial<AgentDefinition>;
     if (
-        typeof candidate.name !== "string"
-        || !candidate.name
-        || typeof candidate.description !== "string"
-        || typeof candidate.systemPrompt !== "string"
-        || !Array.isArray(candidate.capabilities)
-        || candidate.capabilities.some((capability) => !AGENT_CAPABILITIES.includes(capability as AgentCapability))
-        || (candidate.additionalPaths !== undefined
-            && (!Array.isArray(candidate.additionalPaths)
-                || candidate.additionalPaths.some((additionalPath) =>
-                    typeof additionalPath !== "string" || additionalPath.trim() === "")))
-        || (candidate.safeBashCommands !== undefined
-            && (!Array.isArray(candidate.safeBashCommands)
-                || candidate.safeBashCommands.some((command) =>
-                    typeof command !== "string" || command.trim() === "")))
-        || (candidate.model !== undefined && typeof candidate.model !== "string")
-        || !["builtin", "user", "project"].includes(candidate.source as string)
-        || (candidate.filePath !== undefined && typeof candidate.filePath !== "string")
-        || (candidate.allowUserInteraction !== undefined && typeof candidate.allowUserInteraction !== "boolean")
-    ) return undefined;
+        typeof candidate.name !== "string" ||
+        !candidate.name ||
+        typeof candidate.description !== "string" ||
+        typeof candidate.systemPrompt !== "string" ||
+        !Array.isArray(candidate.capabilities) ||
+        candidate.capabilities.some(
+            (capability) => !AGENT_CAPABILITIES.includes(capability as AgentCapability),
+        ) ||
+        (candidate.additionalPaths !== undefined &&
+            (!Array.isArray(candidate.additionalPaths) ||
+                candidate.additionalPaths.some(
+                    (additionalPath) =>
+                        typeof additionalPath !== "string" || additionalPath.trim() === "",
+                ))) ||
+        (candidate.safeBashCommands !== undefined &&
+            (!Array.isArray(candidate.safeBashCommands) ||
+                candidate.safeBashCommands.some(
+                    (command) => typeof command !== "string" || command.trim() === "",
+                ))) ||
+        (candidate.model !== undefined && typeof candidate.model !== "string") ||
+        !["builtin", "user", "project"].includes(candidate.source as string) ||
+        (candidate.filePath !== undefined && typeof candidate.filePath !== "string") ||
+        (candidate.allowUserInteraction !== undefined &&
+            typeof candidate.allowUserInteraction !== "boolean")
+    )
+        return undefined;
     const contextPolicy = candidate.contextPolicy;
-    if (contextPolicy !== undefined && (
-        !contextPolicy
-        || !Array.isArray(contextPolicy.sectionIds)
-        || contextPolicy.sectionIds.some((sectionId) => typeof sectionId !== "string")
-        || typeof contextPolicy.maxChars !== "number"
-        || !Number.isFinite(contextPolicy.maxChars)
-    )) return undefined;
+    if (
+        contextPolicy !== undefined &&
+        (!contextPolicy ||
+            !Array.isArray(contextPolicy.sectionIds) ||
+            contextPolicy.sectionIds.some((sectionId) => typeof sectionId !== "string") ||
+            typeof contextPolicy.maxChars !== "number" ||
+            !Number.isFinite(contextPolicy.maxChars))
+    )
+        return undefined;
     return snapshotAgentDefinition(candidate as AgentDefinition);
 }
 
@@ -114,7 +123,7 @@ export function parseAgentDefinitionSnapshot(value: unknown): AgentDefinition | 
  * agents can read the memories listed in their memory-system appendix.
  */
 export function agentAdditionalPaths(definition: AgentDefinition): string[] {
-    const paths = [...definition.additionalPaths ?? []];
+    const paths = [...(definition.additionalPaths ?? [])];
     if (hasAgentCapability(definition, "memories")) {
         paths.push(getUserMemoryDirectory());
     }
@@ -153,7 +162,8 @@ export function agentCanRunCommands(definition: AgentDefinition): boolean {
 export function agentTools(definition: AgentDefinition): string[] {
     const tools: string[] = [...READ_ONLY_AGENT_TOOLS];
     if (agentCanEdit(definition)) tools.push("edit", "write");
-    if (agentCanRunCommands(definition) || hasAgentCapability(definition, "safe-bash")) tools.push("bash");
+    if (agentCanRunCommands(definition) || hasAgentCapability(definition, "safe-bash"))
+        tools.push("bash");
     return tools;
 }
 
@@ -172,8 +182,10 @@ export function isAgentDefinitionFingerprintCompatible(
     definition: AgentDefinition,
     fingerprint: string,
 ): boolean {
-    return fingerprintAgentDefinition(definition) === fingerprint
-        || fingerprintLegacyAgentDefinition(definition) === fingerprint;
+    return (
+        fingerprintAgentDefinition(definition) === fingerprint ||
+        fingerprintLegacyAgentDefinition(definition) === fingerprint
+    );
 }
 
 function hashDefinition(definition: AgentDefinition, includeContextPolicy: boolean): string {
@@ -182,22 +194,22 @@ function hashDefinition(definition: AgentDefinition, includeContextPolicy: boole
         description: definition.description,
         capabilities: [...definition.capabilities].sort(),
         ...(includeContextPolicy
-            ? { additionalPaths: [...definition.additionalPaths ?? []].sort() }
+            ? { additionalPaths: [...(definition.additionalPaths ?? [])].sort() }
             : {}),
         ...(includeContextPolicy
-            ? { safeBashCommands: [...definition.safeBashCommands ?? []].sort() }
+            ? { safeBashCommands: [...(definition.safeBashCommands ?? [])].sort() }
             : {}),
         model: definition.model ?? null,
         systemPrompt: definition.systemPrompt,
         ...(includeContextPolicy
             ? {
-                contextPolicy: definition.contextPolicy
-                    ? {
-                        sectionIds: [...definition.contextPolicy.sectionIds],
-                        maxChars: definition.contextPolicy.maxChars,
-                    }
-                    : null,
-            }
+                  contextPolicy: definition.contextPolicy
+                      ? {
+                            sectionIds: [...definition.contextPolicy.sectionIds],
+                            maxChars: definition.contextPolicy.maxChars,
+                        }
+                      : null,
+              }
             : {}),
         source: definition.source,
         filePath: definition.filePath ?? null,

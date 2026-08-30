@@ -14,7 +14,11 @@ interface AgentToolResult {
 
 interface AgentToolDefinition {
     renderCall: (args: AgentParameters, theme: typeof mockTheme) => unknown;
-    renderResult: (result: AgentToolResult, options: { expanded: boolean; isPartial?: boolean }, theme: typeof mockTheme) => unknown;
+    renderResult: (
+        result: AgentToolResult,
+        options: { expanded: boolean; isPartial?: boolean },
+        theme: typeof mockTheme,
+    ) => unknown;
     execute: (
         toolCallId: string,
         args: AgentParameters,
@@ -63,12 +67,14 @@ function outcome(
             startedAt: 1,
             updatedAt: 2,
             ...(options.toolCounts ? { toolCounts: options.toolCounts } : {}),
-            ...(options.failedToolCalls !== undefined ? { failedToolCalls: options.failedToolCalls } : {}),
+            ...(options.failedToolCalls !== undefined
+                ? { failedToolCalls: options.failedToolCalls }
+                : {}),
         },
         usage: cloneUsage(usage),
-        ...((options.hasResponse
-            ?? ((args.action === "start" || args.action === "collect" || args.action === "continue")
-                && status === "completed"))
+        ...((options.hasResponse ??
+        ((args.action === "start" || args.action === "collect" || args.action === "continue") &&
+            status === "completed"))
             ? { hasResponse: true as const }
             : {}),
         isError: false,
@@ -98,14 +104,33 @@ const actionCases: AgentRenderCase[] = [
             { action: "start", agent: "scout", title: "Project audit", task: projectTask },
             projectTask,
             "Finished inspecting the project. The main entry point is src/index.ts.",
-            { runId: "scout-1", title: "Project audit", agent: "scout", toolCounts: { read: 3, grep: 1 } },
+            {
+                runId: "scout-1",
+                title: "Project audit",
+                agent: "scout",
+                toolCounts: { read: 3, grep: 1 },
+            },
         ),
     },
     {
         snapshotName: "start-background",
-        args: { action: "start", agent: "worker", title: "Implement fix", task: workerTask, isolation: "worktree", background: true },
+        args: {
+            action: "start",
+            agent: "worker",
+            title: "Implement fix",
+            task: workerTask,
+            isolation: "worktree",
+            background: true,
+        },
         outcome: outcome(
-            { action: "start", agent: "worker", title: "Implement fix", task: workerTask, isolation: "worktree", background: true },
+            {
+                action: "start",
+                agent: "worker",
+                title: "Implement fix",
+                task: workerTask,
+                isolation: "worktree",
+                background: true,
+            },
             workerTask,
             `Agent worker-1 started in the background. ${BACKGROUND_AGENT_WAIT_GUIDANCE} After a terminal notification, retrieve the full result with agent(action="collect", runId="worker-1").`,
             { runId: "worker-1", title: "Implement fix", background: true },
@@ -113,12 +138,26 @@ const actionCases: AgentRenderCase[] = [
     },
     {
         snapshotName: "continue-waiting",
-        args: { action: "continue", runId: "scout-1", guidance: "Continue with the remaining checks." },
+        args: {
+            action: "continue",
+            runId: "scout-1",
+            guidance: "Continue with the remaining checks.",
+        },
         outcome: outcome(
-            { action: "continue", runId: "scout-1", guidance: "Continue with the remaining checks." },
+            {
+                action: "continue",
+                runId: "scout-1",
+                guidance: "Continue with the remaining checks.",
+            },
             projectTask,
             `Agent scout-1 resumed in the background. ${BACKGROUND_AGENT_WAIT_GUIDANCE}`,
-            { runId: "scout-1", title: "Project audit", agent: "scout", background: true, status: "running" },
+            {
+                runId: "scout-1",
+                title: "Project audit",
+                agent: "scout",
+                background: true,
+                status: "running",
+            },
         ),
     },
     {
@@ -135,9 +174,17 @@ const actionCases: AgentRenderCase[] = [
     {
         snapshotName: "continue-foreground-partial",
         isPartial: true,
-        args: { action: "continue", runId: "scout-1", guidance: "Continue with the remaining checks." },
+        args: {
+            action: "continue",
+            runId: "scout-1",
+            guidance: "Continue with the remaining checks.",
+        },
         outcome: outcome(
-            { action: "continue", runId: "scout-1", guidance: "Continue with the remaining checks." },
+            {
+                action: "continue",
+                runId: "scout-1",
+                guidance: "Continue with the remaining checks.",
+            },
             projectTask,
             "The child is still inspecting the project.",
             { runId: "scout-1", title: "Project audit", agent: "scout", status: "running" },
@@ -149,7 +196,12 @@ const actionCases: AgentRenderCase[] = [
             { action: "cancel", runId: "worker-1" },
             workerTask,
             "Agent run worker-1 canceled.",
-            { runId: "worker-1", background: true, status: "canceled", toolCounts: { read: 2, bash: 1 } },
+            {
+                runId: "worker-1",
+                background: true,
+                status: "canceled",
+                toolCounts: { read: 2, bash: 1 },
+            },
         ),
     },
     {
@@ -191,12 +243,25 @@ const actionCases: AgentRenderCase[] = [
     },
     {
         snapshotName: "continue-revision",
-        args: { action: "continue", runId: "worker-1", guidance: "Please revisit the test coverage." },
+        args: {
+            action: "continue",
+            runId: "worker-1",
+            guidance: "Please revisit the test coverage.",
+        },
         outcome: outcome(
-            { action: "continue", runId: "worker-1", guidance: "Please revisit the test coverage." },
+            {
+                action: "continue",
+                runId: "worker-1",
+                guidance: "Please revisit the test coverage.",
+            },
             workerTask,
             "The revised implementation passes the focused tests.",
-            { runId: "worker-1", title: "Implement fix revision", background: false, toolCounts: { read: 2, edit: 1, bash: 1 } },
+            {
+                runId: "worker-1",
+                title: "Implement fix revision",
+                background: false,
+                toolCounts: { read: 2, edit: 1, bash: 1 },
+            },
         ),
     },
     {
@@ -216,7 +281,14 @@ const actionCases: AgentRenderCase[] = [
                 "",
                 BACKGROUND_AGENT_WAIT_GUIDANCE,
             ].join("\n"),
-            { runId: "scout-1", title: "Project audit", agent: "scout", background: true, status: "running", toolCounts: { read: 2, grep: 1 } },
+            {
+                runId: "scout-1",
+                title: "Project audit",
+                agent: "scout",
+                background: true,
+                status: "running",
+                toolCounts: { read: 2, grep: 1 },
+            },
         ),
     },
     {
@@ -225,18 +297,26 @@ const actionCases: AgentRenderCase[] = [
             { action: "collect", runId: "worker-1" },
             workerTask,
             "The implementation is complete.\n\nAll focused tests pass.",
-            { runId: "worker-1", background: true, toolCounts: { read: 4, edit: 2, bash: 1 }, failedToolCalls: 1 },
+            {
+                runId: "worker-1",
+                background: true,
+                toolCounts: { read: 4, edit: 2, bash: 1 },
+                failedToolCalls: 1,
+            },
         ),
     },
 ];
 
 function setupAgentTool(expectedOutcome: AgentRunOutcome): AgentToolDefinition {
     let definition: AgentToolDefinition | undefined;
-    registerAgentTool({
-        registerTool(value: AgentToolDefinition) {
-            definition = value;
-        },
-    } as any, async () => expectedOutcome);
+    registerAgentTool(
+        {
+            registerTool(value: AgentToolDefinition) {
+                definition = value;
+            },
+        } as any,
+        async () => expectedOutcome,
+    );
     if (!definition) {
         throw new Error("Agent tool was not registered.");
     }
@@ -251,7 +331,10 @@ function renderCallAndResult(
     isPartial = false,
 ): string {
     const call = renderText(tool.renderCall(args, mockTheme) as any, 120);
-    const renderedResult = renderText(tool.renderResult(result, { expanded, isPartial }, mockTheme) as any, 120);
+    const renderedResult = renderText(
+        tool.renderResult(result, { expanded, isPartial }, mockTheme) as any,
+        120,
+    );
     return snapshotText([call, renderedResult].filter((part) => part.length > 0).join("\n"));
 }
 
@@ -266,20 +349,22 @@ describe("agent tool TUI rendering", () => {
             ),
         );
         const args: AgentParameters = { action: "start", agent: "scout", task: projectTask };
-        const result = tool.execute(
-            "call-manual-background",
-            args,
-            undefined,
-            undefined,
-            {},
-        );
+        const result = tool.execute("call-manual-background", args, undefined, undefined, {});
 
         return result.then((renderedResult) => {
-            expect(renderText(tool.renderCall(args, mockTheme) as any, 120)).not.toContain("Ctrl+Alt+B");
-            expect(renderText(
-                tool.renderResult(renderedResult, { expanded: false, isPartial: true }, mockTheme) as any,
-                120,
-            )).not.toContain("Ctrl+Alt+B");
+            expect(renderText(tool.renderCall(args, mockTheme) as any, 120)).not.toContain(
+                "Ctrl+Alt+B",
+            );
+            expect(
+                renderText(
+                    tool.renderResult(
+                        renderedResult,
+                        { expanded: false, isPartial: true },
+                        mockTheme,
+                    ) as any,
+                    120,
+                ),
+            ).not.toContain("Ctrl+Alt+B");
         });
     });
 

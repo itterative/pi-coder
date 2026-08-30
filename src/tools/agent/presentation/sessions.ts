@@ -2,16 +2,10 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
-import {
-    SessionManager,
-    type SessionInfo,
-} from "@earendil-works/pi-coding-agent";
+import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 
 import { PI_CODER_AGENT_SESSIONS_DIR } from "../../../common/constants";
-import {
-    getAgentCwdSessionDir,
-    validateAgentRunSnapshot,
-} from "../runs/persistence";
+import { getAgentCwdSessionDir, validateAgentRunSnapshot } from "../runs/persistence";
 import { deriveAgentTitle } from "../runs/manager";
 import type { AgentRunSummary, PersistedAgentRun } from "../contracts/runs";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
@@ -54,9 +48,7 @@ function historicalStatus(status: string | undefined): string | undefined {
         : status;
 }
 
-function displayStatus(
-    displayMetadata: AgentRunCatalogRecord | PersistedAgentRun,
-): string {
+function displayStatus(displayMetadata: AgentRunCatalogRecord | PersistedAgentRun): string {
     if (displayMetadata.status !== "removed") {
         return displayMetadata.status;
     }
@@ -76,8 +68,8 @@ function transcriptLeafCandidates(item: AgentSessionBrowserItem): Array<string |
     const leaves: Array<string | null> = [];
     if (item.childSessionLeafId !== undefined) leaves.push(item.childSessionLeafId);
     if (
-        item.fallbackChildSessionLeafId !== undefined
-        && item.fallbackChildSessionLeafId !== item.childSessionLeafId
+        item.fallbackChildSessionLeafId !== undefined &&
+        item.fallbackChildSessionLeafId !== item.childSessionLeafId
     ) {
         leaves.push(item.fallbackChildSessionLeafId);
     }
@@ -119,9 +111,11 @@ function displayMetadataFields(
         updatedAt: displayMetadata.updatedAt,
         mutating: displayMetadata.mutating,
         usage: displayMetadata.usageSnapshot,
-        responsePreview: "responsePreview" in displayMetadata
-            ? displayMetadata.responsePreview
-            : checkpointRecord?.progress.output || checkpointRecord?.progress.lastAssistantMessage,
+        responsePreview:
+            "responsePreview" in displayMetadata
+                ? displayMetadata.responsePreview
+                : checkpointRecord?.progress.output ||
+                  checkpointRecord?.progress.lastAssistantMessage,
         changedFiles: mutationReport?.changedFiles,
         readFiles: mutationReport?.readFiles,
     };
@@ -165,7 +159,9 @@ function buildPastItem(source: PastItemSource): AgentSessionBrowserItem {
         startedAt: source.startedAt,
         updatedAt: source.updatedAt,
         sessionFile: source.file,
-        ...(source.childSessionLeafId !== undefined ? { childSessionLeafId: source.childSessionLeafId } : {}),
+        ...(source.childSessionLeafId !== undefined
+            ? { childSessionLeafId: source.childSessionLeafId }
+            : {}),
         ...(source.fallbackChildSessionLeafId !== undefined
             ? { fallbackChildSessionLeafId: source.fallbackChildSessionLeafId }
             : {}),
@@ -193,12 +189,11 @@ function pastItem(
     const record = checkpoint?.record;
     const displayMetadata = record ?? metadata;
     const fields = displayMetadata ? displayMetadataFields(displayMetadata, record) : undefined;
-    const catalogLeaf = metadata && (
-        metadata.latestSnapshotId !== undefined
-        || typeof metadata.childSessionLeafId === "string"
-    )
-        ? metadata.childSessionLeafId
-        : undefined;
+    const catalogLeaf =
+        metadata &&
+        (metadata.latestSnapshotId !== undefined || typeof metadata.childSessionLeafId === "string")
+            ? metadata.childSessionLeafId
+            : undefined;
     return buildPastItem({
         id: info.id,
         file: info.path,
@@ -228,9 +223,10 @@ function pastItemFromCatalog(
 ): AgentSessionBrowserItem {
     const displayRecord = checkpoint?.record ?? record;
     const fields = displayMetadataFields(displayRecord, checkpoint?.record);
-    const catalogLeaf = record.latestSnapshotId !== undefined || typeof record.childSessionLeafId === "string"
-        ? record.childSessionLeafId
-        : undefined;
+    const catalogLeaf =
+        record.latestSnapshotId !== undefined || typeof record.childSessionLeafId === "string"
+            ? record.childSessionLeafId
+            : undefined;
     return buildPastItem({
         id: record.runId,
         file: path.resolve(record.childSessionFile!),
@@ -260,52 +256,54 @@ export function currentAgentSessionItems(runs: AgentRunSummary[]): AgentSessionB
 export async function loadAgentSessionTranscripts(
     items: AgentSessionBrowserItem[],
 ): Promise<AgentSessionBrowserItem[]> {
-    return Promise.all(items.map(async (item) => {
-        if (!item.sessionFile || item.transcript !== undefined) {
-            return item;
-        }
-        let sessionExists = true;
-        try {
-            await fs.access(item.sessionFile);
-        } catch {
-            sessionExists = false;
-        }
-        if (!sessionExists) {
-            return item;
-        }
-
-        const leaves = transcriptLeafCandidates(item);
-        if (leaves.length === 0) {
-            return {
-                ...item,
-                transcript: NO_LEAF_TRANSCRIPT,
-                transcriptCollapsed: NO_LEAF_TRANSCRIPT,
-            };
-        }
-        // A plain existence check plus the transcript parse below is enough; the
-        // directory scan SessionManager.listAll would perform re-reads every
-        // sibling transcript in the same directory for no additional data.
-        for (const leaf of leaves) {
+    return Promise.all(
+        items.map(async (item) => {
+            if (!item.sessionFile || item.transcript !== undefined) {
+                return item;
+            }
+            let sessionExists = true;
             try {
-                const transcript = loadTranscriptAtLeaf(item, leaf).views;
+                await fs.access(item.sessionFile);
+            } catch {
+                sessionExists = false;
+            }
+            if (!sessionExists) {
+                return item;
+            }
+
+            const leaves = transcriptLeafCandidates(item);
+            if (leaves.length === 0) {
                 return {
                     ...item,
-                    transcript: transcript.detailed,
-                    transcriptCollapsed: transcript.collapsed,
-                    transcriptParts: transcript.detailedParts,
-                    transcriptCollapsedParts: transcript.collapsedParts,
+                    transcript: NO_LEAF_TRANSCRIPT,
+                    transcriptCollapsed: NO_LEAF_TRANSCRIPT,
                 };
-            } catch {
-                // A historical checkpoint may no longer contain its exact leaf;
-                // try the latest catalog leaf for visual browsing.
             }
-        }
-        return {
-            ...item,
-            transcript: UNAVAILABLE_TRANSCRIPT,
-            transcriptCollapsed: UNAVAILABLE_TRANSCRIPT,
-        };
-    }));
+            // A plain existence check plus the transcript parse below is enough; the
+            // directory scan SessionManager.listAll would perform re-reads every
+            // sibling transcript in the same directory for no additional data.
+            for (const leaf of leaves) {
+                try {
+                    const transcript = loadTranscriptAtLeaf(item, leaf).views;
+                    return {
+                        ...item,
+                        transcript: transcript.detailed,
+                        transcriptCollapsed: transcript.collapsed,
+                        transcriptParts: transcript.detailedParts,
+                        transcriptCollapsedParts: transcript.collapsedParts,
+                    };
+                } catch {
+                    // A historical checkpoint may no longer contain its exact leaf;
+                    // try the latest catalog leaf for visual browsing.
+                }
+            }
+            return {
+                ...item,
+                transcript: UNAVAILABLE_TRANSCRIPT,
+                transcriptCollapsed: UNAVAILABLE_TRANSCRIPT,
+            };
+        }),
+    );
 }
 
 /**
@@ -378,9 +376,8 @@ async function activeBranchChildCheckpoints(
     try {
         const parent = SessionManager.open(parentSessionFile);
         const allMarkers = collectAgentRunSnapshotMarkers(parent.getEntries());
-        const activeEntries = parentSessionLeafId === null
-            ? []
-            : parent.getBranch(parentSessionLeafId);
+        const activeEntries =
+            parentSessionLeafId === null ? [] : parent.getBranch(parentSessionLeafId);
         const activeMarkers = collectAgentRunSnapshotMarkers(activeEntries);
         const database = await openAgentMetadataDatabase(workspacesDir);
         try {
@@ -388,14 +385,22 @@ async function activeBranchChildCheckpoints(
                 database,
                 allMarkers.map((entry) => entry.marker.snapshotId),
             );
-            const snapshotsById = new Map(snapshots.map((snapshot) => [snapshot.snapshotId, snapshot]));
+            const snapshotsById = new Map(
+                snapshots.map((snapshot) => [snapshot.snapshotId, snapshot]),
+            );
             const sessionHeads = new Map<string, string>();
             const recordsBySnapshotId = new Map<string, PersistedAgentRun>();
             for (const entry of allMarkers) {
                 const snapshot = snapshotsById.get(entry.marker.snapshotId);
-                const record = snapshot && ownerSessionId
-                    ? validateAgentRunSnapshot(snapshot, entry.marker, ownerSessionId, childSessionDir)
-                    : undefined;
+                const record =
+                    snapshot && ownerSessionId
+                        ? validateAgentRunSnapshot(
+                              snapshot,
+                              entry.marker,
+                              ownerSessionId,
+                              childSessionDir,
+                          )
+                        : undefined;
                 if (record) {
                     sessionHeads.set(entry.marker.runInstanceId, entry.marker.snapshotId);
                     recordsBySnapshotId.set(entry.marker.snapshotId, record);
@@ -419,11 +424,14 @@ async function activeBranchChildCheckpoints(
                 });
             }
             return new Map(
-                [...checkpoints].map(([file, checkpoint]) => [file, {
-                    childSessionLeafId: checkpoint.childSessionLeafId,
-                    record: checkpoint.record,
-                    readOnlyReason: checkpoint.readOnlyReason,
-                }]),
+                [...checkpoints].map(([file, checkpoint]) => [
+                    file,
+                    {
+                        childSessionLeafId: checkpoint.childSessionLeafId,
+                        record: checkpoint.record,
+                        readOnlyReason: checkpoint.readOnlyReason,
+                    },
+                ]),
             );
         } finally {
             await database.close();
@@ -468,12 +476,12 @@ export async function listAgentPastSessionLists(
     );
     const checkpoints = activeBranch
         ? await activeBranchChildCheckpoints(
-            activeBranch.parentSessionFile,
-            activeBranch.parentSessionLeafId,
-            activeBranch.parentSessionId,
-            path.join(cwdSessionDir, activeBranch.parentSessionId),
-            workspacesDir,
-        )
+              activeBranch.parentSessionFile,
+              activeBranch.parentSessionLeafId,
+              activeBranch.parentSessionId,
+              path.join(cwdSessionDir, activeBranch.parentSessionId),
+              workspacesDir,
+          )
         : undefined;
     const catalog = await listAgentRunCatalog(cwd, workspacesDir);
 
@@ -490,9 +498,10 @@ export async function listAgentPastSessionLists(
             continue;
         }
         catalogFiles.add(file);
-        const checkpoint = record.ownerSessionId === activeBranch?.parentSessionId
-            ? checkpoints?.get(file)
-            : undefined;
+        const checkpoint =
+            record.ownerSessionId === activeBranch?.parentSessionId
+                ? checkpoints?.get(file)
+                : undefined;
         all.push(pastItemFromCatalog(record, checkpoint));
         if (checkpoint) {
             activeBranchFiles.add(file);
@@ -513,8 +522,10 @@ export async function listAgentPastSessionLists(
     all.sort((a, b) => b.updatedAt - a.updatedAt);
     return {
         all,
-        activeBranch: all.filter((item) =>
-            item.sessionFile !== undefined && activeBranchFiles.has(path.resolve(item.sessionFile)),
+        activeBranch: all.filter(
+            (item) =>
+                item.sessionFile !== undefined &&
+                activeBranchFiles.has(path.resolve(item.sessionFile)),
         ),
     };
 }
@@ -567,9 +578,8 @@ async function listOrphanPastSessions(
             if (catalogFiles.has(file)) {
                 continue;
             }
-            const checkpoint = entry === activeBranch?.parentSessionId
-                ? checkpoints?.get(file)
-                : undefined;
+            const checkpoint =
+                entry === activeBranch?.parentSessionId ? checkpoints?.get(file) : undefined;
             items.push(pastItem(info, entry, undefined, checkpoint));
             if (checkpoint) {
                 checkpointedFiles.push(file);
@@ -590,13 +600,14 @@ export async function listPastAgentSessions(
         parentSessionLeafId,
         activeBranchOnly,
     } = options;
-    const activeBranch = activeBranchOnly && parentSessionId
-        ? {
-            parentSessionId,
-            parentSessionFile,
-            parentSessionLeafId,
-        }
-        : undefined;
+    const activeBranch =
+        activeBranchOnly && parentSessionId
+            ? {
+                  parentSessionId,
+                  parentSessionFile,
+                  parentSessionLeafId,
+              }
+            : undefined;
     const lists = await listAgentPastSessionLists(cwd, { agentSessionsDir, activeBranch });
     if (activeBranchOnly) {
         return lists.activeBranch;
@@ -616,5 +627,7 @@ export function removeCurrentAgentTranscripts(
             .map((item) => item.sessionFile && path.resolve(item.sessionFile))
             .filter((file): file is string => file !== undefined),
     );
-    return past.filter((item) => !item.sessionFile || !currentFiles.has(path.resolve(item.sessionFile)));
+    return past.filter(
+        (item) => !item.sessionFile || !currentFiles.has(path.resolve(item.sessionFile)),
+    );
 }

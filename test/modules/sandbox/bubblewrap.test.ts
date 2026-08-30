@@ -22,7 +22,7 @@ describe("bubblewrap", () => {
     function writeProjectConfig(cfg: object): ReturnType<typeof config.load> {
         fs.writeFileSync(
             path.join(projectDir, ".pi", "bash-sandbox-config.json"),
-            JSON.stringify(cfg)
+            JSON.stringify(cfg),
         );
         return config.load(projectDir);
     }
@@ -59,8 +59,9 @@ describe("bubblewrap", () => {
         });
 
         expect(result).toContain(`--bind '${scratchpad}' '${scratchpad}'`);
-        expect(result.indexOf(`--bind '${scratchpad}' '${scratchpad}'`))
-            .toBeGreaterThan(result.indexOf("--bind '/tmp' '/tmp'"));
+        expect(result.indexOf(`--bind '${scratchpad}' '${scratchpad}'`)).toBeGreaterThan(
+            result.indexOf("--bind '/tmp' '/tmp'"),
+        );
     });
 
     describe("buildEnvCmd - default environment variables", () => {
@@ -173,7 +174,12 @@ describe("bubblewrap", () => {
             });
 
             const options: SandboxOptions = {
-                env: { HOME: "/home/testuser", PATH: "/usr/bin", USER: "testuser", PWD: "/custom/pwd" },
+                env: {
+                    HOME: "/home/testuser",
+                    PATH: "/usr/bin",
+                    USER: "testuser",
+                    PWD: "/custom/pwd",
+                },
                 cwd: projectDir,
                 config: testConfig,
             };
@@ -190,7 +196,12 @@ describe("bubblewrap", () => {
             });
 
             const options: SandboxOptions = {
-                env: { HOME: "/home/testuser", PATH: "/usr/bin", USER: "testuser", SHELL: "/bin/zsh" },
+                env: {
+                    HOME: "/home/testuser",
+                    PATH: "/usr/bin",
+                    USER: "testuser",
+                    SHELL: "/bin/zsh",
+                },
                 cwd: projectDir,
                 config: testConfig,
             };
@@ -484,7 +495,12 @@ describe("bubblewrap", () => {
             });
 
             const options: SandboxOptions = {
-                env: { HOME: "/home/testuser", PATH: "/usr/bin", USER: "testuser", SHELL: "/bin/zsh" },
+                env: {
+                    HOME: "/home/testuser",
+                    PATH: "/usr/bin",
+                    USER: "testuser",
+                    SHELL: "/bin/zsh",
+                },
                 cwd: projectDir,
                 config: testConfig,
             };

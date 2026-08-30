@@ -25,9 +25,14 @@ describe("Spinner", () => {
         const tui = fakeTui();
         const events = fakeEvents();
         let finish!: () => void;
-        const dialog = withDialogQueue(undefined, () => new Promise<void>((resolve) => {
-            finish = resolve;
-        }), events);
+        const dialog = withDialogQueue(
+            undefined,
+            () =>
+                new Promise<void>((resolve) => {
+                    finish = resolve;
+                }),
+            events,
+        );
         for (let index = 0; index < 4; index++) await Promise.resolve();
 
         const spinner = new Spinner(tui, { frames: ["a", "b"], intervalMs: 10, events });

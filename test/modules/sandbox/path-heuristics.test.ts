@@ -22,17 +22,28 @@ describe("file path confinement", () => {
     });
 
     it("allows ordinary paths in cwd and rejects paths outside or sensitive paths", () => {
-        expect(getPathConfinementPermission("src/index.ts", { cwd: "/project", config: {} })).toBe(Heuristic.SAFE_READONLY);
-        expect(getPathConfinementPermission("../secrets.txt", { cwd: "/project", config: {} })).toBe(Heuristic.UNSAFE);
-        expect(getPathConfinementPermission(".env", { cwd: "/project", config: {} })).toBe(Heuristic.UNSAFE);
-        expect(getPathConfinementPermission("src/app.pem", { cwd: "/project", config: {} })).toBe(Heuristic.UNSAFE);
+        expect(getPathConfinementPermission("src/index.ts", { cwd: "/project", config: {} })).toBe(
+            Heuristic.SAFE_READONLY,
+        );
+        expect(
+            getPathConfinementPermission("../secrets.txt", { cwd: "/project", config: {} }),
+        ).toBe(Heuristic.UNSAFE);
+        expect(getPathConfinementPermission(".env", { cwd: "/project", config: {} })).toBe(
+            Heuristic.UNSAFE,
+        );
+        expect(getPathConfinementPermission("src/app.pem", { cwd: "/project", config: {} })).toBe(
+            Heuristic.UNSAFE,
+        );
     });
 
     it("classifies sensitive paths outside cwd as sensitive before outside traversal", () => {
-        const assessment = getPathConfinementAssessment(path.join(os.homedir(), ".ssh", "id_ed25519"), {
-            cwd: "/project",
-            config: {},
-        });
+        const assessment = getPathConfinementAssessment(
+            path.join(os.homedir(), ".ssh", "id_ed25519"),
+            {
+                cwd: "/project",
+                config: {},
+            },
+        );
 
         expect(assessment.reasons).toEqual([UnsafeReason.SENSITIVE_PATH]);
     });
@@ -43,23 +54,57 @@ describe("file path confinement", () => {
         temporaryDirectories.push(cwd, scratchpad);
 
         const filePath = path.join(scratchpad, "notes.txt");
-        expect(getPathConfinementPermission(filePath, { cwd, config: {}, access: "read", additionalRoots: [scratchpad] }))
-            .toBe(Heuristic.SAFE_READONLY);
-        expect(getPathConfinementPermission(filePath, { cwd, config: {}, access: "write", additionalRoots: [scratchpad] }))
-            .toBe(Heuristic.SAFE_EDIT);
-        expect(getPathConfinementPermission(path.join(scratchpad, ".env"), { cwd, config: {}, access: "read", additionalRoots: [scratchpad] }))
-            .toBe(Heuristic.SAFE_READONLY);
-        expect(getPathConfinementPermission(path.join(scratchpad, "..", "outside.txt"), { cwd, config: {}, access: "read", additionalRoots: [scratchpad] }))
-            .toBe(Heuristic.UNSAFE);
+        expect(
+            getPathConfinementPermission(filePath, {
+                cwd,
+                config: {},
+                access: "read",
+                additionalRoots: [scratchpad],
+            }),
+        ).toBe(Heuristic.SAFE_READONLY);
+        expect(
+            getPathConfinementPermission(filePath, {
+                cwd,
+                config: {},
+                access: "write",
+                additionalRoots: [scratchpad],
+            }),
+        ).toBe(Heuristic.SAFE_EDIT);
+        expect(
+            getPathConfinementPermission(path.join(scratchpad, ".env"), {
+                cwd,
+                config: {},
+                access: "read",
+                additionalRoots: [scratchpad],
+            }),
+        ).toBe(Heuristic.SAFE_READONLY);
+        expect(
+            getPathConfinementPermission(path.join(scratchpad, "..", "outside.txt"), {
+                cwd,
+                config: {},
+                access: "read",
+                additionalRoots: [scratchpad],
+            }),
+        ).toBe(Heuristic.UNSAFE);
     });
 
     it("honors the cwd heuristic configuration", () => {
-        expect(getPathConfinementPermission("file.txt", { cwd: "/project", config: {
-            permission: "allow",
-        } })).toBe(Heuristic.SAFE_READONLY);
-        expect(getPathConfinementPermission("file.txt", { cwd: "/project", config: {
-            enabled: false,
-        } })).toBe(Heuristic.UNSAFE);
+        expect(
+            getPathConfinementPermission("file.txt", {
+                cwd: "/project",
+                config: {
+                    permission: "allow",
+                },
+            }),
+        ).toBe(Heuristic.SAFE_READONLY);
+        expect(
+            getPathConfinementPermission("file.txt", {
+                cwd: "/project",
+                config: {
+                    enabled: false,
+                },
+            }),
+        ).toBe(Heuristic.UNSAFE);
     });
 
     it("rejects symlink escapes and dangling symlinks", () => {
@@ -69,10 +114,18 @@ describe("file path confinement", () => {
         fs.symlinkSync(outside, path.join(cwd, "link"), "dir");
         fs.symlinkSync(path.join(outside, "missing"), path.join(cwd, "dangling"));
 
-        expect(getPathConfinementPermission("link/file.txt", { cwd, config: {} })).toBe(Heuristic.UNSAFE);
-        expect(getPathConfinementPermission("dangling", { cwd, config: {} })).toBe(Heuristic.UNSAFE);
-        expect(getPathConfinementPermission("new/file.txt", { cwd, config: {} })).toBe(Heuristic.SAFE_READONLY);
-        expect(getPathConfinementPermission("new/file.txt", { cwd, config: {}, access: "write" })).toBe(Heuristic.SAFE_EDIT);
+        expect(getPathConfinementPermission("link/file.txt", { cwd, config: {} })).toBe(
+            Heuristic.UNSAFE,
+        );
+        expect(getPathConfinementPermission("dangling", { cwd, config: {} })).toBe(
+            Heuristic.UNSAFE,
+        );
+        expect(getPathConfinementPermission("new/file.txt", { cwd, config: {} })).toBe(
+            Heuristic.SAFE_READONLY,
+        );
+        expect(
+            getPathConfinementPermission("new/file.txt", { cwd, config: {}, access: "write" }),
+        ).toBe(Heuristic.SAFE_EDIT);
     });
 
     it("does not let a scratchpad symlink expose a sensitive project path", () => {
@@ -86,18 +139,22 @@ describe("file path confinement", () => {
         fs.symlinkSync(secret, path.join(scratchpad, "secret-link"));
         fs.symlinkSync(ordinary, path.join(scratchpad, "ordinary-link"));
 
-        expect(getPathConfinementPermission(path.join(scratchpad, "secret-link"), {
-            cwd,
-            config: {},
-            access: "read",
-            additionalRoots: [scratchpad],
-        })).toBe(Heuristic.UNSAFE);
-        expect(getPathConfinementPermission(path.join(scratchpad, "ordinary-link"), {
-            cwd,
-            config: {},
-            access: "read",
-            additionalRoots: [scratchpad],
-        })).toBe(Heuristic.UNSAFE);
+        expect(
+            getPathConfinementPermission(path.join(scratchpad, "secret-link"), {
+                cwd,
+                config: {},
+                access: "read",
+                additionalRoots: [scratchpad],
+            }),
+        ).toBe(Heuristic.UNSAFE);
+        expect(
+            getPathConfinementPermission(path.join(scratchpad, "ordinary-link"), {
+                cwd,
+                config: {},
+                access: "read",
+                additionalRoots: [scratchpad],
+            }),
+        ).toBe(Heuristic.UNSAFE);
     });
 
     it("resolves symlinks before following parent components", () => {
@@ -109,12 +166,14 @@ describe("file path confinement", () => {
         fs.mkdirSync(target);
         fs.symlinkSync(target, path.join(scratchpad, "link"), "dir");
 
-        expect(getPathConfinementPermission(`${scratchpad}/link/../owned.txt`, {
-            cwd,
-            config: {},
-            access: "write",
-            additionalRoots: [scratchpad],
-        })).toBe(Heuristic.UNSAFE);
+        expect(
+            getPathConfinementPermission(`${scratchpad}/link/../owned.txt`, {
+                cwd,
+                config: {},
+                access: "write",
+                additionalRoots: [scratchpad],
+            }),
+        ).toBe(Heuristic.UNSAFE);
     });
 
     it("does not let one additional root authorize another", () => {
@@ -124,12 +183,14 @@ describe("file path confinement", () => {
         temporaryDirectories.push(cwd, first, second);
         fs.symlinkSync(second, path.join(first, "link"), "dir");
 
-        expect(getPathConfinementPermission(path.join(first, "link", "owned.txt"), {
-            cwd,
-            config: {},
-            access: "write",
-            additionalRoots: [first, second],
-        })).toBe(Heuristic.UNSAFE);
+        expect(
+            getPathConfinementPermission(path.join(first, "link", "owned.txt"), {
+                cwd,
+                config: {},
+                access: "write",
+                additionalRoots: [first, second],
+            }),
+        ).toBe(Heuristic.UNSAFE);
     });
 
     it("uses the most-specific nested additional root", () => {
@@ -142,12 +203,14 @@ describe("file path confinement", () => {
         fs.mkdirSync(sibling);
         fs.symlinkSync(sibling, path.join(nested, "link"), "dir");
 
-        expect(getPathConfinementPermission(path.join(nested, "link", "owned.txt"), {
-            cwd,
-            config: {},
-            access: "write",
-            additionalRoots: [outer, nested],
-        })).toBe(Heuristic.UNSAFE);
+        expect(
+            getPathConfinementPermission(path.join(nested, "link", "owned.txt"), {
+                cwd,
+                config: {},
+                access: "write",
+                additionalRoots: [outer, nested],
+            }),
+        ).toBe(Heuristic.UNSAFE);
     });
 
     it("rejects additional-root inputs containing parent components", () => {
@@ -160,12 +223,14 @@ describe("file path confinement", () => {
         fs.symlinkSync(target, path.join(container, "link"), "dir");
 
         for (const config of [{}, { resolveSymlinks: false }]) {
-            expect(getPathConfinementPermission(path.join(container, "owned.txt"), {
-                cwd,
-                config,
-                access: "write",
-                additionalRoots: [`${container}/link/..`],
-            })).toBe(Heuristic.UNSAFE);
+            expect(
+                getPathConfinementPermission(path.join(container, "owned.txt"), {
+                    cwd,
+                    config,
+                    access: "write",
+                    additionalRoots: [`${container}/link/..`],
+                }),
+            ).toBe(Heuristic.UNSAFE);
         }
     });
 

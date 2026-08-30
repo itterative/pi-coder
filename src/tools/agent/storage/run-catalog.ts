@@ -21,26 +21,31 @@ function parseJson(value: unknown): unknown {
 
 function rowToAgentRunCatalogRecord(row: CatalogRow): AgentRunCatalogRecord | undefined {
     if (
-        typeof row.owner_session_id !== "string"
-        || typeof row.run_id !== "string"
-        || typeof row.parent_cwd !== "string"
-        || typeof row.title !== "string"
-        || typeof row.agent !== "string"
-        || typeof row.agent_source !== "string"
-        || typeof row.task !== "string"
-        || typeof row.status !== "string"
-        || (row.background !== 0 && row.background !== 1)
-        || (row.mutating !== 0 && row.mutating !== 1)
-        || typeof row.started_at !== "number"
-        || typeof row.updated_at !== "number"
-    ) return undefined;
+        typeof row.owner_session_id !== "string" ||
+        typeof row.run_id !== "string" ||
+        typeof row.parent_cwd !== "string" ||
+        typeof row.title !== "string" ||
+        typeof row.agent !== "string" ||
+        typeof row.agent_source !== "string" ||
+        typeof row.task !== "string" ||
+        typeof row.status !== "string" ||
+        (row.background !== 0 && row.background !== 1) ||
+        (row.mutating !== 0 && row.mutating !== 1) ||
+        typeof row.started_at !== "number" ||
+        typeof row.updated_at !== "number"
+    )
+        return undefined;
     const usageSnapshot = parseJson(row.usage_json);
     if (!usageSnapshot || typeof usageSnapshot !== "object") return undefined;
     const mutationReport = parseJson(row.mutation_report_json);
-    const definitionSnapshot = parseAgentDefinitionSnapshot(parseJson(row.definition_snapshot_json));
+    const definitionSnapshot = parseAgentDefinitionSnapshot(
+        parseJson(row.definition_snapshot_json),
+    );
     return {
         ownerSessionId: row.owner_session_id,
-        ...(typeof row.owner_pid === "number" && Number.isSafeInteger(row.owner_pid) ? { ownerPid: row.owner_pid } : {}),
+        ...(typeof row.owner_pid === "number" && Number.isSafeInteger(row.owner_pid)
+            ? { ownerPid: row.owner_pid }
+            : {}),
         runId: row.run_id,
         ...(typeof row.run_instance_id === "string" ? { runInstanceId: row.run_instance_id } : {}),
         parentCwd: row.parent_cwd,
@@ -51,18 +56,32 @@ function rowToAgentRunCatalogRecord(row: CatalogRow): AgentRunCatalogRecord | un
         ...(definitionSnapshot ? { definitionSnapshot } : {}),
         task: row.task,
         status: row.status,
-        ...(isAgentTerminalStatus(row.terminal_status) ? { terminalStatus: row.terminal_status } : {}),
+        ...(isAgentTerminalStatus(row.terminal_status)
+            ? { terminalStatus: row.terminal_status }
+            : {}),
         background: row.background === 1,
         mutating: row.mutating === 1,
         ...(typeof row.workspace_id === "string" ? { workspaceId: row.workspace_id } : {}),
-        ...(typeof row.workspace_result_id === "string" ? { workspaceResultId: row.workspace_result_id } : {}),
-        ...(typeof row.child_session_file === "string" ? { childSessionFile: row.child_session_file } : {}),
-        ...(typeof row.child_session_leaf_id === "string" ? { childSessionLeafId: row.child_session_leaf_id } : row.child_session_leaf_id === null ? { childSessionLeafId: null } : {}),
-        ...(typeof row.latest_snapshot_id === "string" ? { latestSnapshotId: row.latest_snapshot_id } : {}),
+        ...(typeof row.workspace_result_id === "string"
+            ? { workspaceResultId: row.workspace_result_id }
+            : {}),
+        ...(typeof row.child_session_file === "string"
+            ? { childSessionFile: row.child_session_file }
+            : {}),
+        ...(typeof row.child_session_leaf_id === "string"
+            ? { childSessionLeafId: row.child_session_leaf_id }
+            : row.child_session_leaf_id === null
+              ? { childSessionLeafId: null }
+              : {}),
+        ...(typeof row.latest_snapshot_id === "string"
+            ? { latestSnapshotId: row.latest_snapshot_id }
+            : {}),
         startedAt: row.started_at,
         updatedAt: row.updated_at,
         usageSnapshot: usageSnapshot as Usage,
-        ...(typeof row.response_preview === "string" ? { responsePreview: row.response_preview } : {}),
+        ...(typeof row.response_preview === "string"
+            ? { responsePreview: row.response_preview }
+            : {}),
         ...(mutationReport && typeof mutationReport === "object"
             ? { mutationReport: mutationReport as WorkerMutationReport }
             : {}),
@@ -74,7 +93,8 @@ export async function upsertAgentRunCatalogRecordInDatabase(
     record: AgentRunCatalogRecord,
 ): Promise<void> {
     const runInstanceId = record.runInstanceId ?? `${record.ownerSessionId}:${record.runId}`;
-    await database.run(`
+    await database.run(
+        `
             INSERT INTO agent_runs (
                 owner_session_id, owner_pid, run_id, run_instance_id, parent_cwd, execution_cwd, title, agent,
                 agent_source, task, status, terminal_status, background, mutating, workspace_id, workspace_result_id,
@@ -106,7 +126,8 @@ export async function upsertAgentRunCatalogRecordInDatabase(
                 mutation_report_json = excluded.mutation_report_json,
                 definition_snapshot_json = excluded.definition_snapshot_json
             WHERE excluded.updated_at >= agent_runs.updated_at
-        `, record.ownerSessionId,
+        `,
+        record.ownerSessionId,
         record.ownerPid ?? null,
         record.runId,
         runInstanceId,
@@ -130,7 +151,8 @@ export async function upsertAgentRunCatalogRecordInDatabase(
         JSON.stringify(record.usageSnapshot),
         record.responsePreview ?? null,
         record.mutationReport ? JSON.stringify(record.mutationReport) : null,
-        record.definitionSnapshot ? JSON.stringify(record.definitionSnapshot) : null,);
+        record.definitionSnapshot ? JSON.stringify(record.definitionSnapshot) : null,
+    );
 }
 
 export async function upsertAgentRunCatalogRecord(
@@ -151,7 +173,8 @@ export async function listAgentRunCatalog(
 ): Promise<AgentRunCatalogRecord[]> {
     const database = await openAgentMetadataDatabase(workspacesDir);
     try {
-        const rows = await database.all(`
+        const rows = (await database.all(
+            `
             SELECT owner_session_id, owner_pid, run_id, run_instance_id, parent_cwd, execution_cwd, title, agent,
                    agent_source, task, status, terminal_status, background, mutating, workspace_id, workspace_result_id,
                    child_session_file, child_session_leaf_id, latest_snapshot_id, started_at, updated_at, usage_json,
@@ -159,7 +182,9 @@ export async function listAgentRunCatalog(
             FROM agent_runs
             WHERE parent_cwd = ?
             ORDER BY updated_at DESC, run_id ASC
-        `, path.resolve(cwd)) as CatalogRow[];
+        `,
+            path.resolve(cwd),
+        )) as CatalogRow[];
         return rows
             .map(rowToAgentRunCatalogRecord)
             .filter((record): record is AgentRunCatalogRecord => record !== undefined);

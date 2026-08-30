@@ -15,20 +15,14 @@ import {
 import { ZERO_USAGE } from "./usage";
 import { parseAgentDefinitionSnapshot } from "../definitions/types";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
-import {
-    openAgentMetadataDatabase,
-    type AgentMetadataDatabase,
-} from "../storage/metadata";
+import { openAgentMetadataDatabase, type AgentMetadataDatabase } from "../storage/metadata";
 import { upsertAgentRunCatalogRecordInDatabase } from "../storage/run-catalog";
 import {
     AGENT_RUN_SNAPSHOT_MARKER,
     collectAgentRunSnapshotMarkers,
     type AgentRunSnapshotMarker,
 } from "../storage/run-markers";
-import {
-    listAgentRunStatesInDatabase,
-    upsertAgentRunStateInDatabase,
-} from "../storage/run-state";
+import { listAgentRunStatesInDatabase, upsertAgentRunStateInDatabase } from "../storage/run-state";
 import {
     insertAgentRunSnapshotInDatabase,
     listAgentRunSnapshotsInDatabase,
@@ -104,7 +98,13 @@ function boundedToolCounts(value: unknown): Record<string, number> | undefined {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
     const counts: Record<string, number> = {};
     for (const [name, count] of Object.entries(value as Record<string, unknown>)) {
-        if (name.length > 80 || typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) continue;
+        if (
+            name.length > 80 ||
+            typeof count !== "number" ||
+            !Number.isSafeInteger(count) ||
+            count < 0
+        )
+            continue;
         counts[name] = count;
     }
     return Object.keys(counts).length ? counts : undefined;
@@ -112,19 +112,28 @@ function boundedToolCounts(value: unknown): Record<string, number> | undefined {
 
 function inside(directory: string, candidate: string): boolean {
     const relative = path.relative(directory, candidate);
-    return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
+    return (
+        relative !== "" &&
+        !relative.startsWith(`..${path.sep}`) &&
+        relative !== ".." &&
+        !path.isAbsolute(relative)
+    );
 }
 
 function responsePreview(record: PersistedAgentRun): string | undefined {
-    const text = (record.progress.output || record.progress.lastAssistantMessage || "").replace(/\s+/g, " ").trim();
+    const text = (record.progress.output || record.progress.lastAssistantMessage || "")
+        .replace(/\s+/g, " ")
+        .trim();
     if (!text) return undefined;
     return text.length <= 240 ? text : `${text.slice(0, 239)}…`;
 }
 
-
 export interface AgentRunStateWriter {
     save(record: PersistedAgentRun): Promise<{ ok: true } | { ok: false; error: unknown }>;
-    acquireContinuationLease?(runInstanceId: string, onLost?: () => void): Promise<AgentContinuationLease>;
+    acquireContinuationLease?(
+        runInstanceId: string,
+        onLost?: () => void,
+    ): Promise<AgentContinuationLease>;
     flush(): Promise<void>;
     close(): Promise<void>;
 }
@@ -161,7 +170,8 @@ export async function initializeAgentRunContinuationHeads(
     if (heads.size === 0) return;
     await database.transaction(async (transaction) => {
         for (const [runInstanceId, head] of heads) {
-            await transaction.run(`
+            await transaction.run(
+                `
                 INSERT INTO agent_run_continuation_heads (
                     run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence, pending
                 ) VALUES (?, ?, ?, ?, ?, ?, 0)
@@ -181,7 +191,15 @@ export async function initializeAgentRunContinuationHeads(
                              AND lease_until > ?
                        )
                    )
-            `, runInstanceId, head.ownerSessionId, head.runId, head.snapshotId, head.updatedAt, head.createdSequence, Date.now());
+            `,
+                runInstanceId,
+                head.ownerSessionId,
+                head.runId,
+                head.snapshotId,
+                head.updatedAt,
+                head.createdSequence,
+                Date.now(),
+            );
         }
     }, "IMMEDIATE");
 }
@@ -223,11 +241,13 @@ export interface AgentRunStateWriterOptions {
 export function createAgentRunStateWriter(
     parentCwd: string,
     database: AgentMetadataDatabase,
-    appendMarker: (marker: { version: 2; snapshotId: string; runInstanceId: string; runId: string }) => string | undefined,
-    {
-        initialHeads = new Map(),
-        requireMarker = true,
-    }: AgentRunStateWriterOptions = {},
+    appendMarker: (marker: {
+        version: 2;
+        snapshotId: string;
+        runInstanceId: string;
+        runId: string;
+    }) => string | undefined,
+    { initialHeads = new Map(), requireMarker = true }: AgentRunStateWriterOptions = {},
 ): AgentRunStateWriter {
     let closed = false;
     let acceptingAcquisitions = true;
@@ -235,7 +255,10 @@ export function createAgentRunStateWriter(
     const processToken = randomUUID();
     const expectedHeads = new Map<string, string | undefined>(initialHeads);
     const knownHeads = new Set(initialHeads.keys());
-    const activeLeases = new Map<string, { token: string; timer: ReturnType<typeof setInterval>; onLost?: () => void }>();
+    const activeLeases = new Map<
+        string,
+        { token: string; timer: ReturnType<typeof setInterval>; onLost?: () => void }
+    >();
     const lostLeases = new Set<string>();
 
     const markLeaseLost = (runInstanceId: string, token: string): void => {
@@ -251,11 +274,17 @@ export function createAgentRunStateWriter(
         let lost = false;
         try {
             const result = await database.transaction(
-                (transaction) => transaction.run(`
+                (transaction) =>
+                    transaction.run(
+                        `
                     UPDATE agent_run_continuation_leases
                     SET lease_until = ?
                     WHERE run_instance_id = ? AND process_token = ?
-                `, Date.now() + CONTINUATION_LEASE_MS, runInstanceId, token),
+                `,
+                        Date.now() + CONTINUATION_LEASE_MS,
+                        runInstanceId,
+                        token,
+                    ),
                 "IMMEDIATE",
             );
             lost = result.changes === 0;
@@ -272,10 +301,17 @@ export function createAgentRunStateWriter(
         clearInterval(active.timer);
         try {
             await database.transaction(
-                (transaction) => transaction.run(`
+                (transaction) =>
+                    transaction
+                        .run(
+                            `
                     DELETE FROM agent_run_continuation_leases
                     WHERE run_instance_id = ? AND process_token = ?
-                `, runInstanceId, token).then(() => undefined),
+                `,
+                            runInstanceId,
+                            token,
+                        )
+                        .then(() => undefined),
                 "IMMEDIATE",
             );
         } catch {
@@ -294,45 +330,64 @@ export function createAgentRunStateWriter(
             throw new Error("Agent run state storage is closed.");
         }
         if (lostLeases.has(runInstanceId)) {
-            throw new Error("Delegated run continuation lease was lost; reload the parent session before retrying.");
+            throw new Error(
+                "Delegated run continuation lease was lost; reload the parent session before retrying.",
+            );
         }
         const acquisition = (async () => {
-        const now = Date.now();
-        const leaseToken = `${processToken}:${randomUUID()}`;
-        await database.transaction(async (transaction) => {
-            const current = await transaction.get(`
+            const now = Date.now();
+            const leaseToken = `${processToken}:${randomUUID()}`;
+            await database.transaction(async (transaction) => {
+                const current = (await transaction.get(
+                    `
                 SELECT snapshot_id, owner_session_id
                 FROM agent_run_continuation_heads
                 WHERE run_instance_id = ?
-            `, runInstanceId) as { snapshot_id?: string; owner_session_id?: string } | undefined;
-            if (!knownHeads.has(runInstanceId)) {
-                expectedHeads.set(runInstanceId, typeof current?.snapshot_id === "string" ? current.snapshot_id : undefined);
-                knownHeads.add(runInstanceId);
-            }
-            const expected = expectedHeads.get(runInstanceId);
-            const actual = typeof current?.snapshot_id === "string" ? current.snapshot_id : undefined;
-            if (actual !== expected) {
-                throw new Error("Delegated run continuation is stale; another process has already continued it.");
-            }
-            const existingLease = await transaction.get(`
+            `,
+                    runInstanceId,
+                )) as { snapshot_id?: string; owner_session_id?: string } | undefined;
+                if (!knownHeads.has(runInstanceId)) {
+                    expectedHeads.set(
+                        runInstanceId,
+                        typeof current?.snapshot_id === "string" ? current.snapshot_id : undefined,
+                    );
+                    knownHeads.add(runInstanceId);
+                }
+                const expected = expectedHeads.get(runInstanceId);
+                const actual =
+                    typeof current?.snapshot_id === "string" ? current.snapshot_id : undefined;
+                if (actual !== expected) {
+                    throw new Error(
+                        "Delegated run continuation is stale; another process has already continued it.",
+                    );
+                }
+                const existingLease = (await transaction.get(
+                    `
                 SELECT process_token, owner_pid, lease_until
                 FROM agent_run_continuation_leases
                 WHERE run_instance_id = ?
-            `, runInstanceId) as {
-                process_token?: string;
-                owner_pid?: number;
-                lease_until?: number;
-            } | undefined;
-            const activeLease = typeof existingLease?.lease_until === "number"
-                && existingLease.lease_until > now;
-            const ownerIsDead = ENABLE_PID_LEASE_RECOVERY
-                && activeLease
-                && typeof existingLease?.owner_pid === "number"
-                && !isProcessAlive(existingLease.owner_pid);
-            if (activeLease && !ownerIsDead) {
-                throw new AgentContinuationLeaseBusyError(existingLease.lease_until!);
-            }
-            await transaction.run(`
+            `,
+                    runInstanceId,
+                )) as
+                    | {
+                          process_token?: string;
+                          owner_pid?: number;
+                          lease_until?: number;
+                      }
+                    | undefined;
+                const activeLease =
+                    typeof existingLease?.lease_until === "number" &&
+                    existingLease.lease_until > now;
+                const ownerIsDead =
+                    ENABLE_PID_LEASE_RECOVERY &&
+                    activeLease &&
+                    typeof existingLease?.owner_pid === "number" &&
+                    !isProcessAlive(existingLease.owner_pid);
+                if (activeLease && !ownerIsDead) {
+                    throw new AgentContinuationLeaseBusyError(existingLease.lease_until!);
+                }
+                await transaction.run(
+                    `
                 INSERT INTO agent_run_continuation_leases (
                     run_instance_id, owner_session_id, process_token, owner_pid, lease_until
                 ) VALUES (?, ?, ?, ?, ?)
@@ -341,16 +396,21 @@ export function createAgentRunStateWriter(
                     process_token = excluded.process_token,
                     owner_pid = excluded.owner_pid,
                     lease_until = excluded.lease_until
-            `, runInstanceId,
-                typeof current?.owner_session_id === "string" ? current.owner_session_id : "",
-                leaseToken,
-                process.pid,
-                now + CONTINUATION_LEASE_MS,);
-        }, "IMMEDIATE");
-        const timer = setInterval(() => renewLease(runInstanceId, leaseToken), CONTINUATION_LEASE_MS / 3);
-        timer.unref?.();
-        activeLeases.set(runInstanceId, { token: leaseToken, timer, onLost });
-        return { release: () => releaseLease(runInstanceId, leaseToken) };
+            `,
+                    runInstanceId,
+                    typeof current?.owner_session_id === "string" ? current.owner_session_id : "",
+                    leaseToken,
+                    process.pid,
+                    now + CONTINUATION_LEASE_MS,
+                );
+            }, "IMMEDIATE");
+            const timer = setInterval(
+                () => renewLease(runInstanceId, leaseToken),
+                CONTINUATION_LEASE_MS / 3,
+            );
+            timer.unref?.();
+            activeLeases.set(runInstanceId, { token: leaseToken, timer, onLost });
+            return { release: () => releaseLease(runInstanceId, leaseToken) };
         })();
         pendingAcquisitions.add(acquisition);
         try {
@@ -383,63 +443,101 @@ export function createAgentRunStateWriter(
                 return { ok: false, error: new Error("Agent run state storage is closed.") };
             }
             return serializeSave(async () => {
-            if (closed) {
-                return { ok: false, error: new Error("Agent run state storage is closed.") };
-            }
-            if (!record.runInstanceId) {
-                return { ok: false, error: new Error("Delegated run is missing its physical run identity.") };
-            }
-            const runInstanceId = record.runInstanceId;
-            let automaticLease: AgentContinuationLease | undefined;
-            if (!activeLeases.has(runInstanceId)) {
-                try {
-                    automaticLease = await acquireContinuationLease(runInstanceId, undefined, true);
-                } catch (error) {
-                    return { ok: false, error };
+                if (closed) {
+                    return { ok: false, error: new Error("Agent run state storage is closed.") };
                 }
-            }
-            const finishSave = async <T extends { ok: boolean }>(result: T): Promise<T> => {
-                await automaticLease?.release();
-                return result;
-            };
-            let snapshot: Awaited<ReturnType<typeof insertAgentRunSnapshotInDatabase>>;
-            try {
-                snapshot = await database.transaction(async (transaction) => {
-                    const current = await transaction.get(`
+                if (!record.runInstanceId) {
+                    return {
+                        ok: false,
+                        error: new Error("Delegated run is missing its physical run identity."),
+                    };
+                }
+                const runInstanceId = record.runInstanceId;
+                let automaticLease: AgentContinuationLease | undefined;
+                if (!activeLeases.has(runInstanceId)) {
+                    try {
+                        automaticLease = await acquireContinuationLease(
+                            runInstanceId,
+                            undefined,
+                            true,
+                        );
+                    } catch (error) {
+                        return { ok: false, error };
+                    }
+                }
+                const finishSave = async <T extends { ok: boolean }>(result: T): Promise<T> => {
+                    await automaticLease?.release();
+                    return result;
+                };
+                let snapshot: Awaited<ReturnType<typeof insertAgentRunSnapshotInDatabase>>;
+                try {
+                    snapshot = await database.transaction(async (transaction) => {
+                        const current = (await transaction.get(
+                            `
                         SELECT snapshot_id
                         FROM agent_run_continuation_heads
                         WHERE run_instance_id = ?
-                    `, runInstanceId) as { snapshot_id?: string } | undefined;
-                    if (!knownHeads.has(runInstanceId)) {
-                        expectedHeads.set(runInstanceId, typeof current?.snapshot_id === "string" ? current.snapshot_id : undefined);
-                        knownHeads.add(runInstanceId);
-                    }
-                    const expected = expectedHeads.get(runInstanceId);
-                    const actual = typeof current?.snapshot_id === "string" ? current.snapshot_id : undefined;
-                    if (actual !== expected) {
-                        throw new Error("Delegated run continuation is stale; another process has already continued it.");
-                    }
-                    const lease = await transaction.get(`
+                    `,
+                            runInstanceId,
+                        )) as { snapshot_id?: string } | undefined;
+                        if (!knownHeads.has(runInstanceId)) {
+                            expectedHeads.set(
+                                runInstanceId,
+                                typeof current?.snapshot_id === "string"
+                                    ? current.snapshot_id
+                                    : undefined,
+                            );
+                            knownHeads.add(runInstanceId);
+                        }
+                        const expected = expectedHeads.get(runInstanceId);
+                        const actual =
+                            typeof current?.snapshot_id === "string"
+                                ? current.snapshot_id
+                                : undefined;
+                        if (actual !== expected) {
+                            throw new Error(
+                                "Delegated run continuation is stale; another process has already continued it.",
+                            );
+                        }
+                        const lease = (await transaction.get(
+                            `
                         SELECT process_token, lease_until
                         FROM agent_run_continuation_leases
                         WHERE run_instance_id = ?
-                    `, runInstanceId) as { process_token?: string; lease_until?: number } | undefined;
-                    const activeLease = activeLeases.get(runInstanceId);
-                    if (typeof lease?.lease_until === "number" && lease.lease_until > Date.now()) {
-                        if (!activeLease || lease.process_token !== activeLease.token) {
-                            throw new Error("Delegated run continuation is already owned by another process.");
-                        }
-                    } else if (activeLease) {
-                        markLeaseLost(runInstanceId, activeLease.token);
-                        throw new Error("Delegated run continuation lease expired or was lost.");
-                    } else if (typeof lease?.process_token === "string") {
-                        await transaction.run(`
+                    `,
+                            runInstanceId,
+                        )) as { process_token?: string; lease_until?: number } | undefined;
+                        const activeLease = activeLeases.get(runInstanceId);
+                        if (
+                            typeof lease?.lease_until === "number" &&
+                            lease.lease_until > Date.now()
+                        ) {
+                            if (!activeLease || lease.process_token !== activeLease.token) {
+                                throw new Error(
+                                    "Delegated run continuation is already owned by another process.",
+                                );
+                            }
+                        } else if (activeLease) {
+                            markLeaseLost(runInstanceId, activeLease.token);
+                            throw new Error(
+                                "Delegated run continuation lease expired or was lost.",
+                            );
+                        } else if (typeof lease?.process_token === "string") {
+                            await transaction.run(
+                                `
                             DELETE FROM agent_run_continuation_leases
                             WHERE run_instance_id = ? AND process_token = ?
-                        `, runInstanceId, lease.process_token);
-                    }
-                    const nextSnapshot = await insertAgentRunSnapshotInDatabase(transaction, record);
-                    await transaction.run(`
+                        `,
+                                runInstanceId,
+                                lease.process_token,
+                            );
+                        }
+                        const nextSnapshot = await insertAgentRunSnapshotInDatabase(
+                            transaction,
+                            record,
+                        );
+                        await transaction.run(
+                            `
                         INSERT INTO agent_run_continuation_heads (
                             run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence, pending
                         ) VALUES (?, ?, ?, ?, ?, ?, 1)
@@ -450,56 +548,71 @@ export function createAgentRunStateWriter(
                             updated_at = excluded.updated_at,
                             created_sequence = excluded.created_sequence,
                             pending = 1
-                    `, runInstanceId,
-                        record.ownerSessionId,
-                        record.runId,
-                        nextSnapshot.snapshotId,
-                        record.updatedAt,
-                        nextSnapshot.createdSequence,);
-                    return nextSnapshot;
-                }, "IMMEDIATE");
-            } catch (error) {
-                return await finishSave({ ok: false, error });
-            }
+                    `,
+                            runInstanceId,
+                            record.ownerSessionId,
+                            record.runId,
+                            nextSnapshot.snapshotId,
+                            record.updatedAt,
+                            nextSnapshot.createdSequence,
+                        );
+                        return nextSnapshot;
+                    }, "IMMEDIATE");
+                } catch (error) {
+                    return await finishSave({ ok: false, error });
+                }
 
-            // Hold the SQLite write lock while renewing ownership, appending the
-            // external marker, and updating the head. A competing process cannot
-            // acquire the expired lease between those operations.
-            let markerAppended = false;
-            try {
-                await database.transaction(async (transaction) => {
-                    const activeLease = activeLeases.get(runInstanceId);
-                    if (!activeLease) {
-                        throw new Error("Delegated run continuation lease was lost.");
-                    }
-                    const renewed = await transaction.run(`
+                // Hold the SQLite write lock while renewing ownership, appending the
+                // external marker, and updating the head. A competing process cannot
+                // acquire the expired lease between those operations.
+                let markerAppended = false;
+                try {
+                    await database.transaction(async (transaction) => {
+                        const activeLease = activeLeases.get(runInstanceId);
+                        if (!activeLease) {
+                            throw new Error("Delegated run continuation lease was lost.");
+                        }
+                        const renewed = await transaction.run(
+                            `
                         UPDATE agent_run_continuation_leases
                         SET lease_until = ?
                         WHERE run_instance_id = ? AND process_token = ?
-                    `, Date.now() + CONTINUATION_LEASE_MS, runInstanceId, activeLease.token);
-                    if (renewed.changes === 0) {
-                        markLeaseLost(runInstanceId, activeLease.token);
-                        throw new Error("Delegated run continuation lease expired or was lost.");
-                    }
-                    const current = await transaction.get(`
+                    `,
+                            Date.now() + CONTINUATION_LEASE_MS,
+                            runInstanceId,
+                            activeLease.token,
+                        );
+                        if (renewed.changes === 0) {
+                            markLeaseLost(runInstanceId, activeLease.token);
+                            throw new Error(
+                                "Delegated run continuation lease expired or was lost.",
+                            );
+                        }
+                        const current = (await transaction.get(
+                            `
                         SELECT snapshot_id, pending
                         FROM agent_run_continuation_heads
                         WHERE run_instance_id = ?
-                    `, runInstanceId) as { snapshot_id?: string; pending?: number } | undefined;
-                    if (current?.snapshot_id !== snapshot.snapshotId || current.pending !== 1) {
-                        throw new Error("Delegated run continuation reservation was lost before its marker was committed.");
-                    }
-                    const markerEntryId = appendMarker({
-                        version: 2,
-                        snapshotId: snapshot.snapshotId,
-                        runInstanceId,
-                        runId: record.runId,
-                    });
-                    if (requireMarker && typeof markerEntryId !== "string") {
-                        throw new Error("Parent session marker could not be appended.");
-                    }
-                    markerAppended = true;
-                    await transaction.run(`
+                    `,
+                            runInstanceId,
+                        )) as { snapshot_id?: string; pending?: number } | undefined;
+                        if (current?.snapshot_id !== snapshot.snapshotId || current.pending !== 1) {
+                            throw new Error(
+                                "Delegated run continuation reservation was lost before its marker was committed.",
+                            );
+                        }
+                        const markerEntryId = appendMarker({
+                            version: 2,
+                            snapshotId: snapshot.snapshotId,
+                            runInstanceId,
+                            runId: record.runId,
+                        });
+                        if (requireMarker && typeof markerEntryId !== "string") {
+                            throw new Error("Parent session marker could not be appended.");
+                        }
+                        markerAppended = true;
+                        await transaction.run(
+                            `
                         INSERT INTO agent_run_continuation_heads (
                             run_instance_id, owner_session_id, run_id, snapshot_id, updated_at, created_sequence, pending
                         ) VALUES (?, ?, ?, ?, ?, ?, 0)
@@ -510,30 +623,32 @@ export function createAgentRunStateWriter(
                             updated_at = excluded.updated_at,
                             created_sequence = excluded.created_sequence,
                             pending = 0
-                    `, runInstanceId,
-                        record.ownerSessionId,
-                        record.runId,
-                        snapshot.snapshotId,
-                        record.updatedAt,
-                        snapshot.createdSequence,);
-                    try {
-                        await upsertAgentRunCatalogRecordInDatabase(transaction, {
-                            ...catalogRecord(record, parentCwd),
-                            latestSnapshotId: snapshot.snapshotId,
-                        });
-                    } catch {
-                        // Catalog is a lossy projection. The marker/snapshot remains authoritative.
-                    }
-                }, "IMMEDIATE");
-                expectedHeads.set(runInstanceId, snapshot.snapshotId);
-                return await finishSave({ ok: true });
-            } catch (error) {
-                if (markerAppended) {
+                    `,
+                            runInstanceId,
+                            record.ownerSessionId,
+                            record.runId,
+                            snapshot.snapshotId,
+                            record.updatedAt,
+                            snapshot.createdSequence,
+                        );
+                        try {
+                            await upsertAgentRunCatalogRecordInDatabase(transaction, {
+                                ...catalogRecord(record, parentCwd),
+                                latestSnapshotId: snapshot.snapshotId,
+                            });
+                        } catch {
+                            // Catalog is a lossy projection. The marker/snapshot remains authoritative.
+                        }
+                    }, "IMMEDIATE");
                     expectedHeads.set(runInstanceId, snapshot.snapshotId);
                     return await finishSave({ ok: true });
+                } catch (error) {
+                    if (markerAppended) {
+                        expectedHeads.set(runInstanceId, snapshot.snapshotId);
+                        return await finishSave({ ok: true });
+                    }
+                    return await finishSave({ ok: false, error });
                 }
-                return await finishSave({ ok: false, error });
-            }
             });
         },
         async acquireContinuationLease(runInstanceId, onLost) {
@@ -556,9 +671,9 @@ export function createAgentRunStateWriter(
                     await Promise.allSettled([...pendingAcquisitions]);
                 }
                 await Promise.all(
-                    [...activeLeases].map(([runInstanceId, active]) => (
-                        releaseLease(runInstanceId, active.token)
-                    )),
+                    [...activeLeases].map(([runInstanceId, active]) =>
+                        releaseLease(runInstanceId, active.token),
+                    ),
                 );
                 closed = true;
                 await database.close();
@@ -596,54 +711,73 @@ function safeExistingChildFile(childSessionDir: string, candidate: string): stri
     }
 }
 
-function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: string): PersistedAgentRun | undefined {
+function parseRecord(
+    value: unknown,
+    ownerSessionId: string,
+    childSessionDir: string,
+): PersistedAgentRun | undefined {
     if (!value || typeof value !== "object") return undefined;
     const record = value as Partial<PersistedAgentRun>;
     if (
-        record.version !== 1
-        || record.ownerSessionId !== ownerSessionId
-        || typeof record.runId !== "string"
-        || !RUN_ID.test(record.runId)
-        || typeof record.agent !== "string"
-        || !record.runId.startsWith(`${record.agent}-`)
-        || typeof record.agentSource !== "string"
-        || typeof record.definitionFingerprint !== "string"
-        || !/^[a-f0-9]{64}$/.test(record.definitionFingerprint)
-        || typeof record.status !== "string"
-        || !RESTORABLE_STATUSES.has(record.status as PersistedAgentRun["status"])
-        || typeof record.background !== "boolean"
-        || typeof record.mutating !== "boolean"
-        || !finite(record.startedAt)
-        || !finite(record.updatedAt)
-    ) return undefined;
+        record.version !== 1 ||
+        record.ownerSessionId !== ownerSessionId ||
+        typeof record.runId !== "string" ||
+        !RUN_ID.test(record.runId) ||
+        typeof record.agent !== "string" ||
+        !record.runId.startsWith(`${record.agent}-`) ||
+        typeof record.agentSource !== "string" ||
+        typeof record.definitionFingerprint !== "string" ||
+        !/^[a-f0-9]{64}$/.test(record.definitionFingerprint) ||
+        typeof record.status !== "string" ||
+        !RESTORABLE_STATUSES.has(record.status as PersistedAgentRun["status"]) ||
+        typeof record.background !== "boolean" ||
+        typeof record.mutating !== "boolean" ||
+        !finite(record.startedAt) ||
+        !finite(record.updatedAt)
+    )
+        return undefined;
 
-    const progressValue = record.progress && typeof record.progress === "object" ? record.progress : undefined;
+    const progressValue =
+        record.progress && typeof record.progress === "object" ? record.progress : undefined;
     const activity = Array.isArray(progressValue?.recentActivity)
-        ? progressValue.recentActivity.filter((item): item is string => typeof item === "string").slice(-8).map((item) => item.slice(0, 500))
+        ? progressValue.recentActivity
+              .filter((item): item is string => typeof item === "string")
+              .slice(-8)
+              .map((item) => item.slice(0, 500))
         : [];
     const phase = boundedString(progressValue?.phase, 120);
     const lastAssistantMessage = boundedString(progressValue?.lastAssistantMessage, 32_000);
     const lastToolActivity = boundedString(progressValue?.lastToolActivity, 500);
-    const failedToolCalls = finite(progressValue?.failedToolCalls)
-        && Number.isSafeInteger(progressValue?.failedToolCalls)
-        && progressValue.failedToolCalls >= 0
-        ? progressValue.failedToolCalls
-        : undefined;
+    const failedToolCalls =
+        finite(progressValue?.failedToolCalls) &&
+        Number.isSafeInteger(progressValue?.failedToolCalls) &&
+        progressValue.failedToolCalls >= 0
+            ? progressValue.failedToolCalls
+            : undefined;
     const toolCounts = boundedToolCounts(progressValue?.toolCounts);
     const childSessionFile = boundedString(record.childSessionFile, 4_096);
     const resolvedChildFile = childSessionFile
         ? safeExistingChildFile(childSessionDir, childSessionFile)
         : undefined;
-    const questionValue = record.question && typeof record.question === "object" ? record.question : undefined;
-    const mutationValue = record.mutationReport && typeof record.mutationReport === "object" ? record.mutationReport : undefined;
+    const questionValue =
+        record.question && typeof record.question === "object" ? record.question : undefined;
+    const mutationValue =
+        record.mutationReport && typeof record.mutationReport === "object"
+            ? record.mutationReport
+            : undefined;
     const definitionSnapshot = parseAgentDefinitionSnapshot(record.definitionSnapshot);
 
     return {
         version: 1,
         ownerSessionId,
-        ownerPid: typeof record.ownerPid === "number" && Number.isSafeInteger(record.ownerPid) ? record.ownerPid : undefined,
+        ownerPid:
+            typeof record.ownerPid === "number" && Number.isSafeInteger(record.ownerPid)
+                ? record.ownerPid
+                : undefined,
         runId: record.runId,
-        ...(typeof record.runInstanceId === "string" ? { runInstanceId: record.runInstanceId } : {}),
+        ...(typeof record.runInstanceId === "string"
+            ? { runInstanceId: record.runInstanceId }
+            : {}),
         title: boundedString(record.title, 80),
         agent: record.agent.slice(0, 64),
         agentSource: record.agentSource.slice(0, 32),
@@ -659,14 +793,20 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
         mutating: record.mutating,
         workspaceId: boundedString(record.workspaceId, 200),
         workspaceResultId: boundedString(record.workspaceResultId, 200),
-        question: typeof questionValue?.question === "string" ? {
-            question: questionValue.question.slice(0, 4_000),
-            context: boundedString(questionValue.context, 12_000),
-            options: Array.isArray(questionValue.options)
-                ? questionValue.options.filter((item): item is string => typeof item === "string").slice(0, 20).map((item) => item.slice(0, 1_000))
+        question:
+            typeof questionValue?.question === "string"
+                ? {
+                      question: questionValue.question.slice(0, 4_000),
+                      context: boundedString(questionValue.context, 12_000),
+                      options: Array.isArray(questionValue.options)
+                          ? questionValue.options
+                                .filter((item): item is string => typeof item === "string")
+                                .slice(0, 20)
+                                .map((item) => item.slice(0, 1_000))
+                          : undefined,
+                      recommendation: boundedString(questionValue.recommendation, 4_000),
+                  }
                 : undefined,
-            recommendation: boundedString(questionValue.recommendation, 4_000),
-        } : undefined,
         progress: {
             output: boundedString(progressValue?.output, 32_000) ?? "",
             recentActivity: activity,
@@ -687,26 +827,34 @@ function parseRecord(value: unknown, ownerSessionId: string, childSessionDir: st
             ? { childSessionLeafId: record.childSessionLeafId }
             : {}),
         ...(record.resumable === false ? { resumable: false } : {}),
-        ...(typeof record.readOnlyReason === "string" ? { readOnlyReason: record.readOnlyReason.slice(0, 500) } : {}),
+        ...(typeof record.readOnlyReason === "string"
+            ? { readOnlyReason: record.readOnlyReason.slice(0, 500) }
+            : {}),
         terminalContent: boundedString(record.terminalContent, 48_000),
         terminalError: boundedString(record.terminalError, 4_000),
-        terminalIsError: typeof record.terminalIsError === "boolean" ? record.terminalIsError : undefined,
+        terminalIsError:
+            typeof record.terminalIsError === "boolean" ? record.terminalIsError : undefined,
         setupFailed: record.setupFailed === true ? true : undefined,
-        mutationReport: mutationValue ? {
-            changedFiles: Array.isArray(mutationValue.changedFiles)
-                ? mutationValue.changedFiles.filter((item): item is string => typeof item === "string").slice(0, 1_000).map((item) => item.slice(0, 4_096))
-                : [],
-            ...(Array.isArray(mutationValue.readFiles) && mutationValue.readFiles.length
-                ? {
-                    readFiles: mutationValue.readFiles
-                        .filter((item): item is string => typeof item === "string")
-                        .slice(0, 1_000)
-                        .map((item) => item.slice(0, 4_096)),
-                }
-                : {}),
-            bashApproved: mutationValue.bashApproved === true,
-            interrupted: mutationValue.interrupted === true,
-        } : undefined,
+        mutationReport: mutationValue
+            ? {
+                  changedFiles: Array.isArray(mutationValue.changedFiles)
+                      ? mutationValue.changedFiles
+                            .filter((item): item is string => typeof item === "string")
+                            .slice(0, 1_000)
+                            .map((item) => item.slice(0, 4_096))
+                      : [],
+                  ...(Array.isArray(mutationValue.readFiles) && mutationValue.readFiles.length
+                      ? {
+                            readFiles: mutationValue.readFiles
+                                .filter((item): item is string => typeof item === "string")
+                                .slice(0, 1_000)
+                                .map((item) => item.slice(0, 4_096)),
+                        }
+                      : {}),
+                  bashApproved: mutationValue.bashApproved === true,
+                  interrupted: mutationValue.interrupted === true,
+              }
+            : undefined,
     };
 }
 
@@ -717,17 +865,25 @@ export function validateAgentRunSnapshot(
     childSessionDir: string,
 ): PersistedAgentRun | undefined {
     if (
-        snapshot.ownerSessionId !== ownerSessionId
-        || snapshot.payloadVersion !== 2
-        || snapshot.runInstanceId !== marker.runInstanceId
-        || snapshot.runId !== marker.runId
-    ) return undefined;
+        snapshot.ownerSessionId !== ownerSessionId ||
+        snapshot.payloadVersion !== 2 ||
+        snapshot.runInstanceId !== marker.runInstanceId ||
+        snapshot.runId !== marker.runId
+    )
+        return undefined;
     const parsed = parseRecord(snapshot.payload, ownerSessionId, childSessionDir);
-    if (!parsed || parsed.runInstanceId !== marker.runInstanceId || parsed.runId !== marker.runId) return undefined;
-    if (snapshot.childSessionFile !== undefined && parsed.childSessionLeafId === undefined) return undefined;
+    if (!parsed || parsed.runInstanceId !== marker.runInstanceId || parsed.runId !== marker.runId)
+        return undefined;
+    if (snapshot.childSessionFile !== undefined && parsed.childSessionLeafId === undefined)
+        return undefined;
     if ((parsed.childSessionLeafId ?? null) !== snapshot.childSessionLeafId) return undefined;
-    if ((snapshot.childSessionFile ? path.resolve(snapshot.childSessionFile) : undefined) !== parsed.childSessionFile) return undefined;
-    if (snapshot.status !== parsed.status || snapshot.updatedAt !== parsed.updatedAt) return undefined;
+    if (
+        (snapshot.childSessionFile ? path.resolve(snapshot.childSessionFile) : undefined) !==
+        parsed.childSessionFile
+    )
+        return undefined;
+    if (snapshot.status !== parsed.status || snapshot.updatedAt !== parsed.updatedAt)
+        return undefined;
     return parsed;
 }
 
@@ -755,7 +911,9 @@ export async function loadAgentRunPersistence(
     fs.mkdirSync(childSessionDir, { recursive: true, mode: 0o700 });
     fs.chmodSync(childSessionDir, 0o700);
 
-    const hasEntryIndex = typeof (ctx.sessionManager as unknown as { getEntries?: unknown }).getEntries === "function";
+    const hasEntryIndex =
+        typeof (ctx.sessionManager as unknown as { getEntries?: unknown }).getEntries ===
+        "function";
     const allParentEntries = hasEntryIndex ? ctx.sessionManager.getEntries() : [];
     const activeBranchIds = new Set(ctx.sessionManager.getBranch().map((entry) => entry.id));
     const allMarkers = collectAgentRunSnapshotMarkers(allParentEntries);
@@ -763,23 +921,31 @@ export async function loadAgentRunPersistence(
     const workspacesDir = path.join(path.dirname(path.resolve(agentSessionsDir)), "workspaces");
     const database = await openAgentMetadataDatabase(workspacesDir);
     const snapshotIds = [...new Set(allMarkers.map((entry) => entry.marker.snapshotId))];
-    const snapshots = await withDatabaseFailureCleanup(
-        database,
-        () => listAgentRunSnapshotsInDatabase(database, snapshotIds),
+    const snapshots = await withDatabaseFailureCleanup(database, () =>
+        listAgentRunSnapshotsInDatabase(database, snapshotIds),
     );
     const snapshotsById = new Map(snapshots.map((snapshot) => [snapshot.snapshotId, snapshot]));
     const diagnostics: string[] = [];
     const validSnapshot = (
         entry: ReturnType<typeof collectAgentRunSnapshotMarkers>[number],
-        snapshot: typeof snapshots[number] | undefined,
+        snapshot: (typeof snapshots)[number] | undefined,
     ): PersistedAgentRun | undefined => {
         if (!snapshot) {
-            diagnostics.push(`Could not restore ${entry.marker.runId}: parent marker references a missing SQLite snapshot.`);
+            diagnostics.push(
+                `Could not restore ${entry.marker.runId}: parent marker references a missing SQLite snapshot.`,
+            );
             return undefined;
         }
-        const parsed = validateAgentRunSnapshot(snapshot, entry.marker, ownerSessionId, childSessionDir);
+        const parsed = validateAgentRunSnapshot(
+            snapshot,
+            entry.marker,
+            ownerSessionId,
+            childSessionDir,
+        );
         if (!parsed) {
-            diagnostics.push(`Could not restore ${entry.marker.runId}: parent marker and SQLite snapshot identity do not match.`);
+            diagnostics.push(
+                `Could not restore ${entry.marker.runId}: parent marker and SQLite snapshot identity do not match.`,
+            );
             return undefined;
         }
         return parsed;
@@ -796,9 +962,8 @@ export async function loadAgentRunPersistence(
             createdSequence: snapshot.createdSequence,
         });
     }
-    await withDatabaseFailureCleanup(
-        database,
-        () => initializeAgentRunContinuationHeads(database, sessionHeads),
+    await withDatabaseFailureCleanup(database, () =>
+        initializeAgentRunContinuationHeads(database, sessionHeads),
     );
     const branchHeads = new Map<string, { snapshotId: string; order: number }>();
     for (const entry of activeMarkers) {
@@ -828,9 +993,8 @@ export async function loadAgentRunPersistence(
             }
             throw error;
         }
-        const legacy = await withDatabaseFailureCleanup(
-            database,
-            () => listAgentRunStatesInDatabase(database, ownerSessionId, legacyIds),
+        const legacy = await withDatabaseFailureCleanup(database, () =>
+            listAgentRunStatesInDatabase(database, ownerSessionId, legacyIds),
         );
         for (const stored of legacy) {
             const parsed = parseRecord(stored.state, ownerSessionId, childSessionDir);
@@ -840,13 +1004,21 @@ export async function loadAgentRunPersistence(
     for (const [runInstanceId, branchHead] of branchHeads) {
         const snapshot = snapshotsById.get(branchHead.snapshotId);
         if (!snapshot) {
-            diagnostics.push(`Could not restore ${runInstanceId}: parent marker references a missing SQLite snapshot.`);
+            diagnostics.push(
+                `Could not restore ${runInstanceId}: parent marker references a missing SQLite snapshot.`,
+            );
             continue;
         }
-        const marker = allMarkers.find((entry) => entry.marker.snapshotId === branchHead.snapshotId)?.marker;
-        const parsed = marker ? validateAgentRunSnapshot(snapshot, marker, ownerSessionId, childSessionDir) : undefined;
+        const marker = allMarkers.find(
+            (entry) => entry.marker.snapshotId === branchHead.snapshotId,
+        )?.marker;
+        const parsed = marker
+            ? validateAgentRunSnapshot(snapshot, marker, ownerSessionId, childSessionDir)
+            : undefined;
         if (!parsed) {
-            diagnostics.push(`Could not restore ${snapshot.runId}: its SQLite snapshot is invalid.`);
+            diagnostics.push(
+                `Could not restore ${snapshot.runId}: its SQLite snapshot is invalid.`,
+            );
             continue;
         }
         parsed.runInstanceId = runInstanceId;
@@ -871,7 +1043,12 @@ export async function loadAgentRunPersistence(
                 return sessionManager.appendCustomEntry?.(AGENT_RUN_SNAPSHOT_MARKER, marker);
             },
             {
-                initialHeads: new Map([...sessionHeads].map(([runInstanceId, head]) => [runInstanceId, head.snapshotId])),
+                initialHeads: new Map(
+                    [...sessionHeads].map(([runInstanceId, head]) => [
+                        runInstanceId,
+                        head.snapshotId,
+                    ]),
+                ),
                 requireMarker: hasEntryIndex,
             },
         );
@@ -904,8 +1081,12 @@ export async function loadAgentRunPersistence(
             if (result.ok) return true;
             if (!persistenceWarningShown) {
                 persistenceWarningShown = true;
-                const message = result.error instanceof Error ? result.error.message : String(result.error);
-                ctx.ui.notify(`pi-coder agents: could not persist delegated run state: ${message}`, "warning");
+                const message =
+                    result.error instanceof Error ? result.error.message : String(result.error);
+                ctx.ui.notify(
+                    `pi-coder agents: could not persist delegated run state: ${message}`,
+                    "warning",
+                );
             }
             return false;
         },

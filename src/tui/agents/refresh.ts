@@ -12,7 +12,8 @@ export class RefreshCoordinator<T> {
     constructor(
         private readonly load: () => Promise<T>,
         private readonly target: RefreshTarget<T>,
-        private readonly onError: (error: unknown) => void = (error) => console.error("Agent browser refresh failed:", error),
+        private readonly onError: (error: unknown) => void = (error) =>
+            console.error("Agent browser refresh failed:", error),
     ) {}
 
     schedule(): void {

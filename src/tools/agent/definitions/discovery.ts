@@ -1,10 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-    CONFIG_DIR_NAME,
-    getAgentDir,
-    parseFrontmatter,
-} from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 import {
     AGENT_CAPABILITIES,
@@ -74,7 +70,16 @@ Review the assigned changes for concrete correctness, security, API compatibilit
 export const BUILTIN_WORKER: AgentDefinition = {
     name: "worker",
     description: "Permission-gated implementation work in the current or isolated checkout",
-    capabilities: ["read", "search", "memories", "scratchpad", "todolist", "safe-bash", "command-runner", "edit"],
+    capabilities: [
+        "read",
+        "search",
+        "memories",
+        "scratchpad",
+        "todolist",
+        "safe-bash",
+        "command-runner",
+        "edit",
+    ],
     systemPrompt: `You are the parent's implementation agent for a bounded coding task.
 
 Inspect the relevant code and latest working-tree state before editing. Implement the narrowest complete change, preserve unrelated work, follow repository conventions, and avoid destructive Git operations. Validate the result when feasible and disclose uncertainty or incomplete validation.`,
@@ -105,10 +110,13 @@ const BUILTIN_DEFINITIONS = new Map<string, AgentDefinition>([
 
 function sortedMarkdownFiles(dir: string): string[] {
     try {
-        return fs.readdirSync(dir, { withFileTypes: true })
-            .filter((entry) => entry.name.endsWith(".md") && (entry.isFile() || entry.isSymbolicLink()))
+        return fs
+            .readdirSync(dir, { withFileTypes: true })
+            .filter(
+                (entry) => entry.name.endsWith(".md") && (entry.isFile() || entry.isSymbolicLink()),
+            )
             .map((entry) => path.join(dir, entry.name))
-            .sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+            .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     } catch {
         return [];
     }
@@ -116,9 +124,14 @@ function sortedMarkdownFiles(dir: string): string[] {
 
 function parseCapabilities(value: unknown): AgentCapability[] | undefined {
     if (value === undefined) return [];
-    if (!Array.isArray(value) || value.some((capability) => typeof capability !== "string")) return undefined;
+    if (!Array.isArray(value) || value.some((capability) => typeof capability !== "string"))
+        return undefined;
     const capabilities = [...new Set(value.map((capability) => capability.trim()).filter(Boolean))];
-    if (capabilities.some((capability) => !AGENT_CAPABILITIES.includes(capability as AgentCapability))) {
+    if (
+        capabilities.some(
+            (capability) => !AGENT_CAPABILITIES.includes(capability as AgentCapability),
+        )
+    ) {
         return undefined;
     }
     return capabilities as AgentCapability[];
@@ -126,8 +139,10 @@ function parseCapabilities(value: unknown): AgentCapability[] | undefined {
 
 function parseSafeBashCommands(value: unknown): string[] | undefined {
     if (value === undefined) return [];
-    if (!Array.isArray(value)
-        || value.some((command) => typeof command !== "string" || command.trim() === "")) {
+    if (
+        !Array.isArray(value) ||
+        value.some((command) => typeof command !== "string" || command.trim() === "")
+    ) {
         return undefined;
     }
     const commands = value.map((command) => command.trim());
@@ -136,9 +151,12 @@ function parseSafeBashCommands(value: unknown): string[] | undefined {
 
 function parseAdditionalPaths(value: unknown): string[] | undefined {
     if (value === undefined) return [];
-    if (!Array.isArray(value)
-        || value.some((additionalPath) =>
-            typeof additionalPath !== "string" || additionalPath.trim() === "")) {
+    if (
+        !Array.isArray(value) ||
+        value.some(
+            (additionalPath) => typeof additionalPath !== "string" || additionalPath.trim() === "",
+        )
+    ) {
         return undefined;
     }
     const paths = value.map((additionalPath) => additionalPath.trim());
@@ -224,7 +242,8 @@ function loadScope(
         if (tools !== undefined) {
             diagnostics.push({
                 level: "warning",
-                message: "Agent frontmatter field \"tools\" is unsupported; use the capabilities list instead.",
+                message:
+                    'Agent frontmatter field "tools" is unsupported; use the capabilities list instead.',
                 paths: [filePath],
             });
         }
@@ -250,7 +269,8 @@ function loadScope(
         if (!additionalPaths) {
             diagnostics.push({
                 level: "warning",
-                message: "Agent additionalPaths must be an array containing only non-empty strings.",
+                message:
+                    "Agent additionalPaths must be an array containing only non-empty strings.",
                 paths: [filePath],
             });
             continue;
@@ -259,7 +279,8 @@ function loadScope(
         if (!safeBashCommands) {
             diagnostics.push({
                 level: "warning",
-                message: "Agent safeBashCommands must be an array containing only non-empty strings.",
+                message:
+                    "Agent safeBashCommands must be an array containing only non-empty strings.",
                 paths: [filePath],
             });
             continue;
@@ -285,27 +306,27 @@ function loadScope(
 
         const definition = builtin
             ? {
-                ...builtin,
-                ...(typeof description === "string" ? { description: description.trim() } : {}),
-                capabilities: [...builtin.capabilities],
-                ...(requestedAdditionalPaths !== undefined ? { additionalPaths } : {}),
-                ...(requestedSafeBashCommands !== undefined ? { safeBashCommands } : {}),
-                ...(model !== undefined ? { model: model.trim() || undefined } : {}),
-                systemPrompt: parsed.body.trim() || builtin.systemPrompt,
-                source: builtin.source,
-                filePath,
-            }
+                  ...builtin,
+                  ...(typeof description === "string" ? { description: description.trim() } : {}),
+                  capabilities: [...builtin.capabilities],
+                  ...(requestedAdditionalPaths !== undefined ? { additionalPaths } : {}),
+                  ...(requestedSafeBashCommands !== undefined ? { safeBashCommands } : {}),
+                  ...(model !== undefined ? { model: model.trim() || undefined } : {}),
+                  systemPrompt: parsed.body.trim() || builtin.systemPrompt,
+                  source: builtin.source,
+                  filePath,
+              }
             : {
-                name,
-                description: (description as string).trim(),
-                capabilities,
-                ...(requestedAdditionalPaths !== undefined ? { additionalPaths } : {}),
-                ...(requestedSafeBashCommands !== undefined ? { safeBashCommands } : {}),
-                model: typeof model === "string" && model.trim() ? model.trim() : undefined,
-                systemPrompt: parsed.body.trim(),
-                source,
-                filePath,
-            };
+                  name,
+                  description: (description as string).trim(),
+                  capabilities,
+                  ...(requestedAdditionalPaths !== undefined ? { additionalPaths } : {}),
+                  ...(requestedSafeBashCommands !== undefined ? { safeBashCommands } : {}),
+                  model: typeof model === "string" && model.trim() ? model.trim() : undefined,
+                  systemPrompt: parsed.body.trim(),
+                  source,
+                  filePath,
+              };
         selected.set(name, definition);
     }
 

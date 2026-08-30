@@ -7,9 +7,7 @@ import { withOverlayStack } from "./overlay-stack";
 
 const HORIZONTAL_PADDING = 4;
 
-export type NumericInputParseResult<T extends number> =
-    | { value: T }
-    | { error: string };
+export type NumericInputParseResult<T extends number> = { value: T } | { error: string };
 
 export interface NumericInputOptions<T extends number> {
     title: string;
@@ -56,7 +54,9 @@ export class NumericInputComponent<T extends number> implements Component, Focus
     initialize(theme: Theme): void {
         this.theme = theme;
         const borderColor = (text: string) => theme.fg("border", text);
-        this.container.addChild(new Text(theme.fg("accent", theme.bold(`  ${this.options.title}`)), 1, 0));
+        this.container.addChild(
+            new Text(theme.fg("accent", theme.bold(`  ${this.options.title}`)), 1, 0),
+        );
         this.container.addChild(new Spacer(1));
         this.container.addChild(this.contentBox);
         this.container.addChild(new Spacer(1));
@@ -68,7 +68,9 @@ export class NumericInputComponent<T extends number> implements Component, Focus
 
     render(width: number): string[] {
         if (!this.theme || !this.borderedContainer) {
-            throw new Error("NumericInputComponent must be initialized with a theme before rendering");
+            throw new Error(
+                "NumericInputComponent must be initialized with a theme before rendering",
+            );
         }
         this.contentBox.clear();
         if (this.options.description) {
@@ -90,9 +92,8 @@ export class NumericInputComponent<T extends number> implements Component, Focus
             width: Math.max(1, contentWidth - prefixWidth - 1),
             placeholder: this.theme.fg("dim", this.placeholder),
             firstLinePrefix: label,
-            linePrefixFor: (lineIndex) => lineIndex === 0
-                ? markerPrefix
-                : " ".repeat(prefixWidth),
+            linePrefixFor: (lineIndex) =>
+                lineIndex === 0 ? markerPrefix : " ".repeat(prefixWidth),
         });
         for (const line of lines) {
             this.contentBox.addChild(new Text(line, 1, 0));
@@ -150,21 +151,26 @@ export async function numericInput<T extends number>(
 ): Promise<T | undefined> {
     if (!ctx.hasUI || ctx.mode !== "tui") return undefined;
 
-    return withOverlayStack((overlay) => ctx.ui.custom<T | undefined>((tui, theme, _keybindings, done) => {
-        const component = new NumericInputComponent(options);
-        component.setDoneCallback(done);
-        component.initialize(theme);
-        overlay.bind(tui);
-        return component;
-    }, {
-        overlay: true,
-        overlayOptions: {
-            width: "50%",
-            minWidth: 48,
-            maxHeight: "50%",
-            anchor: "center",
-            margin: 1,
-        },
-        onHandle: overlay.setHandle,
-    }));
+    return withOverlayStack((overlay) =>
+        ctx.ui.custom<T | undefined>(
+            (tui, theme, _keybindings, done) => {
+                const component = new NumericInputComponent(options);
+                component.setDoneCallback(done);
+                component.initialize(theme);
+                overlay.bind(tui);
+                return component;
+            },
+            {
+                overlay: true,
+                overlayOptions: {
+                    width: "50%",
+                    minWidth: 48,
+                    maxHeight: "50%",
+                    anchor: "center",
+                    margin: 1,
+                },
+                onHandle: overlay.setHandle,
+            },
+        ),
+    );
 }

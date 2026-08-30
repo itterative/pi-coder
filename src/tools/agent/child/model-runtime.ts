@@ -1,7 +1,4 @@
-import {
-    ModelRuntime,
-    type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 function mergeProviderHeaders(
     configured: Record<string, string> | undefined,
@@ -48,11 +45,13 @@ export async function createChildModelRuntime(
     const childHasAuth = Boolean(childAuth?.auth.apiKey || childAuth?.auth.headers);
     const parentUsesOAuth = ctx.modelRegistry.isUsingOAuth(model);
 
-    if (shouldCopyParentApiKey({
-        childHasAuth,
-        parentHasApiKey: Boolean(parentAuth.apiKey),
-        parentUsesOAuth,
-    })) {
+    if (
+        shouldCopyParentApiKey({
+            childHasAuth,
+            parentHasApiKey: Boolean(parentAuth.apiKey),
+            parentUsesOAuth,
+        })
+    ) {
         await runtime.setRuntimeApiKey(model.provider, parentAuth.apiKey!);
         runtimeModel = runtime.getModel(model.provider, model.id) ?? model;
         childAuth = await runtime.getAuth(runtimeModel);

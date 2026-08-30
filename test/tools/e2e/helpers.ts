@@ -4,13 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Usage } from "@earendil-works/pi-ai";
-import { openAgentMetadataDatabase, type AgentMetadataDatabase } from "../../../src/tools/agent/storage/metadata";
+import {
+    openAgentMetadataDatabase,
+    type AgentMetadataDatabase,
+} from "../../../src/tools/agent/storage/metadata";
 import { upsertAgentRunCatalogRecordInDatabase } from "../../../src/tools/agent/storage/run-catalog";
 import { loadAgentRunPersistence } from "../../../src/tools/agent/runs/persistence";
 import type { ChildAgentHandle, ParentQuestion } from "../../../src/tools/agent/contracts/runs";
 import type { AgentRunCatalogRecord } from "../../../src/tools/agent/contracts/workspaces";
-import { claimAgentWorkspace, type AgentWorkspace } from "../../../src/tools/agent/workspaces/store";
-import { createAgentWorkspace, updateAgentWorkspace } from "../../../src/tools/agent/workspaces/lifecycle";
+import {
+    claimAgentWorkspace,
+    type AgentWorkspace,
+} from "../../../src/tools/agent/workspaces/store";
+import {
+    createAgentWorkspace,
+    updateAgentWorkspace,
+} from "../../../src/tools/agent/workspaces/lifecycle";
 
 export interface E2EPaths {
     root: string;
@@ -46,7 +55,9 @@ export function assertTemporaryStateDirectory(directory: string): void {
     }
 }
 
-export async function openE2EMetadataDatabase(paths: Pick<E2EPaths, "state">): Promise<AgentMetadataDatabase> {
+export async function openE2EMetadataDatabase(
+    paths: Pick<E2EPaths, "state">,
+): Promise<AgentMetadataDatabase> {
     assertTemporaryStateDirectory(paths.state);
     return openAgentMetadataDatabase(paths.state);
 }
@@ -168,7 +179,11 @@ export async function createClaimedTaskWorkspace(
     }: { ownerSessionId?: string; runId?: string; runInstanceId?: string } = {},
 ): Promise<AgentWorkspace> {
     const created = await createAgentWorkspace(paths.repository, { workspacesDir: paths.state });
-    const ready = await updateAgentWorkspace(created, { setupState: "skipped" }, { workspacesDir: paths.state });
+    const ready = await updateAgentWorkspace(
+        created,
+        { setupState: "skipped" },
+        { workspacesDir: paths.state },
+    );
     return claimAgentWorkspace(ready.id, {
         ownerSessionId,
         leaseRunId: runId,

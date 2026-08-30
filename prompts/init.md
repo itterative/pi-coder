@@ -7,6 +7,7 @@ Create or update the `AGENTS.md` file in the project root. AGENTS.md is loaded i
 ## Phase 1: Ask what to set up
 
 Ask the user what they want to document. pi loads `AGENTS.md` files automatically:
+
 - **Project `AGENTS.md`** at the repo root — checked into source control, shared with the team.
 - **Global `~/.pi/agent/AGENTS.md`** — personal instructions loaded for all projects, not shared.
 
@@ -17,6 +18,7 @@ Clarify which file(s) to create or update. If the user wants personal preference
 Survey the codebase by reading key files to understand the project: manifest files (`package.json`, `Cargo.toml`, `pyproject.toml`, `go.mod`, `pom.xml`, etc.), README, Makefile/build configs, CI config, existing `AGENTS.md`, `.cursor/rules` or `.cursorrules`, `.github/copilot-instructions.md`, `.windsurfrules`, `.clinerules`, any `.pi/` config.
 
 Detect:
+
 - Build, test, and lint commands (especially non-standard ones)
 - Languages, frameworks, and package manager
 - Project structure (monorepo with workspaces, multi-module, or single project)
@@ -34,10 +36,11 @@ Ask the user only about things the code can't answer.
 If the user chose project AGENTS.md or both: ask about codebase practices — non-obvious commands, gotchas, branch/PR conventions, required env setup, testing quirks. Skip things already in README or obvious from manifest files. Do not mark any options as "recommended" — this is about how their team works, not best practices.
 
 If the user wants to set up global personal rules: ask about them, not the codebase. Do not mark any options as "recommended" — this is about their personal preferences, not best practices. Examples:
-  - What's their role? (e.g., "backend engineer", "data scientist", "new hire onboarding")
-  - How familiar are they with this codebase and its languages/frameworks? (so responses can calibrate explanation depth)
-  - Do they have personal sandbox URLs, test accounts, API key paths, or local setup details worth noting?
-  - Any communication preferences? (e.g., "be terse", "always explain tradeoffs", "don't summarize at the end")
+
+- What's their role? (e.g., "backend engineer", "data scientist", "new hire onboarding")
+- How familiar are they with this codebase and its languages/frameworks? (so responses can calibrate explanation depth)
+- Do they have personal sandbox URLs, test accounts, API key paths, or local setup details worth noting?
+- Any communication preferences? (e.g., "be terse", "always explain tradeoffs", "don't summarize at the end")
 
 Show the proposed AGENTS.md content directly and ask: "Does this look right? Anything to add, change, or remove?" Iterate based on feedback.
 
@@ -46,6 +49,7 @@ Show the proposed AGENTS.md content directly and ask: "Does this look right? Any
 Write a minimal AGENTS.md at the project root. Every line must pass this test: "Would removing this cause mistakes?" If no, cut it.
 
 Include:
+
 - Build/test/lint commands the model can't guess (non-standard scripts, flags, or sequences)
 - Code style rules that DIFFER from language defaults (e.g., "prefer type over interface")
 - Testing instructions and quirks (e.g., "run single test with: pytest -k 'test_name'")
@@ -55,6 +59,7 @@ Include:
 - Important parts from existing AI coding tool configs if they exist (`.cursor/rules`, `.cursorrules`, `.github/copilot-instructions.md`, `.windsurfrules`, `.clinerules`)
 
 Exclude:
+
 - File-by-file structure or component lists (the model can discover these by reading the codebase)
 - Standard language conventions the model already knows
 - Generic advice ("write clean code", "handle errors")
@@ -74,6 +79,7 @@ If AGENTS.md already exists: read it, propose specific changes, and explain why 
 Write a minimal `~/.pi/agent/AGENTS.md`. This file is loaded for all projects.
 
 Include:
+
 - The user's role and general familiarity levels (so responses can calibrate explanations)
 - Personal workflow or communication preferences
 - Any cross-project setup details worth noting

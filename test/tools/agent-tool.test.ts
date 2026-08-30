@@ -9,7 +9,11 @@ import registerAgentTool, { clearCompletedWorkspaceSetupRun } from "../../src/to
 import { executeAgentAction } from "../../src/tools/agent/action-dispatch";
 import { registerAgentTool as registerAgentToolDefinition } from "../../src/tools/agent/presentation/tool";
 import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/observability/events";
-import { ZERO_USAGE, type AgentRunSummary, type ChildAgentHandle } from "../../src/tools/agent/runs/manager";
+import {
+    ZERO_USAGE,
+    type AgentRunSummary,
+    type ChildAgentHandle,
+} from "../../src/tools/agent/runs/manager";
 import type {
     AgentWorkspace,
     AgentWorkspaceResult,
@@ -40,8 +44,9 @@ const TEST_WORKER_DEFINITION = {
 
 const tempDirs: string[] = [];
 beforeEach(() => {
-    vi.spyOn(workspaceCheckpoints, "createAgentWorkspaceCheckpointCallback")
-        .mockReturnValue(async () => {});
+    vi.spyOn(workspaceCheckpoints, "createAgentWorkspaceCheckpointCallback").mockReturnValue(
+        async () => {},
+    );
     vi.spyOn(workspaceCheckpoints, "latestAgentWorkspaceCheckpoint").mockResolvedValue({
         id: "checkpoint-1",
         workspaceId: "workspace-1",
@@ -138,7 +143,10 @@ function revisionActionFixture() {
     const manager = {
         flushPersistence: vi.fn(async () => {}),
         getPersistedRun: vi.fn(() => record),
-        reserveRunIdentity: vi.fn(() => ({ runId: "worker-1", runInstanceId: "worker-instance-1" })),
+        reserveRunIdentity: vi.fn(() => ({
+            runId: "worker-1",
+            runInstanceId: "worker-instance-1",
+        })),
         reserveContinuationLease: vi.fn(() => undefined),
         startContinuation: vi.fn(async () => continuationOutcome),
     };
@@ -169,7 +177,9 @@ function configureRevisionAction(fixture: ReturnType<typeof revisionActionFixtur
     return vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
 }
 
-async function executeRevisionAction(fixture: ReturnType<typeof revisionActionFixture>): Promise<unknown> {
+async function executeRevisionAction(
+    fixture: ReturnType<typeof revisionActionFixture>,
+): Promise<unknown> {
     return executeParentWorkspaceAction(
         { action: "continue", runId: fixture.record.runId, guidance: "Apply feedback" },
         {
@@ -205,9 +215,14 @@ describe("agent extension registration", () => {
         };
         const startError = new Error("manager startup failed");
         vi.spyOn(workspaceSetup, "prepareIsolatedWorkspace").mockResolvedValue(reservation);
-        const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
+        const transferSpy = vi
+            .spyOn(workspaceStore, "transferAgentWorkspaceLease")
+            .mockResolvedValue();
         const manager = {
-            reserveRunIdentity: vi.fn(() => ({ runId: "worker-1", runInstanceId: "worker-instance-1" })),
+            reserveRunIdentity: vi.fn(() => ({
+                runId: "worker-1",
+                runInstanceId: "worker-instance-1",
+            })),
             start: vi.fn().mockRejectedValue(startError),
         };
         const definition = TEST_WORKER_DEFINITION;
@@ -231,7 +246,13 @@ describe("agent extension registration", () => {
         };
 
         const outcome = await executeAgentAction(
-            { action: "start", agent: "worker", task: "Implement the change", isolation: "worktree", background: true },
+            {
+                action: "start",
+                agent: "worker",
+                task: "Implement the change",
+                isolation: "worktree",
+                background: true,
+            },
             { signal: undefined, progress: vi.fn(), ctx: ctx as any, lifecycle: lifecycle as any },
         );
 
@@ -260,19 +281,23 @@ describe("agent extension registration", () => {
         ]);
 
         for (const status of ["failed", "canceled", "interrupted"] as const) {
-            expect(clearCompletedWorkspaceSetupRun(setupRuns, {
-                agent: "worker",
-                status,
-                workspaceId: "workspace-1",
-            })).toBe(false);
+            expect(
+                clearCompletedWorkspaceSetupRun(setupRuns, {
+                    agent: "worker",
+                    status,
+                    workspaceId: "workspace-1",
+                }),
+            ).toBe(false);
             expect(setupRuns.has("setup-1")).toBe(true);
         }
 
-        expect(clearCompletedWorkspaceSetupRun(setupRuns, {
-            agent: "worker",
-            status: "completed",
-            workspaceId: "workspace-1",
-        })).toBe(true);
+        expect(
+            clearCompletedWorkspaceSetupRun(setupRuns, {
+                agent: "worker",
+                status: "completed",
+                workspaceId: "workspace-1",
+            }),
+        ).toBe(true);
         expect(setupRuns.has("setup-1")).toBe(false);
     });
 
@@ -317,7 +342,10 @@ describe("agent extension registration", () => {
             ui: { notify: () => {}, setWidget: () => {} },
         };
         await handlers.session_start[0]({ reason: "startup" }, ctx);
-        const prompt = await handlers.before_agent_start[0]({ systemPrompt: "Parent prompt" }, ctx) as any;
+        const prompt = (await handlers.before_agent_start[0](
+            { systemPrompt: "Parent prompt" },
+            ctx,
+        )) as any;
         const result = await tool.execute(
             "call-1",
             { action: "start", agent: "scout", task: "Inspect" },
@@ -325,10 +353,13 @@ describe("agent extension registration", () => {
             undefined,
             ctx,
         );
-        const errorHook = await handlers.tool_result[0]({
-            toolName: "agent",
-            details: { status: "failed" },
-        }, ctx);
+        const errorHook = await handlers.tool_result[0](
+            {
+                toolName: "agent",
+                details: { status: "failed" },
+            },
+            ctx,
+        );
 
         expect(tool.name).toBe("agent");
         expect(tool.executionMode).toBe("sequential");
@@ -336,25 +367,41 @@ describe("agent extension registration", () => {
             key: "ctrl+alt+b",
             description: "Move foreground delegated agent to background",
         });
-        await expect([
-            tool.description,
-            ...tool.promptGuidelines,
-        ].join("\n")).toMatchFileSnapshot("__snapshots__/agent-tool.delegation-guidance.txt");
-        await expect(prompt.systemPrompt).toMatchFileSnapshot("__snapshots__/agent-tool.parent-system-prompt.txt");
-        const repeatedPrompt = await handlers.before_agent_start[0](prompt, ctx) as any;
+        await expect([tool.description, ...tool.promptGuidelines].join("\n")).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.delegation-guidance.txt",
+        );
+        await expect(prompt.systemPrompt).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.parent-system-prompt.txt",
+        );
+        const repeatedPrompt = (await handlers.before_agent_start[0](prompt, ctx)) as any;
         expect(repeatedPrompt).toEqual(prompt);
         expect(result.details).toMatchObject({ status: "completed", agent: "scout" });
         expect(events).toContainEqual({
             channel: AGENT_EVENT_CHANNEL,
-            data: expect.objectContaining({ cwd: process.cwd(), type: "run", action: "created", runId: "scout-1" }),
+            data: expect.objectContaining({
+                cwd: process.cwd(),
+                type: "run",
+                action: "created",
+                runId: "scout-1",
+            }),
         });
         expect(events).toContainEqual({
             channel: AGENT_EVENT_CHANNEL,
-            data: expect.objectContaining({ type: "run", action: "status_changed", status: "running", runId: "scout-1" }),
+            data: expect.objectContaining({
+                type: "run",
+                action: "status_changed",
+                status: "running",
+                runId: "scout-1",
+            }),
         });
         expect(events).toContainEqual({
             channel: AGENT_EVENT_CHANNEL,
-            data: expect.objectContaining({ type: "run", action: "removed", reason: "terminal", runId: "scout-1" }),
+            data: expect.objectContaining({
+                type: "run",
+                action: "removed",
+                reason: "terminal",
+                runId: "scout-1",
+            }),
         });
         expect(errorHook).toEqual({ isError: true });
         await handlers.session_shutdown[0]({}, ctx);
@@ -392,7 +439,14 @@ describe("agent extension registration", () => {
                 agent: "scout",
                 task: "Inspect",
                 context: {
-                    sections: [{ id: "parent_summary", title: "Summary", content: "Known", source: "parent" }],
+                    sections: [
+                        {
+                            id: "parent_summary",
+                            title: "Summary",
+                            content: "Known",
+                            source: "parent",
+                        },
+                    ],
                 },
             },
             undefined,
@@ -400,13 +454,18 @@ describe("agent extension registration", () => {
             {
                 cwd: process.cwd(),
                 isProjectTrusted: () => false,
-                sessionManager: { getSessionId: () => "parent-session", getSessionFile: () => undefined },
+                sessionManager: {
+                    getSessionId: () => "parent-session",
+                    getSessionFile: () => undefined,
+                },
                 ui: { notify: () => {}, setWidget: () => {} },
             },
         );
 
         expect(result.details.status).toBe("completed");
-        await expect(result.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.ignored-context-response.txt");
+        await expect(result.content[0].text).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.ignored-context-response.txt",
+        );
         await handlers.session_shutdown?.[0]?.({}, {});
     });
 
@@ -422,7 +481,10 @@ describe("agent extension registration", () => {
             registerTool(definition: any) {
                 tool = definition;
             },
-            registerShortcut(_key: string, options: { handler: (ctx: any) => void | Promise<void> }) {
+            registerShortcut(
+                _key: string,
+                options: { handler: (ctx: any) => void | Promise<void> },
+            ) {
                 shortcutHandler = options.handler;
             },
             registerCommand() {},
@@ -456,7 +518,10 @@ describe("agent extension registration", () => {
             hasUI: true,
             isProjectTrusted: () => false,
             isIdle: () => false,
-            sessionManager: { getSessionId: () => "parent-session", getSessionFile: () => undefined },
+            sessionManager: {
+                getSessionId: () => "parent-session",
+                getSessionFile: () => undefined,
+            },
             ui: { notify: () => {}, setWidget: () => {} },
         };
         const start = tool.execute(
@@ -483,26 +548,31 @@ describe("agent extension registration", () => {
 
     it("renders the full prompt and preserves response whitespace without metadata", async () => {
         let tool: any;
-        const prompt = "Review the implementation.\nPlease inspect the relevant modules and report any regressions.";
+        const prompt =
+            "Review the implementation.\nPlease inspect the relevant modules and report any regressions.";
         const response = "\n  leading spaces\ntrailing spaces  \n";
-        registerAgentToolDefinition({
-            registerTool(definition: any) {
-                tool = definition;
-            },
-        } as any, async () => ({
-            content: response,
-            details: {
-                title: "Natural validation run",
-                agent: "scout",
-                status: "completed",
-                task: prompt,
-                response,
-                toolCounts: { read: 2, grep: 1 },
-                failedToolCalls: 1,
-            },
-            usage: ZERO_USAGE,
-            isError: false,
-        } as any));
+        registerAgentToolDefinition(
+            {
+                registerTool(definition: any) {
+                    tool = definition;
+                },
+            } as any,
+            async () =>
+                ({
+                    content: response,
+                    details: {
+                        title: "Natural validation run",
+                        agent: "scout",
+                        status: "completed",
+                        task: prompt,
+                        response,
+                        toolCounts: { read: 2, grep: 1 },
+                        failedToolCalls: 1,
+                    },
+                    usage: ZERO_USAGE,
+                    isError: false,
+                }) as any,
+        );
 
         const result = await tool.execute(
             "call-render",
@@ -512,7 +582,9 @@ describe("agent extension registration", () => {
             {} as any,
         );
         result.content[0].text = `<metadata>generated metadata</metadata>\n\n${response}`;
-        const rendered = snapshotText(renderText(tool.renderResult(result, { expanded: true }, mockTheme), 10_000));
+        const rendered = snapshotText(
+            renderText(tool.renderResult(result, { expanded: true }, mockTheme), 10_000),
+        );
 
         await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-tool.tui.markdown.txt");
     });
@@ -565,35 +637,41 @@ describe("agent extension registration", () => {
             leaseKind: undefined,
             latestResult: { ...result, status: "applied" },
         };
-        vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([{
-            ownerSessionId: "parent-1",
-            runId: "worker-1",
-            parentCwd: process.cwd(),
-            title: "Worker result",
-            agent: "worker",
-            agentSource: "builtin",
-            task: "Implement the change",
-            status: "removed",
-            background: true,
-            mutating: true,
-            workspaceId: "workspace-1",
-            startedAt: 1,
-            updatedAt: 1,
-            usageSnapshot: ZERO_USAGE,
-        }]);
-        vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValueOnce(workspace);
-        const executeWorkspaceAction = vi.spyOn(workspaceActions, "executeWorkspaceAction").mockResolvedValue({
-            workspace: releasedWorkspace,
-            result: {
-                ...result,
-                status: "applied",
-                parentRevision: "base",
-                appliedAt: 2,
+        vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([
+            {
+                ownerSessionId: "parent-1",
+                runId: "worker-1",
+                parentCwd: process.cwd(),
+                title: "Worker result",
+                agent: "worker",
+                agentSource: "builtin",
+                task: "Implement the change",
+                status: "removed",
+                background: true,
+                mutating: true,
+                workspaceId: "workspace-1",
+                startedAt: 1,
+                updatedAt: 1,
+                usageSnapshot: ZERO_USAGE,
             },
-            effects: ["result_changed", "lease_changed", "workspace_updated"],
-            disposition: "applied",
+        ]);
+        vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValueOnce(workspace);
+        const executeWorkspaceAction = vi
+            .spyOn(workspaceActions, "executeWorkspaceAction")
+            .mockResolvedValue({
+                workspace: releasedWorkspace,
+                result: {
+                    ...result,
+                    status: "applied",
+                    parentRevision: "base",
+                    appliedAt: 2,
+                },
+                effects: ["result_changed", "lease_changed", "workspace_updated"],
+                disposition: "applied",
+            });
+        registerAgentTool(pi, async () => {
+            throw new Error("not used");
         });
-        registerAgentTool(pi, async () => { throw new Error("not used"); });
 
         const outcome = await tool.execute(
             "call-apply",
@@ -643,7 +721,8 @@ describe("agent extension registration", () => {
                         context: "Implementation A is simpler; B has more callers.",
                     };
                 } else {
-                    output = "Implementation A is preferred because it preserves the existing contract.";
+                    output =
+                        "Implementation A is preferred because it preserves the existing contract.";
                 }
             },
             abort: async () => {},
@@ -677,13 +756,16 @@ describe("agent extension registration", () => {
             undefined,
             ctx,
         );
-        const waitingText = snapshotText(renderText(
-            tool.renderResult(waiting, { expanded: false }, mockTheme),
-            120,
-        ));
+        const waitingText = snapshotText(
+            renderText(tool.renderResult(waiting, { expanded: false }, mockTheme), 120),
+        );
         expect(waiting.details.status).toBe("waiting_for_parent");
-        await expect(waiting.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.foreground-waiting.txt");
-        await expect(waitingText).toMatchFileSnapshot("__snapshots__/agent-tool.tui.foreground-waiting.txt");
+        await expect(waiting.content[0].text).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.foreground-waiting.txt",
+        );
+        await expect(waitingText).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.tui.foreground-waiting.txt",
+        );
 
         const completed = await tool.execute(
             "call-2",
@@ -692,13 +774,16 @@ describe("agent extension registration", () => {
             undefined,
             ctx,
         );
-        const completedText = snapshotText(renderText(
-            tool.renderResult(completed, { expanded: true }, mockTheme),
-            120,
-        ));
+        const completedText = snapshotText(
+            renderText(tool.renderResult(completed, { expanded: true }, mockTheme), 120),
+        );
         expect(completed.details.status).toBe("completed");
-        await expect(completed.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.foreground-completed.txt");
-        await expect(completedText).toMatchFileSnapshot("__snapshots__/agent-tool.tui.foreground-completed.txt");
+        await expect(completed.content[0].text).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.foreground-completed.txt",
+        );
+        await expect(completedText).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.tui.foreground-completed.txt",
+        );
         expect(promptCount).toBe(2);
         await handlers.session_shutdown[0]({}, ctx);
     });
@@ -721,7 +806,8 @@ describe("agent extension registration", () => {
             },
         } as any;
         let background = false;
-        let reportProgress: ((progress: { output: string; recentActivity: string[] }) => void) | undefined;
+        let reportProgress:
+            ((progress: { output: string; recentActivity: string[] }) => void) | undefined;
         let childProgress = { output: "", recentActivity: [] as string[] };
         const child: ChildAgentHandle = {
             async prompt() {
@@ -762,7 +848,13 @@ describe("agent extension registration", () => {
                 notify: () => {},
                 setWidget: (
                     _id: string,
-                    value: string[] | ((tui: typeof widgetTui, theme: unknown) => { render(width: number): string[] }) | undefined,
+                    value:
+                        | string[]
+                        | ((
+                              tui: typeof widgetTui,
+                              theme: unknown,
+                          ) => { render(width: number): string[] })
+                        | undefined,
                     options?: { placement?: string },
                 ) => {
                     if (typeof value === "function") {
@@ -794,10 +886,10 @@ describe("agent extension registration", () => {
             undefined,
             ctx,
         );
-        const prompt = await handlers.before_agent_start[0](
+        const prompt = (await handlers.before_agent_start[0](
             { systemPrompt: "Parent prompt" },
             ctx,
-        ) as any;
+        )) as any;
         expect(sentMessages).toEqual([]);
         await handlers.agent_settled[0]({}, { ...ctx, isIdle: () => true });
         expect(sentMessages).toHaveLength(1);
@@ -806,8 +898,12 @@ describe("agent extension registration", () => {
             customType: "pi-coder-agent-mailbox",
             display: false,
         });
-        await expect(sentMessages[0]?.message.content).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-mailbox-completion.txt");
-        const listWorkspaces = vi.spyOn(workspaceStore, "listAgentWorkspaces").mockResolvedValue([]);
+        await expect(sentMessages[0]?.message.content).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.background-mailbox-completion.txt",
+        );
+        const listWorkspaces = vi
+            .spyOn(workspaceStore, "listAgentWorkspaces")
+            .mockResolvedValue([]);
         const listed = await tool.execute(
             "call-list",
             { action: "list" },
@@ -815,7 +911,9 @@ describe("agent extension registration", () => {
             undefined,
             ctx,
         );
-        expect(listWorkspaces).toHaveBeenCalledWith(process.cwd(), { includeMissingWorktrees: true });
+        expect(listWorkspaces).toHaveBeenCalledWith(process.cwd(), {
+            includeMissingWorktrees: true,
+        });
         const collected = await tool.execute(
             "call-3",
             { action: "collect", runId: "scout-1" },
@@ -825,16 +923,29 @@ describe("agent extension registration", () => {
         );
 
         expect(started.details).toMatchObject({ status: "starting", background: true });
-        await expect(started.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-start.txt");
+        await expect(started.content[0].text).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.background-start.txt",
+        );
         expect(status.details.status).toBe("completed");
-        await expect(status.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-status.txt");
-        const promptAfterSpawn = await handlers.before_agent_start[0]({ systemPrompt: "Parent prompt" }, ctx) as any;
+        await expect(status.content[0].text).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.background-status.txt",
+        );
+        const promptAfterSpawn = (await handlers.before_agent_start[0](
+            { systemPrompt: "Parent prompt" },
+            ctx,
+        )) as any;
         expect(promptAfterSpawn).toEqual(prompt);
-        await expect(listed.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-list.txt");
+        await expect(listed.content[0].text).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.background-list.txt",
+        );
         expect(collected.details.status).toBe("completed");
-        await expect(collected.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.background-collect.txt");
+        await expect(collected.content[0].text).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.background-collect.txt",
+        );
         const widgetLines = widgets.flatMap((lines) => lines ?? []).map((line) => line.trimEnd());
-        await expect(widgetLines.join("\n")).toMatchFileSnapshot("__snapshots__/agent-tool.tui.background-widget.txt");
+        await expect(widgetLines.join("\n")).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.tui.background-widget.txt",
+        );
         expect(widgets[widgets.length - 1]).toBeUndefined();
         expect(widgetPlacements).toContain("aboveEditor");
         expect(background).toBe(true);
@@ -885,9 +996,15 @@ describe("agent extension registration", () => {
             provisionalLeaseRunId: "provisional-1",
             provisionalLeaseRunInstanceId: "provisional-instance-1",
         });
-        const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
-        const getWorkspaceSpy = vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace);
-        const prepareResultSpy = vi.spyOn(workspaceResults, "prepareAgentWorkspaceApplication").mockResolvedValue(result);
+        const transferSpy = vi
+            .spyOn(workspaceStore, "transferAgentWorkspaceLease")
+            .mockResolvedValue();
+        const getWorkspaceSpy = vi
+            .spyOn(workspaceStore, "getAgentWorkspace")
+            .mockResolvedValue(workspace);
+        const prepareResultSpy = vi
+            .spyOn(workspaceResults, "prepareAgentWorkspaceApplication")
+            .mockResolvedValue(result);
         const child: ChildAgentHandle = {
             prompt: async () => {},
             abort: async () => {},
@@ -912,7 +1029,13 @@ describe("agent extension registration", () => {
         await handlers.session_start[0]({}, ctx);
         await tool.execute(
             "call-1",
-            { action: "start", agent: "worker", task: "Implement in isolation", isolation: "worktree", background: true },
+            {
+                action: "start",
+                agent: "worker",
+                task: "Implement in isolation",
+                isolation: "worktree",
+                background: true,
+            },
             undefined,
             undefined,
             ctx,
@@ -941,17 +1064,14 @@ describe("agent extension registration", () => {
                 dialogEvents: undefined,
             }),
         );
-        expect(transferSpy).toHaveBeenCalledWith(
-            workspace.id,
-            {
-                ownerSessionId: "parent-session",
-                fromLeaseRunId: "provisional-1",
-                toLeaseRunId: "worker-1",
-                leaseKind: "task",
-                fromLeaseRunInstanceId: "provisional-instance-1",
-                toLeaseRunInstanceId: expect.any(String),
-            },
-        );
+        expect(transferSpy).toHaveBeenCalledWith(workspace.id, {
+            ownerSessionId: "parent-session",
+            fromLeaseRunId: "provisional-1",
+            toLeaseRunId: "worker-1",
+            leaseKind: "task",
+            fromLeaseRunInstanceId: "provisional-instance-1",
+            toLeaseRunInstanceId: expect.any(String),
+        });
         expect(getWorkspaceSpy).toHaveBeenCalledWith(workspace.id);
         expect(prepareResultSpy).toHaveBeenCalledWith(workspace, {
             ownerSessionId: "parent-session",
@@ -959,7 +1079,9 @@ describe("agent extension registration", () => {
             leaseRunInstanceId: expect.any(String),
         });
         expect(collected.details.workspaceResult).toEqual(result);
-        await expect(collected.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.isolated-collect.txt");
+        await expect(collected.content[0].text).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.isolated-collect.txt",
+        );
         await handlers.session_shutdown[0]({}, ctx);
     });
 
@@ -1040,7 +1162,10 @@ describe("agent extension registration", () => {
         const manager = {
             flushPersistence: vi.fn(async () => {}),
             getPersistedRun: vi.fn(() => record),
-            reserveRunIdentity: vi.fn(() => ({ runId: "worker-1", runInstanceId: "worker-instance-1" })),
+            reserveRunIdentity: vi.fn(() => ({
+                runId: "worker-1",
+                runInstanceId: "worker-instance-1",
+            })),
             startContinuation: vi.fn(async () => continuationOutcome),
         };
         const ctx = {
@@ -1056,8 +1181,12 @@ describe("agent extension registration", () => {
         vi.spyOn(workspaceGit, "hasAncestor").mockResolvedValue(true);
         vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record] as any);
         vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace as any);
-        const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
-        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockResolvedValue(continuationOutcome as any);
+        const transferSpy = vi
+            .spyOn(workspaceStore, "transferAgentWorkspaceLease")
+            .mockResolvedValue();
+        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockResolvedValue(
+            continuationOutcome as any,
+        );
 
         const result = await executeParentWorkspaceAction(
             { action: "continue", runId: "worker-1", guidance: "Apply feedback" },
@@ -1099,7 +1228,14 @@ describe("agent extension registration", () => {
         const definition = {
             name: "reviewer",
             source: "builtin",
-            capabilities: ["read", "search", "memories", "scratchpad", "safe-bash", "command-runner"],
+            capabilities: [
+                "read",
+                "search",
+                "memories",
+                "scratchpad",
+                "safe-bash",
+                "command-runner",
+            ],
             description: "Code and Git-history review with validation",
             systemPrompt: "Reviewer prompt",
         };
@@ -1145,7 +1281,10 @@ describe("agent extension registration", () => {
         const manager = {
             flushPersistence: vi.fn(async () => {}),
             getPersistedRun: vi.fn(() => record),
-            reserveRunIdentity: vi.fn(() => ({ runId: "reviewer-1", runInstanceId: "reviewer-instance-1" })),
+            reserveRunIdentity: vi.fn(() => ({
+                runId: "reviewer-1",
+                runInstanceId: "reviewer-instance-1",
+            })),
             startContinuation: vi.fn(async () => continuationOutcome),
         };
         const ctx = {
@@ -1160,7 +1299,11 @@ describe("agent extension registration", () => {
         vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record] as any);
 
         const result = await executeParentWorkspaceAction(
-            { action: "continue", runId: "reviewer-1", guidance: "Please re-check the API compatibility findings." },
+            {
+                action: "continue",
+                runId: "reviewer-1",
+                guidance: "Please re-check the API compatibility findings.",
+            },
             {
                 ctx: ctx as any,
                 manager: manager as any,
@@ -1200,7 +1343,7 @@ describe("agent extension registration", () => {
                 onProgress: progress,
                 onBackgroundUpdate,
                 title: "Review changes revision",
-                identity: { runId: "reviewer-1", runInstanceId: "reviewer-instance-1" }
+                identity: { runId: "reviewer-1", runInstanceId: "reviewer-instance-1" },
             },
         );
         expect(discover).toHaveBeenCalledWith(ctx);
@@ -1222,11 +1365,18 @@ describe("agent extension registration", () => {
             },
         };
         manager.getPersistedRun.mockReturnValue(continuedRecord);
-        manager.reserveRunIdentity.mockReturnValue({ runId: "reviewer-1", runInstanceId: "reviewer-instance-1" });
+        manager.reserveRunIdentity.mockReturnValue({
+            runId: "reviewer-1",
+            runInstanceId: "reviewer-instance-1",
+        });
         manager.startContinuation.mockResolvedValue(secondOutcome);
 
         const secondResult = await executeParentWorkspaceAction(
-            { action: "continue", runId: "reviewer-1", guidance: "Follow up on the remaining concern." },
+            {
+                action: "continue",
+                runId: "reviewer-1",
+                guidance: "Follow up on the remaining concern.",
+            },
             {
                 ctx: ctx as any,
                 manager: manager as any,
@@ -1251,7 +1401,7 @@ describe("agent extension registration", () => {
             expect.objectContaining({
                 onBackgroundUpdate,
                 title: "Review changes revision",
-                identity: { runId: "reviewer-1", runInstanceId: "reviewer-instance-1" }
+                identity: { runId: "reviewer-1", runInstanceId: "reviewer-instance-1" },
             }),
         );
     });
@@ -1308,7 +1458,9 @@ describe("agent extension registration", () => {
         const fixture = revisionActionFixture();
         const transferSpy = configureRevisionAction(fixture);
         const finalizationError = new Error("result finalization failed");
-        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockRejectedValue(finalizationError);
+        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockRejectedValue(
+            finalizationError,
+        );
 
         await expect(executeRevisionAction(fixture)).rejects.toBe(finalizationError);
         expect(transferSpy).not.toHaveBeenCalled();
@@ -1357,12 +1509,18 @@ describe("agent extension registration", () => {
             provisionalLeaseRunInstanceId: "provisional-instance-foreground",
         });
         const order: string[] = [];
-        const transferSpy = vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockImplementation(async () => {
-            order.push("transfer");
-        });
+        const transferSpy = vi
+            .spyOn(workspaceStore, "transferAgentWorkspaceLease")
+            .mockImplementation(async () => {
+                order.push("transfer");
+            });
         vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace);
-        const prepareResultSpy = vi.spyOn(workspaceResults, "prepareAgentWorkspaceApplication").mockResolvedValue(result);
-        const releaseSpy = vi.spyOn(workspaceResults, "releaseAgentWorkspaceAfterNoChanges").mockResolvedValue();
+        const prepareResultSpy = vi
+            .spyOn(workspaceResults, "prepareAgentWorkspaceApplication")
+            .mockResolvedValue(result);
+        const releaseSpy = vi
+            .spyOn(workspaceResults, "releaseAgentWorkspaceAfterNoChanges")
+            .mockResolvedValue();
         const child: ChildAgentHandle = {
             prompt: async () => {
                 order.push("prompt");
@@ -1390,7 +1548,12 @@ describe("agent extension registration", () => {
 
         const completed = await tool.execute(
             "call-foreground",
-            { action: "start", agent: "worker", task: "Inspect in isolation", isolation: "worktree" },
+            {
+                action: "start",
+                agent: "worker",
+                task: "Inspect in isolation",
+                isolation: "worktree",
+            },
             undefined,
             undefined,
             ctx,
@@ -1398,17 +1561,14 @@ describe("agent extension registration", () => {
 
         expect(order.indexOf("transfer")).toBeGreaterThanOrEqual(0);
         expect(order.indexOf("transfer")).toBeLessThan(order.indexOf("prompt"));
-        expect(transferSpy).toHaveBeenCalledWith(
-            workspace.id,
-            {
-                ownerSessionId: "parent-session",
-                fromLeaseRunId: "provisional-foreground",
-                toLeaseRunId: "worker-1",
-                leaseKind: "task",
-                fromLeaseRunInstanceId: "provisional-instance-foreground",
-                toLeaseRunInstanceId: expect.any(String),
-            },
-        );
+        expect(transferSpy).toHaveBeenCalledWith(workspace.id, {
+            ownerSessionId: "parent-session",
+            fromLeaseRunId: "provisional-foreground",
+            toLeaseRunId: "worker-1",
+            leaseKind: "task",
+            fromLeaseRunInstanceId: "provisional-instance-foreground",
+            toLeaseRunInstanceId: expect.any(String),
+        });
         expect(prepareResultSpy).toHaveBeenCalledWith(workspace, {
             ownerSessionId: "parent-session",
             leaseRunId: "worker-1",
@@ -1420,7 +1580,9 @@ describe("agent extension registration", () => {
             leaseRunInstanceId: expect.any(String),
         });
         expect(completed.details.workspaceResult).toEqual(result);
-        await expect(completed.content[0].text).toMatchFileSnapshot("__snapshots__/agent-tool.agent.isolated-foreground.txt");
+        await expect(completed.content[0].text).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.isolated-foreground.txt",
+        );
         await handlers.session_shutdown[0]({}, ctx);
     });
 
@@ -1442,9 +1604,10 @@ describe("agent extension registration", () => {
         } as any;
         let releasePrompt: (() => void) | undefined;
         const child: ChildAgentHandle = {
-            prompt: () => new Promise<void>((resolve) => {
-                releasePrompt = resolve;
-            }),
+            prompt: () =>
+                new Promise<void>((resolve) => {
+                    releasePrompt = resolve;
+                }),
             abort: async () => {},
             dispose: () => {},
             takeParentQuestion: () => undefined,
@@ -1480,7 +1643,9 @@ describe("agent extension registration", () => {
             deliverAs: "followUp",
             triggerTurn: true,
         });
-        await expect(sentMessages[0]?.message.content).toMatchFileSnapshot("__snapshots__/agent-tool.agent.idle-mailbox-completion.txt");
+        await expect(sentMessages[0]?.message.content).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.idle-mailbox-completion.txt",
+        );
         await handlers.session_shutdown[0]({}, ctx);
     });
 
@@ -1489,14 +1654,17 @@ describe("agent extension registration", () => {
         tempDirs.push(cwd);
         const agentsDir = path.join(cwd, ".pi", "agents");
         fs.mkdirSync(agentsDir, { recursive: true });
-        fs.writeFileSync(path.join(agentsDir, "reserved.md"), [
-            "---",
-            "name: scout",
-            "description: Invalid capability override",
-            "capabilities: [edit]",
-            "---",
-            "Instructions",
-        ].join("\n"));
+        fs.writeFileSync(
+            path.join(agentsDir, "reserved.md"),
+            [
+                "---",
+                "name: scout",
+                "description: Invalid capability override",
+                "capabilities: [edit]",
+                "---",
+                "Instructions",
+            ].join("\n"),
+        );
 
         const handlers: Record<string, Handler[]> = {};
         const pi = {
@@ -1506,7 +1674,9 @@ describe("agent extension registration", () => {
             registerTool() {},
             registerCommand() {},
         } as any;
-        registerAgentTool(pi, async () => { throw new Error("not used"); });
+        registerAgentTool(pi, async () => {
+            throw new Error("not used");
+        });
         const notifications: string[] = [];
         const ctx = {
             cwd,
@@ -1520,10 +1690,16 @@ describe("agent extension registration", () => {
         await handlers.before_agent_start[0]({ systemPrompt: "Parent" }, ctx);
         await handlers.before_agent_start[0]({ systemPrompt: "Parent" }, ctx);
 
-        const invalidOverlayNotifications = notifications.filter((message) => message.includes("capabilities cannot be overridden"));
+        const invalidOverlayNotifications = notifications.filter((message) =>
+            message.includes("capabilities cannot be overridden"),
+        );
         expect(invalidOverlayNotifications).toHaveLength(1);
-        const normalizedNotifications = invalidOverlayNotifications.map((message) => message.replaceAll(cwd, "<fixture-cwd>"));
-        await expect(normalizedNotifications.join("\n")).toMatchFileSnapshot("__snapshots__/agent-tool.tui.discovery-warning.txt");
+        const normalizedNotifications = invalidOverlayNotifications.map((message) =>
+            message.replaceAll(cwd, "<fixture-cwd>"),
+        );
+        await expect(normalizedNotifications.join("\n")).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.tui.discovery-warning.txt",
+        );
         await handlers.session_shutdown[0]({}, ctx);
     });
 
@@ -1540,15 +1716,16 @@ describe("agent extension registration", () => {
 
         try {
             delete process.env[AGENT_TRACE_ENV];
-            registerAgentTool(pi, async () => { throw new Error("not used"); });
+            registerAgentTool(pi, async () => {
+                throw new Error("not used");
+            });
             expect(commands).toEqual(["agent-trace", "agents"]);
 
             process.env[AGENT_TRACE_ENV] = "0";
-            registerAgentTool(pi, async () => { throw new Error("not used"); });
-            expect(commands).toEqual([
-                "agent-trace", "agents",
-                "agent-trace", "agents",
-            ]);
+            registerAgentTool(pi, async () => {
+                throw new Error("not used");
+            });
+            expect(commands).toEqual(["agent-trace", "agents", "agent-trace", "agents"]);
         } finally {
             if (previous === undefined) delete process.env[AGENT_TRACE_ENV];
             else process.env[AGENT_TRACE_ENV] = previous;

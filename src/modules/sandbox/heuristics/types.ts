@@ -78,18 +78,24 @@ const UNSAFE_REASON_DESCRIPTIONS: Record<UnsafeReason, string> = {
     [UnsafeReason.EMPTY_INPUT]: "the command is empty",
     [UnsafeReason.PARSE_ERROR]: "the shell syntax could not be parsed safely",
     [UnsafeReason.UNKNOWN_COMMAND]: "the command is not in the curated read-only allowlist",
-    [UnsafeReason.COMMAND_PATH]: "commands must use a trusted command name rather than a filesystem path",
-    [UnsafeReason.COMMAND_NOT_ALLOWED]: "the command is not enabled by the restricted command policy",
-    [UnsafeReason.DANGEROUS_ENVIRONMENT]: "an environment assignment could alter command behavior unsafely",
+    [UnsafeReason.COMMAND_PATH]:
+        "commands must use a trusted command name rather than a filesystem path",
+    [UnsafeReason.COMMAND_NOT_ALLOWED]:
+        "the command is not enabled by the restricted command policy",
+    [UnsafeReason.DANGEROUS_ENVIRONMENT]:
+        "an environment assignment could alter command behavior unsafely",
     [UnsafeReason.OUTSIDE_CWD]: "a path is outside the working directory",
     [UnsafeReason.SENSITIVE_PATH]: "a path is sensitive",
-    [UnsafeReason.SYMLINK_ESCAPE]: "a symlink escapes the working directory or cannot be resolved safely",
+    [UnsafeReason.SYMLINK_ESCAPE]:
+        "a symlink escapes the working directory or cannot be resolved safely",
     [UnsafeReason.DYNAMIC_CWD]: "the working-directory change cannot be modeled safely",
     [UnsafeReason.DYNAMIC_PATH]: "a filesystem path is dynamic or cannot be resolved safely",
     [UnsafeReason.UNSAFE_FLAG]: "an option is not safe for restricted read-only execution",
-    [UnsafeReason.UNSAFE_SUBCOMMAND]: "the subcommand is not safe for restricted read-only execution",
+    [UnsafeReason.UNSAFE_SUBCOMMAND]:
+        "the subcommand is not safe for restricted read-only execution",
     [UnsafeReason.UNSAFE_MODE]: "the command mode is not read-only",
-    [UnsafeReason.UNSAFE_COMMAND]: "the command form is not safe for restricted read-only execution",
+    [UnsafeReason.UNSAFE_COMMAND]:
+        "the command form is not safe for restricted read-only execution",
 };
 
 /** A concise user-facing explanation for a stable unsafe-reason code. */

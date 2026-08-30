@@ -4,12 +4,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { materializePersistentSession, repairInterruptedToolCalls } from "../../src/tools/agent/child";
+import {
+    materializePersistentSession,
+    repairInterruptedToolCalls,
+} from "../../src/tools/agent/child";
 import { ZERO_USAGE } from "../../src/tools/agent/runs/manager";
 
 const tempDirs: string[] = [];
 afterEach(() => {
-    for (const directory of tempDirs.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+    for (const directory of tempDirs.splice(0))
+        fs.rmSync(directory, { recursive: true, force: true });
 });
 
 describe("persistent child transcript repair", () => {

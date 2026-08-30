@@ -29,7 +29,12 @@ export class Spinner implements Component {
         this.intervalMs = options.intervalMs && options.intervalMs > 0 ? options.intervalMs : 80;
         this.paused = isDialogActive(options.events);
         this.unsubscribeEvents = options.events?.on(TUI_DIALOG_EVENT, (data) => {
-            if (!data || typeof data !== "object" || typeof (data as { active?: unknown }).active !== "boolean") return;
+            if (
+                !data ||
+                typeof data !== "object" ||
+                typeof (data as { active?: unknown }).active !== "boolean"
+            )
+                return;
             this.paused = (data as { active: boolean }).active;
             this.updateAnimation();
             this.ui.requestRender();

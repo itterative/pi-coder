@@ -3,12 +3,30 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { executeWorkspaceAction } from "../../../src/tools/agent/workspaces/actions";
-import { createAgentWorkspace, recycleAgentWorkspaceForReuse, resetAgentWorkspaceForReuse } from "../../../src/tools/agent/workspaces/lifecycle";
+import {
+    createAgentWorkspace,
+    recycleAgentWorkspaceForReuse,
+    resetAgentWorkspaceForReuse,
+} from "../../../src/tools/agent/workspaces/lifecycle";
 import { createAgentWorkspaceCheckpoint } from "../../../src/tools/agent/workspaces/checkpoints";
-import { applyAgentWorkspaceApplication, prepareAgentWorkspaceApplication, retainAgentWorkspaceResult } from "../../../src/tools/agent/workspaces/results";
+import {
+    applyAgentWorkspaceApplication,
+    prepareAgentWorkspaceApplication,
+    retainAgentWorkspaceResult,
+} from "../../../src/tools/agent/workspaces/results";
 import { getAgentWorkspace, MAX_AGENT_WORKSPACES } from "../../../src/tools/agent/workspaces/store";
 import * as workspaceGit from "../../../src/tools/agent/workspaces/git";
-import { appendParentCommit, createClaimedTaskWorkspace, createE2EPaths, gitOutput, initializeRepository, insertE2EAgentRun, removeE2EPaths, withE2EMetadataDatabase, type E2EPaths } from "./helpers";
+import {
+    appendParentCommit,
+    createClaimedTaskWorkspace,
+    createE2EPaths,
+    gitOutput,
+    initializeRepository,
+    insertE2EAgentRun,
+    removeE2EPaths,
+    withE2EMetadataDatabase,
+    type E2EPaths,
+} from "./helpers";
 
 const pathsInUse: E2EPaths[] = [];
 
@@ -22,7 +40,10 @@ describe("isolated workspace recovery e2e", () => {
         const paths = createE2EPaths();
         pathsInUse.push(paths);
         const initialHead = initializeRepository(paths.repository);
-        const workspace = await createClaimedTaskWorkspace(paths, { runId: "worker-x", runInstanceId: "worker-x-instance" });
+        const workspace = await createClaimedTaskWorkspace(paths, {
+            runId: "worker-x",
+            runInstanceId: "worker-x-instance",
+        });
         fs.writeFileSync(path.join(workspace.worktreePath, "worker-x.txt"), "x\n");
         await createAgentWorkspaceCheckpoint(workspace.id, {
             ownerSessionId: "owner",
@@ -58,18 +79,27 @@ describe("isolated workspace recovery e2e", () => {
         const paths = createE2EPaths();
         pathsInUse.push(paths);
         initializeRepository(paths.repository);
-        const workspace = await createClaimedTaskWorkspace(paths, { runId: "worker-x", runInstanceId: "worker-x-instance" });
-        await insertE2EAgentRun(paths, { runId: "worker-x", runInstanceId: "worker-x-instance", status: "running" });
+        const workspace = await createClaimedTaskWorkspace(paths, {
+            runId: "worker-x",
+            runInstanceId: "worker-x-instance",
+        });
+        await insertE2EAgentRun(paths, {
+            runId: "worker-x",
+            runInstanceId: "worker-x-instance",
+            status: "running",
+        });
 
-        await expect(recycleAgentWorkspaceForReuse(workspace.id, {
-            previousOwnerSessionId: "owner",
-            previousLeaseRunId: "worker-x",
-            previousLeaseRunInstanceId: "worker-x-instance",
-            ownerSessionId: "other-owner",
-            leaseRunId: "worker-y",
-            leaseRunInstanceId: "worker-y-instance",
-            workspacesDir: paths.state,
-        })).rejects.toThrow("still used by active run worker-x");
+        await expect(
+            recycleAgentWorkspaceForReuse(workspace.id, {
+                previousOwnerSessionId: "owner",
+                previousLeaseRunId: "worker-x",
+                previousLeaseRunInstanceId: "worker-x-instance",
+                ownerSessionId: "other-owner",
+                leaseRunId: "worker-y",
+                leaseRunInstanceId: "worker-y-instance",
+                workspacesDir: paths.state,
+            }),
+        ).rejects.toThrow("still used by active run worker-x");
 
         const unchanged = await getAgentWorkspace(workspace.id, { workspacesDir: paths.state });
         expect(unchanged).toMatchObject({
@@ -84,7 +114,10 @@ describe("isolated workspace recovery e2e", () => {
         const paths = createE2EPaths();
         pathsInUse.push(paths);
         initializeRepository(paths.repository);
-        const workspace = await createClaimedTaskWorkspace(paths, { runId: "worker-x", runInstanceId: "worker-x-instance" });
+        const workspace = await createClaimedTaskWorkspace(paths, {
+            runId: "worker-x",
+            runInstanceId: "worker-x-instance",
+        });
         fs.writeFileSync(path.join(workspace.worktreePath, "worker-x.txt"), "x\n");
         const result = await prepareAgentWorkspaceApplication(workspace, {
             ownerSessionId: "owner",
@@ -95,19 +128,22 @@ describe("isolated workspace recovery e2e", () => {
         const parentRevision = gitOutput(paths.repository, ["rev-parse", "HEAD"]);
         fs.writeFileSync(path.join(paths.repository, "worker-x.txt"), "x\n");
         await withE2EMetadataDatabase(paths, async (database) => {
-            await database.run(`
+            await database.run(
+                `
                 UPDATE workspace_results
                 SET status = 'applying', parent_revision = ?, reservation_token = ?,
                     reservation_owner_session_id = ?, reservation_run_id = ?,
                     reservation_run_instance_id = ?, reservation_owner_pid = ?
                 WHERE id = ?
-            `, parentRevision,
+            `,
+                parentRevision,
                 "apply-token",
                 "owner",
                 "worker-x",
                 "worker-x-instance",
                 123_456,
-                result.id,);
+                result.id,
+            );
         });
         vi.spyOn(process, "kill").mockImplementation(() => {
             const error = new Error("process not found") as NodeJS.ErrnoException;
@@ -129,8 +165,12 @@ describe("isolated workspace recovery e2e", () => {
         expect(recovered).toMatchObject({ id: result.id, status: "applied", parentRevision });
         expect(fs.readFileSync(path.join(paths.repository, "worker-x.txt"), "utf8")).toBe("x\n");
         await withE2EMetadataDatabase(paths, async (database) => {
-            expect(await database.get("SELECT status, reservation_token FROM workspace_results WHERE id = ?", result.id))
-                .toEqual({ status: "applied", reservation_token: null });
+            expect(
+                await database.get(
+                    "SELECT status, reservation_token FROM workspace_results WHERE id = ?",
+                    result.id,
+                ),
+            ).toEqual({ status: "applied", reservation_token: null });
         });
     });
 
@@ -138,7 +178,10 @@ describe("isolated workspace recovery e2e", () => {
         const paths = createE2EPaths();
         pathsInUse.push(paths);
         initializeRepository(paths.repository);
-        const workspace = await createClaimedTaskWorkspace(paths, { runId: "worker-x", runInstanceId: "worker-x-instance" });
+        const workspace = await createClaimedTaskWorkspace(paths, {
+            runId: "worker-x",
+            runInstanceId: "worker-x-instance",
+        });
         fs.writeFileSync(path.join(workspace.worktreePath, "worker-x.txt"), "x\n");
         const result = await prepareAgentWorkspaceApplication(workspace, {
             ownerSessionId: "owner",
@@ -171,13 +214,15 @@ describe("isolated workspace recovery e2e", () => {
             workspacesDir: paths.state,
         });
         await applyStartedPromise;
-        await expect(applyAgentWorkspaceApplication(workspace, {
-            ownerSessionId: "owner",
-            leaseRunId: "worker-x",
-            leaseRunInstanceId: "worker-x-instance",
-            resultId: result.id,
-            workspacesDir: paths.state,
-        })).rejects.toThrow("still being applied");
+        await expect(
+            applyAgentWorkspaceApplication(workspace, {
+                ownerSessionId: "owner",
+                leaseRunId: "worker-x",
+                leaseRunInstanceId: "worker-x-instance",
+                resultId: result.id,
+                workspacesDir: paths.state,
+            }),
+        ).rejects.toThrow("still being applied");
         releaseApply();
         await expect(firstApply).resolves.toMatchObject({ id: result.id, status: "applied" });
     });
@@ -186,7 +231,10 @@ describe("isolated workspace recovery e2e", () => {
         const paths = createE2EPaths();
         pathsInUse.push(paths);
         initializeRepository(paths.repository);
-        const workspace = await createClaimedTaskWorkspace(paths, { runId: "worker-x", runInstanceId: "worker-x-instance" });
+        const workspace = await createClaimedTaskWorkspace(paths, {
+            runId: "worker-x",
+            runInstanceId: "worker-x-instance",
+        });
         fs.writeFileSync(path.join(workspace.worktreePath, "worker-x.txt"), "x\n");
         const result = await prepareAgentWorkspaceApplication(workspace, {
             ownerSessionId: "owner",
@@ -196,33 +244,42 @@ describe("isolated workspace recovery e2e", () => {
         });
         const parentRevision = gitOutput(paths.repository, ["rev-parse", "HEAD"]);
         await withE2EMetadataDatabase(paths, async (database) => {
-            await database.run(`
+            await database.run(
+                `
                 UPDATE workspace_results
                 SET status = 'applying', parent_revision = ?, reservation_token = ?,
                     reservation_owner_session_id = ?, reservation_run_id = ?,
                     reservation_run_instance_id = ?, reservation_owner_pid = ?
                 WHERE id = ?
-            `, parentRevision,
+            `,
+                parentRevision,
                 "foreign-apply-token",
                 "owner",
                 "worker-x",
                 "worker-x-instance",
                 123_456,
-                result.id,);
+                result.id,
+            );
         });
         vi.spyOn(process, "kill").mockReturnValue(true);
 
-        await expect(applyAgentWorkspaceApplication(workspace, {
-            ownerSessionId: "owner",
-            leaseRunId: "worker-x",
-            leaseRunInstanceId: "worker-x-instance",
-            resultId: result.id,
-            workspacesDir: paths.state,
-        })).rejects.toThrow("live process");
+        await expect(
+            applyAgentWorkspaceApplication(workspace, {
+                ownerSessionId: "owner",
+                leaseRunId: "worker-x",
+                leaseRunInstanceId: "worker-x-instance",
+                resultId: result.id,
+                workspacesDir: paths.state,
+            }),
+        ).rejects.toThrow("live process");
 
         await withE2EMetadataDatabase(paths, async (database) => {
-            expect(await database.get("SELECT status, reservation_token FROM workspace_results WHERE id = ?", result.id))
-                .toEqual({ status: "applying", reservation_token: "foreign-apply-token" });
+            expect(
+                await database.get(
+                    "SELECT status, reservation_token FROM workspace_results WHERE id = ?",
+                    result.id,
+                ),
+            ).toEqual({ status: "applying", reservation_token: "foreign-apply-token" });
         });
         expect(fs.existsSync(path.join(paths.repository, "worker-x.txt"))).toBe(false);
     });
@@ -231,7 +288,10 @@ describe("isolated workspace recovery e2e", () => {
         const paths = createE2EPaths();
         pathsInUse.push(paths);
         initializeRepository(paths.repository);
-        const workspace = await createClaimedTaskWorkspace(paths, { runId: "worker-x", runInstanceId: "worker-x-instance" });
+        const workspace = await createClaimedTaskWorkspace(paths, {
+            runId: "worker-x",
+            runInstanceId: "worker-x-instance",
+        });
         fs.writeFileSync(path.join(workspace.worktreePath, "worker-x.txt"), "x\n");
         const result = await prepareAgentWorkspaceApplication(workspace, {
             ownerSessionId: "owner",
@@ -241,13 +301,15 @@ describe("isolated workspace recovery e2e", () => {
         });
         fs.writeFileSync(path.join(paths.repository, "uncommitted-parent.txt"), "dirty\n");
 
-        await expect(applyAgentWorkspaceApplication(workspace, {
-            ownerSessionId: "owner",
-            leaseRunId: "worker-x",
-            leaseRunInstanceId: "worker-x-instance",
-            resultId: result.id,
-            workspacesDir: paths.state,
-        })).rejects.toThrow("uncommitted changes");
+        await expect(
+            applyAgentWorkspaceApplication(workspace, {
+                ownerSessionId: "owner",
+                leaseRunId: "worker-x",
+                leaseRunInstanceId: "worker-x-instance",
+                resultId: result.id,
+                workspacesDir: paths.state,
+            }),
+        ).rejects.toThrow("uncommitted changes");
         await withE2EMetadataDatabase(paths, async (failedDatabase) => {
             const stored = await failedDatabase.get<{ status: string; reservation_token?: string }>(
                 "SELECT status, reservation_token FROM workspace_results WHERE id = ?",
@@ -257,13 +319,15 @@ describe("isolated workspace recovery e2e", () => {
         });
 
         fs.rmSync(path.join(paths.repository, "uncommitted-parent.txt"));
-        await expect(applyAgentWorkspaceApplication(workspace, {
-            ownerSessionId: "owner",
-            leaseRunId: "worker-x",
-            leaseRunInstanceId: "worker-x-instance",
-            resultId: result.id,
-            workspacesDir: paths.state,
-        })).resolves.toMatchObject({ id: result.id, status: "applied" });
+        await expect(
+            applyAgentWorkspaceApplication(workspace, {
+                ownerSessionId: "owner",
+                leaseRunId: "worker-x",
+                leaseRunInstanceId: "worker-x-instance",
+                resultId: result.id,
+                workspacesDir: paths.state,
+            }),
+        ).resolves.toMatchObject({ id: result.id, status: "applied" });
     });
 
     it("rejects new workspaces while the parent checkout is dirty", async () => {
@@ -272,8 +336,9 @@ describe("isolated workspace recovery e2e", () => {
         initializeRepository(paths.repository);
         fs.writeFileSync(path.join(paths.repository, "parent-uncommitted.txt"), "dirty\n");
 
-        await expect(createAgentWorkspace(paths.repository, { workspacesDir: paths.state }))
-            .rejects.toThrow("parent checkout has uncommitted changes");
+        await expect(
+            createAgentWorkspace(paths.repository, { workspacesDir: paths.state }),
+        ).rejects.toThrow("parent checkout has uncommitted changes");
     });
 
     it("enforces workspace capacity across concurrent allocations", async () => {
@@ -282,21 +347,28 @@ describe("isolated workspace recovery e2e", () => {
         initializeRepository(paths.repository);
 
         const attempts = await Promise.allSettled(
-            Array.from({ length: MAX_AGENT_WORKSPACES + 1 }, () => (
-                createAgentWorkspace(paths.repository, { workspacesDir: paths.state })
-            )),
+            Array.from({ length: MAX_AGENT_WORKSPACES + 1 }, () =>
+                createAgentWorkspace(paths.repository, { workspacesDir: paths.state }),
+            ),
         );
 
-        expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(MAX_AGENT_WORKSPACES);
+        expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(
+            MAX_AGENT_WORKSPACES,
+        );
         expect(attempts.filter((attempt) => attempt.status === "rejected")).toHaveLength(1);
-        expect(attempts.find((attempt) => attempt.status === "rejected")?.reason?.message).toContain("capacity reached");
+        expect(
+            attempts.find((attempt) => attempt.status === "rejected")?.reason?.message,
+        ).toContain("capacity reached");
     });
 
     it("blocks lifecycle reuse during a live result reservation and recovers a dead one", async () => {
         const paths = createE2EPaths();
         pathsInUse.push(paths);
         initializeRepository(paths.repository);
-        const workspace = await createClaimedTaskWorkspace(paths, { runId: "worker-x", runInstanceId: "worker-x-instance" });
+        const workspace = await createClaimedTaskWorkspace(paths, {
+            runId: "worker-x",
+            runInstanceId: "worker-x-instance",
+        });
         fs.writeFileSync(path.join(workspace.worktreePath, "worker-x.txt"), "x\n");
         const result = await prepareAgentWorkspaceApplication(workspace, {
             ownerSessionId: "owner",
@@ -306,34 +378,51 @@ describe("isolated workspace recovery e2e", () => {
         });
 
         await withE2EMetadataDatabase(paths, async (database) => {
-            await database.run(`
+            await database.run(
+                `
                 UPDATE workspace_results
                 SET reservation_token = ?, reservation_owner_pid = ?, reservation_acquired_at = ?
                 WHERE id = ?
-            `, "live-token", process.pid, Date.now(), result.id);
+            `,
+                "live-token",
+                process.pid,
+                Date.now(),
+                result.id,
+            );
         });
-        await expect(retainAgentWorkspaceResult(workspace.id, {
-            ownerSessionId: "owner",
-            leaseRunId: "worker-x",
-            leaseRunInstanceId: "worker-x-instance",
-            workspacesDir: paths.state,
-        })).rejects.toThrow("already reserved");
-        await expect(resetAgentWorkspaceForReuse(workspace.id, { workspacesDir: paths.state }))
-            .rejects.toThrow("result disposition in progress");
+        await expect(
+            retainAgentWorkspaceResult(workspace.id, {
+                ownerSessionId: "owner",
+                leaseRunId: "worker-x",
+                leaseRunInstanceId: "worker-x-instance",
+                workspacesDir: paths.state,
+            }),
+        ).rejects.toThrow("already reserved");
+        await expect(
+            resetAgentWorkspaceForReuse(workspace.id, { workspacesDir: paths.state }),
+        ).rejects.toThrow("result disposition in progress");
 
         await withE2EMetadataDatabase(paths, async (staleDatabase) => {
-            await staleDatabase.run(`
+            await staleDatabase.run(
+                `
                 UPDATE workspace_results
                 SET reservation_token = ?, reservation_owner_pid = ?, reservation_acquired_at = ?
                 WHERE id = ?
-            `, "dead-token", 999_999_999, Date.now() - 10 * 60_000, result.id);
+            `,
+                "dead-token",
+                999_999_999,
+                Date.now() - 10 * 60_000,
+                result.id,
+            );
         });
-        await expect(retainAgentWorkspaceResult(workspace.id, {
-            ownerSessionId: "owner",
-            leaseRunId: "worker-x",
-            leaseRunInstanceId: "worker-x-instance",
-            workspacesDir: paths.state,
-        })).resolves.toBeUndefined();
+        await expect(
+            retainAgentWorkspaceResult(workspace.id, {
+                ownerSessionId: "owner",
+                leaseRunId: "worker-x",
+                leaseRunInstanceId: "worker-x-instance",
+                workspacesDir: paths.state,
+            }),
+        ).resolves.toBeUndefined();
 
         await withE2EMetadataDatabase(paths, async (finalDatabase) => {
             const reservation = await finalDatabase.get<{ reservation_token?: string }>(

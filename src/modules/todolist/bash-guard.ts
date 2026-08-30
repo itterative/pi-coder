@@ -1,13 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-    chmod,
-    lstat,
-    readFile,
-    realpath,
-    rename,
-    unlink,
-    writeFile,
-} from "node:fs/promises";
+import { chmod, lstat, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -131,7 +123,8 @@ async function restoreIfSafe(
     postState: TodoFileState,
     hasCompetingMutation: boolean,
 ): Promise<RollbackResult | undefined> {
-    if (hasCompetingMutation || (snapshot.before.exists && !snapshot.before.valid)) return undefined;
+    if (hasCompetingMutation || (snapshot.before.exists && !snapshot.before.valid))
+        return undefined;
 
     const currentState = await readTodoFileState(snapshot.path);
     if (!sameFileState(currentState, postState)) return undefined;

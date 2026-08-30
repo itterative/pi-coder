@@ -28,7 +28,7 @@ describe("config merging", () => {
     function writeProjectConfig(cfg: object) {
         fs.writeFileSync(
             path.join(projectDir, ".pi", "bash-sandbox-config.json"),
-            JSON.stringify(cfg)
+            JSON.stringify(cfg),
         );
     }
 
@@ -290,9 +290,9 @@ describe("config merging", () => {
                 sandbox: {
                     mounts: {},
                     inheritEnv: {
-                        "HOME": "allow",
-                        "PATH": "allow",
-                        "SECRET": "deny",
+                        HOME: "allow",
+                        PATH: "allow",
+                        SECRET: "deny",
                     },
                 },
                 permissions: {},
@@ -301,8 +301,8 @@ describe("config merging", () => {
                 sandbox: {
                     mounts: {},
                     inheritEnv: {
-                        "SECRET": "allow", // Project overrides to allow
-                        "DEBUG": "allow",
+                        SECRET: "allow", // Project overrides to allow
+                        DEBUG: "allow",
                     },
                 },
                 permissions: {},
@@ -492,11 +492,11 @@ describe("config merging", () => {
                 const loaded = config.load(projectDir);
 
                 expect(loaded.heuristics?.cwdConfinement).toEqual({
-                    enabled: false,           // from global
-                    permission: "allow",      // project overrides
-                    commands: ["cat"],        // from global
-                    denyPaths: ["*.secret", "*.db"],  // concatenated
-                    blockDotfiles: true,      // from global
+                    enabled: false, // from global
+                    permission: "allow", // project overrides
+                    commands: ["cat"], // from global
+                    denyPaths: ["*.secret", "*.db"], // concatenated
+                    blockDotfiles: true, // from global
                 });
             } finally {
                 process.env.SANDBOX_CONFIG_PATH_GLOBAL = originalGlobal;

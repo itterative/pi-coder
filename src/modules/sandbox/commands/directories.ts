@@ -4,17 +4,28 @@ import { OUTPUT_PATH_VALUE, PATH_VALUE, UNSAFE, VALUE, type CommandSpec } from "
 const FD_SPEC: CommandSpec = {
     positionals: "first-pattern",
     flags: {
-        "-d": VALUE, "--max-depth": VALUE,
-        "-t": VALUE, "--type": VALUE,
-        "-e": VALUE, "--extension": VALUE,
-        "--size": VALUE, "--owner": VALUE,
-        "--changed-within": VALUE, "--changed-before": VALUE, "--changed-after": VALUE,
-        "--change-newer-than": VALUE, "--change-older-than": VALUE,
-        "--max-results": VALUE, "--color": VALUE,
+        "-d": VALUE,
+        "--max-depth": VALUE,
+        "-t": VALUE,
+        "--type": VALUE,
+        "-e": VALUE,
+        "--extension": VALUE,
+        "--size": VALUE,
+        "--owner": VALUE,
+        "--changed-within": VALUE,
+        "--changed-before": VALUE,
+        "--changed-after": VALUE,
+        "--change-newer-than": VALUE,
+        "--change-older-than": VALUE,
+        "--max-results": VALUE,
+        "--color": VALUE,
         // -x/-X run a command on the results; -L descends into symlinks
-        "-x": UNSAFE, "--exec": UNSAFE,
-        "-X": UNSAFE, "--exec-batch": UNSAFE,
-        "-L": UNSAFE, "--follow": UNSAFE,
+        "-x": UNSAFE,
+        "--exec": UNSAFE,
+        "-X": UNSAFE,
+        "--exec-batch": UNSAFE,
+        "-L": UNSAFE,
+        "--follow": UNSAFE,
     },
 };
 
@@ -25,17 +36,24 @@ export const DIRECTORY_COMMANDS: Record<string, CommandSpec> = {
     vdir: {},
     du: {
         flags: {
-            "-B": VALUE, "--block-size": VALUE,
-            "-t": VALUE, "--threshold": VALUE, "--time-style": VALUE,
+            "-B": VALUE,
+            "--block-size": VALUE,
+            "-t": VALUE,
+            "--threshold": VALUE,
+            "--time-style": VALUE,
             "--files0-from": PATH_VALUE,
             // -L follows symlinks during traversal
-            "-L": UNSAFE, "--dereference-all": UNSAFE,
+            "-L": UNSAFE,
+            "--dereference-all": UNSAFE,
         },
     },
     tree: {
         flags: {
-            "-L": VALUE, "-P": VALUE, "-I": VALUE,
-            "--filelimit": VALUE, "--charset": VALUE,
+            "-L": VALUE,
+            "-P": VALUE,
+            "-I": VALUE,
+            "--filelimit": VALUE,
+            "--charset": VALUE,
             "-o": OUTPUT_PATH_VALUE,
             // -l follows symlinks to directories during traversal
             "-l": UNSAFE,

@@ -22,11 +22,14 @@ function interactiveContext(actions: Array<"select" | "cancel">) {
                 setWorkingVisible() {},
                 custom(factory: any) {
                     return new Promise<AskUserResult | undefined>((resolve, reject) => {
-                        void Promise.resolve(factory(undefined, mockTheme, undefined, resolve))
-                            .then((component) => {
-                                rendered.push(renderText(component, 80));
-                                component.handleInput(actions.shift() === "cancel" ? KEY.escape : KEY.enter);
-                            }, reject);
+                        void Promise.resolve(
+                            factory(undefined, mockTheme, undefined, resolve),
+                        ).then((component) => {
+                            rendered.push(renderText(component, 80));
+                            component.handleInput(
+                                actions.shift() === "cancel" ? KEY.escape : KEY.enter,
+                            );
+                        }, reject);
                     });
                 },
             },
@@ -40,10 +43,14 @@ describe("child-to-user interaction", () => {
         const { context, rendered } = interactiveContext(["select", "select"]);
 
         const first = await askChildUser(question, context, "scout");
-        const second = await askChildUser({
-            ...question,
-            title: "Apply the recommendation?",
-        }, context, "scout");
+        const second = await askChildUser(
+            {
+                ...question,
+                title: "Apply the recommendation?",
+            },
+            context,
+            "scout",
+        );
 
         expect(first).toMatchObject({
             content: [{ text: "User selected: Implementation A" }],
@@ -70,7 +77,11 @@ describe("child-to-user interaction", () => {
         const context = {
             hasUI: false,
             mode: "print",
-            ui: { custom: () => { customCalls++; } },
+            ui: {
+                custom: () => {
+                    customCalls++;
+                },
+            },
         } as any;
 
         const result = await askChildUser(question, context, "scout");
@@ -89,8 +100,9 @@ describe("child-to-user interaction", () => {
                 setWorkingVisible() {},
                 custom(factory: any) {
                     return new Promise<AskUserResult | undefined>((resolve, reject) => {
-                        void Promise.resolve(factory(undefined, mockTheme, undefined, resolve))
-                            .then(() => controller.abort(), reject);
+                        void Promise.resolve(
+                            factory(undefined, mockTheme, undefined, resolve),
+                        ).then(() => controller.abort(), reject);
                     });
                 },
             },

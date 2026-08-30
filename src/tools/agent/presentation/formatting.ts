@@ -47,12 +47,13 @@ export function toolMetadataBlock(
         lines.push("Collection: not applicable; foreground results are returned directly.");
     }
     const report = details.mutationReport;
-    if (report && (
-        details.mutating === true
-        || report.changedFiles.length > 0
-        || report.bashApproved
-        || report.interrupted === true
-    )) {
+    if (
+        report &&
+        (details.mutating === true ||
+            report.changedFiles.length > 0 ||
+            report.bashApproved ||
+            report.interrupted === true)
+    ) {
         const files = report.changedFiles.length
             ? report.changedFiles.map((file) => `  - \`${file}\``)
             : ["  - none tracked"];
@@ -67,15 +68,20 @@ export function toolMetadataBlock(
             lines.push("- The run was interrupted previously; tool mutations may be uncertain.");
         }
         if (report.bashApproved) {
-            lines.push("- Approved bash commands may have changed additional files; inspect the checkout before attribution.");
+            lines.push(
+                "- Approved bash commands may have changed additional files; inspect the checkout before attribution.",
+            );
         }
     }
     if (details.workspaceResult) {
-        lines.push("", workspaceResultMetadata(
-            details.workspaceResult,
-            details.workspaceResult.workerHead === details.workspaceResult.baseRevision
-                && details.workspaceResult.commits.length === 0,
-        ));
+        lines.push(
+            "",
+            workspaceResultMetadata(
+                details.workspaceResult,
+                details.workspaceResult.workerHead === details.workspaceResult.baseRevision &&
+                    details.workspaceResult.commits.length === 0,
+            ),
+        );
     }
     if (details.error) lines.push("", `Error: ${details.error}`);
     if (outcome.additionalMetadata?.length) {

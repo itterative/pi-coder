@@ -26,9 +26,10 @@ const CHECKPOINT_COMMIT_MESSAGE = "pi-coder: workspace checkpoint";
 
 type CheckpointRow = Record<string, unknown>;
 
-export interface CreateAgentWorkspaceCheckpointOptions
-    extends Omit<AgentWorkspaceLeaseOptions, "leaseRunInstanceId">
-{
+export interface CreateAgentWorkspaceCheckpointOptions extends Omit<
+    AgentWorkspaceLeaseOptions,
+    "leaseRunInstanceId"
+> {
     runInstanceId: string;
     kind: WorkspaceCheckpointKind;
     runStatus: WorkspaceCheckpointStatus;
@@ -38,22 +39,30 @@ export interface CreateAgentWorkspaceCheckpointOptions
 
 function rowToCheckpoint(row: CheckpointRow | undefined): AgentWorkspaceCheckpoint | undefined {
     if (
-        !row
-        || typeof row.checkpoint_id !== "string"
-        || typeof row.workspace_id !== "string"
-        || typeof row.run_id !== "string"
-        || typeof row.run_instance_id !== "string"
-        || typeof row.sequence !== "number"
-        || !Number.isSafeInteger(row.sequence)
-        || !["intermediate", "terminal"].includes(row.kind as string)
-        || !["waiting_for_parent", "interrupted", "completed", "failed", "aborted", "canceled"].includes(row.run_status as string)
-        || typeof row.base_revision !== "string"
-        || typeof row.head_revision !== "string"
-        || typeof row.durable_ref !== "string"
-        || typeof row.created_at !== "number"
-        || !Number.isFinite(row.created_at)
-        || row.child_session_leaf_id !== null && typeof row.child_session_leaf_id !== "string"
-    ) return undefined;
+        !row ||
+        typeof row.checkpoint_id !== "string" ||
+        typeof row.workspace_id !== "string" ||
+        typeof row.run_id !== "string" ||
+        typeof row.run_instance_id !== "string" ||
+        typeof row.sequence !== "number" ||
+        !Number.isSafeInteger(row.sequence) ||
+        !["intermediate", "terminal"].includes(row.kind as string) ||
+        ![
+            "waiting_for_parent",
+            "interrupted",
+            "completed",
+            "failed",
+            "aborted",
+            "canceled",
+        ].includes(row.run_status as string) ||
+        typeof row.base_revision !== "string" ||
+        typeof row.head_revision !== "string" ||
+        typeof row.durable_ref !== "string" ||
+        typeof row.created_at !== "number" ||
+        !Number.isFinite(row.created_at) ||
+        (row.child_session_leaf_id !== null && typeof row.child_session_leaf_id !== "string")
+    )
+        return undefined;
     return {
         id: row.checkpoint_id,
         workspaceId: row.workspace_id,
@@ -65,7 +74,9 @@ function rowToCheckpoint(row: CheckpointRow | undefined): AgentWorkspaceCheckpoi
         baseRevision: row.base_revision,
         headRevision: row.head_revision,
         durableRef: row.durable_ref,
-        ...(typeof row.child_session_file === "string" ? { childSessionFile: row.child_session_file } : {}),
+        ...(typeof row.child_session_file === "string"
+            ? { childSessionFile: row.child_session_file }
+            : {}),
         childSessionLeafId: row.child_session_leaf_id as string | null,
         createdAt: row.created_at,
     };
@@ -78,7 +89,12 @@ async function createCommitSnapshot(workspace: AgentWorkspace): Promise<string> 
     }
     if (state.dirty) {
         await git(workspace.worktreePath, ["add", "-A"]);
-        await git(workspace.worktreePath, ["commit", "--no-verify", "-m", CHECKPOINT_COMMIT_MESSAGE]);
+        await git(workspace.worktreePath, [
+            "commit",
+            "--no-verify",
+            "-m",
+            CHECKPOINT_COMMIT_MESSAGE,
+        ]);
     }
     return git(workspace.worktreePath, ["rev-parse", "HEAD"]);
 }
@@ -116,22 +132,27 @@ export async function createAgentWorkspaceCheckpoint(
 
         const createdAt = Date.now();
         const sequence = await database.transaction(async (transaction) => {
-            const sequenceRow = await transaction.get(`
+            const sequenceRow = (await transaction.get(
+                `
                 SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence
                 FROM workspace_checkpoints
                 WHERE workspace_id = ?
-            `, workspace.id) as CheckpointRow;
+            `,
+                workspace.id,
+            )) as CheckpointRow;
             const nextSequence = Number(sequenceRow.sequence);
             if (!Number.isSafeInteger(nextSequence) || nextSequence < 1) {
                 throw new Error(`Workspace ${workspaceId} checkpoint sequence is invalid.`);
             }
-            await transaction.run(`
+            await transaction.run(
+                `
                 INSERT INTO workspace_checkpoints (
                     checkpoint_id, workspace_id, run_id, run_instance_id, sequence,
                     kind, run_status, base_revision, head_revision, durable_ref,
                     child_session_file, child_session_leaf_id, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `, checkpointId,
+            `,
+                checkpointId,
                 workspace.id,
                 leaseRunId,
                 runInstanceId,
@@ -143,7 +164,8 @@ export async function createAgentWorkspaceCheckpoint(
                 durableRef,
                 childSessionFile ?? null,
                 childSessionLeafId,
-                createdAt,);
+                createdAt,
+            );
             return nextSequence;
         }, "IMMEDIATE");
         return {
@@ -197,13 +219,16 @@ export async function getAgentWorkspaceCheckpoint(
 ): Promise<AgentWorkspaceCheckpoint | undefined> {
     const database = await openDatabase(workspacesDir);
     try {
-        const row = await database.get(`
+        const row = (await database.get(
+            `
             SELECT checkpoint_id, workspace_id, run_id, run_instance_id, sequence,
                    kind, run_status, base_revision, head_revision, durable_ref,
                    child_session_file, child_session_leaf_id, created_at
             FROM workspace_checkpoints
             WHERE checkpoint_id = ?
-        `, checkpointId) as CheckpointRow | undefined;
+        `,
+            checkpointId,
+        )) as CheckpointRow | undefined;
         return rowToCheckpoint(row);
     } finally {
         await database.close();
@@ -218,7 +243,8 @@ export async function latestAgentWorkspaceCheckpoint(
 ): Promise<AgentWorkspaceCheckpoint | undefined> {
     const database = await openDatabase(workspacesDir);
     try {
-        const row = await database.get(`
+        const row = (await database.get(
+            `
             SELECT checkpoint_id, workspace_id, run_id, run_instance_id, sequence,
                    kind, run_status, base_revision, head_revision, durable_ref,
                    child_session_file, child_session_leaf_id, created_at
@@ -226,7 +252,10 @@ export async function latestAgentWorkspaceCheckpoint(
             WHERE workspace_id = ? AND run_instance_id = ?
             ORDER BY sequence DESC
             LIMIT 1
-        `, workspaceId, runInstanceId) as CheckpointRow | undefined;
+        `,
+            workspaceId,
+            runInstanceId,
+        )) as CheckpointRow | undefined;
         return rowToCheckpoint(row);
     } finally {
         await database.close();
@@ -240,14 +269,17 @@ export async function listAgentWorkspaceCheckpoints(
 ): Promise<AgentWorkspaceCheckpoint[]> {
     const database = await openDatabase(workspacesDir);
     try {
-        const rows = await database.all(`
+        const rows = (await database.all(
+            `
             SELECT checkpoint_id, workspace_id, run_id, run_instance_id, sequence,
                    kind, run_status, base_revision, head_revision, durable_ref,
                    child_session_file, child_session_leaf_id, created_at
             FROM workspace_checkpoints
             WHERE workspace_id = ?
             ORDER BY sequence ASC
-        `, workspaceId) as CheckpointRow[];
+        `,
+            workspaceId,
+        )) as CheckpointRow[];
         return rows
             .map((row) => rowToCheckpoint(row))
             .filter((row): row is AgentWorkspaceCheckpoint => row !== undefined);
@@ -266,23 +298,34 @@ export async function restoreAgentWorkspaceCheckpoint(
     { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
 ): Promise<void> {
     if (workspace.id !== checkpoint.workspaceId) {
-        throw new Error(`Checkpoint ${checkpoint.id} belongs to workspace ${checkpoint.workspaceId}, not ${workspace.id}.`);
+        throw new Error(
+            `Checkpoint ${checkpoint.id} belongs to workspace ${checkpoint.workspaceId}, not ${workspace.id}.`,
+        );
     }
     const database = await openDatabase(workspacesDir);
     try {
         await database.transaction(async (transaction) => {
             const current = await workspaceById(transaction, workspace.id);
-            if (!current
-                || current.status === "recycling"
-                || current.leaseOwnerSessionId !== workspace.leaseOwnerSessionId
-                || current.leaseRunId !== workspace.leaseRunId
-                || current.leaseRunInstanceId !== workspace.leaseRunInstanceId
-                || current.leaseKind !== workspace.leaseKind) {
-                throw new Error(`Workspace ${workspace.id} changed before checkpoint ${checkpoint.id} could be restored.`);
+            if (
+                !current ||
+                current.status === "recycling" ||
+                current.leaseOwnerSessionId !== workspace.leaseOwnerSessionId ||
+                current.leaseRunId !== workspace.leaseRunId ||
+                current.leaseRunInstanceId !== workspace.leaseRunInstanceId ||
+                current.leaseKind !== workspace.leaseKind
+            ) {
+                throw new Error(
+                    `Workspace ${workspace.id} changed before checkpoint ${checkpoint.id} could be restored.`,
+                );
             }
-            const currentRef = await git(workspace.repositoryRoot, ["rev-parse", checkpoint.durableRef]);
+            const currentRef = await git(workspace.repositoryRoot, [
+                "rev-parse",
+                checkpoint.durableRef,
+            ]);
             if (currentRef !== checkpoint.headRevision) {
-                throw new Error(`Checkpoint ${checkpoint.id} no longer points to its recorded commit.`);
+                throw new Error(
+                    `Checkpoint ${checkpoint.id} no longer points to its recorded commit.`,
+                );
             }
             await git(workspace.worktreePath, ["reset", "--hard", checkpoint.headRevision]);
             await git(workspace.worktreePath, ["clean", "-fd"]);

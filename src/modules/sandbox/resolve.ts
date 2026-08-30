@@ -1,4 +1,7 @@
-import { type SandboxConfigCwdConfinement, type SandboxConfigPermissions } from "../../common/config";
+import {
+    type SandboxConfigCwdConfinement,
+    type SandboxConfigPermissions,
+} from "../../common/config";
 import {
     getBashCommandPermissionMatch,
     getBashStatementPermissionMatch,
@@ -105,12 +108,16 @@ export function resolvePermissionDetails(
         unresolved.push(...result.unresolved);
 
         if (result.source === "policy") {
-            policy = policy === null ? result.permission : moreRestrictive(policy, result.permission);
+            policy =
+                policy === null ? result.permission : moreRestrictive(policy, result.permission);
             if (policy === "deny") {
                 return { permission: "deny", unresolved };
             }
         } else if (result.source === "heuristic") {
-            heuristic = heuristic === null ? result.permission : moreRestrictive(heuristic, result.permission);
+            heuristic =
+                heuristic === null
+                    ? result.permission
+                    : moreRestrictive(heuristic, result.permission);
         } else {
             hasUnresolved = true;
         }
@@ -160,14 +167,11 @@ function resolveLine(
 
     for (let commandIndex = 0; commandIndex < statement.commands.length; commandIndex++) {
         const segmentCommand = statement.commands[commandIndex];
-        const partIndex = statement.node.parts.findIndex((part) =>
-            part.type === "command"
-            && part === segmentCommand.node,
+        const partIndex = statement.node.parts.findIndex(
+            (part) => part.type === "command" && part === segmentCommand.node,
         );
         const nextPart = statement.node.parts[partIndex + 1];
-        const operatorAfter = nextPart?.type === "operator"
-            ? nextPart.value
-            : null;
+        const operatorAfter = nextPart?.type === "operator" ? nextPart.value : null;
         const segmentTokens = segmentCommand.toTokens();
         const beforeSegment = cloneCwdConfinementState(confinementState);
         if (nonPersistentBase === null && isNonPersistentChainOperator(operatorAfter)) {
@@ -189,10 +193,7 @@ function resolveLine(
             readOnlyAdditionalRoots: options?.readOnlyAdditionalRoots,
             customSafeBashCommands: options?.safeBashCommands,
         });
-        const match = getBashCommandPermissionMatch(
-            segmentCommand,
-            options?.permissions,
-        );
+        const match = getBashCommandPermissionMatch(segmentCommand, options?.permissions);
 
         if (match.matched) {
             policy = policy === null ? match.permission : moreRestrictive(policy, match.permission);
@@ -211,9 +212,10 @@ function resolveLine(
                 const grantPermission = getConfiguredCwdConfinementPermission(
                     options?.cwdConfinement,
                 );
-                heuristic = heuristic === null
-                    ? grantPermission
-                    : moreRestrictive(heuristic, grantPermission);
+                heuristic =
+                    heuristic === null
+                        ? grantPermission
+                        : moreRestrictive(heuristic, grantPermission);
             } else {
                 hasUnresolved = true;
                 unresolved.push(segmentTokens);
@@ -236,5 +238,9 @@ function resolveLine(
         return { permission: policy, source: "policy", unresolved };
     }
 
-    return { permission: heuristic ?? "ask", source: heuristic ? "heuristic" : "unresolved", unresolved };
+    return {
+        permission: heuristic ?? "ask",
+        source: heuristic ? "heuristic" : "unresolved",
+        unresolved,
+    };
 }

@@ -152,7 +152,9 @@ describe("in-process scout SDK session", () => {
                 cwd,
                 definition: {
                     ...BUILTIN_SCOUT,
-                    capabilities: BUILTIN_SCOUT.capabilities.filter((capability) => capability !== "memories"),
+                    capabilities: BUILTIN_SCOUT.capabilities.filter(
+                        (capability) => capability !== "memories",
+                    ),
                 },
                 parentContext: {
                     model,
@@ -160,7 +162,10 @@ describe("in-process scout SDK session", () => {
                     modelRegistry: {
                         getRegisteredNativeProvider: () => undefined,
                         getRegisteredProviderConfig: () => undefined,
-                        getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "smoke-test" }),
+                        getApiKeyAndHeaders: async () => ({
+                            ok: true as const,
+                            apiKey: "smoke-test",
+                        }),
                         isUsingOAuth: () => false,
                         find: (provider: string, id: string) => source.getModel(provider, id),
                         getAll: () => [...source.getModels()],
@@ -181,7 +186,10 @@ describe("in-process scout SDK session", () => {
                     modelRegistry: {
                         getRegisteredNativeProvider: () => undefined,
                         getRegisteredProviderConfig: () => undefined,
-                        getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "smoke-test" }),
+                        getApiKeyAndHeaders: async () => ({
+                            ok: true as const,
+                            apiKey: "smoke-test",
+                        }),
                         isUsingOAuth: () => false,
                         find: (provider: string, id: string) => source.getModel(provider, id),
                         getAll: () => [...source.getModels()],
@@ -227,7 +235,10 @@ describe("in-process scout SDK session", () => {
                     modelRegistry: {
                         getRegisteredNativeProvider: () => undefined,
                         getRegisteredProviderConfig: () => undefined,
-                        getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "smoke-test" }),
+                        getApiKeyAndHeaders: async () => ({
+                            ok: true as const,
+                            apiKey: "smoke-test",
+                        }),
                         isUsingOAuth: () => false,
                         find: (provider: string, id: string) => source.getModel(provider, id),
                         getAll: () => [...source.getModels()],
@@ -281,7 +292,10 @@ describe("in-process scout SDK session", () => {
                     modelRegistry: {
                         getRegisteredNativeProvider: () => undefined,
                         getRegisteredProviderConfig: () => undefined,
-                        getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "smoke-test" }),
+                        getApiKeyAndHeaders: async () => ({
+                            ok: true as const,
+                            apiKey: "smoke-test",
+                        }),
                         isUsingOAuth: () => false,
                         find: (provider: string, id: string) => source.getModel(provider, id),
                         getAll: () => [...source.getModels()],
@@ -291,7 +305,8 @@ describe("in-process scout SDK session", () => {
                 childSessionFile: sessionFile,
                 onProgress: () => {},
                 onTrace: (type, data) => {
-                    if (type === "model.resolved") resolvedModels.push(`${data?.provider}/${data?.model}`);
+                    if (type === "model.resolved")
+                        resolvedModels.push(`${data?.provider}/${data?.model}`);
                 },
             });
 
@@ -319,20 +334,26 @@ describe("in-process scout SDK session", () => {
     });
 
     it("does not replace child OAuth auth with an API-key credential", () => {
-        expect(shouldCopyParentApiKey({
-            childHasAuth: true,
-            parentHasApiKey: true,
-            parentUsesOAuth: true,
-        })).toBe(false);
-        expect(shouldCopyParentApiKey({
-            childHasAuth: false,
-            parentHasApiKey: true,
-            parentUsesOAuth: true,
-        })).toBe(false);
-        expect(shouldCopyParentApiKey({
-            childHasAuth: false,
-            parentHasApiKey: true,
-            parentUsesOAuth: false,
-        })).toBe(true);
+        expect(
+            shouldCopyParentApiKey({
+                childHasAuth: true,
+                parentHasApiKey: true,
+                parentUsesOAuth: true,
+            }),
+        ).toBe(false);
+        expect(
+            shouldCopyParentApiKey({
+                childHasAuth: false,
+                parentHasApiKey: true,
+                parentUsesOAuth: true,
+            }),
+        ).toBe(false);
+        expect(
+            shouldCopyParentApiKey({
+                childHasAuth: false,
+                parentHasApiKey: true,
+                parentUsesOAuth: false,
+            }),
+        ).toBe(true);
     });
 });

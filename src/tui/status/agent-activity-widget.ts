@@ -4,11 +4,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Spinner } from "../spinner";
 import type { AgentRunSummary } from "../../tools/agent/contracts/runs";
 import { formatTodoProgress } from "./format";
-import {
-    firstLinePreview,
-    formatToolCounts,
-    oneLinePreview,
-} from "./agent-activity-format";
+import { firstLinePreview, formatToolCounts, oneLinePreview } from "./agent-activity-format";
 
 const MAX_PREVIEW_CHARS = 72;
 const MAX_ACTIVITY_CHARS = 100;
@@ -23,9 +19,10 @@ function renderRunningRun(run: AgentRunSummary, spinnerFrame: string): string[] 
     const label = run.agent === "workspace-setup" ? run.title : run.runId;
     const status = run.responsePreview
         ? firstLinePreview(run.responsePreview, MAX_PREVIEW_CHARS)
-        : run.phase ?? "Thinking";
+        : (run.phase ?? "Thinking");
     const firstLine = `${spinnerFrame} ${label} · ${formatElapsed(run.startedAt)} · ${status}`;
-    const action = run.activity && run.activity !== "Thinking" ? run.activity : run.lastToolActivity;
+    const action =
+        run.activity && run.activity !== "Thinking" ? run.activity : run.lastToolActivity;
     const details = [
         formatToolCounts(run.toolCounts),
         action ? oneLinePreview(action, MAX_ACTIVITY_CHARS) : "",
@@ -39,15 +36,37 @@ function renderRunningRun(run: AgentRunSummary, spinnerFrame: string): string[] 
 function renderRun(run: AgentRunSummary, spinnerFrame: string): string[] {
     const label = run.agent === "workspace-setup" ? run.title : run.runId;
     if (run.status === "running") return renderRunningRun(run, spinnerFrame);
-    if (run.status === "starting") return [`● ${label} · ${formatElapsed(run.startedAt)} · Starting: ${oneLinePreview(run.task, 90)}`];
-    const response = run.responsePreview ? ` · “${firstLinePreview(run.responsePreview, MAX_PREVIEW_CHARS)}”` : "";
+    if (run.status === "starting")
+        return [
+            `● ${label} · ${formatElapsed(run.startedAt)} · Starting: ${oneLinePreview(run.task, 90)}`,
+        ];
+    const response = run.responsePreview
+        ? ` · “${firstLinePreview(run.responsePreview, MAX_PREVIEW_CHARS)}”`
+        : "";
     const todo = formatTodoProgress(run.todo);
     const todoSuffix = todo ? ` · ${todo}` : "";
-    if (run.status === "waiting_for_permission") return [`? ${label} — ${run.activity ?? "Waiting for mutation permission"}${todoSuffix}${response}`];
-    if (run.status === "waiting_for_parent") return [`? ${label} — Waiting: ${oneLinePreview(run.question ?? "parent guidance", MAX_ACTIVITY_CHARS)}${todoSuffix}${response}`];
-    if (run.status === "interrupted") return [`! ${label} — Interrupted; resume with explicit guidance${todoSuffix}${response}`];
-    if (run.status === "completed") return [run.agent === "workspace-setup" ? `✓ ${label} — Setup complete${todoSuffix}${response}` : `✓ ${label} — Ready to collect${todoSuffix}${response}`];
-    if (run.status === "failed") return [run.agent === "workspace-setup" ? `! ${label} — Setup failed${todoSuffix}${response}` : `! ${label} — Failed; result ready to collect${todoSuffix}${response}`];
+    if (run.status === "waiting_for_permission")
+        return [
+            `? ${label} — ${run.activity ?? "Waiting for mutation permission"}${todoSuffix}${response}`,
+        ];
+    if (run.status === "waiting_for_parent")
+        return [
+            `? ${label} — Waiting: ${oneLinePreview(run.question ?? "parent guidance", MAX_ACTIVITY_CHARS)}${todoSuffix}${response}`,
+        ];
+    if (run.status === "interrupted")
+        return [`! ${label} — Interrupted; resume with explicit guidance${todoSuffix}${response}`];
+    if (run.status === "completed")
+        return [
+            run.agent === "workspace-setup"
+                ? `✓ ${label} — Setup complete${todoSuffix}${response}`
+                : `✓ ${label} — Ready to collect${todoSuffix}${response}`,
+        ];
+    if (run.status === "failed")
+        return [
+            run.agent === "workspace-setup"
+                ? `! ${label} — Setup failed${todoSuffix}${response}`
+                : `! ${label} — Failed; result ready to collect${todoSuffix}${response}`,
+        ];
     return [`× ${label} — ${run.status}`];
 }
 

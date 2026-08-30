@@ -7,7 +7,9 @@ describe("BorderBox", () => {
     it("wraps child content in a Unicode border and preserves the width", async () => {
         const component = new BorderBox(new Text("Hello\nWorld", 0, 0));
 
-        await expect(renderText(component, 12)).toMatchFileSnapshot("__snapshots__/border-box.rounded.txt");
+        await expect(renderText(component, 12)).toMatchFileSnapshot(
+            "__snapshots__/border-box.rounded.txt",
+        );
     });
 
     it("supports a fixed total height and keeps the bottom border visible", () => {
@@ -47,6 +49,8 @@ describe("BorderBox", () => {
             },
         });
 
-        await expect(renderText(component, 6)).toMatchFileSnapshot("__snapshots__/border-box.custom-glyphs.txt");
+        await expect(renderText(component, 6)).toMatchFileSnapshot(
+            "__snapshots__/border-box.custom-glyphs.txt",
+        );
     });
 });

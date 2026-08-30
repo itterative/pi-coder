@@ -9,7 +9,11 @@ import agentConfig, {
     maxWorkspacesPerRepo,
     shouldNotifyBusyWorkerChanges,
 } from "../../src/tools/agent/config";
-import { BUILTIN_ADVISOR, BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
+import {
+    BUILTIN_ADVISOR,
+    BUILTIN_SCOUT,
+    BUILTIN_WORKER,
+} from "../../src/tools/agent/definitions/discovery";
 
 function clearCache(): void {
     (agentConfig as unknown as { _config: unknown })._config = null;
@@ -44,8 +48,14 @@ describe("agent configuration", () => {
     });
 
     it("merges global and project built-in model overrides", () => {
-        fs.writeFileSync(globalPath, JSON.stringify({ models: { scout: "openai/gpt-4o", worker: "anthropic/sonnet" } }));
-        fs.writeFileSync(path.join(project, ".pi", "agent-config.json"), JSON.stringify({ models: { scout: "openai/gpt-4.1" } }));
+        fs.writeFileSync(
+            globalPath,
+            JSON.stringify({ models: { scout: "openai/gpt-4o", worker: "anthropic/sonnet" } }),
+        );
+        fs.writeFileSync(
+            path.join(project, ".pi", "agent-config.json"),
+            JSON.stringify({ models: { scout: "openai/gpt-4.1" } }),
+        );
 
         expect(agentConfig.load(project)).toEqual({
             models: {
@@ -59,7 +69,10 @@ describe("agent configuration", () => {
         fs.writeFileSync(globalPath, JSON.stringify({ advisorEnabled: true }));
         expect(isAdvisorEnabled(agentConfig.load(project))).toBe(true);
 
-        fs.writeFileSync(path.join(project, ".pi", "agent-config.json"), JSON.stringify({ advisorEnabled: false }));
+        fs.writeFileSync(
+            path.join(project, ".pi", "agent-config.json"),
+            JSON.stringify({ advisorEnabled: false }),
+        );
         expect(isAdvisorEnabled(agentConfig.load(project))).toBe(false);
         expect(isAdvisorEnabled({})).toBe(false);
     });
@@ -68,7 +81,10 @@ describe("agent configuration", () => {
         fs.writeFileSync(globalPath, JSON.stringify({ notifyBusyWorkerChanges: false }));
         expect(shouldNotifyBusyWorkerChanges(agentConfig.load(project))).toBe(false);
 
-        fs.writeFileSync(path.join(project, ".pi", "agent-config.json"), JSON.stringify({ notifyBusyWorkerChanges: true }));
+        fs.writeFileSync(
+            path.join(project, ".pi", "agent-config.json"),
+            JSON.stringify({ notifyBusyWorkerChanges: true }),
+        );
         expect(shouldNotifyBusyWorkerChanges(agentConfig.load(project))).toBe(true);
     });
 
@@ -78,21 +94,30 @@ describe("agent configuration", () => {
         fs.writeFileSync(globalPath, JSON.stringify({ maxWorkspacesPerRepo: 6 }));
         expect(maxWorkspacesPerRepo(agentConfig.load(project))).toBe(6);
 
-        fs.writeFileSync(path.join(project, ".pi", "agent-config.json"), JSON.stringify({ maxWorkspacesPerRepo: 2 }));
+        fs.writeFileSync(
+            path.join(project, ".pi", "agent-config.json"),
+            JSON.stringify({ maxWorkspacesPerRepo: 2 }),
+        );
         expect(maxWorkspacesPerRepo(agentConfig.load(project))).toBe(2);
     });
 
     it("preserves inherited values when saving project overrides", () => {
         const projectConfigPath = path.join(project, ".pi", "agent-config.json");
-        fs.writeFileSync(globalPath, JSON.stringify({
-            models: { scout: "global/scout", reviewer: "global/reviewer" },
-            advisorEnabled: true,
-            notifyBusyWorkerChanges: false,
-        }));
-        fs.writeFileSync(projectConfigPath, JSON.stringify({
-            models: { worker: "project/worker" },
-            advisorEnabled: false,
-        }));
+        fs.writeFileSync(
+            globalPath,
+            JSON.stringify({
+                models: { scout: "global/scout", reviewer: "global/reviewer" },
+                advisorEnabled: true,
+                notifyBusyWorkerChanges: false,
+            }),
+        );
+        fs.writeFileSync(
+            projectConfigPath,
+            JSON.stringify({
+                models: { worker: "project/worker" },
+                advisorEnabled: false,
+            }),
+        );
 
         agentConfig.setNotifyBusyWorkerChanges(true, project);
         expect(JSON.parse(fs.readFileSync(projectConfigPath, "utf8"))).toEqual({
@@ -129,7 +154,11 @@ describe("agent configuration", () => {
             models: { advisor: "openai/o3", scout: "openai/gpt-4.1", worker: "anthropic/sonnet" },
         });
 
-        expect(result.map((agent) => agent.model)).toEqual(["openai/o3", "openai/gpt-4.1", "anthropic/sonnet"]);
+        expect(result.map((agent) => agent.model)).toEqual([
+            "openai/o3",
+            "openai/gpt-4.1",
+            "anthropic/sonnet",
+        ]);
         expect(BUILTIN_ADVISOR.model).toBeUndefined();
         expect(BUILTIN_SCOUT.model).toBeUndefined();
         expect(BUILTIN_WORKER.model).toBeUndefined();

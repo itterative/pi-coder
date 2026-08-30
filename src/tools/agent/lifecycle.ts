@@ -1,10 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { createAgentChild } from "./child";
-import agentConfig, {
-    applyAgentConfig,
-    shouldNotifyBusyWorkerChanges,
-} from "./config";
+import agentConfig, { applyAgentConfig, shouldNotifyBusyWorkerChanges } from "./config";
 import { discoverAgents } from "./definitions/discovery";
 import {
     createAgentEventSink,
@@ -25,14 +22,12 @@ import {
 import type { AgentTraceStore } from "./observability/trace";
 import type { AgentWorkspace } from "./contracts/workspaces";
 import type { WorkspaceSetupUiUpdate } from "./workspaces/setup";
-import {
-    clearCompletedWorkspaceSetupRun,
-    visibleAgentRuns,
-} from "./presentation/status";
+import { clearCompletedWorkspaceSetupRun, visibleAgentRuns } from "./presentation/status";
 import { emitAgentStatus } from "./observability/events";
 import { diagnosticText } from "./presentation/text";
 
-export type WorkspaceEventAction = "created" | "updated" | "lease_changed" | "result_changed" | "removed";
+export type WorkspaceEventAction =
+    "created" | "updated" | "lease_changed" | "result_changed" | "removed";
 
 export class AgentLifecycle {
     readonly events: AgentEventSink;
@@ -60,7 +55,7 @@ export class AgentLifecycle {
         this.managerValue = this.createManager();
         this.mailbox = new AgentMailbox(pi);
         this.unsubscribeAgentUiEvents = subscribeAgentEvents(pi.events, (event) => {
-            const eventCwd = event.type === "run" ? event.parentCwd ?? event.cwd : event.cwd;
+            const eventCwd = event.type === "run" ? (event.parentCwd ?? event.cwd) : event.cwd;
             if (!this.activeContext || this.activeContext.cwd !== eventCwd) return;
             this.publishAgentStatus();
         });
@@ -94,33 +89,46 @@ export class AgentLifecycle {
             const delegatedEndMarker = "</delegated_agents>";
             const delegatedEnd = event.systemPrompt.indexOf(delegatedEndMarker);
             if (delegatedStart !== -1 && delegatedEnd !== -1 && delegatedEnd > delegatedStart) {
-                const systemPrompt = event.systemPrompt.slice(0, delegatedStart)
-                    + this.cachedAgentPrompt
-                    + event.systemPrompt.slice(delegatedEnd + delegatedEndMarker.length);
+                const systemPrompt =
+                    event.systemPrompt.slice(0, delegatedStart) +
+                    this.cachedAgentPrompt +
+                    event.systemPrompt.slice(delegatedEnd + delegatedEndMarker.length);
                 return { systemPrompt };
             }
             const projectContextEnd = "</project_context>";
             const idx = event.systemPrompt.indexOf(projectContextEnd);
-            const systemPrompt = idx === -1
-                ? `${event.systemPrompt}\n\n${this.cachedAgentPrompt}`
-                : event.systemPrompt.slice(0, idx + projectContextEnd.length)
-                    + "\n\n"
-                    + this.cachedAgentPrompt
-                    + "\n"
-                    + event.systemPrompt.slice(idx + projectContextEnd.length);
+            const systemPrompt =
+                idx === -1
+                    ? `${event.systemPrompt}\n\n${this.cachedAgentPrompt}`
+                    : event.systemPrompt.slice(0, idx + projectContextEnd.length) +
+                      "\n\n" +
+                      this.cachedAgentPrompt +
+                      "\n" +
+                      event.systemPrompt.slice(idx + projectContextEnd.length);
             return { systemPrompt };
         });
 
         this.pi.on("session_before_tree", (_event, ctx) => {
-            const unsafe = this.manager.listRuns().some((run) => (
-                run.status === "starting" || run.status === "running" || run.status === "waiting_for_permission"
-            )) || this.setupRunSummaries.some((run) => (
-                run.status === "starting"
-                || run.status === "running"
-                || run.status === "waiting_for_permission"
-            ));
+            const unsafe =
+                this.manager
+                    .listRuns()
+                    .some(
+                        (run) =>
+                            run.status === "starting" ||
+                            run.status === "running" ||
+                            run.status === "waiting_for_permission",
+                    ) ||
+                this.setupRunSummaries.some(
+                    (run) =>
+                        run.status === "starting" ||
+                        run.status === "running" ||
+                        run.status === "waiting_for_permission",
+                );
             if (!unsafe) return;
-            ctx.ui.notify("Pause, finish, or cancel running delegated agents before navigating the session tree.", "warning");
+            ctx.ui.notify(
+                "Pause, finish, or cancel running delegated agents before navigating the session tree.",
+                "warning",
+            );
             return { cancel: true };
         });
 
@@ -135,7 +143,10 @@ export class AgentLifecycle {
             await this.manager.closePersistence();
             this.manager.setPersistence(undefined);
             await this.manager.shutdown();
-            emitAgentEvent({ type: "runtime", action: "reset" }, { sink: this.events, cwd: ctx.cwd });
+            emitAgentEvent(
+                { type: "runtime", action: "reset" },
+                { sink: this.events, cwd: ctx.cwd },
+            );
             this.managerValue = this.createManager();
             this.publishAgentStatus();
             const discovered = this.discover(ctx);
@@ -150,7 +161,10 @@ export class AgentLifecycle {
             await this.manager.shutdown();
             await this.manager.flushPersistence();
             await this.manager.closePersistence();
-            emitAgentEvent({ type: "runtime", action: "shutdown" }, { sink: this.events, cwd: ctx.cwd });
+            emitAgentEvent(
+                { type: "runtime", action: "shutdown" },
+                { sink: this.events, cwd: ctx.cwd },
+            );
             this.activeContext = undefined;
             this.unsubscribeAgentUiEvents();
         });
@@ -193,12 +207,15 @@ export class AgentLifecycle {
         action: WorkspaceEventAction,
         reason?: string,
     ): void {
-        emitAgentEvent({
-            type: "workspace",
-            action,
-            workspaceId,
-            reason,
-        }, { sink: this.events, cwd: ctx.cwd });
+        emitAgentEvent(
+            {
+                type: "workspace",
+                action,
+                workspaceId,
+                reason,
+            },
+            { sink: this.events, cwd: ctx.cwd },
+        );
     }
 
     updateSetupRun(
@@ -242,19 +259,19 @@ export class AgentLifecycle {
     backgroundUpdate(ctx: ExtensionContext): (details: AgentRunDetails) => void {
         return (details) => {
             if (
-                details.status === "completed"
-                || details.status === "failed"
-                || details.status === "aborted"
-                || details.status === "canceled"
+                details.status === "completed" ||
+                details.status === "failed" ||
+                details.status === "aborted" ||
+                details.status === "canceled"
             ) {
                 this.clearCompletedWorkspaceSetup(ctx, details);
             }
             this.publishAgentStatus();
             if (
-                details.background
-                && details.mutating
-                && details.workspaceId === undefined
-                && shouldNotifyBusyWorkerChanges(agentConfig.get(ctx.cwd))
+                details.background &&
+                details.mutating &&
+                details.workspaceId === undefined &&
+                shouldNotifyBusyWorkerChanges(agentConfig.get(ctx.cwd))
             ) {
                 const changedFiles = details.mutationReport?.changedFiles ?? [];
                 const notified = this.notifiedMutationFiles.get(details.runId) ?? new Set<string>();
@@ -317,7 +334,10 @@ export class AgentLifecycle {
         } catch (error) {
             this.manager.setPersistence(undefined);
             const message = error instanceof Error ? error.message : String(error);
-            ctx.ui.notify(`pi-coder agents: durable child storage is unavailable: ${message}`, "warning");
+            ctx.ui.notify(
+                `pi-coder agents: durable child storage is unavailable: ${message}`,
+                "warning",
+            );
             return;
         }
         this.manager.setPersistence(loaded?.persistence);
@@ -342,7 +362,10 @@ export class AgentLifecycle {
             );
         }
         this.publishAgentStatus();
-        emitAgentEvent({ type: "runtime", action: "restored" }, { sink: this.events, cwd: ctx.cwd });
+        emitAgentEvent(
+            { type: "runtime", action: "restored" },
+            { sink: this.events, cwd: ctx.cwd },
+        );
         this.reconcileMailbox();
         await this.manager.flushPersistence();
     }

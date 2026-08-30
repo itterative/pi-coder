@@ -1,8 +1,6 @@
 import { PATH_VALUE, VALUE, type CommandSpec } from "./spec";
 
-const SHELL_ACCESS_TOKENS = new Set([
-    "<", ">", ">>", "2>", "2>>", "2>&1", "<<", "<<-",
-]);
+const SHELL_ACCESS_TOKENS = new Set(["<", ">", ">>", "2>", "2>>", "2>&1", "<<", "<<-"]);
 
 function getSimplePositionals(args: readonly string[]): string[] | null {
     const positionals: string[] = [];
@@ -54,12 +52,20 @@ export const SCRATCHPAD_MUTATOR_COMMANDS: Record<string, CommandSpec> = {
         additionalRootOnly: true,
         rejectUnknownFlags: true,
         flags: {
-            "-d": {}, "--dir": {},
-            "-f": {}, "--force": {},
-            "-i": {}, "-I": {}, "--interactive": {},
-            "-r": {}, "-R": {}, "--recursive": {},
-            "-v": {}, "--verbose": {},
-            "--one-file-system": {}, "--preserve-root": {},
+            "-d": {},
+            "--dir": {},
+            "-f": {},
+            "--force": {},
+            "-i": {},
+            "-I": {},
+            "--interactive": {},
+            "-r": {},
+            "-R": {},
+            "--recursive": {},
+            "-v": {},
+            "--verbose": {},
+            "--one-file-system": {},
+            "--preserve-root": {},
         },
     },
     mkdir: {
@@ -73,8 +79,10 @@ export const SCRATCHPAD_MUTATOR_COMMANDS: Record<string, CommandSpec> = {
         additionalRootOnly: true,
         rejectUnknownFlags: true,
         flags: {
-            "-p": {}, "--parents": {},
-            "-v": {}, "--verbose": {},
+            "-p": {},
+            "--parents": {},
+            "-v": {},
+            "--verbose": {},
             "--ignore-fail-on-non-empty": {},
         },
     },
@@ -84,8 +92,11 @@ export const SCRATCHPAD_MUTATOR_COMMANDS: Record<string, CommandSpec> = {
         rejectUnknownFlags: true,
         rejectHardLinkedPositionals: true,
         flags: {
-            "-a": {}, "-c": {}, "-m": {},
-            "-r": PATH_VALUE, "--reference": PATH_VALUE,
+            "-a": {},
+            "-c": {},
+            "-m": {},
+            "-r": PATH_VALUE,
+            "--reference": PATH_VALUE,
             "--no-create": {},
         },
     },
@@ -95,8 +106,10 @@ export const SCRATCHPAD_MUTATOR_COMMANDS: Record<string, CommandSpec> = {
         rejectUnknownFlags: true,
         rejectHardLinkedPositionals: true,
         flags: {
-            "-r": PATH_VALUE, "--reference": PATH_VALUE,
-            "-s": VALUE, "--size": VALUE,
+            "-r": PATH_VALUE,
+            "--reference": PATH_VALUE,
+            "-s": VALUE,
+            "--size": VALUE,
         },
     },
     tee: {
@@ -105,8 +118,10 @@ export const SCRATCHPAD_MUTATOR_COMMANDS: Record<string, CommandSpec> = {
         rejectUnknownFlags: true,
         rejectHardLinkedPositionals: true,
         flags: {
-            "-a": {}, "--append": {},
-            "-i": {}, "--ignore-interrupts": {},
+            "-a": {},
+            "--append": {},
+            "-i": {},
+            "--ignore-interrupts": {},
         },
     },
     cp: {
@@ -117,10 +132,14 @@ export const SCRATCHPAD_MUTATOR_COMMANDS: Record<string, CommandSpec> = {
         rejectUnknownFlags: true,
         validate: hasExactlyTwoPositionals,
         flags: {
-            "-f": {}, "--force": {},
-            "-n": {}, "--no-clobber": {},
-            "-u": {}, "--update": {},
-            "-v": {}, "--verbose": {},
+            "-f": {},
+            "--force": {},
+            "-n": {},
+            "--no-clobber": {},
+            "-u": {},
+            "--update": {},
+            "-v": {},
+            "--verbose": {},
         },
     },
     mv: {
@@ -131,11 +150,16 @@ export const SCRATCHPAD_MUTATOR_COMMANDS: Record<string, CommandSpec> = {
         rejectUnknownFlags: true,
         validate: hasExactlyTwoPositionals,
         flags: {
-            "-f": {}, "--force": {},
-            "-i": {}, "--interactive": {},
-            "-n": {}, "--no-clobber": {},
-            "-T": {}, "--no-target-directory": {},
-            "-v": {}, "--verbose": {},
+            "-f": {},
+            "--force": {},
+            "-i": {},
+            "--interactive": {},
+            "-n": {},
+            "--no-clobber": {},
+            "-T": {},
+            "--no-target-directory": {},
+            "-v": {},
+            "--verbose": {},
         },
     },
     chmod: {
@@ -146,9 +170,13 @@ export const SCRATCHPAD_MUTATOR_COMMANDS: Record<string, CommandSpec> = {
         positionals: "first-pattern",
         validate: isChmodInvocation,
         flags: {
-            "-c": {}, "--changes": {},
-            "-f": {}, "--silent": {}, "--quiet": {},
-            "-v": {}, "--verbose": {},
+            "-c": {},
+            "--changes": {},
+            "-f": {},
+            "--silent": {},
+            "--quiet": {},
+            "-v": {},
+            "--verbose": {},
         },
     },
 };

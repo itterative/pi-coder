@@ -9,7 +9,15 @@ import type { AgentParameters } from "./prompt";
  */
 export type AgentRequest =
     | { action: "list" }
-    | { action: "start"; agent: string; task: string; title?: string; isolation?: "worktree"; context?: AgentContext; background?: boolean }
+    | {
+          action: "start";
+          agent: string;
+          task: string;
+          title?: string;
+          isolation?: "worktree";
+          context?: AgentContext;
+          background?: boolean;
+      }
     | { action: "continue"; runId: string; guidance?: string }
     | { action: "cancel"; runId: string }
     | { action: "inspect"; runId: string }
@@ -25,7 +33,10 @@ type ActionSpec = {
 
 const ACTION_FIELDS: Record<string, ActionSpec> = {
     list: { required: [], optional: [] },
-    start: { required: ["agent", "task"], optional: ["title", "isolation", "context", "background"] },
+    start: {
+        required: ["agent", "task"],
+        optional: ["title", "isolation", "context", "background"],
+    },
     continue: { required: ["runId"], optional: ["guidance"] },
     cancel: { required: ["runId"], optional: [] },
     inspect: { required: ["runId"], optional: [] },
@@ -38,7 +49,7 @@ const ACTION_FIELDS: Record<string, ActionSpec> = {
 const FIELD_HINTS: Record<string, string> = {
     agent: "name of an available delegated agent",
     task: "self-contained task brief for the child agent",
-    runId: "run ID of an existing run, as listed by action \"list\"",
+    runId: 'run ID of an existing run, as listed by action "list"',
     guidance: "guidance text for the run",
 };
 
@@ -69,14 +80,17 @@ export function validateAgentParameters(params: AgentParameters): AgentRequest {
 
     const value = params as Record<string, unknown>;
     const allowed = [...spec.required, ...spec.optional];
-    const provided = Object.keys(value).filter((key) => key !== "action" && value[key] !== undefined);
+    const provided = Object.keys(value).filter(
+        (key) => key !== "action" && value[key] !== undefined,
+    );
 
     const unexpected = provided.filter((key) => !allowed.includes(key));
     if (unexpected.length > 0) {
         const quoted = (field: string) => JSON.stringify(field);
-        const accepted = allowed.length > 0
-            ? `Parameters for action ${JSON.stringify(params.action)}: ${allowed.map(quoted).join(", ")}.`
-            : `Action ${JSON.stringify(params.action)} takes no parameters.`;
+        const accepted =
+            allowed.length > 0
+                ? `Parameters for action ${JSON.stringify(params.action)}: ${allowed.map(quoted).join(", ")}.`
+                : `Action ${JSON.stringify(params.action)} takes no parameters.`;
         throw new AgentActionError(
             `Action ${JSON.stringify(params.action)} does not accept ${joinFields(unexpected.map(quoted))}. ${accepted}`,
         );

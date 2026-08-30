@@ -17,7 +17,9 @@ const testPaths = vi.hoisted(() => {
 });
 
 vi.mock("../../../src/common/constants", async () => {
-    const actual = await vi.importActual<typeof import("../../../src/common/constants")>("../../../src/common/constants");
+    const actual = await vi.importActual<typeof import("../../../src/common/constants")>(
+        "../../../src/common/constants",
+    );
     return {
         ...actual,
         PI_CODER_STATE_DIR: testPaths.root,
@@ -68,7 +70,11 @@ describe("registered continuation lifecycle", () => {
         const ownerSessionId = parentSession.getSessionId();
 
         const created = await createAgentWorkspace(repository, { workspacesDir: paths.state });
-        const ready = await updateAgentWorkspace(created, { setupState: "skipped" }, { workspacesDir: paths.state });
+        const ready = await updateAgentWorkspace(
+            created,
+            { setupState: "skipped" },
+            { workspacesDir: paths.state },
+        );
         const provisional = await claimAgentWorkspace(ready.id, {
             ownerSessionId,
             leaseRunId: "setup-1",
@@ -89,7 +95,11 @@ describe("registered continuation lifecycle", () => {
                 throw new Error("child session could not be reopened");
             }
             const childSession = context.childSessionFile
-                ? SessionManager.open(context.childSessionFile, context.childSessionDir, context.cwd)
+                ? SessionManager.open(
+                      context.childSessionFile,
+                      context.childSessionDir,
+                      context.cwd,
+                  )
                 : SessionManager.create(context.cwd, context.childSessionDir);
             childSessions.push(childSession);
             factoryContexts.push(context);
@@ -137,15 +147,22 @@ describe("registered continuation lifecycle", () => {
 
         const spawned = await tool.execute(
             "e2e-background-start",
-            { action: "start", agent: "worker", task: "Create the marker", isolation: "worktree", background: true },
+            {
+                action: "start",
+                agent: "worker",
+                task: "Create the marker",
+                isolation: "worktree",
+                background: true,
+            },
             undefined,
             undefined,
             ctx,
         );
         await vi.waitFor(() => expect(prompts).toHaveLength(1));
         await vi.waitFor(async () => {
-            const record = (await runCatalog.listAgentRunCatalog(repository))
-                .find((candidate) => candidate.runId === spawned.details.runId);
+            const record = (await runCatalog.listAgentRunCatalog(repository)).find(
+                (candidate) => candidate.runId === spawned.details.runId,
+            );
             expect(record?.status).toBe("completed");
         });
         const collected = await tool.execute(
@@ -168,7 +185,9 @@ describe("registered continuation lifecycle", () => {
         const persistedSessionFile = childSessions[0]?.getSessionFile();
         expect(persistedSessionFile).toBeDefined();
         const catalogAfterCollect = await runCatalog.listAgentRunCatalog(repository);
-        const firstRecord = catalogAfterCollect.find((record) => record.runId === spawned.details.runId);
+        const firstRecord = catalogAfterCollect.find(
+            (record) => record.runId === spawned.details.runId,
+        );
         expect(firstRecord).toMatchObject({
             ownerSessionId: parentSession.getSessionId(),
             runInstanceId: spawned.details.runInstanceId,
@@ -191,7 +210,10 @@ describe("registered continuation lifecycle", () => {
             leaseRunInstanceId: "worker-y-instance",
             workspacesDir: paths.state,
         });
-        fs.writeFileSync(path.join(recycledForOtherWorker.worktreePath, "other-worker.txt"), "other worker\n");
+        fs.writeFileSync(
+            path.join(recycledForOtherWorker.worktreePath, "other-worker.txt"),
+            "other worker\n",
+        );
         await createAgentWorkspaceCheckpoint(recycledForOtherWorker.id, {
             ownerSessionId: "other-parent",
             leaseRunId: "worker-y",
@@ -219,7 +241,11 @@ describe("registered continuation lifecycle", () => {
             childSessionLeafId: childSessions[0]?.getLeafId(),
         });
         expect(childSessions[1]?.getSessionFile()).toBe(persistedSessionFile);
-        const continuedSession = SessionManager.open(persistedSessionFile!, childSessions[1]?.getSessionDir(), provisional.worktreePath);
+        const continuedSession = SessionManager.open(
+            persistedSessionFile!,
+            childSessions[1]?.getSessionDir(),
+            provisional.worktreePath,
+        );
         const userMessages = continuedSession.getBranch().flatMap((entry) => {
             if (entry.type !== "message" || entry.message.role !== "user") return [];
             return [entry.message.content];
@@ -233,7 +259,9 @@ describe("registered continuation lifecycle", () => {
             status: "prepared",
         });
         expect(revised.details.workspaceResult.id).not.toBe(firstResult.id);
-        expect(fs.readFileSync(path.join(provisional.worktreePath, "revision-marker.txt"), "utf8")).toBe("revised\n");
+        expect(
+            fs.readFileSync(path.join(provisional.worktreePath, "revision-marker.txt"), "utf8"),
+        ).toBe("revised\n");
         expect(gitOutput(repository, ["rev-parse", "HEAD"])).toBe(parentHead);
         expect(gitOutput(repository, ["status", "--porcelain"])).toBe("");
         expect(fs.existsSync(path.join(repository, "revision-marker.txt"))).toBe(false);
@@ -255,7 +283,11 @@ describe("registered continuation lifecycle", () => {
         failNextSetup = true;
         const setupFailure = await tool.execute(
             "e2e-setup-failure",
-            { action: "continue", runId: revised.details.runId, guidance: "Retry after setup failure" },
+            {
+                action: "continue",
+                runId: revised.details.runId,
+                guidance: "Retry after setup failure",
+            },
             undefined,
             undefined,
             ctx,
@@ -278,7 +310,11 @@ describe("registered continuation lifecycle", () => {
 
         const retried = await tool.execute(
             "e2e-setup-retry",
-            { action: "continue", runId: revised.details.runId, guidance: "Retry the review after setup recovers" },
+            {
+                action: "continue",
+                runId: revised.details.runId,
+                guidance: "Retry the review after setup recovers",
+            },
             undefined,
             undefined,
             ctx,
@@ -292,11 +328,16 @@ describe("registered continuation lifecycle", () => {
         ]);
 
         const finalizationError = new Error("revision finalization failed");
-        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult")
-            .mockRejectedValueOnce(finalizationError);
+        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockRejectedValueOnce(
+            finalizationError,
+        );
         const finalizationFailure = await tool.execute(
             "e2e-finalization-failure",
-            { action: "continue", runId: revised.details.runId, guidance: "Try finalization failure" },
+            {
+                action: "continue",
+                runId: revised.details.runId,
+                guidance: "Try finalization failure",
+            },
             undefined,
             undefined,
             ctx,
@@ -318,7 +359,13 @@ describe("registered continuation lifecycle", () => {
         expect(fs.existsSync(path.join(repository, "revision-marker.txt"))).toBe(false);
 
         runGit(provisional.worktreePath, ["checkout", "--orphan", "divergent"]);
-        runGit(provisional.worktreePath, ["commit", "--quiet", "--allow-empty", "-m", "divergent history"]);
+        runGit(provisional.worktreePath, [
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "divergent history",
+        ]);
         const divergentHead = gitOutput(provisional.worktreePath, ["rev-parse", "HEAD"]);
         const continuedAfterDivergence = await tool.execute(
             "e2e-divergent-revise",
