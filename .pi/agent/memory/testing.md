@@ -6,7 +6,9 @@ category: workflow
 
 # Testing pi-coder
 
-Run the full suite with `npm run test:run` and check types with `npx tsc --noEmit`. The tests cover the consolidated TUI, memory, config, and sandbox modules.
+Run the full suite with `npm run test:run` and check types with `npm run typecheck` (or `npx tsc --noEmit`). The tests cover the consolidated TUI, memory, config, and sandbox modules.
+
+Quality checks are available through `npm run lint`, `npm run format:check`, and `npm run knip`; `npm run check` runs typechecking, linting, formatting, tests, and Knip together. ESLint uses the flat config in `eslint.config.mjs`, with cyclomatic and cognitive complexity reported as warnings initially. The repository currently has pre-existing lint, formatting, and Knip findings; do not treat those baseline findings as regressions without comparing changes.
 
 For a manual permission-prompt check, run `cat /etc/hostname`; without a matching rule it should prompt with `ask`. Verify the `selectWithMessage` UI, long-command wrapping and scrolling, Tab edit mode, bracketed clipboard paste, wrapped feedback, and Enter/Escape behavior.
 

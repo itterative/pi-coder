@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+.state/
+.workspace-validation/
+vendor/
+package-lock.json

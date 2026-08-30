@@ -26,15 +26,31 @@
     "@earendil-works/pi-ai": "^0.84.1",
     "@earendil-works/pi-coding-agent": "^0.84.1",
     "@earendil-works/pi-tui": "^0.84.1",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^25.3.3",
+    "@vitest/coverage-v8": "^4.1.11",
+    "eslint": "^10.9.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-sonarjs": "^4.2.0",
+    "globals": "^17.11.0",
+    "knip": "^6.32.2",
+    "prettier": "^3.9.6",
     "tsx": "^4.23.12",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0",
     "vitest": "^4.0.18"
   },
   "scripts": {
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "bench": "vitest bench"
+    "bench": "vitest bench",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"docs/**/*.md\" \"prompts/**/*.md\" README.md eslint.config.mjs .prettierrc.json \"*.json\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"docs/**/*.md\" \"prompts/**/*.md\" README.md eslint.config.mjs .prettierrc.json \"*.json\"",
+    "knip": "knip",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test:run && npm run knip"
   }
 }
