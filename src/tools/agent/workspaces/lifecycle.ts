@@ -338,13 +338,21 @@ export async function discardAgentWorkspace(
 
 export async function createAgentWorkspace(
     cwd: string,
-    { workspacesDir = PI_CODER_WORKSPACES_DIR }: AgentWorkspaceDirectoryOptions = {},
+    {
+        workspacesDir = PI_CODER_WORKSPACES_DIR,
+        maxWorkspaces,
+        skipParentDirtyCheck = false,
+    }: AgentWorkspaceDirectoryOptions = {},
 ): Promise<AgentWorkspace> {
     const resolvedCwd = path.resolve(cwd);
     const repositoryRoot = path.resolve(await git(resolvedCwd, ["rev-parse", "--show-toplevel"]));
-    const parentStatus = await git(repositoryRoot, ["status", "--porcelain=v1", "--untracked-files=all"]);
-    if (parentStatus) {
-        throw new Error("Cannot create an isolated workspace while the parent checkout has uncommitted changes.");
+    // Manual browser creation intentionally allows a dirty parent. The new
+    // worktree is still based on the current committed HEAD, not uncommitted files.
+    if (!skipParentDirtyCheck) {
+        const parentStatus = await git(repositoryRoot, ["status", "--porcelain=v1", "--untracked-files=all"]);
+        if (parentStatus) {
+            throw new Error("Cannot create an isolated workspace while the parent checkout has uncommitted changes.");
+        }
     }
     const baseRevision = await git(repositoryRoot, ["rev-parse", "HEAD"]);
     const directory = workspacesRoot(workspacesDir);
@@ -354,12 +362,15 @@ export async function createAgentWorkspace(
         // Serialize the capacity check with the worktree creation and row insert
         // so concurrent pi processes cannot allocate the same final slot.
         database.exec("BEGIN IMMEDIATE");
-        const countRow = database.prepare("SELECT COUNT(*) AS count FROM workspaces WHERE cwd = ?")
-            .get(resolvedCwd) as { count?: number } | undefined;
+        const countRow = database.prepare("SELECT COUNT(*) AS count FROM workspaces WHERE repository_root = ?")
+            .get(repositoryRoot) as { count?: number } | undefined;
         const count = Number(countRow?.count ?? 0);
-        if (count >= MAX_AGENT_WORKSPACES) {
+        const capacity = Number.isInteger(maxWorkspaces) && maxWorkspaces !== undefined && maxWorkspaces > 0
+            ? maxWorkspaces
+            : MAX_AGENT_WORKSPACES;
+        if (count >= capacity) {
             throw new Error(
-                `Workspace capacity reached for ${resolvedCwd}: ${MAX_AGENT_WORKSPACES} workspaces already exist. Explicitly apply, retain, reset, or discard an existing workspace before creating another.`,
+                `Workspace capacity reached for ${repositoryRoot}: ${capacity} workspaces already exist. Explicitly apply, retain, reset, or discard an existing workspace before creating another.`,
             );
         }
         let slug = randomSlug();

@@ -233,6 +233,12 @@ export class AgentLifecycle {
         }
     }
 
+    clearSetupRun(runId: string): void {
+        if (this.setupRuns.delete(runId)) {
+            this.publishAgentStatus();
+        }
+    }
+
     backgroundUpdate(ctx: ExtensionContext): (details: AgentRunDetails) => void {
         return (details) => {
             if (

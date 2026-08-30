@@ -8,6 +8,8 @@ export const BUILTIN_AGENT_NAMES = ["scout", "reviewer", "advisor", "worker"] as
 export type BuiltinAgentName = (typeof BUILTIN_AGENT_NAMES)[number];
 export type BuiltinAgentModels = Partial<Record<BuiltinAgentName, string>>;
 
+export const DEFAULT_MAX_WORKSPACES_PER_REPO = 3;
+
 export interface AgentConfig {
     /** Models override the parent model for individual built-in agents. */
     models?: BuiltinAgentModels;
@@ -15,6 +17,8 @@ export interface AgentConfig {
     advisorEnabled?: boolean;
     /** Notify an active parent immediately when a same-checkout worker changes a file. */
     notifyBusyWorkerChanges?: boolean;
+    /** Maximum number of persistent isolated workspaces allowed per repository. */
+    maxWorkspacesPerRepo?: number;
 }
 
 function globalConfigPath(): string {
@@ -42,6 +46,7 @@ function parseConfig(filePath: string | undefined): AgentConfig | null {
             models?: unknown;
             advisorEnabled?: unknown;
             notifyBusyWorkerChanges?: unknown;
+            maxWorkspacesPerRepo?: unknown;
         };
         const models: BuiltinAgentModels = {};
         if (record.models && typeof record.models === "object") {
@@ -58,6 +63,11 @@ function parseConfig(filePath: string | undefined): AgentConfig | null {
             ...(typeof record.notifyBusyWorkerChanges === "boolean"
                 ? { notifyBusyWorkerChanges: record.notifyBusyWorkerChanges }
                 : {}),
+            ...(typeof record.maxWorkspacesPerRepo === "number"
+                && Number.isInteger(record.maxWorkspacesPerRepo)
+                && record.maxWorkspacesPerRepo > 0
+                ? { maxWorkspacesPerRepo: record.maxWorkspacesPerRepo }
+                : {}),
         };
     } catch {
         return null;
@@ -73,10 +83,13 @@ function mergeConfigs(global: AgentConfig | null, project: AgentConfig | null): 
         ?? global?.advisorEnabled;
     const notifyBusyWorkerChanges = project?.notifyBusyWorkerChanges
         ?? global?.notifyBusyWorkerChanges;
+    const maxWorkspacesPerRepo = project?.maxWorkspacesPerRepo
+        ?? global?.maxWorkspacesPerRepo;
     return {
         ...(Object.keys(models).length ? { models } : {}),
         ...(advisorEnabled === undefined ? {} : { advisorEnabled }),
         ...(notifyBusyWorkerChanges === undefined ? {} : { notifyBusyWorkerChanges }),
+        ...(maxWorkspacesPerRepo === undefined ? {} : { maxWorkspacesPerRepo }),
     };
 }
 
@@ -114,6 +127,13 @@ export function configuredBuiltinModel(
 
 export function shouldNotifyBusyWorkerChanges(config: AgentConfig): boolean {
     return config.notifyBusyWorkerChanges !== false;
+}
+
+export function maxWorkspacesPerRepo(config: AgentConfig): number {
+    const value = config.maxWorkspacesPerRepo;
+    return Number.isInteger(value) && value !== undefined && value > 0
+        ? value
+        : DEFAULT_MAX_WORKSPACES_PER_REPO;
 }
 
 /** The advisor is opt-in because it may use a more expensive model. */
@@ -166,6 +186,9 @@ const agentConfig = {
             ...(current.notifyBusyWorkerChanges === undefined
                 ? {}
                 : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
+            ...(current.maxWorkspacesPerRepo === undefined
+                ? {}
+                : { maxWorkspacesPerRepo: current.maxWorkspacesPerRepo }),
         }, cwd);
     },
 
@@ -177,6 +200,9 @@ const agentConfig = {
             ...(current.notifyBusyWorkerChanges === undefined
                 ? {}
                 : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
+            ...(current.maxWorkspacesPerRepo === undefined
+                ? {}
+                : { maxWorkspacesPerRepo: current.maxWorkspacesPerRepo }),
         }, cwd);
     },
 
@@ -185,7 +211,25 @@ const agentConfig = {
         return this.save({
             ...(current.models ? { models: { ...current.models } } : {}),
             ...(current.advisorEnabled === undefined ? {} : { advisorEnabled: current.advisorEnabled }),
+            ...(current.maxWorkspacesPerRepo === undefined
+                ? {}
+                : { maxWorkspacesPerRepo: current.maxWorkspacesPerRepo }),
             notifyBusyWorkerChanges: enabled,
+        }, cwd);
+    },
+
+    setMaxWorkspacesPerRepo(value: number, cwd = process.cwd()): AgentConfig {
+        if (!Number.isInteger(value) || value < 1) {
+            throw new Error("Maximum workspaces per repository must be a positive whole number.");
+        }
+        const current = targetConfig(cwd);
+        return this.save({
+            ...(current.models ? { models: { ...current.models } } : {}),
+            ...(current.advisorEnabled === undefined ? {} : { advisorEnabled: current.advisorEnabled }),
+            ...(current.notifyBusyWorkerChanges === undefined
+                ? {}
+                : { notifyBusyWorkerChanges: current.notifyBusyWorkerChanges }),
+            maxWorkspacesPerRepo: value,
         }, cwd);
     },
 };

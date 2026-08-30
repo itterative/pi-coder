@@ -25,6 +25,10 @@ type WorkspaceRow = Record<string, unknown>;
 
 export interface AgentWorkspaceDirectoryOptions {
     workspacesDir?: string;
+    /** Override the default capacity for this allocation operation. */
+    maxWorkspaces?: number;
+    /** Manual browser creation intentionally skips the dirty-parent guard. */
+    skipParentDirtyCheck?: boolean;
 }
 
 export interface AgentWorkspaceListOptions extends AgentWorkspaceDirectoryOptions {
@@ -360,6 +364,7 @@ export async function listAgentWorkspaces(
         includeMissingWorktrees = false,
     }: AgentWorkspaceListOptions = {},
 ): Promise<AgentWorkspace[]> {
+    const repositoryRoot = path.resolve(await git(path.resolve(cwd), ["rev-parse", "--show-toplevel"]));
     const database = await openDatabase(workspacesDir);
     try {
         const rows = database.prepare(`
@@ -368,9 +373,9 @@ export async function listAgentWorkspaces(
                    lease_owner_session_id, lease_run_id, lease_run_instance_id, lease_kind, lease_acquired_at,
                    created_at, updated_at
             FROM workspaces
-            WHERE cwd = ?
+            WHERE repository_root = ?
             ORDER BY created_at ASC, slug ASC
-        `).all(path.resolve(cwd)) as WorkspaceRow[];
+        `).all(repositoryRoot) as WorkspaceRow[];
         return rows
             .map(rowToWorkspace)
             .filter((workspace): workspace is AgentWorkspace => workspace !== undefined)

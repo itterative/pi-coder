@@ -2,7 +2,7 @@ import type { EventBus } from "@earendil-works/pi-coding-agent";
 import type { AgentWorkspaceBrowserItem, AgentSessionBrowserItem, WorkspaceDispositionAction } from "../../tools/agent/presentation/browser-models";
 import type { BuiltinAgentName } from "../../tools/agent/config";
 
-export type AgentSettingId = BuiltinAgentName | "advisorEnabled" | "notifyBusyWorkerChanges";
+export type AgentSettingId = BuiltinAgentName | "advisorEnabled" | "notifyBusyWorkerChanges" | "maxWorkspacesPerRepo";
 
 export interface AgentSetting {
     id: AgentSettingId;
@@ -10,6 +10,7 @@ export interface AgentSetting {
     description: string;
     model?: string;
     enabled?: boolean;
+    value?: number;
 }
 
 export interface AgentModelOption {
@@ -55,11 +56,14 @@ export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
         action: WorkspaceDispositionAction,
     ) => AgentWorkspaceBrowserItem | null | undefined | Promise<AgentWorkspaceBrowserItem | null | undefined>;
     onWorkspaceInspect?: (workspace: AgentWorkspaceBrowserItem) => string | Promise<string>;
+    onCreateWorkspace?: () => void | Promise<void>;
     onModelChange?: (agent: BuiltinAgentName, model: string | undefined) => void | Promise<void>;
     onToggleChange?: (
         setting: "advisorEnabled" | "notifyBusyWorkerChanges",
         enabled: boolean,
     ) => void | Promise<void>;
+    onMaxWorkspacesInput?: (currentValue: number) => number | undefined | Promise<number | undefined>;
+    onMaxWorkspacesChange?: (value: number) => void | Promise<void>;
     onModelChangeError?: (error: unknown) => void;
     onInvalidate?: () => void;
 }

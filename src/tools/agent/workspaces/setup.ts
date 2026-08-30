@@ -16,6 +16,7 @@ import {
     listAgentWorkspaces,
     MAX_AGENT_WORKSPACES,
     releaseAgentWorkspaceLease,
+    getAgentWorkspace,
     transferAgentWorkspaceLease,
 } from "./store";
 import { createAgentWorkspace, recycleAgentWorkspaceForReuse, updateAgentWorkspace } from "./lifecycle";
@@ -45,6 +46,7 @@ export interface WorkspaceSetupOptions {
     setupRunId: string;
     onUiUpdate?: WorkspaceSetupUiCallback;
     events?: AgentEventSink;
+    workspacesDir?: string;
 }
 
 export async function runWorkspaceSetup(
@@ -57,9 +59,11 @@ export async function runWorkspaceSetup(
         setupRunId,
         onUiUpdate,
         events,
+        workspacesDir,
     }: WorkspaceSetupOptions,
 ): Promise<AgentWorkspace> {
-    await updateAgentWorkspace(workspace, { setupState: "running" });
+    const workspaceOptions = workspacesDir ? { workspacesDir } : {};
+    await updateAgentWorkspace(workspace, { setupState: "running" }, workspaceOptions);
     emitAgentEvent({
         type: "workspace",
         action: "updated",
@@ -129,7 +133,7 @@ Do not implement the requested feature, edit unrelated source files, or make unr
         const readyWorkspace = await updateAgentWorkspace(workspace, {
             setupState: "ready",
             setupSummary: summary,
-        });
+        }, workspaceOptions);
         emitAgentEvent({
             type: "workspace",
             action: "updated",
@@ -150,7 +154,7 @@ Do not implement the requested feature, edit unrelated source files, or make unr
             activity: "Setup failed",
             responsePreview: message,
         });
-        const failedWorkspace = await updateAgentWorkspace(workspace, { setupState: "failed", setupSummary: message });
+        const failedWorkspace = await updateAgentWorkspace(workspace, { setupState: "failed", setupSummary: message }, workspaceOptions);
         emitAgentEvent({
             type: "workspace",
             action: "updated",
@@ -168,6 +172,119 @@ export interface WorkspaceReservation {
     ownerSessionId: string;
     provisionalLeaseRunId: string;
     provisionalLeaseRunInstanceId: string;
+}
+
+export interface ManualWorkspaceCreationOptions extends Omit<PrepareIsolatedWorkspaceOptions, "manager"> {}
+
+/** Create a workspace from the browser and optionally run its setup worker. */
+export async function createAgentWorkspaceManually(
+    cwd: string,
+    {
+        definition,
+        factory,
+        ctx,
+        signal,
+        onUiUpdate,
+        events,
+        dialogEvents,
+        workspacesDir,
+        maxWorkspaces,
+    }: ManualWorkspaceCreationOptions,
+): Promise<AgentWorkspace | undefined> {
+    if (!agentCanEdit(definition)) {
+        throw new AgentActionError("Workspace setup is currently available only for the mutation-capable worker.");
+    }
+    if (signal?.aborted) return undefined;
+
+    const prompt = await selectWithMessage<WorkspacePromptChoice>({
+        title: "Create isolated workspace?",
+        contentLines: [
+            "A detached Git worktree will be created under pi-coder's .state/workspaces directory.",
+            "Choose whether a limited setup worker should prepare it before the task worker starts.",
+        ],
+        items: [
+            {
+                value: "setup",
+                label: "Create and run setup worker",
+                description: "Prepare dependencies and project tooling before the task worker starts.",
+            },
+            {
+                value: "skip",
+                label: "Create and skip setup",
+                description: "Create the worktree without a setup pass.",
+            },
+            {
+                value: "cancel",
+                label: "Cancel",
+                description: "Do not create the isolated workspace.",
+            },
+        ],
+        selectHelpText: "↑/↓ choose · Enter confirm · Esc cancel",
+    }, { ...ctx, events: dialogEvents }, signal);
+    const choice = prompt?.value;
+    if (!choice || choice === "cancel") return undefined;
+
+    const workspaceOptions = {
+        ...(workspacesDir ? { workspacesDir } : {}),
+        ...(maxWorkspaces !== undefined ? { maxWorkspaces } : {}),
+        // Manual creation intentionally skips the dirty-parent check and
+        // snapshots the current committed HEAD instead.
+        skipParentDirtyCheck: true,
+    };
+    const workspace = await createAgentWorkspace(cwd, workspaceOptions);
+    emitAgentEvent({
+        type: "workspace",
+        action: "created",
+        workspaceId: workspace.id,
+    }, { sink: events, cwd: ctx.cwd });
+
+    if (choice === "skip") {
+        return await updateAgentWorkspace(workspace, { setupState: "skipped" }, workspaceOptions);
+    }
+
+    const ownerSessionId = ctx.sessionManager.getSessionId();
+    const setupRunId = `workspace-setup-${workspace.slug}-${randomUUID()}`;
+    const setupRunInstanceId = randomUUID();
+    const claimed = await claimAgentWorkspace(workspace.id, {
+        ownerSessionId,
+        leaseRunId: setupRunId,
+        leaseRunInstanceId: setupRunInstanceId,
+        leaseKind: "setup",
+        ...workspaceOptions,
+    });
+    emitAgentEvent({
+        type: "workspace",
+        action: "lease_changed",
+        workspaceId: claimed.id,
+        reason: "setup_claimed",
+    }, { sink: events, cwd: ctx.cwd });
+    let prepared: AgentWorkspace;
+    try {
+        prepared = await runWorkspaceSetup(claimed, {
+            definition,
+            factory,
+            ctx,
+            signal,
+            setupRunId,
+            onUiUpdate,
+            events,
+            workspacesDir,
+        });
+    } finally {
+        await releaseAgentWorkspaceLease(workspace.id, {
+            ownerSessionId,
+            leaseRunId: setupRunId,
+            leaseRunInstanceId: setupRunInstanceId,
+            workspacesDir,
+        });
+        emitAgentEvent({
+            type: "workspace",
+            action: "lease_changed",
+            workspaceId: workspace.id,
+            reason: "setup_released",
+        }, { sink: events, cwd: ctx.cwd });
+    }
+    return await getAgentWorkspace(workspace.id, { workspacesDir }) ?? prepared;
 }
 
 /** Named dependencies and UI/event controls for isolated workspace preparation. */
@@ -235,6 +352,7 @@ export interface PrepareIsolatedWorkspaceOptions {
     events?: AgentEventSink;
     dialogEvents?: EventBus;
     workspacesDir?: string;
+    maxWorkspaces?: number;
 }
 
 export async function prepareIsolatedWorkspace(
@@ -249,6 +367,7 @@ export async function prepareIsolatedWorkspace(
         events,
         dialogEvents,
         workspacesDir,
+        maxWorkspaces,
     }: PrepareIsolatedWorkspaceOptions,
 ): Promise<WorkspaceReservation> {
     if (!agentCanEdit(definition)) {
@@ -269,7 +388,10 @@ export async function prepareIsolatedWorkspace(
     const ownerSessionId = ctx.sessionManager.getSessionId();
     const provisionalLeaseRunId = `workspace-provision-${randomUUID()}`;
     const provisionalLeaseRunInstanceId = randomUUID();
-    const workspaceOptions = workspacesDir ? { workspacesDir } : {};
+    const workspaceOptions = {
+        ...(workspacesDir ? { workspacesDir } : {}),
+        ...(maxWorkspaces !== undefined ? { maxWorkspaces } : {}),
+    };
     const released = await reconcileNoChangeAgentWorkspaceLeases(cwd, workspaceOptions);
     if (released > 0) {
         emitAgentEvent({
@@ -324,13 +446,16 @@ export async function prepareIsolatedWorkspace(
     const existing = await findUnpreparedAgentWorkspace(cwd, workspaceOptions);
     if (!existing) {
         const workspaces = await listAgentWorkspaces(cwd, workspaceOptions);
-        if (workspaces.length >= MAX_AGENT_WORKSPACES) {
+        const capacity = Number.isInteger(maxWorkspaces) && maxWorkspaces !== undefined && maxWorkspaces > 0
+            ? maxWorkspaces
+            : MAX_AGENT_WORKSPACES;
+        if (workspaces.length >= capacity) {
             const summary = workspaces.map((workspace) => {
                 const lease = workspace.leaseRunId ? `leased by ${workspace.leaseRunId}` : workspace.status;
                 return `${workspace.slug} (${workspace.setupState}, ${lease})`;
             }).join(", ");
             throw new AgentActionError(
-                `Workspace capacity reached (${MAX_AGENT_WORKSPACES}) for this project. Existing workspaces: ${summary}. Explicitly apply, retain, reset, or discard one before creating another.`,
+                `Workspace capacity reached (${capacity}) for this repository. Existing workspaces: ${summary}. Explicitly apply, retain, reset, or discard one before creating another.`
             );
         }
     }
@@ -408,6 +533,7 @@ export async function prepareIsolatedWorkspace(
                     setupRunId: provisionalLeaseRunId,
                     onUiUpdate,
                     events,
+                    workspacesDir,
                 },
             );
         }

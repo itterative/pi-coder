@@ -10,6 +10,7 @@ import type {
 import { AGENT_EVENT_CHANNEL, isAgentEvent } from "../../tools/agent/observability/events";
 import { BORDER_STYLES } from "../border-box";
 import { ListViewComponent, type ListItem, type ListViewRenderItemOptions, type ListViewState } from "../list-view";
+import { NumericInputComponent, parsePositiveInteger } from "../numeric-input";
 import { SelectComponent } from "../select";
 import { withOverlayStack } from "../overlay-stack";
 import { AgentSessionDetailComponent } from "./session-detail";
@@ -51,8 +52,12 @@ function isSetting(item: BrowserItem): item is AgentSetting {
     return !("kind" in item);
 }
 
+function isCreateWorkspace(item: BrowserItem): item is Extract<WorkspaceListItem, { kind: "create" }> {
+    return "kind" in item && item.kind === "create";
+}
+
 function isSession(item: BrowserItem): item is AgentSessionBrowserItem {
-    return !isWorkspace(item) && !isSetting(item);
+    return !isWorkspace(item) && !isSetting(item) && !isCreateWorkspace(item);
 }
 
 function sameSession(left: AgentSessionBrowserItem, right: AgentSessionBrowserItem): boolean {
@@ -82,9 +87,15 @@ function tabText(tab: BrowserTab, theme: Theme, includeWorkspaces: boolean, incl
 
 function itemText(item: BrowserItem, theme: Theme): string {
     if (isWorkspace(item)) return agentWorkspaceItemText(item, theme);
+    if (isCreateWorkspace(item)) {
+        return theme.fg("accent", item.task)
+            + `\n${theme.fg("muted", "Create an empty isolated worktree for a later agent task.")}`;
+    }
     if (isSetting(item)) {
         let value: string;
-        if (item.enabled === undefined) {
+        if (item.value !== undefined) {
+            value = String(item.value);
+        } else if (item.enabled === undefined) {
             value = item.model ?? "Parent model (uses the current pi model)";
         } else {
             value = item.enabled ? "On" : "Off";
@@ -96,6 +107,7 @@ function itemText(item: BrowserItem, theme: Theme): string {
         return theme.fg("accent", item.label)
             + `\n${theme.fg("muted", item.description)}\nValue: ${value}`;
     }
+    if (!isSession(item)) return theme.fg("muted", item.task);
     if (item.kind === "empty") return theme.fg("muted", item.task);
 
     const mode = item.agent === "workspace-setup"
@@ -130,6 +142,7 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
     private readonly onInvalidate?: () => void;
     private readonly fixedHeight?: () => number;
     private readonly onLoadTranscript?: AgentSessionBrowserOptions["onLoadTranscript"];
+    private readonly onCreateWorkspace?: AgentSessionBrowserOptions["onCreateWorkspace"];
     private readonly refresh: RefreshCoordinator<AgentSessionBrowserData> | null;
     private readonly unsubscribeEvents?: () => void;
     private readonly list: ListViewComponent<BrowserItem, void, BrowserState>;
@@ -141,6 +154,7 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
     private sessionDetail: AgentSessionDetailComponent | null = null;
     private workspaceDetail: AgentWorkspaceDetailComponent | null = null;
     private modelSelector: SelectComponent<AgentModelOption> | null = null;
+    private numericSelector: NumericInputComponent<number> | null = null;
     private cancelConfirmationOpen = false;
     private tabHeader: Text | null = null;
     private theme: Theme | null = null;
@@ -159,6 +173,7 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
         this.onInvalidate = options.onInvalidate;
         this.fixedHeight = options.fixedHeight;
         this.onLoadTranscript = options.onLoadTranscript;
+        this.onCreateWorkspace = options.onCreateWorkspace;
         this.tabs = ["agents"];
         if (options.workspaces !== undefined) this.tabs.push("workspaces");
         if (options.settings !== undefined) this.tabs.push("settings");
@@ -220,9 +235,11 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
         disposeChild(this.sessionDetail);
         disposeChild(this.workspaceDetail);
         disposeChild(this.modelSelector);
+        disposeChild(this.numericSelector);
         this.sessionDetail = null;
         this.workspaceDetail = null;
         this.modelSelector = null;
+        this.numericSelector = null;
     }
 
     isDisposed(): boolean {
@@ -323,7 +340,26 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
             this.closeListAndQueue(options.onResume, selected);
             return true;
         }
-        if (key === "c" && selected && isSession(selected) && selected.kind === "current" && this.isCancelable(selected.status)) {
+        if (state.tab === "workspaces" && selected && isCreateWorkspace(selected) && matchesKey(key, "enter")) {
+            this.done?.();
+            queueMicrotask(() => {
+                try {
+                    const result = options.onCreateWorkspace?.();
+                    if (result) {
+                        void result.catch((error) => console.error("Workspace creation failed:", error));
+                    }
+                } catch (error) {
+                    console.error("Workspace creation failed:", error);
+                }
+            });
+            return true;
+        }
+        if (key === "c"
+            && selected
+            && isSession(selected)
+            && selected.kind === "current"
+            && selected.agent !== "workspace-setup"
+            && this.isCancelable(selected.status)) {
             if (!options.onCancelConfirmation) {
                 this.closeListAndQueue(options.onCancel, selected);
                 return true;
@@ -356,6 +392,7 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
             this.openWorkspace(selected, options);
             return;
         }
+        if (isCreateWorkspace(selected)) return;
         if (isSetting(selected)) {
             this.openSetting(selected, options);
             return;
@@ -427,6 +464,10 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
             this.toggleSetting(setting, options);
             return;
         }
+        if (setting.id === "maxWorkspacesPerRepo") {
+            this.openMaxWorkspacesSetting(setting, options);
+            return;
+        }
         const modelItems = (this.models ?? [{ label: "Parent model", description: "Use the current pi model" }])
             .map((model) => ({ value: model, label: model.label }));
         if (modelItems.length === 0) return;
@@ -470,6 +511,54 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
                 () => { current.model = previous; },
                 options,
             );
+        });
+        selector.initialize(this.theme!);
+    }
+
+    private openMaxWorkspacesSetting(setting: AgentSetting, options: AgentSessionBrowserOptions): void {
+        const applyValue = (value: number | undefined): void => {
+            if (value === undefined) {
+                this.invalidate();
+                return;
+            }
+            const current = this.settings.find((candidate) => candidate.id === setting.id);
+            if (!current || current.id !== "maxWorkspacesPerRepo") {
+                this.invalidate();
+                return;
+            }
+            const previous = current.value ?? 3;
+            current.value = value;
+            this.rebuildItems();
+            this.invalidate();
+            this.saveWithRollback(
+                () => options.onMaxWorkspacesChange?.(value),
+                () => { current.value = previous; },
+                options,
+            );
+        };
+
+        if (options.onMaxWorkspacesInput) {
+            void Promise.resolve()
+                .then(() => options.onMaxWorkspacesInput!(setting.value ?? 3))
+                .then(applyValue)
+                .catch((error) => {
+                    options.onModelChangeError?.(error);
+                    this.invalidate();
+                });
+            return;
+        }
+
+        const selector = new NumericInputComponent({
+            title: setting.label,
+            description: "Maximum number of persistent workspaces per repository.",
+            initialValue: setting.value ?? 3,
+            parse: parsePositiveInteger,
+            helpText: "Enter save · Esc cancel",
+        });
+        this.numericSelector = selector;
+        selector.setDoneCallback((value) => {
+            this.numericSelector = null;
+            applyValue(value);
         });
         selector.initialize(this.theme!);
     }
@@ -581,8 +670,8 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
         this.invalidate();
     }
 
-    private activeChild(): (AgentSessionDetailComponent | AgentWorkspaceDetailComponent | SelectComponent<AgentModelOption>) | null {
-        return this.sessionDetail ?? this.workspaceDetail ?? this.modelSelector;
+    private activeChild(): (AgentSessionDetailComponent | AgentWorkspaceDetailComponent | SelectComponent<AgentModelOption> | NumericInputComponent<number>) | null {
+        return this.sessionDetail ?? this.workspaceDetail ?? this.modelSelector ?? this.numericSelector;
     }
 
     private agentItems(): AgentSessionBrowserItem[] {
@@ -601,7 +690,7 @@ export class AgentSessionBrowserComponent implements Component, RefreshTarget<Ag
             return asSessionListItems(this.agentItems(), this.loadingAgents).map((item) => item as ListItem<BrowserItem>);
         }
         if (tab === "workspaces") {
-            return asWorkspaceListItems(this.workspaces, this.loadingWorkspaces).map((item) => item as ListItem<BrowserItem>);
+            return asWorkspaceListItems(this.workspaces, this.loadingWorkspaces, Boolean(this.onCreateWorkspace)).map((item) => item as ListItem<BrowserItem>);
         }
         return asSettingsListItems(this.settings).map((item) => item as ListItem<BrowserItem>);
     }

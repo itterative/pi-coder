@@ -560,7 +560,7 @@ describe("agent workspaces", () => {
         expect((await listAgentWorkspaces(repository, { workspacesDir: state }))[0]).toMatchObject({ leaseRunId: "worker-1" });
     });
 
-    it("limits each project to three persistent workspaces", async () => {
+    it("limits each repository to the configured workspace capacity", async () => {
         const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
         temporaryDirectories.push(root);
         const repository = path.join(root, "repo");
@@ -579,6 +579,44 @@ describe("agent workspaces", () => {
 
         await expect(createAgentWorkspace(repository, { workspacesDir: state })).rejects.toThrow("Workspace capacity reached");
         expect(await listAgentWorkspaces(repository, { workspacesDir: state })).toHaveLength(3);
+
+        const customState = path.join(root, "custom-root", "state");
+        const subdirectory = path.join(repository, "subdirectory");
+        await fs.mkdir(subdirectory);
+        const subdirectoryWorkspace = await createAgentWorkspace(subdirectory, {
+            workspacesDir: customState,
+            maxWorkspaces: 1,
+        });
+        await expect(listAgentWorkspaces(repository, { workspacesDir: customState })).resolves.toMatchObject([
+            { id: subdirectoryWorkspace.id, cwd: subdirectory },
+        ]);
+        await expect(createAgentWorkspace(repository, { workspacesDir: customState, maxWorkspaces: 1 })).rejects.toThrow("Workspace capacity reached");
+    });
+
+    it("allows manual creation from a dirty parent while using committed HEAD", async () => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-coder-workspaces-"));
+        temporaryDirectories.push(root);
+        const repository = path.join(root, "repo");
+        const state = path.join(root, "state");
+        await fs.mkdir(repository);
+        await git(repository, "init", "--quiet");
+        await git(repository, "config", "user.email", "test@example.com");
+        await git(repository, "config", "user.name", "Test");
+        await fs.writeFile(path.join(repository, "README.md"), "committed\n");
+        await git(repository, "add", "README.md");
+        await git(repository, "commit", "--quiet", "-m", "initial");
+        const head = await gitOutput(repository, "rev-parse", "HEAD");
+        await fs.writeFile(path.join(repository, "README.md"), "dirty parent\n");
+
+        const workspace = await createAgentWorkspace(repository, {
+            workspacesDir: state,
+            skipParentDirtyCheck: true,
+        });
+
+        expect(workspace.baseRevision).toBe(head);
+        expect(await gitOutput(workspace.worktreePath, "rev-parse", "HEAD")).toBe(head);
+        expect(await fs.readFile(path.join(workspace.worktreePath, "README.md"), "utf8")).toBe("committed\n");
+        expect(await fs.readFile(path.join(repository, "README.md"), "utf8")).toBe("dirty parent\n");
     });
 
     it("releases a clean no-change result without creating a durable ref", async () => {

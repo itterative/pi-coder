@@ -965,6 +965,28 @@ Keep the notes with the TODO list.
         await vi.waitFor(() => expect(canceled).toBe("scout-1"));
     });
 
+    it("offers manual workspace creation and closes before invoking the setup flow", async () => {
+        let createCalls = 0;
+        let closed = false;
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            workspaces: [],
+            onCreateWorkspace: async () => {
+                createCalls++;
+            },
+        });
+        value.initialize(mockTheme);
+        value.setDoneCallback(() => { closed = true; });
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab, KEY.down);
+        expect(ui.render()).toContain("Create a new workspace");
+        ui.press(KEY.enter);
+        await vi.waitFor(() => expect(createCalls).toBe(1));
+        expect(closed).toBe(true);
+    });
+
     it("merges workspaces into the agents browser", () => {
         let invalidations = 0;
         const workspaceView = workspaceBrowserItem(workspace, {
@@ -1174,6 +1196,37 @@ Keep the notes with the TODO list.
         await expect(snapshotText(ui.render())).toMatchFileSnapshot(
             "__snapshots__/agent-session-browser.settings-notifications-off.txt",
         );
+    });
+
+    it("changes the maximum workspace setting", async () => {
+        let selected: number | undefined;
+        const value = new AgentSessionBrowserComponent({
+            current: [],
+            past: [],
+            settings: [{
+                id: "maxWorkspacesPerRepo",
+                label: "Maximum workspaces per repository",
+                description: "Maximum number of persistent isolated workspaces.",
+                value: 3,
+            }],
+            onMaxWorkspacesChange: (next) => {
+                selected = next;
+            },
+        });
+        value.initialize(mockTheme);
+        const ui = interact(value, 100);
+
+        ui.press(KEY.tab, KEY.enter, KEY.backspace);
+        ui.type("0");
+        ui.press(KEY.enter);
+        expect(ui.render()).toContain("Enter a positive whole number.");
+
+        ui.press(KEY.backspace);
+        ui.type("4");
+        ui.press(KEY.enter);
+        await vi.waitFor(() => expect(selected).toBe(4));
+        expect(ui.render()).toContain("Maximum workspaces per repository");
+        expect(ui.render()).toContain("Value: 4");
     });
 
     it("uses Enter and Escape for details, then closes the browser", () => {

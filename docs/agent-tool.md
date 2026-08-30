@@ -19,7 +19,7 @@ This document contains the detailed reference for pi-coder's delegated-agent too
 | `discard` | Discard an isolated result or workspace. |
 
 
-There can be up to four active or interrupted runs, and up to three persistent isolated workspaces per project. Terminal background results are retained separately until collected or evicted. Continuation lookup is bound to the exact parent session and active parent-tree branch. Continuations retain the same public run ID and physical child identity, so repeated continuations continue the latest checkpoint; isolated workspace results receive new result records while using that same run ID.
+There can be up to four active or interrupted runs, and up to three persistent isolated workspaces per repository by default (the limit is configurable in `/agents` Settings). Terminal background results are retained separately until collected or evicted. Continuation lookup is bound to the exact parent session and active parent-tree branch. Continuations retain the same public run ID and physical child identity, so repeated continuations continue the latest checkpoint; isolated workspace results receive new result records while using that same run ID.
 
 ### Background behavior
 

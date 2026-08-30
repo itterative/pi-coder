@@ -27,13 +27,13 @@ The initial shared-slot implementation remains conservative about the parent wor
 
 ## Workspace lifecycle
 
-1. **Setup** — select or create one of up to three persistent worktrees.
+1. **Setup** — select or create one of up to three persistent worktrees per repository (the limit is configurable in `/agents` Settings).
 2. **Lease** — claim the worktree for a parent session and delegated run.
 3. **Execution** — the isolated worker reads and changes only its worktree.
 4. **Finalization** — collection commits remaining changes, creates a private result ref, and records a prepared result.
 5. **Disposition** — the parent explicitly inspects, applies, retains, continues, resets, or discards the result.
 
-No-change results create no durable ref and release the workspace for reuse. Changed results remain outside the parent checkout and retain their immutable result refs until disposition, but an inactive physical slot may be explicitly recycled for another logical worker after its checkpoint/result is durable. Recycling resets the physical worktree to the current parent `HEAD` and transfers its lease without deleting the older worker's checkpoints or results. Workspaces are never silently merged, applied, or deleted; scheduler recycling is the deliberate reset/rebase operation used to reuse a protected inactive slot.
+No-change results create no durable ref and release the workspace for reuse. Changed results remain outside the parent checkout and retain their immutable result refs until disposition, but an inactive physical slot may be explicitly recycled for another logical worker after its checkpoint/result is durable. The `/agents` Workspaces tab also offers a manual create item; selecting it closes the browser and opens the setup prompt before creating the new slot. Recycling resets the physical worktree to the current parent `HEAD` and transfers its lease without deleting the older worker's checkpoints or results. Workspaces are never silently merged, applied, or deleted; scheduler recycling is the deliberate reset/rebase operation used to reuse a protected inactive slot.
 
 Applying uses the complete base-to-worker tree diff without creating a parent commit. The parent must be clean, still contain the recorded base revision, and pass Git patch checks. Application records an `applying` result state before changing the parent; a later apply request reconciles whether the patch was applied, was not applied, or left an uncertain checkout. Preflight failures leave the parent, result, and lease intact, while uncertain application state remains protected for explicit recovery.
 

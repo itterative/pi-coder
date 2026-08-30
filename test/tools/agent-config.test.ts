@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import agentConfig, {
     applyAgentConfig,
     isAdvisorEnabled,
+    maxWorkspacesPerRepo,
     shouldNotifyBusyWorkerChanges,
 } from "../../src/tools/agent/config";
 import { BUILTIN_ADVISOR, BUILTIN_SCOUT, BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
@@ -71,6 +72,16 @@ describe("agent configuration", () => {
         expect(shouldNotifyBusyWorkerChanges(agentConfig.load(project))).toBe(true);
     });
 
+    it("merges and defaults the workspace capacity", () => {
+        expect(maxWorkspacesPerRepo(agentConfig.load(project))).toBe(3);
+
+        fs.writeFileSync(globalPath, JSON.stringify({ maxWorkspacesPerRepo: 6 }));
+        expect(maxWorkspacesPerRepo(agentConfig.load(project))).toBe(6);
+
+        fs.writeFileSync(path.join(project, ".pi", "agent-config.json"), JSON.stringify({ maxWorkspacesPerRepo: 2 }));
+        expect(maxWorkspacesPerRepo(agentConfig.load(project))).toBe(2);
+    });
+
     it("preserves inherited values when saving project overrides", () => {
         const projectConfigPath = path.join(project, ".pi", "agent-config.json");
         fs.writeFileSync(globalPath, JSON.stringify({
@@ -125,7 +136,7 @@ describe("agent configuration", () => {
         expect(applyAgentConfig([BUILTIN_ADVISOR], {})).toEqual([]);
     });
 
-    it("persists notification preference, advisor availability, and model overrides", () => {
+    it("persists notification preference, advisor availability, model overrides, and workspace capacity", () => {
         agentConfig.setAdvisorEnabled(true, project);
         expect(JSON.parse(fs.readFileSync(globalPath, "utf8"))).toEqual({
             advisorEnabled: true,
@@ -146,10 +157,19 @@ describe("agent configuration", () => {
             notifyBusyWorkerChanges: false,
         });
 
+        agentConfig.setMaxWorkspacesPerRepo(7, project);
+        expect(JSON.parse(fs.readFileSync(globalPath, "utf8"))).toEqual({
+            models: { scout: "openai/gpt-4.1" },
+            advisorEnabled: true,
+            notifyBusyWorkerChanges: false,
+            maxWorkspacesPerRepo: 7,
+        });
+
         agentConfig.setModel("scout", undefined, project);
         expect(agentConfig.load(project)).toEqual({
             advisorEnabled: true,
             notifyBusyWorkerChanges: false,
+            maxWorkspacesPerRepo: 7,
         });
     });
 });

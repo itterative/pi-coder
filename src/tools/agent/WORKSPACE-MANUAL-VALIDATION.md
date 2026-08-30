@@ -227,7 +227,7 @@ Optional higher-coverage test.
 3. Verify it reports workspace capacity instead of silently creating a fourth workspace.
 4. Reset or discard one workspace explicitly, then verify a later isolated worker can create or reuse capacity.
 
-Expected: the limit is three workspaces per cwd and capacity is never resolved through automatic deletion or reset.
+Expected: the limit is three workspaces per repository by default (or the configured value), and capacity is never resolved through automatic deletion or reset.
 
 ## Results report
 

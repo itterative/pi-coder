@@ -28,6 +28,7 @@ import {
     prepareCollectedWorkspaceResult,
     prepareForegroundWorkspaceResult,
 } from "./workspaces/finalization";
+import agentConfig, { maxWorkspacesPerRepo } from "./config";
 import type { AgentLifecycle } from "./lifecycle";
 import type { AgentWorkspace } from "./contracts/workspaces";
 
@@ -98,6 +99,7 @@ export async function executeAgentAction(
                         onUiUpdate: (runId, workspace, update) => lifecycle.updateSetupRun(ctx, runId, workspace, update),
                         events: lifecycle.events,
                         dialogEvents: lifecycle.eventBus,
+                        maxWorkspaces: maxWorkspacesPerRepo(agentConfig.get(ctx.cwd)),
                     },
                 )
                 : undefined;

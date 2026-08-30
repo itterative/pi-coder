@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import agentConfig, {
     BUILTIN_AGENT_NAMES,
     isAdvisorEnabled,
+    maxWorkspacesPerRepo,
     shouldNotifyBusyWorkerChanges,
     type BuiltinAgentName,
 } from "./config";
@@ -22,6 +23,7 @@ import {
     removeCurrentAgentTranscripts,
 } from "./presentation/sessions";
 import { confirm } from "../../tui/confirmation";
+import { numericInput, parsePositiveInteger } from "../../tui/numeric-input";
 import {
     showAgentSessionBrowser,
     type AgentModelOption,
@@ -32,6 +34,7 @@ import type { AgentLifecycle } from "./lifecycle";
 import { prepareForegroundWorkspaceResult } from "./workspaces/finalization";
 import { inspectAgentWorkspaceResult, reconcileNoChangeAgentWorkspaceLeases } from "./workspaces/results";
 import { inspectAgentWorkspaceGitState, listAgentWorkspaces } from "./workspaces/store";
+import { createAgentWorkspaceManually } from "./workspaces/setup";
 import { handleWorkspaceAction } from "./workspaces/tui-actions";
 
 function capitalize(text: string): string {
@@ -108,6 +111,12 @@ function buildSettings(cwd: string): AgentSetting[] {
             label: "Busy worker change notifications",
             description: "Get an immediate update when a worker changes your files while the main assistant is still working. Turn this off to receive the update only when the worker finishes.",
             enabled: shouldNotifyBusyWorkerChanges(config),
+        },
+        {
+            id: "maxWorkspacesPerRepo" as const,
+            label: "Maximum workspaces per repository",
+            description: "Maximum number of persistent isolated workspaces that can exist for one Git repository.",
+            value: maxWorkspacesPerRepo(config),
         },
         {
             id: "advisorEnabled" as const,
@@ -311,6 +320,37 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                 }
             },
             onWorkspaceInspect: async (item) => inspectAgentWorkspaceResult(requireWorkspace(item.id)),
+            onCreateWorkspace: async () => {
+                const definition = lifecycle.discover(ctx).agents.find((agent) => agent.name === "worker");
+                if (!definition) {
+                    ctx.ui.notify("The mutation-capable worker is not available.", "warning");
+                    return;
+                }
+                let setupRunId: string | undefined;
+                try {
+                    const workspace = await createAgentWorkspaceManually(ctx.cwd, {
+                        definition,
+                        factory: lifecycle.factory,
+                        ctx,
+                        onUiUpdate: (runId, workspaceItem, update) => {
+                            setupRunId = runId;
+                            lifecycle.updateSetupRun(ctx, runId, workspaceItem, update);
+                        },
+                        events: lifecycle.events,
+                        dialogEvents: lifecycle.eventBus,
+                        maxWorkspaces: maxWorkspacesPerRepo(agentConfig.get(ctx.cwd)),
+                    });
+                    if (workspace) {
+                        ctx.ui.notify(`Created isolated workspace ${workspace.slug}.`, "info");
+                    }
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    ctx.ui.notify(`Could not create isolated workspace: ${message}`, "warning");
+                } finally {
+                    if (setupRunId) lifecycle.clearSetupRun(setupRunId);
+                    lifecycle.publishAgentStatus();
+                }
+            },
             onConfirmWorkspaceAction: (item, action) => confirm(
                 workspaceActionConfirmation(action, item.slug),
                 ctx,
@@ -318,6 +358,16 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
             onLoadTranscript: (item) => loadAgentSessionTranscriptForItem(item),
             onModelChange: (agent, model) => {
                 agentConfig.setModel(agent, model, ctx.cwd);
+            },
+            onMaxWorkspacesInput: (currentValue) => numericInput({
+                title: "Maximum workspaces per repository",
+                description: "Maximum number of persistent workspaces per repository.",
+                initialValue: currentValue,
+                parse: parsePositiveInteger,
+                helpText: "Enter save · Esc cancel",
+            }, ctx),
+            onMaxWorkspacesChange: (value) => {
+                agentConfig.setMaxWorkspacesPerRepo(value, ctx.cwd);
             },
             onToggleChange: (setting, enabled) => {
                 if (setting === "advisorEnabled") {

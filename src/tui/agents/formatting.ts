@@ -33,7 +33,13 @@ export interface EmptyWorkspaceItem {
     task: string;
 }
 
-export type WorkspaceListItem = AgentWorkspaceBrowserItem | EmptyWorkspaceItem;
+export interface CreateWorkspaceItem {
+    kind: "create";
+    id: "create-workspace";
+    task: string;
+}
+
+export type WorkspaceListItem = AgentWorkspaceBrowserItem | EmptyWorkspaceItem | CreateWorkspaceItem;
 
 export const EMPTY_WORKSPACES: EmptyWorkspaceItem = {
     kind: "empty",
@@ -102,6 +108,7 @@ export function asSessionListItems(
 export function asWorkspaceListItems(
     workspaces: AgentWorkspaceBrowserItem[],
     loading = false,
+    includeCreate = false,
 ): ListItem<WorkspaceListItem>[] {
     let values: WorkspaceListItem[];
     if (loading) {
@@ -111,11 +118,29 @@ export function asWorkspaceListItems(
     } else {
         values = [EMPTY_WORKSPACES];
     }
-    return values.map((value) => ({
+    const items = values.map((value) => ({
         value,
         label: value.kind === "workspace" ? value.slug : value.task,
         disabled: value.kind !== "workspace",
     }));
+    if (includeCreate && !loading) {
+        items.push({
+            value: {
+                kind: "create",
+                id: "create-workspace",
+                task: "Create a new workspace",
+            },
+            label: "Create a new workspace",
+            disabled: false,
+        });
+    }
+    return items;
+}
+
+function settingListLabel(setting: AgentSetting): string {
+    if (setting.value !== undefined) return `${setting.label}: ${setting.value}`;
+    if (setting.enabled === undefined) return `${setting.label}: ${setting.model ?? "Parent model"}`;
+    return `${setting.label} · ${setting.enabled ? "On" : "Off"}`;
 }
 
 export function asSettingsListItems(
@@ -123,9 +148,7 @@ export function asSettingsListItems(
 ): ListItem<AgentSetting>[] {
     return settings.map((setting) => ({
         value: setting,
-        label: setting.enabled === undefined
-            ? `${setting.label}: ${setting.model ?? "Parent model"}`
-            : `${setting.label} · ${setting.enabled ? "On" : "Off"}`,
+        label: settingListLabel(setting),
     }));
 }
 
