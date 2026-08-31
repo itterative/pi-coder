@@ -10,8 +10,15 @@ second time.
 Examples:
     python3 scripts/cognitive_load_report.py
     python3 scripts/cognitive_load_report.py --target src/modules --top 20
+    python3 scripts/cognitive_load_report.py --big-function-lines 150
     eslint . --format json > eslint.json
     python3 scripts/cognitive_load_report.py --input eslint.json
+
+The structure dimension exists because per-function scores are blind to a long function assembled
+from many small callbacks: every callback can stay under the threshold while the reader still holds
+the whole thing. The report therefore also asks ESLint for its AST-based max-lines-per-function rule
+in the same pass, nests the reported spans, and separates a function's own lines from the lines of the
+functions inside it.
 """
 
 from __future__ import annotations
@@ -24,14 +31,20 @@ import shlex
 import subprocess
 import sys
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 COMPLEXITY_RULE = "complexity"
 COGNITIVE_RULE = "sonarjs/cognitive-complexity"
+STRUCTURE_RULE = "max-lines-per-function"
 RULES = (COMPLEXITY_RULE, COGNITIVE_RULE)
+MIN_FUNCTION_LINES_DEFAULT = 20
+BIG_FUNCTION_LINES_DEFAULT = 200
+CHILD_FUNCTION_LINES_DEFAULT = 60
+NESTED_ASSEMBLY_DEFAULT = 4
+TEST_PATH_PREFIX = "test/"
 ESLINT_CONFIG_FILE = "eslint.config.mjs"
 COMPLEXITY_CONSTANT = "COMPLEXITY_THRESHOLD"
 COGNITIVE_CONSTANT = "COGNITIVE_COMPLEXITY_THRESHOLD"
@@ -54,6 +67,12 @@ SOURCE_METHOD_PATTERN = re.compile(
 )
 SOURCE_ARROW_PATTERN = re.compile(
     r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=.*=>", re.IGNORECASE
+)
+STRUCTURE_LINES_PATTERN = re.compile(r"has too many lines \((\d+)\)", re.IGNORECASE)
+# Messages look like: "Async method 'save' has too many lines (213). Maximum allowed is 150."
+STRUCTURE_SUBJECT_PATTERN = re.compile(
+    r"^(?P<kind>[A-Za-z ]*?)(?:\s*\x27(?P<name>[^\x27]+)\x27|\"(?P<quoted>[^\"]+)\")?\s+has too many lines",
+    re.IGNORECASE,
 )
 SEVERITY_RANK = {"critical": 3, "high": 2, "moderate": 1}
 
@@ -89,14 +108,49 @@ class Finding:
 
 
 @dataclass
+class StructureNode:
+    # One function's physical size, as measured by ESLint's AST-based structural rule.
+
+    path: str
+    name: str
+    kind: str
+    line: int
+    lines: int
+    parent: "StructureNode | None" = None
+    children: list["StructureNode"] = field(default_factory=list)
+
+    @property
+    def end_line(self) -> int:
+        # The rule counts physical lines of the function node, so this span is exact.
+        return self.line + self.lines - 1
+
+    @property
+    def depth(self) -> int:
+        return 1 if self.parent is None else self.parent.depth + 1
+
+    @property
+    def self_lines(self) -> int:
+        return max(self.lines - sum(child.lines for child in self.children), 0)
+
+    @property
+    def nested_functions(self) -> int:
+        return sum(1 + child.nested_functions for child in self.children)
+
+    @property
+    def label(self) -> str:
+        return self.name or f"<{self.kind}>"
+
+
+@dataclass
 class Report:
-    """Parsed findings and non-complexity lint diagnostics."""
+    """Parsed findings, function-size inventory, and non-complexity lint diagnostics."""
 
     files_analyzed: int
     findings: list[Finding]
     other_messages: list[dict[str, Any]]
     eslint_exit_code: int | None
     thresholds: dict[str, int]
+    structure: list[StructureNode] = field(default_factory=list)
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -150,6 +204,25 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="report output format (default: text)",
     )
     parser.add_argument(
+        "--min-function-lines",
+        type=int,
+        default=MIN_FUNCTION_LINES_DEFAULT,
+        metavar="N",
+        help="inventory every function at least this long (default: 20)",
+    )
+    parser.add_argument(
+        "--big-function-lines",
+        type=int,
+        default=BIG_FUNCTION_LINES_DEFAULT,
+        metavar="N",
+        help="length that makes a function a structural outlier (default: 200)",
+    )
+    parser.add_argument(
+        "--no-structure",
+        action="store_true",
+        help="skip the function-size pass and report only complexity metrics",
+    )
+    parser.add_argument(
         "--fail-on",
         choices=("none", "findings", "critical"),
         default="none",
@@ -159,6 +232,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
     if args.top < 1:
         parser.error("--top must be at least 1")
+    if args.min_function_lines < 1:
+        parser.error("--min-function-lines must be positive")
+    if args.big_function_lines < args.min_function_lines:
+        parser.error("--big-function-lines must be at least --min-function-lines")
     if args.complexity_threshold is not None and args.complexity_threshold < 1:
         parser.error("complexity threshold must be positive")
     if args.cognitive_threshold is not None and args.cognitive_threshold < 1:
@@ -214,7 +291,15 @@ def eslint_command(root: Path, configured: str | None) -> list[str]:
     return ["npx", "--no-install", "eslint"]
 
 
-def run_eslint(root: Path, command: list[str], targets: list[str]) -> tuple[Any, int]:
+def structure_rule_json(min_lines: int) -> str:
+    """Ask for function sizes in the same pass; --rule adds to the project config."""
+
+    return json.dumps({STRUCTURE_RULE: ["warn", min_lines]})
+
+
+def run_eslint(
+    root: Path, command: list[str], targets: list[str], min_function_lines: int | None
+) -> tuple[Any, int]:
     invocation = [
         *command,
         *(targets or ["."]),
@@ -222,6 +307,8 @@ def run_eslint(root: Path, command: list[str], targets: list[str]) -> tuple[Any,
         "json",
         "--no-error-on-unmatched-pattern",
     ]
+    if min_function_lines:
+        invocation += ["--rule", structure_rule_json(min_function_lines)]
     environment = {**os.environ, "FORCE_COLOR": "0", "NO_COLOR": "1"}
 
     try:
@@ -318,6 +405,26 @@ def finding_score(rule: str, message: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def structure_node(message: str, path: str, line: int) -> StructureNode | None:
+    """Build a node from a `max-lines-per-function` message, or None when it is not one."""
+
+    lines_match = STRUCTURE_LINES_PATTERN.search(message)
+    if not lines_match:
+        return None
+    subject_match = STRUCTURE_SUBJECT_PATTERN.match(message)
+    kind = (subject_match.group("kind") if subject_match else "").strip().lower()
+    name = ""
+    if subject_match:
+        name = subject_match.group("name") or subject_match.group("quoted") or ""
+    return StructureNode(
+        path=path,
+        name=name,
+        kind=kind or "function",
+        line=line,
+        lines=int(lines_match.group(1)),
+    )
+
+
 def parse_report(
     data: Any,
     root: Path,
@@ -329,6 +436,7 @@ def parse_report(
 
     findings: list[Finding] = []
     other_messages: list[dict[str, Any]] = []
+    structure: list[StructureNode] = []
     for result in data:
         if not isinstance(result, dict):
             continue
@@ -341,6 +449,13 @@ def parse_report(
                 continue
             rule = message.get("ruleId")
             text = str(message.get("message", ""))
+            line = int(message.get("line") or 0)
+            if rule == STRUCTURE_RULE:
+                # Sizes belong to the structure inventory, not the residual lint tally.
+                node = structure_node(text, path, line)
+                if node:
+                    structure.append(node)
+                continue
             score = finding_score(rule, text) if rule in RULES else None
             if rule in RULES and score is not None:
                 findings.append(
@@ -371,7 +486,159 @@ def parse_report(
                     }
                 )
 
-    return Report(len(data), findings, other_messages, exit_code, thresholds)
+    return Report(len(data), findings, other_messages, exit_code, thresholds, structure)
+
+
+
+def structure_pattern(node: StructureNode) -> str:
+    """Name the readability risk a large span carries, when the metrics show nothing.
+
+    A big body with little nesting accumulates statements in one place; a big span made of many
+    functions assembles behavior across closures, so each piece scores alone and nothing does.
+    """
+
+    if node.self_lines >= node.lines - node.self_lines:
+        return "accumulates"
+    return "assembles" if node.nested_functions >= NESTED_ASSEMBLY_DEFAULT else "spans"
+
+
+def build_structure_tree(nodes: Sequence[StructureNode]) -> list[StructureNode]:
+    """Nest function spans inside their enclosing functions using ESLint's line ranges.
+
+    The nodes are mutated with parent and child links, so build the tree once per report.
+    """
+
+    roots: list[StructureNode] = []
+    by_file: dict[str, list[StructureNode]] = defaultdict(list)
+    for node in nodes:
+        # Rebuilding must not accumulate child links from an earlier pass.
+        node.parent = None
+        node.children = []
+        by_file[node.path].append(node)
+
+    for file_nodes in by_file.values():
+        stack: list[StructureNode] = []
+        for node in sorted(file_nodes, key=lambda item: (item.line, -item.lines)):
+            while stack and stack[-1].end_line < node.end_line:
+                stack.pop()
+            if stack:
+                node.parent = stack[-1]
+                stack[-1].children.append(node)
+            else:
+                roots.append(node)
+            stack.append(node)
+    return roots
+
+
+def structure_rows(
+    roots: Sequence[StructureNode], findings: Sequence[Finding]
+) -> list[dict[str, Any]]:
+    """Flatten the size tree, counting the metric findings each function encloses."""
+
+    finding_lines: dict[str, list[int]] = defaultdict(list)
+    for item in findings:
+        finding_lines[item.path].append(item.line)
+
+    rows: list[dict[str, Any]] = []
+
+    def walk(node: StructureNode) -> None:
+        contained = sum(1 for line in finding_lines[node.path] if node.line <= line <= node.end_line)
+        rows.append(
+            {
+                "path": node.path,
+                "name": node.label,
+                "kind": node.kind,
+                "line": node.line,
+                "lines": node.lines,
+                "self_lines": node.self_lines,
+                "nested_functions": node.nested_functions,
+                "depth": node.depth,
+                "findings_inside": contained,
+                "pattern": structure_pattern(node),
+            }
+        )
+        for child in node.children:
+            walk(child)
+
+    for root in roots:
+        walk(root)
+    return rows
+
+
+def structure_analysis(
+    report: Report, big_lines: int
+) -> tuple[list[StructureNode], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return the size tree, its flattened rows, and the large rows with no metric signal."""
+
+    roots = build_structure_tree(report.structure)
+    rows = structure_rows(roots, report.findings)
+    silent = [
+        row
+        for row in rows
+        if row["findings_inside"] == 0
+        and (row["self_lines"] >= big_lines or row["lines"] >= big_lines)
+        # Test files assemble from describe/it callbacks by design, so an assembled span there is the
+        # framework's shape rather than a readability risk; an undecomposed body still counts.
+        and not (row["path"].startswith(TEST_PATH_PREFIX) and row["pattern"] == "assembles")
+    ]
+    return roots, rows, sorted(silent, key=lambda item: (-item["self_lines"], -item["lines"]))
+
+
+def render_structure_section(
+    roots: Sequence[StructureNode],
+    rows: Sequence[dict[str, Any]],
+    silent: Sequence[dict[str, Any]],
+    top: int,
+    big_lines: int,
+    child_lines: int,
+) -> list[str]:
+    """Render the largest functions as a tree so delegation reads as delegation."""
+
+    title = "Function size and nesting (structure)"
+    lines = ["", title, "-" * len(title)]
+    if not rows:
+        lines.append("No size inventory (run without --no-structure to collect it).")
+        return lines
+
+    lines.append(
+        f"{len(rows)} functions inventoried; ranked by self lines, because that is what a reader holds "
+        f"at once. {len(silent)} functions of {big_lines}+ lines carry no complexity finding anywhere "
+        f"inside them."
+    )
+    lines.append(
+        "Counts are ESLint physical lines per function node, so an indented row sits inside the row "
+        "above it. 'nested' counts functions declared inside, so a huge span with a small self and many "
+        "nested pieces is assembled from callbacks; a huge self is one undecomposed body. Size is a "
+        "review signal, not a defect threshold."
+    )
+    lines.append(f"{'self':>6} {'lines':>6} {'nested':>6} {'inside':>6}  function")
+
+    index = {(row["path"], row["line"]): row for row in rows}
+
+    def render_node(node: StructureNode, depth: int) -> None:
+        row = index[(node.path, node.line)]
+        marker = "  <- no complexity signal" if row in silent else ""
+        indent = "  " * (depth - 1) + ("|- " if depth > 1 else "")
+        lines.append(
+            f"{row['self_lines']:>6} {row['lines']:>6} {row['nested_functions']:>6} "
+            f"{row['findings_inside']:>6}  {indent}{row['name']}  "
+            f"{row['path']}:{row['line']} [{row['pattern']}]{marker}"
+        )
+        children = sorted(
+            (child for child in node.children if child.lines >= child_lines),
+            key=lambda item: (-item.self_lines, -item.lines),
+        )
+        for child in children:
+            render_node(child, depth + 1)
+        hidden = len(node.children) - len(children)
+        if hidden > 0:
+            continuation = "  " * (depth - 1) + ("|- " if depth > 1 else "")
+            lines.append(f"{'':>26}  {continuation}+ {hidden} below {child_lines} lines")
+
+    for root in sorted(roots, key=lambda item: (-item.self_lines, -item.lines))[:top]:
+        render_node(root, 1)
+    return lines
+
 
 
 def subsystem(path: str) -> str:
@@ -488,6 +755,15 @@ def summary(report: Report) -> dict[str, Any]:
         "cognitive": metrics["cognitive"],
         "complexity_findings": len(report.findings),
         "other_lint_messages": len(report.other_messages),
+        "structure_functions": len(report.structure),
+        "structure_inventory": sorted(
+            (
+                row
+                for row in structure_rows(build_structure_tree(report.structure), report.findings)
+                if row["depth"] == 1
+            ),
+            key=lambda item: -item["lines"],
+        ),
         "eslint_exit_code": report.eslint_exit_code,
         "thresholds": {
             metric_label(rule): report.thresholds[rule]
@@ -496,7 +772,12 @@ def summary(report: Report) -> dict[str, Any]:
     }
 
 
-def render_text(report: Report, top: int) -> str:
+def render_text(
+    report: Report,
+    top: int,
+    big_lines: int = BIG_FUNCTION_LINES_DEFAULT,
+    child_lines: int = CHILD_FUNCTION_LINES_DEFAULT,
+) -> str:
     lines = [
         "Cognitive-load overview",
         "========================",
@@ -540,6 +821,9 @@ def render_text(report: Report, top: int) -> str:
                 f"{item.path}:{item.line} {item.name} (excess +{item.excess})"
             )
 
+    roots, rows, silent = structure_analysis(report, big_lines)
+    lines.extend(render_structure_section(roots, rows, silent, top, big_lines, child_lines))
+
     lines.extend(["", "Top files", "---------"])
     for row in file_stats(report)[:top]:
         lines.append(
@@ -565,6 +849,17 @@ def render_text(report: Report, top: int) -> str:
         )
     if not report.findings:
         lines.append("  None.")
+    if silent:
+        lines.append("")
+        lines.append(
+            "  Size with no complexity signal (accumulates = one long body, assembles = many callbacks):"
+        )
+        for row in silent[:top]:
+            lines.append(
+                f"  STRUCTURE {row['self_lines']:>4} self / {row['lines']:>4} lines  "
+                f"{row['pattern']:11} {row['nested_functions']:>2} nested  "
+                f"{row['path']}:{row['line']} {row['name']}"
+            )
 
     if report.other_messages:
         rule_counts = Counter(item["rule"] for item in report.other_messages)
@@ -607,13 +902,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.input:
             data, exit_code = read_json(args.input)
         else:
-            data, exit_code = run_eslint(root, eslint_command(root, args.eslint), args.target or ["."])
+            data, exit_code = run_eslint(
+                root,
+                eslint_command(root, args.eslint),
+                args.target or ["."],
+                None if args.no_structure else args.min_function_lines,
+            )
         report = parse_report(data, root, thresholds, exit_code)
     except RuntimeError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
-    output = render_json(report, args.top) if args.format == "json" else render_text(report, args.top)
+    if args.format == "json":
+        output = render_json(report, args.top)
+    else:
+        output = render_text(report, args.top, args.big_function_lines)
     print(output, end="")
 
     if args.fail_on == "findings" and report.findings:
