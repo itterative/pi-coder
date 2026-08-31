@@ -11,8 +11,11 @@ import {
     type AgentContinuationLease,
     type AgentRefusedWriteListener,
     type AgentRunPersistence,
+    type ChildProgress,
+    type ParentQuestion,
     type PersistedAgentRun,
 } from "../contracts/runs";
+import type { WorkerMutationReport } from "../contracts/mutations";
 import { ZERO_USAGE } from "./usage";
 import { parseAgentDefinitionSnapshot } from "../definitions/types";
 import type { AgentRunCatalogRecord } from "../contracts/workspaces";
@@ -64,7 +67,12 @@ export function getAgentCwdSessionDir(
     return sessionDir;
 }
 
-function finite(value: unknown): value is number {
+/**
+ * Durable numeric fields only ever hold quantities that cannot go below zero: usage counters, costs,
+ * timestamps, and counts. A negative value is corruption, so it fails the check and the caller falls
+ * back to its default rather than restoring a nonsensical number.
+ */
+function nonNegativeNumber(value: unknown): value is number {
     return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
@@ -73,19 +81,19 @@ function cloneUsage(value: unknown): PersistedAgentRun["usageSnapshot"] {
     const usage = value as Partial<PersistedAgentRun["usageSnapshot"]>;
     const cost = usage.cost && typeof usage.cost === "object" ? usage.cost : ZERO_USAGE.cost;
     return {
-        input: finite(usage.input) ? usage.input : 0,
-        output: finite(usage.output) ? usage.output : 0,
-        cacheRead: finite(usage.cacheRead) ? usage.cacheRead : 0,
-        cacheWrite: finite(usage.cacheWrite) ? usage.cacheWrite : 0,
-        ...(finite(usage.cacheWrite1h) ? { cacheWrite1h: usage.cacheWrite1h } : {}),
-        ...(finite(usage.reasoning) ? { reasoning: usage.reasoning } : {}),
-        totalTokens: finite(usage.totalTokens) ? usage.totalTokens : 0,
+        input: nonNegativeNumber(usage.input) ? usage.input : 0,
+        output: nonNegativeNumber(usage.output) ? usage.output : 0,
+        cacheRead: nonNegativeNumber(usage.cacheRead) ? usage.cacheRead : 0,
+        cacheWrite: nonNegativeNumber(usage.cacheWrite) ? usage.cacheWrite : 0,
+        ...(nonNegativeNumber(usage.cacheWrite1h) ? { cacheWrite1h: usage.cacheWrite1h } : {}),
+        ...(nonNegativeNumber(usage.reasoning) ? { reasoning: usage.reasoning } : {}),
+        totalTokens: nonNegativeNumber(usage.totalTokens) ? usage.totalTokens : 0,
         cost: {
-            input: finite(cost.input) ? cost.input : 0,
-            output: finite(cost.output) ? cost.output : 0,
-            cacheRead: finite(cost.cacheRead) ? cost.cacheRead : 0,
-            cacheWrite: finite(cost.cacheWrite) ? cost.cacheWrite : 0,
-            total: finite(cost.total) ? cost.total : 0,
+            input: nonNegativeNumber(cost.input) ? cost.input : 0,
+            output: nonNegativeNumber(cost.output) ? cost.output : 0,
+            cacheRead: nonNegativeNumber(cost.cacheRead) ? cost.cacheRead : 0,
+            cacheWrite: nonNegativeNumber(cost.cacheWrite) ? cost.cacheWrite : 0,
+            total: nonNegativeNumber(cost.total) ? cost.total : 0,
         },
     };
 }
@@ -271,7 +279,7 @@ export function createAgentRunStateWriter(
     };
 
     const renewLease = async (runInstanceId: string, token: string): Promise<void> => {
-        let lost = false;
+        let lost: boolean;
         try {
             const result = await database.transaction(
                 (transaction) =>
@@ -715,6 +723,109 @@ function safeExistingChildFile(childSessionDir: string, candidate: string): stri
     }
 }
 
+/**
+ * Cap a stored string list, keeping the leading entries and truncating each item.
+ */
+function boundedStringList(value: unknown, maxItems: number, maxLength: number): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value
+        .filter((item): item is string => typeof item === "string")
+        .slice(0, maxItems)
+        .map((item) => item.slice(0, maxLength));
+}
+
+/**
+ * Accept a stored count only as a non-negative safe integer.
+ *
+ * `finite` already rejects negatives, so the integer check carries the whole remaining contract; the
+ * snapshot shape test pins both.
+ */
+function boundedCount(value: unknown): number | undefined {
+    if (!nonNegativeNumber(value) || !Number.isSafeInteger(value)) {
+        return undefined;
+    }
+    return value;
+}
+
+/**
+ * Coerce a stored progress object into the shape projection and accounting code expect.
+ *
+ * Progress is display state, so a corrupt or oversized field is dropped rather than a reason to
+ * reject the run: the run stays restorable without its last progress frame. Activity keeps the eight
+ * most recent entries, because older ones are already superseded.
+ */
+function normalizeProgress(value: unknown): ChildProgress {
+    const progress =
+        value && typeof value === "object" ? (value as Partial<ChildProgress>) : undefined;
+    const activity = Array.isArray(progress?.recentActivity)
+        ? progress.recentActivity
+              .filter((item): item is string => typeof item === "string")
+              .slice(-8)
+              .map((item) => item.slice(0, 500))
+        : [];
+    const phase = boundedString(progress?.phase, 120);
+    const lastAssistantMessage = boundedString(progress?.lastAssistantMessage, 32_000);
+    const lastToolActivity = boundedString(progress?.lastToolActivity, 500);
+    const failedToolCalls = boundedCount(progress?.failedToolCalls);
+    const toolCounts = boundedToolCounts(progress?.toolCounts);
+
+    return {
+        output: boundedString(progress?.output, 32_000) ?? "",
+        recentActivity: activity,
+        ...(phase ? { phase } : {}),
+        ...(lastAssistantMessage ? { lastAssistantMessage } : {}),
+        ...(lastToolActivity ? { lastToolActivity } : {}),
+        ...(toolCounts ? { toolCounts } : {}),
+        ...(failedToolCalls !== undefined ? { failedToolCalls } : {}),
+    };
+}
+
+/**
+ * Keep a stored question only when it still carries its text; the rest is best effort.
+ */
+function normalizeQuestion(value: unknown): ParentQuestion | undefined {
+    const question =
+        value && typeof value === "object" ? (value as Partial<ParentQuestion>) : undefined;
+    if (typeof question?.question !== "string") {
+        return undefined;
+    }
+    const context = boundedString(question.context, 12_000);
+    const recommendation = boundedString(question.recommendation, 4_000);
+    const options = Array.isArray(question.options)
+        ? boundedStringList(question.options, 20, 1_000)
+        : undefined;
+
+    return {
+        question: question.question.slice(0, 4_000),
+        ...(context ? { context } : {}),
+        ...(options ? { options } : {}),
+        ...(recommendation ? { recommendation } : {}),
+    };
+}
+
+/**
+ * Rebuild a stored mutation report with capped lists and explicit boolean defaults.
+ *
+ * `readFiles` is omitted when empty, which is how an unmutating child stores it; the apply path
+ * distinguishes an absent list from an empty one only for display.
+ */
+function normalizeMutationReport(value: unknown): WorkerMutationReport | undefined {
+    if (!value || typeof value !== "object") {
+        return undefined;
+    }
+    const report = value as Partial<WorkerMutationReport>;
+    const readFiles = boundedStringList(report.readFiles, 1_000, 4_096);
+
+    return {
+        changedFiles: boundedStringList(report.changedFiles, 1_000, 4_096),
+        ...(readFiles.length > 0 ? { readFiles } : {}),
+        bashApproved: report.bashApproved === true,
+        interrupted: report.interrupted === true,
+    };
+}
+
 function parseRecord(
     value: unknown,
     ownerSessionId: string,
@@ -736,39 +847,15 @@ function parseRecord(
         !RESTORABLE_STATUSES.has(record.status as PersistedAgentRun["status"]) ||
         typeof record.background !== "boolean" ||
         typeof record.mutating !== "boolean" ||
-        !finite(record.startedAt) ||
-        !finite(record.updatedAt)
+        !nonNegativeNumber(record.startedAt) ||
+        !nonNegativeNumber(record.updatedAt)
     )
         return undefined;
 
-    const progressValue =
-        record.progress && typeof record.progress === "object" ? record.progress : undefined;
-    const activity = Array.isArray(progressValue?.recentActivity)
-        ? progressValue.recentActivity
-              .filter((item): item is string => typeof item === "string")
-              .slice(-8)
-              .map((item) => item.slice(0, 500))
-        : [];
-    const phase = boundedString(progressValue?.phase, 120);
-    const lastAssistantMessage = boundedString(progressValue?.lastAssistantMessage, 32_000);
-    const lastToolActivity = boundedString(progressValue?.lastToolActivity, 500);
-    const failedToolCalls =
-        finite(progressValue?.failedToolCalls) &&
-        Number.isSafeInteger(progressValue?.failedToolCalls) &&
-        progressValue.failedToolCalls >= 0
-            ? progressValue.failedToolCalls
-            : undefined;
-    const toolCounts = boundedToolCounts(progressValue?.toolCounts);
     const childSessionFile = boundedString(record.childSessionFile, 4_096);
     const resolvedChildFile = childSessionFile
         ? safeExistingChildFile(childSessionDir, childSessionFile)
         : undefined;
-    const questionValue =
-        record.question && typeof record.question === "object" ? record.question : undefined;
-    const mutationValue =
-        record.mutationReport && typeof record.mutationReport === "object"
-            ? record.mutationReport
-            : undefined;
     const definitionSnapshot = parseAgentDefinitionSnapshot(record.definitionSnapshot);
 
     return {
@@ -797,29 +884,8 @@ function parseRecord(
         mutating: record.mutating,
         workspaceId: boundedString(record.workspaceId, 200),
         workspaceResultId: boundedString(record.workspaceResultId, 200),
-        question:
-            typeof questionValue?.question === "string"
-                ? {
-                      question: questionValue.question.slice(0, 4_000),
-                      context: boundedString(questionValue.context, 12_000),
-                      options: Array.isArray(questionValue.options)
-                          ? questionValue.options
-                                .filter((item): item is string => typeof item === "string")
-                                .slice(0, 20)
-                                .map((item) => item.slice(0, 1_000))
-                          : undefined,
-                      recommendation: boundedString(questionValue.recommendation, 4_000),
-                  }
-                : undefined,
-        progress: {
-            output: boundedString(progressValue?.output, 32_000) ?? "",
-            recentActivity: activity,
-            ...(phase ? { phase } : {}),
-            ...(lastAssistantMessage ? { lastAssistantMessage } : {}),
-            ...(lastToolActivity ? { lastToolActivity } : {}),
-            ...(toolCounts ? { toolCounts } : {}),
-            ...(failedToolCalls !== undefined ? { failedToolCalls } : {}),
-        },
+        question: normalizeQuestion(record.question),
+        progress: normalizeProgress(record.progress),
         usageCheckpoint: cloneUsage(record.usageCheckpoint),
         usageSnapshot: cloneUsage(record.usageSnapshot),
         startedAt: record.startedAt,
@@ -839,26 +905,7 @@ function parseRecord(
         terminalIsError:
             typeof record.terminalIsError === "boolean" ? record.terminalIsError : undefined,
         setupFailed: record.setupFailed === true ? true : undefined,
-        mutationReport: mutationValue
-            ? {
-                  changedFiles: Array.isArray(mutationValue.changedFiles)
-                      ? mutationValue.changedFiles
-                            .filter((item): item is string => typeof item === "string")
-                            .slice(0, 1_000)
-                            .map((item) => item.slice(0, 4_096))
-                      : [],
-                  ...(Array.isArray(mutationValue.readFiles) && mutationValue.readFiles.length
-                      ? {
-                            readFiles: mutationValue.readFiles
-                                .filter((item): item is string => typeof item === "string")
-                                .slice(0, 1_000)
-                                .map((item) => item.slice(0, 4_096)),
-                        }
-                      : {}),
-                  bashApproved: mutationValue.bashApproved === true,
-                  interrupted: mutationValue.interrupted === true,
-              }
-            : undefined,
+        mutationReport: normalizeMutationReport(record.mutationReport),
     };
 }
 
@@ -997,23 +1044,15 @@ export async function loadAgentRunPersistence(
     // sessions always expose getEntries(), so legacy rows never become restore
     // authority in production.
     if (!hasEntryIndex) {
-        let legacyIds: string[];
-        try {
-            legacyIds = ["root", ...ctx.sessionManager.getBranch().map((entry) => entry.id)];
-        } catch (error) {
-            try {
-                await database.close();
-            } catch {
-                // Preserve the load failure; the connection is best-effort cleanup.
-            }
-            throw error;
-        }
-        const legacy = await withDatabaseFailureCleanup(database, () =>
-            listAgentRunStatesInDatabase(database, ownerSessionId, legacyIds),
-        );
+        const legacy = await withDatabaseFailureCleanup(database, async () => {
+            const legacyIds = ["root", ...ctx.sessionManager.getBranch().map((entry) => entry.id)];
+            return listAgentRunStatesInDatabase(database, ownerSessionId, legacyIds);
+        });
         for (const stored of legacy) {
             const parsed = parseRecord(stored.state, ownerSessionId, childSessionDir);
-            if (parsed) latest.set(parsed.runId, parsed);
+            if (parsed) {
+                latest.set(parsed.runId, parsed);
+            }
         }
     }
     for (const [runInstanceId, branchHead] of branchHeads) {
@@ -1046,9 +1085,8 @@ export async function loadAgentRunPersistence(
         latest.set(runInstanceId, parsed);
     }
 
-    let catalog: AgentRunStateWriter;
-    try {
-        catalog = createAgentRunStateWriter(
+    const catalog = await withDatabaseFailureCleanup(database, async () =>
+        createAgentRunStateWriter(
             ctx.cwd,
             database,
             (marker) => {
@@ -1066,17 +1104,31 @@ export async function loadAgentRunPersistence(
                 ),
                 requireMarker: hasEntryIndex,
             },
-        );
-    } catch (error) {
-        try {
-            await database.close();
-        } catch {
-            // Preserve the load failure; the connection is best-effort cleanup.
-        }
-        throw error;
-    }
+        ),
+    );
 
     let persistenceWarningShown = false;
+
+    /**
+     * The listener call is unbudgeted so no refusal goes unseen, while the user warning is limited to
+     * one per session; a failing disk must not spam the UI. Only writes the authoritative snapshot path
+     * refused reach here, so a lost catalog row stays a lossy projection detail.
+     */
+    const reportRefusedWrite = (record: PersistedAgentRun, message: string): void => {
+        options.onRefusedWrite?.({
+            runId: record.runId,
+            ...(record.runInstanceId ? { runInstanceId: record.runInstanceId } : {}),
+            message,
+        });
+        if (persistenceWarningShown) {
+            return;
+        }
+        persistenceWarningShown = true;
+        ctx.ui.notify(
+            `pi-coder agents: could not persist delegated run state: ${message}`,
+            "warning",
+        );
+    };
     const persistence: AgentRunPersistence = {
         ownerSessionId,
         usesSnapshotMarkers: hasEntryIndex,
@@ -1093,23 +1145,12 @@ export async function loadAgentRunPersistence(
                     ctx.sessionManager.getLeafId() ?? "root",
                 );
             }
-            if (result.ok) return true;
+            if (result.ok) {
+                return true;
+            }
             const message =
                 result.error instanceof Error ? result.error.message : String(result.error);
-            // Reported before the budgeted warning so no failure is invisible, and only for writes the
-            // authoritative snapshot path refused: a lost catalog row stays a lossy projection detail.
-            options.onRefusedWrite?.({
-                runId: record.runId,
-                ...(record.runInstanceId ? { runInstanceId: record.runInstanceId } : {}),
-                message,
-            });
-            if (!persistenceWarningShown) {
-                persistenceWarningShown = true;
-                ctx.ui.notify(
-                    `pi-coder agents: could not persist delegated run state: ${message}`,
-                    "warning",
-                );
-            }
+            reportRefusedWrite(record, message);
             return false;
         },
         flush: () => catalog.flush(),
