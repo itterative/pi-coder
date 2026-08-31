@@ -20,6 +20,7 @@ pi-coder is a pi extension providing coding-oriented memory, sandbox, TUI, and d
 
 ## Development
 
+- Do not run Prettier (`--write` or `--check`) on a file until the edits to it are finished; format once, at the end of the task, as part of validation. Reformatting mid-task moves the exact text later `edit` operations must match, which forces re-reads and retry loops, and it makes exact-string mutations and diffs easy to mis-target. Type checking with `npx tsc --noEmit` and focused `npx vitest run` calls are unaffected and may be used freely while working.
 - Run `npm run test:run` for the full suite and `npx tsc --noEmit` for type checking. To run a focused suite, use `npx vitest run <test-file>`.
 - Tests do not make provider calls. For agent lifecycle, provider, or rendering changes, follow the manual checklist in `src/tools/agent/README.md`.
 - Child prompt design guidelines are documented in `docs/agent-tool.md` under **Prompt design**; read them before changing child protocols, capability wording, or prompt snapshots.
