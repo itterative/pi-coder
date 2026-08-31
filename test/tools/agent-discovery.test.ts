@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -8,7 +9,6 @@ import {
     agentCapabilities,
     agentTools,
     BUILTIN_ADVISOR,
-    BUILTIN_REVIEWER,
     BUILTIN_SCOUT,
     discoverAgentsInDirectories,
 } from "../../src/tools/agent/definitions/discovery";
@@ -31,18 +31,24 @@ function tempScope(): string {
     return dir;
 }
 
-function writeAgent(dir: string, file: string, name: string, body: string, extra = ""): void {
-    fs.writeFileSync(
-        path.join(dir, file),
-        `---\nname: ${name}\ndescription: ${name} description\n${extra}---\n\n${body}\n`,
-    );
+/**
+ * Definition files are authored as fixtures under `fixtures/agent-definitions/` and copied into a
+ * temp scope under their own names, because the loader's contract is about the files it reads:
+ * sort order decides which duplicate wins, and each diagnostic reports the offending path.
+ */
+function copyFixtures(dir: string, names: string[]): void {
+    for (const name of names) {
+        const fixture = fileURLToPath(
+            new URL(`./fixtures/agent-definitions/${name}.md`, import.meta.url),
+        );
+        fs.copyFileSync(fixture, path.join(dir, `${name}.md`));
+    }
 }
 
 describe("agent discovery", () => {
     it("selects the first sorted same-scope definition and warns", () => {
         const userDir = tempScope();
-        writeAgent(userDir, "b.md", "analyst", "Definition B");
-        writeAgent(userDir, "a.md", "analyst", "Definition A");
+        copyFixtures(userDir, ["analyst-a", "analyst-b"]);
 
         const result = discoverAgentsInDirectories(userDir);
         const analyst = result.agents.find((agent) => agent.name === "analyst");
@@ -52,7 +58,7 @@ describe("agent discovery", () => {
             expect.objectContaining({
                 level: "warning",
                 message: expect.stringContaining("first sorted definition wins"),
-                paths: [path.join(userDir, "a.md"), path.join(userDir, "b.md")],
+                paths: [path.join(userDir, "analyst-a.md"), path.join(userDir, "analyst-b.md")],
             }),
         );
     });
@@ -60,8 +66,8 @@ describe("agent discovery", () => {
     it("lets a project definition override a user definition with an informational diagnostic", () => {
         const userDir = tempScope();
         const projectDir = tempScope();
-        writeAgent(userDir, "analyst.md", "analyst", "User definition");
-        writeAgent(projectDir, "analyst.md", "analyst", "Project definition");
+        copyFixtures(userDir, ["analyst-user"]);
+        copyFixtures(projectDir, ["analyst-project"]);
 
         const result = discoverAgentsInDirectories(userDir, projectDir);
         const analyst = result.agents.find((agent) => agent.name === "analyst");
@@ -79,7 +85,7 @@ describe("agent discovery", () => {
     it("does not load project definitions when no trusted project directory is supplied", () => {
         const userDir = tempScope();
         const projectDir = tempScope();
-        writeAgent(projectDir, "project-only.md", "project-only", "Project definition");
+        copyFixtures(projectDir, ["project-only"]);
 
         const untrusted = discoverAgentsInDirectories(userDir);
         const trusted = discoverAgentsInDirectories(userDir, projectDir);
@@ -101,10 +107,7 @@ describe("agent discovery", () => {
 
     it("keeps built-in capabilities while applying scout overlays", () => {
         const userDir = tempScope();
-        fs.writeFileSync(
-            path.join(userDir, "scout.md"),
-            '---\nname: scout\nsafeBashCommands: ["ast-outline digest *"]\n---\n\n',
-        );
+        copyFixtures(userDir, ["scout-safe-bash"]);
 
         const result = discoverAgentsInDirectories(userDir);
         const scout = result.agents.find((agent) => agent.name === "scout");
@@ -118,12 +121,55 @@ describe("agent discovery", () => {
         });
     });
 
+    /**
+     * An overlay must not gain a field it never asked for: the merge copies the built-in and then
+     * applies only requested keys, so `additionalPaths: []` or a blank `model` would have to be
+     * written as an absent key rather than an empty one.
+     */
+    it("omits optional fields the overlay did not request", () => {
+        const userDir = tempScope();
+        copyFixtures(userDir, ["scout-blank-model", "reviewer-metadata-only"]);
+
+        const result = discoverAgentsInDirectories(userDir);
+        const scout = result.agents.find((agent) => agent.name === "scout");
+        const reviewer = result.agents.find((agent) => agent.name === "reviewer");
+
+        expect(scout).toMatchObject({
+            source: "builtin",
+            capabilities: BUILTIN_SCOUT.capabilities,
+            systemPrompt: BUILTIN_SCOUT.systemPrompt,
+        });
+        expect(scout?.model).toBeUndefined();
+        expect(scout?.safeBashCommands).toBeUndefined();
+        expect(scout?.additionalPaths).toEqual([]);
+        // A field the overlay never mentions stays absent, not empty.
+        expect(reviewer?.additionalPaths).toBeUndefined();
+        expect(reviewer?.safeBashCommands).toBeUndefined();
+        expect(reviewer?.model).toBeUndefined();
+        expect(reviewer?.description).toBe("Overlaid reviewer");
+    });
+
+    /**
+     * `mergeScopeDefinition` uses `body || base.systemPrompt`, which distinguishes an empty custom
+     * body from a metadata-only overlay only because the custom skeleton starts with an empty prompt.
+     * Pin both sides of that fallback.
+     */
+    it("gives a body-less custom definition no prompt and a body-less overlay the built-in prompt", () => {
+        const userDir = tempScope();
+        copyFixtures(userDir, ["custom-no-body", "scout-safe-bash"]);
+
+        const result = discoverAgentsInDirectories(userDir);
+        const terse = result.agents.find((agent) => agent.name === "terse");
+        const scout = result.agents.find((agent) => agent.name === "scout");
+
+        expect(terse).toMatchObject({ source: "user", description: "terse description" });
+        expect(terse?.systemPrompt).toBe("");
+        expect(scout?.systemPrompt).toBe(BUILTIN_SCOUT.systemPrompt);
+    });
+
     it("overrides scout metadata but ignores capability changes", () => {
         const userDir = tempScope();
-        fs.writeFileSync(
-            path.join(userDir, "scout.md"),
-            '---\nname: scout\ndescription: Custom scout\ncapabilities: [edit]\nadditionalPaths: ["/tmp/notes"]\nsafeBashCommands: ["ast-outline digest *"]\nmodel: provider/model\n---\n\nCustom scout role\n',
-        );
+        copyFixtures(userDir, ["scout-full-overlay"]);
 
         const result = discoverAgentsInDirectories(userDir);
         const scout = result.agents.find((agent) => agent.name === "scout");
@@ -148,15 +194,7 @@ describe("agent discovery", () => {
 
     it("grants only declared capabilities", () => {
         const userDir = tempScope();
-        writeAgent(
-            userDir,
-            "custom.md",
-            "custom",
-            "Custom",
-            'capabilities: [command-runner, memories]\nadditionalPaths: ["/tmp/shared-notes"]\nsafeBashCommands: ["ast-outline digest *"]\n',
-        );
-        writeAgent(userDir, "todo.md", "todo", "TODO", "capabilities: [todolist]\n");
-        writeAgent(userDir, "stale.md", "stale", "Stale", "tools: [read, bash]\n");
+        copyFixtures(userDir, ["custom-capabilities", "todo-capabilities", "stale-tools"]);
 
         const result = discoverAgentsInDirectories(userDir);
         const scout = result.agents.find((agent) => agent.name === "scout");
@@ -259,12 +297,73 @@ describe("agent discovery", () => {
         });
     });
 
+    /**
+     * Every guard in `loadScope` exists so a broken file says _which_ field is wrong. Pin one
+     * message per guard, including the paths it reports, so reordering or rewording a guard is a
+     * deliberate change rather than a side effect of restructuring the loader.
+     */
+    it("diagnoses each malformed field with its own message", () => {
+        const cases = [
+            { fixture: "bad-name", name: "Bad Name", message: "Agent name must match" },
+            {
+                fixture: "missing-description",
+                name: "missing-description",
+                message: "Agent description must be a non-empty string.",
+            },
+            {
+                fixture: "blank-description",
+                name: "blank-description",
+                message: "Agent description must be a non-empty string when provided.",
+            },
+            {
+                fixture: "list-model",
+                name: "list-model",
+                message: "Agent model must be a provider/model string.",
+            },
+            {
+                fixture: "not-a-list",
+                name: "not-a-list",
+                message: "Agent capabilities must be an array",
+            },
+            {
+                fixture: "empty-path",
+                name: "bad-paths",
+                message: "additionalPaths must be an array",
+            },
+            {
+                fixture: "bad-commands",
+                name: "bad-commands",
+                message: "safeBashCommands must be an array",
+            },
+            {
+                fixture: "custom-edit",
+                name: "edit-agent",
+                message: "The edit capability is reserved for the built-in worker.",
+            },
+        ];
+        const userDir = tempScope();
+        copyFixtures(
+            userDir,
+            cases.map((testCase) => testCase.fixture),
+        );
+
+        const result = discoverAgentsInDirectories(userDir);
+
+        for (const testCase of cases) {
+            expect(result.agents.map((agent) => agent.name)).not.toContain(testCase.name);
+            expect(result.diagnostics).toContainEqual(
+                expect.objectContaining({
+                    level: "warning",
+                    message: expect.stringContaining(testCase.message),
+                    paths: [path.join(userDir, `${testCase.fixture}.md`)],
+                }),
+            );
+        }
+    });
+
     it("rejects malformed or unknown capability lists", () => {
         const userDir = tempScope();
-        writeAgent(userDir, "not-a-list.md", "not-a-list", "Bad", "capabilities: safe-bash\n");
-        writeAgent(userDir, "unknown.md", "unknown", "Bad", "capabilities: [unsafe-bash]\n");
-        writeAgent(userDir, "edit.md", "edit-agent", "Bad", "capabilities: [edit]\n");
-        writeAgent(userDir, "paths.md", "bad-paths", "Bad", 'additionalPaths: [""]\n');
+        copyFixtures(userDir, ["not-a-list", "unknown-capability", "custom-edit", "empty-path"]);
 
         const result = discoverAgentsInDirectories(userDir);
 
@@ -281,10 +380,79 @@ describe("agent discovery", () => {
         );
     });
 
+    /**
+     * Guard order is user-visible. Two of the three advisories are raised after the model guard, so a
+     * file with both problems reports only the model rejection, while a file whose rejection comes
+     * later reports the advisory _and_ the rejection. Assert the whole ordered list: `toContainEqual`
+     * tolerates extra entries and would let a refactor silently reordering the guards pass.
+     */
+    it("reports diagnostics in guard order for multi-problem definitions", () => {
+        const userDir = tempScope();
+        copyFixtures(userDir, [
+            "scout-overlay-bad-model",
+            "scout-overlay-bad-paths",
+            "tools-bad-capabilities",
+            "tools-bad-model",
+            "tools-reserved-edit",
+        ]);
+
+        const result = discoverAgentsInDirectories(userDir);
+        const at = (fixture: string) => [path.join(userDir, `${fixture}.md`)];
+
+        expect(result.diagnostics).toEqual([
+            {
+                level: "warning",
+                message: expect.stringContaining("provider/model string"),
+                paths: at("scout-overlay-bad-model"),
+            },
+            {
+                level: "warning",
+                message: expect.stringContaining("capabilities cannot be overridden"),
+                paths: at("scout-overlay-bad-paths"),
+            },
+            {
+                level: "warning",
+                message: expect.stringContaining("additionalPaths must be an array"),
+                paths: at("scout-overlay-bad-paths"),
+            },
+            {
+                level: "warning",
+                message: expect.stringContaining('field "tools" is unsupported'),
+                paths: at("tools-bad-capabilities"),
+            },
+            {
+                level: "warning",
+                message: expect.stringContaining("capabilities must be an array"),
+                paths: at("tools-bad-capabilities"),
+            },
+            {
+                level: "warning",
+                message: expect.stringContaining("provider/model string"),
+                paths: at("tools-bad-model"),
+            },
+            {
+                level: "warning",
+                message: expect.stringContaining('field "tools" is unsupported'),
+                paths: at("tools-reserved-edit"),
+            },
+            {
+                level: "warning",
+                message: expect.stringContaining("edit capability is reserved"),
+                paths: at("tools-reserved-edit"),
+            },
+        ]);
+        // None of these files loaded, so only the built-ins remain.
+        expect(result.agents.map((agent) => agent.name)).toEqual([
+            "scout",
+            "reviewer",
+            "advisor",
+            "worker",
+        ]);
+    });
+
     it("reports malformed definitions without hiding valid agents", () => {
         const userDir = tempScope();
-        fs.writeFileSync(path.join(userDir, "bad.md"), "not frontmatter");
-        writeAgent(userDir, "valid.md", "valid", "Valid definition");
+        copyFixtures(userDir, ["not-frontmatter", "valid-definition"]);
 
         const result = discoverAgentsInDirectories(userDir);
 
@@ -298,7 +466,7 @@ describe("agent discovery", () => {
         expect(result.diagnostics).toContainEqual(
             expect.objectContaining({
                 level: "warning",
-                paths: [path.join(userDir, "bad.md")],
+                paths: [path.join(userDir, "not-frontmatter.md")],
             }),
         );
     });

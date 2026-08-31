@@ -163,139 +163,230 @@ function parseAdditionalPaths(value: unknown): string[] | undefined {
     return [...new Set(paths)];
 }
 
+/**
+ * Optional fields a definition file may replace. Only the keys the author actually wrote are
+ * present, which is what lets an overlay inherit: spreading `model: undefined` over a built-in
+ * would erase the built-in's own model instead of leaving it alone.
+ */
+type DefinitionOverrides = Partial<
+    Pick<AgentDefinition, "description" | "additionalPaths" | "safeBashCommands" | "model">
+>;
+
+/**
+ * Apply one definition file to the definition it extends.
+ *
+ * `base` is either the built-in being overlaid or a custom skeleton assembled by the caller. An
+ * empty body keeps the base prompt, so a metadata-only overlay keeps the built-in's instructions
+ * while a custom file without a body still ends up with no prompt.
+ */
+function mergeScopeDefinition(
+    base: AgentDefinition,
+    body: string,
+    filePath: string,
+    overrides: DefinitionOverrides,
+): AgentDefinition {
+    return {
+        ...base,
+        ...overrides,
+        systemPrompt: body || base.systemPrompt,
+        filePath,
+    };
+}
+
+/**
+ * Read one definition file and split its frontmatter from its body.
+ *
+ * A failure comes back as a message instead of a recorded diagnostic, which keeps `loadScope` the
+ * only place that assembles the `{ level, message, paths }` envelope. Both messages name the scope,
+ * because an unreadable project file and an unreadable user file call for different fixes.
+ */
+type ScopeFileRead =
+    | { ok: true; frontmatter: AgentFrontmatter; body: string }
+    | {
+          ok: false;
+          message: string;
+      };
+
+function readScopeFile(filePath: string, source: "user" | "project"): ScopeFileRead {
+    let content: string;
+    try {
+        content = fs.readFileSync(filePath, "utf8");
+    } catch (error) {
+        return {
+            ok: false,
+            message: `Could not read ${source} agent definition: ${errorMessage(error)}`,
+        };
+    }
+
+    try {
+        const parsed = parseFrontmatter<AgentFrontmatter>(content);
+        return { ok: true, frontmatter: parsed.frontmatter, body: parsed.body.trim() };
+    } catch (error) {
+        return {
+            ok: false,
+            message: `Invalid ${source} agent frontmatter: ${errorMessage(error)}`,
+        };
+    }
+}
+
+/** A definition file that passed every rule, narrowed to the values the loader merges. */
+interface ValidatedScopeDefinition {
+    name: string;
+    /** What this file extends: the built-in for an overlay, a custom skeleton otherwise. */
+    base: AgentDefinition;
+    body: string;
+    /** Only the fields the file actually wrote, so anything else stays inherited. */
+    overrides: DefinitionOverrides;
+}
+
+type ScopeNormalization = { warnings: string[] } & (
+    { ok: true; definition: ValidatedScopeDefinition } | { ok: false; message: string }
+);
+
+/**
+ * Apply every field rule to one parsed definition file and normalize what survives.
+ *
+ * This is the whole authorization surface for user- and project-authored agents, so it returns a
+ * decision instead of recording one: no diagnostics array, no filesystem, no `source` in any
+ * message. `warnings` carries the non-fatal advisories and `message` the first fatal guard.
+ *
+ * Guard order is part of the observable behavior and must stay exactly as written. The unsupported
+ * `tools` field and the ignored-overlay-capabilities advisory are raised after the model guard but
+ * before the capability, path, and command guards, so a file with a bad `model` reports only the
+ * model while a file with a bad `capabilities` list reports the advisory _and_ the rejection.
+ * Hoisting either advisory out of the chain changes the diagnostics even when every rule holds;
+ * the guard-order test in `test/tools/agent-discovery.test.ts` pins the sequence.
+ */
+function normalizeScopeDefinition(
+    source: "user" | "project",
+    frontmatter: AgentFrontmatter,
+    body: string,
+): ScopeNormalization {
+    const warnings: string[] = [];
+    const {
+        name,
+        description,
+        capabilities: requestedCapabilities,
+        additionalPaths: requestedAdditionalPaths,
+        safeBashCommands: requestedSafeBashCommands,
+        tools,
+        model,
+    } = frontmatter;
+
+    const reject = (message: string): ScopeNormalization => ({ ok: false, warnings, message });
+
+    if (typeof name !== "string" || !AGENT_NAME.test(name)) {
+        return reject("Agent name must match /^[a-z][a-z0-9_-]{0,63}$/.");
+    }
+    const builtin = BUILTIN_DEFINITIONS.get(name);
+    const isBuiltinOverlay = builtin !== undefined;
+    const trimmedDescription = typeof description === "string" ? description.trim() : "";
+    if (description !== undefined && !trimmedDescription) {
+        return reject("Agent description must be a non-empty string when provided.");
+    }
+    if (!isBuiltinOverlay && !trimmedDescription) {
+        return reject("Agent description must be a non-empty string.");
+    }
+    if (model !== undefined && typeof model !== "string") {
+        return reject("Agent model must be a provider/model string.");
+    }
+    const trimmedModel = typeof model === "string" ? model.trim() : "";
+
+    if (tools !== undefined) {
+        // Unsupported, but not fatal: the definition still loads without a tool list.
+        warnings.push(
+            'Agent frontmatter field "tools" is unsupported; use the capabilities list instead.',
+        );
+    }
+    if (isBuiltinOverlay && requestedCapabilities !== undefined) {
+        warnings.push(
+            `Built-in agent "${name}" capabilities cannot be overridden; the declaration was ignored.`,
+        );
+    }
+    const capabilities = isBuiltinOverlay
+        ? [...builtin.capabilities]
+        : parseCapabilities(requestedCapabilities);
+    if (!capabilities) {
+        return reject(
+            `Agent capabilities must be an array containing only: ${AGENT_CAPABILITIES.join(", ")}.`,
+        );
+    }
+    const additionalPaths = parseAdditionalPaths(requestedAdditionalPaths);
+    if (!additionalPaths) {
+        return reject("Agent additionalPaths must be an array containing only non-empty strings.");
+    }
+    const safeBashCommands = parseSafeBashCommands(requestedSafeBashCommands);
+    if (!safeBashCommands) {
+        return reject("Agent safeBashCommands must be an array containing only non-empty strings.");
+    }
+    if (!isBuiltinOverlay && capabilities.includes("edit")) {
+        return reject("The edit capability is reserved for the built-in worker.");
+    }
+
+    const overrides: DefinitionOverrides = {};
+    if (trimmedDescription) overrides.description = trimmedDescription;
+    if (requestedAdditionalPaths !== undefined) overrides.additionalPaths = additionalPaths;
+    if (requestedSafeBashCommands !== undefined) overrides.safeBashCommands = safeBashCommands;
+    if (trimmedModel) overrides.model = trimmedModel;
+
+    // A custom skeleton starts with no prompt, which is how `mergeScopeDefinition` tells an empty
+    // custom body (no prompt at all) from a metadata-only overlay (keep the built-in's prompt).
+    const base: AgentDefinition = builtin
+        ? { ...builtin, capabilities }
+        : {
+              name,
+              description: trimmedDescription,
+              capabilities,
+              systemPrompt: "",
+              source,
+          };
+
+    return { ok: true, warnings, definition: { name, base, body, overrides } };
+}
+
+/**
+ * Load every definition file in one scope directory, recording a diagnostic for
+ * each file it refuses.
+ *
+ * Cross-scope precedence belongs to the caller (`discoverAgentsInDirectories`); this decides only
+ * which file wins _within_ a scope, and it keeps that decision per-scope so a user-level duplicate
+ * never surfaces as a project one. Sorted filename order picks the winner, and the `selected` map
+ * carries that order into the result. `source` labels both the messages and the definitions.
+ *
+ * Two details here are deliberate. `warn` is the only place the
+ * `{ level, message, paths }` envelope is assembled, so the duplicate case is the one literal
+ * `diagnostics.push` because it must report both files, not just the one being ignored. And
+ * advisories are recorded before the rejection is checked, so a file can be refused while still
+ * contributing the warnings its earlier guards raised.
+ */
 function loadScope(
     dir: string,
     source: "user" | "project",
     diagnostics: AgentDiagnostic[],
 ): AgentDefinition[] {
     const selected = new Map<string, AgentDefinition>();
+    const warn = (filePath: string, message: string): void => {
+        diagnostics.push({ level: "warning", message, paths: [filePath] });
+    };
 
     for (const filePath of sortedMarkdownFiles(dir)) {
-        let content: string;
-        try {
-            content = fs.readFileSync(filePath, "utf8");
-        } catch (error) {
-            diagnostics.push({
-                level: "warning",
-                message: `Could not read ${source} agent definition: ${errorMessage(error)}`,
-                paths: [filePath],
-            });
+        const file = readScopeFile(filePath, source);
+        if (!file.ok) {
+            warn(filePath, file.message);
             continue;
         }
 
-        let parsed: ReturnType<typeof parseFrontmatter<AgentFrontmatter>>;
-        try {
-            parsed = parseFrontmatter<AgentFrontmatter>(content);
-        } catch (error) {
-            diagnostics.push({
-                level: "warning",
-                message: `Invalid ${source} agent frontmatter: ${errorMessage(error)}`,
-                paths: [filePath],
-            });
+        const normalized = normalizeScopeDefinition(source, file.frontmatter, file.body);
+        for (const warning of normalized.warnings) warn(filePath, warning);
+        if (!normalized.ok) {
+            warn(filePath, normalized.message);
             continue;
         }
 
-        const {
-            name,
-            description,
-            capabilities: requestedCapabilities,
-            additionalPaths: requestedAdditionalPaths,
-            safeBashCommands: requestedSafeBashCommands,
-            tools,
-            model,
-        } = parsed.frontmatter;
-        if (typeof name !== "string" || !AGENT_NAME.test(name)) {
-            diagnostics.push({
-                level: "warning",
-                message: "Agent name must match /^[a-z][a-z0-9_-]{0,63}$/.",
-                paths: [filePath],
-            });
-            continue;
-        }
-        const builtin = BUILTIN_DEFINITIONS.get(name);
-        const isBuiltinOverlay = builtin !== undefined;
-        if (description === undefined && !isBuiltinOverlay) {
-            diagnostics.push({
-                level: "warning",
-                message: "Agent description must be a non-empty string.",
-                paths: [filePath],
-            });
-            continue;
-        }
-        if (description !== undefined && (typeof description !== "string" || !description.trim())) {
-            diagnostics.push({
-                level: "warning",
-                message: "Agent description must be a non-empty string when provided.",
-                paths: [filePath],
-            });
-            continue;
-        }
-        if (model !== undefined && typeof model !== "string") {
-            diagnostics.push({
-                level: "warning",
-                message: "Agent model must be a provider/model string.",
-                paths: [filePath],
-            });
-            continue;
-        }
-
-        if (tools !== undefined) {
-            diagnostics.push({
-                level: "warning",
-                message:
-                    'Agent frontmatter field "tools" is unsupported; use the capabilities list instead.',
-                paths: [filePath],
-            });
-        }
-        if (isBuiltinOverlay && requestedCapabilities !== undefined) {
-            diagnostics.push({
-                level: "warning",
-                message: `Built-in agent "${name}" capabilities cannot be overridden; the declaration was ignored.`,
-                paths: [filePath],
-            });
-        }
-        const capabilities = isBuiltinOverlay
-            ? [...builtin.capabilities]
-            : parseCapabilities(requestedCapabilities);
-        if (!capabilities) {
-            diagnostics.push({
-                level: "warning",
-                message: `Agent capabilities must be an array containing only: ${AGENT_CAPABILITIES.join(", ")}.`,
-                paths: [filePath],
-            });
-            continue;
-        }
-        const additionalPaths = parseAdditionalPaths(requestedAdditionalPaths);
-        if (!additionalPaths) {
-            diagnostics.push({
-                level: "warning",
-                message:
-                    "Agent additionalPaths must be an array containing only non-empty strings.",
-                paths: [filePath],
-            });
-            continue;
-        }
-        const safeBashCommands = parseSafeBashCommands(requestedSafeBashCommands);
-        if (!safeBashCommands) {
-            diagnostics.push({
-                level: "warning",
-                message:
-                    "Agent safeBashCommands must be an array containing only non-empty strings.",
-                paths: [filePath],
-            });
-            continue;
-        }
-        if (!isBuiltinOverlay && capabilities.includes("edit")) {
-            diagnostics.push({
-                level: "warning",
-                message: "The edit capability is reserved for the built-in worker.",
-                paths: [filePath],
-            });
-            continue;
-        }
-
+        const { name, base, body, overrides } = normalized.definition;
         const existing = selected.get(name);
         if (existing) {
+            // Reports both files, so it cannot use the single-path `warn` helper.
             diagnostics.push({
                 level: "warning",
                 message: `Duplicate ${source} agent "${name}" ignored; the first sorted definition wins.`,
@@ -304,30 +395,7 @@ function loadScope(
             continue;
         }
 
-        const definition = builtin
-            ? {
-                  ...builtin,
-                  ...(typeof description === "string" ? { description: description.trim() } : {}),
-                  capabilities: [...builtin.capabilities],
-                  ...(requestedAdditionalPaths !== undefined ? { additionalPaths } : {}),
-                  ...(requestedSafeBashCommands !== undefined ? { safeBashCommands } : {}),
-                  ...(model !== undefined ? { model: model.trim() || undefined } : {}),
-                  systemPrompt: parsed.body.trim() || builtin.systemPrompt,
-                  source: builtin.source,
-                  filePath,
-              }
-            : {
-                  name,
-                  description: (description as string).trim(),
-                  capabilities,
-                  ...(requestedAdditionalPaths !== undefined ? { additionalPaths } : {}),
-                  ...(requestedSafeBashCommands !== undefined ? { safeBashCommands } : {}),
-                  model: typeof model === "string" && model.trim() ? model.trim() : undefined,
-                  systemPrompt: parsed.body.trim(),
-                  source,
-                  filePath,
-              };
-        selected.set(name, definition);
+        selected.set(name, mergeScopeDefinition(base, body, filePath, overrides));
     }
 
     return [...selected.values()];

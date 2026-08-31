@@ -1,0 +1,6 @@
+---
+name: scout
+model: "   "
+additionalPaths: []
+---
+
