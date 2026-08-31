@@ -1,5 +1,6 @@
 import sandboxConfig, { SandboxConfigPermissions } from "../../common/config";
 import { BashAst, parseBashAst } from "./bash";
+import { unwrapWrapperCommand } from "./command-wrappers";
 import type {
     BashAstNode,
     BashCommand,
@@ -674,11 +675,24 @@ export function getBashCommandPermissionMatch(
     }
 
     const tokens = commandTokens(command.node);
+    // Take the alternative view from the same command-node transform the classifier uses, so nesting,
+    // word order, and redirections cannot drift between what is judged safe and what is matched.
+    const wrappedCommand = unwrapWrapperCommand(command);
+    const wrappedTokens = wrappedCommand ? commandTokens(wrappedCommand.node) : undefined;
     let match: Permission = defaultPermission;
     let matched = false;
     for (const permission of parsedPermissions) {
         try {
-            if (!matchArgs(tokens, permission.matchers, 0, false)) {
+            // Consider the literal segment and, when a transparent wrapper prefixes it, the command
+            // being wrapped. Both views are evaluated inside this one pass so pattern order and
+            // last-match-wins semantics are unchanged; a rule remembered for `npm run test:run`
+            // therefore also covers `timeout 600 npm run test:run`, while an explicit rule naming the
+            // wrapper keeps matching the literal line.
+            const covered =
+                matchArgs(tokens, permission.matchers, 0, false) ||
+                (wrappedTokens !== undefined &&
+                    matchArgs(wrappedTokens, permission.matchers, 0, false));
+            if (!covered) {
                 continue;
             }
             match = permission.value;

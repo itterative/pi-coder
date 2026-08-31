@@ -5,6 +5,7 @@ import { parseBashAst } from "../bash";
 import type { BashAst, BashCommand, BashStatement, BashWordNode } from "../bash";
 import { KNOWN_COMMANDS } from "../commands";
 import type { CommandSpec } from "../commands";
+import { unwrapWrapperCommand, unwrapWrapperTokens } from "../command-wrappers";
 import {
     Heuristic,
     UnsafeReason,
@@ -507,8 +508,23 @@ function allowsAdditionalRootContainment(
 }
 
 /**
- * Check whether a single parsed command is a known command whose file
- * accesses all stay within the working directory.
+ * Replace transparent wrapper prefixes with the innermost command they run.
+ *
+ * Confinement must be judged on that command, because it is what actually touches files. Both
+ * entrypoints in `command-wrappers.ts` unwrap to a bounded depth, so nesting is handled here exactly
+ * as it is for rule matching and suggestions, and environment assignments stay opaque in both.
+ */
+function transparentSubject(input: string[] | BashCommand): string[] | BashCommand {
+    const unwrapped = Array.isArray(input)
+        ? unwrapWrapperTokens(input)
+        : unwrapWrapperCommand(input);
+    return unwrapped ?? input;
+}
+
+/**
+ * Check whether a single parsed command is a known command whose file accesses all stay within the
+ * working directory. A transparent wrapper is unwrapped first, so the inner command is what gets
+ * classified; see `command-wrappers.ts` for which prefixes qualify.
  */
 export function isCommandConfined(
     input: string[] | BashCommand,
@@ -523,13 +539,16 @@ export function isCommandConfined(
         return undefined;
     }
 
-    const astCommand = Array.isArray(input) ? undefined : input;
     const args = Array.isArray(input) ? input : input.words.map((word) => word.value);
     const environment = inspectEnvironmentAssignments(input, args, cwd, options, diagnostics);
     if (environment === undefined) return undefined;
 
+    const subject = transparentSubject(input);
+    const astCommand = Array.isArray(subject) ? undefined : subject;
+    const subjectArgs = Array.isArray(subject) ? subject : subject.words.map((word) => word.value);
+
     const command = resolveKnownCommand(
-        args,
+        subjectArgs,
         environment.index,
         astCommand?.command,
         options,

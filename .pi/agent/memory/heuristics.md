@@ -35,6 +35,21 @@ Existing callers import from `./heuristics`; no other module should depend on th
 
 Important exclusions include unsafe `git diff` modes, `cat-file` (output-channel risk), credential-printing/network/mutating git subcommands, shell wrappers, interpreters, and exec-capable flags. Safe output flags use `OUTPUT_PATH_VALUE` and classify successful invocations as `SAFE_EDIT`. The shell builtin `command` is allowlisted only for `-v`/`-V` lookup modes (optionally with `-p`); ordinary forms that execute an operand remain ineligible. Commands invoked by path (`./cat`, `/tmp/cat`) are never trusted.
 
+## Transparent command wrappers
+
+`src/modules/sandbox/command-wrappers.ts` (a leaf importing only `./bash`) models prefixes that run another command and add no capability of their own, so `timeout 600 npm run test:run` is judged as `npm run test:run`. Only `timeout` is modeled. Recognition is all-or-nothing per prefix grammar and refuses: unmodeled options (`-c/--chdir` moves the confinement cwd, `--profile` writes a file, `--group`, combined short flags, `--`), non-static durations (`$T`, `$(…)`), a wrapper with no command, a wrapped directory builtin (`cd`/`pushd`/`popd` would advance modeled state that never moved), `nohup` (writes `nohup.out`), and any segment with leading environment assignments. Refusal is never a safety loss: the segment keeps the old conservative behavior of an unknown command.
+
+One transform serves every consumer, and that is the invariant to preserve: `unwrapWrapperCommand()` (bounded nested unwrap; preserves word order and all redirections and shares the original word nodes, so substitution and quoting provenance survives) is used by the classifier (`heuristics/evaluator.ts` `transparentSubject`), by `permissions.ts` `getBashCommandPermissionMatch()` (which re-tokenizes the unwrapped node), and by `resolve.ts` `unresolvedSegmentTokens()`. `unwrapWrapperTokens()` exists only for the string-argument classification entrypoint. Do not re-derive a wrapped view from a raw token list in a new consumer: nesting, word order, and the assignment rule then drift apart, which is exactly what the first review of this design found.
+
+Decided semantics, each pinned by a test in `test/modules/sandbox/command-wrappers.test.ts`:
+
+- `heuristics.cwdConfinement.commands` gates the **innermost** command, so a curated allowlist needs no `timeout` entry and an entry naming the wrapper is inert. A grant can never exceed the inner command's own authorized capability.
+- `safeBashCommands` patterns also see the wrapped command, so an inner-naming pattern now covers wrapped forms while a custom pattern that _names_ the wrapper (`timeout 5 mytool`) no longer matches. That compat change is intentional.
+- Policy matching tests the literal segment **and** the wrapped view in one ordered pass, so pattern order and last-match-wins are unchanged and a rule naming the wrapper (for example `timeout *: deny`) still covers a chained segment; matching only the wrapped view would let `&&` bypass wrapper-naming rules.
+- Known limit: a redirection written _inside_ the wrapper prefix (`timeout > out 900 ls`) is confined correctly, but the wrapped token view starts with that redirection, so an inner-name rule may not match that spelling and it prompts again.
+
+Environment assignments are excluded on purpose: keeping them would make the suggested rule differ from the token list rules are matched against, and dropping them would let a rule for `npm test` authorize `FOO=evil npm test`.
+
 ## Path and environment safety
 
 - Path arguments are checked lexically and, when enabled, through canonical realpaths.

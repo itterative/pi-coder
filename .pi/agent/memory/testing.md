@@ -20,6 +20,8 @@ Database-backed agent tests must use an explicit temporary state/workspaces dire
 
 TUI widget tests must assert distinct projected **states**, not a trace of render frames. The background-flow recorder in `test/tools/agent-tool.test.ts` dedupes consecutive identical frames before `toMatchFileSnapshot`, because the widget requests a render on every status event, so a raw frame trace snapshots how many microtask boundaries a flow contains and a transient state (`Starting:`) can coalesce into the next frame. Keep that recorder dedupe when adding widget coverage, and prefer `vi.waitFor` over fixed flush counts for background-settling assertions.
 
+When proving a test actually detects a regression, mutate the source and confirm the test fails—and assert the mutation applied. An exact string replace silently becomes a no-op when formatting differs (Prettier re-wraps long boolean expressions), which reads as “the tests caught nothing” and can also leave the tree mutated: restore from a saved copy, not by re-running the reverse replacement.
+
 Parser benchmarks:
 
 - `npm run bench` runs `test/modules/sandbox/bash.bench.ts`, measuring `parseBashAst()` across simple, medium, and high-complexity command corpora. Benchmarks are separate from `npm run test:run`.

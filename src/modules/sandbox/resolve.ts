@@ -11,6 +11,7 @@ import {
 } from "./permissions";
 import { parseBashAst } from "./bash";
 import type { BashAst, BashCommand, BashStatement } from "./bash";
+import { unwrapWrapperCommand } from "./command-wrappers";
 import {
     cloneCwdConfinementState,
     createCwdConfinementState,
@@ -179,12 +180,25 @@ function resolveSegment(
         return { permission: match.permission, source: "policy" };
     }
     if (!isSafeHeuristic(grant)) {
-        return { source: "unresolved", tokens: command.toTokens() };
+        return { source: "unresolved", tokens: unresolvedSegmentTokens(command) };
     }
     return {
         permission: getConfiguredCwdConfinementPermission(options?.cwdConfinement),
         source: "heuristic",
     };
+}
+
+/**
+ * Tokens used to suggest a session rule for an uncovered segment.
+ *
+ * A transparent wrapper is unwrapped through the same command-node transform the classifier and the
+ * matcher use, so the suggested rule names the command that actually runs and the remembered rule
+ * matches the wrapped form. A `timeout *` suggestion would silently authorize any command under a
+ * timeout, so it is never offered.
+ */
+function unresolvedSegmentTokens(command: BashCommand): string[] {
+    const wrappedCommand = unwrapWrapperCommand(command);
+    return wrappedCommand ? wrappedCommand.toTokens() : command.toTokens();
 }
 
 function resolveLine(
