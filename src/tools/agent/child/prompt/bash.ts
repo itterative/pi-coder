@@ -10,8 +10,8 @@
  * The narrow read exception for truncated Bash output.
  *
  * Deliberately not phrased as `/tmp` access: the runtime only publishes exact files it created for
- * this child's own result, and `child/extension.ts` validates them against the temp directory on
- * every read.
+ * this child's own result, and the bash-output gate (`child/gates/bash-output.ts`) validates them
+ * against the temp directory on every read.
  */
 export function fullOutputReadNote(): string {
     return "When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access.";

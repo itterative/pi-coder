@@ -32,7 +32,7 @@ Before continuing a collected isolated run, the worktree `HEAD` must descend fro
 
 ## More documentation
 
-- [Agent tool reference](docs/agent-tool.md) — actions, child roles, safety boundaries, prompt design, and diagnostics.
+- [Agent tool reference](docs/agent-tool.md) — actions, child roles, capabilities and gates, safety boundaries, prompt design, and diagnostics.
 - [Workspace lifecycle](docs/agent-workspaces.md) — isolated worktrees, result disposition, leases, and the continuation flow chart.
 - [Persistence and recovery](docs/agent-persistence.md) — child transcripts, snapshots, restoration, and restart behavior.
 - [Manual workspace validation](src/tools/agent/WORKSPACE-MANUAL-VALIDATION.md) — disposable-repository lifecycle checklist.
@@ -47,3 +47,17 @@ npx tsc --noEmit
 ```
 
 Provider and lifecycle behavior also require the manual checks in the linked documentation.
+
+### Changing what a child may do
+
+The layers and their rules are in [Capabilities, grants, and gates](docs/agent-tool.md#capabilities-grants-and-gates). In short:
+
+- `definitions/types.ts` — capability names, baseline grants, implications, and the authority ladder.
+- `child/grant.ts` — the only place a declaration becomes a decision for one child.
+- `child/capabilities/` — one unit per capability: its tools, read roots, and registered extension.
+- `child/gates/` — one file per authorization surface, installed in the fixed order in `gates/index.ts`.
+- `child/prompt/` — the four run-mode profiles and the paragraphs they place.
+
+Pinned by `test/tools/agent-child-gates.test.ts` (which gates a child arms, in order) and
+`test/tools/agent-child-decisions.test.ts` (the resulting allow/block truth table). Use
+`test/tools/child-run-fixture.ts` for new child-side tests rather than hand-writing an option bag.

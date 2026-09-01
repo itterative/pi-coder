@@ -43,9 +43,31 @@ The built-in roles are:
 - **`worker`** — implementation work with edit/write access; the only edit-capable built-in.
 - **`advisor`** — read-only senior advice, disabled until assigned a model in `/agents`.
 
-Custom definitions live in `~/.pi/agent/agents/*.md` or trusted project `.pi/agents/*.md` files. They always receive baseline read/search access. Optional capabilities are `memories`, `scratchpad`, `safe-bash`, and `command-runner`; `edit` is reserved for the built-in worker. Trusted project definitions override user definitions. Built-in names are reserved.
+Custom definitions live in `~/.pi/agent/agents/*.md` or trusted project `.pi/agents/*.md` files. They always receive baseline read/search access. Optional capabilities are `memories`, `scratchpad`, `todolist`, `safe-bash`, and `command-runner`; `edit` is reserved for the built-in worker. Trusted project definitions override user definitions. Built-in names are reserved.
+
+Two capabilities imply others, because they are strengths of one axis rather than independent grants: `command-runner` implies `safe-bash`, and `todolist` implies `scratchpad`. Implications are applied where a definition is read, so the parent-facing catalog and the persisted definition fingerprint both describe the same effective grant.
 
 A definition may select a model and a bounded context policy. Dynamic parent/repository/workspace context belongs in the initial task message, not the system prompt, so the child transcript retains it exactly.
+
+## Capabilities, grants, and gates
+
+What a definition declares and what a child can actually do are separated into five layers, each with one job. Keeping them apart is what lets a capability be read in one file instead of inferred from six scattered conditions.
+
+| Layer       | Location               | Owns                                                                                                               |
+| ----------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Declaration | `definitions/types.ts` | capability names, baseline grants, implications, the authority ladder, and the fingerprint over the _declared_ set |
+| Grant       | `child/grant.ts`       | the single resolution from a definition plus run mode plus parent UI to one `ChildGrant`                           |
+| Units       | `child/capabilities/`  | per capability: the session tools it adds, the read roots it publishes, and the extension it registers             |
+| Gates       | `child/gates/`         | per authorization surface: whether it applies to this child, and the hooks, tools, and prompts it installs         |
+| Profiles    | `child/prompt/`        | how the run describes itself to the child: the four run-mode profiles and their paragraph order                    |
+
+The authority ladder is `read < inspect < command < mutate`, from `safe-bash`, `command-runner`, and `edit`. It orders **gate strength**, so every "may this child be gated, run serially, or carry the worker label?" question is a rung comparison rather than a boolean combination. It does not decide tool presence: `edit` does not imply shell access, so the `bash` tool follows `safe-bash` (which `command-runner` implies) rather than a rung test. Adding a fifth rung, or reading the ladder as a presence test, is the mistake this split exists to prevent.
+
+To add a capability, add a unit file plus its name in `AGENT_CAPABILITIES`, and let the grant/gates/profile read the resulting facts. Do not add a new boolean to the grant, and do not combine two existing ones into a third name at a call site: if two conditions always move together, one of them is describing the wrong thing.
+
+Gates install in a fixed order — bash-output, file-access, interaction, commands, confinement — and pi runs `tool_call` handlers in registration order, so the sequence is behavior rather than style: the file-access gate records approvals that the command and confinement gates then honour, and the confinement handler runs last so a Bash call reaching it means no command gate claimed it. `test/tools/agent-child-gates.test.ts` pins the ordered registration record per profile, and `test/tools/agent-child-decisions.test.ts` pins the resulting block/allow truth table with its reasons.
+
+Two things a child may read are runtime state rather than capabilities and must not be merged into the ladder: the private scratchpad, and the exact full-output files this child's own truncated Bash results reported. The latter is validated on every use (real path under the temp directory, same device and inode as recorded) and pruned when it no longer matches, so a replaced or deleted output file never stays readable.
 
 ## Prompt design
 
@@ -56,7 +78,9 @@ The system prompt has two layers:
 1. The role definition states purpose and work standards.
 2. The child operating protocol states available tools, permissions, interaction behavior, and same-checkout versus isolated behavior.
 
-Keep capability mechanics out of role text. Test complete rendered prompts with the file snapshots in `test/tools/agent-prompt.test.ts`.
+The protocol comes from one of four profiles — isolated worker, same-checkout worker, command-capable, read-only — selected by the child's rung plus whether it owns a workspace, followed by the interaction paragraph and the profile's report expectation. Sentences that more than one profile needs live with the capability that warrants them (`prompt/bash.ts`, `prompt/paths.ts`), while each profile keeps its own paragraph order so the child reads one coherent mode description rather than a list of capability notes.
+
+Keep capability mechanics out of role text. Test complete rendered prompts with the file snapshots in `test/tools/agent-prompt.test.ts`, which resolve through `resolveChildGrant` exactly as a real child does; the older style of passing a hand-written prompt option bag let a fixture omit grants the child actually holds. Behavior that follows from the same grant is pinned in `test/tools/agent-child-decisions.test.ts`.
 
 ## Safety boundary
 
@@ -68,7 +92,9 @@ Within that trusted environment:
 - `safe-bash` allows only commands classified as cwd-confined and heuristically read-only.
 - `command-runner` uses the normal permission gate for commands outside that heuristic.
 - Same-checkout mutation calls share the parent's access; isolated workers use their own worktree access.
-- Isolated workers and setup workers do not inherit parent Bash rules. Explicit remembered rules may be propagated to the parent session.
+- Isolated workers and setup workers do not inherit parent Bash rules. Explicit remembered rules may be propagated to the parent session: the parent's own approval state is therefore resolved _without_ regard to isolation, while the state a child may read back is not. Do not fold the two together.
+- A child that shares the checkout but has no parent session to borrow approvals from gets no file-access gate at all, which makes it behave like an isolated child for path prompts.
+- Outside-cwd writes fail closed by redundancy: both the shared file hook and the command gate must allow the call, so one handler's approval cannot smuggle a path past the other.
 - Permission-gated child calls are serialized; concurrent isolated workers may use distinct worktrees.
 - SAFE_EDIT and Bash attribution are advisory; inspect the final diff before committing.
 
@@ -85,7 +111,8 @@ The extension publishes bounded lifecycle events on `pi-coder:agent-event`. Even
 For provider, interaction, permission, persistence, rendering, and workspace behavior, use:
 
 - [Workspace lifecycle checklist](src/tools/agent/WORKSPACE-MANUAL-VALIDATION.md).
-- [Prompt snapshots](test/tools/agent-prompt.test.ts).
+- [Prompt snapshots](test/tools/agent-prompt.test.ts), resolved through the real grant.
+- [Child gate composition](test/tools/agent-child-gates.test.ts) and the [decision truth table](test/tools/agent-child-decisions.test.ts) — automated, but read the snapshot after any gate change, since the block reasons are what a child sees.
 - [Transcript and browser tests](test/tools/agent-transcript.test.ts) and `test/tui/`.
 
 Automated checks are:

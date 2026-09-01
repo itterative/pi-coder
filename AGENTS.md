@@ -33,4 +33,5 @@ pi-coder is a pi extension providing coding-oriented memory, sandbox, TUI, and d
 
 - The extension entrypoint is `src/index.ts`; register new modules there.
 - Preserve the agent capability split: `scout` is read-only and only the built-in `worker` may mutate. Same-checkout workers are single-flight; isolated `worker` runs in distinct worktrees may mutate concurrently, with shared permission dialogs still serialized.
+- Keep the delegated-agent capability layers separate (see [Capabilities, grants, and gates](docs/agent-tool.md)): the declaration layer owns capability names, implications, and the authority ladder.
 - Extend the shared TUI components in `src/tui/list-view.ts` and `src/tui/inline-editor.ts` rather than duplicating their behavior.
