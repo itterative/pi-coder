@@ -5,3 +5,7 @@ coverage/
 .workspace-validation/
 vendor/
 package-lock.json
+
+.pi/agent/memory
+src/**/*.md
+test/**/*.md
