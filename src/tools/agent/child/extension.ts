@@ -25,6 +25,8 @@ import { getPermissionState } from "../../../modules/sandbox/permission-state";
 import { guardSafeBashCommand } from "./safe-bash";
 import { registerCommandPermissionHooks } from "./command-permissions";
 import type { ChildAgentFactoryContext } from "../contracts/runs";
+import { hasAgentAuthority } from "../definitions/types";
+import type { AgentAuthority } from "../definitions/types";
 import { reportProgress } from "./progress";
 import type { ChildProgressTracker as ProgressTracker } from "./progress";
 
@@ -280,8 +282,12 @@ export async function askChildUser(
 export interface ChildExtensionOptions {
     agentName: string;
     background: boolean;
-    canEdit: boolean;
-    safeBash: boolean;
+    /**
+     * Where this child sits on the command-and-mutation ladder. It replaces the per-flag pairs the
+     * gate installation used to test, because "who gets the command gate" and "who keeps the
+     * read-only heuristic gate" are the same question asked from two sides of one rung.
+     */
+    authority: AgentAuthority;
     runId: string;
     runTitle: string;
     onProgress: ChildAgentFactoryContext["onProgress"];
@@ -291,7 +297,6 @@ export interface ChildExtensionOptions {
     allowUserInteraction?: boolean;
     workspaceId?: string;
     isolated?: boolean;
-    commandRunner?: boolean;
     additionalPaths?: readonly string[];
     safeBashCommands?: readonly string[];
 }
@@ -302,8 +307,7 @@ export function registerChildExtension(
     cwd: string,
     {
         agentName,
-        canEdit,
-        safeBash,
+        authority,
         runId,
         runTitle,
         onProgress,
@@ -313,7 +317,6 @@ export function registerChildExtension(
         allowUserInteraction = true,
         workspaceId,
         isolated = false,
-        commandRunner = false,
         additionalPaths = [],
         safeBashCommands = [],
     }: ChildExtensionOptions,
@@ -351,7 +354,7 @@ export function registerChildExtension(
         const nonIsolated = !isolatedChild;
         const parentSessionManager = parentContext.sessionManager;
         const parentPermissionState =
-            parentSessionManager && (canEdit || commandRunner)
+            parentSessionManager && hasAgentAuthority(authority, "command")
                 ? getPermissionState(parentSessionManager)
                 : undefined;
         const permissionState = nonIsolated ? parentPermissionState : undefined;
@@ -367,7 +370,7 @@ export function registerChildExtension(
             reportProgress(tracker, onProgress);
         };
 
-        if (nonIsolated && canEdit && permissionState !== undefined) {
+        if (nonIsolated && authority === "mutate" && permissionState !== undefined) {
             const fileHookOptions = {
                 state: permissionState,
                 promptContext: parentContext,
@@ -521,7 +524,7 @@ export function registerChildExtension(
             },
         });
 
-        if (canEdit || commandRunner) {
+        if (hasAgentAuthority(authority, "command")) {
             registerCommandPermissionHooks(pi, {
                 parentContext,
                 events,
@@ -555,12 +558,11 @@ export function registerChildExtension(
 
         pi.on("tool_call", (event, ctx) => {
             if (
-                !canEdit &&
-                !commandRunner &&
+                !hasAgentAuthority(authority, "command") &&
                 isToolCallEventType<"bash", BashToolInput>("bash", event)
             ) {
                 return guardSafeBashCommand(event.input.command, ctx.cwd, {
-                    safeBash,
+                    safeBash: hasAgentAuthority(authority, "inspect"),
                     onTrace,
                     additionalRoots: [...additionalPaths, ...getScratchpadRoots(ctx)],
                     sensitiveAdditionalRoots: getScratchpadRoots(ctx),

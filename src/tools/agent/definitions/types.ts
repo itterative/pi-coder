@@ -21,6 +21,22 @@ export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
 /** Capabilities granted to every delegated agent for baseline inspection. */
 export const BASELINE_AGENT_CAPABILITIES = ["read", "search"] as const;
 
+/**
+ * The command-and-mutation ladder, from least to most capable.
+ *
+ * These rungs are not three more capabilities: `safe-bash`, `command-runner`, and `edit` are one
+ * axis at different strengths, which is why a `command-runner` can also do everything `safe-bash`
+ * can. Anything asking "may this child be gated, mutate, or run serially?" should compare a rung
+ * instead of combining booleans, so the number of scenarios stays equal to the number of rungs
+ * rather than growing with every flag pair.
+ *
+ * The ladder orders *gate strength*, not tool presence: `mutate` is the top rung of the gate, but a
+ * definition may hold `edit` without any Bash capability at all, so whether the `bash` tool exists
+ * comes from `safe-bash` (`agentCanUseBash`) rather than from a rung comparison.
+ */
+export const AGENT_AUTHORITY_LADDER = ["read", "inspect", "command", "mutate"] as const;
+export type AgentAuthority = (typeof AGENT_AUTHORITY_LADDER)[number];
+
 /** Tools granted by the baseline read and search capabilities. */
 export const READ_ONLY_AGENT_TOOLS = ["read", "grep", "find", "ls"] as const;
 
@@ -130,6 +146,31 @@ export function agentAdditionalPaths(definition: AgentDefinition): string[] {
     return [...new Set(paths)];
 }
 
+/**
+ * Where a definition sits on the ladder, read from its effective capability set.
+ *
+ * Ordered checks rather than rank arithmetic, because the highest rung is the only one whose lower
+ * rungs must also be available, and that precedence is the whole meaning of the ladder.
+ */
+export function agentAuthority(definition: AgentDefinition): AgentAuthority {
+    const capabilities = new Set(agentCapabilities(definition));
+    if (capabilities.has("edit")) {
+        return "mutate";
+    }
+    if (capabilities.has("command-runner")) {
+        return "command";
+    }
+    if (capabilities.has("safe-bash")) {
+        return "inspect";
+    }
+    return "read";
+}
+
+/** Whether an authority may do everything `minimum` allows. */
+export function hasAgentAuthority(authority: AgentAuthority, minimum: AgentAuthority): boolean {
+    return AGENT_AUTHORITY_LADDER.indexOf(authority) >= AGENT_AUTHORITY_LADDER.indexOf(minimum);
+}
+
 /** Returns the effective capability set, including the always-available baseline. */
 export function agentCapabilities(definition: AgentDefinition): AgentCapability[] {
     const declared = new Set<AgentCapability>([
@@ -148,22 +189,33 @@ export function hasAgentCapability(
     return agentCapabilities(definition).includes(capability);
 }
 
-/** Whether the definition can use direct edit/write tools. */
+/** Whether the definition can use direct edit/write tools: the top rung of the ladder. */
 export function agentCanEdit(definition: AgentDefinition): boolean {
-    return hasAgentCapability(definition, "edit");
+    return agentAuthority(definition) === "mutate";
 }
 
 /** Whether the definition can run Bash through the normal permission gate. */
 export function agentCanRunCommands(definition: AgentDefinition): boolean {
-    return hasAgentCapability(definition, "command-runner");
+    return hasAgentAuthority(agentAuthority(definition), "command");
+}
+
+/** Whether the definition may call Bash at all, gated either way: the `safe-bash` capability. */
+export function agentCanUseBash(definition: AgentDefinition): boolean {
+    return hasAgentCapability(definition, "safe-bash");
 }
 
 /** Maps the capability policy to the concrete SDK tools supplied to a child. */
 export function agentTools(definition: AgentDefinition): string[] {
+    const authority = agentAuthority(definition);
     const tools: string[] = [...READ_ONLY_AGENT_TOOLS];
-    if (agentCanEdit(definition)) tools.push("edit", "write");
-    if (agentCanRunCommands(definition) || hasAgentCapability(definition, "safe-bash"))
+    if (hasAgentAuthority(authority, "mutate")) {
+        tools.push("edit", "write");
+    }
+    // Tool presence is its own question, answered by `safe-bash`: `command-runner` implies it, and
+    // `edit` deliberately does not, so a mutation-only definition gets no shell.
+    if (agentCanUseBash(definition)) {
         tools.push("bash");
+    }
     return tools;
 }
 

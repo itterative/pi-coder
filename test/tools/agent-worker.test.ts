@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import registerScratchpadExtension, { getScratchpadPath } from "../../src/modules/scratchpad";
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
+import type { AgentAuthority } from "../../src/tools/agent/definitions/types";
 import registerFileToolHook from "../../src/tools/file-permissions";
 import { registerCommandPermissionHooks } from "../../src/tools/agent/child/command-permissions";
 import {
@@ -255,15 +256,13 @@ describe("command and edit permission gate", () => {
         registerChildExtension(tracker, parentContext, cwd, {
             agentName: "worker",
             background: false,
-            canEdit: true,
-            safeBash: true,
+            authority: "mutate" as AgentAuthority,
             runId: "worker-restored-1",
             runTitle: "Restored worker",
             onProgress: () => {},
             allowUserInteraction: true,
             workspaceId: "workspace-1",
             isolated: false,
-            commandRunner: true,
         })(pi);
 
         const permission = handlers.tool_call[0](

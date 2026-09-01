@@ -8,6 +8,7 @@ import {
     type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { READ_ONLY_AGENT_TOOLS } from "../definitions/discovery";
+import { hasAgentAuthority } from "../definitions/types";
 import registerMemoryExtension from "../../../modules/memory";
 import registerScratchpadExtension from "../../../modules/scratchpad";
 import registerTodoListExtension from "../../../modules/todolist";
@@ -64,14 +65,14 @@ interface ChildAssemblyRequest {
 }
 
 /**
- * The registered name of the child extension. A worker is named for its edit authority even though it
- * also runs commands, so the wider grant decides the label the loader records.
+ * The registered name of the child extension: the label the loader records for this grant.
+ * A worker is named for its edit authority even though it also runs commands, so the rung decides.
  */
-function childExtensionKind({ canEdit, canRunCommands }: ChildCapabilities): string {
-    if (canEdit) {
+function childExtensionKind({ authority }: ChildCapabilities): string {
+    if (authority === "mutate") {
         return "pi-coder-worker-child";
     }
-    if (canRunCommands) {
+    if (hasAgentAuthority(authority, "command")) {
         return "pi-coder-command-child";
     }
     return "pi-coder-readonly-child";
@@ -91,8 +92,7 @@ function childExtensionEntries(request: ChildAssemblyRequest): InlineExtension[]
             factory: registerChildExtension(tracker, parentContext, cwd, {
                 agentName: context.definition.name,
                 background: context.background === true,
-                canEdit: capabilities.canEdit,
-                safeBash: capabilities.safeBash,
+                authority: capabilities.authority,
                 runId: context.runId ?? context.definition.name,
                 runTitle: context.runTitle ?? context.runId ?? context.definition.name,
                 onProgress: context.onProgress,
@@ -102,7 +102,6 @@ function childExtensionEntries(request: ChildAssemblyRequest): InlineExtension[]
                 allowUserInteraction: capabilities.canAskUser,
                 workspaceId: context.workspaceId,
                 isolated: context.isolated,
-                commandRunner: capabilities.canRunCommands,
                 additionalPaths: capabilities.additionalPaths,
                 safeBashCommands: capabilities.safeBashCommands,
             }),
@@ -161,11 +160,36 @@ function childSystemPrompt(request: ChildAssemblyRequest): string {
             isolated: context.isolated === true || context.workspaceId !== undefined,
             commandRunner: capabilities.canRunCommands,
             hasScratchpad: capabilities.hasScratchpad,
-            hasBashOutputAccess: capabilities.safeBash || capabilities.canRunCommands,
+            hasBashOutputAccess: capabilities.safeBash,
             additionalPaths: capabilities.additionalPaths,
             safeBashCommands: capabilities.safeBashCommands,
         }),
     );
+}
+
+/**
+ * The SDK tool allowlist for a child session.
+ *
+ * `createAgentSession({ tools })` is a strict allowlist, so a capability whose behavior needs a tool
+ * must appear here as well as being registered: the interaction tools are appended by hand for that
+ * reason, and a future extension-provided capability tool has to join this list too.
+ */
+export function childSessionTools(capabilities: ChildCapabilities): string[] {
+    return [...capabilities.tools, ...(capabilities.canAskUser ? ["ask_user"] : []), "ask_parent"];
+}
+
+/**
+ * Whether a child's tool calls must run one at a time.
+ *
+ * Worker mutation permission is implemented in beforeToolCall. The SDK preflights every tool in a
+ * parallel batch before executing any of them; waiting for a previous tool_result from that hook
+ * would therefore deadlock a batch containing multiple mutations. Run gated children sequentially so
+ * each approval can reach execution and release its gate.
+ * TODO(agent): Consider moving permission/queue handling into tool execution wrappers so read-only
+ * worker calls can remain parallel.
+ */
+export function childRequiresSequentialToolExecution(capabilities: ChildCapabilities): boolean {
+    return hasAgentAuthority(capabilities.authority, "command");
 }
 
 export async function createAgentChild(
@@ -200,12 +224,13 @@ export async function createAgentChild(
     await resourceLoader.reload();
     const interactionToolCount = capabilities.canAskUser ? 2 : 1;
     context.onTrace?.("resources.loaded", {
-        readOnlyToolCount: capabilities.canEdit
-            ? READ_ONLY_AGENT_TOOLS.length
-            : capabilities.tools.length,
+        readOnlyToolCount:
+            capabilities.authority === "mutate"
+                ? READ_ONLY_AGENT_TOOLS.length
+                : capabilities.tools.length,
         directUserUI: capabilities.canAskUser,
         background: context.background === true,
-        ...(capabilities.canEdit
+        ...(capabilities.authority === "mutate"
             ? { configuredToolCount: capabilities.tools.length, mutating: true }
             : {}),
     });
@@ -233,20 +258,9 @@ export async function createAgentChild(
         resourceLoader,
         settingsManager,
         sessionManager,
-        tools: [
-            ...capabilities.tools,
-            ...(capabilities.canAskUser ? ["ask_user"] : []),
-            "ask_parent",
-        ],
+        tools: childSessionTools(capabilities),
     });
-    // Worker mutation permission is implemented in beforeToolCall. The SDK
-    // preflights every tool in a parallel batch before executing any of them;
-    // waiting for a previous tool_result from that hook would therefore
-    // deadlock a batch containing multiple mutations. Run worker batches
-    // sequentially so each approval can reach execution and release its gate.
-    // TODO(agent): Consider moving permission/queue handling into tool execution
-    // wrappers so read-only worker calls can remain parallel.
-    if (capabilities.canEdit || capabilities.canRunCommands) {
+    if (childRequiresSequentialToolExecution(capabilities)) {
         session.agent.toolExecution = "sequential";
     }
 
@@ -275,3 +289,8 @@ export async function createAgentChild(
         onTrace: context.onTrace,
     });
 }
+
+// FIXME(capability-refactor): temporary oracle seam, replaced by an exported assembly plan in stage
+// 2 and removed with test/tools/tmp-capability-oracle.test.ts.
+export { childExtensionEntries, childSystemPrompt, childExtensionKind };
+export type { ChildAssemblyRequest };

@@ -2,13 +2,13 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import {
     agentAdditionalPaths,
-    agentCanEdit,
-    agentCanRunCommands,
+    agentAuthority,
+    agentCanUseBash,
     agentTools,
+    hasAgentAuthority,
     hasAgentCapability,
-} from "../definitions/discovery";
-import type { AgentDefinition } from "../definitions/types";
-
+} from "../definitions/types";
+import type { AgentAuthority, AgentDefinition } from "../definitions/types";
 /**
  * What one child may use, resolved from its definition plus the parent's ability to host a prompt.
  *
@@ -17,6 +17,12 @@ import type { AgentDefinition } from "../definitions/types";
  * of them should re-derive a rule and drift from the others.
  */
 export interface ChildCapabilities {
+    /**
+     * The one rung this child sits on, and the answer to every "may it be gated, mutate, or run
+     * serially?" question. Tool presence is separate: `safeBash` below is the declared capability,
+     * because a definition may hold `edit` without any shell access at all.
+     */
+    authority: AgentAuthority;
     tools: string[];
     additionalPaths: string[];
     safeBashCommands: string[];
@@ -39,14 +45,16 @@ export function deriveChildCapabilities(
     definition: AgentDefinition,
     parentContext: ExtensionContext,
 ): ChildCapabilities {
+    const authority = agentAuthority(definition);
     const allowUserInteraction = definition.allowUserInteraction !== false;
     return {
+        authority,
         tools: agentTools(definition),
         additionalPaths: agentAdditionalPaths(definition),
         safeBashCommands: definition.safeBashCommands ?? [],
-        canEdit: agentCanEdit(definition),
-        canRunCommands: agentCanRunCommands(definition),
-        safeBash: hasAgentCapability(definition, "safe-bash"),
+        canEdit: authority === "mutate",
+        canRunCommands: hasAgentAuthority(authority, "command"),
+        safeBash: agentCanUseBash(definition),
         hasMemories: hasAgentCapability(definition, "memories"),
         hasScratchpad: hasAgentCapability(definition, "scratchpad"),
         hasTodolist: hasAgentCapability(definition, "todolist"),

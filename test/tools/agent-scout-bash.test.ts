@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
+import type { AgentAuthority } from "../../src/tools/agent/definitions/types";
 import { getPermissionState } from "../../src/modules/sandbox/permission-state";
 import { KEY, mockTheme } from "../helpers";
 
@@ -83,17 +84,18 @@ function setup(
             : {}),
     } as any;
 
+    // The gate takes one ladder rung now; the two flags above describe the same grant the old
+    // per-capability booleans spelled out separately.
+    const authority: AgentAuthority = commandRunner ? "command" : safeBash ? "inspect" : "read";
     registerChildExtension(tracker, parentContext, cwd, {
         agentName: "scout",
         background,
-        canEdit: false,
-        safeBash,
+        authority,
         runId: "scout-1",
         runTitle: "Bash safety",
         onProgress: () => {},
         allowUserInteraction,
         isolated,
-        commandRunner,
         additionalPaths,
         safeBashCommands,
     })(pi);
