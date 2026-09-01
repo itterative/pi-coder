@@ -6,7 +6,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
-import type { AgentAuthority } from "../../src/tools/agent/definitions/types";
+import { resolveChildGrant } from "../../src/tools/agent/child/grant";
+import type { ChildAgentFactoryContext } from "../../src/tools/agent/contracts/runs";
+import type { AgentDefinition } from "../../src/tools/agent/definitions/types";
 import { getPermissionState } from "../../src/modules/sandbox/permission-state";
 import { KEY, mockTheme } from "../helpers";
 
@@ -84,21 +86,31 @@ function setup(
             : {}),
     } as any;
 
-    // The gate takes one ladder rung now; the two flags above describe the same grant the old
-    // per-capability booleans spelled out separately.
-    const authority: AgentAuthority = commandRunner ? "command" : safeBash ? "inspect" : "read";
-    registerChildExtension(tracker, parentContext, cwd, {
-        agentName: "scout",
+    // Grant resolution is the production path, so the knobs above become a definition plus a run
+    // mode rather than a hand-assembled option bag. That keeps the assertions about what a given
+    // capability set may do honest: they now exercise the resolution itself.
+    const definition: AgentDefinition = {
+        name: "scout",
+        description: "Read-only reconnaissance",
+        capabilities: commandRunner ? ["command-runner"] : safeBash ? ["safe-bash"] : [],
+        systemPrompt: "",
+        source: "builtin",
+        allowUserInteraction,
+        ...(additionalPaths.length > 0 ? { additionalPaths } : {}),
+        ...(safeBashCommands.length > 0 ? { safeBashCommands } : {}),
+    };
+    const context: ChildAgentFactoryContext = {
+        cwd,
+        definition,
+        parentContext,
         background,
-        authority,
+        isolated,
         runId: "scout-1",
         runTitle: "Bash safety",
         onProgress: () => {},
-        allowUserInteraction,
-        isolated,
-        additionalPaths,
-        safeBashCommands,
-    })(pi);
+    };
+    const grant = resolveChildGrant(context, parentContext);
+    registerChildExtension(tracker, parentContext, cwd, grant.extensionOptions)(pi);
 
     return { handlers, ctx: { cwd, sessionManager }, tools, dialogs, sessionManager };
 }

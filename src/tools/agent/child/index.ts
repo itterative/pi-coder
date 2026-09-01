@@ -8,18 +8,17 @@ import {
     type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { READ_ONLY_AGENT_TOOLS } from "../definitions/discovery";
-import { hasAgentAuthority } from "../definitions/types";
 import registerMemoryExtension from "../../../modules/memory";
 import registerScratchpadExtension from "../../../modules/scratchpad";
 import registerTodoListExtension from "../../../modules/todolist";
-import { deriveChildCapabilities, type ChildCapabilities } from "./capabilities";
+import { childProtocolPrompt, registerChildExtension } from "./extension";
+import { resolveChildGrant, type ChildGrant } from "./grant";
 import {
     createChildModelRuntime,
     resolveChildModel,
     restoreChildSessionModel,
 } from "./model-runtime";
 import { createChildHandle } from "./handle";
-import { childProtocolPrompt, registerChildExtension } from "./extension";
 import { renderAgentSystemPrompt } from "../prompts/renderer";
 import { bootstrapChildSession } from "./transcript";
 import {
@@ -61,68 +60,42 @@ interface ChildAssemblyRequest {
     parentContext: ExtensionContext;
     cwd: string;
     tracker: ChildProgressTracker;
-    capabilities: ChildCapabilities;
+    grant: ChildGrant;
 }
 
 /**
- * The registered name of the child extension: the label the loader records for this grant.
- * A worker is named for its edit authority even though it also runs commands, so the rung decides.
- */
-function childExtensionKind({ authority }: ChildCapabilities): string {
-    if (authority === "mutate") {
-        return "pi-coder-worker-child";
-    }
-    if (hasAgentAuthority(authority, "command")) {
-        return "pi-coder-command-child";
-    }
-    return "pi-coder-readonly-child";
-}
-
-/**
- * The extensions a child runs with: the pi-coder child extension, plus one per capability the
- * definition holds. Every entry is `hidden`, because these register the child's own tool surface
- * rather than commands the end user may invoke.
+ * The extensions a child runs with: the pi-coder child extension, plus one per resource capability the
+ * definition holds.
+ *
+ * Every entry is `hidden`, because these register the child's own tool surface rather than commands
+ * the end user may invoke. The child extension receives the option bag the grant already resolved, so
+ * the only decision left here is which resource extensions accompany it.
  */
 function childExtensionEntries(request: ChildAssemblyRequest): InlineExtension[] {
-    const { context, parentContext, cwd, tracker, capabilities } = request;
+    const { context, parentContext, cwd, tracker, grant } = request;
     const entries: InlineExtension[] = [
         {
-            name: childExtensionKind(capabilities),
+            name: grant.extensionKind,
             hidden: true,
-            factory: registerChildExtension(tracker, parentContext, cwd, {
-                agentName: context.definition.name,
-                background: context.background === true,
-                authority: capabilities.authority,
-                runId: context.runId ?? context.definition.name,
-                runTitle: context.runTitle ?? context.runId ?? context.definition.name,
-                onProgress: context.onProgress,
-                onFileChanged: context.onFileChanged,
-                onTrace: context.onTrace,
-                events: context.events,
-                allowUserInteraction: capabilities.canAskUser,
-                workspaceId: context.workspaceId,
-                isolated: context.isolated,
-                additionalPaths: capabilities.additionalPaths,
-                safeBashCommands: capabilities.safeBashCommands,
-            }),
+            factory: registerChildExtension(tracker, parentContext, cwd, grant.extensionOptions),
         },
     ];
 
-    if (capabilities.hasMemories) {
+    if (grant.hasMemories) {
         entries.push({
             name: "pi-coder-memory-child",
             hidden: true,
             factory: registerMemoryExtension,
         });
     }
-    if (capabilities.hasScratchpad) {
+    if (grant.hasScratchpad) {
         entries.push({
             name: "pi-coder-scratchpad-child",
             hidden: true,
             factory: registerScratchpadExtension,
         });
     }
-    if (capabilities.hasTodolist) {
+    if (grant.hasTodolist) {
         entries.push({
             name: "pi-coder-todolist-child",
             hidden: true,
@@ -143,53 +116,14 @@ function childExtensionEntries(request: ChildAssemblyRequest): InlineExtension[]
 /**
  * The child's system prompt: its definition's instructions plus the delegated-run protocol.
  *
- * `isolated` is derived differently here than in the extension set on purpose. The prompt has to
- * describe a run that owns a workspace even when the transient factory flag was not persisted with
- * the run, so a workspace ID counts; the extension receives the raw flag and reconciles the same
- * rule internally. Keep the two spellings in step if either one changes.
+ * The protocol options come straight from the grant, including `isolated`, which the grant reconciles
+ * once from the transient flag and the workspace id. Before that reconciliation lived in the grant,
+ * the prompt and the extension each spelled isolation their own way and had to be kept in step by
+ * hand.
  */
 function childSystemPrompt(request: ChildAssemblyRequest): string {
-    const { context, capabilities } = request;
-    return renderAgentSystemPrompt(
-        context.definition,
-        childProtocolPrompt({
-            background: context.background === true,
-            canEdit: capabilities.canEdit,
-            safeBash: capabilities.safeBash,
-            allowUserInteraction: capabilities.canAskUser,
-            isolated: context.isolated === true || context.workspaceId !== undefined,
-            commandRunner: capabilities.canRunCommands,
-            hasScratchpad: capabilities.hasScratchpad,
-            hasBashOutputAccess: capabilities.safeBash,
-            additionalPaths: capabilities.additionalPaths,
-            safeBashCommands: capabilities.safeBashCommands,
-        }),
-    );
-}
-
-/**
- * The SDK tool allowlist for a child session.
- *
- * `createAgentSession({ tools })` is a strict allowlist, so a capability whose behavior needs a tool
- * must appear here as well as being registered: the interaction tools are appended by hand for that
- * reason, and a future extension-provided capability tool has to join this list too.
- */
-export function childSessionTools(capabilities: ChildCapabilities): string[] {
-    return [...capabilities.tools, ...(capabilities.canAskUser ? ["ask_user"] : []), "ask_parent"];
-}
-
-/**
- * Whether a child's tool calls must run one at a time.
- *
- * Worker mutation permission is implemented in beforeToolCall. The SDK preflights every tool in a
- * parallel batch before executing any of them; waiting for a previous tool_result from that hook
- * would therefore deadlock a batch containing multiple mutations. Run gated children sequentially so
- * each approval can reach execution and release its gate.
- * TODO(agent): Consider moving permission/queue handling into tool execution wrappers so read-only
- * worker calls can remain parallel.
- */
-export function childRequiresSequentialToolExecution(capabilities: ChildCapabilities): boolean {
-    return hasAgentAuthority(capabilities.authority, "command");
+    const { context, grant } = request;
+    return renderAgentSystemPrompt(context.definition, childProtocolPrompt(grant.protocolPrompt));
 }
 
 export async function createAgentChild(
@@ -200,7 +134,7 @@ export async function createAgentChild(
 
     const tracker = seedProgressTracker(context);
     const cwd = context.cwd;
-    const capabilities = deriveChildCapabilities(context.definition, parentContext);
+    const grant = resolveChildGrant(context, parentContext);
 
     const agentDir = getAgentDir();
     // The transcript is positioned on the leaf this run owns inside the bootstrap, before anything
@@ -208,7 +142,7 @@ export async function createAgentChild(
     const sessionManager = bootstrapChildSession(context);
     context.onSessionCreated?.(sessionManager.getSessionFile(), sessionManager.getLeafId());
     const settingsManager = SettingsManager.create(cwd, agentDir);
-    const request: ChildAssemblyRequest = { context, parentContext, cwd, tracker, capabilities };
+    const request: ChildAssemblyRequest = { context, parentContext, cwd, tracker, grant };
     const resourceLoader = new DefaultResourceLoader({
         cwd,
         agentDir,
@@ -222,16 +156,15 @@ export async function createAgentChild(
         appendSystemPrompt: [childSystemPrompt(request)],
     });
     await resourceLoader.reload();
-    const interactionToolCount = capabilities.canAskUser ? 2 : 1;
     context.onTrace?.("resources.loaded", {
         readOnlyToolCount:
-            capabilities.authority === "mutate"
+            grant.authority === "mutate"
                 ? READ_ONLY_AGENT_TOOLS.length
-                : capabilities.tools.length,
-        directUserUI: capabilities.canAskUser,
-        background: context.background === true,
-        ...(capabilities.authority === "mutate"
-            ? { configuredToolCount: capabilities.tools.length, mutating: true }
+                : grant.capabilityTools.length,
+        directUserUI: grant.canAskUser,
+        background: grant.background,
+        ...(grant.authority === "mutate"
+            ? { configuredToolCount: grant.capabilityTools.length, mutating: true }
             : {}),
     });
 
@@ -258,14 +191,14 @@ export async function createAgentChild(
         resourceLoader,
         settingsManager,
         sessionManager,
-        tools: childSessionTools(capabilities),
+        tools: grant.sessionTools,
     });
-    if (childRequiresSequentialToolExecution(capabilities)) {
+    if (grant.requiresSequentialToolExecution) {
         session.agent.toolExecution = "sequential";
     }
 
     context.onTrace?.("session.created", {
-        toolCount: capabilities.tools.length + interactionToolCount,
+        toolCount: grant.sessionTools.length,
     });
     const unsubscribe = session.subscribe((event) => {
         const traceEvent = traceSessionEvent(event);
@@ -290,7 +223,6 @@ export async function createAgentChild(
     });
 }
 
-// FIXME(capability-refactor): temporary oracle seam, replaced by an exported assembly plan in stage
-// 2 and removed with test/tools/tmp-capability-oracle.test.ts.
-export { childExtensionEntries, childSystemPrompt, childExtensionKind };
+// FIXME(capability-refactor): temporary oracle seam, removed with test/tools/tmp-capability-oracle.test.ts.
+export { childExtensionEntries, childSystemPrompt };
 export type { ChildAssemblyRequest };

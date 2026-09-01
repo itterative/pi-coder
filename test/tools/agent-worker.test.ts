@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import registerScratchpadExtension, { getScratchpadPath } from "../../src/modules/scratchpad";
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
-import type { AgentAuthority } from "../../src/tools/agent/definitions/types";
+import { resolveChildGrant } from "../../src/tools/agent/child/grant";
+import type { ChildAgentFactoryContext } from "../../src/tools/agent/contracts/runs";
+import type { AgentDefinition } from "../../src/tools/agent/definitions/types";
 import registerFileToolHook from "../../src/tools/file-permissions";
 import { registerCommandPermissionHooks } from "../../src/tools/agent/child/command-permissions";
 import {
@@ -253,17 +255,28 @@ describe("command and edit permission gate", () => {
             bashApproved: false,
             interrupted: false,
         } as any;
-        registerChildExtension(tracker, parentContext, cwd, {
-            agentName: "worker",
+        const workerDefinition: AgentDefinition = {
+            name: "worker",
+            description: "Implementation worker",
+            capabilities: ["read", "search", "memories", "scratchpad", "command-runner", "edit"],
+            systemPrompt: "",
+            source: "builtin",
+        };
+        // The workspace id is what marks a restored run as isolated, and the grant is what applies
+        // that rule, so the fixture resolves through production instead of hand-passing the flag.
+        const context: ChildAgentFactoryContext = {
+            cwd,
+            definition: workerDefinition,
+            parentContext,
             background: false,
-            authority: "mutate" as AgentAuthority,
+            isolated: false,
+            workspaceId: "workspace-1",
             runId: "worker-restored-1",
             runTitle: "Restored worker",
             onProgress: () => {},
-            allowUserInteraction: true,
-            workspaceId: "workspace-1",
-            isolated: false,
-        })(pi);
+        };
+        const grant = resolveChildGrant(context, parentContext);
+        registerChildExtension(tracker, parentContext, cwd, grant.extensionOptions)(pi);
 
         const permission = handlers.tool_call[0](
             bashEvent("bash-restored-1", "unrecognized-command"),

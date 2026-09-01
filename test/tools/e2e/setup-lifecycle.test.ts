@@ -76,6 +76,9 @@ describe("isolated workspace setup e2e", () => {
                 cwd: workspace.worktreePath,
                 isolated: true,
                 runId: `workspace-setup-${workspace.slug}`,
+                // Setup installs dependencies unattended, so it must ask the permission gate for the
+                // long default rather than relying on the gate recognizing the agent's name.
+                defaultBashTimeoutSeconds: 600,
             }),
         );
         expect(

@@ -56,6 +56,11 @@ interface CommandPermissionOptions extends CommandPermissionCallbacks {
     additionalReadRoots?: readonly string[];
     /** Exact command patterns that extend the safe-Bash heuristic. */
     safeBashCommands?: readonly string[];
+    /**
+     * Timeout applied to a Bash call that did not request one. Owned by the caller: workspace setup
+     * needs a long default because installs run unattended, and that policy belongs to setup.
+     */
+    defaultBashTimeoutSeconds?: number;
     permissionState?: PermissionState;
 }
 
@@ -70,7 +75,6 @@ const COMMAND_CONFINEMENT = {
     permission: "allow" as const,
     resolveSymlinks: true,
 };
-const SETUP_BASH_TIMEOUT_SECONDS = 10 * 60;
 
 function isCommandPathAllowed(
     filePath: string | undefined,
@@ -394,8 +398,8 @@ export function registerCommandPermissionHooks(
         }
 
         const input = event.input as BashToolInput;
-        if (options.agentName === "workspace-setup" && input.timeout === undefined) {
-            input.timeout = SETUP_BASH_TIMEOUT_SECONDS;
+        if (options.defaultBashTimeoutSeconds !== undefined && input.timeout === undefined) {
+            input.timeout = options.defaultBashTimeoutSeconds;
         }
         let permission: Permission = "ask";
         let unresolved: string[][] = [];

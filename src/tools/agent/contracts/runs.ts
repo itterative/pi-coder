@@ -87,6 +87,12 @@ export interface ChildAgentFactoryContext {
     workspaceId?: string;
     /** Internal setup children are isolated even before a task lease exists. */
     isolated?: boolean;
+    /**
+     * Timeout for a Bash call that did not request one, used by children whose commands run
+     * unattended. Deliberately a run-mode fact rather than something the gate infers from the
+     * agent name, and not part of the durable definition contract.
+     */
+    defaultBashTimeoutSeconds?: number;
     repairInterrupted?: boolean;
     initialProgress?: ChildProgress;
     initialMutationReport?: WorkerMutationReport;

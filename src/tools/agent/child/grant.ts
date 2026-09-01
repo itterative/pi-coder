@@ -1,0 +1,175 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+import {
+    agentAdditionalPaths,
+    agentAuthority,
+    agentTools,
+    hasAgentAuthority,
+    hasAgentCapability,
+} from "../definitions/types";
+import type { AgentAuthority } from "../definitions/types";
+import type { ChildAgentFactoryContext } from "../contracts/runs";
+import type { ChildExtensionOptions, ChildProtocolPromptOptions } from "./extension";
+
+/**
+ * Everything a child may do, resolved once from its definition plus the run mode and the parent's
+ * ability to host a prompt.
+ *
+ * This is the only place that turns a capability declaration into a decision. The session bootstrap,
+ * the extension set, the system prompt, the tool allowlist, and the permission gates each read a
+ * field here rather than re-deriving a rule, because every one of those derivations was previously
+ * duplicated in a second consumer and drifted.
+ *
+ * Two separate questions are kept separate on purpose:
+ *
+ * - `authority` orders *gate strength* (`read < inspect < command < mutate`), so it answers "may this
+ *   child be gated, run serially, or carry the worker label?".
+ * - `capabilityTools` answers "which tools exist at all", and `edit` deliberately does not imply shell
+ *   access there. A mutation-only definition has no `bash` tool even though it sits on the top rung.
+ */
+export interface ChildGrant {
+    /** Where this child sits on the command-and-mutation ladder. */
+    authority: AgentAuthority;
+    /** Tools contributed by the capability declaration, before interaction tools are added. */
+    capabilityTools: string[];
+    /**
+     * The strict SDK allowlist for the session. `createAgentSession({ tools })` filters extension
+     * tools too, so any capability that registers its own tool must appear here.
+     */
+    sessionTools: string[];
+    /** The name the child extension registers under. */
+    extensionKind: string;
+    /**
+     * Whether a child's tool calls must run one at a time.
+     *
+     * Worker mutation permission is implemented in beforeToolCall. The SDK preflights every tool in a
+     * parallel batch before executing any of them; waiting for a previous tool_result from that hook
+     * would therefore deadlock a batch containing multiple mutations, so a gated child runs its calls
+     * one at a time and each approval can reach execution and release its gate.
+     * TODO(agent): Consider moving permission/queue handling into tool execution wrappers so read-only
+     * worker calls can remain parallel.
+     */
+    requiresSequentialToolExecution: boolean;
+    /** Whether this child may ask the end user directly, once the parent can host the prompt. */
+    canAskUser: boolean;
+    /** Whether the run owns a workspace; a workspace id counts even when the transient flag was lost. */
+    isolated: boolean;
+    /** Whether the parent launched this run in the background. */
+    background: boolean;
+    /** Read roots beyond the working directory, including the memory directory when granted. */
+    readRoots: string[];
+    /** Exact command patterns the definition adds to the read-only Bash heuristic. */
+    safeBashCommands: string[];
+    hasMemories: boolean;
+    hasScratchpad: boolean;
+    hasTodolist: boolean;
+    /** Whether the child may read the full-output files its own Bash results report. */
+    bashOutputAccess: boolean;
+    /** Option bag for the protocol prompt; replaced by profile modules in stage 3. */
+    protocolPrompt: ChildProtocolPromptOptions;
+    /** Option bag for the child extension; replaced by per-unit installation in stage 4. */
+    extensionOptions: ChildExtensionOptions;
+}
+
+/**
+ * Resolves a definition into a grant.
+ *
+ * `context` carries the run mode and the callbacks the child reports through; only the run mode
+ * affects what is decided here. The callbacks are placed verbatim into `extensionOptions` so the
+ * factory call site cannot silently drop one.
+ */
+export function resolveChildGrant(
+    context: ChildAgentFactoryContext,
+    parentContext: ExtensionContext,
+): ChildGrant {
+    const definition = context.definition;
+    const authority = agentAuthority(definition);
+    const capabilityTools = agentTools(definition);
+    const readRoots = agentAdditionalPaths(definition);
+    const safeBashCommands = definition.safeBashCommands ?? [];
+    const hasScratchpad = hasAgentCapability(definition, "scratchpad");
+
+    // A background or print-mode parent has no UI to answer with, so asking would strand the child:
+    // the definition's own flag is necessary but not sufficient. This is the only place that rule is
+    // evaluated, and both the prompt and the tool registration consume the result.
+    const canAskUser =
+        definition.allowUserInteraction !== false &&
+        parentContext.hasUI === true &&
+        parentContext.mode === "tui";
+
+    // Restored isolated runs keep their workspace id even when the transient `isolated` flag was not
+    // persisted with the run, so both spellings resolve to one value here.
+    const isolated = context.isolated === true || context.workspaceId !== undefined;
+
+    return {
+        authority,
+        capabilityTools,
+        sessionTools: [
+            ...capabilityTools,
+            ...(canAskUser ? ["ask_user"] : []),
+            // `ask_parent` needs no UI: it pauses the run and reports through the parent.
+            "ask_parent",
+        ],
+        extensionKind: extensionKindFor(authority),
+        requiresSequentialToolExecution: hasAgentAuthority(authority, "command"),
+        canAskUser,
+        isolated,
+        background: context.background === true,
+        readRoots,
+        safeBashCommands,
+        hasMemories: hasAgentCapability(definition, "memories"),
+        hasScratchpad,
+        hasTodolist: hasAgentCapability(definition, "todolist"),
+        bashOutputAccess: hasAgentCapability(definition, "safe-bash"),
+        protocolPrompt: {
+            background: context.background === true,
+            canEdit: authority === "mutate",
+            // Only the read-only arm reads this flag, and that arm is reachable only at the `read`
+            // and `inspect` rungs, so the effective-capability test and the rung agree there.
+            safeBash: authority === "inspect",
+            allowUserInteraction: canAskUser,
+            isolated,
+            commandRunner: hasAgentAuthority(authority, "command"),
+            hasScratchpad,
+            hasBashOutputAccess: hasAgentCapability(definition, "safe-bash"),
+            additionalPaths: readRoots,
+            safeBashCommands,
+        },
+        extensionOptions: {
+            agentName: definition.name,
+            authority,
+            runId: context.runId ?? definition.name,
+            runTitle: context.runTitle ?? context.runId ?? definition.name,
+            isolated,
+            canAskUser,
+            additionalPaths: readRoots,
+            safeBashCommands,
+            defaultBashTimeoutSeconds: context.defaultBashTimeoutSeconds,
+            onProgress: context.onProgress,
+            onFileChanged: context.onFileChanged,
+            onTrace: context.onTrace,
+            events: context.events,
+        },
+    };
+}
+
+/**
+ * The registered name of the child extension.
+ *
+ * A worker is named for its edit authority even though it also runs commands, so the top rung
+ * decides the label the loader records.
+ */
+function extensionKindFor(authority: AgentAuthority): string {
+    if (authority === "mutate") {
+        return "pi-coder-worker-child";
+    }
+    if (hasAgentAuthority(authority, "command")) {
+        return "pi-coder-command-child";
+    }
+    return "pi-coder-readonly-child";
+}
+
+/**
+ * The `safeBash` prompt flag is the only remaining place a rung is translated back into a boolean,
+ * and the comment above its call site explains why the two readings cannot disagree.
+ */

@@ -8,6 +8,9 @@ import {
 } from "../../src/tools/agent/definitions/discovery";
 import { availableAgentsPrompt } from "../../src/tools/agent/definitions/prompt";
 import { childProtocolPrompt } from "../../src/tools/agent/child/extension";
+import { resolveChildGrant } from "../../src/tools/agent/child/grant";
+import type { ChildAgentFactoryContext } from "../../src/tools/agent/contracts/runs";
+import type { AgentCapability, AgentDefinition } from "../../src/tools/agent/definitions/types";
 import { renderAgentSystemPrompt, renderAgentTask } from "../../src/tools/agent/prompts/renderer";
 
 describe("delegated-agent prompt rendering", () => {
@@ -160,6 +163,119 @@ describe("delegated-agent prompt rendering", () => {
         expect(prompt).toContain("current working directory or the temporary scratchpad");
         expect(prompt).toContain(
             "Sensitive-path restrictions apply outside the temporary scratchpad",
+        );
+    });
+
+    it("renders one protocol prompt for every grant the ladder can produce", async () => {
+        // These go through `resolveChildGrant` rather than a hand-written option bag, so a resolution
+        // change cannot silently alter what a child is told about its own authority.
+        const custom = (
+            name: string,
+            capabilities: AgentCapability[],
+            extra: Partial<AgentDefinition> = {},
+        ): AgentDefinition => ({
+            name,
+            description: `${name} description`,
+            capabilities,
+            systemPrompt: `You are ${name}.`,
+            source: "user",
+            ...extra,
+        });
+        const cases: Array<{
+            label: string;
+            definition: AgentDefinition;
+            context: object;
+            parent: object;
+        }> = [
+            {
+                label: "scout in a tui parent",
+                definition: BUILTIN_SCOUT,
+                context: { background: false },
+                parent: { hasUI: true, mode: "tui" },
+            },
+            {
+                label: "scout in a background parent",
+                definition: BUILTIN_SCOUT,
+                context: { background: true },
+                parent: { hasUI: false, mode: "print" },
+            },
+            {
+                label: "advisor without direct interaction",
+                definition: BUILTIN_ADVISOR,
+                context: { background: false },
+                parent: { hasUI: true, mode: "tui" },
+            },
+            {
+                label: "reviewer sharing the parent checkout",
+                definition: BUILTIN_REVIEWER,
+                context: { background: false },
+                parent: { hasUI: true, mode: "tui" },
+            },
+            {
+                label: "worker in the parent checkout",
+                definition: BUILTIN_WORKER,
+                context: { background: false },
+                parent: { hasUI: true, mode: "tui" },
+            },
+            {
+                label: "worker in an isolated worktree",
+                definition: BUILTIN_WORKER,
+                context: { background: false, isolated: true, workspaceId: "workspace-1" },
+                parent: { hasUI: true, mode: "tui" },
+            },
+            {
+                label: "restored worker keeps isolation from its workspace id",
+                definition: BUILTIN_WORKER,
+                context: { background: false, isolated: false, workspaceId: "workspace-1" },
+                parent: { hasUI: true, mode: "tui" },
+            },
+            {
+                label: "custom definition with no bash capability",
+                definition: custom("reader", []),
+                context: { background: false },
+                parent: { hasUI: true, mode: "tui" },
+            },
+            {
+                label: "custom definition with a ui-capable print parent",
+                definition: custom("reader", ["safe-bash"]),
+                context: { background: false },
+                parent: { hasUI: true, mode: "print" },
+            },
+            {
+                label: "custom scratchpad and todolist definition with custom roots",
+                definition: custom("organizer", ["scratchpad", "todolist", "safe-bash"], {
+                    additionalPaths: ["/opt/read-only"],
+                    safeBashCommands: ["ast-outline digest *"],
+                }),
+                context: { background: false },
+                parent: { hasUI: true, mode: "tui" },
+            },
+        ];
+
+        const rendered = cases.map(({ label, definition, context, parent }) => {
+            const factoryContext = {
+                cwd: "/repo",
+                definition,
+                parentContext: parent,
+                runId: `${definition.name}-1`,
+                runTitle: `${definition.name} title`,
+                onProgress: () => {},
+                ...context,
+            } as unknown as ChildAgentFactoryContext;
+            const grant = resolveChildGrant(
+                factoryContext,
+                parent as unknown as Parameters<typeof resolveChildGrant>[1],
+            );
+            return [
+                `### ${label}`,
+                `authority=${grant.authority} tools=[${grant.sessionTools.join(",")}]`,
+                `kind=${grant.extensionKind} sequential=${grant.requiresSequentialToolExecution}`,
+                childProtocolPrompt(grant.protocolPrompt),
+            ].join("\n");
+        });
+
+        await expect(rendered.join("\n\n===\n\n")).toMatchFileSnapshot(
+            "__snapshots__/agent-prompt.grant-profiles.txt",
         );
     });
 

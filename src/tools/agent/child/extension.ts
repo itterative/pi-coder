@@ -278,27 +278,32 @@ export async function askChildUser(
     };
 }
 
-/** Named setup values and callbacks for the child extension factory. */
+/**
+ * What the child extension needs, all of it already resolved by `resolveChildGrant`.
+ *
+ * Nothing here is a raw capability flag to be combined: `authority` is the rung, `isolated` is the
+ * reconciled run mode, and `canAskUser` already accounts for the parent's ability to host a prompt.
+ * An earlier version of this bag carried `allowUserInteraction` plus `workspaceId` and re-derived
+ * both decisions here, which is how the same question came to have two answers.
+ */
 export interface ChildExtensionOptions {
     agentName: string;
-    background: boolean;
-    /**
-     * Where this child sits on the command-and-mutation ladder. It replaces the per-flag pairs the
-     * gate installation used to test, because "who gets the command gate" and "who keeps the
-     * read-only heuristic gate" are the same question asked from two sides of one rung.
-     */
+    /** Where this child sits on the command-and-mutation ladder; decides which gates get installed. */
     authority: AgentAuthority;
+    /** Whether the run owns a workspace, with a workspace id already counted as isolated. */
+    isolated: boolean;
+    /** Whether this child may prompt the end user, with parent UI availability already counted. */
+    canAskUser: boolean;
     runId: string;
     runTitle: string;
     onProgress: ChildAgentFactoryContext["onProgress"];
     onFileChanged?: ChildAgentFactoryContext["onFileChanged"];
     onTrace?: ChildAgentFactoryContext["onTrace"];
     events?: EventBus;
-    allowUserInteraction?: boolean;
-    workspaceId?: string;
-    isolated?: boolean;
     additionalPaths?: readonly string[];
     safeBashCommands?: readonly string[];
+    /** Default timeout applied to Bash calls when the caller sets one, for example workspace setup. */
+    defaultBashTimeoutSeconds?: number;
 }
 
 export function registerChildExtension(
@@ -308,23 +313,21 @@ export function registerChildExtension(
     {
         agentName,
         authority,
+        isolated,
+        canAskUser,
         runId,
         runTitle,
         onProgress,
         onFileChanged,
         onTrace,
         events,
-        allowUserInteraction = true,
-        workspaceId,
-        isolated = false,
         additionalPaths = [],
         safeBashCommands = [],
+        defaultBashTimeoutSeconds,
     }: ChildExtensionOptions,
 ) {
     return (pi: ExtensionAPI): void => {
         const bashOutputPaths = new Map<string, BashOutputPath>();
-        const canAskUser =
-            allowUserInteraction && parentContext.hasUI === true && parentContext.mode === "tui";
         const readRoots = (ctx: ExtensionContext): readonly string[] => [
             ...additionalPaths,
             ...getScratchpadRoots(ctx),
@@ -348,10 +351,9 @@ export function registerChildExtension(
             rememberBashOutputPath(bashOutputPaths, event.details);
         });
 
-        // Restored isolated runs carry their workspace ID even when the
-        // transient `isolated` flag was not persisted in the run context.
-        const isolatedChild = isolated || workspaceId !== undefined;
-        const nonIsolated = !isolatedChild;
+        // The grant already reconciled the run mode, so this extension and the protocol prompt can
+        // no longer disagree about whether a run is isolated.
+        const nonIsolated = !isolated;
         const parentSessionManager = parentContext.sessionManager;
         const parentPermissionState =
             parentSessionManager && hasAgentAuthority(authority, "command")
@@ -531,7 +533,8 @@ export function registerChildExtension(
                 runId,
                 runTitle,
                 agentName,
-                isolated: isolatedChild,
+                isolated,
+                defaultBashTimeoutSeconds,
                 additionalReadRoots: additionalPaths,
                 safeBashCommands,
                 permissionState,
@@ -550,7 +553,7 @@ export function registerChildExtension(
                     // Isolated children do not inherit parent rules, but an
                     // explicit end-user remember choice is an instruction to
                     // update the parent session for later parent calls.
-                    if (!isolatedChild || parentPermissionState === undefined) return;
+                    if (!isolated || parentPermissionState === undefined) return;
                     parentPermissionState.bashRules[pattern] = permission;
                 },
             });

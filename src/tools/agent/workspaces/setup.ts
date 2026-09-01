@@ -30,6 +30,13 @@ import { git } from "./git";
 
 export type WorkspacePromptChoice = "setup" | "skip" | "cancel";
 
+/**
+ * Setup commands run unattended in a fresh worktree, so a call that does not state a timeout gets a
+ * generous one rather than the tool default. The permission gate applies this; it no longer infers it
+ * from the agent's name.
+ */
+const WORKSPACE_SETUP_BASH_TIMEOUT_SECONDS = 10 * 60;
+
 export type WorkspaceSetupUiUpdate = Pick<AgentRunSummary, "status"> &
     Partial<Pick<AgentRunSummary, "activity" | "responsePreview" | "usage">>;
 
@@ -102,6 +109,7 @@ Do not implement the requested feature, edit unrelated source files, or make unr
             runId: `workspace-setup-${workspace.slug}`,
             runTitle: `Setup ${workspace.slug}`,
             isolated: true,
+            defaultBashTimeoutSeconds: WORKSPACE_SETUP_BASH_TIMEOUT_SECONDS,
             onProgress: (progress) => {
                 emitAgentEvent(
                     {
