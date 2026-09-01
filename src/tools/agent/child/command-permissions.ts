@@ -15,7 +15,8 @@ import { matchesKey } from "@earendil-works/pi-tui";
 import { lookpath } from "lookpath";
 
 import sandboxConfig from "../../../common/config";
-import { getScratchpadPath } from "../../../modules/scratchpad";
+import { scratchpadRoots } from "./roots";
+import { CHILD_CONFINEMENT } from "./policy";
 import { PERMISSION_PROMPT_CONFIRMATION_DELAY_MS } from "../../../common/constants";
 import sandbox from "../../../modules/sandbox/bubblewrap";
 import {
@@ -70,12 +71,6 @@ function runLabel(options: CommandPermissionOptions): string {
     return options.runTitle ? `${options.runTitle} · ${options.runId}` : options.runId;
 }
 
-const COMMAND_CONFINEMENT = {
-    enabled: true,
-    permission: "allow" as const,
-    resolveSymlinks: true,
-};
-
 function isCommandPathAllowed(
     filePath: string | undefined,
     cwd: string,
@@ -85,7 +80,7 @@ function isCommandPathAllowed(
     return isSafeHeuristic(
         getPathConfinementPermission(target, {
             cwd,
-            config: COMMAND_CONFINEMENT,
+            config: CHILD_CONFINEMENT,
             access: "write",
             additionalRoots,
         }),
@@ -132,16 +127,11 @@ class PermissionQueue {
     }
 }
 
-function getScratchpadRoots(ctx: ExtensionContext): readonly string[] {
-    const scratchpadPath = getScratchpadPath(ctx.sessionManager);
-    return scratchpadPath ? [scratchpadPath] : [];
-}
-
 function getCommandReadRoots(
     ctx: ExtensionContext,
     additionalReadRoots: readonly string[],
 ): readonly string[] {
-    return [...additionalReadRoots, ...getScratchpadRoots(ctx)];
+    return [...additionalReadRoots, ...scratchpadRoots(ctx)];
 }
 
 function userNote(input: Record<string, unknown>): string | undefined {
@@ -330,27 +320,26 @@ export function registerCommandPermissionHooks(
         if (isEdit || isWrite) {
             const action = isEdit ? "edit" : "write";
             const input = event.input as EditToolInput | WriteToolInput;
-            const additionalRoots = getScratchpadRoots(ctx);
+            const additionalRoots = scratchpadRoots(ctx);
             const cwdPathAllowed = isCommandPathAllowed(input.path, ctx.cwd, additionalRoots);
             const scratchpadPathAllowed = additionalRoots.some((root) =>
-                isPathWithinDirectory(input.path, root, ctx.cwd, COMMAND_CONFINEMENT),
+                isPathWithinDirectory(input.path, root, ctx.cwd, CHILD_CONFINEMENT),
             );
             if (cwdPathAllowed || scratchpadPathAllowed) {
-                // This hook is installed only for children with mutation or
-                // command-runner capability. A confined cwd path is already
-                // the worker's authorized mutation root, whether it is the
-                // parent checkout or an isolated worktree. Scratchpad files
-                // are also trusted because they are private runtime-owned
-                // temporary data. Keep the confinement checks so sensitive
-                // project paths and symlink escapes cannot be auto-approved
-                // accidentally.
+                // Whether this gate exists at all is decided by the command gate's `applies` in
+                // `gates/commands.ts`; this handler never infers authority from the agent's name or
+                // capabilities. Given that, a confined cwd path is already the worker's authorized
+                // mutation root, whether it is the parent checkout or an isolated worktree, and
+                // scratchpad files are trusted because they are private runtime-owned temporary data.
+                // The confinement checks stay, so a sensitive project path or a symlink escape cannot
+                // be auto-approved by being inside a root.
                 releases.set(event.toolCallId, release);
                 return { block: false };
             }
             if (!cwdPathAllowed) {
                 const assessment = getPathConfinementAssessment(input.path, {
                     cwd: ctx.cwd,
-                    config: COMMAND_CONFINEMENT,
+                    config: CHILD_CONFINEMENT,
                     access: "write",
                     additionalRoots,
                 });
@@ -403,7 +392,7 @@ export function registerCommandPermissionHooks(
         }
         let permission: Permission = "ask";
         let unresolved: string[][] = [];
-        const scratchpadRoots = getScratchpadRoots(ctx);
+        const sensitiveRoots = scratchpadRoots(ctx);
         const additionalRoots = getCommandReadRoots(ctx, options.additionalReadRoots ?? []);
         try {
             const details = resolvePermissionDetails(input.command, ctx.cwd, {
@@ -412,7 +401,7 @@ export function registerCommandPermissionHooks(
                     ...(nonIsolated ? permissionState.bashRules : {}),
                 },
                 additionalRoots,
-                sensitiveAdditionalRoots: scratchpadRoots,
+                sensitiveAdditionalRoots: sensitiveRoots,
                 readOnlyAdditionalRoots: options.additionalReadRoots,
                 safeBashCommands: options.safeBashCommands,
             });

@@ -6,14 +6,7 @@ import {
 } from "../../../modules/sandbox/heuristics";
 import type { ChildAgentFactoryContext } from "../contracts/runs";
 import { getSafeBashRuntimeBlock } from "./safe-bash-rules";
-
-import type { SandboxConfigCwdConfinement } from "../../../common/config";
-
-const CHILD_CONFINEMENT: SandboxConfigCwdConfinement = {
-    enabled: true,
-    permission: "allow",
-    resolveSymlinks: true,
-};
+import { CHILD_CONFINEMENT } from "./policy";
 
 export interface SafeBashBlock {
     block: true;
