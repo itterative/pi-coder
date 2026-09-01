@@ -10,7 +10,7 @@ Help the parent make a sound implementation decision. Investigate relevant code 
 <delegated_agent_protocol>
 Run mode: read-only delegated agent.
 
-You may use `read`, `grep`, `find`, and `ls`. Every path, after resolving symlinks, must remain inside the current working directory or an exact full-output file reported by Bash. Sensitive paths and paths that escape through symlinks are always blocked. You cannot modify files.
+You may use `read`, `grep`, `find`, and `ls`. Every path, after resolving symlinks, must remain inside the current working directory, or configured additional paths, or an exact full-output file reported by Bash. Sensitive paths and paths that escape through symlinks are always blocked. You cannot modify files.
 
 When Bash provides a full-output path for truncated output, use `read` with that path. This exception applies only to exact runtime-created files reported by this child; it does not grant general `/tmp` access.
 

@@ -1,15 +1,10 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import {
-    agentAdditionalPaths,
-    agentAuthority,
-    agentTools,
-    hasAgentAuthority,
-    hasAgentCapability,
-} from "../definitions/types";
+import { agentAuthority, hasAgentAuthority, hasAgentCapability } from "../definitions/types";
+import { capabilityReadRoots, capabilityTools } from "./capabilities";
 import type { AgentAuthority } from "../definitions/types";
 import type { ChildAgentFactoryContext } from "../contracts/runs";
-import type { ChildExtensionOptions, ChildProtocolPromptOptions } from "./extension";
+import type { ChildExtensionOptions } from "./extension";
 
 /**
  * Everything a child may do, resolved once from its definition plus the run mode and the parent's
@@ -60,13 +55,10 @@ export interface ChildGrant {
     readRoots: string[];
     /** Exact command patterns the definition adds to the read-only Bash heuristic. */
     safeBashCommands: string[];
-    hasMemories: boolean;
+    /** Whether the child may write to a private scratchpad; the prompt and the gate read this. */
     hasScratchpad: boolean;
-    hasTodolist: boolean;
     /** Whether the child may read the full-output files its own Bash results report. */
     bashOutputAccess: boolean;
-    /** Option bag for the protocol prompt; replaced by profile modules in stage 3. */
-    protocolPrompt: ChildProtocolPromptOptions;
     /** Option bag for the child extension; replaced by per-unit installation in stage 4. */
     extensionOptions: ChildExtensionOptions;
 }
@@ -84,8 +76,8 @@ export function resolveChildGrant(
 ): ChildGrant {
     const definition = context.definition;
     const authority = agentAuthority(definition);
-    const capabilityTools = agentTools(definition);
-    const readRoots = agentAdditionalPaths(definition);
+    const tools = capabilityTools(definition);
+    const readRoots = capabilityReadRoots(definition);
     const safeBashCommands = definition.safeBashCommands ?? [];
     const hasScratchpad = hasAgentCapability(definition, "scratchpad");
 
@@ -103,9 +95,9 @@ export function resolveChildGrant(
 
     return {
         authority,
-        capabilityTools,
+        capabilityTools: tools,
         sessionTools: [
-            ...capabilityTools,
+            ...tools,
             ...(canAskUser ? ["ask_user"] : []),
             // `ask_parent` needs no UI: it pauses the run and reports through the parent.
             "ask_parent",
@@ -117,24 +109,8 @@ export function resolveChildGrant(
         background: context.background === true,
         readRoots,
         safeBashCommands,
-        hasMemories: hasAgentCapability(definition, "memories"),
         hasScratchpad,
-        hasTodolist: hasAgentCapability(definition, "todolist"),
         bashOutputAccess: hasAgentCapability(definition, "safe-bash"),
-        protocolPrompt: {
-            background: context.background === true,
-            canEdit: authority === "mutate",
-            // Only the read-only arm reads this flag, and that arm is reachable only at the `read`
-            // and `inspect` rungs, so the effective-capability test and the rung agree there.
-            safeBash: authority === "inspect",
-            allowUserInteraction: canAskUser,
-            isolated,
-            commandRunner: hasAgentAuthority(authority, "command"),
-            hasScratchpad,
-            hasBashOutputAccess: hasAgentCapability(definition, "safe-bash"),
-            additionalPaths: readRoots,
-            safeBashCommands,
-        },
         extensionOptions: {
             agentName: definition.name,
             authority,

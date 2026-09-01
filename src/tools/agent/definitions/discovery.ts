@@ -12,10 +12,8 @@ import {
 export type { AgentCapability, AgentDefinition, AgentSource } from "./types";
 export {
     agentCanEdit,
-    agentAdditionalPaths,
     agentCanRunCommands,
     agentCapabilities,
-    agentTools,
     fingerprintAgentDefinition,
     fingerprintLegacyAgentDefinition,
     hasAgentCapability,

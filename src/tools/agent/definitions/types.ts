@@ -133,20 +133,6 @@ export function parseAgentDefinitionSnapshot(value: unknown): AgentDefinition | 
 }
 
 /**
- * Returns the read roots granted by an agent definition.
- *
- * The memory capability includes the user memory directory so delegated
- * agents can read the memories listed in their memory-system appendix.
- */
-export function agentAdditionalPaths(definition: AgentDefinition): string[] {
-    const paths = [...(definition.additionalPaths ?? [])];
-    if (hasAgentCapability(definition, "memories")) {
-        paths.push(getUserMemoryDirectory());
-    }
-    return [...new Set(paths)];
-}
-
-/**
  * Where a definition sits on the ladder, read from its effective capability set.
  *
  * Ordered checks rather than rank arithmetic, because the highest rung is the only one whose lower
@@ -171,7 +157,14 @@ export function hasAgentAuthority(authority: AgentAuthority, minimum: AgentAutho
     return AGENT_AUTHORITY_LADDER.indexOf(authority) >= AGENT_AUTHORITY_LADDER.indexOf(minimum);
 }
 
-/** Returns the effective capability set, including the always-available baseline. */
+/**
+ * The effective capability set, including the always-available baseline and the implications below.
+ *
+ * This is the declaration layer's answer to "what did the author ask for", and the implications are
+ * part of that contract: they show up in the parent-facing catalog and are hashed into the persisted
+ * definition fingerprint. The child-side mapping from capability to tools, read roots, and extensions
+ * lives in `child/capabilities`, and deliberately does not restate these implications.
+ */
 export function agentCapabilities(definition: AgentDefinition): AgentCapability[] {
     const declared = new Set<AgentCapability>([
         ...BASELINE_AGENT_CAPABILITIES,
@@ -202,21 +195,6 @@ export function agentCanRunCommands(definition: AgentDefinition): boolean {
 /** Whether the definition may call Bash at all, gated either way: the `safe-bash` capability. */
 export function agentCanUseBash(definition: AgentDefinition): boolean {
     return hasAgentCapability(definition, "safe-bash");
-}
-
-/** Maps the capability policy to the concrete SDK tools supplied to a child. */
-export function agentTools(definition: AgentDefinition): string[] {
-    const authority = agentAuthority(definition);
-    const tools: string[] = [...READ_ONLY_AGENT_TOOLS];
-    if (hasAgentAuthority(authority, "mutate")) {
-        tools.push("edit", "write");
-    }
-    // Tool presence is its own question, answered by `safe-bash`: `command-runner` implies it, and
-    // `edit` deliberately does not, so a mutation-only definition gets no shell.
-    if (agentCanUseBash(definition)) {
-        tools.push("bash");
-    }
-    return tools;
 }
 
 /** Stable capability/prompt identity used to validate durable child sessions. */

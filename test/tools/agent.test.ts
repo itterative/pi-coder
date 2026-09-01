@@ -14,13 +14,13 @@ import {
     isScoutBashAllowed,
 } from "../../src/tools/agent/child";
 import {
-    agentAdditionalPaths,
     BUILTIN_ADVISOR,
     BUILTIN_SCOUT,
     BUILTIN_WORKER,
     fingerprintAgentDefinition,
     fingerprintLegacyAgentDefinition,
 } from "../../src/tools/agent/definitions/discovery";
+import { capabilityReadRoots } from "../../src/tools/agent/child/capabilities";
 import {
     AgentActionError,
     AgentRunManager,
@@ -1665,7 +1665,7 @@ describe("scout confinement", () => {
                 additionalRoots: [additional],
             }),
         ).toBe(true);
-        expect(agentAdditionalPaths(BUILTIN_SCOUT)).toContain(
+        expect(capabilityReadRoots(BUILTIN_SCOUT)).toContain(
             path.join(os.homedir(), ".pi", "agent", "memory"),
         );
     });

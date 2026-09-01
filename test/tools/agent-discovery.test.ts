@@ -5,13 +5,12 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-    agentAdditionalPaths,
     agentCapabilities,
-    agentTools,
     BUILTIN_ADVISOR,
     BUILTIN_SCOUT,
     discoverAgentsInDirectories,
 } from "../../src/tools/agent/definitions/discovery";
+import { capabilityReadRoots, capabilityTools } from "../../src/tools/agent/child/capabilities";
 import {
     parseAgentDefinitionSnapshot,
     snapshotAgentDefinition,
@@ -225,8 +224,8 @@ describe("agent discovery", () => {
             source: "builtin",
             capabilities: ["read", "search", "memories", "safe-bash"],
         });
-        expect(agentTools(advisor!)).toEqual(["read", "grep", "find", "ls", "bash"]);
-        expect(agentTools(scout!)).toEqual(["read", "grep", "find", "ls", "bash"]);
+        expect(capabilityTools(advisor!)).toEqual(["read", "grep", "find", "ls", "bash"]);
+        expect(capabilityTools(scout!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(worker).toMatchObject({
             source: "builtin",
             capabilities: [
@@ -240,7 +239,7 @@ describe("agent discovery", () => {
                 "edit",
             ],
         });
-        expect(agentTools(worker!)).toEqual([
+        expect(capabilityTools(worker!)).toEqual([
             "read",
             "grep",
             "find",
@@ -255,7 +254,7 @@ describe("agent discovery", () => {
             additionalPaths: ["/tmp/shared-notes"],
             safeBashCommands: ["ast-outline digest *"],
         });
-        expect(agentAdditionalPaths(custom!)).toEqual([
+        expect(capabilityReadRoots(custom!)).toEqual([
             "/tmp/shared-notes",
             path.join(os.homedir(), ".pi", "agent", "memory"),
         ]);
@@ -266,10 +265,10 @@ describe("agent discovery", () => {
             "safe-bash",
             "command-runner",
         ]);
-        expect(agentTools(custom!)).toEqual(["read", "grep", "find", "ls", "bash"]);
+        expect(capabilityTools(custom!)).toEqual(["read", "grep", "find", "ls", "bash"]);
         expect(todo).toMatchObject({ source: "user", capabilities: ["todolist"] });
         expect(agentCapabilities(todo!)).toEqual(["read", "search", "scratchpad", "todolist"]);
-        expect(agentTools(todo!)).toEqual(["read", "grep", "find", "ls"]);
+        expect(capabilityTools(todo!)).toEqual(["read", "grep", "find", "ls"]);
         expect(stale?.capabilities).toEqual([]);
         expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "warning")).toEqual(
             expect.arrayContaining([

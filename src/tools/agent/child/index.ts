@@ -3,15 +3,13 @@ import {
     SettingsManager,
     createAgentSession,
     getAgentDir,
-    type ExtensionAPI,
     type ExtensionContext,
     type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { READ_ONLY_AGENT_TOOLS } from "../definitions/discovery";
-import registerMemoryExtension from "../../../modules/memory";
-import registerScratchpadExtension from "../../../modules/scratchpad";
-import registerTodoListExtension from "../../../modules/todolist";
-import { childProtocolPrompt, registerChildExtension } from "./extension";
+import { capabilityExtensions } from "./capabilities";
+import { registerChildExtension } from "./extension";
+import { childProtocolPrompt } from "./prompt";
 import { resolveChildGrant, type ChildGrant } from "./grant";
 import {
     createChildModelRuntime,
@@ -22,7 +20,6 @@ import { createChildHandle } from "./handle";
 import { renderAgentSystemPrompt } from "../prompts/renderer";
 import { bootstrapChildSession } from "./transcript";
 import {
-    reportProgress,
     seedProgressTracker,
     traceSessionEvent,
     updateTracker,
@@ -39,7 +36,6 @@ export {
     isScoutBashAllowed,
     type ChildExtensionOptions,
     type ChildPathOptions,
-    type ChildProtocolPromptOptions,
     type ChildUserAnswerDetails,
     type ChildUserAnswerResult,
     type ChildUserQuestion,
@@ -81,49 +77,27 @@ function childExtensionEntries(request: ChildAssemblyRequest): InlineExtension[]
         },
     ];
 
-    if (grant.hasMemories) {
-        entries.push({
-            name: "pi-coder-memory-child",
-            hidden: true,
-            factory: registerMemoryExtension,
-        });
-    }
-    if (grant.hasScratchpad) {
-        entries.push({
-            name: "pi-coder-scratchpad-child",
-            hidden: true,
-            factory: registerScratchpadExtension,
-        });
-    }
-    if (grant.hasTodolist) {
-        entries.push({
-            name: "pi-coder-todolist-child",
-            hidden: true,
-            // A todo change is a progress frame like any other: store it on the tracker first, then
-            // report the whole frame, so the parent never sees a todo list ahead of its activity.
-            factory: (pi: ExtensionAPI) =>
-                registerTodoListExtension(pi, {
-                    onTodoProgress: (todo) => {
-                        tracker.progress.todo = todo ? { ...todo } : undefined;
-                        reportProgress(tracker, context.onProgress);
-                    },
-                }),
-        });
-    }
+    // Each resource capability registers its own extension, so adding one is a unit file rather than
+    // another branch here. Order comes from the registry, which is load-bearing: registration order
+    // decides which `tool_call` handler runs first.
+    entries.push(
+        ...capabilityExtensions({ tracker, onProgress: context.onProgress }, context.definition),
+    );
+
     return entries;
 }
 
 /**
  * The child's system prompt: its definition's instructions plus the delegated-run protocol.
  *
- * The protocol options come straight from the grant, including `isolated`, which the grant reconciles
+ * The prompt is rendered straight from the grant, including `isolated`, which the grant reconciles
  * once from the transient flag and the workspace id. Before that reconciliation lived in the grant,
  * the prompt and the extension each spelled isolation their own way and had to be kept in step by
  * hand.
  */
 function childSystemPrompt(request: ChildAssemblyRequest): string {
     const { context, grant } = request;
-    return renderAgentSystemPrompt(context.definition, childProtocolPrompt(grant.protocolPrompt));
+    return renderAgentSystemPrompt(context.definition, childProtocolPrompt(grant));
 }
 
 export async function createAgentChild(
