@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it, expect } from "vitest";
-import resolvePermission, { resolvePermissionDetails } from "../../../src/modules/sandbox/resolve";
+import resolvePermission, {
+    resolvePermissionDetails,
+    unresolvedPermissionDetails,
+} from "../../../src/modules/sandbox/resolve";
 import type { SandboxConfigCwdConfinement } from "../../../src/common/config";
 import type { Permission } from "../../../src/modules/sandbox/permissions";
 
@@ -438,5 +441,145 @@ describe("resolvePermission: patterns vs heuristics", () => {
                 expected: "deny",
             },
         ]);
+    });
+});
+
+describe("resolvePermissionDetails: decision breakdown", () => {
+    const check = (
+        command: string,
+        permissions: Record<string, Permission> = {},
+        cwdConfinement?: SandboxConfigCwdConfinement,
+    ) =>
+        resolvePermissionDetails(command, CWD, {
+            permissions,
+            cwdConfinement: cwdConfinement ?? {},
+        });
+
+    it("reports a heuristic grant per segment", () => {
+        const details = check("cat file.txt | tail -5");
+
+        expect(details.permission).toBe("allow:sandbox");
+        expect(details.source).toBe("heuristic");
+        expect(details.pattern).toBeNull();
+        expect(details.unresolved).toEqual([]);
+        expect(details.segments).toEqual([
+            {
+                tokens: ["cat", "file.txt"],
+                source: "heuristic",
+                permission: "allow:sandbox",
+                pattern: null,
+                coveredBy: null,
+            },
+            {
+                tokens: ["tail", "-5"],
+                source: "heuristic",
+                permission: "allow:sandbox",
+                pattern: null,
+                coveredBy: null,
+            },
+        ]);
+    });
+
+    it("names the unwrapped inner command of a transparent wrapper", () => {
+        const details = check("timeout 600 cat file.txt");
+
+        expect(details.source).toBe("heuristic");
+        expect(details.segments.map((segment) => segment.tokens)).toEqual([["cat", "file.txt"]]);
+    });
+
+    it("attributes a rescued chain to the rule that matched", () => {
+        const details = check("cd /project && npx vitest run | tail -5", { "npx *": "allow" });
+
+        expect(details.permission).toBe("allow");
+        expect(details.source).toBe("policy");
+        expect(details.pattern).toBe("npx *");
+        expect(details.segments.map((segment) => segment.source)).toEqual([
+            "heuristic",
+            "policy",
+            "heuristic",
+        ]);
+        expect(details.segments[1]).toMatchObject({ permission: "allow", pattern: "npx *" });
+    });
+
+    it("distinguishes an explicit ask rule from an uncovered segment", () => {
+        const ruled = check("foo bar", { "foo *": "ask" });
+        expect(ruled.permission).toBe("ask");
+        expect(ruled.source).toBe("policy");
+        expect(ruled.pattern).toBe("foo *");
+        expect(ruled.unresolved).toEqual([]);
+
+        const uncovered = check("foo bar");
+        expect(uncovered.permission).toBe("ask");
+        expect(uncovered.source).toBe("unresolved");
+        expect(uncovered.pattern).toBeNull();
+        expect(uncovered.unresolved).toEqual([["foo", "bar"]]);
+    });
+
+    it("marks every segment of a whole-line match as covered by that pattern", () => {
+        const pattern = "cd /project && npm test";
+        const details = check(pattern, { [pattern]: "allow" });
+
+        expect(details.permission).toBe("allow");
+        expect(details.source).toBe("policy");
+        expect(details.pattern).toBe(pattern);
+        expect(details.unresolved).toEqual([]);
+        expect(details.segments).toHaveLength(2);
+        for (const segment of details.segments) {
+            expect(segment).toMatchObject({ source: "policy", coveredBy: "whole-line", pattern });
+        }
+    });
+
+    it("reports the default permission as policy without a pattern", () => {
+        const details = check("foo bar", { "**": "deny" });
+
+        expect(details.permission).toBe("deny");
+        expect(details.source).toBe("policy");
+        expect(details.pattern).toBeNull();
+    });
+
+    it("keeps the pattern that denied a mixed chain", () => {
+        const details = check("echo hi | tail -f log", {
+            "echo *": "allow",
+            "tail *": "deny",
+        });
+
+        expect(details.permission).toBe("deny");
+        expect(details.source).toBe("policy");
+        expect(details.pattern).toBe("tail *");
+    });
+
+    it("keeps an empty breakdown for input that never reached segment analysis", () => {
+        // A line with no chain command cannot be attributed to any segment.
+        const operatorOnly = check("&&");
+        expect(operatorOnly.permission).toBe("ask");
+        expect(operatorOnly.source).toBe("policy");
+        expect(operatorOnly.segments).toEqual([]);
+        expect(operatorOnly.unresolved).toEqual([]);
+
+        const empty = check("   ", { "**": "deny" });
+        expect(empty.permission).toBe("deny");
+        expect(empty.source).toBe("policy");
+        expect(empty.pattern).toBeNull();
+        expect(empty.segments).toEqual([]);
+    });
+
+    it("treats an incomplete heredoc as an uncovered segment", () => {
+        const details = check("cat <<EOF");
+
+        expect(details.permission).toBe("ask");
+        expect(details.source).toBe("unresolved");
+        expect(details.unresolved).toEqual([["cat", "<<", "EOF"]]);
+        expect(details.segments).toHaveLength(1);
+        expect(details.segments[0]).toMatchObject({ source: "unresolved", coveredBy: null });
+    });
+
+    it("exposes an ask-with-no-breakdown shape for failed resolutions", () => {
+        expect(unresolvedPermissionDetails()).toEqual({
+            permission: "ask",
+            unresolved: [],
+            source: "unresolved",
+            pattern: null,
+            segments: [],
+        });
     });
 });

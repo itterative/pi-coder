@@ -45,6 +45,7 @@
         "test:run": "vitest run",
         "test:coverage": "vitest run --coverage",
         "bench": "vitest bench",
+        "permission-report": "node scripts/permission-report.mjs",
         "typecheck": "tsc --noEmit",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",

@@ -18,3 +18,4 @@ for integrity hashes of the committed binaries.
 - [Agent tool reference](docs/agent-tool.md)
 - [Isolated workspace lifecycle](docs/agent-workspaces.md)
 - [Persistence and recovery](docs/agent-persistence.md)
+- [Bash permission decision log](docs/bash-decision-log.md)

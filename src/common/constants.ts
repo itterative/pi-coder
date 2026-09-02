@@ -19,6 +19,13 @@ export const SANDBOX_CONFIG_PATH_GLOBAL = path.join(
 );
 export const SANDBOX_CONFIG_PATH = process.env.SANDBOX_CONFIG_PATH;
 
+/**
+ * Development bash permission decision log. Extension-local runtime state like the
+ * other `.state/` files; relocate with `SANDBOX_DECISION_LOG_PATH` and disable with
+ * `SANDBOX_DECISION_LOG=0`.
+ */
+export const BASH_DECISION_LOG_PATH = path.join(PI_CODER_STATE_DIR, "bash-log.jsonl");
+
 /** User-level pi agent memories shared by the parent and delegated agents. */
 export function getUserMemoryDirectory(): string {
     return path.join(os.homedir(), ".pi", "agent", "memory");

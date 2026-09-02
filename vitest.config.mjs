@@ -4,6 +4,9 @@ export default defineConfig({
     test: {
         globals: true,
         environment: "node",
+        // Neutralize the development decision log so no suite can append to the
+        // real .state/bash-log.jsonl.
+        setupFiles: ["test/setup.ts"],
         // Keep the repository's test command scoped to this checkout. Persistent
         // isolated worktrees under .state are complete project copies and must
         // never become Vitest projects of their own.

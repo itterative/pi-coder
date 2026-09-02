@@ -27,12 +27,24 @@ type PermissionMatcherSubshell = {
 };
 
 type PermissionMatch = {
-    wildcard: string;
+    pattern: string;
     matchers: PermissionMatcher[];
     value: Permission;
 };
 
 export type Permission = "deny" | "ask" | "allow" | "allow:sandbox";
+
+/**
+ * Outcome of matching a command, statement, or argument list against the
+ * configured rules. `pattern` is the config key that produced `permission`
+ * (last match wins), or `null` when nothing matched and the result came from
+ * the `"**"` default / the fallback.
+ */
+export type PermissionMatchResult = {
+    permission: Permission;
+    matched: boolean;
+    pattern: string | null;
+};
 
 let permissions: PermissionMatch[] = [];
 let defaultPermission: Permission = "ask";
@@ -488,7 +500,7 @@ function getPermissions(configPermissions?: SandboxConfigPermissions): Permissio
                         test: (value: PermissionToken) => value.value === "",
                     };
                     _permissions.push({
-                        wildcard: permission[0],
+                        pattern: permission[0],
                         value: permission[1] as Permission,
                         matchers: [emptyMatcher],
                     });
@@ -506,7 +518,7 @@ function getPermissions(configPermissions?: SandboxConfigPermissions): Permissio
                 const matchers = createMatchers(statementTokens(statement.node));
 
                 _permissions.push({
-                    wildcard: permission[0],
+                    pattern: permission[0],
                     value: permission[1] as Permission,
                     matchers,
                 });
@@ -533,9 +545,9 @@ function getSingleCommandPermission(
     commands: string[],
     permissions: PermissionMatch[],
     fallback: Permission = "ask",
-): { permission: Permission; matched: boolean } {
+): PermissionMatchResult {
     if (permissions.length === 0) {
-        return { permission: fallback, matched: false };
+        return { permission: fallback, matched: false, pattern: null };
     }
 
     const tokens = commands.map((value) => ({
@@ -544,6 +556,7 @@ function getSingleCommandPermission(
     }));
     let match: Permission = fallback;
     let matched = false;
+    let pattern: string | null = null;
 
     // note: this will match the last one (similar to opencode)
     //       could also try a specificity approach
@@ -555,26 +568,28 @@ function getSingleCommandPermission(
 
             match = permission.value;
             matched = true;
+            pattern = permission.pattern;
         } catch {
             continue;
         }
     }
 
-    return { permission: match, matched };
+    return { permission: match, matched, pattern };
 }
 
 function getSingleAstCommandPermission(
     statement: BashStatement,
     permissions: PermissionMatch[],
     fallback: Permission = "ask",
-): { permission: Permission; matched: boolean } {
+): PermissionMatchResult {
     if (permissions.length === 0) {
-        return { permission: fallback, matched: false };
+        return { permission: fallback, matched: false, pattern: null };
     }
 
     const tokens = statementTokens(statement.node);
     let match: Permission = fallback;
     let matched = false;
+    let pattern: string | null = null;
 
     for (const permission of permissions) {
         try {
@@ -584,12 +599,13 @@ function getSingleAstCommandPermission(
 
             match = permission.value;
             matched = true;
+            pattern = permission.pattern;
         } catch {
             continue;
         }
     }
 
-    return { permission: match, matched };
+    return { permission: match, matched, pattern };
 }
 
 /**
@@ -604,13 +620,13 @@ export function moreRestrictive(a: Permission, b: Permission): Permission {
 export function getPermissionMatch(
     command: string,
     configPermissions?: SandboxConfigPermissions,
-): { permission: Permission; matched: boolean } {
+): PermissionMatchResult {
     let permissions: PermissionMatch[];
 
     try {
         permissions = getPermissions(configPermissions);
     } catch {
-        return { permission: "ask", matched: false };
+        return { permission: "ask", matched: false, pattern: null };
     }
 
     // Handle empty command as a special case for backward compatibility
@@ -621,35 +637,43 @@ export function getPermissionMatch(
     const parsed = parseBashAst(command);
 
     if (parsed.statements.length === 0) {
-        return { permission: defaultPermission, matched: false };
+        return { permission: defaultPermission, matched: false, pattern: null };
     }
 
     // Return the most restrictive permission across all commands
-    return parsed.statements.reduce<{ permission: Permission; matched: boolean }>(
-        (result, statement) => {
-            const { permission, matched } = getSingleAstCommandPermission(
-                statement,
-                permissions,
-                defaultPermission,
-            );
-            return {
-                permission: moreRestrictive(result.permission, permission),
-                matched: result.matched || matched,
-            };
-        },
-        { permission: "allow", matched: false },
-    );
+    return parsed.statements.reduce<PermissionMatchResult>((result, statement) => {
+        const { permission, matched, pattern } = getSingleAstCommandPermission(
+            statement,
+            permissions,
+            defaultPermission,
+        );
+        // Keep the pattern of the statement that decided the combined result,
+        // so callers can attribute a decision to the rule that produced it.
+        const combined = moreRestrictive(result.permission, permission);
+        if (combined !== result.permission) {
+            return { permission: combined, matched: result.matched || matched, pattern };
+        }
+        return {
+            permission: combined,
+            matched: result.matched || matched,
+            pattern: result.pattern ?? pattern,
+        };
+    }, newEmptyMatch());
+}
+
+function newEmptyMatch(): PermissionMatchResult {
+    return { permission: "allow", matched: false, pattern: null };
 }
 
 export function getBashStatementPermissionMatch(
     statement: BashStatement,
     configPermissions?: SandboxConfigPermissions,
-): { permission: Permission; matched: boolean } {
+): PermissionMatchResult {
     let parsedPermissions: PermissionMatch[];
     try {
         parsedPermissions = getPermissions(configPermissions);
     } catch {
-        return { permission: "ask", matched: false };
+        return { permission: "ask", matched: false, pattern: null };
     }
     return getSingleAstCommandPermission(statement, parsedPermissions, defaultPermission);
 }
@@ -657,16 +681,16 @@ export function getBashStatementPermissionMatch(
 export function getBashCommandPermissionMatch(
     command: BashCommand,
     configPermissions?: SandboxConfigPermissions,
-): { permission: Permission; matched: boolean } {
+): PermissionMatchResult {
     let parsedPermissions: PermissionMatch[];
     try {
         parsedPermissions = getPermissions(configPermissions);
     } catch {
-        return { permission: "ask", matched: false };
+        return { permission: "ask", matched: false, pattern: null };
     }
 
     if (parsedPermissions.length === 0) {
-        return { permission: defaultPermission, matched: false };
+        return { permission: defaultPermission, matched: false, pattern: null };
     }
 
     const tokens = commandTokens(command.node);
@@ -676,6 +700,7 @@ export function getBashCommandPermissionMatch(
     const wrappedTokens = wrappedCommand ? commandTokens(wrappedCommand.node) : undefined;
     let match: Permission = defaultPermission;
     let matched = false;
+    let pattern: string | null = null;
     for (const permission of parsedPermissions) {
         try {
             // Consider the literal segment and, when a transparent wrapper prefixes it, the command
@@ -692,11 +717,12 @@ export function getBashCommandPermissionMatch(
             }
             match = permission.value;
             matched = true;
+            pattern = permission.pattern;
         } catch {
             continue;
         }
     }
-    return { permission: match, matched };
+    return { permission: match, matched, pattern };
 }
 
 export default function getPermission(
@@ -713,13 +739,13 @@ export default function getPermission(
 export function getArgsPermissionMatch(
     args: string[],
     configPermissions?: SandboxConfigPermissions,
-): { permission: Permission; matched: boolean } {
+): PermissionMatchResult {
     let permissions: PermissionMatch[];
 
     try {
         permissions = getPermissions(configPermissions);
     } catch {
-        return { permission: "ask", matched: false };
+        return { permission: "ask", matched: false, pattern: null };
     }
 
     return getSingleCommandPermission(args, permissions, defaultPermission);

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
 import { resolveChildGrant } from "../../src/tools/agent/child/grant";
+import type { BashDecisionRecord } from "../../src/modules/sandbox/decision-log";
 import type { ChildAgentFactoryContext } from "../../src/tools/agent/contracts/runs";
 import type { AgentDefinition } from "../../src/tools/agent/definitions/types";
 import { getPermissionState } from "../../src/modules/sandbox/permission-state";
@@ -24,10 +25,24 @@ import {
 const tempDirs: string[] = [];
 
 afterEach(() => {
+    vi.unstubAllEnvs();
     for (const directory of tempDirs.splice(0)) {
         fs.rmSync(directory, { recursive: true, force: true });
     }
 });
+
+/** Records appended by the development decision log. */
+function readDecisionLog(filePath: string): BashDecisionRecord[] {
+    if (!fs.existsSync(filePath)) {
+        return [];
+    }
+
+    return fs
+        .readFileSync(filePath, "utf8")
+        .split("\n")
+        .filter((line) => line.trim() !== "")
+        .map((line) => JSON.parse(line) as BashDecisionRecord);
+}
 
 function setup(
     cwd: string,
@@ -169,6 +184,76 @@ describe("child Bash permissions", () => {
             block: true,
             reason: expect.stringContaining("UNKNOWN_COMMAND"),
         });
+    });
+
+    it("records an automatic child gate outcome without a prompt", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-log-"));
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-log-home-"));
+        tempDirs.push(cwd, home);
+        fs.writeFileSync(path.join(cwd, "safe.txt"), "safe");
+        const logPath = path.join(home, "decisions.jsonl");
+        vi.stubEnv("SANDBOX_DECISION_LOG", "1");
+        vi.stubEnv("SANDBOX_DECISION_LOG_PATH", logPath);
+
+        const runtime = setup(cwd, { commandRunner: true, background: false });
+        await expect(
+            runtime.handlers.tool_call[0]!(
+                {
+                    toolName: "bash",
+                    toolCallId: "bash-grant-1",
+                    input: { command: "cat safe.txt" },
+                },
+                runtime.ctx,
+            ),
+        ).resolves.toMatchObject({ block: false });
+
+        const records = readDecisionLog(logPath);
+        expect(records).toHaveLength(1);
+        const [record] = records;
+        expect(record?.surface).toBe("child");
+        expect(record?.agent).toBe("scout");
+        expect(record?.cwd).toBe(cwd);
+        expect(record?.command).toBe("cat safe.txt");
+        expect(record?.prompt).toBeUndefined();
+        expect(record?.resolution.source).toBe("heuristic");
+        expect(record?.decision).toBe("allow:sandbox");
+        expect(record?.blocked).toBe(false);
+    });
+
+    it("records a rule remembered from a child prompt answered by the parent", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-prompt-"));
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-prompt-home-"));
+        tempDirs.push(cwd, home);
+        const logPath = path.join(home, "decisions.jsonl");
+        vi.stubEnv("SANDBOX_DECISION_LOG", "1");
+        vi.stubEnv("SANDBOX_DECISION_LOG_PATH", logPath);
+
+        const runtime = setup(cwd, { commandRunner: true, background: false });
+        const pending = runtime.handlers.tool_call[0]!(
+            {
+                toolName: "bash",
+                toolCallId: "bash-remember-log-1",
+                input: { command: "npm run test:run" },
+            },
+            runtime.ctx,
+        );
+
+        await vi.waitFor(() => expect(runtime.dialogs).toHaveLength(1));
+        await new Promise((resolve) => setTimeout(resolve, 260));
+        runtime.dialogs[0].handleInput(KEY.down);
+        runtime.dialogs[0].handleInput(KEY.enter);
+        await expect(pending).resolves.toEqual({ block: false });
+
+        const [record] = readDecisionLog(logPath);
+        expect(record?.surface).toBe("child");
+        expect(record?.resolution.source).toBe("unresolved");
+        expect(record?.resolution.segments[0]?.tokens).toEqual(["npm", "run", "test:run"]);
+        expect(record?.prompt).toEqual({
+            outcome: "remember",
+            suggestion: "npm run test:run",
+            rule: "npm run test:run",
+        });
+        expect(record?.blocked).toBe(false);
     });
 
     it("allows exact custom safe-Bash patterns while retaining path checks", async () => {

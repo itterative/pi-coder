@@ -32,7 +32,12 @@ import {
     createPermissionState,
     type PermissionState,
 } from "../../../modules/sandbox/permission-state";
-import { resolvePermissionDetails } from "../../../modules/sandbox/resolve";
+import {
+    resolvePermissionDetails,
+    unresolvedPermissionDetails,
+    type ResolvePermissionDetails,
+} from "../../../modules/sandbox/resolve";
+import { logBashDecision, type BashDecisionInput } from "../../../modules/sandbox/decision-log";
 import { selectWithMessage, type SelectMessageItem } from "../../../tui/select-with-message";
 import { isFileAccessApproved } from "../../file-permissions";
 
@@ -192,10 +197,16 @@ async function promptBash(
     permissionState: PermissionState,
     sandboxed: { value: boolean },
     canToggle: boolean,
-): Promise<{ allowed: boolean; permission?: Permission; message?: string }> {
-    if (!options.parentContext.hasUI) return { allowed: false };
+): Promise<{
+    allowed: boolean;
+    permission: Permission;
+    message?: string;
+    prompt?: BashDecisionInput["prompt"];
+}> {
+    if (!options.parentContext.hasUI) return { allowed: false, permission: "deny" };
 
     const suggestion = unresolved.length === 1 ? suggestRule(unresolved[0]) : null;
+    const offered = suggestion === null ? {} : { suggestion };
     const items: SelectMessageItem<PromptChoice | { kind: "remember"; saveRule: string }>[] = [
         { value: { kind: "yes" }, label: "Yes", description: "run once" },
     ];
@@ -234,7 +245,12 @@ async function promptBash(
             ctx.signal,
         );
         if (!result || result.value.kind === "no") {
-            return { allowed: false, message: result?.message };
+            return {
+                allowed: false,
+                permission: "deny",
+                message: result?.message,
+                prompt: { outcome: result ? "no" : "dismissed", ...offered },
+            };
         }
 
         const permission = sandboxed.value ? "allow:sandbox" : "allow";
@@ -242,7 +258,16 @@ async function promptBash(
             permissionState.bashRules[result.value.saveRule] = permission;
             options.bashRuleRemembered?.(result.value.saveRule, permission);
         }
-        return { allowed: true, permission, message: result.message };
+        return {
+            allowed: true,
+            permission,
+            message: result.message,
+            prompt: {
+                outcome: result.value.kind,
+                ...offered,
+                ...(result.value.kind === "remember" ? { rule: result.value.saveRule } : {}),
+            },
+        };
     } finally {
         options.permissionPending(false, "Working");
     }
@@ -391,10 +416,36 @@ export function registerCommandPermissionHooks(
         }
         let permission: Permission;
         let unresolved: string[][] = [];
+        let details: ResolvePermissionDetails = unresolvedPermissionDetails();
         const sensitiveRoots = scratchpadRoots(ctx);
         const additionalRoots = getCommandReadRoots(ctx, options.additionalReadRoots ?? []);
+        const requestedCommand = input.command;
+
+        // Record every gate outcome for offline mining, including denials and
+        // approvals that could not be executed. Never throws.
+        const logDecision = (
+            decision: Permission,
+            sandboxed: boolean,
+            blocked: boolean,
+            prompt?: BashDecisionInput["prompt"],
+        ) => {
+            const note = userNote(event.input as Record<string, unknown>);
+            logBashDecision({
+                surface: "child",
+                agentName: options.agentName,
+                cwd: ctx.cwd,
+                command: requestedCommand,
+                details,
+                ...(prompt === undefined ? {} : { prompt }),
+                decision,
+                sandboxed,
+                blocked,
+                ...(note === undefined ? {} : { note }),
+            });
+        };
+
         try {
-            const details = resolvePermissionDetails(input.command, ctx.cwd, {
+            details = resolvePermissionDetails(input.command, ctx.cwd, {
                 permissions: {
                     ...sandboxConfig.current?.permissions,
                     ...(nonIsolated ? permissionState.bashRules : {}),
@@ -410,6 +461,7 @@ export function registerCommandPermissionHooks(
             permission = "ask";
         }
         if (permission === "deny") {
+            logDecision("deny", false, true);
             release();
             return { block: true, reason: "Agent bash blocked by configured permission policy." };
         }
@@ -433,6 +485,7 @@ export function registerCommandPermissionHooks(
         const sandboxedMode = { value: sandboxedModeValue };
         const sandboxed = sandboxedMode.value;
         if (sandboxed && !bwrap) {
+            logDecision(permission, false, true);
             release();
             return {
                 block: true,
@@ -441,7 +494,12 @@ export function registerCommandPermissionHooks(
         }
         const needsPrompt = permission === "ask";
         const canToggle = needsPrompt && sandboxEnabled && bwrap.length > 0;
-        let result: { allowed: boolean; permission?: Permission; message?: string } = {
+        let result: {
+            allowed: boolean;
+            permission: Permission;
+            message?: string;
+            prompt?: BashDecisionInput["prompt"];
+        } = {
             allowed: permission !== "ask",
             permission,
         };
@@ -462,6 +520,7 @@ export function registerCommandPermissionHooks(
             throw error;
         }
         if (result.message) (event.input as Record<string, unknown>)._userMessage = result.message;
+        logDecision(result.permission, sandboxedMode.value, !result.allowed, result.prompt);
         if (!result.allowed) {
             release();
             return {

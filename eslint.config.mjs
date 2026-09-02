@@ -62,5 +62,12 @@ export default [
             },
         },
     },
+    {
+        // Standalone development tooling runs on plain Node, without TypeScript.
+        files: ["scripts/**/*.mjs"],
+        languageOptions: {
+            globals: globals.node,
+        },
+    },
     eslintConfigPrettier,
 ];

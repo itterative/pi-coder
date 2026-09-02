@@ -17,6 +17,7 @@ Run the full suite with `npm run test:run` and check types with `npm run typeche
 - **Run the touched suite even when typechecking passes** (see the paragraph below on `TypeError: cloneUsage is not a function`).
 - **Rendering: distinct states via file snapshots**, `snapshotText(...)` + `toMatchFileSnapshot(...)`, plus direct state or interaction assertions; keep clocks, temp dirs, repo paths, and sandbox argument lists normalized out of snapshots.
 - **State stays out of the repo**: explicit temporary state/workspaces directories; never mutate `.state/`.
+- **Never write the developer's home state from a suite.** `test/setup.ts` (vitest `setupFiles`) sets `SANDBOX_DECISION_LOG ??= "0"`, so the bash decision log is off for every suite unless a file re-enables it with `vi.stubEnv("SANDBOX_DECISION_LOG", "1")` plus a temporary `SANDBOX_DECISION_LOG_PATH` (or a `decisionLog.path` in a temporary project config). Follow the same pattern for any future best-effort global log.
 - **Verify any code you hand to a child.** When a delegation task quotes a helper signature or a snippet, run the single-file probe over it first and say where reality was measured (commit, line numbers). A child cannot tell an illustrative sketch from a checked example, so an unverified snippet costs a round trip when the child reports the mismatch — or gets quietly worked around.
 - **Prettier only on explicit file paths, at the end**, then check `git status` for collateral `*.md` reformatting.
 
@@ -52,6 +53,8 @@ Agent definition tests copy real `.md` fixtures from `test/tools/fixtures/agent-
 
 Loader tests must build records with the real `parent.getSessionId()`. `validateAgentRunSnapshot` compares the stored owner against the session's id, so a fixture owner (the `"parent-1"` used by the fake `context()` in `test/tools/agent-persistence.test.ts`) is rejected, and the only symptom is the generic “parent marker and SQLite snapshot identity do not match” diagnostic, which looks like a validator defect. Instrument `listAgentRunSnapshotsInDatabase` plus `validateAgentRunSnapshot` directly before chasing such a message: a real `SessionManager.create` used as `sessionManager` supplies `getEntries`/`appendCustomEntry`, so `hasEntryIndex` is true and the marker/expectation paths behave as in production.
 
+A suite that prints nothing after the `RUN` header is hung inside **synchronous** code, not failing an assertion: `testTimeout` and `hookTimeout` cannot interrupt a blocked sync call, so the worker stalls with no output at all. Diagnose by filtering one test at a time (`-t "<name>"` under `timeout`) to find the offending case. The cause here was a "must fail fast" fixture path under `/proc`, where `fs.mkdirSync(recursive)` blocks; use a path that fails immediately instead, such as a regular file where a parent directory is required (`ENOTDIR`).
+
 Parser benchmarks:
 
 - `npm run bench` runs `test/modules/sandbox/bash.bench.ts`, measuring `parseBashAst()` across simple, medium, and high-complexity command corpora. Benchmarks are separate from `npm run test:run`.
@@ -62,3 +65,4 @@ Relevant test locations:
 - `test/ask-user.test.ts`, `test/select-with-message.test.ts`, and `test/inline-editor.test.ts` for TUI editing.
 - `test/modules/memory/` for frontmatter parsing, memory scanning, and list formatting.
 - `test/common/config.test.ts` and `test/modules/sandbox/` for sandbox behavior, heuristics, permissions, resolution, suggestions, bubblewrap, fuzzing, and bash parsing.
+- `test/tools/bash-decision-log.test.ts`, `test/modules/sandbox/decision-log.test.ts`, and `test/scripts/permission-report.test.ts` for the bash decision log and its mining script (see the `bash-decision-log` memory).

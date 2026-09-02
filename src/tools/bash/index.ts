@@ -2,7 +2,12 @@ import { lookpath } from "lookpath";
 
 import { isToolCallEventType, isBashToolResult } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
-import type { ExtensionAPI, BashToolInput } from "@earendil-works/pi-coding-agent";
+import type {
+    ExtensionAPI,
+    BashToolInput,
+    EventBus,
+    ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
 import sandboxConfig, { type SandboxConfig } from "../../common/config";
 import {
@@ -13,13 +18,23 @@ import { getScratchpadPath } from "../../modules/scratchpad";
 import { ALLOWED_COMMAND_ENTRY_TYPE, type AllowedCommandEntry } from "../../common/audit";
 import sandbox from "../../modules/sandbox/bubblewrap";
 import { Permission } from "../../modules/sandbox/permissions";
-import { resolvePermissionDetails } from "../../modules/sandbox/resolve";
+import {
+    resolvePermissionDetails,
+    unresolvedPermissionDetails,
+    type ResolvePermissionDetails,
+} from "../../modules/sandbox/resolve";
+import {
+    logBashDecision,
+    type BashDecisionInput,
+    type PromptOutcome,
+} from "../../modules/sandbox/decision-log";
 import { suggestRule } from "../../modules/sandbox/suggestions";
 import { selectWithMessage, type SelectMessageItem } from "../../tui/select-with-message";
 import {
     createPermissionState,
     getPermissionState,
     resetBashPermissionState,
+    type PermissionState,
 } from "../../modules/sandbox/permission-state";
 
 // A prompt choice. The yes-actions are resolved at confirm time (the mode
@@ -38,6 +53,118 @@ interface ToolCallEventResult {
 function userNote(input: Record<string, unknown>): string | undefined {
     const note = input._userMessage;
     return typeof note === "string" && note.trim() ? note.trim() : undefined;
+}
+
+interface PromptResult {
+    permission: Permission;
+    prompt: NonNullable<BashDecisionInput["prompt"]>;
+    note?: string;
+}
+
+/**
+ * Ask the user about a command that no rule or heuristic covered, and translate
+ * the answer into a permission plus the session-rule side effect.
+ *
+ * The returned `prompt` is what the decision log records: the outcome, the rule
+ * the suggestion table offered, and the rule the user chose to remember.
+ */
+async function promptForPermission(options: {
+    command: string;
+    unresolved: string[][];
+    permissionState: PermissionState;
+    sandboxEnabled: boolean;
+    ctx: ExtensionContext;
+    events?: EventBus;
+}): Promise<PromptResult> {
+    const { command, unresolved, permissionState, sandboxEnabled, ctx, events } = options;
+
+    // Suggested session rule: only when exactly one segment is uncovered by
+    // rules/heuristics and the suggestion table has a row for it. Multiple
+    // uncovered segments keep the plain dialog (manual patterns are the tool
+    // for those).
+    const suggestion = unresolved.length === 1 ? suggestRule(unresolved[0]) : null;
+    const items: SelectMessageItem<PromptChoice>[] = [
+        {
+            value: { kind: "yes" },
+            label: "Yes",
+            description: "run once",
+        },
+    ];
+    if (suggestion) {
+        // theme.bold (not fg/accent): accent marks the selected item. Pre-baked
+        // here — the dialog component is rebuilt per prompt, so the style can't
+        // go stale.
+        const boldPattern = ctx.hasUI ? ctx.ui.theme.bold(suggestion) : suggestion;
+        items.push({
+            value: { kind: "remember", saveRule: suggestion },
+            label: `Yes, and allow ${boldPattern}`,
+            description: "remember for this session",
+        });
+    }
+    items.push({
+        value: { kind: "no" },
+        label: "No",
+        placeholder: "e.g., too risky",
+    });
+
+    const result = await selectWithMessage(
+        {
+            // The title carries the current mode (re-evaluated per render — "s"
+            // toggles it while the dialog is open)
+            title: () => {
+                const mode = !sandboxEnabled
+                    ? "direct (sandbox off)"
+                    : permissionState.bashSandboxed
+                      ? "sandbox"
+                      : "direct";
+                return `pi-bash-sandbox: allow command? — mode: ${mode} (s)`;
+            },
+            contentLines: command.split("\n"),
+            items,
+            // The border tone doubles as a mode indicator: neutral border when
+            // the command will run sandboxed, accent border when it runs direct
+            // (including sandboxing disabled by config). Re-evaluated per render,
+            // so "s" updates it live.
+            borderTone: () =>
+                sandboxEnabled && permissionState.bashSandboxed ? "border" : "borderAccent",
+            handleSelectInput: (key) => {
+                if (matchesKey(key, "s")) {
+                    permissionState.bashSandboxed = !permissionState.bashSandboxed;
+                    return true;
+                }
+
+                return false;
+            },
+            // Give the user a moment to notice and read the command before
+            // buffered terminal input can approve it.
+            confirmationDelayMs: PERMISSION_PROMPT_CONFIRMATION_DELAY_MS,
+        },
+        { ...ctx, events },
+        ctx.signal,
+    );
+
+    const remembered = result?.value.kind === "remember" ? result.value.saveRule : null;
+    const outcome: PromptOutcome = result ? result.value.kind : "dismissed";
+    const prompt: PromptResult["prompt"] = {
+        outcome,
+        ...(suggestion === null ? {} : { suggestion }),
+        ...(remembered === null ? {} : { rule: remembered }),
+    };
+
+    if (outcome === "no" || outcome === "dismissed") {
+        return { permission: "deny", prompt, ...(result?.message ? { note: result.message } : {}) };
+    }
+
+    const permission = permissionState.bashSandboxed ? "allow:sandbox" : "allow";
+    if (remembered !== null) {
+        permissionState.bashRules[remembered] = permission;
+        ctx.ui.notify(
+            `pi-bash-sandbox: session rule saved: "${remembered}" → ${permission} (this session only)`,
+            "info",
+        );
+    }
+
+    return { permission, prompt, ...(result?.message ? { note: result.message } : {}) };
 }
 
 export default function registerBashToolHook(pi: ExtensionAPI) {
@@ -157,13 +284,15 @@ Pay attention to these notes as they provide context about the user's preference
 
         let permission: Permission = "ask";
         let unresolved: string[][] = [];
+        let details: ResolvePermissionDetails = unresolvedPermissionDetails();
+        let prompt: BashDecisionInput["prompt"];
         const permissionState = permissionStateFor(ctx);
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
         const userMemoryDirectory = getUserMemoryDirectory();
         const additionalRoots = [...(scratchpadPath ? [scratchpadPath] : []), userMemoryDirectory];
         const readOnlyAdditionalRoots = [userMemoryDirectory];
         try {
-            const details = resolvePermissionDetails(
+            details = resolvePermissionDetails(
                 event.input.command,
                 ctx.cwd ?? process.cwd(),
                 // session rules come after config rules, so on identical
@@ -184,92 +313,20 @@ Pay attention to these notes as they provide context about the user's preference
         }
 
         if (permission === "ask") {
-            // Suggested session rule: only when exactly one segment is
-            // uncovered by rules/heuristics and the suggestion table has a
-            // row for it. Multiple uncovered segments keep the plain
-            // dialog (manual patterns are the tool for those).
-            const suggestion = unresolved.length === 1 ? suggestRule(unresolved[0]) : null;
-
-            const items: SelectMessageItem<PromptChoice>[] = [
-                {
-                    value: { kind: "yes" },
-                    label: "Yes",
-                    description: "run once",
-                },
-            ];
-            if (suggestion) {
-                // theme.bold (not fg/accent): accent marks the selected
-                // item. Pre-baked here — the dialog component is rebuilt
-                // per prompt, so the style can't go stale.
-                const boldPattern = ctx.hasUI ? ctx.ui.theme.bold(suggestion) : suggestion;
-                items.push({
-                    value: { kind: "remember", saveRule: suggestion },
-                    label: `Yes, and allow ${boldPattern}`,
-                    description: "remember for this session",
-                });
-            }
-            items.push({
-                value: { kind: "no" },
-                label: "No",
-                placeholder: "e.g., too risky",
+            const answered = await promptForPermission({
+                command: event.input.command,
+                unresolved,
+                permissionState,
+                sandboxEnabled,
+                ctx,
+                events: pi.events,
             });
+            permission = answered.permission;
+            prompt = answered.prompt;
 
-            const result = await selectWithMessage(
-                {
-                    // The title carries the current mode (re-evaluated per
-                    // render — "s" toggles it while the dialog is open)
-                    title: () => {
-                        const mode = !sandboxEnabled
-                            ? "direct (sandbox off)"
-                            : permissionState.bashSandboxed
-                              ? "sandbox"
-                              : "direct";
-                        return `pi-bash-sandbox: allow command? — mode: ${mode} (s)`;
-                    },
-                    contentLines: event.input.command.split("\n"),
-                    items,
-                    // The border tone doubles as a mode indicator: neutral
-                    // border when the command will run sandboxed, accent
-                    // border when it runs direct (including sandboxing
-                    // disabled by config). Re-evaluated per render, so
-                    // "s" updates it live.
-                    borderTone: () =>
-                        sandboxEnabled && permissionState.bashSandboxed ? "border" : "borderAccent",
-                    handleSelectInput: (key) => {
-                        if (matchesKey(key, "s")) {
-                            permissionState.bashSandboxed = !permissionState.bashSandboxed;
-                            return true;
-                        }
-
-                        return false;
-                    },
-                    // Give the user a moment to notice and read the command
-                    // before buffered terminal input can approve it.
-                    confirmationDelayMs: PERMISSION_PROMPT_CONFIRMATION_DELAY_MS,
-                },
-                { ...ctx, events: pi.events },
-                ctx.signal,
-            );
-
-            if (result) {
-                if (result.value.kind === "no") {
-                    permission = "deny";
-                } else {
-                    permission = permissionState.bashSandboxed ? "allow:sandbox" : "allow";
-                    if (result.value.kind === "remember") {
-                        permissionState.bashRules[result.value.saveRule] = permission;
-                        ctx.ui.notify(
-                            `pi-bash-sandbox: session rule saved: "${result.value.saveRule}" → ${permission} (this session only)`,
-                            "info",
-                        );
-                    }
-                }
-                // Attach message to input for retrieval in tool_result
-                if (result.message) {
-                    (event.input as Record<string, unknown>)._userMessage = result.message;
-                }
-            } else {
-                permission = "deny";
+            // Attach message to input for retrieval in tool_result
+            if (answered.note) {
+                (event.input as Record<string, unknown>)._userMessage = answered.note;
             }
         }
 
@@ -281,15 +338,16 @@ Pay attention to these notes as they provide context about the user's preference
 
         let blocked: boolean;
         let sandboxed: boolean = true;
+        let blockReason: string | undefined;
         const originalCommand = event.input.command; // Save before sandbox wrapping
 
         switch (permission) {
             case "allow:sandbox":
                 if (!hasSupport || bwrap.length === 0) {
-                    return {
-                        block: true,
-                        reason: "Command execution blocked due to lack of sandboxing. If this is the first execution, you can ask the user to run the command without sandboxing and try again.",
-                    };
+                    blocked = true;
+                    blockReason =
+                        "Command execution blocked due to lack of sandboxing. If this is the first execution, you can ask the user to run the command without sandboxing and try again.";
+                    break;
                 }
 
                 blocked = false;
@@ -304,10 +362,12 @@ Pay attention to these notes as they provide context about the user's preference
 
             case "deny":
                 blocked = true;
+                sandboxed = false;
                 break;
 
             default:
                 blocked = true;
+                sandboxed = false;
                 ctx.ui.notify(
                     `pi-bash-sandbox: Received bad action for command: ${permission}`,
                     "warning",
@@ -315,10 +375,30 @@ Pay attention to these notes as they provide context about the user's preference
                 break;
         }
 
+        // Record the decision for offline mining before any early return, so the
+        // log covers denials and approvals that could not be executed.
+        const decisionNote = userNote(event.input as Record<string, unknown>);
+        logBashDecision({
+            surface: "parent",
+            cwd: ctx.cwd ?? process.cwd(),
+            command: originalCommand,
+            details,
+            ...(prompt === undefined ? {} : { prompt }),
+            decision: permission,
+            sandboxed,
+            blocked,
+            ...(decisionNote === undefined ? {} : { note: decisionNote }),
+        });
+
         if (blocked) {
-            const userMessage = userNote(event.input as Record<string, unknown>);
+            if (blockReason !== undefined) {
+                return { block: true, reason: blockReason };
+            }
+
             const baseReason = "Command execution blocked by user.";
-            const reason = userMessage ? `${baseReason} User message: ${userMessage}` : baseReason;
+            const reason = decisionNote
+                ? `${baseReason} User message: ${decisionNote}`
+                : baseReason;
             return {
                 block: true,
                 reason,
@@ -326,11 +406,10 @@ Pay attention to these notes as they provide context about the user's preference
         }
 
         // Track allowed command for audit
-        const userMessage = userNote(event.input as Record<string, unknown>);
         pi.appendEntry<AllowedCommandEntry>(ALLOWED_COMMAND_ENTRY_TYPE, {
             command: originalCommand,
             permission: sandboxed ? "allow:sandbox" : "allow",
-            ...(userMessage && { userMessage }),
+            ...(decisionNote && { userMessage: decisionNote }),
         });
 
         if (sandboxed) {

@@ -20,6 +20,18 @@ export interface SandboxConfigAudit {
     model?: string;
 }
 
+/**
+ * Development diagnostics: an append-only JSONL log of every bash permission
+ * decision (see `src/modules/sandbox/decision-log.ts`). Enabled by default; the
+ * log is extension-local runtime state under `.state/`, and can be disabled here,
+ * through `SANDBOX_DECISION_LOG`, or relocated with `SANDBOX_DECISION_LOG_PATH`.
+ */
+export interface SandboxConfigDecisionLog {
+    enabled?: boolean; // default: true
+    path?: string; // default: .state/bash-log.jsonl next to this extension
+    maxBytes?: number; // rotate to `<path>.1` past this size (default: 8 MiB)
+}
+
 export interface SandboxConfigCwdConfinement {
     enabled?: boolean; // default: true
     /** Execution permission used when a heuristic classification succeeds. */
@@ -45,6 +57,7 @@ export interface SandboxConfig {
     };
     permissions: SandboxConfigPermissions;
     audit?: SandboxConfigAudit;
+    decisionLog?: SandboxConfigDecisionLog;
     heuristics?: SandboxConfigHeuristics;
 }
 
@@ -74,6 +87,13 @@ function tryLoad(path: string): SandboxConfig | null {
                 ? {
                       provider: data.audit.provider,
                       model: data.audit.model,
+                  }
+                : undefined,
+            decisionLog: data.decisionLog
+                ? {
+                      enabled: data.decisionLog.enabled,
+                      path: data.decisionLog.path,
+                      maxBytes: data.decisionLog.maxBytes,
                   }
                 : undefined,
             heuristics: data.heuristics
@@ -236,6 +256,7 @@ function mergeConfigs(global: SandboxConfig | null, project: SandboxConfig | nul
         },
         permissions: mergeRecordsOrDefault(base.permissions, project.permissions, {}),
         audit: project.audit ?? base.audit,
+        decisionLog: project.decisionLog ?? base.decisionLog,
         heuristics: mergeHeuristics(base.heuristics, project.heuristics),
     };
 }

@@ -25,7 +25,7 @@ describe("parsed argument permission matching", () => {
             getArgsPermissionMatch(["cat", "<<", "EOF", "$(cat /etc/passwd"], {
                 "cat << EOF": "allow",
             }),
-        ).toEqual({ permission: "ask", matched: false });
+        ).toEqual({ permission: "ask", matched: false, pattern: null });
     });
 });
 
