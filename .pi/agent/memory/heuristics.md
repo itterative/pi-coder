@@ -24,6 +24,7 @@ The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` a
 - `heuristics/types.ts` — public classifications, unsafe reasons, assessment/diagnostics helpers, and cwd-state contracts.
 - `heuristics/path-policy.ts` — lexical/canonical path checks, sensitive patterns, additional-root pairing, symlink containment, directory/hard-link checks, and `buildConfinementOptions`.
 - `heuristics/command-access.ts` — `CommandSpec` flag/positional interpretation, shell substitution handling (via an injected evaluator callback to avoid cycles), redirections, and custom safe-Bash parsing.
+- `commands/sed.ts` — the dedicated sed lexical audit and conservative sed command specification; sed is kept separate from the general text-command registry because its scripts require grammar-aware validation.
 - `heuristics/evaluator.ts` — AST statement/command traversal, modeled `cd`/`pushd`/`popd` state, leading environment checks, and command-confinement evaluation.
 
 Existing callers import from `./heuristics`; no other module should depend on the internal split files directly. Its path, command-string, and parsed-args entrypoints (`getPathConfinement*`, `getCwdConfinement*`, and `getArgsConfinement*`) take the primary target positionally, with `cwd` plus ancillary controls in one named options object. The facade exports `PathConfinementOptions`, `CwdConfinementOptions`, and `ArgsConfinementOptions`; config, access, roots, state, and custom safe-command controls are named optional fields.

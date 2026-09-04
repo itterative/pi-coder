@@ -138,7 +138,7 @@ function hasSafeModeFlag(args: string[], spec: CommandSpec): boolean {
 
 /**
  * Handle a short-flag cluster (e.g. -la, -n5, -efoo).
- * Returns the new argument index, or null if the command is ineligible.
+ * Returns the next unprocessed argument index, or null if the command is ineligible.
  */
 function handleShortCluster(
     args: string[],
@@ -210,18 +210,18 @@ function handleShortCluster(
                 ) {
                     return null;
                 }
-                return index + 1;
+                return index + 2;
             }
             if (!inspectValue(cluster.slice(j + 1), hasPathSlot(flagSpec, 0), wordAt?.(index))) {
                 return null;
             }
-            return index;
+            return index + 1;
         }
 
         // boolean (known or unknown): continue with the cluster
     }
 
-    return index;
+    return index + 1;
 }
 
 function hasPathSlot(flagSpec: FlagSpec | undefined, slot: number): boolean {
@@ -444,6 +444,402 @@ interface ExtractedCommandAccess {
     tags: CommandTag[];
 }
 
+class CommandPathExtractor {
+    private readonly paths: string[] = [];
+    private readonly positionalPaths: string[] = [];
+    private readonly commandWords: readonly BashWordNode[] | undefined;
+    private readonly tags: Set<CommandTag>;
+    private writes: boolean;
+    private requiresAdditionalRoot = false;
+    private afterDoubleDash = false;
+    private positionalSeen = false;
+    // Subcommand dispatch begins with the parent spec and switches to the
+    // child spec after its name. The validator later receives argv from this
+    // normalized subcommand index (for example ["diff", ...] for git diff).
+    private activeSpec: CommandSpec;
+    private activeArgvStart = 0;
+    private dispatched: boolean;
+    private positionals: NonNullable<CommandSpec["positionals"]>;
+    private patternProvided: boolean;
+
+    public constructor(
+        private readonly args: string[],
+        private readonly spec: CommandSpec,
+        private readonly cwd: string,
+        private readonly options: ConfinementOptions,
+        private readonly diagnostics?: ConfinementDiagnostics,
+        private readonly context?: CommandAccessContext,
+        private readonly astCommand?: BashCommand,
+    ) {
+        this.commandWords = astCommand?.words.slice(astCommand.environment.length);
+        this.tags = new Set<CommandTag>(spec.tags);
+        this.writes = spec.writes === true;
+        this.activeSpec = spec;
+        this.dispatched = spec.subcommands === undefined;
+        this.positionals = spec.positionals ?? "paths";
+        this.patternProvided =
+            this.positionals !== "first-pattern" || hasPatternBypass(args, this.activeSpec);
+    }
+
+    public extract(): ExtractedCommandAccess | null {
+        for (let index = 1; index < this.args.length;) {
+            const nextIndex = this.inspectArgument(index);
+            if (nextIndex === null) {
+                return null;
+            }
+            index = nextIndex;
+        }
+
+        if (!this.inspectAstRedirections()) {
+            return null;
+        }
+        return this.finish();
+    }
+
+    /** Return the next unprocessed argument index, or null when unsafe. */
+    private inspectArgument(index: number): number | null {
+        const arg = this.args[index];
+        const argWord = this.wordAt(index);
+
+        if (this.rejectLegacyHeredoc(arg)) {
+            return null;
+        }
+        const redirectionIndex = this.inspectLegacyRedirection(index, arg);
+        if (redirectionIndex !== undefined) {
+            return redirectionIndex;
+        }
+        if (this.isProcessSubstitution(arg, argWord)) {
+            return this.inspectValue(arg, false, argWord) ? index + 1 : null;
+        }
+
+        const optionIndex = this.inspectOption(index, arg, argWord);
+        if (optionIndex !== undefined) {
+            return optionIndex;
+        }
+        if (!this.dispatched) {
+            const sub = this.spec.subcommands![arg];
+            if (sub === undefined) {
+                addUnsafeReason(this.diagnostics, UnsafeReason.UNSAFE_SUBCOMMAND);
+                return null;
+            }
+            this.adoptSpec(sub);
+            this.activeArgvStart = index;
+            this.dispatched = true;
+            return index + 1;
+        }
+        return this.inspectPositional(arg, argWord) ? index + 1 : null;
+    }
+
+    private inspectOption(
+        index: number,
+        arg: string,
+        argWord?: BashWordNode,
+    ): number | null | undefined {
+        if (this.afterDoubleDash) {
+            return undefined;
+        }
+        if (arg === "--") {
+            this.afterDoubleDash = true;
+            return index + 1;
+        }
+        if (arg.startsWith("--")) {
+            const nextIndex = this.inspectLongFlag(index, arg, argWord);
+            return nextIndex === null ? null : nextIndex;
+        }
+        if (arg.length <= 1 || !arg.startsWith("-")) {
+            return undefined;
+        }
+        const nextIndex = this.inspectShortFlag(index, arg);
+        return nextIndex === null ? null : nextIndex;
+    }
+
+    private wordAt(index: number): BashWordNode | undefined {
+        return this.commandWords?.[index];
+    }
+
+    private adoptSpec(spec: CommandSpec): void {
+        this.activeSpec = spec;
+        spec.tags?.forEach((tag) => this.tags.add(tag));
+        this.positionals = spec.positionals ?? "paths";
+        this.patternProvided =
+            this.positionals !== "first-pattern" || hasPatternBypass(this.args, spec);
+    }
+
+    private inspectValue(value: string, pathContext: boolean, word?: BashWordNode): boolean {
+        if (
+            (this.activeSpec.additionalRootOnly && hasDynamicShellExpansion(value)) ||
+            (pathContext && hasUnmodeledPathExpansion(value, word))
+        ) {
+            addUnsafeReason(this.diagnostics, UnsafeReason.DYNAMIC_PATH);
+            return false;
+        }
+
+        const substitution = inspectShellSubstitution(
+            value,
+            this.cwd,
+            this.options,
+            pathContext,
+            this.diagnostics,
+            this.context,
+            word,
+        );
+        if (substitution === null) {
+            return false;
+        }
+        if (substitution !== undefined) {
+            this.paths.push(...substitution.paths);
+            this.writes = this.writes || substitution.heuristic === Heuristic.SAFE_EDIT;
+        } else if (pathContext) {
+            this.paths.push(value);
+        }
+        return true;
+    }
+
+    private inspectPositionalPath(value: string, word?: BashWordNode): boolean {
+        const pathCount = this.paths.length;
+        if (!this.inspectValue(value, true, word)) {
+            return false;
+        }
+        this.positionalPaths.push(...this.paths.slice(pathCount));
+        return true;
+    }
+
+    private rejectLegacyHeredoc(arg: string): boolean {
+        if (this.astCommand !== undefined) {
+            return false;
+        }
+        const operator = parseBashAst(arg).singleCommand?.singleRedirection?.operator;
+        if (operator !== "<<" && operator !== "<<-") {
+            return false;
+        }
+        addUnsafeReason(this.diagnostics, UnsafeReason.DYNAMIC_PATH);
+        return true;
+    }
+
+    /**
+     * Inspect parsed-argument redirections. AST commands expose redirections
+     * separately; legacy argv still needs shell syntax checked after `--`.
+     * Returns the next unprocessed index, null when unsafe, or undefined when
+     * the current argument is not a redirection.
+     */
+    private inspectLegacyRedirection(index: number, arg: string): number | null | undefined {
+        if (this.astCommand !== undefined || !REDIRECTION_OPERATORS.has(arg)) {
+            return undefined;
+        }
+        const target = this.args[index + 1];
+        if (target === undefined || !this.inspectValue(target, true)) {
+            return null;
+        }
+
+        const targetSubstitution = parseBashAst(target).singleCommand?.singleSubstitution;
+        const processTarget =
+            targetSubstitution?.kind === "process-input" ||
+            targetSubstitution?.kind === "process-output";
+        if (
+            !processTarget &&
+            arg !== "<" &&
+            !target.startsWith("&") &&
+            !SPECIAL_ALLOWED_PATHS.has(target)
+        ) {
+            this.writes = true;
+        }
+        return index + 2;
+    }
+
+    private isProcessSubstitution(arg: string, word?: BashWordNode): boolean {
+        if (word !== undefined) {
+            return word.kind === "process-substitution";
+        }
+        const substitution = parseBashAst(arg).singleCommand?.singleSubstitution;
+        return substitution?.kind === "process-input" || substitution?.kind === "process-output";
+    }
+
+    /** Return the next unprocessed index, or null when the flag is unsafe. */
+    private inspectLongFlag(index: number, arg: string, argWord?: BashWordNode): number | null {
+        const eq = arg.indexOf("=");
+        const name = eq === -1 ? arg : arg.slice(0, eq);
+        const inline = eq === -1 ? undefined : arg.slice(eq + 1);
+        const flagSpec = this.activeSpec.flags?.[name];
+
+        if (!flagSpec && this.activeSpec.rejectUnknownFlags) {
+            addUnsafeReason(this.diagnostics, UnsafeReason.UNSAFE_FLAG);
+            return null;
+        }
+        if (flagSpec?.unsafe) {
+            addUnsafeReason(this.diagnostics, UnsafeReason.UNSAFE_FLAG);
+            return null;
+        }
+        if (flagSpec?.writes) {
+            this.writes = true;
+        }
+        if (flagSpec?.requiresAdditionalRoot) {
+            this.requiresAdditionalRoot = true;
+        }
+
+        const values = flagSpec?.values ?? 0;
+        if (values === 0) {
+            if (inline !== undefined && !this.inspectValue(inline, true, argWord)) {
+                return null;
+            }
+            return index + 1;
+        }
+        if (inline !== undefined) {
+            if (values > 1 || !this.inspectValue(inline, hasPathSlot(flagSpec, 0), argWord)) {
+                return null;
+            }
+            return index + 1;
+        }
+        for (let slot = 0; slot < values; slot++) {
+            const value = this.args[index + 1 + slot];
+            if (
+                value === undefined ||
+                !this.inspectValue(
+                    value,
+                    hasPathSlot(flagSpec, slot),
+                    this.wordAt(index + 1 + slot),
+                )
+            ) {
+                return null;
+            }
+        }
+        return index + values + 1;
+    }
+
+    /** Return the next unprocessed index, or null when the flag is unsafe. */
+    private inspectShortFlag(index: number, arg: string): number | null {
+        if (this.activeSpec.flags?.[arg]?.unsafe) {
+            addUnsafeReason(this.diagnostics, UnsafeReason.UNSAFE_FLAG);
+            return null;
+        }
+
+        const cluster = arg.slice(1);
+        for (let position = 0; position < cluster.length; position++) {
+            const flagSpec = this.activeSpec.flags?.[`-${cluster[position]}`];
+            if (flagSpec?.writes) {
+                this.writes = true;
+            }
+            if (flagSpec?.requiresAdditionalRoot) {
+                this.requiresAdditionalRoot = true;
+            }
+            if ((flagSpec?.values ?? 0) > 0) {
+                break;
+            }
+        }
+
+        const writeState = { value: this.writes };
+        const nextIndex = handleShortCluster(
+            this.args,
+            index,
+            this.activeSpec,
+            this.paths,
+            this.cwd,
+            this.options,
+            writeState,
+            this.diagnostics,
+            this.context,
+            (wordIndex) => this.wordAt(wordIndex),
+        );
+        this.writes = writeState.value;
+        return nextIndex;
+    }
+
+    private inspectPositional(arg: string, argWord?: BashWordNode): boolean {
+        switch (this.positionals) {
+            case "none":
+                return false;
+            case "ignore":
+                return this.inspectValue(arg, false, argWord);
+            case "first-pattern":
+                if (!this.positionalSeen && !this.patternProvided) {
+                    this.positionalSeen = true;
+                    return this.inspectValue(arg, false, argWord);
+                }
+                return this.inspectPositionalPath(arg, argWord);
+            case "first-path":
+                if (!this.positionalSeen) {
+                    this.positionalSeen = true;
+                    return this.inspectPositionalPath(arg, argWord);
+                }
+                return this.inspectValue(arg, false, argWord);
+            case "assignments":
+                return this.inspectAssignment(arg, argWord);
+            default:
+                return this.inspectPositionalPath(arg, argWord);
+        }
+    }
+
+    private inspectAssignment(arg: string, argWord?: BashWordNode): boolean {
+        const eq = arg.indexOf("=");
+        if (eq === -1) {
+            return /^[A-Za-z_][A-Za-z0-9_]*$/.test(arg);
+        }
+        const name = arg.slice(0, eq);
+        if (eq === 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+            return false;
+        }
+        if (isDangerousEnvName(name)) {
+            return false;
+        }
+        return this.inspectValue(arg.slice(eq + 1), true, argWord);
+    }
+
+    private inspectAstRedirections(): boolean {
+        if (this.astCommand === undefined) {
+            return true;
+        }
+        for (const redirection of this.astCommand.redirections) {
+            const operator = redirection.operator;
+            if (operator === "<<" || operator === "<<-" || redirection.heredoc !== undefined) {
+                addUnsafeReason(this.diagnostics, UnsafeReason.DYNAMIC_PATH);
+                return false;
+            }
+
+            const target = redirection.target;
+            if (target === undefined) {
+                if (operator === "2>&1") {
+                    continue;
+                }
+                return false;
+            }
+            if (!this.inspectValue(target.value, true, target)) {
+                return false;
+            }
+            if (
+                target.kind !== "process-substitution" &&
+                operator !== "<" &&
+                !operator.includes(">&") &&
+                !SPECIAL_ALLOWED_PATHS.has(target.value)
+            ) {
+                this.writes = true;
+            }
+        }
+        return true;
+    }
+
+    private finish(): ExtractedCommandAccess | null {
+        if (!this.dispatched) {
+            return null;
+        }
+        if (this.activeSpec !== this.spec && this.activeSpec.validate) {
+            const activeArgv = this.args.slice(this.activeArgvStart);
+            if (!this.activeSpec.validate(activeArgv)) {
+                return null;
+            }
+        }
+        if (this.activeSpec.safeModeFlags && !hasSafeModeFlag(this.args, this.activeSpec)) {
+            addUnsafeReason(this.diagnostics, UnsafeReason.UNSAFE_MODE);
+            return null;
+        }
+        return {
+            paths: this.paths,
+            positionalPaths: this.positionalPaths,
+            writes: this.writes,
+            requiresAdditionalRoot: this.requiresAdditionalRoot,
+            tags: [...this.tags],
+        };
+    }
+}
+
 export function extractCommandPaths(
     args: string[],
     spec: CommandSpec,
@@ -453,380 +849,13 @@ export function extractCommandPaths(
     context?: CommandAccessContext,
     astCommand?: BashCommand,
 ): ExtractedCommandAccess | null {
-    const paths: string[] = [];
-    const commandWords = astCommand?.words.slice(astCommand.environment.length);
-    const wordAt = (index: number): BashWordNode | undefined => commandWords?.[index];
-    const positionalPaths: string[] = [];
-    const tags = new Set<CommandTag>(spec.tags);
-    let writes = spec.writes === true;
-    let requiresAdditionalRoot = false;
-    let afterDoubleDash = false;
-    let positionalSeen = false;
-
-    // Commands with subcommands (e.g. git) dispatch on the first positional:
-    // it must name a known subcommand, after which the subcommand's spec
-    // governs the remaining arguments. The parent's unsafe flags apply before
-    // dispatch only (after it they would collide with subcommand flags,
-    // e.g. `git log -C` means detect-copies, not change directory).
-    const subcommands = spec.subcommands;
-    let activeSpec = spec;
-    // Index in the normalized argv where the active spec begins. For a
-    // regular command this is 0; for `git diff`, it points at `diff`, so the
-    // diff validator receives ["diff", ...] rather than ["git", "diff", ...].
-    let activeArgvStart = 0;
-    let dispatched = subcommands === undefined;
-    let positionals = activeSpec.positionals ?? "paths";
-    let patternProvided = positionals !== "first-pattern" || hasPatternBypass(args, activeSpec);
-
-    const adoptSpec = (s: CommandSpec) => {
-        activeSpec = s;
-        s.tags?.forEach((tag) => tags.add(tag));
-        positionals = s.positionals ?? "paths";
-        patternProvided = positionals !== "first-pattern" || hasPatternBypass(args, s);
-    };
-
-    const inspectValue = (value: string, pathContext: boolean, word?: BashWordNode): boolean => {
-        if (
-            (activeSpec.additionalRootOnly && hasDynamicShellExpansion(value)) ||
-            (pathContext && hasUnmodeledPathExpansion(value, word))
-        ) {
-            addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
-            return false;
-        }
-
-        const substitution = inspectShellSubstitution(
-            value,
-            cwd,
-            options,
-            pathContext,
-            diagnostics,
-            context,
-            word,
-        );
-        if (substitution === null) return false;
-        if (substitution !== undefined) {
-            paths.push(...substitution.paths);
-            writes = writes || substitution.heuristic === Heuristic.SAFE_EDIT;
-        } else if (pathContext) {
-            paths.push(value);
-        }
-        return true;
-    };
-
-    const inspectPositionalPath = (value: string, word?: BashWordNode): boolean => {
-        const pathCount = paths.length;
-        if (!inspectValue(value, true, word)) {
-            return false;
-        }
-        positionalPaths.push(...paths.slice(pathCount));
-        return true;
-    };
-
-    for (let i = 1; i < args.length; i++) {
-        const arg = args[i];
-        const argWord = wordAt(i);
-
-        // Shell redirections and substitutions retain their meaning after a
-        // command's `--`; only command flag parsing stops there. AST commands
-        // expose redirections separately, so the legacy token handling is
-        // only needed for the parsed-arguments entrypoint.
-        if (
-            astCommand === undefined &&
-            (parseBashAst(arg).singleCommand?.singleRedirection?.operator === "<<" ||
-                parseBashAst(arg).singleCommand?.singleRedirection?.operator === "<<-")
-        ) {
-            // Parsed-argument input does not retain heredoc body expansion
-            // metadata. Falling back prevents hidden substitutions from executing
-            // under an otherwise safe outer command.
-            addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
-            return null;
-        }
-
-        if (astCommand === undefined && REDIRECTION_OPERATORS.has(arg)) {
-            const target = args[++i];
-            if (target === undefined) {
-                return null;
-            }
-
-            if (!inspectValue(target, true)) {
-                return null;
-            }
-            // File-descriptor duplication (for example 2>&1) is not
-            // a filesystem write. All other non-special redirection
-            // targets can create or overwrite a file.
-            const targetSubstitution = parseBashAst(target).singleCommand?.singleSubstitution;
-            const processTarget =
-                targetSubstitution?.kind === "process-input" ||
-                targetSubstitution?.kind === "process-output";
-            if (
-                !processTarget &&
-                arg !== "<" &&
-                !target.startsWith("&") &&
-                !SPECIAL_ALLOWED_PATHS.has(target)
-            ) {
-                writes = true;
-            }
-            continue;
-        }
-
-        const processSubstitution =
-            argWord === undefined
-                ? (() => {
-                      const substitution = parseBashAst(arg).singleCommand?.singleSubstitution;
-                      return (
-                          substitution?.kind === "process-input" ||
-                          substitution?.kind === "process-output"
-                      );
-                  })()
-                : argWord.kind === "process-substitution";
-        if (processSubstitution) {
-            if (!inspectValue(arg, false, argWord)) {
-                return null;
-            }
-            continue;
-        }
-
-        if (!afterDoubleDash) {
-            if (arg === "--") {
-                afterDoubleDash = true;
-                continue;
-            }
-
-            if (arg.startsWith("--")) {
-                const eq = arg.indexOf("=");
-                const name = eq === -1 ? arg : arg.slice(0, eq);
-                const inline = eq === -1 ? undefined : arg.slice(eq + 1);
-                const flagSpec = activeSpec.flags?.[name];
-
-                if (!flagSpec && activeSpec.rejectUnknownFlags) {
-                    addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_FLAG);
-                    return null;
-                }
-                if (flagSpec?.unsafe) {
-                    addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_FLAG);
-                    return null;
-                }
-                if (flagSpec?.writes) {
-                    writes = true;
-                }
-                if (flagSpec?.requiresAdditionalRoot) {
-                    requiresAdditionalRoot = true;
-                }
-
-                const values = flagSpec?.values ?? 0;
-                if (values > 0) {
-                    if (inline !== undefined) {
-                        // inline value fills slot 0; multi-value flags do
-                        // not have a usable inline form
-                        if (values > 1) {
-                            return null;
-                        }
-                        if (!inspectValue(inline, hasPathSlot(flagSpec, 0), argWord)) {
-                            return null;
-                        }
-                        continue;
-                    }
-                    for (let slot = 0; slot < values; slot++) {
-                        const value = args[i + 1 + slot];
-                        if (value === undefined) {
-                            return null;
-                        }
-                        if (
-                            !inspectValue(value, hasPathSlot(flagSpec, slot), wordAt(i + 1 + slot))
-                        ) {
-                            return null;
-                        }
-                    }
-                    i += values;
-                    continue;
-                }
-
-                // unknown long flag with inline value: treat value as path
-                if (inline !== undefined && !inspectValue(inline, true, argWord)) {
-                    return null;
-                }
-                continue;
-            }
-
-            if (arg.length > 1 && arg.startsWith("-")) {
-                // whole-arg unsafe flags: find's expression actions are
-                // single-dash multi-character tokens, not short clusters
-                // (-delete, -exec, -fprint, ...)
-                if (activeSpec.flags?.[arg]?.unsafe) {
-                    addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_FLAG);
-                    return null;
-                }
-
-                const cluster = arg.slice(1);
-                for (let j = 0; j < cluster.length; j++) {
-                    const flagSpec = activeSpec.flags?.[`-${cluster[j]}`];
-                    if (flagSpec?.writes) {
-                        writes = true;
-                    }
-                    if (flagSpec?.requiresAdditionalRoot) {
-                        requiresAdditionalRoot = true;
-                    }
-                    if ((flagSpec?.values ?? 0) > 0) {
-                        break;
-                    }
-                }
-
-                const writeState: { value: boolean } = { value: writes };
-                const next = handleShortCluster(
-                    args,
-                    i,
-                    activeSpec,
-                    paths,
-                    cwd,
-                    options,
-                    writeState,
-                    diagnostics,
-                    context,
-                    wordAt,
-                );
-                writes = writeState.value;
-                if (next === null) {
-                    return null;
-                }
-                i = next;
-                continue;
-            }
-        }
-
-        // positional argument
-        if (!dispatched) {
-            const sub = subcommands![arg];
-            if (sub === undefined) {
-                addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_SUBCOMMAND);
-                return null;
-            }
-            adoptSpec(sub);
-            activeArgvStart = i;
-            dispatched = true;
-            continue;
-        }
-
-        switch (positionals) {
-            case "none":
-                return null;
-            case "ignore":
-                if (!inspectValue(arg, false, argWord)) {
-                    return null;
-                }
-                continue;
-            case "first-pattern":
-                if (!positionalSeen && !patternProvided) {
-                    positionalSeen = true;
-                    if (!inspectValue(arg, false, argWord)) {
-                        return null;
-                    }
-                    continue;
-                }
-                if (!inspectPositionalPath(arg, argWord)) {
-                    return null;
-                }
-                continue;
-            case "first-path":
-                if (!positionalSeen) {
-                    positionalSeen = true;
-                    if (!inspectPositionalPath(arg, argWord)) {
-                        return null;
-                    }
-                } else if (!inspectValue(arg, false, argWord)) {
-                    return null;
-                }
-                continue;
-            case "assignments": {
-                // env-assignment positional (the export builtin): NAME=VALUE
-                // is checked like a leading env assignment (dangerous names
-                // ineligible, value path-checked); a bare NAME only marks an
-                // existing variable for export — nothing to check
-                const eq = arg.indexOf("=");
-                if (eq === -1) {
-                    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(arg)) {
-                        return null;
-                    }
-                    continue;
-                }
-                const name = arg.slice(0, eq);
-                if (eq === 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-                    return null;
-                }
-                if (isDangerousEnvName(name)) {
-                    return null;
-                }
-                if (!inspectValue(arg.slice(eq + 1), true, argWord)) {
-                    return null;
-                }
-                continue;
-            }
-            default:
-                if (!inspectPositionalPath(arg, argWord)) {
-                    return null;
-                }
-                continue;
-        }
-    }
-
-    if (astCommand !== undefined) {
-        for (const redirection of astCommand.redirections) {
-            const operator = redirection.operator;
-            if (operator === "<<" || operator === "<<-" || redirection.heredoc !== undefined) {
-                // Falling back prevents hidden substitutions from executing
-                // under an otherwise safe outer command.
-                addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
-                return null;
-            }
-
-            const target = redirection.target;
-            if (target === undefined) {
-                if (operator === "2>&1") {
-                    continue;
-                }
-                return null;
-            }
-            if (!inspectValue(target.value, true, target)) {
-                return null;
-            }
-
-            if (
-                target.kind !== "process-substitution" &&
-                operator !== "<" &&
-                !operator.includes(">&") &&
-                !SPECIAL_ALLOWED_PATHS.has(target.value)
-            ) {
-                writes = true;
-            }
-        }
-    }
-
-    // a subcommand-taking command with no subcommand (e.g. bare `git`)
-    if (!dispatched) {
-        return null;
-    }
-
-    // Subcommands may have their own invocation-level safety check. Their
-    // spec receives a subcommand-relative normalized argv vector, with the
-    // subcommand name at argv[0]. The parent check is performed by
-    // isCommandConfined before extraction.
-    if (activeSpec !== spec && activeSpec.validate) {
-        const activeArgv = args.slice(activeArgvStart);
-        if (!activeSpec.validate(activeArgv)) {
-            return null;
-        }
-    }
-
-    // default mode is unsafe unless a read-only mode flag is present
-    if (activeSpec.safeModeFlags && !hasSafeModeFlag(args, activeSpec)) {
-        addUnsafeReason(diagnostics, UnsafeReason.UNSAFE_MODE);
-        return null;
-    }
-
-    return {
-        paths,
-        positionalPaths,
-        writes,
-        requiresAdditionalRoot,
-        tags: [...tags],
-    };
+    return new CommandPathExtractor(
+        args,
+        spec,
+        cwd,
+        options,
+        diagnostics,
+        context,
+        astCommand,
+    ).extract();
 }

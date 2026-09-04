@@ -26,4 +26,6 @@ Complexity metrics are review signals, not defects. A high score should trigger 
 
 When prioritizing refactors, start with delegated-agent lifecycle/state-machine orchestration and sandbox parser/policy phases. Persistence normalization and validation boundaries are secondary; TUI rendering and input handling can usually be addressed incrementally. Preserve conservative security behavior and existing tests when decomposing sandbox logic.
 
+`extractCommandPaths` is implemented through a private `CommandPathExtractor` context. Its extraction loop delegates legacy redirections, options, process substitutions, positional modes, AST redirections, and final validation to named methods while preserving conservative fallbacks. Argument helpers consistently return the next unprocessed index; an unchanged index means no match, and `null` means unsafe.
+
 Use `scripts/cognitive_load_report.py` for current measurements rather than storing threshold values or dated score tables in this memory.

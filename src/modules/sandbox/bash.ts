@@ -25,6 +25,7 @@ interface BashLexedSubstitution {
 interface BashDelimitedRead {
     value: string;
     complete: boolean;
+    nextIndex: number;
 }
 
 interface BashLexedHeredoc {
@@ -77,555 +78,652 @@ type AssignmentState = "candidate" | "value" | "invalid";
  *
  * Quotes are stripped from output but content is preserved.
  */
-function tokenizeBash(input: string): BashLexedCommand[] {
-    const commands: BashLexedCommand[] = [];
-    const currentArgs: BashLexedToken[] = [];
-    let currentArg = "";
-    let currentArgProtected = false;
-    let currentSubstitutions: BashLexedSubstitution[] = [];
-    let assignmentState: AssignmentState = "candidate";
-    let quote: string | null = null;
-    const heredocs: BashLexedHeredoc[] = [];
-    let i = 0;
+class BashTokenizer {
+    private readonly commands: BashLexedCommand[] = [];
+    private readonly currentArgs: BashLexedToken[] = [];
+    private currentArg = "";
+    private currentArgProtected = false;
+    private currentSubstitutions: BashLexedSubstitution[] = [];
+    private assignmentState: AssignmentState = "candidate";
+    private quote: string | null = null;
+    private readonly heredocs: BashLexedHeredoc[] = [];
 
-    const pushArg = (allowEmpty = false): BashLexedWordToken | undefined => {
-        if (!allowEmpty && currentArg === "") {
+    public constructor(private readonly input: string) {}
+
+    public tokenize(): BashLexedCommand[] {
+        for (let index = 0; index < this.input.length;) {
+            index = this.parseNext(index);
+        }
+
+        for (const pendingHeredoc of this.heredocs) {
+            pendingHeredoc.complete = false;
+        }
+        this.pushCommand();
+        return this.commands;
+    }
+
+    /**
+     * Try parsers in grammar order. A parser returns the input index when it
+     * does not recognize anything; a successful parser must return a larger
+     * index. The final regular-character parser guarantees progress.
+     *
+     * Keep this order in sync with Bash syntax precedence: heredoc bodies,
+     * quoted content, continuations/quotes, substitutions, heredoc
+     * declarations, operators, redirections, separators, escapes, and words.
+     */
+    private parseNext(index: number): number {
+        let nextIndex = this.parseHeredocContent(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseQuotedCharacter(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseLineContinuation(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseQuoteStart(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseCommandSubstitution(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseBacktickSubstitution(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseProcessSubstitution(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseHeredocDeclaration(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseOperator(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseRedirection(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseNewline(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseEscape(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseWhitespace(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        return this.parseRegularCharacter(index);
+    }
+
+    private pushArg(allowEmpty = false): BashLexedWordToken | undefined {
+        if (!allowEmpty && this.currentArg === "") {
             return undefined;
         }
 
         const assignment =
-            assignmentState === "invalid"
+            this.assignmentState === "invalid"
                 ? undefined
-                : /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(currentArg);
+                : /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(this.currentArg);
         const token: BashLexedWordToken = {
             type: "word",
-            value: currentArg,
-            protected: currentArgProtected,
-            substitutions: currentSubstitutions,
+            value: this.currentArg,
+            protected: this.currentArgProtected,
+            substitutions: this.currentSubstitutions,
             ...(assignment === null || assignment === undefined
                 ? {}
                 : { assignment: { name: assignment[1], value: assignment[2] } }),
         };
-        currentArgs.push(token);
-        currentArg = "";
-        currentArgProtected = false;
-        currentSubstitutions = [];
-        assignmentState = "candidate";
+        this.currentArgs.push(token);
+        this.currentArg = "";
+        this.currentArgProtected = false;
+        this.currentSubstitutions = [];
+        this.assignmentState = "candidate";
         return token;
-    };
+    }
 
-    const pushSyntaxToken = (
-        token:
-            | {
-                  type: "operator";
-                  value: BashChainOperator;
-              }
-            | {
-                  type: "redirection";
-                  value: BashRedirectionOperator;
-              },
-    ): void => {
-        pushArg();
-        currentArgs.push(token as BashLexedToken);
-    };
+    private pushSyntaxToken(token: BashLexedOperatorToken | BashLexedRedirectionToken): void {
+        this.pushArg();
+        this.currentArgs.push(token);
+    }
 
-    const appendSubstitution = (substitution: BashLexedSubstitution): void => {
-        currentArg += substitution.value;
-        currentSubstitutions.push(substitution);
-    };
+    private appendSubstitution(substitution: BashLexedSubstitution): void {
+        this.currentArg += substitution.value;
+        this.currentSubstitutions.push(substitution);
+    }
 
-    const appendUnquotedChar = (char: string): void => {
-        if (assignmentState === "candidate") {
+    private appendUnquotedChar(char: string): void {
+        if (this.assignmentState === "candidate") {
             if (char === "=") {
-                const prefix = currentArg;
-                assignmentState = /^[A-Za-z_][A-Za-z0-9_]*$/.test(prefix) ? "value" : "invalid";
+                const prefix = this.currentArg;
+                this.assignmentState = /^[A-Za-z_][A-Za-z0-9_]*$/.test(prefix)
+                    ? "value"
+                    : "invalid";
             } else {
                 const validNameChar =
-                    currentArg.length === 0
+                    this.currentArg.length === 0
                         ? /^[A-Za-z_]$/.test(char)
                         : /^[A-Za-z0-9_]$/.test(char);
                 if (!validNameChar) {
-                    assignmentState = "invalid";
+                    this.assignmentState = "invalid";
                 }
             }
         }
-        currentArg += char;
-    };
+        this.currentArg += char;
+    }
 
-    const pushCommand = () => {
-        pushArg();
-        if (currentArgs.length > 0) {
-            commands.push([...currentArgs]);
-            currentArgs.length = 0;
+    private pushCommand(): void {
+        this.pushArg();
+        if (this.currentArgs.length === 0) {
+            return;
         }
-    };
+        this.commands.push([...this.currentArgs]);
+        this.currentArgs.length = 0;
+    }
 
-    const readBalanced = (open: string, close: string): BashDelimitedRead => {
+    private readBalanced(index: number, open: string, close: string): BashDelimitedRead {
         let depth = 1;
         let result = "";
         let complete = false;
         let nestedComplete = true;
+        let nextIndex = index;
         const quotes: string[] = [];
-        while (i < input.length && depth > 0) {
-            const c = input[i];
+
+        while (nextIndex < this.input.length && depth > 0) {
+            const char = this.input[nextIndex]!;
+            const nextChar = this.input[nextIndex + 1];
             const quote = quotes[quotes.length - 1];
+
             if (quote !== undefined) {
-                if (quote !== "'" && c === "$" && input[i + 1] === "(") {
+                if (quote !== "'" && char === "$" && nextChar === "(") {
                     result += "$(";
-                    i += 2;
-                    const nested = readBalanced("(", ")");
+                    const nested = this.readBalanced(nextIndex + 2, "(", ")");
                     result += nested.value;
-                    if (!nested.complete) {
-                        nestedComplete = false;
-                    }
+                    nextIndex = nested.nextIndex;
+                    nestedComplete = nestedComplete && nested.complete;
                     continue;
                 }
-                if ((quote === '"' || quote === "`") && c === "\\" && i + 1 < input.length) {
-                    result += c + input[i + 1];
-                    i += 2;
+
+                if ((quote === '"' || quote === "`") && char === "\\" && nextChar !== undefined) {
+                    result += char + nextChar;
+                    nextIndex += 2;
                     continue;
                 }
-                if (c === quote) {
+
+                if (char === quote) {
                     quotes.pop();
                 }
-                result += c;
-                i++;
+
+                result += char;
+                nextIndex++;
                 continue;
             }
-            if (c === "\\" && i + 1 < input.length) {
-                result += c + input[i + 1];
-                i += 2;
+
+            if (char === "\\" && nextChar !== undefined) {
+                result += char + nextChar;
+                nextIndex += 2;
                 continue;
             }
-            if (c === "$" && input[i + 1] === "(") {
+
+            if (char === "$" && nextChar === "(") {
                 result += "$(";
-                i += 2;
-                const nested = readBalanced("(", ")");
+                const nested = this.readBalanced(nextIndex + 2, "(", ")");
                 result += nested.value;
-                if (!nested.complete) {
-                    nestedComplete = false;
-                }
+                nextIndex = nested.nextIndex;
+                nestedComplete = nestedComplete && nested.complete;
                 continue;
             }
-            if (c === '"' || c === "'" || c === "`") {
-                quotes.push(c);
-                result += c;
-                i++;
+
+            if (char === '"' || char === "'" || char === "`") {
+                quotes.push(char);
+                result += char;
+                nextIndex++;
                 continue;
             }
-            if (c === open) {
+
+            if (char === open) {
                 depth++;
-            } else if (c === close) {
+            } else if (char === close) {
                 depth--;
                 complete = depth === 0 && nestedComplete;
             }
-            result += c;
-            i++;
-        }
-        return { value: result, complete };
-    };
 
-    const readBacktick = (): BashDelimitedRead => {
-        i++;
+            result += char;
+            nextIndex++;
+        }
+
+        return { value: result, complete, nextIndex };
+    }
+
+    private readBacktick(index: number): BashDelimitedRead {
+        let nextIndex = index + 1;
         let result = "`";
-        let complete = false;
-        while (i < input.length && input[i] !== "`") {
-            if (input[i] === "\\" && i + 1 < input.length) {
-                result += input[i] + input[i + 1];
-                i += 2;
+
+        while (nextIndex < this.input.length && this.input[nextIndex] !== "`") {
+            const char = this.input[nextIndex]!;
+            const nextChar = this.input[nextIndex + 1];
+            if (char === "\\" && nextChar !== undefined) {
+                result += char + nextChar;
+                nextIndex += 2;
                 continue;
             }
-            result += input[i];
-            i++;
+            result += char;
+            nextIndex++;
         }
-        if (i < input.length) {
-            result += "`";
-            i++;
-            complete = true;
+        if (nextIndex >= this.input.length) {
+            return { value: result, complete: false, nextIndex };
         }
-        return { value: result, complete };
-    };
+        result += "`";
+        nextIndex++;
+        return { value: result, complete: true, nextIndex };
+    }
 
-    while (i < input.length) {
-        const char = input[i];
+    private parseHeredocContent(index: number): number {
+        if (this.heredocs.length === 0 || this.input[index] !== "\n") {
+            return index;
+        }
 
-        // Heredoc content mode - consume queued bodies in declaration order.
-        if (heredocs.length > 0) {
-            if (char === "\n") {
-                pushArg();
-                i++;
-                const pending = heredocs.splice(0);
-                for (let index = 0; index < pending.length; index++) {
-                    const current = pending[index];
-                    const bodyLines: string[] = [];
-                    let complete = false;
-                    while (i < input.length) {
-                        const lineStart = i;
-                        const lineEnd = input.indexOf("\n", lineStart);
-                        const line =
-                            lineEnd === -1
-                                ? input.slice(lineStart)
-                                : input.slice(lineStart, lineEnd);
-                        const lineToCheck = current.stripTabs ? line.replace(/^\t+/, "") : line;
+        this.pushArg();
+        let nextIndex = index + 1;
+        const pending = this.heredocs.splice(0);
+        for (let pendingIndex = 0; pendingIndex < pending.length; pendingIndex++) {
+            const current = pending[pendingIndex];
+            const body = this.parseHeredocBody(nextIndex, current);
+            nextIndex = body.nextIndex;
+            if (body.complete) {
+                continue;
+            }
+            for (const remaining of pending.slice(pendingIndex + 1)) {
+                remaining.body = "";
+                remaining.complete = false;
+            }
+            nextIndex = this.input.length;
+            break;
+        }
+        this.pushCommand();
+        return nextIndex;
+    }
 
-                        if (lineToCheck === current.delimiter) {
-                            current.body = bodyLines.join("\n");
-                            current.complete = true;
-                            current.terminator = line;
-                            currentArgs.push({
-                                type: "heredoc-terminator",
-                                value: current.delimiter,
-                            });
-                            complete = true;
-                            i = lineEnd === -1 ? input.length : lineEnd + 1;
-                            break;
-                        }
-                        bodyLines.push(line);
-                        i = lineEnd === -1 ? input.length : lineEnd + 1;
-                    }
-                    if (complete) {
-                        continue;
-                    }
+    private parseHeredocBody(
+        index: number,
+        heredoc: BashLexedHeredoc,
+    ): { complete: boolean; nextIndex: number } {
+        const bodyLines: string[] = [];
+        let nextIndex = index;
+        while (nextIndex < this.input.length) {
+            const lineStart = nextIndex;
+            const lineEnd = this.input.indexOf("\n", lineStart);
+            const line =
+                lineEnd === -1 ? this.input.slice(lineStart) : this.input.slice(lineStart, lineEnd);
+            const lineToCheck = heredoc.stripTabs ? line.replace(/^\t+/, "") : line;
+            if (lineToCheck === heredoc.delimiter) {
+                heredoc.body = bodyLines.join("\n");
+                heredoc.complete = true;
+                heredoc.terminator = line;
+                this.currentArgs.push({
+                    type: "heredoc-terminator",
+                    value: heredoc.delimiter,
+                });
+                nextIndex = lineEnd === -1 ? this.input.length : lineEnd + 1;
+                return { complete: true, nextIndex };
+            }
+            bodyLines.push(line);
+            nextIndex = lineEnd === -1 ? this.input.length : lineEnd + 1;
+        }
+        heredoc.body = bodyLines.join("\n");
+        heredoc.complete = false;
+        return { complete: false, nextIndex };
+    }
 
-                    current.body = bodyLines.join("\n");
-                    current.complete = false;
-                    for (const remaining of pending.slice(index + 1)) {
-                        remaining.body = "";
-                        remaining.complete = false;
-                    }
-                    i = input.length;
+    private parseQuotedCharacter(index: number): number {
+        const quote = this.quote;
+        if (quote === null) {
+            return index;
+        }
+
+        const char = this.input[index]!;
+        const nextChar = this.input[index + 1];
+        if (quote === '"' && char === "$" && nextChar === "(") {
+            return this.parseCommandSubstitution(index);
+        }
+        if (quote === '"' && char === "`") {
+            return this.appendBacktickSubstitution(index);
+        }
+        if (char === "\\" && quote === '"' && nextChar !== undefined) {
+            if (
+                nextChar !== '"' &&
+                nextChar !== "\\" &&
+                nextChar !== "$" &&
+                nextChar !== "`" &&
+                nextChar !== "\n"
+            ) {
+                this.currentArg += char;
+                return index + 1;
+            }
+            this.currentArgProtected = true;
+            if (nextChar !== "\n") {
+                this.currentArg += "\\" + nextChar;
+            }
+            return index + 2;
+        }
+        if (char === quote) {
+            this.quote = null;
+            const nextIndex = index + 1;
+            if (this.input[nextIndex] === undefined || /[\s]/.test(this.input[nextIndex]!)) {
+                this.pushArg(true);
+            }
+            return nextIndex;
+        }
+        this.currentArg += char;
+        return index + 1;
+    }
+
+    private parseLineContinuation(index: number): number {
+        if (this.input[index] !== "\\" || this.input[index + 1] !== "\n") {
+            return index;
+        }
+        this.currentArgProtected = true;
+        return index + 2;
+    }
+
+    private parseQuoteStart(index: number): number {
+        const char = this.input[index];
+        if (char !== '"' && char !== "'") {
+            return index;
+        }
+        this.currentArgProtected = true;
+        if (this.assignmentState === "candidate") {
+            this.assignmentState = "invalid";
+        }
+        this.quote = char;
+        return index + 1;
+    }
+
+    private parseCommandSubstitution(index: number): number {
+        if (this.input[index] !== "$" || this.input[index + 1] !== "(") {
+            return index;
+        }
+        const balanced = this.readBalanced(index + 2, "(", ")");
+        const substitution = "$(" + balanced.value;
+        this.appendSubstitution({
+            kind: "command",
+            value: substitution,
+            content: balanced.complete ? balanced.value.slice(0, -1) : balanced.value,
+            complete: balanced.complete,
+        });
+        return balanced.nextIndex;
+    }
+
+    private parseBacktickSubstitution(index: number): number {
+        if (this.input[index] !== "`") {
+            return index;
+        }
+        return this.appendBacktickSubstitution(index);
+    }
+
+    private appendBacktickSubstitution(index: number): number {
+        const backtick = this.readBacktick(index);
+        this.appendSubstitution({
+            kind: "backtick",
+            value: backtick.value,
+            content: backtick.complete ? backtick.value.slice(1, -1) : backtick.value.slice(1),
+            complete: backtick.complete,
+        });
+        return backtick.nextIndex;
+    }
+
+    private parseProcessSubstitution(index: number): number {
+        const operator = this.input[index];
+        if ((operator !== "<" && operator !== ">") || this.input[index + 1] !== "(") {
+            return index;
+        }
+        const balanced = this.readBalanced(index + 2, "(", ")");
+        const substitution = operator + "(" + balanced.value;
+        this.appendSubstitution({
+            kind: operator === "<" ? "process-input" : "process-output",
+            value: substitution,
+            content: balanced.complete ? balanced.value.slice(0, -1) : balanced.value,
+            complete: balanced.complete,
+        });
+        return balanced.nextIndex;
+    }
+
+    private parseHeredocDeclaration(index: number): number {
+        if (this.input[index] !== "<" || this.input[index + 1] !== "<") {
+            return index;
+        }
+        const isStrip = this.input[index + 2] === "-";
+        this.pushSyntaxToken({ type: "redirection", value: isStrip ? "<<-" : "<<" });
+        let nextIndex = index + (isStrip ? 3 : 2);
+
+        while (nextIndex < this.input.length && /[ \t]/.test(this.input[nextIndex]!)) {
+            nextIndex++;
+        }
+
+        let delimiter = "";
+        let delimiterProtected = false;
+        const delimiterQuote = this.input[nextIndex];
+        if (delimiterQuote === '"' || delimiterQuote === "'") {
+            const quote = delimiterQuote;
+            delimiterProtected = true;
+            nextIndex++;
+            while (nextIndex < this.input.length) {
+                const char = this.input[nextIndex]!;
+                if (char === quote) {
                     break;
                 }
-                if (currentArgs.length > 0) {
-                    commands.push([...currentArgs]);
-                    currentArgs.length = 0;
-                }
-                continue;
+                delimiter += char;
+                nextIndex++;
+            }
+            if (nextIndex < this.input.length) {
+                nextIndex++;
+            }
+        } else {
+            while (nextIndex < this.input.length && !/[\s]/.test(this.input[nextIndex]!)) {
+                delimiter += this.input[nextIndex]!;
+                nextIndex++;
             }
         }
 
-        // Inside quotes
-        if (quote) {
-            if (quote === '"' && char === "$" && input[i + 1] === "(") {
-                i += 2;
-                const balanced = readBalanced("(", ")");
-                const substitution = "$(" + balanced.value;
-                appendSubstitution({
-                    kind: "command",
-                    value: substitution,
-                    content: balanced.complete ? balanced.value.slice(0, -1) : balanced.value,
-                    complete: balanced.complete,
-                });
-                continue;
-            }
-            if (quote === '"' && char === "`") {
-                const backtick = readBacktick();
-                appendSubstitution({
-                    kind: "backtick",
-                    value: backtick.value,
-                    content: backtick.complete
-                        ? backtick.value.slice(1, -1)
-                        : backtick.value.slice(1),
-                    complete: backtick.complete,
-                });
-                continue;
-            }
-            if (char === "\\" && quote === '"' && i + 1 < input.length) {
-                const next = input[i + 1];
-                if (
-                    next === '"' ||
-                    next === "\\" ||
-                    next === "$" ||
-                    next === "`" ||
-                    next === "\n"
-                ) {
-                    currentArgProtected = true;
-                    if (next !== "\n") {
-                        currentArg += "\\" + next;
-                    }
-                    i += 2;
-                    continue;
-                }
-            }
-            if (char === quote) {
-                quote = null;
-                i++;
-                const next = input[i];
-                if (next === undefined || /[\s]/.test(next)) {
-                    pushArg(true);
-                }
-                continue;
-            }
-            currentArg += char;
-            i++;
-            continue;
+        if (delimiter === "") {
+            return nextIndex;
         }
-
-        // Line continuation
-        if (char === "\\" && input[i + 1] === "\n") {
-            currentArgProtected = true;
-            i += 2;
-            continue;
+        this.currentArg = delimiter;
+        this.currentArgProtected = delimiterProtected;
+        this.assignmentState = "invalid";
+        const delimiterToken = this.pushArg();
+        if (delimiterToken === undefined) {
+            return nextIndex;
         }
+        const pendingHeredoc: BashLexedHeredoc = {
+            delimiter,
+            delimiterToken,
+            stripTabs: isStrip,
+            body: "",
+            complete: false,
+        };
+        delimiterToken.heredoc = pendingHeredoc;
+        this.heredocs.push(pendingHeredoc);
+        return nextIndex;
+    }
 
-        // Quote start
-        if (char === '"' || char === "'") {
-            currentArgProtected = true;
-            if (assignmentState === "candidate") {
-                assignmentState = "invalid";
-            }
-            quote = char;
-            i++;
-            continue;
+    private parseOperator(index: number): number {
+        const char = this.input[index];
+        const next = this.input[index + 1];
+        if (char === "&" && next === "&") {
+            this.pushSyntaxToken({ type: "operator", value: "&&" });
+            return index + 2;
         }
-
-        // Subshell $(...)
-        if (char === "$" && input[i + 1] === "(") {
-            i += 2;
-            const balanced = readBalanced("(", ")");
-            const substitution = "$(" + balanced.value;
-            appendSubstitution({
-                kind: "command",
-                value: substitution,
-                content: balanced.complete ? balanced.value.slice(0, -1) : balanced.value,
-                complete: balanced.complete,
-            });
-            continue;
+        if (char === "|" && next === "|") {
+            this.pushSyntaxToken({ type: "operator", value: "||" });
+            return index + 2;
         }
-
-        // Backtick subshell `...`
-        if (char === "`") {
-            const backtick = readBacktick();
-            appendSubstitution({
-                kind: "backtick",
-                value: backtick.value,
-                content: backtick.complete ? backtick.value.slice(1, -1) : backtick.value.slice(1),
-                complete: backtick.complete,
-            });
-            continue;
-        }
-
-        // Process substitution <(...) or >(...)
-        if ((char === "<" || char === ">") && input[i + 1] === "(") {
-            i += 2;
-            const balanced = readBalanced("(", ")");
-            const substitution = char + "(" + balanced.value;
-            appendSubstitution({
-                kind: char === "<" ? "process-input" : "process-output",
-                value: substitution,
-                content: balanced.complete ? balanced.value.slice(0, -1) : balanced.value,
-                complete: balanced.complete,
-            });
-            continue;
-        }
-
-        // Heredoc << or <<-
-        if (char === "<" && input[i + 1] === "<") {
-            const isStrip = input[i + 2] === "-";
-            pushSyntaxToken({ type: "redirection", value: isStrip ? "<<-" : "<<" });
-            i += isStrip ? 3 : 2;
-
-            while (i < input.length && /[ \t]/.test(input[i])) i++;
-
-            let delimiter = "";
-            let delimiterProtected = false;
-            if (i < input.length && (input[i] === '"' || input[i] === "'")) {
-                const q = input[i];
-                delimiterProtected = true;
-                i++;
-                while (i < input.length && input[i] !== q) {
-                    delimiter += input[i];
-                    i++;
-                }
-                if (i < input.length) i++;
-            } else {
-                while (i < input.length && !/[\s]/.test(input[i])) {
-                    delimiter += input[i];
-                    i++;
-                }
-            }
-
-            if (delimiter) {
-                currentArg = delimiter;
-                currentArgProtected = delimiterProtected;
-                assignmentState = "invalid";
-                const delimiterToken = pushArg();
-                if (delimiterToken !== undefined) {
-                    const pendingHeredoc: BashLexedHeredoc = {
-                        delimiter,
-                        delimiterToken,
-                        stripTabs: isStrip,
-                        body: "",
-                        complete: false,
-                    };
-                    delimiterToken.heredoc = pendingHeredoc;
-                    heredocs.push(pendingHeredoc);
-                }
-            }
-            continue;
-        }
-
-        // Operators: && || | ; &
-        if (char === "&" && input[i + 1] === "&") {
-            pushSyntaxToken({ type: "operator", value: "&&" });
-            i += 2;
-            continue;
-        }
-        if (char === "|" && input[i + 1] === "|") {
-            pushSyntaxToken({ type: "operator", value: "||" });
-            i += 2;
-            continue;
-        }
-        if (char === "|" && input[i + 1] === "&") {
-            pushSyntaxToken({ type: "operator", value: "|&" });
-            i += 2;
-            continue;
+        if (char === "|" && next === "&") {
+            this.pushSyntaxToken({ type: "operator", value: "|&" });
+            return index + 2;
         }
         if (char === "|") {
-            pushSyntaxToken({ type: "operator", value: "|" });
-            i++;
-            continue;
+            this.pushSyntaxToken({ type: "operator", value: "|" });
+            return index + 1;
         }
         if (char === ";") {
-            pushSyntaxToken({ type: "operator", value: ";" });
-            i++;
-            continue;
+            this.pushSyntaxToken({ type: "operator", value: ";" });
+            return index + 1;
         }
-        if (char === "&" && input[i + 1] === ">" && input[i + 2] === ">") {
-            pushSyntaxToken({ type: "redirection", value: "&>>" });
-            i += 3;
-            continue;
+        if (char === "&" && next === ">" && this.input[index + 2] === ">") {
+            this.pushSyntaxToken({ type: "redirection", value: "&>>" });
+            return index + 3;
         }
-        if (char === "&" && input[i + 1] === ">") {
-            pushSyntaxToken({ type: "redirection", value: "&>" });
-            i += 2;
-            continue;
+        if (char === "&" && next === ">") {
+            this.pushSyntaxToken({ type: "redirection", value: "&>" });
+            return index + 2;
         }
-        if (char === "&") {
-            pushSyntaxToken({ type: "operator", value: "&" });
-            i++;
-            continue;
+        if (char !== "&") {
+            return index;
         }
+        this.pushSyntaxToken({ type: "operator", value: "&" });
+        return index + 1;
+    }
 
-        // Redirections: < > >> 2> 2>> 2>&1
+    private parseRedirection(index: number): number {
+        let nextIndex = this.parseNumberedRedirection(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        nextIndex = this.parseOutputFdDuplication(index);
+        if (nextIndex !== index) {
+            return nextIndex;
+        }
+        if (this.input[index] === ">" && this.input[index + 1] === ">") {
+            this.pushSyntaxToken({ type: "redirection", value: ">>" });
+            return index + 2;
+        }
+        if (this.input[index] !== ">" && this.input[index] !== "<") {
+            return index;
+        }
+        this.pushSyntaxToken({ type: "redirection", value: this.input[index] });
+        return index + 1;
+    }
+
+    private parseNumberedRedirection(index: number): number {
+        if (this.currentArg !== "") {
+            return index;
+        }
+        const char = this.input[index]!;
         if (
-            currentArg === "" &&
             char === "2" &&
-            input[i + 1] === ">" &&
-            input[i + 2] === "&" &&
-            input[i + 3] === "1" &&
-            (input[i + 4] === undefined || /[\s;&|<>()]/.test(input[i + 4]))
+            this.input[index + 1] === ">" &&
+            this.input[index + 2] === "&" &&
+            this.input[index + 3] === "1" &&
+            (this.input[index + 4] === undefined || /[\s;&|<>()]/.test(this.input[index + 4]!))
         ) {
-            pushSyntaxToken({ type: "redirection", value: "2>&1" });
-            i += 4;
-            continue;
+            this.pushSyntaxToken({ type: "redirection", value: "2>&1" });
+            return index + 4;
         }
-        if (currentArg === "" && /^\d$/.test(char)) {
-            let fdEnd = i + 1;
-            while (/^\d$/.test(input[fdEnd] ?? "")) {
-                fdEnd++;
-            }
-            if (input[fdEnd] === ">" && input[fdEnd + 1] === "&") {
-                let targetEnd = fdEnd + 2;
-                while (/^\d$/.test(input[targetEnd] ?? "")) {
-                    targetEnd++;
-                }
-                const targetBoundary =
-                    input[targetEnd] === undefined || /[\s;&|<>()]/.test(input[targetEnd] ?? "");
-                if (targetEnd > fdEnd + 2 && targetBoundary) {
-                    const fd = input.slice(i, fdEnd);
-                    const target = input.slice(fdEnd + 2, targetEnd);
-                    const operator = `${fd}>&${target}` as BashRedirectionOperator;
-                    pushSyntaxToken({ type: "redirection", value: operator });
-                    i = targetEnd;
-                    continue;
-                }
-            }
-            if (input[fdEnd] === ">") {
-                const fd = input.slice(i, fdEnd);
-                const append = input[fdEnd + 1] === ">";
-                const operator = `${fd}${append ? ">>" : ">"}` as BashRedirectionOperator;
-                pushSyntaxToken({ type: "redirection", value: operator });
-                i = fdEnd + (append ? 2 : 1);
-                continue;
-            }
+        if (!/^\d$/.test(char)) {
+            return index;
         }
-        if (currentArg === "" && char === "2" && input[i + 1] === ">" && input[i + 2] === ">") {
-            pushSyntaxToken({ type: "redirection", value: "2>>" });
-            i += 3;
-            continue;
+        let fdEnd = index + 1;
+        while (/^\d$/.test(this.input[fdEnd] ?? "")) {
+            fdEnd++;
         }
-        if (currentArg === "" && char === "2" && input[i + 1] === ">") {
-            pushSyntaxToken({ type: "redirection", value: "2>" });
-            i += 2;
-            continue;
-        }
-        if (char === ">" && input[i + 1] === "&" && /^\d$/.test(input[i + 2] ?? "")) {
-            let targetEnd = i + 2;
-            while (/^\d$/.test(input[targetEnd + 1] ?? "")) {
+        if (this.input[fdEnd] === ">" && this.input[fdEnd + 1] === "&") {
+            let targetEnd = fdEnd + 2;
+            while (/^\d$/.test(this.input[targetEnd] ?? "")) {
                 targetEnd++;
             }
-            const target = input.slice(i + 2, targetEnd + 1);
             const targetBoundary =
-                input[targetEnd + 1] === undefined ||
-                /[\s;&|<>()]/.test(input[targetEnd + 1] ?? "");
-            if (!targetBoundary) {
-                pushSyntaxToken({ type: "redirection", value: ">" });
-                i++;
-                continue;
+                this.input[targetEnd] === undefined ||
+                /[\s;&|<>()]/.test(this.input[targetEnd] ?? "");
+            if (targetEnd > fdEnd + 2 && targetBoundary) {
+                const fd = this.input.slice(index, fdEnd);
+                const target = this.input.slice(fdEnd + 2, targetEnd);
+                const operator = `${fd}>&${target}` as BashRedirectionOperator;
+                this.pushSyntaxToken({ type: "redirection", value: operator });
+                return targetEnd;
             }
-            const operator = `>&${target}` as BashRedirectionOperator;
-            pushSyntaxToken({ type: "redirection", value: operator });
-            i = targetEnd + 1;
-            continue;
         }
-        if (char === ">" && input[i + 1] === ">") {
-            pushSyntaxToken({ type: "redirection", value: ">>" });
-            i += 2;
-            continue;
+        if (this.input[fdEnd] !== ">") {
+            return index;
         }
-        if (char === ">" || char === "<") {
-            pushSyntaxToken({ type: "redirection", value: char });
-            i++;
-            continue;
-        }
-
-        // Newline - command separator
-        if (char === "\n") {
-            pushCommand();
-            i++;
-            continue;
-        }
-
-        // Escape (not line continuation)
-        if (char === "\\" && i + 1 < input.length) {
-            currentArgProtected = true;
-            if (assignmentState === "candidate") {
-                assignmentState = "invalid";
-            }
-            i++;
-            currentArg += input[i];
-            i++;
-            continue;
-        }
-
-        // Whitespace - argument separator
-        if (/[ \t]/.test(char)) {
-            pushArg();
-            i++;
-            continue;
-        }
-
-        // Regular character
-        appendUnquotedChar(char);
-        i++;
+        const fd = this.input.slice(index, fdEnd);
+        const append = this.input[fdEnd + 1] === ">";
+        const operator = `${fd}${append ? ">>" : ">"}` as BashRedirectionOperator;
+        this.pushSyntaxToken({ type: "redirection", value: operator });
+        return fdEnd + (append ? 2 : 1);
     }
 
-    for (const pendingHeredoc of heredocs) {
-        pendingHeredoc.complete = false;
+    private parseOutputFdDuplication(index: number): number {
+        if (this.input[index] !== ">" || this.input[index + 1] !== "&") {
+            return index;
+        }
+        if (!/^\d$/.test(this.input[index + 2] ?? "")) {
+            return index;
+        }
+        let targetEnd = index + 2;
+        while (/^\d$/.test(this.input[targetEnd + 1] ?? "")) {
+            targetEnd++;
+        }
+        const target = this.input.slice(index + 2, targetEnd + 1);
+        const targetBoundary =
+            this.input[targetEnd + 1] === undefined ||
+            /[\s;&|<>()]/.test(this.input[targetEnd + 1] ?? "");
+        if (!targetBoundary) {
+            this.pushSyntaxToken({ type: "redirection", value: ">" });
+            return index + 1;
+        }
+        const operator = `>&${target}` as BashRedirectionOperator;
+        this.pushSyntaxToken({ type: "redirection", value: operator });
+        return targetEnd + 1;
     }
-    pushCommand();
-    return commands;
+
+    private parseNewline(index: number): number {
+        if (this.input[index] !== "\n") {
+            return index;
+        }
+        this.pushCommand();
+        return index + 1;
+    }
+
+    private parseEscape(index: number): number {
+        if (this.input[index] !== "\\" || this.input[index + 1] === undefined) {
+            return index;
+        }
+        this.currentArgProtected = true;
+        if (this.assignmentState === "candidate") {
+            this.assignmentState = "invalid";
+        }
+        this.currentArg += this.input[index + 1];
+        return index + 2;
+    }
+
+    private parseWhitespace(index: number): number {
+        if (this.input[index] !== " " && this.input[index] !== "\t") {
+            return index;
+        }
+        this.pushArg();
+        return index + 1;
+    }
+
+    private parseRegularCharacter(index: number): number {
+        this.appendUnquotedChar(this.input[index]!);
+        return index + 1;
+    }
+}
+
+function tokenizeBash(input: string): BashLexedCommand[] {
+    return new BashTokenizer(input).tokenize();
 }
 
 export type BashWordKind = "word" | "subshell" | "process-substitution";

@@ -3,6 +3,7 @@ import { READER_COMMANDS } from "./readers";
 import { DIRECTORY_COMMANDS } from "./directories";
 import { PATH_COMMANDS } from "./paths";
 import { TEXT_COMMANDS } from "./text";
+import { SED_COMMANDS } from "./sed";
 import { COMPARISON_COMMANDS } from "./comparison";
 import { CHECKSUM_COMMANDS } from "./checksums";
 import { ARCHIVE_COMMANDS } from "./archives";
@@ -26,6 +27,7 @@ export const KNOWN_COMMANDS: Record<string, CommandSpec> = {
     ...DIRECTORY_COMMANDS,
     ...PATH_COMMANDS,
     ...TEXT_COMMANDS,
+    ...SED_COMMANDS,
     ...COMPARISON_COMMANDS,
     ...CHECKSUM_COMMANDS,
     ...ARCHIVE_COMMANDS,

@@ -1077,6 +1077,46 @@ describe("getCwdConfinementPermission", () => {
                 expected: Heuristic.SAFE_READONLY,
             },
             {
+                desc: "sed with short option cluster expression",
+                command: "sed -ne '1p' file.txt",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "sed with inline long expression",
+                command: "sed --expression='1p' file.txt",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "sed with y transliteration",
+                command: "sed 'y/abc/ABC/' file.txt",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "sed with line length value",
+                command: "sed -l 80 '1p' file.txt",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "sed with inline line length value",
+                command: "sed --line-length=80 '1p' file.txt",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "sed options after double dash are treated as script paths",
+                command: "sed -- '1p' file.txt",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "sed input redirection token is consumed separately",
+                command: "sed '1p' < file.txt",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "sed inline script file remains rejected",
+                command: "sed --file=transform.sed file.txt",
+                expected: Heuristic.UNSAFE,
+            },
+            {
                 desc: "sed with explicit long quiet flag",
                 command: "sed --quiet -e '1p' file.txt",
                 expected: Heuristic.SAFE_READONLY,
@@ -2082,6 +2122,40 @@ describe("getCwdConfinementPermission", () => {
             },
             { desc: "git -- status", command: "git -- status", expected: Heuristic.SAFE_READONLY },
         ]);
+    });
+
+    describe("argument handoff boundaries", () => {
+        runTests([
+            {
+                desc: "long flag value leaves the following path for inspection",
+                command: "head --lines 5 /etc/passwd",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "short flag value leaves the following path for inspection",
+                command: "sort -o out.txt /etc/passwd",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "multi-value long flag leaves the following path for inspection",
+                command: "jq --slurpfile x data.json '.x' /etc/passwd",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "process substitution after double dash is still inspected",
+                command: "cat -- <(curl example.com)",
+                expected: Heuristic.UNSAFE,
+            },
+        ]);
+
+        it("checks a legacy redirection target after consuming its operator", () => {
+            expect(
+                getArgsConfinementPermission(["cat", ">", "/etc/out"], {
+                    cwd: CWD,
+                    config: {},
+                }),
+            ).toBe(Heuristic.UNSAFE);
+        });
     });
 
     describe("flag value model", () => {

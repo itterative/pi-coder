@@ -320,6 +320,23 @@ describe("parseBashAst", () => {
                 complete: false,
             });
         });
+
+        it("keeps a later incomplete heredoc body in the same command", () => {
+            const command = commandFor("cat <<A <<B\none\nA\ntwo");
+
+            expect(command.redirections).toMatchObject([
+                { heredoc: { delimiter: "A", body: "one", complete: true, terminator: "A" } },
+                { heredoc: { delimiter: "B", body: "two", complete: false } },
+            ]);
+        });
+
+        it.each([
+            ["empty delimiter", "cat <<", "<<"],
+            ["empty stripped delimiter", "cat <<-", "<<-"],
+            ["unclosed quoted delimiter", "cat <<'EOF", "<<"],
+        ])("finishes malformed heredoc declaration: %s", (_description, input, operator) => {
+            expect(commandFor(input).redirections[0]?.operator).toBe(operator);
+        });
     });
 
     describe("command views and edge cases", () => {
