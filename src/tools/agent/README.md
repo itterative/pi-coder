@@ -36,6 +36,7 @@ Before continuing a collected isolated run, the worktree `HEAD` must descend fro
 - [Workspace lifecycle](docs/agent-workspaces.md) — isolated worktrees, result disposition, leases, and the continuation flow chart.
 - [Persistence and recovery](docs/agent-persistence.md) — child transcripts, snapshots, restoration, and restart behavior.
 - [Manual workspace validation](src/tools/agent/WORKSPACE-MANUAL-VALIDATION.md) — disposable-repository lifecycle checklist.
+- [Manual snapshot GC validation](src/tools/agent/SNAPSHOT-GC-MANUAL-VALIDATION.md) — checkpoint-vs-frame counts, `kill -9` restore at the working leaf, resume-without-replay, and the kill-switch equivalence run.
 - [Implementation plan](src/tools/agent/PLAN.md) — architecture and deferred work.
 - [Revise investigation](src/tools/agent/REVISE-INVESTIGATION.md) — historical findings and remaining engineering work.
 
@@ -47,6 +48,26 @@ npx tsc --noEmit
 ```
 
 Provider and lifecycle behavior also require the manual checks in the linked documentation.
+
+### Changing delegated-run persistence
+
+The layered rules are in [Persistence and recovery](docs/agent-persistence.md) and
+`docs/agent-snapshot-gc.md`. The two that are easiest to break silently:
+
+- A **checkpoint** save (status transition, guidance park, terminal outcome, tombstone) writes a snapshot row,
+  appends one `pi-coder:agent-run-snapshot-v2` parent marker, and advances the continuation head. An
+  **intermediate** frame writes only `agent_run_working_state` and the catalog projection: never a marker, never
+  the head. `SqliteAgentRunStateWriter.persistQueued` owns that branch, and the only `intermediate` senders are
+  `onFileChanged` and `updateTranscriptLeaf` in `runs/child-setup.ts`.
+- `agent_run_continuation_heads` must always name a surviving, valid checkpoint row, and
+  `agent_run_snapshots` rows stay immutable once marked. Mutable per-run state belongs in its own table, because
+  two markers naming one changing row would let an older sibling branch restore a newer state.
+
+Covered by `test/tools/agent-run-working-state.test.ts` (frame storage, the overlay gate matrix, and the
+child-hook seam) and the V2 cases in `test/tools/agent-persistence-v2.test.ts`. Run
+[Manual snapshot GC validation](src/tools/agent/SNAPSHOT-GC-MANUAL-VALIDATION.md) after changing the save
+branching, the overlay gates, or leaf resolution: an interrupted run restoring at the wrong transcript leaf
+passes every unit test.
 
 ### Changing what a child may do
 

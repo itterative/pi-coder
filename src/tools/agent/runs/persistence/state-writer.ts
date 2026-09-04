@@ -1,6 +1,8 @@
 import {
     AgentContinuationLeaseBusyError,
     type AgentContinuationLease,
+    type AgentDroppedProgressWriteListener,
+    type AgentRunCheckpointIntent,
     type PersistedAgentRun,
 } from "../../contracts/runs";
 import { type AgentMetadataDatabase } from "../../storage/metadata";
@@ -9,19 +11,26 @@ import {
     insertAgentRunSnapshotInDatabase,
     type AgentRunSnapshotRow,
 } from "../../storage/run-snapshots";
+import {
+    clearAgentRunWorkingStateInDatabase,
+    isAgentRunWorkingStatus,
+    upsertAgentRunWorkingStateInDatabase,
+} from "../../storage/run-working-state";
 import { catalogRecord } from "./catalog-projection";
 import { type HeadRow, AgentRunJournalState, snapshotIdOf } from "./journal-heads";
 import {
     CONTINUATION_LEASE_MS,
     ContinuationLeaseLedger,
-    ENABLE_PID_LEASE_RECOVERY,
     LEASE_EXPIRED_MESSAGE,
     type LeaseRow,
-    isProcessAlive,
+    heldLeaseUntil,
 } from "./lease-ledger";
 
 export interface AgentRunStateWriter {
-    save(record: PersistedAgentRun): Promise<{ ok: true } | { ok: false; error: unknown }>;
+    save(
+        record: PersistedAgentRun,
+        intent?: AgentRunCheckpointIntent,
+    ): Promise<{ ok: true } | { ok: false; error: unknown }>;
     acquireContinuationLease?(
         runInstanceId: string,
         onLost?: () => void,
@@ -33,6 +42,8 @@ export interface AgentRunStateWriter {
 export interface AgentRunStateWriterOptions {
     initialHeads?: ReadonlyMap<string, string>;
     requireMarker?: boolean;
+    /** Called for every progress write this writer refuses to store. */
+    onDroppedProgress?: AgentDroppedProgressWriteListener;
 }
 
 type AgentRunSaveResult = { ok: true } | { ok: false; error: unknown };
@@ -65,6 +76,7 @@ class SqliteAgentRunStateWriter implements AgentRunStateWriter {
         runId: string;
     }) => string | undefined;
     private readonly requireMarker: boolean;
+    private readonly onDroppedProgress: AgentDroppedProgressWriteListener;
     private readonly leases: ContinuationLeaseLedger;
     private readonly heads: AgentRunJournalState;
     private readonly pendingAcquisitions = new Set<Promise<AgentContinuationLease>>();
@@ -83,7 +95,11 @@ class SqliteAgentRunStateWriter implements AgentRunStateWriter {
             runInstanceId: string;
             runId: string;
         }) => string | undefined,
-        { initialHeads = new Map(), requireMarker = true }: AgentRunStateWriterOptions = {},
+        {
+            initialHeads = new Map(),
+            requireMarker = true,
+            onDroppedProgress,
+        }: AgentRunStateWriterOptions = {},
     ) {
         this.parentCwd = parentCwd;
         this.database = database;
@@ -91,14 +107,18 @@ class SqliteAgentRunStateWriter implements AgentRunStateWriter {
         this.requireMarker = requireMarker;
         this.leases = new ContinuationLeaseLedger(database);
         this.heads = new AgentRunJournalState(initialHeads);
+        this.onDroppedProgress = onDroppedProgress ?? (() => {});
     }
 
-    async save(record: PersistedAgentRun): Promise<AgentRunSaveResult> {
+    async save(
+        record: PersistedAgentRun,
+        intent: AgentRunCheckpointIntent = "checkpoint",
+    ): Promise<AgentRunSaveResult> {
         if (!this.acceptingSaves) {
             return { ok: false, error: new Error(AGENT_RUN_STORAGE_CLOSED) };
         }
 
-        return this.serializeSave(() => this.persistQueued(record));
+        return this.serializeSave(() => this.persistQueued(record, intent));
     }
 
     async acquireContinuationLease(
@@ -142,12 +162,18 @@ class SqliteAgentRunStateWriter implements AgentRunStateWriter {
     }
 
     /** Runs inside the save queue, so `closed` may have flipped since `save` was called. */
-    private async persistQueued(record: PersistedAgentRun): Promise<AgentRunSaveResult> {
+    private async persistQueued(
+        record: PersistedAgentRun,
+        intent: AgentRunCheckpointIntent,
+    ): Promise<AgentRunSaveResult> {
         if (this.closed) {
             return { ok: false, error: new Error(AGENT_RUN_STORAGE_CLOSED) };
         }
         if (!record.runInstanceId) {
             return { ok: false, error: new Error(MISSING_RUN_IDENTITY_MESSAGE) };
+        }
+        if (intent === "intermediate") {
+            return this.persistProgress(record, record.runInstanceId);
         }
 
         const runInstanceId = record.runInstanceId;
@@ -161,6 +187,79 @@ class SqliteAgentRunStateWriter implements AgentRunStateWriter {
         } finally {
             await automaticLease?.release();
         }
+    }
+
+    /**
+     * Store a progress frame: the run's working row plus the browsing projection, and nothing else.
+     *
+     * No marker is appended and no head is claimed, so this write cannot move, or be moved by, the
+     * checkpoint journal. It is deliberately best-effort: this process may only overwrite the working row
+     * while it owns the run's continuation lease, and a frame that cannot be stored is worth less than the
+     * transaction that would have to fail to prove it. Failures are reported through `onDroppedProgress`
+     * rather than the refusal channel, which is reserved for writes that carry authority and is budgeted to
+     * one user warning per session.
+     */
+    private async persistProgress(
+        record: PersistedAgentRun,
+        runInstanceId: string,
+    ): Promise<AgentRunSaveResult> {
+        const status = record.status;
+        if (!isAgentRunWorkingStatus(status)) {
+            this.reportDroppedProgress(
+                record,
+                "status is a checkpoint boundary, not a progress frame",
+            );
+            return { ok: true };
+        }
+        if (!this.leases.owns(runInstanceId)) {
+            this.reportDroppedProgress(record, "no continuation lease is held here");
+            return { ok: true };
+        }
+
+        try {
+            await this.database.transaction(async (transaction) => {
+                const head = (await transaction.get(
+                    `
+                    SELECT snapshot_id
+                    FROM agent_run_continuation_heads
+                    WHERE run_instance_id = ?
+                `,
+                    runInstanceId,
+                )) as HeadRow | undefined;
+                await upsertAgentRunWorkingStateInDatabase(transaction, {
+                    runInstanceId,
+                    ownerSessionId: record.ownerSessionId,
+                    runId: record.runId,
+                    status,
+                    ...(record.childSessionFile
+                        ? { childSessionFile: record.childSessionFile }
+                        : {}),
+                    childSessionLeafId: record.childSessionLeafId ?? null,
+                    progress: record.progress,
+                    updatedAt: record.updatedAt,
+                });
+                await this.writeCatalogProjection(transaction, record, snapshotIdOf(head));
+            }, "IMMEDIATE");
+        } catch (error) {
+            this.reportDroppedProgress(record, error);
+        }
+
+        return { ok: true };
+    }
+
+    private reportDroppedProgress(record: PersistedAgentRun, reason: unknown): void {
+        // Outside marker mode there is no lease protocol to hold a run, so a missing claim is the expected
+        // state and the pre-V2 state row still carries the frame; reporting it would be pure noise.
+        if (!this.requireMarker) {
+            return;
+        }
+
+        const message = reason instanceof Error ? reason.message : String(reason);
+        this.onDroppedProgress({
+            runId: record.runId,
+            ...(record.runInstanceId ? { runInstanceId: record.runInstanceId } : {}),
+            message: `Dropped delegated-run progress write: ${message}`,
+        });
     }
 
     /** A save without an explicit lease claims one for its own duration and releases it afterwards. */
@@ -234,7 +333,10 @@ class SqliteAgentRunStateWriter implements AgentRunStateWriter {
                 markerAppended = true;
 
                 await this.writeHeadRow(transaction, record, runInstanceId, snapshot, 0);
-                await this.writeCatalogProjection(transaction, record, snapshot);
+                // The checkpoint just absorbed every progress frame up to now, so the working row is stale
+                // by definition; leaving it would let a later crash overlay a leaf this checkpoint passed.
+                await clearAgentRunWorkingStateInDatabase(transaction, runInstanceId);
+                await this.writeCatalogProjection(transaction, record, snapshot.snapshotId);
             }, "IMMEDIATE");
         } catch (error) {
             if (!markerAppended) return { ok: false, error };
@@ -396,12 +498,12 @@ class SqliteAgentRunStateWriter implements AgentRunStateWriter {
     private async writeCatalogProjection(
         transaction: AgentMetadataDatabase,
         record: PersistedAgentRun,
-        snapshot: AgentRunSnapshotRow,
+        latestSnapshotId: string | undefined,
     ): Promise<void> {
         try {
             await upsertAgentRunCatalogRecordInDatabase(transaction, {
                 ...catalogRecord(record, this.parentCwd),
-                latestSnapshotId: snapshot.snapshotId,
+                ...(latestSnapshotId ? { latestSnapshotId } : {}),
             });
         } catch {
             // Catalog is a lossy projection. The marker/snapshot remains authoritative.
@@ -450,7 +552,7 @@ class SqliteAgentRunStateWriter implements AgentRunStateWriter {
             runInstanceId,
         )) as LeaseRow | undefined;
 
-        const heldUntil = this.heldLeaseUntil(existing, now);
+        const heldUntil = heldLeaseUntil(existing, now);
         if (heldUntil !== undefined) {
             throw new AgentContinuationLeaseBusyError(heldUntil);
         }
@@ -472,26 +574,6 @@ class SqliteAgentRunStateWriter implements AgentRunStateWriter {
             process.pid,
             now + CONTINUATION_LEASE_MS,
         );
-    }
-
-    /**
-     * The expiry of a lease that still blocks a claim, or undefined when the row can be taken over.
-     * A dead owner process releases its lease early instead of waiting for it to expire.
-     */
-    private heldLeaseUntil(row: LeaseRow | undefined, now: number): number | undefined {
-        if (typeof row?.lease_until !== "number" || row.lease_until <= now) {
-            return undefined;
-        }
-
-        if (!ENABLE_PID_LEASE_RECOVERY) {
-            return row.lease_until;
-        }
-
-        if (typeof row.owner_pid !== "number") {
-            return row.lease_until;
-        }
-
-        return isProcessAlive(row.owner_pid) ? row.lease_until : undefined;
     }
 
     /**

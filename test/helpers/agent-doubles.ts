@@ -198,7 +198,8 @@ export function partialWorkingState(
  * `save` to record what was written. `save` is async because that is the contract — two hand-built
  * doubles returned a bare `true`, which typechecking never saw because tests are excluded from
  * `tsconfig.json`.
- */ export function partialPersistence(
+ */
+export function partialPersistence(
     overrides: Partial<AgentRunPersistence> = {},
 ): AgentRunPersistence {
     return {

@@ -14,6 +14,7 @@ import {
     type AgentBackgroundCallback,
     type AgentContinuationLease,
     type AgentProgressCallback,
+    type AgentRunCheckpointIntent,
     type AgentRunDetails,
     type AgentRunOutcome,
     type AgentRunPersistence,
@@ -157,8 +158,8 @@ export class AgentRunManager {
         emitStatusChanged: (run, previousStatus, status) =>
             this.emitRunStatusChanged(run, previousStatus, status),
         emitBackgroundUpdate: (run, details) => this.emitBackgroundUpdate(run, details),
-        persist: (run) => {
-            void this.persistRun(run);
+        persist: (run, intent) => {
+            void this.persistRun(run, undefined, intent);
         },
         record: (run, type, data) => this.record(run, type, data),
     };
@@ -2036,9 +2037,18 @@ export class AgentRunManager {
         this.disposeRun(run);
     }
 
-    /** Checkpoint the run's current state; resolves with whether the write reached storage. */
-    private persistRun(run: AgentRun, status?: PersistedAgentRun["status"]): Promise<boolean> {
-        return this.checkpoints.save(run, status);
+    /**
+     * Checkpoint the run's current state; resolves with whether the write reached storage.
+     *
+     * `intent` is only ever `intermediate` for the child-hook seam, where a frame must not append a marker;
+     * every lifecycle boundary keeps the default.
+     */
+    private persistRun(
+        run: AgentRun,
+        status?: PersistedAgentRun["status"],
+        intent?: AgentRunCheckpointIntent,
+    ): Promise<boolean> {
+        return this.checkpoints.save(run, status, intent);
     }
 
     /**

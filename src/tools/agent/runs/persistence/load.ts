@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PI_CODER_AGENT_SESSIONS_DIR } from "../../../../common/constants";
 import {
+    type AgentDroppedProgressWriteListener,
+    type AgentRunCheckpointIntent,
     type AgentRunPersistence,
     type AgentRefusedWriteListener,
     type AgentContinuationLease,
@@ -20,12 +23,23 @@ import {
 } from "../../storage/run-state";
 import {
     listAgentRunSnapshotsInDatabase,
+    listRunInstanceIdsWithSnapshotsInDatabase,
     type AgentRunSnapshotRow,
 } from "../../storage/run-snapshots";
+import {
+    isAgentRunWorkingStatus,
+    readAgentRunWorkingStateInDatabase,
+} from "../../storage/run-working-state";
 import { type ContinuationHead, initializeAgentRunContinuationHeads } from "./journal-heads";
+import { type LeaseRow, heldLeaseUntil } from "./lease-ledger";
 import { getAgentCwdSessionDir, inside } from "./session-paths";
 import { type AgentRunStateWriter, createAgentRunStateWriter } from "./state-writer";
-import { parseRecord, validateAgentRunSnapshot } from "./stored-record";
+import {
+    ENABLE_WORKING_STATE_OVERLAY,
+    applyWorkingStateOverlay,
+    parseRecord,
+    validateAgentRunSnapshot,
+} from "./stored-record";
 
 /** One parent-session checkpoint marker, as collected from the parent transcript. */
 type MarkerEntry = ReturnType<typeof collectAgentRunSnapshotMarkers>[number];
@@ -48,6 +62,13 @@ export interface AgentRunPersistenceOptions {
      * user warning inside `RefusedWriteReporter` and is lost entirely for every later refusal.
      */
     onRefusedWrite?: AgentRefusedWriteListener;
+    /**
+     * Called for every progress write this process chose not to store.
+     *
+     * A dropped frame carries no authority, so it must never spend the one-shot user warning that a refused
+     * checkpoint uses; this is the unbudgeted observability channel for it.
+     */
+    onDroppedProgress?: AgentDroppedProgressWriteListener;
 }
 
 async function withDatabaseFailureCleanup<T>(
@@ -116,7 +137,9 @@ function collectParentMarkers(ctx: ExtensionContext, hasEntryIndex: boolean): Pa
  *
  * A missing row and an identity mismatch are separate diagnostics because they need different fixes:
  * the first means the database was wiped or never written, the second means the parent transcript and
- * the database disagree about which run a marker belongs to.
+ * the database disagree about which run a marker belongs to. A missing row is not a diagnostic at all when
+ * the same physical run still has surviving rows: that is the signature of a checkpoint the snapshot GC
+ * reclaimed, and the branch resolves to the next-older surviving checkpoint instead.
  */
 class SnapshotValidator {
     readonly diagnostics: string[] = [];
@@ -125,6 +148,7 @@ class SnapshotValidator {
         private readonly rows: SnapshotRows,
         private readonly ownerSessionId: string,
         private readonly childSessionDir: string,
+        private readonly reclaimedInstances: ReadonlySet<string> = new Set(),
     ) {}
 
     rowFor(snapshotId: string): AgentRunSnapshotRow | undefined {
@@ -135,9 +159,11 @@ class SnapshotValidator {
     recordFor(entry: MarkerEntry): PersistedAgentRun | undefined {
         const snapshot = this.rows.get(entry.marker.snapshotId);
         if (!snapshot) {
-            this.diagnostics.push(
-                `Could not restore ${entry.marker.runId}: parent marker references a missing SQLite snapshot.`,
-            );
+            if (!this.reclaimedInstances.has(entry.marker.runInstanceId)) {
+                this.diagnostics.push(
+                    `Could not restore ${entry.marker.runId}: parent marker references a missing SQLite snapshot.`,
+                );
+            }
             return undefined;
         }
         const parsed = this.validate(snapshot, entry.marker);
@@ -207,6 +233,66 @@ function collectBranchHeads(
         }
     }
     return heads;
+}
+
+/**
+ * Sharpen where a crashed child actually stopped, using each run's working row.
+ *
+ * Only a run this branch may resume, whose last checkpoint is still unclean, and whose record already names
+ * a child transcript can be moved: every other record keeps exactly what its marker describes, because
+ * markers stay the authority for which checkpoint a branch restores. Each candidate is read per run rather
+ * than batched, because the candidate set is the interrupted runs of one parent session — a handful.
+ */
+async function overlayWorkingState(
+    database: AgentMetadataDatabase,
+    records: Map<string, PersistedAgentRun>,
+): Promise<void> {
+    if (!ENABLE_WORKING_STATE_OVERLAY) {
+        return;
+    }
+
+    for (const [key, record] of records) {
+        const runInstanceId = record.runInstanceId;
+        const childSessionFile = record.childSessionFile;
+        if (
+            record.resumable !== true ||
+            !isAgentRunWorkingStatus(record.status) ||
+            typeof runInstanceId !== "string" ||
+            typeof childSessionFile !== "string"
+        ) {
+            continue;
+        }
+
+        const working = await readAgentRunWorkingStateInDatabase(database, runInstanceId);
+        if (!working) {
+            continue;
+        }
+
+        const lease = (await database.get(
+            `
+            SELECT process_token, owner_pid, lease_until
+            FROM agent_run_continuation_leases
+            WHERE run_instance_id = ?
+        `,
+            runInstanceId,
+        )) as LeaseRow | undefined;
+        records.set(
+            key,
+            applyWorkingStateOverlay(record, working, {
+                leaseIsHeld: heldLeaseUntil(lease, Date.now()) !== undefined,
+                leafExists: (leafId) => childTranscriptHasLeaf(childSessionFile, leafId),
+            }),
+        );
+    }
+}
+
+/** Whether the child transcript still holds this entry; a stale hint must never break a restore. */
+function childTranscriptHasLeaf(childSessionFile: string, leafId: string): boolean {
+    try {
+        return Boolean(SessionManager.open(childSessionFile).getEntry(leafId));
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -331,11 +417,14 @@ class AgentRunPersistenceFacade implements AgentRunPersistence {
         this.childSessionDir = layout.childSessionDir;
     }
 
-    async save(record: PersistedAgentRun): Promise<boolean> {
+    async save(
+        record: PersistedAgentRun,
+        intent: AgentRunCheckpointIntent = "checkpoint",
+    ): Promise<boolean> {
         const durableRecord = record.runInstanceId
             ? record
             : { ...record, runInstanceId: `legacy-${record.ownerSessionId}-${record.runId}` };
-        const result = await this.writer.save(durableRecord);
+        const result = await this.writer.save(durableRecord, intent);
         if (!result.ok) {
             this.reporter.report(
                 record,
@@ -344,6 +433,9 @@ class AgentRunPersistenceFacade implements AgentRunPersistence {
             return false;
         }
         if (!this.layout.hasEntryIndex) {
+            // A session facade without an entry index has no marker journal to stay out of, and the
+            // pre-V2 state row is a single in-place upsert per branch entry, so a progress frame keeps
+            // refreshing it exactly as it always did.
             await upsertAgentRunStateInDatabase(
                 this.database,
                 durableRecord,
@@ -413,10 +505,23 @@ export async function loadAgentRunPersistence(
     const snapshots = await withDatabaseFailureCleanup(database, () =>
         listAgentRunSnapshotsInDatabase(database, snapshotIds),
     );
+    const rowsById = new Map(snapshots.map((snapshot) => [snapshot.snapshotId, snapshot]));
+    // One extra query, only when a marker named a row this load could not fetch: it is what lets the
+    // validator tell a reclaimed checkpoint from a wiped database. Returns without touching the database
+    // when the list is empty, which is every healthy session.
+    const reclaimedInstances = await withDatabaseFailureCleanup(database, () =>
+        listRunInstanceIdsWithSnapshotsInDatabase(
+            database,
+            markers.all
+                .filter((entry) => !rowsById.has(entry.marker.snapshotId))
+                .map((entry) => entry.marker.runInstanceId),
+        ),
+    );
     const validator = new SnapshotValidator(
-        new Map(snapshots.map((snapshot) => [snapshot.snapshotId, snapshot])),
+        rowsById,
         layout.ownerSessionId,
         layout.childSessionDir,
+        reclaimedInstances,
     );
 
     const sessionHeads = collectSessionHeads(validator, markers.all, layout.ownerSessionId);
@@ -434,6 +539,7 @@ export async function loadAgentRunPersistence(
     )) {
         latest.set(runInstanceId, record);
     }
+    await withDatabaseFailureCleanup(database, () => overlayWorkingState(database, latest));
 
     const catalog = await withDatabaseFailureCleanup(database, async () =>
         createAgentRunStateWriter(ctx.cwd, database, appendMarker(ctx), {
@@ -441,6 +547,7 @@ export async function loadAgentRunPersistence(
                 [...sessionHeads].map(([runInstanceId, head]) => [runInstanceId, head.snapshotId]),
             ),
             requireMarker: layout.hasEntryIndex,
+            onDroppedProgress: options.onDroppedProgress,
         }),
     );
     const reporter = new RefusedWriteReporter(ctx.ui, options.onRefusedWrite);

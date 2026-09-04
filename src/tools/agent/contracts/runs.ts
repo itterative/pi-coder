@@ -236,12 +236,41 @@ export interface AgentRefusedWrite {
  */
 export type AgentRefusedWriteListener = (refusal: AgentRefusedWrite) => void;
 
+/**
+ * Why a save was made, which decides what becomes durable.
+ *
+ * `checkpoint` is a lifecycle boundary — accepted start, guidance request, terminal outcome, removal
+ * tombstone, interruption — and is the only kind that may append a parent marker and move the continuation
+ * head. `intermediate` is a progress frame: it refreshes the run's working row and the browsing projection
+ * and leaves the checkpoint journal exactly as it found it.
+ *
+ * Callers that do not say get `checkpoint`, so a call site that forgets to classify can only ever write too
+ * much, never too little.
+ */
+export type AgentRunCheckpointIntent = "checkpoint" | "intermediate";
+
+/** A progress-only write this process chose not to store, together with why. */
+export interface AgentDroppedProgressWrite {
+    runId: string;
+    runInstanceId?: string;
+    message: string;
+}
+
+/**
+ * Reports every progress write that was dropped.
+ *
+ * A dropped frame carries no authority, so it must never spend the one-shot user warning that
+ * `AgentRefusedWrite` uses; this is the unbudgeted observability channel for it.
+ */
+export type AgentDroppedProgressWriteListener = (drop: AgentDroppedProgressWrite) => void;
+
 export interface AgentRunPersistence {
     ownerSessionId: string;
     /** True when records are V2 marker/snapshot checkpoints. */
     usesSnapshotMarkers?: boolean;
     childSessionDir: string;
-    save(record: PersistedAgentRun): Promise<boolean>;
+    /** Durably records `record`; `intent` defaults to a checkpoint-boundary write. */
+    save(record: PersistedAgentRun, intent?: AgentRunCheckpointIntent): Promise<boolean>;
     /** Acquires a renewable CAS lease for the physical run's active operation. */
     acquireContinuationLease?: (
         runInstanceId: string,

@@ -118,7 +118,12 @@ export async function upsertAgentRunCatalogRecordInDatabase(
                 workspace_result_id = excluded.workspace_result_id,
                 child_session_file = excluded.child_session_file,
                 child_session_leaf_id = excluded.child_session_leaf_id,
-                latest_snapshot_id = excluded.latest_snapshot_id,
+                -- A progress frame carries the head as it found it, and a run can frame before its first
+                -- checkpoint lands; the pointer to a committed checkpoint is never erased by a frame.
+                latest_snapshot_id = COALESCE(
+                    excluded.latest_snapshot_id,
+                    agent_runs.latest_snapshot_id
+                ),
                 started_at = excluded.started_at,
                 updated_at = excluded.updated_at,
                 usage_json = excluded.usage_json,

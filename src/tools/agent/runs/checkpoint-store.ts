@@ -1,5 +1,9 @@
 import { isAgentTerminalStatus } from "../contracts/runs";
-import type { AgentRunPersistence, PersistedAgentRun } from "../contracts/runs";
+import type {
+    AgentRunCheckpointIntent,
+    AgentRunPersistence,
+    PersistedAgentRun,
+} from "../contracts/runs";
 import { snapshotAgentDefinition } from "../definitions/types";
 import { mutationReport, progressSnapshot, readUsage } from "./projection";
 import { type AgentRun, truncate } from "./run-state";
@@ -90,8 +94,12 @@ export class AgentRunCheckpointStore {
      * tracked promise is what `waitForPending` uses to keep a removal tombstone from racing saves
      * that were already in flight.
      */
-    save(run: AgentRun, status?: PersistedAgentRun["status"]): Promise<boolean> {
-        const operation = this.saveNow(run, status);
+    save(
+        run: AgentRun,
+        status?: PersistedAgentRun["status"],
+        intent: AgentRunCheckpointIntent = "checkpoint",
+    ): Promise<boolean> {
+        const operation = this.saveNow(run, status, intent);
         this.pendingPersistence.set(run.id, operation);
         void operation.then(
             () => this.clearPending(run.id, operation),
@@ -144,8 +152,15 @@ export class AgentRunCheckpointStore {
      *    through their projections so the stored record is a snapshot, not a live reference.
      * 6. The transcript leaf is refreshed from the handle before projection, because the leaf is what
      *    a later restore uses to decide where the child stopped.
+     * 7. `intent` decides only *where* the record lands, never what it says: an intermediate save becomes
+     *    the run's single working-progress row instead of another checkpoint, so a call site that never
+     *    passes it can only ever write too much, never too little.
      */
-    private async saveNow(run: AgentRun, status?: PersistedAgentRun["status"]): Promise<boolean> {
+    private async saveNow(
+        run: AgentRun,
+        status?: PersistedAgentRun["status"],
+        intent: AgentRunCheckpointIntent = "checkpoint",
+    ): Promise<boolean> {
         if (!this.persistence) {
             return false;
         }
@@ -203,8 +218,11 @@ export class AgentRunCheckpointStore {
             setupFailed: run.setupFailed,
             mutationReport: mutationReport(run),
         };
-        const saved = await this.persistence.save(persisted);
-        if (saved) {
+        const saved = await this.persistence.save(persisted, intent);
+        // The cache holds the last authoritative checkpoint, which is what `continue` and workspace-result
+        // attachment read back. A progress frame is durable elsewhere, so caching one would let a
+        // non-checkpoint record answer a checkpoint question.
+        if (saved && intent !== "intermediate") {
             this.persistedRuns.set(run.id, persisted);
         }
         return saved;

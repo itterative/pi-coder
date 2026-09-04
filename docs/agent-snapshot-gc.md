@@ -1,8 +1,8 @@
 # Delegated-agent snapshot GC — design plan
 
-Status: **steps 1–2 of §11 landed 2026-09-02; steps 3–7 remain.** Design was agreed in
-`docs/agent-snapshot-gc.md` review; measurements are against `.state/meta.sqlite` of this checkout. Resolve
-relative paths against the project root.
+Status: **steps 1–3 of §11 landed 2026-09-02; steps 4–7 remain.** Steps 1–2 are committed as
+`wip: agent persistence improvement 3`; step 3 is the current working tree. Measurements are against
+`.state/meta.sqlite` of this checkout. Resolve relative paths against the project root.
 
 **Chosen direction (F′): keep at most one intermediate snapshot row per physical run, in a dedicated
 non-authoritative "working state" table, and clear it at every checkpoint.**
@@ -178,11 +178,28 @@ CREATE TABLE IF NOT EXISTS agent_run_working_state (
   `status` is constrained to the unclean statuses, a leftover row always means "died between checkpoints".
 - Best-effort by contract: if this process does not own the continuation lease
   (`ContinuationLeaseLedger.owns`, the predicate `acquireLeaseForSave` consults), drop the write, report
-  `{ ok: true }`, and trace `persistence.intermediate_dropped`. Never auto-acquire or release a lease for an
+  `{ ok: true }`, and trace `persistence.progress_dropped`. Never auto-acquire or release a lease for an
   intermediate write, and never route it through `RefusedWriteReporter`, which would spend the session's one
   user warning on a write that carries no authority. `checkpoint-store.saveNow` keeps refusing when
   `continuationLeaseLost` is set, and `pendingPersistence` registration stays so `waitForPending` still
   fences removal tombstones against in-flight progress writes.
+
+Four questions this step had to settle, each covered by a test:
+
+1. **A frame that reports a boundary status is dropped, not upgraded.** Upgrading it would append a marker
+   _after_ the run's real terminal checkpoint. Safe because every status transition writes its own checkpoint,
+   so a boundary-status frame is necessarily late and carries nothing unsaved.
+2. **The drop is traced only in marker mode.** A session facade without an entry index has no lease protocol at
+   all, so "no lease held" is its normal state — and its pre-V2 `agent_run_states` row still takes the frame,
+   because `AgentRunPersistenceFacade.save` upserts it for both intents and that row is one in-place write per
+   branch entry, so it cannot bloat.
+3. **The checkpoint cache holds checkpoints only.** `AgentRunCheckpointStore.saveNow` no longer caches a record
+   written as a frame, because `getPersistedRun` answers "which checkpoint is authoritative" and a frame is not
+   one. `runId ↔ runInstanceId` resolution and `setWorkspaceResultId` consult the live registry first, so no
+   caller loses anything.
+4. **"Who owns this run" has one implementation again.** `heldLeaseUntil` moved out of a private writer method
+   into `persistence/lease-ledger.ts`, because the loader's overlay and the writer's lease claim must never
+   disagree about whether a live PID's lease still blocks a takeover.
 
 ### 4.3 The checkpoint save, plus the per-checkpoint clean
 
@@ -240,11 +257,13 @@ The overlay is the one genuinely new mechanism, so keep it narrow and total:
 Needed because the legacy backlog is marker-pinned. Replace the unconditional diagnostic with an inference
 that needs no stored tombstone:
 
-- Precompute once per load, from the fetched snapshot set: which `run_instance_id`s still have a surviving
-  row, and their `MIN(created_sequence)`.
+- Ask once per load, and only when some marker named a row this fetch did not return: which of those physical
+  runs still have a surviving `agent_run_snapshots` row (`listRunInstanceIdsWithSnapshotsInDatabase`, chunked and
+  deduplicated like the snapshot fetch). A healthy session has no unresolved markers, so it pays nothing.
 - A marker naming a **missing** row whose instance still has a surviving row is a **reclaimed intermediate** →
   skip it with no diagnostic, letting the branch resolve to the next-older surviving checkpoint. This matches
-  what `presentation/sessions.ts:413` already does silently.
+  what `presentation/sessions.ts:413` already does silently, and it needs no stored tombstone or `MIN(sequence)`
+  bookkeeping: which checkpoint wins is still decided by marker order over the rows that exist.
 - A marker naming a missing row whose instance has **no** surviving row keeps today's hard diagnostic: that is
   the real "database was wiped or never written" case the message exists for, so the fail-fast rule survives.
 
@@ -362,6 +381,12 @@ above the one method that enforces it (see the `complexity-hotspots` memory). Th
 `AgentRunJournalState` must own real state — if it ends up a pass-through over the heads table, prefer two maps
 and a comment over an indirection layer, per that memory's ban on tiny wrappers.
 
+As landed, the entry carries the head **only**. `lastIntent` and the working-row belief were drafted above and
+were deliberately not added in step 3: nothing reads them — the frame path takes its facts from the record it
+was handed and the heads row it already queries, and the loader reads the working table directly — so adding
+them would turn the coordinator into a place to hide state rather than the owner of it, which is exactly what
+the paragraph above forbids. They return with their first consumer.
+
 Validation addition (§7.8): assert the journal entry and `agent_run_continuation_heads` cannot disagree after
 (a) a committed save, (b) a marker-append failure, and (c) a lost lease — the three paths where the in-process
 belief updates without a straightforward successful write.
@@ -428,7 +453,8 @@ test/tools/agent-lifecycle-persistence.test.ts test/tools/agent-run-snapshot-sha
    committed save, a marker-append failure (which still adopts the snapshot as head), or a lost lease.
 
 Manual — required, because this is provider/child-session behavior tests cannot cover (follow the checklist in
-`src/tools/agent/README.md`): run a `worker` with ≥20 tool calls and `kill -9` the parent mid-run; reopen the
+[Manual snapshot GC validation](../src/tools/agent/SNAPSHOT-GC-MANUAL-VALIDATION.md)): run a `worker` with
+≥20 tool calls and `kill -9` the parent mid-run; reopen the
 session and confirm the run restores as `interrupted` at the **working** leaf, `resume` reopens the child
 transcript with correct context and unmatched tool calls repaired, and `/agents` shows the older checkpoint
 without error. Repeat for a background run parked on `ask_parent`, and for `/tree` navigation onto a sibling
@@ -539,38 +565,54 @@ first sight`, `refuses later saves and strands a pending reservation when the ma
   nothing", `ENABLE_WORKING_STATE_OVERLAY === false`, the overlay gate matrix, and the chunked fetch; 1,676
   tests, both typechecks, eslint, and prettier clean.
 
-### Step 3 — intent threading + the writer branch (the behavior change)
+### Step 3 — intent threading + the writer branch (the behavior change) — ✅ landed
 
 - `AgentRunCheckpointIntent` in `contracts/runs.ts`; `save(record, intent?)` on `AgentRunPersistence`,
-  `AgentRunStateWriter`, and `AgentRunCheckpointStore.save` (default `"checkpoint"`). Extend the shared doubles
-  in `test/helpers/agent-doubles.ts` so they **record** the intent — `save: async () => true` would otherwise
-  swallow the new parameter and every test would pass while intent was ignored.
-- `SqliteAgentRunStateWriter.save` branches: `intermediate` → working upsert + catalog projection, no lease
-  acquisition, best-effort drop when `ContinuationLeaseLedger.owns()` is false; `checkpoint` → the existing
-  reserve/commit path untouched.
-- Add `lastIntent` / `working` to the journal entry (§4.8) so the belief has one home.
-- **Only then** switch the seam: `ChildSetupHooks.persist(run, intent)` sends `intermediate` from
-  `onFileChanged` and `updateTranscriptLeaf`; `onSessionCreated` and `checkpointOutcome` stay `checkpoint`.
-  Never split the writer branch and the seam switch across commits — a switched seam with an unbranched writer
-  is the one combination that silently loses the crash leaf.
-- Enable `ENABLE_WORKING_STATE_OVERLAY` in this same step.
-- **Acceptance:** §7.1–§7.3, §7.5–§7.7, plus a real 20+-turn background run measured against §12.
-- **Expected test fallout** (update to assert "one marker per checkpoint" explicitly rather than loosening a
-  count): `commits immutable snapshots through parent markers and rejects stale branch resume`,
-  `restores V2 branch checkpoints and browses their exact child leaves`,
-  `restores starting and running checkpoints as interrupted without replaying them`, and
-  `agent-lifecycle-persistence.test.ts`'s detach case. `persists a save whose lease was released in the same
-turn`, `preserves commit ordering when snapshot, marker, or catalog writes fail`, and
-  `keeps a committed snapshot when head projection commit fails after marker append` must pass **unchanged** —
-  they are the checkpoint path and the TOCTOU ordering that this design must not disturb.
+  `AgentRunStateWriter`, and `AgentRunCheckpointStore.save`, defaulting to `checkpoint` at every level. The only
+  intermediate senders are `onFileChanged` and `updateTranscriptLeaf` in `child-setup.ts`; `onSessionCreated`
+  stays a checkpoint so no run is ever without a restorable one. §4.2 records the four decisions this step had
+  to settle, and §4.8 why the journal gained no new fields.
+- A frame is one `IMMEDIATE` transaction (working upsert + catalog projection) instead of the checkpoint path's
+  two transactions + marker append + head settle, and it acquires no lease of its own.
+- The doubles recorded the intent before any seam test was written, as planned: `partialPersistence`'s default
+  `save` still ignores its arguments, but a test overriding `save` now receives the parameter with the real
+  contract's type, so an intent that never arrives is a failing assertion instead of a silent pass.
+- The catalog upsert now `COALESCE`s `latest_snapshot_id`, so a frame can never erase the pointer to a
+  committed checkpoint; a frame carries the head as it found it, and before the first checkpoint lands that is
+  nothing at all. The full suite confirms no path depended on clearing it.
+- `load.ts` applies the overlay (`overlayWorkingState` as one more pipeline phase, wrapped in
+  `withDatabaseFailureCleanup`), `ENABLE_WORKING_STATE_OVERLAY` is on, and drops reach the trace store as
+  `persistence.progress_dropped` through `AgentRunPersistenceOptions.onDroppedProgress`.
+- **Acceptance met:** `test/tools/agent-run-working-state.test.ts` grew to 22 cases covering §7.1–§7.3 and §7.7
+  plus the seam itself (a live child's leaf advance and file change each produce exactly one frame, and a run's
+  first and last saves are checkpoints). 1,682 tests, both typechecks, eslint, and prettier clean. **No
+  pre-existing test needed an edit** — including the three this plan said must survive untouched: `persists a
+save whose lease was released in the same turn`, `preserves commit ordering when snapshot, marker, or catalog
+writes fail`, and `keeps a committed snapshot when head projection commit fails after marker append`. The
+  predicted marker-count fallout in `commits immutable snapshots through parent markers …` and the restore cases
+  did not happen, because those cases drive saves through `AgentRunPersistence.save`-shaped doubles or make
+  checkpoint-boundary saves only, which is exactly the path that still appends one marker each.
+- **One test premise was wrong and the code was right:** the seam case first expected a frame from the first
+  `onProgress`, and none came — the pre-execution checkpoint had already captured the leaf from the handle
+  (`saveNow` rule 6), so the leaf had not advanced. The test now moves the stub's leaf between callbacks, which
+  is what a real child does.
 
-### Step 4 — read-side tolerance for reclaimed rows (§4.5)
+### Step 4 — read-side tolerance for reclaimed rows (§4.5) — ✅ landed
 
-- Surviving-instance predicate computed once per load; silent skip in `SnapshotValidator.recordFor` and
-  `resolveActiveRecords`; the no-surviving-row diagnostic stays word-for-word, since it is user-visible and
-  asserted by `reports a marker that references a missing snapshot without restoring it` (extend that case with
-  the surviving-sibling direction instead of replacing it).
-- **Acceptance:** §7.4 both directions; `presentation/sessions.ts` verified only (§6).
+- `listRunInstanceIdsWithSnapshotsInDatabase` answers "does this physical run still have a row?" in one
+  chunked, deduplicated query, and `loadAgentRunPersistence` asks it only when some marker named a row the
+  fetch did not return — a healthy session pays nothing.
+- `SnapshotValidator.recordFor` skips silently for a reclaimed instance and keeps the existing diagnostic
+  verbatim otherwise, so `reports a marker that references a missing snapshot without restoring it` passed
+  unchanged: its fixture run has no surviving row, which is exactly the wiped-database case that must stay loud.
+- `resolveActiveRecords`' second missing-row diagnostic was left alone deliberately: `collectBranchHeads`
+  already filtered to entries whose row resolved, so that arm cannot fire on a reclaimed marker, and the
+  §4.6 protected set is what keeps the inference sound.
+- **Acceptance met:** `reclaims a marker's snapshot silently and falls back to the older checkpoint` deletes the
+  newest row while both markers stay in the transcript, then asserts no diagnostics, one restored record, the
+  _older_ surviving leaf, `resumable: true`, two markers against one row; and a storage case covers the new
+  query's dedup, empty input, and chunk boundary. 1,687 tests, both typechecks, eslint, and prettier clean.
+- `presentation/sessions.ts` was verified, not changed — it already `continue`s on a missing row.
 
 ### Step 5 — per-checkpoint prune guard (§4.3)
 
@@ -620,10 +662,14 @@ Fill in as each step lands; the work is done when the last columns match §5's p
 
 Two gates that are not test suites:
 
-- **Manual gate for step 3, before it is trusted** — provider and child-session behavior is not covered by
-  tests (`AGENTS.md`), so run the `src/tools/agent/README.md` checklist plus §7's `kill -9` case and confirm the
+- **Manual gate for step 3 — documented, deliberately not yet run.** Provider and child-session behavior is not
+  covered by tests (`AGENTS.md`), so run
+  [`src/tools/agent/SNAPSHOT-GC-MANUAL-VALIDATION.md`](../src/tools/agent/SNAPSHOT-GC-MANUAL-VALIDATION.md)
+  (scenarios A–D) and confirm the
   interrupted run restores at the **working** leaf and `/agents` opens both the live run and an older
-  checkpoint with no diagnostics.
+  checkpoint with no diagnostics. 1,682 automated tests are green without it, which is exactly why this is a
+  gate and not an option; §12's _after step 3_ column stays unmeasured until a real run lands against
+  `.state/meta.sqlite`.
 - **Soak gate for step 6** — after the sweep, use agents normally for a day and re-measure: row count must stay
   in the hundreds, not thousands. Only then delete the step-0 `.bak`.
 

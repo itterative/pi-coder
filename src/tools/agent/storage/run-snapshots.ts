@@ -95,6 +95,43 @@ export async function insertAgentRunSnapshotInDatabase(
     };
 }
 
+/**
+ * Which of these physical runs still have at least one snapshot row.
+ *
+ * A parent marker whose row is gone means one of two very different things: the checkpoint was reclaimed by
+ * the snapshot GC, in which case the run's journal is intact and the branch simply resolves to an older
+ * surviving checkpoint, or the database was wiped, in which case the run is unrecoverable and the parent must
+ * say so. Surviving rows for the same physical run is the signal that separates them, so this is asked once
+ * per load rather than per marker.
+ */
+export async function listRunInstanceIdsWithSnapshotsInDatabase(
+    database: AgentMetadataDatabase,
+    runInstanceIds: string[],
+): Promise<Set<string>> {
+    const unique = [...new Set(runInstanceIds)];
+    const surviving = new Set<string>();
+
+    for (let offset = 0; offset < unique.length; offset += SNAPSHOT_ID_CHUNK_SIZE) {
+        const chunk = unique.slice(offset, offset + SNAPSHOT_ID_CHUNK_SIZE);
+        const placeholders = chunk.map(() => "?").join(", ");
+        const rows = (await database.all(
+            `
+            SELECT DISTINCT run_instance_id
+            FROM agent_run_snapshots
+            WHERE run_instance_id IN (${placeholders})
+        `,
+            ...chunk,
+        )) as Array<Record<string, unknown>>;
+        for (const row of rows) {
+            if (typeof row.run_instance_id === "string") {
+                surviving.add(row.run_instance_id);
+            }
+        }
+    }
+
+    return surviving;
+}
+
 function rowToSnapshot(row: Record<string, unknown>): AgentRunSnapshotRow | undefined {
     if (
         typeof row.snapshot_id !== "string" ||

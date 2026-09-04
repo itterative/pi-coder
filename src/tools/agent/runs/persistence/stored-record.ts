@@ -313,11 +313,11 @@ export function validateAgentRunSnapshot(
 /**
  * Whether a crash-interrupted run may be resumed at its working leaf instead of its last checkpoint leaf.
  *
- * Shipped disabled because nothing writes a working row until the writer distinguishes intermediate saves;
- * flipping it is step 3 of `docs/agent-snapshot-gc.md`, and flipping it back is the whole rollback story for
- * the leaf-resolution change, in the same role `ENABLE_PID_LEASE_RECOVERY` plays for lease reclaim.
+ * The one knob that reverts the leaf-resolution change: turn it off and every restore uses the leaf its
+ * marker names, which is the behavior this repository had before working state existed. Writers may still
+ * fill the table while this is off, so switching it back on never needs a repair pass.
  */
-export const ENABLE_WORKING_STATE_OVERLAY = false;
+export const ENABLE_WORKING_STATE_OVERLAY = true;
 
 /** What a caller must prove about the outside world before a working row may sharpen a checkpoint. */
 export interface WorkingStateOverlayContext {

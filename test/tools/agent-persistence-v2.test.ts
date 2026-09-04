@@ -22,12 +22,16 @@ import {
     type ChildAgentHandle,
     type PersistedAgentRun,
 } from "../../src/tools/agent/runs/manager";
-import { AGENT_RUN_SNAPSHOT_MARKER } from "../../src/tools/agent/storage/run-markers";
+import {
+    AGENT_RUN_SNAPSHOT_MARKER,
+    collectAgentRunSnapshotMarkers,
+} from "../../src/tools/agent/storage/run-markers";
 import type {
     AgentRefusedWrite,
     ChildAgentFactoryContext,
 } from "../../src/tools/agent/contracts/runs";
 import { openAgentMetadataDatabase } from "../../src/tools/agent/storage/metadata";
+import { upsertAgentRunWorkingStateInDatabase } from "../../src/tools/agent/storage/run-working-state";
 import { upsertAgentRunStateInDatabase } from "../../src/tools/agent/storage/run-state";
 import { upsertAgentRunCatalogRecord } from "../../src/tools/agent/storage/run-catalog";
 import {
@@ -1158,6 +1162,84 @@ describe("delegated-agent V2 persistence", () => {
     });
 
     /**
+     * A parent transcript cannot be rewritten, so after the snapshot GC reclaims rows its markers stay
+     * behind. When the same physical run still has a surviving row, the dangling marker is a reclaimed
+     * checkpoint rather than a wiped database: the branch falls back to the older surviving checkpoint and
+     * says nothing, because reporting every reclaimed marker would drown the one message that matters.
+     */
+    it("reclaims a marker's snapshot silently and falls back to the older checkpoint", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-reclaimed-"));
+        tempDirs.push(stateDir);
+        const sessionsDir = path.join(stateDir, "agent-sessions");
+        const workspacesDir = path.join(stateDir, "workspaces");
+        const parentDir = path.join(
+            getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }),
+            "parent-1",
+        );
+        fs.mkdirSync(parentDir, { recursive: true });
+        const parent = SessionManager.create(process.cwd(), parentDir);
+        const context = stubContext({
+            cwd: process.cwd(),
+            ui: stubUi({ notify: vi.fn() }),
+            sessionManager: parent,
+        });
+        const runInstanceId = "instance-reclaimed";
+
+        const first = await loadAgentRunPersistence(context, sessionsDir);
+        expect(
+            await first?.persistence.save(
+                record(runInstanceId, parent.getSessionId(), undefined, "leaf-checkpoint-one"),
+            ),
+        ).toBe(true);
+        expect(
+            await first?.persistence.save(
+                record(runInstanceId, parent.getSessionId(), undefined, "leaf-checkpoint-two"),
+            ),
+        ).toBe(true);
+        first?.persistence.close?.();
+
+        // Reclaim the newest snapshot the way the GC would: the row goes, its marker stays in the transcript.
+        const database = await openAgentMetadataDatabase(workspacesDir);
+        try {
+            const newest = (await database.get(
+                `SELECT snapshot_id FROM agent_run_snapshots
+                 WHERE run_instance_id = ? ORDER BY created_sequence DESC LIMIT 1`,
+                runInstanceId,
+            )) as { snapshot_id: string };
+            await database.run(
+                `DELETE FROM agent_run_snapshots WHERE snapshot_id = ?`,
+                newest.snapshot_id,
+            );
+        } finally {
+            await database.close();
+        }
+
+        const reloaded = await loadAgentRunPersistence(context, sessionsDir);
+        expect(reloaded?.diagnostics).toEqual([]);
+        expect(reloaded?.records).toHaveLength(1);
+        expect(reloaded?.records[0]).toMatchObject({
+            runId: "scout-1",
+            childSessionLeafId: "leaf-checkpoint-one",
+            resumable: true,
+        });
+
+        // The transcript still carries both markers; only one row survives them.
+        expect(collectAgentRunSnapshotMarkers(parent.getEntries())).toHaveLength(2);
+        const survivor = await openAgentMetadataDatabase(workspacesDir);
+        try {
+            expect(
+                await survivor.get(
+                    `SELECT COUNT(*) AS rows FROM agent_run_snapshots WHERE run_instance_id = ?`,
+                    runInstanceId,
+                ),
+            ).toMatchObject({ rows: 1 });
+        } finally {
+            await survivor.close();
+        }
+        reloaded?.persistence.close?.();
+    });
+
+    /**
      * Two persistence facades over one parent session stand in for a reloaded parent: the second load
      * must seed its head expectations from the markers it read, or it would overwrite the checkpoints
      * the first one committed after the load.
@@ -1420,5 +1502,226 @@ describe("delegated-agent V2 persistence", () => {
         expect(() => selectChildSessionLeaf(child, "missing-leaf")).toThrow(/missing/);
         expect(() => selectChildSessionLeaf(child, null)).not.toThrow();
         expect(child.getLeafId()).toBeNull();
+    });
+
+    /**
+     * Parent, child transcript, and a loaded persistence for one parent session — the loader overlay tests
+     * need the real files because the leaf hint is validated against the child transcript itself.
+     */
+    async function overlayFixture(label: string) {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-agent-v2-${label}-`));
+        tempDirs.push(stateDir);
+        const sessionsDir = path.join(stateDir, "agent-sessions");
+        const parentDir = path.join(
+            getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }),
+            "parent-1",
+        );
+        fs.mkdirSync(parentDir, { recursive: true });
+        const parent = SessionManager.create(process.cwd(), parentDir);
+        const context = {
+            cwd: process.cwd(),
+            ui: { notify: vi.fn() },
+            sessionManager: parent,
+        } as unknown as ExtensionContext;
+
+        const childDir = path.join(
+            getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }),
+            parent.getSessionId(),
+        );
+        fs.mkdirSync(childDir, { recursive: true });
+        const child = SessionManager.create(process.cwd(), childDir);
+        child.appendMessage({ role: "user", content: "task", timestamp: 1 });
+        const checkpointLeaf = child.appendMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "at the checkpoint" }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage: ZERO_USAGE,
+            stopReason: "stop",
+            timestamp: 2,
+        });
+        const workingLeaf = child.appendMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "worked past the checkpoint" }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage: ZERO_USAGE,
+            stopReason: "stop",
+            timestamp: 3,
+        });
+        const childFile = child.getSessionFile() as string;
+        return {
+            sessionsDir,
+            context,
+            ownerSessionId: parent.getSessionId(),
+            childFile,
+            checkpointLeaf,
+            workingLeaf,
+        };
+    }
+
+    /**
+     * The loader wiring, which the pure overlay tests cannot reach: a run whose last checkpoint is unclean
+     * restores at the leaf its working row recorded, and the child session the manager reopens starts from
+     * there instead of from the older checkpoint.
+     */
+    it("restores a crash-interrupted run at its working leaf", async () => {
+        const fixture = await overlayFixture("overlay-apply");
+        const loaded = await loadAgentRunPersistence(fixture.context, fixture.sessionsDir);
+        const runInstanceId = "instance-overlay-apply";
+        expect(
+            await loaded?.persistence.save({
+                ...record(
+                    runInstanceId,
+                    fixture.ownerSessionId,
+                    fixture.childFile,
+                    fixture.checkpointLeaf,
+                ),
+                status: "running",
+                updatedAt: 100,
+            }),
+        ).toBe(true);
+        loaded?.persistence.close?.();
+
+        const database = await openAgentMetadataDatabase(
+            path.join(fixture.sessionsDir, "..", "workspaces"),
+        );
+        try {
+            await upsertAgentRunWorkingStateInDatabase(database, {
+                runInstanceId,
+                ownerSessionId: fixture.ownerSessionId,
+                runId: "scout-1",
+                status: "running",
+                childSessionFile: fixture.childFile,
+                childSessionLeafId: fixture.workingLeaf,
+                progress: {
+                    output: "worked past the checkpoint",
+                    recentActivity: ["read src/index.ts"],
+                },
+                updatedAt: 200,
+            });
+        } finally {
+            await database.close();
+        }
+
+        const reloaded = await loadAgentRunPersistence(fixture.context, fixture.sessionsDir);
+        expect(reloaded?.records[0]).toMatchObject({
+            childSessionLeafId: fixture.workingLeaf,
+            status: "running",
+            resumable: true,
+        });
+        expect(reloaded?.records[0]?.progress.output).toBe("worked past the checkpoint");
+        // The checkpoint's own timestamp stays authoritative for ordering and retention.
+        expect(reloaded?.records[0]?.updatedAt).toBe(100);
+        expect(() =>
+            selectChildSessionLeaf(SessionManager.open(fixture.childFile), fixture.workingLeaf),
+        ).not.toThrow();
+        reloaded?.persistence.close?.();
+    });
+
+    /**
+     * A working leaf the child transcript does not hold must never move a restore — the same guard that
+     * makes a stale hint harmless has to survive the loader, or `setupRun` would fail the run outright.
+     */
+    it("keeps the checkpoint leaf when the working leaf is not in the transcript", async () => {
+        const fixture = await overlayFixture("overlay-missing-leaf");
+        const loaded = await loadAgentRunPersistence(fixture.context, fixture.sessionsDir);
+        const runInstanceId = "instance-overlay-missing";
+        expect(
+            await loaded?.persistence.save({
+                ...record(
+                    runInstanceId,
+                    fixture.ownerSessionId,
+                    fixture.childFile,
+                    fixture.checkpointLeaf,
+                ),
+                status: "running",
+                updatedAt: 100,
+            }),
+        ).toBe(true);
+        loaded?.persistence.close?.();
+
+        const database = await openAgentMetadataDatabase(
+            path.join(fixture.sessionsDir, "..", "workspaces"),
+        );
+        try {
+            await upsertAgentRunWorkingStateInDatabase(database, {
+                runInstanceId,
+                ownerSessionId: fixture.ownerSessionId,
+                runId: "scout-1",
+                status: "running",
+                childSessionFile: fixture.childFile,
+                childSessionLeafId: "leaf-from-a-different-run",
+                progress: { output: "nowhere", recentActivity: [] },
+                updatedAt: 200,
+            });
+        } finally {
+            await database.close();
+        }
+
+        const reloaded = await loadAgentRunPersistence(fixture.context, fixture.sessionsDir);
+        expect(reloaded?.records[0]).toMatchObject({
+            childSessionLeafId: fixture.checkpointLeaf,
+            progress: { output: "" },
+        });
+        expect(reloaded?.diagnostics).toEqual([]);
+        reloaded?.persistence.close?.();
+    });
+
+    /**
+     * While another live process holds the continuation lease its rows may be mid-update, so the checkpoint
+     * leaf wins. The lease row is written with this process's pid because a dead owner releases early, which
+     * would otherwise test the wrong arm.
+     */
+    it("keeps the checkpoint leaf while a live process holds the lease", async () => {
+        const fixture = await overlayFixture("overlay-leased");
+        const loaded = await loadAgentRunPersistence(fixture.context, fixture.sessionsDir);
+        const runInstanceId = "instance-overlay-leased";
+        expect(
+            await loaded?.persistence.save({
+                ...record(
+                    runInstanceId,
+                    fixture.ownerSessionId,
+                    fixture.childFile,
+                    fixture.checkpointLeaf,
+                ),
+                status: "running",
+                updatedAt: 100,
+            }),
+        ).toBe(true);
+        loaded?.persistence.close?.();
+
+        const database = await openAgentMetadataDatabase(
+            path.join(fixture.sessionsDir, "..", "workspaces"),
+        );
+        try {
+            await upsertAgentRunWorkingStateInDatabase(database, {
+                runInstanceId,
+                ownerSessionId: fixture.ownerSessionId,
+                runId: "scout-1",
+                status: "running",
+                childSessionFile: fixture.childFile,
+                childSessionLeafId: fixture.workingLeaf,
+                progress: { output: "still writing", recentActivity: [] },
+                updatedAt: 200,
+            });
+            await database.run(
+                `INSERT INTO agent_run_continuation_leases
+                    (run_instance_id, owner_session_id, process_token, lease_until, owner_pid)
+                 VALUES (?, ?, 'token-live-parent', ?, ?)`,
+                runInstanceId,
+                fixture.ownerSessionId,
+                Date.now() + 60_000,
+                process.pid,
+            );
+        } finally {
+            await database.close();
+        }
+
+        const reloaded = await loadAgentRunPersistence(fixture.context, fixture.sessionsDir);
+        expect(reloaded?.records[0]).toMatchObject({ childSessionLeafId: fixture.checkpointLeaf });
+        reloaded?.persistence.close?.();
     });
 });

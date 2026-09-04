@@ -1,6 +1,7 @@
 import type { AgentDefinition } from "../definitions/types";
 import type {
     AgentProgressCallback,
+    AgentRunCheckpointIntent,
     AgentRunDetails,
     AgentRunStatus,
     ChildAgentFactoryContext,
@@ -22,8 +23,14 @@ export interface ChildSetupHooks {
     ) => void;
     /** Publish progress to the event sink and the run's background callback. */
     readonly emitBackgroundUpdate: (run: AgentRun, details: AgentRunDetails) => void;
-    /** Checkpoint the run without blocking the child; failures surface on the next awaited save. */
-    readonly persist: (run: AgentRun) => void;
+    /**
+     * Persist the run without blocking the child; failures surface on the next awaited save.
+     *
+     * `intermediate` is the progress frame, which refreshes the run's single working row and leaves the
+     * checkpoint journal alone; `checkpoint` is reserved for the one save that establishes the child
+     * transcript, because a run with no durable checkpoint at all cannot be restored.
+     */
+    readonly persist: (run: AgentRun, intent: AgentRunCheckpointIntent) => void;
     /** Record a run-scoped lifecycle trace event. */
     readonly record: (run: AgentRun, type: string, data?: AgentTraceData) => void;
 }
@@ -46,8 +53,10 @@ export interface ChildSetupInputs {
  * Ordering inside `onProgress` is load-bearing:
  *
  * 1. `updatedAt` advances first so retention and UI ordering see the activity.
- * 2. The exact transcript leaf is refreshed and checkpointed before any event is published, so a
- *    parent that reacts to the status change can restore from the leaf already on disk.
+ * 2. The exact transcript leaf is refreshed and stored as a progress frame before any event is published,
+ *    so a parent that reacts to the status change can restore from the leaf already on disk. That frame is
+ *    not a checkpoint: it never appends a parent marker, so a long child run leaves one journal entry per
+ *    lifecycle boundary instead of one per tool call.
  * 3. `permissionPending` is projected from the incoming progress, and the status change is
  *    emitted using the previously observed status, so approval transitions are never duplicated
  *    or dropped.
@@ -75,12 +84,12 @@ export function createChildFactoryContext(
         onSessionCreated: (sessionFile, childSessionLeafId) => {
             run.childSessionFile = sessionFile;
             run.childSessionLeafId = childSessionLeafId;
-            hooks.persist(run);
+            hooks.persist(run, "checkpoint");
             context.onSessionCreated?.(sessionFile, childSessionLeafId);
         },
         onFileChanged: () => {
             run.updatedAt = Date.now();
-            hooks.persist(run);
+            hooks.persist(run, "intermediate");
             hooks.emitBackgroundUpdate(run, hooks.details(run, currentProgress()));
         },
         onProgress: (progress) => {
@@ -105,13 +114,13 @@ export function createChildFactoryContext(
     };
 }
 
-/** Refresh the exact transcript leaf and checkpoint the run when it advanced. */
+/** Refresh the exact transcript leaf and store a progress frame when it advanced. */
 function updateTranscriptLeaf(run: AgentRun, hooks: ChildSetupHooks): void {
     const childSessionLeafId = run.handle?.getSessionLeafId?.() ?? run.childSessionLeafId;
     const childLeafChanged = childSessionLeafId !== run.childSessionLeafId;
     run.childSessionLeafId = childSessionLeafId;
     if (childLeafChanged) {
-        hooks.persist(run);
+        hooks.persist(run, "intermediate");
     }
 }
 

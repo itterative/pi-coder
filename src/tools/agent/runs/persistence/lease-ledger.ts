@@ -35,6 +35,29 @@ export type LeaseRow = {
 export const LEASE_EXPIRED_MESSAGE = "Delegated run continuation lease expired or was lost.";
 
 /**
+ * The expiry of a lease row that still blocks a claim, or `undefined` when the row can be taken over.
+ *
+ * A dead owner process releases its lease early instead of waiting for it to expire, which is what lets an
+ * abrupt process stop recover without a full expiry wait. Both the writer's claim path and the loader's
+ * working-state overlay ask this question, and they must never disagree about who owns a run.
+ */
+export function heldLeaseUntil(row: LeaseRow | undefined, now: number): number | undefined {
+    if (typeof row?.lease_until !== "number" || row.lease_until <= now) {
+        return undefined;
+    }
+
+    if (!ENABLE_PID_LEASE_RECOVERY) {
+        return row.lease_until;
+    }
+
+    if (typeof row.owner_pid !== "number") {
+        return row.lease_until;
+    }
+
+    return isProcessAlive(row.owner_pid) ? row.lease_until : undefined;
+}
+
+/**
  * In-process bookkeeping for continuation leases and their `agent_run_continuation_leases` rows.
  *
  * A lease is claimed by a transaction that writes the row, then kept alive by a renewal timer. Losing
