@@ -10,7 +10,7 @@ import {
     type AgentRunSnapshotRow,
 } from "../../storage/run-snapshots";
 import { catalogRecord } from "./catalog-projection";
-import { type HeadRow, JournalHeadExpectations, snapshotIdOf } from "./journal-heads";
+import { type HeadRow, AgentRunJournalState, snapshotIdOf } from "./journal-heads";
 import {
     CONTINUATION_LEASE_MS,
     ContinuationLeaseLedger,
@@ -66,7 +66,7 @@ class SqliteAgentRunStateWriter implements AgentRunStateWriter {
     }) => string | undefined;
     private readonly requireMarker: boolean;
     private readonly leases: ContinuationLeaseLedger;
-    private readonly heads: JournalHeadExpectations;
+    private readonly heads: AgentRunJournalState;
     private readonly pendingAcquisitions = new Set<Promise<AgentContinuationLease>>();
     private closed = false;
     private acceptingAcquisitions = true;
@@ -90,7 +90,7 @@ class SqliteAgentRunStateWriter implements AgentRunStateWriter {
         this.appendMarker = appendMarker;
         this.requireMarker = requireMarker;
         this.leases = new ContinuationLeaseLedger(database);
-        this.heads = new JournalHeadExpectations(initialHeads);
+        this.heads = new AgentRunJournalState(initialHeads);
     }
 
     async save(record: PersistedAgentRun): Promise<AgentRunSaveResult> {

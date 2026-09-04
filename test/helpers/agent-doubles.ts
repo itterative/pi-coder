@@ -1,13 +1,19 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
+import {
+    BUILTIN_SCOUT,
+    fingerprintAgentDefinition,
+} from "../../src/tools/agent/definitions/discovery";
 import type {
     AgentRunDetails,
     AgentRunPersistence,
     AgentRunSummary,
     ChildProgress,
+    PersistedAgentRun,
 } from "../../src/tools/agent/contracts/runs";
 import type { AgentRunStateWriter } from "../../src/tools/agent/runs/persistence/state-writer";
 import type { ChildProgressTracker } from "../../src/tools/agent/child/progress";
+import type { AgentRunWorkingStateInput } from "../../src/tools/agent/storage/run-working-state";
 import type {
     AgentWorkspace,
     AgentWorkspaceResult,
@@ -128,12 +134,71 @@ export function partialTracker(
 }
 
 /**
+ * A `PersistedAgentRun` checkpoint record, as the durable layer stores one.
+ *
+ * The fingerprint is the real builtin-scout fingerprint because `parseRecord` rejects a stored record whose
+ * fingerprint is not 64 hex characters, and a synthetic placeholder would make every restore test pass while
+ * standing for a row production could never write.
+ */
+export function partialPersistedRecord(
+    overrides: Partial<PersistedAgentRun> = {},
+): PersistedAgentRun {
+    return {
+        version: 1,
+        ownerSessionId: "parent-1",
+        runId: "scout-1",
+        runInstanceId: "instance-1",
+        title: "Test run",
+        agent: "scout",
+        agentSource: "builtin",
+        definitionFingerprint: fingerprintAgentDefinition(BUILTIN_SCOUT),
+        task: "Test task",
+        status: "running",
+        background: false,
+        mutating: false,
+        progress: partialProgress(),
+        usageCheckpoint: zeroUsage(),
+        usageSnapshot: zeroUsage(),
+        startedAt: 10,
+        updatedAt: 20,
+        parentCwd: "/repo",
+        cwd: "/repo",
+        childSessionFile: "/agent-sessions/parent-1/child.jsonl",
+        childSessionLeafId: "leaf-checkpoint",
+        resumable: true,
+        ...overrides,
+    };
+}
+
+/**
+ * An `agent_run_working_state` row to write.
+ *
+ * Typed as the write input rather than the read row on purpose: the read shape carries an unvalidated
+ * `unknown` payload, so a test that wants to prove the overlay rejects corrupt storage must write raw SQL
+ * instead of reaching for this helper.
+ */
+export function partialWorkingState(
+    overrides: Partial<AgentRunWorkingStateInput> = {},
+): AgentRunWorkingStateInput {
+    return {
+        runInstanceId: "instance-1",
+        ownerSessionId: "parent-1",
+        runId: "scout-1",
+        status: "running",
+        childSessionFile: "/agent-sessions/parent-1/child.jsonl",
+        childSessionLeafId: "leaf-working",
+        progress: partialProgress({ output: "newer progress" }),
+        updatedAt: 30,
+        ...overrides,
+    };
+}
+
+/**
  * An `AgentRunPersistence` double. The defaults do nothing but satisfy the contract; a suite overrides
  * `save` to record what was written. `save` is async because that is the contract — two hand-built
  * doubles returned a bare `true`, which typechecking never saw because tests are excluded from
  * `tsconfig.json`.
- */
-export function partialPersistence(
+ */ export function partialPersistence(
     overrides: Partial<AgentRunPersistence> = {},
 ): AgentRunPersistence {
     return {

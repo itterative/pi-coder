@@ -132,24 +132,41 @@ function rowToSnapshot(row: Record<string, unknown>): AgentRunSnapshotRow | unde
     };
 }
 
+/**
+ * Upper bound on the placeholders one `IN (...)` statement may carry.
+ *
+ * The list is driven by how many markers a parent transcript holds, which is unbounded across a long
+ * session, so the fetch is chunked instead of assuming a driver limit.
+ */
+const SNAPSHOT_ID_CHUNK_SIZE = 500;
+
 export async function listAgentRunSnapshotsInDatabase(
     database: AgentMetadataDatabase,
     snapshotIds: string[],
 ): Promise<AgentRunSnapshotRow[]> {
-    if (snapshotIds.length === 0) return [];
-    const placeholders = snapshotIds.map(() => "?").join(", ");
-    const rows = (await database.all(
-        `
-        SELECT snapshot_id, run_instance_id, owner_session_id, run_id, payload_version,
-               status, child_session_file, child_session_leaf_id, updated_at,
-               payload_json, created_sequence
-        FROM agent_run_snapshots
-        WHERE snapshot_id IN (${placeholders})
-    `,
-        ...snapshotIds,
-    )) as Array<Record<string, unknown>>;
-    return rows.flatMap((row) => {
-        const snapshot = rowToSnapshot(row);
-        return snapshot ? [snapshot] : [];
-    });
+    const unique = [...new Set(snapshotIds)];
+    const snapshots: AgentRunSnapshotRow[] = [];
+
+    for (let offset = 0; offset < unique.length; offset += SNAPSHOT_ID_CHUNK_SIZE) {
+        const chunk = unique.slice(offset, offset + SNAPSHOT_ID_CHUNK_SIZE);
+        const placeholders = chunk.map(() => "?").join(", ");
+        const rows = (await database.all(
+            `
+            SELECT snapshot_id, run_instance_id, owner_session_id, run_id, payload_version,
+                   status, child_session_file, child_session_leaf_id, updated_at,
+                   payload_json, created_sequence
+            FROM agent_run_snapshots
+            WHERE snapshot_id IN (${placeholders})
+        `,
+            ...chunk,
+        )) as Array<Record<string, unknown>>;
+        for (const row of rows) {
+            const snapshot = rowToSnapshot(row);
+            if (snapshot) {
+                snapshots.push(snapshot);
+            }
+        }
+    }
+
+    return snapshots;
 }

@@ -1208,6 +1208,159 @@ describe("delegated-agent V2 persistence", () => {
     });
 
     /**
+     * The journal adopts whatever the heads row holds the first time it looks at a run, so a writer that
+     * never created a checkpoint can still continue it; only a head that moves *after* the first look is
+     * treated as a rival writer. This is what lets a reloaded parent resume a run it did not start.
+     */
+    it("adopts an existing continuation head on first sight", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-head-adopt-"));
+        tempDirs.push(stateDir);
+        const workspacesDir = path.join(stateDir, "workspaces");
+        const database = await openAgentMetadataDatabase(workspacesDir);
+        const writer = createAgentRunStateWriter(
+            process.cwd(),
+            database,
+            (marker) => `marker-${marker.runInstanceId}`,
+        );
+        const runInstanceId = "instance-head-adopt";
+        expect((await writer.save(record(runInstanceId, "parent-1"))).ok).toBe(true);
+
+        const beforeAdoption = (await database.get(
+            `SELECT snapshot_id FROM agent_run_continuation_heads WHERE run_instance_id = ?`,
+            runInstanceId,
+        )) as { snapshot_id: string };
+        await writer.close();
+
+        // A fresh writer with no seeded expectations stands in for a parent that learned about this run
+        // from the heads row rather than from its own commit.
+        const reopened = await openAgentMetadataDatabase(workspacesDir);
+        const adopter = createAgentRunStateWriter(
+            process.cwd(),
+            reopened,
+            (marker) => `marker-${marker.runInstanceId}`,
+        );
+        expect((await adopter.save(record(runInstanceId, "parent-1"))).ok).toBe(true);
+
+        expect(
+            await reopened.get(
+                `SELECT snapshot_id, pending FROM agent_run_continuation_heads
+                 WHERE run_instance_id = ?`,
+                runInstanceId,
+            ),
+        ).toMatchObject({ pending: 0 });
+        expect(
+            (
+                await reopened.get(
+                    `SELECT snapshot_id FROM agent_run_continuation_heads WHERE run_instance_id = ?`,
+                    runInstanceId,
+                )
+            )?.snapshot_id,
+        ).not.toBe(beforeAdoption.snapshot_id);
+        expect(
+            await reopened.get(
+                `SELECT COUNT(*) AS settled FROM agent_run_continuation_heads
+                 WHERE run_instance_id = ? AND pending = 0`,
+                runInstanceId,
+            ),
+        ).toMatchObject({ settled: 1 });
+
+        await adopter.close();
+    });
+
+    /**
+     * A marker append that fails after the reservation left no trace of a committed checkpoint: the row
+     * keeps the stranded `pending` reservation, the journal never adopts it, and every later save from
+     * this writer reports the head as stale until a reload resolves it. Pinned because the next save is
+     * refused by the compare-and-set guard rather than by the reservation itself.
+     */
+    it("refuses later saves and strands a pending reservation when the marker append fails", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-head-strand-"));
+        tempDirs.push(stateDir);
+        const database = await openAgentMetadataDatabase(path.join(stateDir, "workspaces"));
+        const writer = createAgentRunStateWriter(process.cwd(), database, () => {
+            throw new Error("marker append unavailable");
+        });
+        const runInstanceId = "instance-head-strand";
+
+        const first = await writer.save(record(runInstanceId, "parent-1"));
+        expect(first.ok).toBe(false);
+        expect(
+            await database.get(
+                `SELECT COUNT(*) AS stranded FROM agent_run_continuation_heads
+                 WHERE run_instance_id = ? AND pending = 1`,
+                runInstanceId,
+            ),
+        ).toMatchObject({ stranded: 1 });
+        expect(
+            await database.get(
+                `SELECT COUNT(*) AS rows FROM agent_run_snapshots WHERE run_instance_id = ?`,
+                runInstanceId,
+            ),
+        ).toMatchObject({ rows: 1 });
+
+        const second = await writer.save(record(runInstanceId, "parent-1"));
+        expect(second.ok).toBe(false);
+        expect(String((second as { error: unknown }).error)).toMatch(/stale/i);
+        expect(
+            await database.get(
+                `SELECT COUNT(*) AS rows FROM agent_run_snapshots WHERE run_instance_id = ?`,
+                runInstanceId,
+            ),
+        ).toMatchObject({ rows: 1 });
+
+        await writer.close();
+    });
+
+    /**
+     * Every committed save settles its own reservation, so the pending count never accumulates; this is
+     * what a merge of the two journal maps must not disturb.
+     */
+    it("settles each reservation when one writer commits repeatedly", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-head-settle-"));
+        tempDirs.push(stateDir);
+        const database = await openAgentMetadataDatabase(path.join(stateDir, "workspaces"));
+        const writer = createAgentRunStateWriter(
+            process.cwd(),
+            database,
+            (marker) => `marker-${marker.runInstanceId}`,
+        );
+        const runInstanceId = "instance-head-settle";
+
+        for (const output of ["first", "second", "third"]) {
+            expect(
+                (
+                    await writer.save({
+                        ...record(runInstanceId, "parent-1"),
+                        progress: { output, recentActivity: [] },
+                    })
+                ).ok,
+            ).toBe(true);
+        }
+
+        expect(
+            await database.get(
+                `SELECT COUNT(*) AS pending FROM agent_run_continuation_heads
+                 WHERE run_instance_id = ? AND pending = 1`,
+                runInstanceId,
+            ),
+        ).toMatchObject({ pending: 0 });
+        expect(
+            await database.get(
+                `SELECT heads.created_sequence AS sequence, snapshots.status AS status
+                 FROM agent_run_continuation_heads AS heads
+                 JOIN agent_run_snapshots AS snapshots ON snapshots.snapshot_id = heads.snapshot_id
+                 WHERE heads.run_instance_id = ?`,
+                runInstanceId,
+            ),
+        ).toMatchObject({
+            sequence: 3,
+            status: "waiting_for_parent",
+        });
+
+        await writer.close();
+    });
+
+    /**
      * Pre-V2 `agent_run_states` rows are read-only compatibility for session facades without an entry
      * index. A real SDK session must ignore them, or a stale row could resurface as a checkpoint.
      */

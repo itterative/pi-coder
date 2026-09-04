@@ -21,7 +21,9 @@ keep_updated: true
 - Before continuing a crash-interrupted transcript, unmatched tool calls receive synthetic uncertain-outcome errors. Worker mutations are never automatically replayed.
 - Resumable snapshots must include a complete persisted agent definition; missing or malformed definition snapshots fail fast. The persisted definition supplies the runtime contract, while current-definition fingerprint drift is informational. Persisted metadata cannot grant mutation authority; an edit-capable snapshot still requires the current reserved built-in worker authorization.
 - Restoring a stored record separates authority from display state: identity and cross-check failures (owner, run-id shape, fingerprint, non-restorable status, marker/column disagreement, negative or non-finite timestamps) reject the record, while corrupt progress, question, and mutation-report fields are dropped or capped so the run stays restorable. `test/tools/agent-run-snapshot-shape.test.ts` pins both directions.
-- Collection, cancellation, and terminal-result eviction append removal tombstones but retain child files so `/agents` can browse past work. Tombstones retain the original terminal status in `terminalStatus`, and browser projections display that status instead of leaking internal `removed`; the database migration defaults the nullable column to the `removed` sentinel for older rows, and older tombstones without a recoverable status remain `removed`. Garbage collection is currently limited to a read-only report; the parked script (`tools/report-agent-gc.mjs`) is in git stash `0ccdbf040be633195333a0fb6c7c07dcb9190c0f` and identifies orphan transcripts, missing transcript references, protected/unreachable snapshots, and reclaimable bytes without deleting anything. Any future prune policy should remove only conservatively verified orphan files first.
+- Collection, cancellation, and terminal-result eviction append removal tombstones but retain child files so `/agents` can browse past work. Tombstones retain the original terminal status in `terminalStatus`, and browser projections display that status instead of leaking internal `removed`; the database migration defaults the nullable column to the `removed` sentinel for older rows, and older tombstones without a recoverable status remain `removed`. Garbage collection is currently limited to a read-only report; the parked script (`tools/report-agent-gc.mjs`) is in git stash `0ccdbf040be633195333a0fb6c7c07dcb9190c0f` (reachable via that stash commit's third parent, not `git stash list` index 0) and identifies orphan transcripts, missing transcript references, protected/unreachable snapshots, and reclaimable bytes without deleting anything. Any future prune policy should remove only conservatively verified orphan files first.
+
+Snapshot growth is the measured problem, and its constraints are load-bearing: `commitSnapshot` appends a parent-tree marker on **every** save, so every snapshot row is pinned by an unremovable marker. The schema itself does not protect rows — no foreign key references `agent_run_snapshots`, `agent_run_continuation_heads` has no FK, and `presentation/sessions.ts` already skips a marker whose row is missing **silently**, while `load.ts` emits one `parent marker references a missing SQLite snapshot` diagnostic per hole. Measured on a development `.state/meta.sqlite`: 12,795 snapshot rows / 67.3 MiB for 175 run instances, of which 12,293 are superseded `running`/`starting` intermediates (90% of payload) — none of them the newest row of its instance and none pointed at by a continuation head — written by the child-hook `persist` seam (`manager.ts:160`, fired from `child-setup.ts` on every transcript-leaf change and file change). Chosen direction (design agreed, not yet implemented): keep **at most one** intermediate record per physical run in a new dedicated `agent_run_working_state` table (upserted in place, keyed `run_instance_id PRIMARY KEY`, cleared at the next checkpoint), and stop writing snapshot rows + markers + head advances for intermediate saves. `intent: "checkpoint" | "intermediate"` becomes an explicit parameter of `AgentRunPersistence.save`, defaulting to checkpoint, and only the child-hook seam sends intermediate. Restore consults the working row **only** as an overlay for an unclean (`running`/`starting`) record with a dead continuation lease that is `resumable` on this branch, after validating the leaf against that child transcript — markers stay the sole authority for branch state. Mutable working state must **not** live inside `agent_run_snapshots`: two markers aliasing one ever-changing `snapshot_id` would let an older sibling branch resolve to a newer state. The legacy 12,293-row backlog is plain `DELETE`d in a migration, made safe by inferring "provably superseded" (a surviving row exists for that `run_instance_id`) and skipping those markers silently instead of storing stubs; the hard `missing SQLite snapshot` diagnostic stays for the genuine wiped-database case. Invariant that must survive: the continuation head always names a surviving, fully valid checkpoint row. The live database is `dirname(workspacesDir)/meta.sqlite`, i.e. `.state/meta.sqlite`; the 45 KB `.state/workspaces/meta.sqlite` is a dead remnant of an earlier layout. **Steps 1–2 of that plan are landed.** `AgentRunJournalState` now owns this process's head belief, and migration 17 added `storage/run-working-state.ts` plus the `agent_run_working_state` table, `applyWorkingStateOverlay`, and `ENABLE_WORKING_STATE_OVERLAY`. Both new pieces are **inert on purpose**: nothing writes a working row and the overlay ships disabled, until the writer learns the checkpoint/intermediate intent (step 3), which also lands the `load.ts` call site so the path is exercised end to end. `listAgentRunSnapshotsInDatabase` now chunks its id list (500 placeholders) and tolerates holes, because one parent transcript can hold 1,826 markers. Full design, measured reclamation, probe evidence, validation checklist, per-step implementation sequence (§11) with landed status and deviations, and reproduction SQL: `docs/agent-snapshot-gc.md`.
 
 ## Branch-correct persistence (V2)
 
@@ -42,12 +44,22 @@ pre-split count.
   projection, never the authority for restoration.
 - `lease-ledger.ts` — `CONTINUATION_LEASE_MS`, the `ENABLE_PID_LEASE_RECOVERY` kill switch,
   `isProcessAlive`, and `ContinuationLeaseLedger`.
-- `journal-heads.ts` — `JournalHeadExpectations`, the continuation-head row shapes, and
+- `journal-heads.ts` — `AgentRunJournalState` (formerly `JournalHeadExpectations`), the continuation-head row shapes, and
   `initializeAgentRunContinuationHeads`, whose sequence guard still lets a re-adopt claim take over a
   pending reservation with no live lease.
 - `state-writer.ts` — the `AgentRunStateWriter` interfaces plus `SqliteAgentRunStateWriter` and its factory.
 - `stored-record.ts` — the untrusted-record gate: `parseRecord`, the `normalize*` coercion helpers, and the
   exported `validateAgentRunSnapshot` seam.
+
+`applyWorkingStateOverlay` is the second gate in that file and the only one allowed to move a restored run past
+its last checkpoint: it swaps in a newer `childSessionLeafId` + `progress` from `agent_run_working_state`, and
+only for a run whose checkpoint is still unclean (`starting`/`running`), still `resumable` on this branch, with
+no live lease, a newer row, the same physical run, the same child transcript, and a leaf that exists in that
+file. Every other status — parked, terminal, removed, read-only sibling history — must return the record
+untouched, because markers stay the sole authority for which checkpoint a branch restores. It is shipped behind
+`ENABLE_WORKING_STATE_OVERLAY = false`: nothing writes a working row until the writer distinguishes intermediate
+saves, and `updatedAt` deliberately stays the checkpoint's (the row narrows where the child stopped, not when
+the parent last checkpointed).
 - `load.ts` — `loadAgentRunPersistence` as a short orchestrator over one function per pipeline phase (`sessionLayout`, `collectParentMarkers`, `collectSessionHeads`, `collectBranchHeads`, `collectLegacyRecords`, `resolveActiveRecords`) plus three classes that own state across calls: `SnapshotValidator` (row lookup + the diagnostics accumulator), `RefusedWriteReporter` (the one-shot user warning over an unbudgeted listener), and `AgentRunPersistenceFacade` (`implements AgentRunPersistence`).
 
 SQL stays inline at the call site that executes it, even where two statements are textually identical: the
@@ -59,10 +71,26 @@ constant was judged more fragile than the duplication.
 `createAgentRunStateWriter` in `state-writer.ts` is a thin factory over `SqliteAgentRunStateWriter`,
 which holds the state that was previously a dozen captured locals. Two small classes own the state clusters that more than one
 method touches: `ContinuationLeaseLedger` (tokens, renewal timers, the sticky lost-run set, and the
-renew/release row writes) and `JournalHeadExpectations` (the compare-and-set expectation that both the
-lease claim and the reserve transaction verify, where the first read of a run adopts whatever the row
-holds and every later read must agree). Keep the factory as the exported seam so call sites and tests do
+renew/release row writes) and `AgentRunJournalState` (the compare-and-set belief that both the lease claim
+and the reserve transaction verify). `AgentRunJournalState` is the one owner of this process's per-run
+journal belief: a single `Map<runInstanceId, { head?: string }>` where **entry presence** means "already
+looked" and `head: undefined` means "looked, the row was empty" — do not re-split that into a value map plus
+a `known` set, because the two must never disagree. The first read of a run adopts whatever the row holds and
+every later read must agree. Keep the factory as the exported seam so call sites and tests do
 not churn when the class changes.
+
+**There is no single per-run persistence coordinator, by design and by accident.** One run's persistence status
+is currently held in `AgentRun` (leaf, file, status, `resumable`, `continuationLease`/`continuationLeaseLost`),
+`AgentRunRegistry.runs`, `AgentRunCheckpointStore.persistedRuns` + `.pendingPersistence` (both keyed by the
+logical `runId`), `AgentRunJournalState` and `ContinuationLeaseLedger` (both keyed by the physical
+`runInstanceId`), the global `saveTail`, and durably in `agent_run_continuation_heads` (the real "which
+checkpoint"), `agent_run_continuation_leases`, the `agent_runs` projection, plus `workspace_checkpoints` /
+`workspace_results` as a fifth per-run persistence home. Before adding any further per-run persistence fact,
+read `docs/agent-snapshot-gc.md` §4.8, which inventories this and describes the writer-owned `AgentRunJournalState`
+consolidation (landed: it owns head belief only) while explicitly **not** merging `ContinuationLeaseLedger`
+(its drop-the-claim-before-awaiting-the-`DELETE` ordering is a live TOCTOU fix gated by
+`test/tools/agent-persistence-v2.test.ts`) or `AgentRunCheckpointStore` (different key space, different reset
+trigger: `replace()` clears it on restore/branch switch while head expectations must survive a save cycle).
 
 - The save pipeline is `persistQueued` (identity guard, automatic lease, release in `finally`) over
   `reserveSnapshot` (snapshot row plus head reserved with `pending` set) and `commitSnapshot` (renew,

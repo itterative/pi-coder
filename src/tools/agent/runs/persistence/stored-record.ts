@@ -10,6 +10,10 @@ import { ZERO_USAGE } from ".././usage";
 import { parseAgentDefinitionSnapshot } from "../../definitions/types";
 import { type AgentRunSnapshotMarker } from "../../storage/run-markers";
 import { type AgentRunSnapshotRow } from "../../storage/run-snapshots";
+import {
+    isAgentRunWorkingStatus,
+    type AgentRunWorkingState,
+} from "../../storage/run-working-state";
 import { safeExistingChildFile } from "./session-paths";
 
 const RUN_ID = /^[a-z][a-z0-9_-]{0,63}-\d+$/;
@@ -304,4 +308,94 @@ export function validateAgentRunSnapshot(
     }
 
     return parsed;
+}
+
+/**
+ * Whether a crash-interrupted run may be resumed at its working leaf instead of its last checkpoint leaf.
+ *
+ * Shipped disabled because nothing writes a working row until the writer distinguishes intermediate saves;
+ * flipping it is step 3 of `docs/agent-snapshot-gc.md`, and flipping it back is the whole rollback story for
+ * the leaf-resolution change, in the same role `ENABLE_PID_LEASE_RECOVERY` plays for lease reclaim.
+ */
+export const ENABLE_WORKING_STATE_OVERLAY = false;
+
+/** What a caller must prove about the outside world before a working row may sharpen a checkpoint. */
+export interface WorkingStateOverlayContext {
+    /** True while another live process holds this run's continuation lease. */
+    leaseIsHeld: boolean;
+    /** Whether the working leaf names a real entry of the run's own child transcript. */
+    leafExists(leafId: string): boolean;
+}
+
+/**
+ * Replace a checkpoint's child-session position with the run's working row, when the row is trustworthy.
+ *
+ * The working row is the durable record of "the child got this far, then this process died", so it is the
+ * only input that may move a restored run past its last checkpoint. Every gate below exists because a wrong
+ * leaf would silently resume from the wrong conversation, which is worse than a coarser one:
+ *
+ * 1. Only a run whose last checkpoint is still unclean (`starting`/`running`) can be interrupted; a parked
+ *    or terminal checkpoint describes a boundary the child actually reached.
+ * 2. Read-only history ("continued on another branch") keeps its own checkpoint, or a sibling branch would
+ *    restore another branch's progress.
+ * 3. A live lease means some other process is still writing, so its rows may be mid-update.
+ * 4. The row must be newer than the checkpoint, name the same physical run, and point at the same child
+ *    transcript — the leaf is only meaningful inside the file it came from.
+ * 5. The leaf must exist in that transcript: a stale hint may choose an older or newer entry of the same
+ *    file, never a foreign identifier.
+ *
+ * `updatedAt` deliberately stays the checkpoint's: this narrows where the child stopped, it does not redate
+ * when the parent last checkpointed, and retention and UI ordering key off that timestamp. Progress is
+ * replaced wholesale, because the working row is strictly newer than the checkpoint it sharpens.
+ */
+export function applyWorkingStateOverlay(
+    record: PersistedAgentRun,
+    working: AgentRunWorkingState | undefined,
+    context: WorkingStateOverlayContext,
+): PersistedAgentRun {
+    if (!working) {
+        return record;
+    }
+    if (!isAgentRunWorkingStatus(record.status)) {
+        return record;
+    }
+    if (record.resumable === false) {
+        return record;
+    }
+    if (context.leaseIsHeld) {
+        return record;
+    }
+    if (working.updatedAt <= record.updatedAt) {
+        return record;
+    }
+    if (
+        working.runInstanceId !== record.runInstanceId ||
+        working.runId !== record.runId ||
+        working.ownerSessionId !== record.ownerSessionId
+    ) {
+        return record;
+    }
+    if (!record.childSessionFile) {
+        return record;
+    }
+    const workingFile = working.childSessionFile
+        ? path.resolve(working.childSessionFile)
+        : undefined;
+    if (workingFile !== record.childSessionFile) {
+        return record;
+    }
+
+    const leafId = working.childSessionLeafId;
+    if (typeof leafId !== "string" || leafId.length === 0) {
+        return record;
+    }
+    if (!context.leafExists(leafId)) {
+        return record;
+    }
+
+    return {
+        ...record,
+        childSessionLeafId: leafId,
+        progress: normalizeProgress(working.progress),
+    };
 }

@@ -67,36 +67,60 @@ export function snapshotIdOf(row: HeadRow | undefined): string | undefined {
 }
 
 /**
- * What this process expects each continuation-heads row to hold, used as a compare-and-set guard.
+ * What this process believes about one physical run's checkpoint journal.
  *
- * The first read of a run adopts whatever the row currently says, so a save can never fail merely
- * because this process has not looked yet; every later read must agree with the last adopted value.
- * Committing a snapshot adopts it, which is what makes the marker append safe to attempt again.
+ * `head` is the snapshot id this process last saw or committed. An entry that exists with `head`
+ * `undefined` means the head row was empty when this process first looked, which is a different state
+ * from having never looked at the run at all.
  */
-export class JournalHeadExpectations {
-    private readonly expected = new Map<string, string | undefined>();
-    private readonly known = new Set<string>();
+export interface RunJournalEntry {
+    head?: string;
+}
 
-    constructor(initial: ReadonlyMap<string, string>) {
-        for (const [runInstanceId, snapshotId] of initial) {
-            this.expected.set(runInstanceId, snapshotId);
-            this.known.add(runInstanceId);
+/**
+ * This process's view of the durable continuation journal, one entry per physical run.
+ *
+ * The entry map is the whole state: which checkpoint each run is at, and whether this process has looked at
+ * it yet. `agent_run_continuation_heads` stays the durable authority; this is the belief about it that lets
+ * a save prove it is writing the next checkpoint of the run it read instead of overwriting one another
+ * parent already continued. Both the lease claim and the reserve transaction verify against it first.
+ *
+ * Two rules the single map must keep, because every other persistence invariant leans on them:
+ *
+ * 1. The first read of a run adopts whatever the row currently says, so a save can never fail merely because
+ *    this process has not looked yet.
+ * 2. Committing a snapshot adopts it even when the writes after the marker append failed, because the parent
+ *    transcript already references that snapshot.
+ */
+export class AgentRunJournalState {
+    private readonly entries = new Map<string, RunJournalEntry>();
+
+    constructor(initialHeads: ReadonlyMap<string, string> = new Map()) {
+        for (const [runInstanceId, snapshotId] of initialHeads) {
+            this.entries.set(runInstanceId, { head: snapshotId });
         }
     }
 
+    /**
+     * Adopt the run's current head on the first look, or reject a head that moved since then.
+     *
+     * `actual` is what the heads row holds right now, including `undefined` for a run with no row yet.
+     */
     verify(runInstanceId: string, actual: string | undefined): void {
-        if (!this.known.has(runInstanceId)) {
-            this.expected.set(runInstanceId, actual);
-            this.known.add(runInstanceId);
+        const entry = this.entries.get(runInstanceId);
+        if (!entry) {
+            this.entries.set(runInstanceId, { head: actual });
             return;
         }
-        if (this.expected.get(runInstanceId) === actual) return;
+        if (entry.head === actual) {
+            return;
+        }
 
         throw new Error(STALE_CONTINUATION_MESSAGE);
     }
 
+    /** Adopt the snapshot this process just committed as the run's head. */
     commit(runInstanceId: string, snapshotId: string): void {
-        this.expected.set(runInstanceId, snapshotId);
-        this.known.add(runInstanceId);
+        this.entries.set(runInstanceId, { head: snapshotId });
     }
 }

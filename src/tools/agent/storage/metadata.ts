@@ -341,6 +341,28 @@ export const AGENT_METADATA_MIGRATIONS = [
         `);
         },
     },
+    {
+        // At most one row per physical run, holding where an interrupted child last stopped. Kept out
+        // of `agent_run_snapshots` on purpose: every row there is immutable once its parent marker is
+        // committed, and two markers naming one changing row would let an older branch restore a newer
+        // state. No foreign key either, mirroring `agent_run_continuation_heads`: this row is a hint that
+        // must never block or be blocked by a checkpoint write.
+        version: 17,
+        async apply(database: AgentMetadataDatabase): Promise<void> {
+            await database.exec(`
+            CREATE TABLE IF NOT EXISTS agent_run_working_state (
+                run_instance_id TEXT PRIMARY KEY,
+                owner_session_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('starting', 'running')),
+                child_session_file TEXT,
+                child_session_leaf_id TEXT,
+                progress_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+        `);
+        },
+    },
 ] as const;
 
 export function agentWorkspacesRoot(workspacesDir = PI_CODER_WORKSPACES_DIR): string {

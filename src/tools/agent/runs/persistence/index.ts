@@ -13,5 +13,9 @@ export { getAgentCwdSessionDir } from "./session-paths";
 export { initializeAgentRunContinuationHeads } from "./journal-heads";
 export { ENABLE_PID_LEASE_RECOVERY } from "./lease-ledger";
 export { createAgentRunStateWriter } from "./state-writer";
-export { validateAgentRunSnapshot } from "./stored-record";
+export {
+    ENABLE_WORKING_STATE_OVERLAY,
+    applyWorkingStateOverlay,
+    validateAgentRunSnapshot,
+} from "./stored-record";
 export { loadAgentRunPersistence } from "./load";
