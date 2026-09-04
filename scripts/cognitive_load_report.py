@@ -19,6 +19,12 @@ from many small callbacks: every callback can stay under the threshold while the
 the whole thing. The report therefore also asks ESLint for its AST-based max-lines-per-function rule
 in the same pass, nests the reported spans, and separates a function's own lines from the lines of the
 functions inside it.
+
+Two floors are involved, and they are not the same thing. ESLint measures every function at
+``INVENTORY_FUNCTION_LINES`` or longer, because a function that is not reported cannot be subtracted
+from its parent's self count, and a parent that already delegates would then look like one long
+undecomposed body. ``--min-function-lines`` only decides which measured rows are displayed. Neither
+floor is a requirement: the tree is a reading order, not a defect list.
 """
 
 from __future__ import annotations
@@ -40,9 +46,15 @@ COMPLEXITY_RULE = "complexity"
 COGNITIVE_RULE = "sonarjs/cognitive-complexity"
 STRUCTURE_RULE = "max-lines-per-function"
 RULES = (COMPLEXITY_RULE, COGNITIVE_RULE)
-MIN_FUNCTION_LINES_DEFAULT = 20
-BIG_FUNCTION_LINES_DEFAULT = 200
-CHILD_FUNCTION_LINES_DEFAULT = 60
+BIG_FUNCTION_LINES_DEFAULT = 300
+# The tree's display floor sits at two thirds of the outlier length, so a function can be listed
+# without being an outlier. Integer arithmetic keeps the default exact for any --big-function-lines.
+MIN_FUNCTION_LINES_DEFAULT = BIG_FUNCTION_LINES_DEFAULT * 2 // 3
+CHILD_FUNCTION_LINES_DEFAULT = 80
+# ESLint's rule threshold is the measurement floor, not a display filter: functions shorter than this
+# are never reported, so their lines fold into the parent's self count and a function that already
+# delegates reads as one undecomposed body. Keep this low and filter while rendering instead.
+INVENTORY_FUNCTION_LINES = 20
 NESTED_ASSEMBLY_DEFAULT = 4
 TEST_PATH_PREFIX = "test/"
 ESLINT_CONFIG_FILE = "eslint.config.mjs"
@@ -206,16 +218,30 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--min-function-lines",
         type=int,
-        default=MIN_FUNCTION_LINES_DEFAULT,
+        default=None,
         metavar="N",
-        help="inventory every function at least this long (default: 20)",
+        help=(
+            "shortest function the size tree lists. Display floor only: measurement stays at "
+            "INVENTORY_FUNCTION_LINES so self counts keep their inner functions (default: two thirds "
+            f"of --big-function-lines, currently {MIN_FUNCTION_LINES_DEFAULT})"
+        ),
     )
     parser.add_argument(
         "--big-function-lines",
         type=int,
         default=BIG_FUNCTION_LINES_DEFAULT,
         metavar="N",
-        help="length that makes a function a structural outlier (default: 200)",
+        help=f"length that makes a function a structural outlier (default: {BIG_FUNCTION_LINES_DEFAULT})",
+    )
+    parser.add_argument(
+        "--child-function-lines",
+        type=int,
+        default=CHILD_FUNCTION_LINES_DEFAULT,
+        metavar="N",
+        help=(
+            "shortest nested function expanded in the size tree; shorter ones are counted in the "
+            f"'+ N below' note (default: {CHILD_FUNCTION_LINES_DEFAULT})"
+        ),
     )
     parser.add_argument(
         "--no-structure",
@@ -232,8 +258,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
     if args.top < 1:
         parser.error("--top must be at least 1")
-    if args.min_function_lines < 1:
+    if args.min_function_lines is not None and args.min_function_lines < 1:
         parser.error("--min-function-lines must be positive")
+    elif args.min_function_lines is None:
+        args.min_function_lines = max(1, args.big_function_lines * 2 // 3)
+    if args.child_function_lines < 1:
+        parser.error("--child-function-lines must be positive")
     if args.big_function_lines < args.min_function_lines:
         parser.error("--big-function-lines must be at least --min-function-lines")
     if args.complexity_threshold is not None and args.complexity_threshold < 1:
@@ -590,6 +620,7 @@ def render_structure_section(
     silent: Sequence[dict[str, Any]],
     top: int,
     big_lines: int,
+    min_lines: int,
     child_lines: int,
 ) -> list[str]:
     """Render the largest functions as a tree so delegation reads as delegation."""
@@ -600,18 +631,31 @@ def render_structure_section(
         lines.append("No size inventory (run without --no-structure to collect it).")
         return lines
 
+    visible = [root for root in roots if root.lines >= min_lines]
+    if not visible:
+        lines.append(
+            f"No function reaches the {min_lines}-line floor, so nothing is listed. Lower "
+            f"--min-function-lines to inspect smaller bodies, or --big-function-lines to treat "
+            f"shorter functions as outliers."
+        )
+        return lines
+
     lines.append(
-        f"{len(rows)} functions inventoried; ranked by self lines, because that is what a reader holds "
-        f"at once. {len(silent)} functions of {big_lines}+ lines carry no complexity finding anywhere "
-        f"inside them."
+        f"{len(rows)} functions measured at {INVENTORY_FUNCTION_LINES}+ lines, {len(visible)} at or above "
+        f"the {min_lines}-line display floor; ranked by self lines, because that is what a reader holds "
+        f"at once. {len(silent)} reach {big_lines}+ lines with no complexity finding anywhere inside."
     )
     lines.append(
         "Counts are ESLint physical lines per function node, so an indented row sits inside the row "
         "above it. 'nested' counts functions declared inside, so a huge span with a small self and many "
-        "nested pieces is assembled from callbacks; a huge self is one undecomposed body. Size is a "
-        "review signal, not a defect threshold."
+        "nested pieces is assembled from callbacks; a huge self is one undecomposed body."
     )
-    lines.append(f"{'self':>6} {'lines':>6} {'nested':>6} {'inside':>6}  function")
+    lines.append(
+        "This is a reading order, not a requirement list. Length is informative: a long body already "
+        "split into named steps may need nothing, a short one can still be unreadable, and a row "
+        "under the display floor is simply not shown here."
+    )
+    lines.append(f"{'self':>7} {'lines':>7} {'nested':>7} {'inside':>7}  function")
 
     index = {(row["path"], row["line"]): row for row in rows}
 
@@ -620,8 +664,8 @@ def render_structure_section(
         marker = "  <- no complexity signal" if row in silent else ""
         indent = "  " * (depth - 1) + ("|- " if depth > 1 else "")
         lines.append(
-            f"{row['self_lines']:>6} {row['lines']:>6} {row['nested_functions']:>6} "
-            f"{row['findings_inside']:>6}  {indent}{row['name']}  "
+            f"{row['self_lines']:>7} {row['lines']:>7} {row['nested_functions']:>7} "
+            f"{row['findings_inside']:>7}  {indent}{row['name']}  "
             f"{row['path']}:{row['line']} [{row['pattern']}]{marker}"
         )
         children = sorted(
@@ -633,9 +677,9 @@ def render_structure_section(
         hidden = len(node.children) - len(children)
         if hidden > 0:
             continuation = "  " * (depth - 1) + ("|- " if depth > 1 else "")
-            lines.append(f"{'':>26}  {continuation}+ {hidden} below {child_lines} lines")
+            lines.append(f"{'':>31}  {continuation}+ {hidden} below {child_lines} lines")
 
-    for root in sorted(roots, key=lambda item: (-item.self_lines, -item.lines))[:top]:
+    for root in sorted(visible, key=lambda item: (-item.self_lines, -item.lines))[:top]:
         render_node(root, 1)
     return lines
 
@@ -776,6 +820,7 @@ def render_text(
     report: Report,
     top: int,
     big_lines: int = BIG_FUNCTION_LINES_DEFAULT,
+    min_lines: int = MIN_FUNCTION_LINES_DEFAULT,
     child_lines: int = CHILD_FUNCTION_LINES_DEFAULT,
 ) -> str:
     lines = [
@@ -790,6 +835,16 @@ def render_text(
         "Scores are the values reported by ESLint. Severity is derived from the configured thresholds:",
         "moderate (> threshold), high (>= 2x), critical (>= 4x). Priorities are sorted by severity, then normalized score.",
     ]
+    lines.extend(
+        [
+            "",
+            "These metrics are review signals, not requirements. A high score should trigger inspection",
+            "rather than automatic refactoring, and a smaller score is not an improvement if readability",
+            "gets worse: dispatch tables and tiny wrappers lower numbers while making the code harder to",
+            "follow. Track trends rather than absolute values, and read the structure section below as a",
+            "suggestion of what to look at, not a list of obligations.",
+        ]
+    )
 
     for rule in RULES:
         findings = metric_findings(report, rule)
@@ -822,7 +877,11 @@ def render_text(
             )
 
     roots, rows, silent = structure_analysis(report, big_lines)
-    lines.extend(render_structure_section(roots, rows, silent, top, big_lines, child_lines))
+    lines.extend(
+        render_structure_section(
+            roots, rows, silent, top, big_lines, min_lines, child_lines
+        )
+    )
 
     lines.extend(["", "Top files", "---------"])
     for row in file_stats(report)[:top]:
@@ -870,8 +929,25 @@ def render_text(
     return "\n".join(lines) + "\n"
 
 
-def render_json(report: Report, top: int) -> str:
+def render_json(
+    report: Report,
+    top: int,
+    big_lines: int = BIG_FUNCTION_LINES_DEFAULT,
+    min_lines: int = MIN_FUNCTION_LINES_DEFAULT,
+    child_lines: int = CHILD_FUNCTION_LINES_DEFAULT,
+) -> str:
     payload = summary(report)
+    payload["structure_thresholds"] = {
+        "display_floor_lines": min_lines,
+        "measured_floor_lines": INVENTORY_FUNCTION_LINES,
+        "outlier_lines": big_lines,
+        "expanded_child_lines": child_lines,
+        "note": (
+            "Size is a reading suggestion, not a requirement: rows under the display floor are not "
+            "shown, all measurement runs at the lower measured floor, and a long body already split "
+            "into named steps may need nothing."
+        ),
+    }
     payload["top_functions"] = {
         metric_label(rule): [
             asdict(item) | {"severity": item.severity, "excess": item.excess}
@@ -906,7 +982,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 root,
                 eslint_command(root, args.eslint),
                 args.target or ["."],
-                None if args.no_structure else args.min_function_lines,
+                None if args.no_structure else INVENTORY_FUNCTION_LINES,
             )
         report = parse_report(data, root, thresholds, exit_code)
     except RuntimeError as error:
@@ -914,9 +990,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if args.format == "json":
-        output = render_json(report, args.top)
+        output = render_json(
+            report, args.top, args.big_function_lines, args.min_function_lines
+        )
     else:
-        output = render_text(report, args.top, args.big_function_lines)
+        output = render_text(
+            report,
+            args.top,
+            args.big_function_lines,
+            args.min_function_lines,
+            args.child_function_lines,
+        )
     print(output, end="")
 
     if args.fail_on == "findings" and report.findings:
