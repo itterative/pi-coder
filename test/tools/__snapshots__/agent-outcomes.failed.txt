@@ -1,0 +1,95 @@
+### start with an Error
+Agent action failed: boom
+{
+  "isError": true,
+  "details": {
+    "runId": "unstarted",
+    "title": "Spare title",
+    "agent": "scout",
+    "status": "failed",
+    "background": true,
+    "task": "Inspect the loader\nsecond line",
+    "recentActivity": [],
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "totalTokens": 0,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total": 0
+      }
+    },
+    "startedAt": "<timestamp>",
+    "updatedAt": "<timestamp>",
+    "error": "boom"
+  }
+}
+
+### non-start with a string throwable
+Agent action failed: not an error
+{
+  "isError": true,
+  "details": {
+    "runId": "unknown",
+    "title": "Agent action",
+    "agent": "unknown",
+    "status": "failed",
+    "background": false,
+    "task": "",
+    "recentActivity": [],
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "totalTokens": 0,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total": 0
+      }
+    },
+    "startedAt": "<timestamp>",
+    "updatedAt": "<timestamp>",
+    "error": "not an error"
+  }
+}
+
+### start with only an action
+Agent action failed: [object Object]
+{
+  "isError": true,
+  "details": {
+    "runId": "unstarted",
+    "title": "Delegated task",
+    "agent": "unknown",
+    "status": "failed",
+    "background": false,
+    "task": "",
+    "recentActivity": [],
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "totalTokens": 0,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total": 0
+      }
+    },
+    "startedAt": "<timestamp>",
+    "updatedAt": "<timestamp>",
+    "error": "[object Object]"
+  }
+}

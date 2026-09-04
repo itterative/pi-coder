@@ -28,6 +28,34 @@ import {
 } from "../../src/tools/agent/definitions/discovery";
 import { ZERO_USAGE } from "../../src/tools/agent/runs/manager";
 
+/**
+ * Real construction needs a live model runtime plus a registry stub. The reopen tests below share
+ * this so they differ only in the transcript arguments under test.
+ */
+async function smokeHarness(modelIndex = 0): Promise<{
+    source: ModelRuntime;
+    model: ReturnType<ModelRuntime["getModels"]>[number] | undefined;
+    parentContext: Record<string, unknown>;
+}> {
+    const source = await ModelRuntime.create({ refreshOnCreate: false, modelsPath: null });
+    const model = source.getModels()[modelIndex];
+    const parentContext = {
+        model,
+        mode: "print",
+        hasUI: false,
+        thinkingLevel: "off",
+        modelRegistry: {
+            getRegisteredNativeProvider: () => undefined,
+            getRegisteredProviderConfig: () => undefined,
+            getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "smoke-test" }),
+            isUsingOAuth: () => false,
+            find: (provider: string, id: string) => source.getModel(provider, id),
+            getAll: () => [...source.getModels()],
+        },
+    };
+    return { source, model, parentContext };
+}
+
 describe("in-process scout SDK session", () => {
     it("constructs and disposes without a provider call or discovered parent extensions", async () => {
         const source = await ModelRuntime.create({
@@ -315,6 +343,125 @@ describe("in-process scout SDK session", () => {
         } finally {
             fs.rmSync(directory, { recursive: true, force: true });
         }
+    });
+
+    /**
+     * `SessionManager.open()` points at the newest physical leaf, so restoration must select the
+     * persisted leaf *before* the session context is built. Two identical transcripts, constructed
+     * the same way except for the leaf argument: the visible difference is which assistant turn the
+     * child can see, which is what proves the ordering. Selecting after the context build would show
+     * the newest turn. Each arm gets its own directory because selection writes a branch into the
+     * transcript, and a shared file would let the first arm decide the second one's result.
+     */
+    it("builds the child context from the persisted leaf, not the newest one", async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-child-leaf-"));
+        try {
+            const { model, parentContext } = await smokeHarness();
+            expect(model).toBeDefined();
+            if (!model) return;
+
+            const transcript = (
+                name: string,
+            ): { dir: string; file: string; firstLeaf: string | null } => {
+                const dir = fs.mkdtempSync(path.join(root, name));
+                const writer = SessionManager.create(process.cwd(), dir);
+                const append = (text: string): void => {
+                    writer.appendMessage({
+                        role: "assistant",
+                        content: [{ type: "text", text }],
+                        api: model.api,
+                        provider: model.provider,
+                        model: model.id,
+                        usage: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
+                        stopReason: "stop",
+                        timestamp: Date.now(),
+                    });
+                };
+                append("First turn");
+                const firstLeaf = writer.getLeafId();
+                append("Second turn");
+                return { dir, file: writer.getSessionFile() ?? "", firstLeaf };
+            };
+
+            const newest = transcript("newest");
+            const unselected = await createAgentChild({
+                cwd: process.cwd(),
+                definition: BUILTIN_SCOUT,
+                parentContext,
+                childSessionDir: newest.dir,
+                childSessionFile: newest.file,
+                onProgress: () => {},
+            });
+            expect(unselected.getFinalOutput()).toBe("Second turn");
+            unselected.dispose();
+
+            const selected = transcript("selected");
+            const resumed = await createAgentChild({
+                cwd: process.cwd(),
+                definition: BUILTIN_SCOUT,
+                parentContext,
+                childSessionDir: selected.dir,
+                childSessionFile: selected.file,
+                childSessionLeafId: selected.firstLeaf,
+                onProgress: () => {},
+            });
+            expect(resumed.getFinalOutput()).toBe("First turn");
+            // Constructing the session appends to the branch, so the pointer has moved on; the
+            // proof is the context content asserted above, not the leaf id.
+            resumed.dispose();
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    /** The middle arm of the session bootstrap: a directory with no transcript yet on disk. */
+    it("materializes a persistent transcript when only a session directory is given", async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-child-materialize-"));
+        try {
+            const { model, parentContext } = await smokeHarness();
+            expect(model).toBeDefined();
+            if (!model) return;
+
+            const child = await createAgentChild({
+                cwd: process.cwd(),
+                definition: BUILTIN_SCOUT,
+                parentContext,
+                childSessionDir: directory,
+                onProgress: () => {},
+            });
+
+            expect(child.sessionFile).toBeDefined();
+            expect(fs.existsSync(child.sessionFile!)).toBe(true);
+            child.dispose();
+        } finally {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+
+    /**
+     * Disposal is reachable from both the run manager and the factory's own rollback path, so the
+     * guard flag is what keeps an unsubscribe from running twice against one session.
+     */
+    it("releases the session once when dispose is called twice", async () => {
+        const { model, parentContext } = await smokeHarness();
+        expect(model).toBeDefined();
+        if (!model) return;
+
+        const events: string[] = [];
+        const child = await createAgentChild({
+            cwd: process.cwd(),
+            definition: BUILTIN_SCOUT,
+            parentContext,
+            onProgress: () => {},
+            onTrace: (type) => {
+                events.push(type);
+            },
+        });
+
+        child.dispose();
+        child.dispose();
+
+        expect(events.filter((type) => type === "session.dispose_called")).toHaveLength(1);
     });
 
     it("preserves persisted OpenAI Codex OAuth when available", async () => {

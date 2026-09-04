@@ -257,11 +257,17 @@ function toolActivity(toolName: string, args: unknown): string {
     return `Using ${toolName}`;
 }
 
-export function reportProgress(
-    tracker: ChildProgressTracker,
-    onProgress: (progress: ChildProgress) => void,
-): void {
-    onProgress({
+/**
+ * Project one progress frame out of the tracker.
+ *
+ * This is the only place that decides what a frame carries: a field is present only when it holds
+ * something, and every mutable container is copied, because the tracker keeps mutating in place and
+ * a frame handed to the manager, the widget, or the transcript must not change after the fact. Three
+ * call sites used to spell this literal out, and they had already started to differ in where they
+ * read `permissionPending` from, which is the drift this function exists to prevent.
+ */
+export function snapshotProgress(tracker: ChildProgressTracker): ChildProgress {
+    return {
         output: tracker.progress.output,
         ...(tracker.progress.lastAssistantMessage
             ? { lastAssistantMessage: tracker.progress.lastAssistantMessage }
@@ -277,7 +283,63 @@ export function reportProgress(
             : {}),
         permissionPending: tracker.progress.permissionPending,
         ...(tracker.progress.todo ? { todo: { ...tracker.progress.todo } } : {}),
-    });
+    };
+}
+
+export function reportProgress(
+    tracker: ChildProgressTracker,
+    onProgress: (progress: ChildProgress) => void,
+): void {
+    onProgress(snapshotProgress(tracker));
+}
+
+/**
+ * Build the tracker a child starts from: a resumed run's last known state, or an empty one.
+ *
+ * The progress frame is copied field by field because the tracker owns it from here and mutates it
+ * in place. The file sets come from the mutation report rather than the progress frame, since changed
+ * and read files are authority data a resumed worker must keep honoring while progress is display
+ * state. `interrupted` is true when either the stored report says the previous run was cut short or
+ * the caller is bringing the child back specifically to repair it.
+ */
+export function seedProgressTracker(request: {
+    initialProgress?: ChildProgress;
+    initialMutationReport?: WorkerMutationReport;
+    repairInterrupted?: boolean;
+}): ChildProgressTracker {
+    const { initialProgress, repairInterrupted } = request;
+    const initialMutation: WorkerMutationReport = request.initialMutationReport ?? {
+        changedFiles: [],
+        bashApproved: false,
+    };
+
+    return {
+        progress: initialProgress
+            ? {
+                  ...initialProgress,
+                  recentActivity: [...initialProgress.recentActivity],
+                  ...(initialProgress.toolCounts
+                      ? { toolCounts: { ...initialProgress.toolCounts } }
+                      : {}),
+                  ...(initialProgress.todo ? { todo: { ...initialProgress.todo } } : {}),
+              }
+            : { output: "", recentActivity: [], toolCounts: {} },
+        lastUpdateAt: 0,
+        changedFiles: new Set(initialMutation.changedFiles),
+        readFiles: new Set(initialMutation.readFiles ?? []),
+        bashApproved: initialMutation.bashApproved,
+        interrupted: initialMutation.interrupted === true || repairInterrupted === true,
+    };
+}
+
+/** The reverse of the seed: what this child changed, read, or was approved to run. */
+export function mutationReport(tracker: ChildProgressTracker): WorkerMutationReport {
+    return {
+        changedFiles: [...tracker.changedFiles].sort(),
+        ...(tracker.readFiles.size ? { readFiles: [...tracker.readFiles].sort() } : {}),
+        bashApproved: tracker.bashApproved,
+        ...(tracker.interrupted ? { interrupted: true } : {}),
+    };
 }
 
 export function updateTracker(

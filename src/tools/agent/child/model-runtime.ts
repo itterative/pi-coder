@@ -1,4 +1,8 @@
-import { ModelRuntime, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+    ModelRuntime,
+    type ExtensionContext,
+    type SessionManager,
+} from "@earendil-works/pi-coding-agent";
 
 function mergeProviderHeaders(
     configured: Record<string, string> | undefined,
@@ -64,6 +68,38 @@ export async function createChildModelRuntime(
         );
     }
     return runtime;
+}
+
+/** What a persisted transcript recorded about how it was being run. */
+export interface ChildRestoredModel {
+    /** Stored as `provider/model`; absent when the transcript predates model recording. */
+    modelSpec: string | undefined;
+    thinkingLevel: ReturnType<SessionManager["buildSessionContext"]>["thinkingLevel"];
+}
+
+/**
+ * Read the model and thinking level a child transcript was actually built with.
+ *
+ * Only a resumed child has anything to restore, and the stored context is the only trustworthy
+ * source: a definition may have selected another model, or the parent may have switched, while the
+ * stored messages were produced by the model named here. Resolving through that recorded value is
+ * what keeps a continuation consistent with its own history.
+ */
+export function restoreChildSessionModel(
+    sessionManager: SessionManager,
+    childSessionFile: string | undefined,
+): ChildRestoredModel | undefined {
+    if (!childSessionFile) {
+        return undefined;
+    }
+
+    const context = sessionManager.buildSessionContext();
+    return {
+        modelSpec: context?.model
+            ? `${context.model.provider}/${context.model.modelId}`
+            : undefined,
+        thinkingLevel: context?.thinkingLevel,
+    };
 }
 
 export function resolveChildModel(

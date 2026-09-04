@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { updateTracker, type ChildProgressTracker } from "../../src/tools/agent/child/progress";
+import {
+    snapshotProgress,
+    updateTracker,
+    type ChildProgressTracker,
+} from "../../src/tools/agent/child/progress";
 
 function tracker(): ChildProgressTracker {
     return {
@@ -13,6 +17,49 @@ function tracker(): ChildProgressTracker {
 }
 
 describe("child progress", () => {
+    /**
+     * `snapshotProgress` now feeds three callers: the parent's progress callback, the permission
+     * frame, and the handle's `getProgress`. A dropped field therefore disappears quietly from
+     * `runs/child-setup.ts`, which derives `waiting_for_permission` from `permissionPending`, so the
+     * frame shape is asserted here rather than inferred from a render.
+     */
+    it("projects every progress field the parent reads from a frame", () => {
+        const state = tracker();
+        state.progress = {
+            output: "working",
+            lastAssistantMessage: "almost done",
+            recentActivity: ["Reading src/a.ts"],
+            phase: "running tools",
+            lastToolActivity: "Reading src/a.ts",
+            toolCounts: { read: 2 },
+            failedToolCalls: 1,
+            permissionPending: true,
+            todo: { completed: 1, total: 3, current: "Wire it up" },
+        };
+
+        expect(snapshotProgress(state)).toStrictEqual({
+            output: "working",
+            lastAssistantMessage: "almost done",
+            recentActivity: ["Reading src/a.ts"],
+            phase: "running tools",
+            lastToolActivity: "Reading src/a.ts",
+            toolCounts: { read: 2 },
+            failedToolCalls: 1,
+            permissionPending: true,
+            todo: { completed: 1, total: 3, current: "Wire it up" },
+        });
+    });
+
+    /** Display state that is absent or empty stays absent, so consumers do not render placeholders. */
+    it("omits optional progress fields that carry nothing", () => {
+        expect(snapshotProgress(tracker())).toStrictEqual({
+            output: "",
+            recentActivity: [],
+            toolCounts: {},
+            permissionPending: undefined,
+        });
+    });
+
     it("tracks reasoning without exposing thinking content", () => {
         const state = tracker();
         const updates: unknown[] = [];

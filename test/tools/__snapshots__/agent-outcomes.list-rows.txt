@@ -1,0 +1,55 @@
+### empty listing
+No delegated agent runs are currently tracked.
+
+### two runs keep manager order
+- "worker-1" · "Live worker" · worker · completed
+  Task: "Implement the task"
+  Next: collect with runId="worker-1"
+- "scout-2" · "Live worker" · worker · completed
+  Task: "Implement the task"
+  Next: collect with runId="scout-2"
+
+### starting
+- "run-1" · "Live worker" · worker · starting
+  Task: "Implement the task"
+  Next: Progress and the final result will be delivered asynchronously. Do not duplicate the same investigation in the parent unless you intentionally want overlapping work. If you have no other work to do, report your current progress to the user and end your turn. Do not sleep or poll; an automatic notification will arrive when the run finishes or needs parent guidance.
+
+### running
+- "run-1" · "Live worker" · worker · running
+  Task: "Implement the task"
+  Next: Progress and the final result will be delivered asynchronously. Do not duplicate the same investigation in the parent unless you intentionally want overlapping work. If you have no other work to do, report your current progress to the user and end your turn. Do not sleep or poll; an automatic notification will arrive when the run finishes or needs parent guidance.
+
+### waiting_for_permission
+- "run-1" · "Live worker" · worker · waiting_for_permission
+  Task: "Implement the task"
+  Next: Progress and the final result will be delivered asynchronously. Do not duplicate the same investigation in the parent unless you intentionally want overlapping work. If you have no other work to do, report your current progress to the user and end your turn. Do not sleep or poll; an automatic notification will arrive when the run finishes or needs parent guidance.
+
+### waiting_for_parent
+- "run-1" · "Live worker" · worker · waiting_for_parent
+  Task: "Implement the task"
+  Next: continue with guidance using runId="run-1"
+
+### interrupted
+- "run-1" · "Live worker" · worker · interrupted
+  Task: "Implement the task"
+  Next: continue with guidance using runId="run-1"
+
+### completed
+- "run-1" · "Live worker" · worker · completed
+  Task: "Implement the task"
+  Next: collect with runId="run-1"
+
+### failed
+- "run-1" · "Live worker" · worker · failed
+  Task: "Implement the task"
+  Next: collect with runId="run-1"
+
+### aborted
+- "run-1" · "Live worker" · worker · aborted
+  Task: "Implement the task"
+  Next: collect with runId="run-1"
+
+### canceled
+- "run-1" · "Live worker" · worker · canceled
+  Task: "Implement the task"
+  Next: collect with runId="run-1"

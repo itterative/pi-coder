@@ -25,6 +25,7 @@ import { getPermissionState } from "../../../modules/sandbox/permission-state";
 import { guardSafeBashCommand } from "./safe-bash";
 import { registerCommandPermissionHooks } from "./command-permissions";
 import type { ChildAgentFactoryContext } from "../contracts/runs";
+import { reportProgress } from "./progress";
 import type { ChildProgressTracker as ProgressTracker } from "./progress";
 
 const MAX_RECENT_ACTIVITY = 8;
@@ -361,25 +362,9 @@ export function registerChildExtension(
             tracker.progress.recentActivity =
                 tracker.progress.recentActivity.slice(-MAX_RECENT_ACTIVITY);
             onTrace?.("mutation.permission", { pending, activity });
-            onProgress({
-                output: tracker.progress.output,
-                ...(tracker.progress.lastAssistantMessage
-                    ? { lastAssistantMessage: tracker.progress.lastAssistantMessage }
-                    : {}),
-                recentActivity: [...tracker.progress.recentActivity],
-                ...(tracker.progress.phase ? { phase: tracker.progress.phase } : {}),
-                ...(tracker.progress.lastToolActivity
-                    ? { lastToolActivity: tracker.progress.lastToolActivity }
-                    : {}),
-                ...(tracker.progress.toolCounts
-                    ? { toolCounts: { ...tracker.progress.toolCounts } }
-                    : {}),
-                ...(tracker.progress.failedToolCalls !== undefined
-                    ? { failedToolCalls: tracker.progress.failedToolCalls }
-                    : {}),
-                ...(tracker.progress.todo ? { todo: { ...tracker.progress.todo } } : {}),
-                permissionPending: pending,
-            });
+            // `permissionPending` is already stored above, so the shared frame projection
+            // carries the same value this callback used to spell out by hand.
+            reportProgress(tracker, onProgress);
         };
 
         if (nonIsolated && canEdit && permissionState !== undefined) {

@@ -381,7 +381,8 @@ function parentActionDeps(scope: ActionScope): ParentActionDeps {
         signal: scope.signal,
         progress: scope.progress,
         events: lifecycle.events,
-        discover: lifecycle.discover.bind(lifecycle),
+        // FIXME: cannot give lifecycle.discover directly, either bind or arrow func
+        discover: (ctx: ExtensionContext) => lifecycle.discover(ctx),
     };
 }
 

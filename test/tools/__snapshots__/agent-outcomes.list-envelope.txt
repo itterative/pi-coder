@@ -1,0 +1,28 @@
+{
+  "isError": false,
+  "details": {
+    "runId": "list",
+    "title": "Delegated agent runs",
+    "agent": "runtime",
+    "status": "completed",
+    "background": false,
+    "task": "List delegated agent runs",
+    "recentActivity": [],
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "totalTokens": 0,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total": 0
+      }
+    },
+    "startedAt": "<timestamp>",
+    "updatedAt": "<timestamp>"
+  }
+}

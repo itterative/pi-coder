@@ -1,0 +1,15 @@
+### with activity
+[
+  {
+    "type": "text",
+    "text": "Agent Wire it up (run-1): Editing src/b.ts"
+  }
+]
+
+### without activity
+[
+  {
+    "type": "text",
+    "text": "Agent Wire it up (run-1): waiting_for_parent"
+  }
+]

@@ -1,0 +1,95 @@
+### setup lease
+- "setup-1" · "Isolated workspace blocker · worktree-1" · workspace-setup · interrupted · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: inspect workspace "worktree-1" in /agents; this catalog-only run is unavailable, so do not continue or collect it until the workspace state is confirmed
+
+### task lease
+- "worker-dead" · "Isolated workspace blocker · worktree-1" · worker · interrupted · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: inspect workspace "worktree-1" in /agents; this catalog-only run is unavailable, so do not continue or collect it until the workspace state is confirmed
+
+### review required with a lease and no result
+- "worker-x" · "Isolated workspace blocker · worktree-1" · worker · completed · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: inspect workspace "worktree-1" in /agents and review it before reusing the workspace
+
+### prepared result the manager no longer tracks
+- "worker-collected" · "Isolated workspace blocker · worktree-1" · worker · completed · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: review workspace "worktree-1" and prepared result "result-1" in /agents; apply, retain, reset, or discard it before reusing the workspace
+
+### setup lease whose own result exists
+- "setup-1" · "Isolated workspace blocker · worktree-1" · worker · completed · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: review workspace "worktree-1" and prepared result "result-1" in /agents; apply, retain, reset, or discard it before reusing the workspace
+
+### lease and prepared result name the same run
+- "worker-1" · "Isolated workspace blocker · worktree-1" · worker · completed · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: review workspace "worktree-1" and prepared result "result-2" in /agents; apply, retain, reset, or discard it before reusing the workspace
+
+### applied result under a review status
+- "worker-reviewed" · "Isolated workspace blocker · worktree-1" · worker · completed · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: inspect workspace "worktree-1" in /agents and review it before reusing the workspace
+
+### missing worktree with no run to name
+- "workspace-ws-missing" · "Isolated workspace blocker · missing-worktree" · workspace-registry · interrupted · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for missing-worktree"
+  Workspace: "missing-worktree" · "/no/such/path"
+  Next: inspect workspace "missing-worktree" in /agents; its worktree is missing and may be consuming workspace capacity
+
+### missing worktree whose result was already released
+- "workspace-workspace-1" · "Isolated workspace blocker · worktree-1" · worker · interrupted · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/no/such/path"
+  Next: inspect workspace "worktree-1" in /agents; its worktree is missing and may be consuming workspace capacity
+
+### recycling workspace under lease
+- "worker-y" · "Isolated workspace blocker · worktree-1" · worker · interrupted · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: inspect workspace "worktree-1" in /agents; this catalog-only run is unavailable, so do not continue or collect it until the workspace state is confirmed
+
+### released no-change result
+No delegated agent runs are currently tracked.
+
+### available workspace with nothing outstanding
+No delegated agent runs are currently tracked.
+
+### live isolated run deduplicates its blocker
+- "worker-live" · "Live worker" · worker · completed
+  Task: "Implement the task"
+  Next: collect with runId="worker-live"
+
+### live isolated run gains the prepared-result action
+- "worker-1" · "Live worker" · worker · completed
+  Task: "Implement the task"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: review workspace "worktree-1" and prepared result "result-1" in /agents; apply, retain, reset, or discard it before reusing the workspace
+
+### same run id in a different checkout stays a separate row
+- "worker-1" · "Live worker" · worker · completed
+  Task: "Implement the task"
+  Next: collect with runId="worker-1"
+- "worker-1" · "Isolated workspace blocker · worktree-1" · worker · interrupted · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: inspect workspace "worktree-1" in /agents; this catalog-only run is unavailable, so do not continue or collect it until the workspace state is confirmed
+
+### two blockers from one lease and one result row
+- "worker-lease" · "Isolated workspace blocker · worktree-1" · worker · interrupted · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: review workspace "worktree-1" and prepared result "result-9" in /agents; apply, retain, reset, or discard it before reusing the workspace
+- "worker-other" · "Isolated workspace blocker · worktree-1" · worker · completed · catalog-only workspace blocker
+  Task: "Catalog-only isolated workspace blocker for worktree-1"
+  Workspace: "worktree-1" · "/home/sd/Repos/pi-coder"
+  Next: review workspace "worktree-1" and prepared result "result-9" in /agents; apply, retain, reset, or discard it before reusing the workspace
