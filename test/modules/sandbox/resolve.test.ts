@@ -289,6 +289,18 @@ describe("resolvePermission: patterns vs heuristics", () => {
                 expected: "ask",
             },
             {
+                desc: "pipe-and-merge directory changes do not leak to heuristics",
+                command: "cd src |& cat ../README.md",
+                permissions: { "cd *": "allow" },
+                expected: "ask",
+            },
+            {
+                desc: "background directory changes do not leak to heuristics",
+                command: "cd src & cat ../README.md",
+                permissions: { "cd *": "allow" },
+                expected: "ask",
+            },
+            {
                 desc: "unknown segment without a rule keeps the chain at ask",
                 command: "cat file.txt && nc host 80",
                 permissions: { "npx *": "allow" },

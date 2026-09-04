@@ -135,6 +135,108 @@ function getNestedCommandTokens(argument: PermissionToken): PermissionToken[][] 
     return ast.statements.map(statementTokens);
 }
 
+const MAX_MATCH_DEPTH = 50;
+
+type WildcardMatchResult =
+    | { type: "advance-pattern"; lookahead: PermissionMatcher }
+    | { type: "advance-command" }
+    | { type: "return"; matched: boolean };
+
+function hasIncompleteSubstitution(token: PermissionToken): boolean {
+    return token.word?.substitutions.some((substitution) => !substitution.complete) ?? false;
+}
+
+function findWildcardLookahead(
+    patternMatchers: readonly PermissionMatcher[],
+    patternIndex: number,
+): PermissionMatcher | undefined {
+    return patternMatchers.slice(patternIndex + 1).find((pattern) => pattern.type !== "wildcard");
+}
+
+function matchRemainingWildcard(
+    commandArgs: readonly PermissionToken[],
+    commandIndex: number,
+): WildcardMatchResult {
+    const remainingArgs = commandArgs.slice(commandIndex);
+    if (remainingArgs.some(hasIncompleteSubstitution)) {
+        return { type: "return", matched: false };
+    }
+    if (remainingArgs.some((value) => isChainOperator(value.value))) {
+        return { type: "return", matched: false };
+    }
+    return { type: "return", matched: true };
+}
+
+function matchWildcard(
+    commandArgs: readonly PermissionToken[],
+    patternMatchers: readonly PermissionMatcher[],
+    patternIndex: number,
+    commandIndex: number,
+    lookahead: PermissionMatcher | null,
+): WildcardMatchResult {
+    const nextPattern = lookahead ?? findWildcardLookahead(patternMatchers, patternIndex);
+    if (nextPattern === undefined) {
+        return matchRemainingWildcard(commandArgs, commandIndex);
+    }
+
+    const argument = commandArgs[commandIndex];
+    if (nextPattern.test(argument)) {
+        return { type: "advance-pattern", lookahead: nextPattern };
+    }
+    if (isChainOperator(argument.value)) {
+        return { type: "return", matched: false };
+    }
+    return { type: "advance-command" };
+}
+
+function matchNestedPattern(
+    argument: PermissionToken,
+    pattern: PermissionMatcherSubshell,
+    depth: number,
+): boolean {
+    const nestedCommands = getNestedCommandTokens(argument);
+    if (nestedCommands.length === 0 && pattern.subMatchers.length === 0) {
+        return true;
+    }
+    return nestedCommands.every((nestedArgs) =>
+        matchArgs(nestedArgs, pattern.subMatchers, depth + 1, false),
+    );
+}
+
+function matchPattern(
+    argument: PermissionToken,
+    pattern: PermissionMatcher,
+    depth: number,
+): boolean {
+    if (!pattern.test(argument)) {
+        return false;
+    }
+    if (pattern.type !== "subshell") {
+        return true;
+    }
+    return matchNestedPattern(argument, pattern, depth);
+}
+
+function matchTrailingHeredocArgument(
+    commandArgs: readonly PermissionToken[],
+    patternMatchers: readonly PermissionMatcher[],
+    commandIndex: number,
+    allowHeredocTrailingArg: boolean,
+): boolean {
+    if (commandIndex >= commandArgs.length) {
+        return true;
+    }
+
+    const hasHeredocOperator = patternMatchers.some((pattern) => pattern.type === "heredoc-op");
+    if (!allowHeredocTrailingArg || !hasHeredocOperator) {
+        return false;
+    }
+    if (commandIndex !== commandArgs.length - 1) {
+        return false;
+    }
+    return !hasIncompleteSubstitution(commandArgs[commandIndex]);
+}
+
 /**
  * Match command arguments against a pattern.
  * Patterns can use * to match one or more arguments.
@@ -148,16 +250,15 @@ function getNestedCommandTokens(argument: PermissionToken): PermissionToken[][] 
  */
 function matchArgs(
     commandArgs: readonly PermissionToken[],
-    patternMatchers: PermissionMatcher[],
+    patternMatchers: readonly PermissionMatcher[],
     depth: number = 0,
     allowHeredocTrailingArg = true,
 ): boolean {
-    const MAX_DEPTH = 50;
     const maxIterations = (commandArgs.length + patternMatchers.length) * 2;
     let iterations = 0;
 
-    if (depth > MAX_DEPTH) {
-        throw new Error(`matchArgs: exceeded maximum depth (${MAX_DEPTH})`);
+    if (depth > MAX_MATCH_DEPTH) {
+        throw new Error(`matchArgs: exceeded maximum depth (${MAX_MATCH_DEPTH})`);
     }
 
     // Empty pattern matches empty command
@@ -165,111 +266,60 @@ function matchArgs(
         return commandArgs.length === 0;
     }
 
-    let cmdIdx = 0;
-    let patIdx = 0;
+    let commandIndex = 0;
+    let patternIndex = 0;
     let lookahead: PermissionMatcher | null = null;
 
-    while (patIdx < patternMatchers.length) {
+    while (patternIndex < patternMatchers.length) {
         if (++iterations > maxIterations) {
             throw new Error(
                 `matchArgs: exceeded maximum iterations (${maxIterations}), possible infinite loop`,
             );
         }
-
-        if (cmdIdx >= commandArgs.length) {
+        if (commandIndex >= commandArgs.length) {
             return false;
         }
 
-        const pattern = patternMatchers[patIdx];
-        const argument = commandArgs[cmdIdx];
-
-        if (argument.word?.substitutions.some((substitution) => !substitution.complete)) {
+        const argument = commandArgs[commandIndex];
+        if (hasIncompleteSubstitution(argument)) {
             return false;
         }
 
+        const pattern = patternMatchers[patternIndex];
         if (pattern.type === "wildcard") {
-            if (lookahead === null) {
-                const remainingPattern = patternMatchers.slice(patIdx + 1);
-                const nextNonWildcardIdx = remainingPattern.findIndex((p) => p.type !== "wildcard");
-
-                if (nextNonWildcardIdx === -1) {
-                    // no lookahead - wildcard matches remaining args except any chain operator
-                    const remainingArgs = commandArgs.slice(cmdIdx);
-                    const hasIncompleteSubstitution = remainingArgs.some((value) =>
-                        value.word?.substitutions.some((substitution) => !substitution.complete),
-                    );
-                    if (hasIncompleteSubstitution) {
-                        return false;
-                    }
-                    const hasChainOperator = remainingArgs.some((value) =>
-                        isChainOperator(value.value),
-                    );
-
-                    if (hasChainOperator) {
-                        return false;
-                    }
-
-                    return true;
-                }
-
-                lookahead = remainingPattern[nextNonWildcardIdx];
+            const result = matchWildcard(
+                commandArgs,
+                patternMatchers,
+                patternIndex,
+                commandIndex,
+                lookahead,
+            );
+            if (result.type === "return") {
+                return result.matched;
             }
-
-            if (lookahead.test(argument)) {
-                patIdx++;
-            } else {
-                // wildcards should not consume chain operators
-                if (isChainOperator(argument.value)) {
-                    return false;
-                }
-
-                cmdIdx++;
+            if (result.type === "advance-pattern") {
+                lookahead = result.lookahead;
+                patternIndex++;
+                continue;
             }
-        } else {
-            lookahead = null; // reset
-
-            if (!pattern.test(argument)) {
-                return false;
-            }
-
-            // for subshells and process substitutions, match the nested content
-            if (pattern.type === "subshell") {
-                const nestedCommands = getNestedCommandTokens(argument);
-
-                // Empty subshell matches empty subshell pattern
-                if (nestedCommands.length === 0 && pattern.subMatchers.length === 0) {
-                    // Both empty, match succeeds
-                } else {
-                    for (const nestedArgs of nestedCommands) {
-                        if (!matchArgs(nestedArgs, pattern.subMatchers, depth + 1, false)) {
-                            return false;
-                        }
-                    }
-                }
-            }
-
-            patIdx++;
-            cmdIdx++;
-        }
-    }
-
-    if (cmdIdx < commandArgs.length) {
-        // allow a single extra arg if the permission pattern has a heredoc operator
-        // (the closing delimiter may be extra in the command)
-        const hasHeredocOp = patternMatchers.some((m) => m.type === "heredoc-op");
-
-        if (allowHeredocTrailingArg && hasHeredocOp && cmdIdx === commandArgs.length - 1) {
-            const trailing = commandArgs[cmdIdx];
-            if (trailing.word?.substitutions.some((substitution) => !substitution.complete)) {
-                return false;
-            }
-            return true;
+            commandIndex++;
+            continue;
         }
 
-        return false;
+        lookahead = null;
+        if (!matchPattern(argument, pattern, depth)) {
+            return false;
+        }
+        patternIndex++;
+        commandIndex++;
     }
 
-    return true;
+    return matchTrailingHeredocArgument(
+        commandArgs,
+        patternMatchers,
+        commandIndex,
+        allowHeredocTrailingArg,
+    );
 }
 
 /**

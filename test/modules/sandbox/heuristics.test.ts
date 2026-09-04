@@ -343,6 +343,47 @@ describe("heuristic assessments", () => {
         }
     });
 
+    it("preserves destination and hard-link diagnostic precedence", () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-reason-cwd-"));
+        const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-reason-root-"));
+        const source = path.join(cwd, "source.txt");
+        const existingDirectory = path.join(cwd, "existing-directory");
+        const hardLinkSource = path.join(cwd, "hard-link-source.txt");
+        const hardLinkTarget = path.join(cwd, "hard-link-target.txt");
+        fs.writeFileSync(source, "source");
+        fs.mkdirSync(existingDirectory);
+        fs.writeFileSync(hardLinkSource, "shared");
+        fs.linkSync(hardLinkSource, hardLinkTarget);
+
+        try {
+            expect(
+                getCwdConfinementAssessment(`cp ${source} ${existingDirectory}`, {
+                    cwd,
+                    config: {},
+                    additionalRoots: [scratchpad],
+                }),
+            ).toEqual({
+                classification: Heuristic.UNSAFE,
+                reasons: [UnsafeReason.UNSAFE_MODE],
+                tags: [],
+            });
+            expect(
+                getCwdConfinementAssessment(`cp ${source} ${hardLinkTarget}`, {
+                    cwd,
+                    config: {},
+                    additionalRoots: [scratchpad],
+                }),
+            ).toEqual({
+                classification: Heuristic.UNSAFE,
+                reasons: [UnsafeReason.UNSAFE_MODE],
+                tags: [],
+            });
+        } finally {
+            fs.rmSync(cwd, { recursive: true, force: true });
+            fs.rmSync(scratchpad, { recursive: true, force: true });
+        }
+    });
+
     it("rejects scratchpad mutations through hard-linked project files", () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-hardlink-cwd-"));
         const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-hardlink-root-"));

@@ -10,7 +10,7 @@ import {
     type Permission,
 } from "./permissions";
 import { parseBashAst } from "./bash";
-import type { BashAst, BashStatement } from "./bash";
+import type { BashAst, BashCommand, BashStatement } from "./bash";
 import {
     cloneCwdConfinementState,
     createCwdConfinementState,
@@ -41,6 +41,11 @@ type SegmentResult = {
     /** segments covered by neither a rule nor the heuristic */
     unresolved: string[][];
 };
+
+type SegmentResolution =
+    | { permission: Permission; source: "policy" }
+    | { permission: Permission; source: "heuristic" }
+    | { source: "unresolved"; tokens: string[] };
 
 export interface ResolvePermissionDetails {
     permission: Permission;
@@ -142,6 +147,46 @@ export default function resolvePermission(
     return resolvePermissionDetails(command, cwd, options).permission;
 }
 
+function getOperatorAfter(statement: BashStatement, command: BashCommand): string | null {
+    const partIndex = statement.node.parts.findIndex(
+        (part) => part.type === "command" && part === command.node,
+    );
+    const nextPart = statement.node.parts[partIndex + 1];
+    return nextPart?.type === "operator" ? nextPart.value : null;
+}
+
+function resolveSegment(
+    command: BashCommand,
+    cwd: string,
+    options: ResolvePermissionOptions | undefined,
+    state: ReturnType<typeof createCwdConfinementState>,
+): SegmentResolution {
+    // Advance modeled shell-directory state even when an explicit policy
+    // handles this segment; later heuristic segments still need the correct
+    // current directory.
+    const grant = getBashCommandConfinementPermission(command, {
+        cwd,
+        config: options?.cwdConfinement,
+        state,
+        additionalRoots: options?.additionalRoots,
+        sensitiveAdditionalRoots: options?.sensitiveAdditionalRoots,
+        readOnlyAdditionalRoots: options?.readOnlyAdditionalRoots,
+        customSafeBashCommands: options?.safeBashCommands,
+    });
+    const match = getBashCommandPermissionMatch(command, options?.permissions);
+
+    if (match.matched || match.permission !== "ask") {
+        return { permission: match.permission, source: "policy" };
+    }
+    if (!isSafeHeuristic(grant)) {
+        return { source: "unresolved", tokens: command.toTokens() };
+    }
+    return {
+        permission: getConfiguredCwdConfinementPermission(options?.cwdConfinement),
+        source: "heuristic",
+    };
+}
+
 function resolveLine(
     statement: BashStatement,
     cwd: string,
@@ -165,14 +210,8 @@ function resolveLine(
     const confinementState = createCwdConfinementState(cwd);
     let nonPersistentBase: ReturnType<typeof cloneCwdConfinementState> | null = null;
 
-    for (let commandIndex = 0; commandIndex < statement.commands.length; commandIndex++) {
-        const segmentCommand = statement.commands[commandIndex];
-        const partIndex = statement.node.parts.findIndex(
-            (part) => part.type === "command" && part === segmentCommand.node,
-        );
-        const nextPart = statement.node.parts[partIndex + 1];
-        const operatorAfter = nextPart?.type === "operator" ? nextPart.value : null;
-        const segmentTokens = segmentCommand.toTokens();
+    for (const segmentCommand of statement.commands) {
+        const operatorAfter = getOperatorAfter(statement, segmentCommand);
         const beforeSegment = cloneCwdConfinementState(confinementState);
         if (nonPersistentBase === null && isNonPersistentChainOperator(operatorAfter)) {
             nonPersistentBase = beforeSegment;
@@ -180,45 +219,15 @@ function resolveLine(
         const segmentState = nonPersistentBase
             ? cloneCwdConfinementState(nonPersistentBase)
             : confinementState;
+        const resolution = resolveSegment(segmentCommand, cwd, options, segmentState);
 
-        // Advance modeled shell-directory state even when an explicit policy
-        // handles this segment; later heuristic segments still need the
-        // correct current directory.
-        const grant = getBashCommandConfinementPermission(segmentCommand, {
-            cwd,
-            config: options?.cwdConfinement,
-            state: segmentState,
-            additionalRoots: options?.additionalRoots,
-            sensitiveAdditionalRoots: options?.sensitiveAdditionalRoots,
-            readOnlyAdditionalRoots: options?.readOnlyAdditionalRoots,
-            customSafeBashCommands: options?.safeBashCommands,
-        });
-        const match = getBashCommandPermissionMatch(segmentCommand, options?.permissions);
-
-        if (match.matched) {
-            policy = policy === null ? match.permission : moreRestrictive(policy, match.permission);
+        if (resolution.source === "policy") {
+            policy =
+                policy === null
+                    ? resolution.permission
+                    : moreRestrictive(policy, resolution.permission);
             if (policy === "deny") {
                 return { permission: "deny", source: "policy", unresolved };
-            }
-        } else if (match.permission !== "ask") {
-            // non-"ask" default ("**") stands as-is
-            policy = policy === null ? match.permission : moreRestrictive(policy, match.permission);
-            if (policy === "deny") {
-                return { permission: "deny", source: "policy", unresolved };
-            }
-        } else {
-            // would prompt: heuristics may rescue the segment
-            if (isSafeHeuristic(grant)) {
-                const grantPermission = getConfiguredCwdConfinementPermission(
-                    options?.cwdConfinement,
-                );
-                heuristic =
-                    heuristic === null
-                        ? grantPermission
-                        : moreRestrictive(heuristic, grantPermission);
-            } else {
-                hasUnresolved = true;
-                unresolved.push(segmentTokens);
             }
         }
 
@@ -227,6 +236,16 @@ function resolveLine(
             if (!isNonPersistentChainOperator(operatorAfter)) {
                 nonPersistentBase = null;
             }
+        }
+
+        if (resolution.source === "heuristic") {
+            heuristic =
+                heuristic === null
+                    ? resolution.permission
+                    : moreRestrictive(heuristic, resolution.permission);
+        } else if (resolution.source === "unresolved") {
+            hasUnresolved = true;
+            unresolved.push(resolution.tokens);
         }
     }
 
