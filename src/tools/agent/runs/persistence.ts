@@ -142,7 +142,6 @@ const CONTINUATION_LEASE_MS = 30_000;
 // Pi and its child-agent runtime share one process, so a dead owner PID is a
 // useful fast path for reclaiming a lease left by an abrupt process exit.
 export const ENABLE_PID_LEASE_RECOVERY = true;
-export const CONTINUATION_LEASE_RECOVERY_GRACE_MS = 250;
 
 function isProcessAlive(pid: number): boolean {
     try {

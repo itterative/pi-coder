@@ -188,6 +188,7 @@ describe("registered continuation lifecycle", () => {
         const firstRecord = catalogAfterCollect.find(
             (record) => record.runId === spawned.details.runId,
         );
+        // FIXME: flaky
         expect(firstRecord).toMatchObject({
             ownerSessionId: parentSession.getSessionId(),
             runInstanceId: spawned.details.runInstanceId,

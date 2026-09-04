@@ -266,4 +266,11 @@ export interface AgentRunSummary {
     mutationReport?: WorkerMutationReport;
     mutating?: boolean;
     workspaceId?: string;
+    /**
+     * Workspace result ID recorded by `AgentRunManager.setWorkspaceResultId`.
+     *
+     * Exposed so a caller can correlate a run with its durable result without a second lookup; the
+     * activity widget and `/agents` browser surface the workspace association, not this ID yet.
+     */
+    workspaceResultId?: string;
 }

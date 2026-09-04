@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "@earendil-works/pi-ai";
 
 import { AgentContinuationLeaseBusyError } from "../../src/tools/agent/contracts/runs";
-import { CONTINUATION_LEASE_RECOVERY_GRACE_MS } from "../../src/tools/agent/runs/persistence";
+import { CONTINUATION_LEASE_RECOVERY_GRACE_MS } from "../../src/tools/agent/runs/run-state";
 import {
     getSafeBashAssessment,
     getScoutBashAssessment,
@@ -989,8 +989,9 @@ describe("AgentRunManager", () => {
         expect(resumed.content).toContain("Do not sleep or poll");
         expect(resumed.content).toContain("automatic notification");
         expect(resumed.usage).toMatchObject({ input: 12, output: 3 });
-        await flushBackground();
-        expect(notifications[notifications.length - 1]).toBe("completed");
+        // Background settlement spans several promise hops, so wait for the final notification
+        // instead of assuming a fixed number of microtask turns.
+        await vi.waitFor(() => expect(notifications.at(-1)).toBe("completed"));
 
         const collected = await manager.collect("scout-1");
         expect(collected.details.status).toBe("completed");
