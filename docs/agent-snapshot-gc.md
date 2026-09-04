@@ -1,8 +1,8 @@
 # Delegated-agent snapshot GC — design plan
 
-Status: **steps 1–3 of §11 landed 2026-09-02; steps 4–7 remain.** Steps 1–2 are committed as
-`wip: agent persistence improvement 3`; step 3 is the current working tree. Measurements are against
-`.state/meta.sqlite` of this checkout. Resolve relative paths against the project root.
+Status: **steps 1–4, 6 and step 7's documentation landed 2026-09-02/04; step 5 is optional insurance and the manual checks are not yet run.**
+Step 6 was executed by hand against this checkout's live database, and §12 records the measured result.
+Measurements are against `.state/meta.sqlite` of this checkout. Resolve relative paths against the project root.
 
 **Chosen direction (F′): keep at most one intermediate snapshot row per physical run, in a dedicated
 non-authoritative "working state" table, and clear it at every checkpoint.**
@@ -302,8 +302,21 @@ Shrinking the file: `PRAGMA auto_vacuum` is currently `0` (none) with WAL journa
 freelist. Measured on a copy of the live database, `VACUUM` took **0.086 s** and reclaimed 82.7 MiB →
 14.6 MiB (the stub variant), `integrity_check` ok — cheap at this size, but exclusive-write and growing with
 the database, so never per prune pass. `VACUUM` cannot run inside a transaction, so the maintenance action
-runs it after its delete transaction, and enabling `auto_vacuum = INCREMENTAL` there (which itself needs one
-full `VACUUM`) means later prunes never need a manual one.
+runs it after its delete transaction.
+
+**Decision: do not enable `auto_vacuum`, incremental or otherwise.** Setting `PRAGMA auto_vacuum` on an existing
+none-mode file does nothing until a full `VACUUM` rebuilds it, so the "one-time" enable is really "pragma plus a
+rewrite", and it cannot go in a migration because `migrateSqliteDatabase` runs each migration inside a
+transaction. The benefit is also gone by design: after §4.2 the steady state is checkpoint-rate inserts plus
+in-place `UPDATE`s on `agent_run_working_state` and `agent_runs`, which free almost no pages, so the freelist
+stays at zero (`freelist_count = 0`, `page_count = 2239` measured after the step-6 sweep, still `0` after a live
+run added 9 rows and 14 pages). The file grows from inserts — Run 1 measured 9 rows holding 38,718 B of payload
+costing 57,344 B of file, ≈6.4 KB per checkpoint row including indexes — not from freed space, and that is insert
+volume autovacuum cannot help with. Autovacuum would trade that for page relocation on every free plus automatic truncation that needs
+the same exclusive lock `VACUUM` uses — contention inside ordinary agent use rather than inside a deliberate
+maintenance action. Revisit only if §9.2's retention budget lands, since age-bounded deletion would make
+reclamation continuous and therefore worth amortizing; the enable would then be
+`PRAGMA auto_vacuum = INCREMENTAL; VACUUM;` inside that same maintenance path.
 
 Because the sweep, the §4.3 per-checkpoint guard, and any future maintenance command must apply the _same_
 protected-set predicate, express it once (`pruneAgentRunSnapshotsInDatabase`, §6) and call it from all three,
@@ -489,6 +502,30 @@ branch whose newest marker was reclaimed by the backlog sweep.
 6. ~~§4.8's `AgentRunJournalState`~~ — **decided in §11 step 1**: land it first as a behavior-preserving
    refactor, gated on the 22 existing V2 cases passing unmodified.
 
+7. **Boundary writes were 3-5 checkpoints instead of one — one source fixed, one kept on purpose.**
+   Live measurement (Run 1/2/3 in `src/tools/agent/SNAPSHOT-GC-MANUAL-VALIDATION.md`) and
+   `test/tools/agent-checkpoint-fanout.test.ts` agreed exactly: a canceled background run wrote 9 rows and 9
+   markers where §4.2 accounts for 6 boundaries.
+    - **Fixed:** `checkpointOutcome` (manager.ts) existed to persist _usage_ and its own comment said the write
+      "must not advance the run", yet it called `persistRun` with the default `checkpoint` intent — so it
+      appended a marker on the accepted-background summary and again on cancel. It now writes `intermediate`,
+      which took the canceled-run sequence from 9 checkpoints to 7. Usage stays durable: the lifecycle
+      checkpoint that follows projects the same `usageCheckpoint`, and a frame whose status is a boundary
+      (`canceled`) is refused by the writer anyway, so the second write became a no-op rather than a silent
+      loss. The test asserts the payload, not just the count. Accepted trade, because §4.4's overlay carries only
+      the leaf and progress: a process dying between this frame and the next checkpoint restores with the
+      _earlier_ usage figure — a stale number in a sub-second window, never lost work, and never authoritative
+      for the parent's own report, which comes from the live outcome.
+    - **Kept:** `child-setup.ts` persists the transcript path from the `onSessionCreated` hook fire-and-forget,
+      and `createChildSession` then awaits the identical content. Downgrading the hook write was considered and
+      rejected: §4.4's overlay refuses a working row whose checkpoint names no child transcript, so that write is
+      the only durable record of the transcript inside its crash window. Two rows buy a closed window, a stable
+      child session id, and no orphaned transcript - see Appendix C for the full reasoning and the fix shape
+      (`confirm` rather than `repeat`) that would remove the duplicate without paying any of that.
+    - **Still open:** whether the awaited gate should be able to _confirm_ the hook's write instead of repeating
+      it — that needs the intent vocabulary to distinguish "may be skipped when already durable" from "must
+      confirm durability", which is a wider change than the reclassification above and is not GC work.
+
 ## 10. Rejected alternatives
 
 - **Stub superseded rows in place** (`payload_json` replaced by a tiny pruned marker + `pruned_at` column,
@@ -622,54 +659,91 @@ writes fail`, and `keeps a committed snapshot when head projection commit fails 
 - **Acceptance:** §7.2 (head never pruned), §7.3, and a status-awareness test proving a `waiting_for_parent` row
   sitting between two checkpoints of the same instance survives.
 
-### Step 6 — backlog sweep (irreversible, gated)
+### Step 6 — backlog sweep — ✅ performed manually 2026-09-04
 
-1. Restore `tools/report-agent-gc.mjs` from stash `0ccdbf0…` and drive its prune section with the **same** step-5
-   helper in dry-run mode, so "what would be deleted" is reviewed as a report first.
-2. Re-check §1's predicate against the live file — step 3 has been writing since, so confirm all
-   `running`/`starting` rows are still non-head, non-newest, and that no head targets one.
-3. Run it behind an **explicit maintenance action**, not a migration (resolves §9.1 in favor of
-   reviewability): print the plan, require confirmation, `DELETE`, `VACUUM` outside any migration transaction,
-   then `PRAGMA integrity_check`. Enabling `auto_vacuum = INCREMENTAL` in the same action means later prunes
-   never need a manual VACUUM (§4.7).
+Run by hand against this checkout's live `.state/meta.sqlite`, after a dry-run report matched §1 exactly (12,293
+rows / 60.8 MiB to delete, 502 kept, four sanity counts all zero). What worked with a parent session attached to
+the same database:
 
-### Step 7 — docs, memory, manual validation
+1. Back up online with `VACUUM INTO '.state/meta.sqlite.before-gc-sweep-<ts>.bak'`, then `integrity_check` it and
+   compare row counts to the live file. **`cp` is not enough here**: the running parent had 24 KB of committed
+   frames still in `-wal`, which a bare file copy can miss.
+2. Delete in one `BEGIN IMMEDIATE` using the §4.6 protected set expressed as a single window predicate
+   (`row_number() OVER (PARTITION BY run_instance_id ORDER BY created_sequence DESC) > 1`, plus the
+   checkpoint-status exclusion, minus every current head target). 12,293 rows removed, `integrity_check` ok.
+3. `VACUUM` (82.7 MiB → 8.75 MiB), then `PRAGMA wal_checkpoint(TRUNCATE)` to hand back the 75 MiB of WAL that the
+   VACUUM itself wrote — a two-step sequence any future sweep must copy, and the reason §4.7 keeps `auto_vacuum` off. Both succeeded with pi still holding the database open, under `PRAGMA busy_timeout`.
 
-- `docs/agent-persistence.md:20` (the catalog-authority line must state §4.4's narrow overlay exception) and
-  `:76` (GC is no longer report-only), `src/tools/agent/README.md`'s manual checklist (add the `kill -9` restore
-  case and a "one marker per checkpoint" confirmation), `.pi/agent/memory/agents/persistence.md`, plus this
-  doc's status line and §12's _after_ column.
-- Then run the §7 manual sequence on a real run, both before and after step 6.
+That leaves the _repeatable_ maintenance action unwritten, and worth reconsidering: with step 3 landed, nothing
+accumulates to sweep, and this checkout now has no `running`/`starting` rows left to reclaim. The remaining value
+of step 6's action and step 5's guard is insurance for databases written by older builds — which argues for the
+shared prune predicate being the deliverable, not a new user-facing command.
 
-### Deferred on purpose
+### Step 7 — docs, memory, manual validation — ✅ documentation half landed, checks not yet run
 
-Payload normalization (§9.4), checkpoint-row retention budgets (§9.2), the live-UI role for the working table
-(§9.5), debouncing intermediate saves, and the 1.3 GB of isolated worktrees (Appendix B). Each is its own
-decision with its own blast radius; the trap is letting step 3 grow into them.
+- `docs/agent-persistence.md` no longer claims GC is report-only or that the catalog is the only non-authoritative
+  store: it gained a **Checkpoints and progress frames** section (the intent split, the two rules that must not be
+  relaxed, the overlay's gates, the silent-skip inference), a Storage section describing all three kinds of durable
+  run state, a restoration bullet for the crash overlay, and a rewritten cleanup section that explains why
+  `auto_vacuum` stays off.
+- `src/tools/agent/README.md` links the checklist and gained a "Changing delegated-run persistence" section naming
+  the two invariants most easily broken. `.pi/agent/memory/agents/persistence.md` records the landed behavior, the
+  deviations, and the live-database operational facts.
+- `src/tools/agent/SNAPSHOT-GC-MANUAL-VALIDATION.md` records this checkout's measured pre/post-sweep state and is
+  accurate about what is still unexercised: **no scenario in it has been run against a live child yet.** The
+  maintainer chose to defer them rather than perform them in the development session, which is a reasonable call
+  for A and D (observable while working normally) and the reason a scripted process-death test for B/C is still
+  worth adding — it would move the only genuinely dangerous path from a checklist into CI.
+- Step 5 remains deliberately unimplemented; §11 step 6 explains why its subject matter is gone.
+
+### Step 8 — checkpoint fan-out at boundaries — ✅ one source reclassified, one pair kept
+
+Follows §9.7; found only because steps 1-4 were measured against a live child, which no unit test had done.
+`test/tools/agent-checkpoint-fanout.test.ts` now pins the checkpoint sequence per lifecycle (6 for a completed
+foreground run, 7 for a canceled background one, down from 9) and exposes the remaining `starting:leaf-1 (x2)`
+duplicate as a named expectation, so a future dedupe has to update it deliberately. 1,690 tests green.
 
 ## 12. Verification and measurement
 
 Fill in as each step lands; the work is done when the last columns match §5's prediction.
 
-| signal                         | before (step 0) | after step 3             | after step 6                  |
-| ------------------------------ | --------------- | ------------------------ | ----------------------------- |
-| `.state/meta.sqlite` size      | 82.7 MiB        | flat (no deletes yet)    | target ~8.7 MiB (unverified)  |
-| `agent_run_snapshots` rows     | 12,795          | flat                     | 502                           |
-| `running`/`starting` rows      | 12,293          | none created per message | 0                             |
-| `agent_run_working_state` rows | table absent    | ≤ 1 per live run         | 0 at rest                     |
-| markers in one long session    | 1,826           | checkpoints only         | unchanged (step 6 is DB-only) |
-| durable saves per day          | ~1,100          | ~1,100 single statements | same                          |
+The _after step 3_ column comes from a live background `worker` run on 2026-09-04 sampled every 2 s (Run 1 in the
+manual-validation checklist), on a parent session that had never persisted a run before — so nothing in it is
+attributable to the pre-frame code path.
+
+| signal                             | before (step 0)            | after step 3                                                                                                                                          | after step 6 — measured 2026-09-04        |
+| ---------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `.state/meta.sqlite` size          | 82.7 MiB                   | 82.7 MiB (no deletes yet)                                                                                                                             | **8.75 MiB**                              |
+| `agent_run_snapshots` rows         | 12,795                     | 12,795                                                                                                                                                | **502**                                   |
+| snapshot payload                   | 67.3 MiB                   | 67.3 MiB                                                                                                                                              | **6.6 MiB**                               |
+| `running`/`starting` rows          | 12,293                     | **created only at boundaries** (Run 1: 4 `starting`, 2 `running`) — superseded within milliseconds, so §4.6's prunable predicate matches them exactly | **0**                                     |
+| `agent_run_working_state` rows     | table absent               | **1 for a whole live run**, advancing while its transcript grew                                                                                       | 0 after the run's terminal checkpoint     |
+| markers in one long parent session | 1,826                      | **9 for a 3-minute run** (`worker-1`, ~17 settled prompts, transcript 8 → 26 lines)                                                                   | unchanged (the sweep touched the DB only) |
+| durable saves per day              | ~1,100                     | ~1,100 single statements                                                                                                                              | same                                      |
+| snapshot rows per physical run     | 185 avg (12,795 / 69 runs) | **9**, all at boundaries; 0 written mid-run                                                                                                           | 502 rows remain for 70 historical runs    |
+
+Post-sweep invariants, all zero on the live database: dangling head targets, physical runs left with no row,
+rows still in a prunable status, runs whose newest row is not a checkpoint, and unsettled `pending`
+reservations. `PRAGMA integrity_check` returned `ok` after the delete and again after the `VACUUM`.
 
 Two gates that are not test suites:
 
-- **Manual gate for step 3 — documented, deliberately not yet run.** Provider and child-session behavior is not
-  covered by tests (`AGENTS.md`), so run
+- **Manual gate for step 3 — scenario A measured live 2026-09-04; B, C, D still open.** Provider and
+  child-session behavior is not covered by tests (`AGENTS.md`). Run 1 in
   [`src/tools/agent/SNAPSHOT-GC-MANUAL-VALIDATION.md`](../src/tools/agent/SNAPSHOT-GC-MANUAL-VALIDATION.md)
-  (scenarios A–D) and confirm the
-  interrupted run restores at the **working** leaf and `/agents` opens both the live run and an older
-  checkpoint with no diagnostics. 1,682 automated tests are green without it, which is exactly why this is a
-  gate and not an option; §12's _after step 3_ column stays unmeasured until a real run lands against
-  `.state/meta.sqlite`.
+  confirms the headline: across ~100 s of frames the snapshot table, marker count and continuation head did not
+  move, exactly one working row advanced, and the terminal checkpoint cleared it. It also surfaced a finding that
+  no test predicted — **a boundary writes ~4-5 checkpoints, not one** — which is duplication that predates this
+  work and is now the main remaining per-run cost (§12's 9-rows-per-run figure is entirely boundary
+  duplication).
+  B and C were then measured the same day against a real crash (Run 2/Run 3 in the checklist): the child
+  transcript's entry-13 leaf — 7 entries past the accept checkpoint — is what the resume parked, and the
+  continued child quoted its own unmatched in-flight `bash` call verbatim with no replay and no tool use.
+  The finding that came out of them is cost, not correctness: `worker-2` paid **18 rows and 18 markers**
+  where §4.2 predicts ~4, because every boundary writes 3-10 checkpoints instead of one. Still ~3 orders of
+  magnitude under the old per-save behavior, but now the dominant remaining cost, and the argument for
+  deduplicating boundary writes as its own change. `/agents` browsing both a live run and an older
+  checkpoint (D) is still open, including whether a `continue` re-shows one working row.
 - **Soak gate for step 6** — after the sweep, use agents normally for a day and re-measure: row count must stay
   in the hundreds, not thousands. Only then delete the step-0 `.bak`.
 
@@ -733,6 +807,13 @@ SELECT group_concat(kind||':'||seq, ' ') FROM w;   -- working:2 checkpoint:10 ch
 
 ## Appendix B — operational notes
 
+- **A running parent makes this database live.** Two facts learned the hard way while doing step 6 with pi
+  attached: `sqlite3 'file:.state/meta.sqlite?mode=ro'` fails with `SQLITE_IOERR` because a read-only connection
+  cannot build the WAL index against a live `-shm` with pending frames — use an ordinary connection and rely on
+  WAL's reader concurrency instead. And `cp` is **not** a valid backup while a parent is attached, because
+  committed frames can still be in `-wal`; `VACUUM INTO '…'` produces a consistent single-file snapshot and is
+  what step 6 used. A `VACUUM` writes through the WAL, so follow it with `PRAGMA wal_checkpoint(TRUNCATE)` or the
+  sidecar stays as large as the database you just shrank.
 - The live database is `.state/meta.sqlite`: `openAgentMetadataDatabase()` (`storage/metadata.ts:350-367`)
   resolves `dirname(workspacesDir)/meta.sqlite`, and that is the only file containing
   `agent_run_snapshots`. The 45 KB `.state/workspaces/meta.sqlite` is a dead remnant of an earlier layout
@@ -746,3 +827,41 @@ SELECT group_concat(kind||':'||seq, ' ') FROM w;   -- working:2 checkpoint:10 ch
   `tools/report-agent-gc.mjs` (reachable through that stash commit's third parent, not `git stash list`
   index 0). Reuse it as the reporting half of this work: it already classifies orphan transcripts, missing
   transcript references, protected/unreachable snapshots, and reclaimable bytes without deleting anything.
+
+## Appendix C — the duplicate write that was kept, and what it actually buys
+
+`test/tools/agent-checkpoint-fanout.test.ts` pins a canceled background run at seven checkpoints, and
+`redundant()` names the one pair still worth questioning: `child-setup.ts` persists the transcript path from the
+`onSessionCreated` hook as fire-and-forget, and `createChildSession` then awaits a checkpoint of identical
+content. It is kept. Recording _why_ matters, because the obvious answer - "downgrade it to a frame" - was
+reached, defended, tested against, and turned out to be wrong for a reason that is not visible from either
+call site.
+
+The argument for downgrading is strong at first. The window holds no processed work: the transcript leaf at
+that moment is the last bootstrap entry (entry 6, `pi-coder:todo-snapshot`, measured live), the task prompt is
+entry 7, and the prompt is not sent until `manager.ts:1450`, long after setup returns. A lease is held there,
+so a frame would land rather than being dropped. Nothing a child _did_ is at stake.
+
+What is at stake is the child session's identity, and the reason is a chain of three unrelated decisions:
+
+1. §4.4's overlay deliberately refuses a working row whose checkpoint names **no child transcript**, so a frame
+   cannot introduce a transcript the checkpoint journal never recorded. The frame is unreachable in exactly the
+   window it would protect.
+2. `bootstrapChildSession` (`child/transcript.ts:79`) branches on that record: a named file reopens the same
+   session and selects its leaf - cleanly, with no second bootstrap, since the reopen arm appends nothing -
+   while no file with a directory present calls `materializePersistentSession`, which mints a **new child
+   session id**.
+3. Collection removes only the transcript its record names. A file no record references is therefore not
+   reclaimed by cleanup; it leaks permanently, and shows up later as an orphan in the §Appendix A reporting.
+
+So the two rows buy: a stable child session id across a crash in a millisecond-scale window, no orphaned
+transcript file, and a `starting` run whose detail view can still be opened from `/agents`. The cost is one
+snapshot row and one parent-tree marker on every run, forever - about 6 KB each, measured in Appendix A.
+
+That is a thin but real trade, and the reason it stays. The outcome worth having, if it ever stops being thin,
+is not deleting either write but letting the awaited gate **confirm** the hook write instead of repeating it:
+an intent meaning "skippable when already durable with identical content", distinct from today's binary of
+"append a marker" versus "best-effort frame". That distinction is a change to the intent vocabulary and the
+durability contract in `checkpoint-store.ts`, which is wider than anything in this document and is not GC
+work. Until someone does it, the pair is the price, and the test is what makes the price visible rather than
+accidental.

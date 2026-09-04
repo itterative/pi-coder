@@ -1896,8 +1896,15 @@ export class AgentRunManager {
     /**
      * Report an outcome without changing lifecycle state, and reset the usage baseline.
      *
-     * Used by actions that acknowledge work in progress (background start, status, cancel summary):
-     * they checkpoint the reported usage and persist best-effort, but must not advance the run.
+     * Used by actions that acknowledge work in progress (background start, status, cancel summary): they
+     * record the reported usage and persist best-effort, but must not advance the run. "Must not advance"
+     * is why this writes a progress frame rather than a checkpoint: a checkpoint would append a parent-tree
+     * marker and move the continuation head for a write that carries no lifecycle authority. The next real
+     * boundary - the settled operation, or the terminal outcome - projects the same `usageCheckpoint`, so the
+     * figure is durable from there on. The accepted trade: the overlay carries only the leaf and progress, so
+     * a process that dies between this frame and the next checkpoint restores with the earlier usage figure.
+     * That is a stale cost number in a sub-second window, not lost work, and it was never authoritative for the
+     * parent's own usage report, which comes from the live outcome.
      */
     private checkpointOutcome(
         run: AgentRun,
@@ -1909,7 +1916,7 @@ export class AgentRunManager {
     ): AgentRunOutcome {
         const outcome = this.outcome(run, content, isError, progress, error, hasResponse);
         run.usageCheckpoint = cloneUsage(outcome.details.usage);
-        void this.persistRun(run);
+        void this.persistRun(run, undefined, "intermediate");
         return outcome;
     }
 
