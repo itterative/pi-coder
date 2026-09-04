@@ -10,9 +10,16 @@ import { resolveChildGrant } from "../../src/tools/agent/child/grant";
 import type { ChildAgentFactoryContext } from "../../src/tools/agent/contracts/runs";
 import type { AgentDefinition } from "../../src/tools/agent/definitions/types";
 import { getPermissionState } from "../../src/modules/sandbox/permission-state";
+import { partialTracker } from "../helpers/agent-doubles";
 import { KEY, mockTheme } from "../helpers";
-
-type Handler = (event: any, ctx: any) => unknown;
+import {
+    createPiStub,
+    stubContext,
+    stubSessionManager,
+    stubUiWithDialogs,
+    type SessionManagerLike,
+    type StubHandler,
+} from "../helpers/pi-stub";
 
 const tempDirs: string[] = [];
 
@@ -30,7 +37,7 @@ function setup(
         background = true,
         allowUserInteraction = true,
         isolated = false,
-        sessionManager = {},
+        sessionManager = stubSessionManager(),
         additionalPaths = [],
         safeBashCommands = [],
     }: {
@@ -39,52 +46,24 @@ function setup(
         background?: boolean;
         allowUserInteraction?: boolean;
         isolated?: boolean;
-        sessionManager?: object;
+        sessionManager?: SessionManagerLike;
         additionalPaths?: string[];
         safeBashCommands?: string[];
     } = {},
 ) {
-    const handlers: Record<string, Handler[]> = {};
-    const tools: Array<{ name: string }> = [];
-    const dialogs: any[] = [];
-    const pi = {
-        on(event: string, handler: Handler) {
-            (handlers[event] ??= []).push(handler);
-        },
-        registerTool(tool: { name: string }) {
-            tools.push(tool);
-        },
-    } as any;
-    const tracker = {
-        progress: { output: "", recentActivity: [] },
-        lastUpdateAt: 0,
-        changedFiles: new Set<string>(),
-        readFiles: new Set<string>(),
-        bashApproved: false,
-        interrupted: false,
-    } as any;
+    const stub = createPiStub();
+    // The parent's dialog surface, kept in one place: only an interactive parent can answer, so `ui` is
+    // handed over together with `hasUI`/`mode` below and the dialogs it opens are collected here.
+    const { ui, dialogs } = stubUiWithDialogs(mockTheme);
+    const tracker = partialTracker();
 
-    const parentContext = {
+    const parentContext = stubContext({
         cwd,
         sessionManager,
         hasUI: commandRunner,
         mode: commandRunner ? "tui" : "print",
-        ...(commandRunner
-            ? {
-                  ui: {
-                      theme: mockTheme,
-                      setWorkingVisible() {},
-                      custom(factory: any) {
-                          return new Promise((resolve) => {
-                              const component = factory(undefined, mockTheme, undefined, resolve);
-                              component.focused = true;
-                              dialogs.push(component);
-                          });
-                      },
-                  },
-              }
-            : {}),
-    } as any;
+        ...(commandRunner ? { ui } : {}),
+    });
 
     // Grant resolution is the production path, so the knobs above become a definition plus a run
     // mode rather than a hand-assembled option bag. That keeps the assertions about what a given
@@ -110,9 +89,18 @@ function setup(
         onProgress: () => {},
     };
     const grant = resolveChildGrant(context, parentContext);
-    registerChildExtension(tracker, parentContext, cwd, grant.extensionOptions)(pi);
+    registerChildExtension(tracker, parentContext, cwd, grant.extensionOptions)(stub.pi);
 
-    return { handlers, ctx: { cwd, sessionManager }, tools, dialogs, sessionManager };
+    // Read off the stub after every gate has registered, so each list stays in registration order. These
+    // are the recorded handlers themselves rather than a `handlerView`: several assertions below call a
+    // gate synchronously and expect its plain return value.
+    const handlers: Record<"tool_call" | "tool_result" | "session_start", StubHandler[]> = {
+        tool_call: stub.handlersFor("tool_call"),
+        tool_result: stub.handlersFor("tool_result"),
+        session_start: stub.handlersFor("session_start"),
+    };
+
+    return { handlers, ctx: { cwd, sessionManager }, tools: stub.tools, dialogs, sessionManager };
 }
 
 describe("child interaction tools", () => {
@@ -416,7 +404,7 @@ describe("child Bash permissions", () => {
     it("propagates an explicitly remembered isolated Bash rule to the parent session", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-isolated-bash-"));
         tempDirs.push(cwd);
-        const sessionManager = {};
+        const sessionManager = stubSessionManager();
         const runtime = setup(cwd, {
             commandRunner: true,
             background: false,

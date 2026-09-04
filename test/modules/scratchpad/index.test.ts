@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { stubContext, stubSessionManager, type SessionManagerLike } from "../../helpers/pi-stub";
 
 import registerScratchpadExtension, {
     getScratchpadPath,
@@ -43,17 +44,14 @@ function harness(entries: unknown[] = []): {
     };
 }
 
-function context(sessionManager: object): ExtensionContext {
-    return {
-        cwd: process.cwd(),
-        sessionManager,
-    } as ExtensionContext;
+function context(sessionManager: Partial<SessionManagerLike>): ExtensionContext {
+    return stubContext({ cwd: process.cwd(), sessionManager: stubSessionManager(sessionManager) });
 }
 
 describe("temporary scratchpad extension", () => {
     it("creates a private temporary directory and explains its lifetime", async () => {
         const { pi, handler } = harness();
-        const sessionManager = {};
+        const sessionManager = stubSessionManager();
         const runtimeContext = context(sessionManager);
         registerScratchpadExtension(pi);
 
@@ -79,7 +77,7 @@ describe("temporary scratchpad extension", () => {
     it("reuses a marked directory when the runtime registry is recreated", async () => {
         const entries: unknown[] = [];
         const sessionManager = {
-            getBranch: () => entries,
+            getBranch: () => entries as SessionEntry[],
         };
         const first = harness(entries);
         const runtimeContext = context(sessionManager);
@@ -123,7 +121,7 @@ describe("temporary scratchpad extension", () => {
 
     it("releases only registry state at shutdown and leaves the directory for OS cleanup", async () => {
         const { pi, handler } = harness();
-        const sessionManager = {};
+        const sessionManager = stubSessionManager();
         const runtimeContext = context(sessionManager);
         registerScratchpadExtension(pi);
         await handler("session_start")({ reason: "startup" }, runtimeContext);

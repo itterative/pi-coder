@@ -4,6 +4,15 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+    createPiStub,
+    handlerView,
+    stubContext,
+    stubSessionManager,
+    stubUi,
+} from "../helpers/pi-stub";
+import { partialTracker } from "../helpers/agent-doubles";
+
 import registerScratchpadExtension, { getScratchpadPath } from "../../src/modules/scratchpad";
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
 import { resolveChildGrant } from "../../src/tools/agent/child/grant";
@@ -17,8 +26,10 @@ import {
 } from "../../src/modules/sandbox/permission-state";
 import { KEY, mockTheme } from "../helpers";
 
-interface Handler {
-    (event: any, ctx: any): Promise<any> | any;
+/** The dialog surface these tests drive: take focus, then receive a raw key sequence. */
+interface StubDialog {
+    focused: boolean;
+    handleInput(key: string): void;
 }
 
 async function flush(): Promise<void> {
@@ -49,36 +60,37 @@ describe("command and edit permission gate", () => {
             isolated?: boolean;
             permissionState?: ReturnType<typeof createPermissionState>;
             registerFileHook?: boolean;
+            registerScratchpad?: boolean;
         } = {},
     ) {
-        const handlers: Record<string, Handler[]> = {};
-        const dialogs: any[] = [];
+        const stub = createPiStub();
+        const dialogs: StubDialog[] = [];
         const changedFiles: string[] = [];
         const pending: boolean[] = [];
-        const sessionManager = {};
-        const parentContext = {
+        const sessionManager = stubSessionManager();
+        const parentContext = stubContext({
             cwd,
             hasUI: true,
             sessionManager,
             mode: "tui",
-            ui: {
+            ui: stubUi({
                 theme: mockTheme,
                 setWorkingVisible() {},
-                custom(factory: any) {
-                    return new Promise((resolve) => {
-                        const component = factory(undefined, mockTheme, undefined, resolve);
+                custom(factory) {
+                    return new Promise<unknown>((resolve) => {
+                        const component = factory(
+                            undefined,
+                            mockTheme,
+                            undefined,
+                            resolve,
+                        ) as StubDialog;
                         component.focused = true;
                         dialogs.push(component);
                     });
                 },
-            },
-        } as any;
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            appendEntry() {},
-        } as any;
+            }),
+        });
+        const pi = stub.pi;
         const permissionState = options.permissionState ?? createPermissionState();
         if (options.registerFileHook) {
             registerFileToolHook(pi, "write", {
@@ -108,13 +120,21 @@ describe("command and edit permission gate", () => {
             },
             bashApproved() {},
         });
+        // Registered last to keep the handler order the suites assert on by index.
+        if (options.registerScratchpad) registerScratchpadExtension(pi);
+
         return {
             pi,
-            handlers,
+            // Built after every registration, so each list is the double's own, in handler order.
+            handlers: handlerView(stub, "tool_call", "tool_result", "session_start"),
             dialogs,
             changedFiles,
             pending,
-            ctx: { cwd, signal: undefined, sessionManager },
+            ctx: {
+                cwd,
+                signal: undefined as AbortSignal | undefined,
+                sessionManager,
+            },
         };
     }
 
@@ -203,8 +223,7 @@ describe("command and edit permission gate", () => {
     it("allows isolated worker writes inside its scratchpad without prompting", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         tempDirs.push(cwd);
-        const runtime = setup(cwd, { isolated: true });
-        registerScratchpadExtension(runtime.pi);
+        const runtime = setup(cwd, { isolated: true, registerScratchpad: true });
         await runtime.handlers.session_start[0]({}, runtime.ctx);
         const scratchpad = getScratchpadPath(runtime.ctx.sessionManager)!;
         tempDirs.push(scratchpad);
@@ -219,42 +238,35 @@ describe("command and edit permission gate", () => {
     it("treats a workspace id as isolated for restored worker permissions", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worker-cwd-"));
         tempDirs.push(cwd);
-        const sessionManager = {};
+        const sessionManager = stubSessionManager();
         const parentState = getPermissionState(sessionManager);
         parentState.bashRules["unrecognized-command"] = "allow";
-        const handlers: Record<string, Handler[]> = {};
-        const dialogs: any[] = [];
-        const parentContext = {
+        const dialogs: StubDialog[] = [];
+        const parentContext = stubContext({
             cwd,
             hasUI: true,
             mode: "tui",
             sessionManager,
-            ui: {
+            ui: stubUi({
                 theme: mockTheme,
                 setWorkingVisible() {},
-                custom(factory: any) {
-                    return new Promise((resolve) => {
-                        const component = factory(undefined, mockTheme, undefined, resolve);
+                custom(factory) {
+                    return new Promise<unknown>((resolve) => {
+                        const component = factory(
+                            undefined,
+                            mockTheme,
+                            undefined,
+                            resolve,
+                        ) as StubDialog;
                         component.focused = true;
                         dialogs.push(component);
                     });
                 },
-            },
-        } as any;
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool() {},
-        } as any;
-        const tracker = {
-            progress: { output: "", recentActivity: [] },
-            lastUpdateAt: 0,
-            changedFiles: new Set<string>(),
-            readFiles: new Set<string>(),
-            bashApproved: false,
-            interrupted: false,
-        } as any;
+            }),
+        });
+        const stub = createPiStub();
+        const pi = stub.pi;
+        const tracker = partialTracker();
         const workerDefinition: AgentDefinition = {
             name: "worker",
             description: "Implementation worker",
@@ -278,7 +290,7 @@ describe("command and edit permission gate", () => {
         const grant = resolveChildGrant(context, parentContext);
         registerChildExtension(tracker, parentContext, cwd, grant.extensionOptions)(pi);
 
-        const permission = handlers.tool_call[0](
+        const permission = handlerView(stub, "tool_call").tool_call[0](
             bashEvent("bash-restored-1", "unrecognized-command"),
             { cwd, signal: undefined, sessionManager },
         );

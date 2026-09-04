@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { snapshotText } from "../helpers";
+import {
+    partialDetails,
+    partialRun,
+    partialWorkspace,
+    partialWorkspaceResult,
+    zeroUsage,
+} from "../helpers/agent-doubles";
 
 import type { Usage } from "@earendil-works/pi-ai";
 
@@ -34,11 +41,7 @@ const liveManager = (...runs: AgentRunSummary[]) =>
     }) as unknown as AgentRunManager;
 
 function workspace(overrides: Partial<AgentWorkspace> = {}): AgentWorkspace {
-    return {
-        version: 1,
-        id: "workspace-1",
-        cwd: "/repo",
-        repositoryRoot: "/repo",
+    return partialWorkspace({
         // Must be a directory that really exists, outside the synthetic `/repo` cwd: the
         // presentation layer stats the worktree path to tell "review this workspace" from "its
         // worktree is missing". `normalizeWorkspacePath` keeps this checkout location out of the
@@ -46,12 +49,8 @@ function workspace(overrides: Partial<AgentWorkspace> = {}): AgentWorkspace {
         worktreePath: process.cwd(),
         slug: "worktree-1",
         baseRevision: "base",
-        setupState: "ready",
-        status: "available",
-        createdAt: 10,
-        updatedAt: 20,
         ...overrides,
-    };
+    });
 }
 
 /**
@@ -76,29 +75,15 @@ function rows(content: string): string[] {
 }
 
 function usage(): Usage {
-    return {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    };
+    return zeroUsage();
 }
 
 function details(overrides: Partial<AgentRunDetails> = {}): AgentRunDetails {
-    return {
-        runId: "run-1",
+    return partialDetails({
         title: "Wire it up",
-        agent: "worker",
-        status: "running",
         task: "Implement the change",
-        recentActivity: [],
-        usage: usage(),
-        startedAt: 10,
-        updatedAt: 20,
         ...overrides,
-    };
+    });
 }
 
 function workspaceResult(
@@ -107,9 +92,8 @@ function workspaceResult(
     status: WorkspaceResultStatus = "prepared",
 ): AgentWorkspaceResult {
     const changed = status === "prepared" || status === "applied";
-    return {
+    return partialWorkspaceResult({
         id,
-        workspaceId: "workspace-1",
         runId,
         baseRevision: "base",
         workerHead: changed ? "head" : "base",
@@ -117,21 +101,16 @@ function workspaceResult(
         commits: changed ? ["head"] : [],
         preparedAt: 25,
         status,
-    };
+    });
 }
 
 function run(runId: string): AgentRunSummary {
-    return {
+    return partialRun({
         runId,
         title: "Live worker",
-        agent: "worker",
         status: "completed",
-        background: false,
         task: "Implement the task",
-        startedAt: 10,
-        updatedAt: 20,
-        usage: usage(),
-    };
+    });
 }
 
 describe("agent list workspace catalog", () => {

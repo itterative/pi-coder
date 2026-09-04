@@ -2,11 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+
 import {
     createEventBus,
     type ExtensionAPI,
     type ExtensionContext,
+    type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { stubContext, stubSessionManager, type SessionManagerLike } from "../../helpers/pi-stub";
 
 import { renderText } from "../../helpers";
 
@@ -68,15 +71,13 @@ function harness(entries: unknown[] = []): {
     };
 }
 
-function runtimeContext(sessionManager: object): ExtensionContext {
-    return {
-        cwd: process.cwd(),
-        sessionManager,
-    } as ExtensionContext;
+function runtimeContext(sessionManager: Partial<SessionManagerLike>): ExtensionContext {
+    return stubContext({ cwd: process.cwd(), sessionManager: stubSessionManager(sessionManager) });
 }
 
-function sessionManagerFor(entries: unknown[]): object {
-    return { getBranch: () => entries };
+function sessionManagerFor(entries: unknown[]): Partial<SessionManagerLike> {
+    // Only the branch is read by the module under test; anything else stays absent.
+    return { getBranch: () => entries as SessionEntry[] };
 }
 
 const validDocument = `---
@@ -177,7 +178,7 @@ describe("TODO runtime extension", () => {
 
     it("restores the TODO snapshot belonging to the active session branch", async () => {
         const branches: unknown[][] = [[]];
-        const sessionManager = { getBranch: () => branches[0] };
+        const sessionManager = { getBranch: () => branches[0] as SessionEntry[] };
         const { pi, handler } = harness(branches[0]);
         const ctx = runtimeContext(sessionManager);
         registerScratchpadExtension(pi);

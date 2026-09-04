@@ -2,6 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { createPiStub, invoke, stubContext, stubUi, type PiStub } from "../helpers/pi-stub";
+import { partialWorkspace } from "../helpers/agent-doubles";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 
 import { BUILTIN_ADVISOR, BUILTIN_WORKER } from "../../src/tools/agent/definitions/discovery";
@@ -67,7 +70,7 @@ interface LifecycleFixture {
     lifecycle: AgentLifecycle;
     child: BlockingChild;
     changed: (files: string[]) => void;
-    messages: ReturnType<typeof vi.fn>;
+    messages: PiStub["sentMessages"];
     root: string;
 }
 
@@ -92,25 +95,18 @@ async function fixture(
     delete process.env.AGENT_CONFIG_PATH;
 
     const events = createEventBus();
-    const messages = vi.fn();
-    const pi = {
-        events,
-        sendMessage: messages,
-    } as any;
+    const stub = createPiStub({ eventBus: events });
     const child = new BlockingChild();
     let onFileChanged: ((filePath: string) => void) | undefined;
-    const lifecycle = new AgentLifecycle(pi, async (context) => {
+    const lifecycle = new AgentLifecycle(stub.pi, async (context) => {
         onFileChanged = context.onFileChanged;
         return child;
     });
-    const ctx = {
+    const ctx = stubContext({
         cwd: root,
         isIdle: () => parentIdle,
-        ui: {
-            notify: vi.fn(),
-            setWidget: vi.fn(),
-        },
-    } as any;
+        ui: stubUi({ notify: vi.fn(), setWidget: vi.fn() }),
+    });
 
     await lifecycle.manager.start(
         BUILTIN_WORKER,
@@ -132,7 +128,7 @@ async function fixture(
             child.setChangedFiles(files);
             onFileChanged!(files[files.length - 1] ?? "");
         },
-        messages,
+        messages: stub.sentMessages,
         root,
     };
     fixtures.push(result);
@@ -155,17 +151,14 @@ describe("agent lifecycle worker-change notifications", () => {
     it("delivers a detached advisor completion through the parent mailbox", async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-advisor-mailbox-"));
         const events = createEventBus();
-        const messages = vi.fn();
+        const stub = createPiStub({ eventBus: events });
         const child = new BlockingChild();
-        const lifecycle = new AgentLifecycle(
-            { events, sendMessage: messages } as any,
-            async () => child,
-        );
-        const ctx = {
+        const lifecycle = new AgentLifecycle(stub.pi, async () => child);
+        const ctx = stubContext({
             cwd: root,
             isIdle: () => true,
-            ui: { notify: vi.fn(), setWidget: vi.fn() },
-        } as any;
+            ui: stubUi({ notify: vi.fn(), setWidget: vi.fn() }),
+        });
 
         try {
             const pending = lifecycle.manager.start(
@@ -189,13 +182,13 @@ describe("agent lifecycle worker-change notifications", () => {
             await vi.waitFor(() =>
                 expect(lifecycle.manager.status("advisor-1").details.status).toBe("completed"),
             );
-            await vi.waitFor(() => expect(messages).toHaveBeenCalledTimes(1));
+            await vi.waitFor(() => expect(stub.sentMessages).toHaveLength(1));
 
-            expect(messages.mock.calls[0]?.[1]).toEqual({
+            expect(stub.sentMessages[0]?.options).toEqual({
                 deliverAs: "followUp",
                 triggerTurn: true,
             });
-            await expect(messages.mock.calls[0]?.[0].content).toMatchFileSnapshot(
+            await expect(stub.sentMessages[0]?.message.content).toMatchFileSnapshot(
                 "__snapshots__/agent-lifecycle.advisor-mailbox-completion.txt",
             );
         } finally {
@@ -210,8 +203,11 @@ describe("agent lifecycle worker-change notifications", () => {
         events.on(AGENT_STATUS_EVENT, (data) => {
             statusSnapshots.push(data);
         });
-        const lifecycle = new AgentLifecycle({ events, sendMessage: vi.fn() } as any);
-        (lifecycle as any).activeContext = { cwd: "/repo/project" };
+        const lifecycle = new AgentLifecycle(createPiStub({ eventBus: events }).pi);
+        // Private-field poke: the lifecycle reads its active context without a public setter.
+        (lifecycle as unknown as { activeContext: { cwd: string } }).activeContext = {
+            cwd: "/repo/project",
+        };
 
         events.emit(AGENT_EVENT_CHANNEL, {
             type: "run",
@@ -231,32 +227,23 @@ describe("agent lifecycle worker-change notifications", () => {
 
     it("publishes an empty status after clearing setup rows during a tree change", async () => {
         const events = createEventBus();
-        const handlers = new Map<string, Array<(event: unknown, ctx: any) => unknown>>();
         const statusSnapshots: Array<{ runs: unknown[]; hiddenCount: number }> = [];
         events.on(AGENT_STATUS_EVENT, (data) => {
             statusSnapshots.push(data as { runs: unknown[]; hiddenCount: number });
         });
-        const pi = {
-            events,
-            on(event: string, handler: (event: unknown, ctx: any) => unknown) {
-                const registered = handlers.get(event) ?? [];
-                registered.push(handler);
-                handlers.set(event, registered);
-            },
-            sendMessage: vi.fn(),
-        } as any;
-        const lifecycle = new AgentLifecycle(pi, async () => new BlockingChild());
+        const stub = createPiStub({ eventBus: events });
+        const lifecycle = new AgentLifecycle(stub.pi, async () => new BlockingChild());
         lifecycle.register();
-        const ctx = {
+        const ctx = stubContext({
             cwd: process.cwd(),
             isProjectTrusted: () => false,
             isIdle: () => true,
-            ui: { notify: vi.fn(), setWidget: vi.fn() },
-        } as any;
+            ui: stubUi({ notify: vi.fn(), setWidget: vi.fn() }),
+        });
         lifecycle.updateSetupRun(
             ctx,
             "workspace-setup-1",
-            { id: "workspace-1", slug: "workspace" } as any,
+            partialWorkspace({ id: "workspace-1", slug: "workspace" }),
             {
                 status: "completed",
                 activity: "Setup complete",
@@ -264,7 +251,8 @@ describe("agent lifecycle worker-change notifications", () => {
         );
         expect(statusSnapshots.at(-1)?.runs).toHaveLength(1);
 
-        await handlers.get("session_tree")?.[0]?.({}, ctx);
+        const [treeHandler] = stub.handlersFor("session_tree");
+        if (treeHandler) await invoke(treeHandler, {}, ctx);
 
         expect(statusSnapshots.at(-1)).toEqual({ runs: [], hiddenCount: 0 });
         await lifecycle.manager.shutdown();
@@ -278,13 +266,13 @@ describe("agent lifecycle worker-change notifications", () => {
         value.changed(["src/one.ts"]);
         value.changed(["src/one.ts", "src/two.ts"]);
 
-        expect(value.messages).toHaveBeenCalledTimes(2);
-        expect(value.messages.mock.calls[0]?.[1]).toEqual({
+        expect(value.messages).toHaveLength(2);
+        expect(value.messages[0]?.options).toEqual({
             deliverAs: "steer",
             triggerTurn: true,
         });
-        expect(value.messages.mock.calls[0]?.[0].content).toContain('"src/one.ts"');
-        expect(value.messages.mock.calls[1]?.[0].content).toContain('"src/two.ts"');
+        expect(value.messages[0]?.message.content).toContain('"src/one.ts"');
+        expect(value.messages[1]?.message.content).toContain('"src/two.ts"');
     });
 
     it("does not send immediate changes when the setting is disabled", async () => {
@@ -292,7 +280,7 @@ describe("agent lifecycle worker-change notifications", () => {
 
         value.changed(["src/example.ts"]);
 
-        expect(value.messages).not.toHaveBeenCalled();
+        expect(value.messages).toEqual([]);
     });
 
     it("defers changes for an idle parent to the terminal notification", async () => {
@@ -300,6 +288,6 @@ describe("agent lifecycle worker-change notifications", () => {
 
         value.changed(["src/example.ts"]);
 
-        expect(value.messages).not.toHaveBeenCalled();
+        expect(value.messages).toEqual([]);
     });
 });

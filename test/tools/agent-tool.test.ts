@@ -2,19 +2,34 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEventBus } from "@earendil-works/pi-coding-agent";
+import type { TextContent } from "@earendil-works/pi-ai";
+import type {
+    AgentToolResult,
+    BeforeAgentStartEventResult,
+    Theme,
+    ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 
 import { registerStatusWidget } from "../../src/tui/status";
 import registerAgentTool, { clearCompletedWorkspaceSetupRun } from "../../src/tools/agent";
 import { executeAgentAction } from "../../src/tools/agent/action-dispatch";
+import type { AgentLifecycle } from "../../src/tools/agent/lifecycle";
 import { registerAgentTool as registerAgentToolDefinition } from "../../src/tools/agent/presentation/tool";
 import { AGENT_EVENT_CHANNEL } from "../../src/tools/agent/observability/events";
+import type { AgentEventSink } from "../../src/tools/agent/observability/events";
+import type { AgentDefinition } from "../../src/tools/agent/definitions/types";
 import {
     ZERO_USAGE,
+    type AgentRunDetails,
+    type AgentRunManager,
+    type AgentRunOutcome,
     type AgentRunSummary,
     type ChildAgentHandle,
+    type ChildProgress,
 } from "../../src/tools/agent/runs/manager";
 import type {
+    AgentRunCatalogRecord,
     AgentWorkspace,
     AgentWorkspaceResult,
 } from "../../src/tools/agent/contracts/workspaces";
@@ -28,13 +43,82 @@ import * as workspaceSetup from "../../src/tools/agent/workspaces/setup";
 import * as workspaceStore from "../../src/tools/agent/workspaces/store";
 import { executeParentWorkspaceAction } from "../../src/tools/agent/workspaces/parent-actions";
 import { AGENT_TRACE_ENV } from "../../src/tools/agent/observability/trace";
+import {
+    createPiStub,
+    handlerView,
+    stubContext,
+    stubSessionManager,
+    stubUi,
+    type PiStub,
+} from "../helpers/pi-stub";
+import { partialDetails, partialWorkspace, partialWorkspaceResult } from "../helpers/agent-doubles";
 import { mockTheme, renderText, snapshotText } from "../helpers";
 
-interface Handler {
-    (event: any, ctx: any): Promise<unknown> | unknown;
+/** What the agent tool really puts in `details`; pi erases that generic on a registered tool. */
+type AgentToolCall = AgentToolResult<AgentRunDetails>;
+
+/**
+ * The registered `agent` tool, narrowed to what these suites drive.
+ *
+ * `pi` types a registered tool's `execute` result with its erased `details` generic and declares
+ * `renderResult`'s fourth argument as a required render context that the package never exports, so no
+ * suite can call the real signature. Both are restored once here instead of cast at every call site.
+ */
+interface AgentTool {
+    readonly definition: ToolDefinition;
+    execute(
+        toolCallId: string,
+        params: Record<string, unknown>,
+        signal?: AbortSignal,
+        onUpdate?: unknown,
+        ctx?: unknown,
+    ): Promise<AgentToolCall>;
+    renderResult(result: AgentToolCall, options: { expanded: boolean }, theme: Theme): Component;
 }
 
-const TEST_WORKER_DEFINITION = {
+/** pi declares the fourth renderer argument as a required render context type it never exports. */
+const noRenderContext = undefined as never;
+
+function agentTool(stub: PiStub): AgentTool {
+    const registered = stub.requireTool<AgentRunDetails>("agent");
+    const render = registered.definition.renderResult;
+    if (!render) {
+        throw new Error(`tool "${registered.name}" declares no result renderer`);
+    }
+
+    return {
+        definition: registered.definition,
+        execute: async (toolCallId, params, signal, onUpdate, ctx) =>
+            await registered.execute(toolCallId, params, signal, onUpdate, ctx),
+        renderResult: (result, options, theme) =>
+            render(result, { ...options, isPartial: false }, theme, noRenderContext),
+    };
+}
+
+/** The guidelines are optional in pi's type but this suite snapshots them. */
+function requirePromptGuidelines(definition: ToolDefinition): string[] {
+    if (!definition.promptGuidelines) {
+        throw new Error("the agent tool declares no prompt guidelines");
+    }
+
+    return definition.promptGuidelines;
+}
+
+/** The agent tool always answers with a single text block; pi types content as a text-or-image union. */
+function agentTextPart(result: AgentToolCall): TextContent {
+    const part = result.content[0];
+    if (!part || part.type !== "text") {
+        throw new Error("the agent tool returned no text content");
+    }
+
+    return part;
+}
+
+function agentToolText(result: AgentToolCall): string {
+    return agentTextPart(result).text;
+}
+
+const TEST_WORKER_DEFINITION: AgentDefinition = {
     name: "worker",
     source: "builtin",
     capabilities: ["edit"],
@@ -70,8 +154,16 @@ afterEach(() => {
     for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+/**
+ * The parent-side continuation fixture: a persisted catalog record whose workspace holds a prepared
+ * result, a manager double recording the continuation calls, and the stub context the action reads.
+ *
+ * `record` is typed as the catalog shape because `resolveParentRunRecord` maps the persisted record into
+ * it before use; the manager double is cast as a whole where it is handed to production, so no single
+ * method has to lie about its return type.
+ */
 function revisionActionFixture() {
-    const record = {
+    const record: AgentRunCatalogRecord = {
         ownerSessionId: "parent-session",
         runId: "worker-1",
         runInstanceId: "worker-instance-1",
@@ -79,7 +171,6 @@ function revisionActionFixture() {
         title: "Implement fix",
         agent: "worker",
         agentSource: "builtin",
-        definitionFingerprint: "definition-before-revise",
         definitionSnapshot: TEST_WORKER_DEFINITION,
         task: "Original task",
         status: "removed",
@@ -92,7 +183,7 @@ function revisionActionFixture() {
         updatedAt: 2,
         usageSnapshot: ZERO_USAGE,
     };
-    const workspace = {
+    const workspace = partialWorkspace({
         id: "workspace-1",
         cwd: process.cwd(),
         repositoryRoot: process.cwd(),
@@ -105,7 +196,7 @@ function revisionActionFixture() {
         leaseRunId: "worker-1",
         leaseRunInstanceId: "worker-instance-1",
         leaseKind: "task",
-        latestResult: {
+        latestResult: partialWorkspaceResult({
             id: "result-1",
             workspaceId: "workspace-1",
             runId: "worker-1",
@@ -116,12 +207,12 @@ function revisionActionFixture() {
             commits: ["worker-head"],
             preparedAt: 3,
             status: "prepared",
-        },
+        }),
         createdAt: 1,
         updatedAt: 2,
-    };
+    });
     const definition = TEST_WORKER_DEFINITION;
-    const continuationOutcome = {
+    const continuationOutcome: AgentRunOutcome = {
         content: "Revised result",
         details: {
             runId: "worker-1",
@@ -141,21 +232,23 @@ function revisionActionFixture() {
         isError: false,
     };
     const manager = {
+        hasPersistence: false,
         flushPersistence: vi.fn(async () => {}),
-        getPersistedRun: vi.fn(() => record),
+        getPersistedRun: vi.fn((): AgentRunCatalogRecord | undefined => record),
         reserveRunIdentity: vi.fn(() => ({
             runId: "worker-1",
             runInstanceId: "worker-instance-1",
         })),
         reserveContinuationLease: vi.fn(() => undefined),
-        startContinuation: vi.fn(async () => continuationOutcome),
+        startContinuation: vi.fn(async (): Promise<AgentRunOutcome> => continuationOutcome),
     };
-    const ctx = {
+    const ctx = stubContext({
         cwd: process.cwd(),
         isProjectTrusted: () => true,
-        sessionManager: { getSessionId: () => "parent-session" },
-        ui: { notify: () => {} },
-    };
+        sessionManager: stubSessionManager({ getSessionId: () => "parent-session" }),
+        ui: stubUi(),
+    });
+    const events: AgentEventSink = { emit: () => {} };
     return {
         record,
         workspace,
@@ -164,16 +257,19 @@ function revisionActionFixture() {
         manager,
         ctx,
         progress: vi.fn(),
-        events: {} as any,
-        discover: vi.fn(() => ({ agents: [definition], diagnostics: [] })),
+        events,
+        discover: vi.fn((): ReturnType<AgentLifecycle["discover"]> => ({
+            agents: [definition],
+            diagnostics: [],
+        })),
     };
 }
 
 function configureRevisionAction(fixture: ReturnType<typeof revisionActionFixture>) {
     vi.spyOn(workspaceGit, "git").mockResolvedValue("worker-head");
     vi.spyOn(workspaceGit, "hasAncestor").mockResolvedValue(true);
-    vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([fixture.record] as any);
-    vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(fixture.workspace as any);
+    vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([fixture.record]);
+    vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(fixture.workspace);
     return vi.spyOn(workspaceStore, "transferAgentWorkspaceLease").mockResolvedValue();
 }
 
@@ -183,8 +279,8 @@ async function executeRevisionAction(
     return executeParentWorkspaceAction(
         { action: "continue", runId: fixture.record.runId, guidance: "Apply feedback" },
         {
-            ctx: fixture.ctx as any,
-            manager: fixture.manager as any,
+            ctx: fixture.ctx,
+            manager: fixture.manager as unknown as AgentRunManager,
             signal: undefined,
             progress: fixture.progress,
             events: fixture.events,
@@ -195,7 +291,7 @@ async function executeRevisionAction(
 
 describe("agent extension registration", () => {
     it("rolls back a transferred workspace lease when manager startup rejects", async () => {
-        const workspace = {
+        const workspace = partialWorkspace({
             id: "workspace-start-failure",
             cwd: process.cwd(),
             repositoryRoot: process.cwd(),
@@ -206,7 +302,7 @@ describe("agent extension registration", () => {
             status: "available",
             createdAt: 1,
             updatedAt: 1,
-        } as AgentWorkspace;
+        });
         const reservation = {
             workspace,
             ownerSessionId: "parent-session",
@@ -226,13 +322,13 @@ describe("agent extension registration", () => {
             start: vi.fn().mockRejectedValue(startError),
         };
         const definition = TEST_WORKER_DEFINITION;
-        const ctx = {
+        const ctx = stubContext({
             cwd: process.cwd(),
             isProjectTrusted: () => true,
             isIdle: () => true,
-            sessionManager: { getSessionId: () => "parent-session" },
-            ui: { notify: () => {} },
-        };
+            sessionManager: stubSessionManager({ getSessionId: () => "parent-session" }),
+            ui: stubUi(),
+        });
         const lifecycle = {
             manager,
             factory: vi.fn(),
@@ -253,7 +349,12 @@ describe("agent extension registration", () => {
                 isolation: "worktree",
                 background: true,
             },
-            { signal: undefined, progress: vi.fn(), ctx: ctx as any, lifecycle: lifecycle as any },
+            {
+                signal: undefined,
+                progress: vi.fn(),
+                ctx,
+                lifecycle: lifecycle as unknown as AgentLifecycle,
+            },
         );
 
         expect(outcome.details.status).toBe("failed");
@@ -302,27 +403,11 @@ describe("agent extension registration", () => {
     });
 
     it("registers the tool, advertises agents, and marks failed results as errors", async () => {
-        const handlers: Record<string, Handler[]> = {};
-        let tool: any;
-        let shortcut: { key: string; description?: string } | undefined;
+        const stub = createPiStub();
         const events: Array<{ channel: string; data: unknown }> = [];
-        const pi = {
-            events: {
-                emit(channel: string, data: unknown) {
-                    events.push({ channel, data });
-                },
-            },
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool(definition: any) {
-                tool = definition;
-            },
-            registerShortcut(key: string, options: { description?: string }) {
-                shortcut = { key, description: options.description };
-            },
-            registerCommand() {},
-        } as any;
+        stub.pi.events?.on(AGENT_EVENT_CHANNEL, (data) => {
+            events.push({ channel: AGENT_EVENT_CHANNEL, data });
+        });
         const child: ChildAgentHandle = {
             prompt: async () => {},
             abort: async () => {},
@@ -333,19 +418,30 @@ describe("agent extension registration", () => {
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
         };
-        registerAgentTool(pi, async () => child);
+        registerAgentTool(stub.pi, async () => child);
+        // Built after registration, so every list is the double's own and keeps handler order.
+        const handlers = handlerView(
+            stub,
+            "session_start",
+            "before_agent_start",
+            "tool_result",
+            "session_shutdown",
+        );
+        const tool = agentTool(stub);
+        const [shortcut] = stub.shortcuts;
 
-        const ctx = {
+        const ctx = stubContext({
             cwd: process.cwd(),
             isProjectTrusted: () => false,
-            sessionManager: { getSessionFile: () => undefined },
-            ui: { notify: () => {}, setWidget: () => {} },
-        };
+            isIdle: () => false,
+            sessionManager: stubSessionManager({ getSessionFile: () => undefined }),
+            ui: stubUi({ setWidget: () => {} }),
+        });
         await handlers.session_start[0]({ reason: "startup" }, ctx);
         const prompt = (await handlers.before_agent_start[0](
             { systemPrompt: "Parent prompt" },
             ctx,
-        )) as any;
+        )) as BeforeAgentStartEventResult;
         const result = await tool.execute(
             "call-1",
             { action: "start", agent: "scout", task: "Inspect" },
@@ -361,19 +457,32 @@ describe("agent extension registration", () => {
             ctx,
         );
 
-        expect(tool.name).toBe("agent");
-        expect(tool.executionMode).toBe("sequential");
-        expect(shortcut).toEqual({
-            key: "ctrl+alt+b",
-            description: "Move foreground delegated agent to background",
-        });
-        await expect([tool.description, ...tool.promptGuidelines].join("\n")).toMatchFileSnapshot(
-            "__snapshots__/agent-tool.delegation-guidance.txt",
-        );
+        expect(stub.order).toEqual([
+            "shortcut:ctrl+alt+b",
+            "command:agent-trace",
+            "command:agents",
+            "on:session_start",
+            "on:agent_settled",
+            "on:before_agent_start",
+            "on:session_before_tree",
+            "on:session_tree",
+            "on:session_shutdown",
+            "on:tool_result",
+            "tool:agent",
+        ]);
+        expect(tool.definition.executionMode).toBe("sequential");
+        expect(shortcut?.key).toBe("ctrl+alt+b");
+        expect(shortcut?.options.description).toBe("Move foreground delegated agent to background");
+        await expect(
+            [tool.definition.description, ...requirePromptGuidelines(tool.definition)].join("\n"),
+        ).toMatchFileSnapshot("__snapshots__/agent-tool.delegation-guidance.txt");
         await expect(prompt.systemPrompt).toMatchFileSnapshot(
             "__snapshots__/agent-tool.parent-system-prompt.txt",
         );
-        const repeatedPrompt = (await handlers.before_agent_start[0](prompt, ctx)) as any;
+        const repeatedPrompt = (await handlers.before_agent_start[0](
+            prompt,
+            ctx,
+        )) as BeforeAgentStartEventResult;
         expect(repeatedPrompt).toEqual(prompt);
         expect(result.details).toMatchObject({ status: "completed", agent: "scout" });
         expect(events).toContainEqual({
@@ -408,18 +517,7 @@ describe("agent extension registration", () => {
     });
 
     it("keeps an ignored-context warning in metadata", async () => {
-        let tool: any;
-        const handlers: Record<string, Handler[]> = {};
-        const pi = {
-            events: createEventBus(),
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool(definition: any) {
-                tool = definition;
-            },
-            registerCommand() {},
-        } as any;
+        const stub = createPiStub();
         const child: ChildAgentHandle = {
             prompt: async () => {},
             abort: async () => {},
@@ -430,7 +528,9 @@ describe("agent extension registration", () => {
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
         };
-        registerAgentTool(pi, async () => child);
+        registerAgentTool(stub.pi, async () => child);
+        const handlers = handlerView(stub, "session_shutdown");
+        const tool = agentTool(stub);
 
         const result = await tool.execute(
             "call-context-warning",
@@ -451,44 +551,27 @@ describe("agent extension registration", () => {
             },
             undefined,
             undefined,
-            {
+            stubContext({
                 cwd: process.cwd(),
                 isProjectTrusted: () => false,
-                sessionManager: {
+                isIdle: () => false,
+                sessionManager: stubSessionManager({
                     getSessionId: () => "parent-session",
                     getSessionFile: () => undefined,
-                },
-                ui: { notify: () => {}, setWidget: () => {} },
-            },
+                }),
+                ui: stubUi({ setWidget: () => {} }),
+            }),
         );
 
         expect(result.details.status).toBe("completed");
-        await expect(result.content[0].text).toMatchFileSnapshot(
+        await expect(agentToolText(result)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.ignored-context-response.txt",
         );
         await handlers.session_shutdown?.[0]?.({}, {});
     });
 
     it("snapshots the Ctrl+Alt+B foreground-to-background result", async () => {
-        const handlers: Record<string, Handler[]> = {};
-        let tool: any;
-        let shortcutHandler: ((ctx: any) => void | Promise<void>) | undefined;
-        const pi = {
-            events: createEventBus(),
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool(definition: any) {
-                tool = definition;
-            },
-            registerShortcut(
-                _key: string,
-                options: { handler: (ctx: any) => void | Promise<void> },
-            ) {
-                shortcutHandler = options.handler;
-            },
-            registerCommand() {},
-        } as any;
+        const stub = createPiStub();
         let promptStarted = false;
         let releasePrompt: (() => void) | undefined;
         let output = "";
@@ -510,20 +593,23 @@ describe("agent extension registration", () => {
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
         };
-        registerAgentTool(pi, async () => child);
+        registerAgentTool(stub.pi, async () => child);
+        const handlers = handlerView(stub, "session_shutdown");
+        const tool = agentTool(stub);
+        const [shortcut] = stub.shortcuts;
 
-        const ctx = {
+        const ctx = stubContext({
             cwd: process.cwd(),
             mode: "tui",
             hasUI: true,
             isProjectTrusted: () => false,
             isIdle: () => false,
-            sessionManager: {
+            sessionManager: stubSessionManager({
                 getSessionId: () => "parent-session",
                 getSessionFile: () => undefined,
-            },
-            ui: { notify: () => {}, setWidget: () => {} },
-        };
+            }),
+            ui: stubUi({ setWidget: () => {} }),
+        });
         const start = tool.execute(
             "call-manual-background",
             { action: "start", agent: "scout", task: "Inspect before continuing" },
@@ -533,11 +619,11 @@ describe("agent extension registration", () => {
         );
 
         await vi.waitFor(() => expect(promptStarted).toBe(true));
-        await shortcutHandler?.(ctx);
+        await shortcut?.options.handler(ctx);
         const moved = await start;
 
         expect(moved.details).toMatchObject({ status: "running", background: true });
-        await expect(moved.content[0].text).toMatchFileSnapshot(
+        await expect(agentToolText(moved)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.manual-background.txt",
         );
 
@@ -547,41 +633,36 @@ describe("agent extension registration", () => {
     });
 
     it("renders the full prompt and preserves response whitespace without metadata", async () => {
-        let tool: any;
+        const stub = createPiStub();
         const prompt =
             "Review the implementation.\nPlease inspect the relevant modules and report any regressions.";
         const response = "\n  leading spaces\ntrailing spaces  \n";
-        registerAgentToolDefinition(
-            {
-                registerTool(definition: any) {
-                    tool = definition;
-                },
-            } as any,
-            async () =>
-                ({
-                    content: response,
-                    details: {
-                        title: "Natural validation run",
-                        agent: "scout",
-                        status: "completed",
-                        task: prompt,
-                        response,
-                        toolCounts: { read: 2, grep: 1 },
-                        failedToolCalls: 1,
-                    },
-                    usage: ZERO_USAGE,
-                    isError: false,
-                }) as any,
-        );
+        registerAgentToolDefinition(stub.pi, async (): Promise<AgentRunOutcome> => {
+            return {
+                content: response,
+                details: partialDetails({
+                    title: "Natural validation run",
+                    agent: "scout",
+                    status: "completed",
+                    task: prompt,
+                    response,
+                    toolCounts: { read: 2, grep: 1 },
+                    failedToolCalls: 1,
+                }),
+                usage: ZERO_USAGE,
+                isError: false,
+            };
+        });
+        const tool = agentTool(stub);
 
         const result = await tool.execute(
             "call-render",
             { action: "start", agent: "scout", task: prompt },
             undefined,
             undefined,
-            {} as any,
+            {},
         );
-        result.content[0].text = `<metadata>generated metadata</metadata>\n\n${response}`;
+        agentTextPart(result).text = `<metadata>generated metadata</metadata>\n\n${response}`;
         const rendered = snapshotText(
             renderText(tool.renderResult(result, { expanded: true }, mockTheme), 10_000),
         );
@@ -590,19 +671,8 @@ describe("agent extension registration", () => {
     });
 
     it("applies a parent workspace result and verifies the lease is cleared", async () => {
-        const handlers: Record<string, Handler[]> = {};
-        let tool: any;
-        const pi = {
-            events: { emit() {} },
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool(definition: any) {
-                tool = definition;
-            },
-            registerCommand() {},
-        } as any;
-        const result = {
+        const stub = createPiStub();
+        const result = partialWorkspaceResult({
             id: "result-1",
             workspaceId: "workspace-1",
             runId: "worker-1",
@@ -612,8 +682,8 @@ describe("agent extension registration", () => {
             commits: ["worker"],
             preparedAt: 1,
             status: "prepared",
-        } as const;
-        const workspace = {
+        });
+        const workspace = partialWorkspace({
             id: "workspace-1",
             cwd: process.cwd(),
             repositoryRoot: process.cwd(),
@@ -628,8 +698,8 @@ describe("agent extension registration", () => {
             latestResult: result,
             createdAt: 1,
             updatedAt: 1,
-        } as any;
-        const releasedWorkspace = {
+        });
+        const releasedWorkspace: AgentWorkspace = {
             ...workspace,
             status: "review_required",
             leaseOwnerSessionId: undefined,
@@ -669,20 +739,22 @@ describe("agent extension registration", () => {
                 effects: ["result_changed", "lease_changed", "workspace_updated"],
                 disposition: "applied",
             });
-        registerAgentTool(pi, async () => {
+        registerAgentTool(stub.pi, async () => {
             throw new Error("not used");
         });
+        const tool = agentTool(stub);
 
         const outcome = await tool.execute(
             "call-apply",
             { action: "apply", runId: "worker-1" },
             undefined,
             undefined,
-            {
+            stubContext({
                 cwd: process.cwd(),
-                sessionManager: { getSessionId: () => "parent-1" },
-                ui: { notify() {}, setWidget() {} },
-            },
+                isIdle: () => false,
+                sessionManager: stubSessionManager({ getSessionId: () => "parent-1" }),
+                ui: stubUi({ setWidget: () => {} }),
+            }),
         );
 
         expect(executeWorkspaceAction).toHaveBeenCalledWith({
@@ -697,17 +769,7 @@ describe("agent extension registration", () => {
     });
 
     it("renders and executes a complete start, wait, continue flow", async () => {
-        const handlers: Record<string, Handler[]> = {};
-        let tool: any;
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool(definition: any) {
-                tool = definition;
-            },
-            registerCommand() {},
-        } as any;
+        const stub = createPiStub();
         let promptCount = 0;
         let output = "";
         let question: { question: string; context: string } | undefined;
@@ -742,12 +804,15 @@ describe("agent extension registration", () => {
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
         };
-        registerAgentTool(pi, async () => child);
-        const ctx = {
+        registerAgentTool(stub.pi, async () => child);
+        const handlers = handlerView(stub, "session_shutdown");
+        const tool = agentTool(stub);
+        const ctx = stubContext({
             cwd: process.cwd(),
             isProjectTrusted: () => false,
-            ui: { notify: () => {}, setWidget: () => {} },
-        };
+            isIdle: () => false,
+            ui: stubUi({ setWidget: () => {} }),
+        });
 
         const waiting = await tool.execute(
             "call-1",
@@ -760,7 +825,7 @@ describe("agent extension registration", () => {
             renderText(tool.renderResult(waiting, { expanded: false }, mockTheme), 120),
         );
         expect(waiting.details.status).toBe("waiting_for_parent");
-        await expect(waiting.content[0].text).toMatchFileSnapshot(
+        await expect(agentToolText(waiting)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.foreground-waiting.txt",
         );
         await expect(waitingText).toMatchFileSnapshot(
@@ -778,7 +843,7 @@ describe("agent extension registration", () => {
             renderText(tool.renderResult(completed, { expanded: true }, mockTheme), 120),
         );
         expect(completed.details.status).toBe("completed");
-        await expect(completed.content[0].text).toMatchFileSnapshot(
+        await expect(agentToolText(completed)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.foreground-completed.txt",
         );
         await expect(completedText).toMatchFileSnapshot(
@@ -789,26 +854,11 @@ describe("agent extension registration", () => {
     });
 
     it("executes a background start, status, and collect flow", async () => {
-        const handlers: Record<string, Handler[]> = {};
-        let tool: any;
-        const sentMessages: Array<{ message: any; options: any }> = [];
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool(definition: any) {
-                tool = definition;
-            },
-            registerCommand() {},
-            events: createEventBus(),
-            sendMessage(message: any, options: any) {
-                sentMessages.push({ message, options });
-            },
-        } as any;
+        const stub = createPiStub();
+        const sentMessages = stub.sentMessages;
         let background = false;
-        let reportProgress:
-            ((progress: { output: string; recentActivity: string[] }) => void) | undefined;
-        let childProgress = { output: "", recentActivity: [] as string[] };
+        let reportProgress: ((progress: ChildProgress) => void) | undefined;
+        let childProgress: ChildProgress = { output: "", recentActivity: [] };
         const child: ChildAgentHandle = {
             async prompt() {
                 childProgress = {
@@ -825,13 +875,13 @@ describe("agent extension registration", () => {
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
         };
-        registerAgentTool(pi, async (context) => {
+        registerAgentTool(stub.pi, async (context) => {
             background = context.background === true;
             reportProgress = context.onProgress;
             return child;
         });
         const widgetPlacements: Array<string | undefined> = [];
-        let widgetComponent: { render(width: number): string[] } | undefined;
+        let widgetComponent: Component | undefined;
         const widgets: Array<string[] | undefined> = [];
         let lastWidgetState: string | undefined;
         // deduplicate widget renders so microtask changes don't completely change the snapshot
@@ -843,42 +893,43 @@ describe("agent extension registration", () => {
             lastWidgetState = state;
             widgets.push(lines);
         };
+        // The status widget only ever calls `requestRender()` on the TUI it is handed.
         const widgetTui = {
             requestRender() {
                 if (widgetComponent) recordWidgetState(widgetComponent.render(200));
             },
-        };
-        const ctx = {
+        } as TUI;
+        const ui = stubUi({
+            setWidget(_id, value, options) {
+                if (typeof value === "function") {
+                    widgetComponent = value(widgetTui, mockTheme);
+                    recordWidgetState(widgetComponent.render(200));
+                } else {
+                    widgetComponent = undefined;
+                    recordWidgetState(value);
+                }
+                if (value) widgetPlacements.push(options?.placement);
+            },
+        });
+        const ctx = stubContext({
             cwd: process.cwd(),
             mode: "tui",
             hasUI: true,
             isProjectTrusted: () => false,
             isIdle: () => false,
-            ui: {
-                notify: () => {},
-                setWidget: (
-                    _id: string,
-                    value:
-                        | string[]
-                        | ((
-                              tui: typeof widgetTui,
-                              theme: unknown,
-                          ) => { render(width: number): string[] })
-                        | undefined,
-                    options?: { placement?: string },
-                ) => {
-                    if (typeof value === "function") {
-                        widgetComponent = value(widgetTui, {});
-                        recordWidgetState(widgetComponent.render(200));
-                    } else {
-                        widgetComponent = undefined;
-                        recordWidgetState(value);
-                    }
-                    if (value) widgetPlacements.push(options?.placement);
-                },
-            },
-        };
-        registerStatusWidget(pi);
+            ui,
+        });
+        registerStatusWidget(stub.pi);
+        // Built after both registrations: `session_start` keeps the widget handler last.
+        const handlers = handlerView(
+            stub,
+            "session_start",
+            "before_agent_start",
+            "agent_settled",
+            "session_shutdown",
+        );
+        const tool = agentTool(stub);
+
         await handlers.session_start.at(-1)?.({}, ctx);
 
         const started = await tool.execute(
@@ -899,7 +950,7 @@ describe("agent extension registration", () => {
         const prompt = (await handlers.before_agent_start[0](
             { systemPrompt: "Parent prompt" },
             ctx,
-        )) as any;
+        )) as BeforeAgentStartEventResult;
         expect(sentMessages).toEqual([]);
         await handlers.agent_settled[0]({}, { ...ctx, isIdle: () => true });
         expect(sentMessages).toHaveLength(1);
@@ -933,23 +984,23 @@ describe("agent extension registration", () => {
         );
 
         expect(started.details).toMatchObject({ status: "starting", background: true });
-        await expect(started.content[0].text).toMatchFileSnapshot(
+        await expect(agentToolText(started)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.background-start.txt",
         );
         expect(status.details.status).toBe("completed");
-        await expect(status.content[0].text).toMatchFileSnapshot(
+        await expect(agentToolText(status)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.background-status.txt",
         );
         const promptAfterSpawn = (await handlers.before_agent_start[0](
             { systemPrompt: "Parent prompt" },
             ctx,
-        )) as any;
+        )) as BeforeAgentStartEventResult;
         expect(promptAfterSpawn).toEqual(prompt);
-        await expect(listed.content[0].text).toMatchFileSnapshot(
+        await expect(agentToolText(listed)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.background-list.txt",
         );
         expect(collected.details.status).toBe("completed");
-        await expect(collected.content[0].text).toMatchFileSnapshot(
+        await expect(agentToolText(collected)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.background-collect.txt",
         );
         const widgetLines = widgets.flatMap((lines) => lines ?? []).map((line) => line.trimEnd());
@@ -963,19 +1014,10 @@ describe("agent extension registration", () => {
     });
 
     it("prepares an isolated result before collecting it in the parent", async () => {
-        const handlers: Record<string, Handler[]> = {};
-        let tool: any;
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool(definition: any) {
-                tool = definition;
-            },
-            registerCommand() {},
-            sendMessage() {},
-        } as any;
-        const workspace = {
+        const stub = createPiStub({ eventBus: null });
+        // No bus at all: `lifecycle.eventBus` is the `dialogEvents` argument asserted below, and pi marks
+        // `events` required even though production treats it as optional.
+        const workspace = partialWorkspace({
             id: "workspace-1",
             cwd: process.cwd(),
             repositoryRoot: process.cwd(),
@@ -986,7 +1028,7 @@ describe("agent extension registration", () => {
             status: "available",
             createdAt: 1,
             updatedAt: 1,
-        } as AgentWorkspace;
+        });
         const result: AgentWorkspaceResult = {
             id: "result-1",
             workspaceId: workspace.id,
@@ -1025,17 +1067,19 @@ describe("agent extension registration", () => {
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
         };
-        registerAgentTool(pi, async () => child);
-        const ctx = {
+        registerAgentTool(stub.pi, async () => child);
+        const handlers = handlerView(stub, "session_start", "session_shutdown");
+        const tool = agentTool(stub);
+        const ctx = stubContext({
             cwd: process.cwd(),
             isProjectTrusted: () => false,
             isIdle: () => false,
-            sessionManager: {
+            sessionManager: stubSessionManager({
                 getSessionId: () => "parent-session",
                 getSessionFile: () => undefined,
-            },
-            ui: { notify: () => {}, setWidget: () => {} },
-        };
+            }),
+            ui: stubUi({ setWidget: () => {} }),
+        });
         await handlers.session_start[0]({}, ctx);
         await tool.execute(
             "call-1",
@@ -1089,7 +1133,7 @@ describe("agent extension registration", () => {
             leaseRunInstanceId: expect.any(String),
         });
         expect(collected.details.workspaceResult).toEqual(result);
-        await expect(collected.content[0].text).toMatchFileSnapshot(
+        await expect(agentToolText(collected)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.isolated-collect.txt",
         );
         await handlers.session_shutdown[0]({}, ctx);
@@ -1097,7 +1141,7 @@ describe("agent extension registration", () => {
 
     it("revises an isolated result by continuing its persisted child session", async () => {
         const childSessionFile = "/tmp/agent-child.jsonl";
-        const record = {
+        const record: AgentRunCatalogRecord = {
             ownerSessionId: "parent-session",
             runId: "worker-1",
             runInstanceId: "worker-instance-1",
@@ -1105,7 +1149,6 @@ describe("agent extension registration", () => {
             title: "Implement fix",
             agent: "worker",
             agentSource: "builtin",
-            definitionFingerprint: "definition-before-revise",
             definitionSnapshot: TEST_WORKER_DEFINITION,
             task: "Original task",
             status: "removed",
@@ -1118,7 +1161,7 @@ describe("agent extension registration", () => {
             updatedAt: 2,
             usageSnapshot: ZERO_USAGE,
         };
-        const workspace = {
+        const workspace = partialWorkspace({
             id: "workspace-1",
             cwd: process.cwd(),
             repositoryRoot: process.cwd(),
@@ -1131,7 +1174,7 @@ describe("agent extension registration", () => {
             leaseRunId: "worker-1",
             leaseRunInstanceId: "worker-instance-1",
             leaseKind: "task",
-            latestResult: {
+            latestResult: partialWorkspaceResult({
                 id: "result-1",
                 workspaceId: "workspace-1",
                 runId: "worker-1",
@@ -1142,15 +1185,15 @@ describe("agent extension registration", () => {
                 commits: ["worker-head"],
                 preparedAt: 3,
                 status: "prepared",
-            },
+            }),
             createdAt: 1,
             updatedAt: 2,
-        };
-        const definition = {
+        });
+        const definition: AgentDefinition = {
             ...TEST_WORKER_DEFINITION,
             systemPrompt: "Current definition changed",
         };
-        const continuationOutcome = {
+        const continuationOutcome: AgentRunOutcome = {
             content: "Revised result",
             details: {
                 runId: "worker-1",
@@ -1171,38 +1214,41 @@ describe("agent extension registration", () => {
         };
         const manager = {
             flushPersistence: vi.fn(async () => {}),
-            getPersistedRun: vi.fn(() => record),
+            getPersistedRun: vi.fn((): AgentRunCatalogRecord | undefined => record),
             reserveRunIdentity: vi.fn(() => ({
                 runId: "worker-1",
                 runInstanceId: "worker-instance-1",
             })),
-            startContinuation: vi.fn(async () => continuationOutcome),
+            startContinuation: vi.fn(async (): Promise<AgentRunOutcome> => continuationOutcome),
         };
-        const ctx = {
+        const ctx = stubContext({
             cwd: process.cwd(),
             isProjectTrusted: () => true,
-            sessionManager: { getSessionId: () => "parent-session" },
-            ui: { notify: () => {} },
-        };
+            sessionManager: stubSessionManager({ getSessionId: () => "parent-session" }),
+            ui: stubUi(),
+        });
         const progress = vi.fn();
-        const events = {} as any;
-        const discover = vi.fn(() => ({ agents: [definition], diagnostics: [] }));
+        const events: AgentEventSink = { emit: () => {} };
+        const discover = vi.fn((): ReturnType<AgentLifecycle["discover"]> => ({
+            agents: [definition],
+            diagnostics: [],
+        }));
         vi.spyOn(workspaceGit, "git").mockResolvedValue("worker-head");
         vi.spyOn(workspaceGit, "hasAncestor").mockResolvedValue(true);
-        vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record] as any);
-        vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace as any);
+        vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record]);
+        vi.spyOn(workspaceStore, "getAgentWorkspace").mockResolvedValue(workspace);
         const transferSpy = vi
             .spyOn(workspaceStore, "transferAgentWorkspaceLease")
             .mockResolvedValue();
         vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockResolvedValue(
-            continuationOutcome as any,
+            continuationOutcome,
         );
 
         const result = await executeParentWorkspaceAction(
             { action: "continue", runId: "worker-1", guidance: "Apply feedback" },
             {
-                ctx: ctx as any,
-                manager: manager as any,
+                ctx,
+                manager: manager as unknown as AgentRunManager,
                 signal: undefined,
                 progress,
                 events,
@@ -1235,7 +1281,7 @@ describe("agent extension registration", () => {
 
     it("revises a collected reviewer result by continuing its persisted child session", async () => {
         const childSessionFile = "/tmp/reviewer-child.jsonl";
-        const definition = {
+        const definition: AgentDefinition = {
             name: "reviewer",
             source: "builtin",
             capabilities: [
@@ -1249,7 +1295,7 @@ describe("agent extension registration", () => {
             description: "Code and Git-history review with validation",
             systemPrompt: "Reviewer prompt",
         };
-        const record = {
+        const record: AgentRunCatalogRecord = {
             ownerSessionId: "parent-session",
             runId: "reviewer-1",
             runInstanceId: "reviewer-instance-1",
@@ -1258,7 +1304,6 @@ describe("agent extension registration", () => {
             title: "Review changes",
             agent: "reviewer",
             agentSource: "builtin",
-            definitionFingerprint: "reviewer-definition",
             definitionSnapshot: definition,
             task: "Review the current changes",
             status: "removed",
@@ -1270,7 +1315,7 @@ describe("agent extension registration", () => {
             updatedAt: 2,
             usageSnapshot: ZERO_USAGE,
         };
-        const continuationOutcome = {
+        const continuationOutcome: AgentRunOutcome = {
             content: "The revised review found no additional issues.",
             details: {
                 runId: "reviewer-1",
@@ -1290,23 +1335,27 @@ describe("agent extension registration", () => {
         };
         const manager = {
             flushPersistence: vi.fn(async () => {}),
-            getPersistedRun: vi.fn(() => record),
+            getPersistedRun: vi.fn((): AgentRunCatalogRecord | undefined => record),
             reserveRunIdentity: vi.fn(() => ({
                 runId: "reviewer-1",
                 runInstanceId: "reviewer-instance-1",
             })),
-            startContinuation: vi.fn(async () => continuationOutcome),
+            startContinuation: vi.fn(async (): Promise<AgentRunOutcome> => continuationOutcome),
         };
-        const ctx = {
+        const ctx = stubContext({
             cwd: process.cwd(),
             isProjectTrusted: () => true,
-            sessionManager: { getSessionId: () => "parent-session" },
-            ui: { notify: () => {} },
-        };
+            sessionManager: stubSessionManager({ getSessionId: () => "parent-session" }),
+            ui: stubUi(),
+        });
         const progress = vi.fn();
         const onBackgroundUpdate = vi.fn();
-        const discover = vi.fn(() => ({ agents: [definition], diagnostics: [] }));
-        vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record] as any);
+        const events: AgentEventSink = { emit: () => {} };
+        const discover = vi.fn((): ReturnType<AgentLifecycle["discover"]> => ({
+            agents: [definition],
+            diagnostics: [],
+        }));
+        vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record]);
 
         const result = await executeParentWorkspaceAction(
             {
@@ -1315,11 +1364,11 @@ describe("agent extension registration", () => {
                 guidance: "Please re-check the API compatibility findings.",
             },
             {
-                ctx: ctx as any,
-                manager: manager as any,
+                ctx,
+                manager: manager as unknown as AgentRunManager,
                 signal: undefined,
                 progress,
-                events: {} as any,
+                events,
                 onBackgroundUpdate,
                 discover,
             },
@@ -1365,7 +1414,7 @@ describe("agent extension registration", () => {
             childSessionLeafId: "leaf-2",
             updatedAt: 6,
         };
-        const secondOutcome = {
+        const secondOutcome: AgentRunOutcome = {
             ...continuationOutcome,
             content: "The second review continuation completed.",
             details: {
@@ -1388,11 +1437,11 @@ describe("agent extension registration", () => {
                 guidance: "Follow up on the remaining concern.",
             },
             {
-                ctx: ctx as any,
-                manager: manager as any,
+                ctx,
+                manager: manager as unknown as AgentRunManager,
                 signal: undefined,
                 progress,
-                events: {} as any,
+                events,
                 onBackgroundUpdate,
                 discover,
             },
@@ -1419,8 +1468,8 @@ describe("agent extension registration", () => {
     it("does not fall back to catalog-only runs when branch persistence is active", async () => {
         const fixture = revisionActionFixture();
         configureRevisionAction(fixture);
-        fixture.manager.getPersistedRun.mockReturnValue(undefined as any);
-        (fixture.manager as any).hasPersistence = true;
+        fixture.manager.getPersistedRun.mockReturnValue(undefined);
+        fixture.manager.hasPersistence = true;
 
         await expect(executeRevisionAction(fixture)).rejects.toThrow(
             "Unknown or stale agent run ID: worker-1",
@@ -1477,18 +1526,8 @@ describe("agent extension registration", () => {
     });
 
     it("prepares and releases a no-change isolated foreground result", async () => {
-        const handlers: Record<string, Handler[]> = {};
-        let tool: any;
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool(definition: any) {
-                tool = definition;
-            },
-            registerCommand() {},
-        } as any;
-        const workspace = {
+        const stub = createPiStub();
+        const workspace = partialWorkspace({
             id: "workspace-foreground",
             cwd: process.cwd(),
             repositoryRoot: process.cwd(),
@@ -1499,7 +1538,7 @@ describe("agent extension registration", () => {
             status: "available",
             createdAt: 1,
             updatedAt: 1,
-        } as AgentWorkspace;
+        });
         const result: AgentWorkspaceResult = {
             id: "result-foreground",
             workspaceId: workspace.id,
@@ -1543,17 +1582,19 @@ describe("agent extension registration", () => {
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
         };
-        registerAgentTool(pi, async () => child);
-        const ctx = {
+        registerAgentTool(stub.pi, async () => child);
+        const handlers = handlerView(stub, "session_start", "session_shutdown");
+        const tool = agentTool(stub);
+        const ctx = stubContext({
             cwd: process.cwd(),
             isProjectTrusted: () => false,
             isIdle: () => false,
-            sessionManager: {
+            sessionManager: stubSessionManager({
                 getSessionId: () => "parent-session",
                 getSessionFile: () => undefined,
-            },
-            ui: { notify: () => {}, setWidget: () => {} },
-        };
+            }),
+            ui: stubUi({ setWidget: () => {} }),
+        });
         await handlers.session_start[0]({}, ctx);
 
         const completed = await tool.execute(
@@ -1590,28 +1631,15 @@ describe("agent extension registration", () => {
             leaseRunInstanceId: expect.any(String),
         });
         expect(completed.details.workspaceResult).toEqual(result);
-        await expect(completed.content[0].text).toMatchFileSnapshot(
+        await expect(agentToolText(completed)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.isolated-foreground.txt",
         );
         await handlers.session_shutdown[0]({}, ctx);
     });
 
     it("automatically delivers a background completion once the parent is idle", async () => {
-        const handlers: Record<string, Handler[]> = {};
-        let tool: any;
-        const sentMessages: Array<{ message: any; options: any }> = [];
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool(definition: any) {
-                tool = definition;
-            },
-            registerCommand() {},
-            sendMessage(message: any, options: any) {
-                sentMessages.push({ message, options });
-            },
-        } as any;
+        const stub = createPiStub();
+        const sentMessages = stub.sentMessages;
         let releasePrompt: (() => void) | undefined;
         const child: ChildAgentHandle = {
             prompt: () =>
@@ -1626,14 +1654,16 @@ describe("agent extension registration", () => {
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
         };
-        registerAgentTool(pi, async () => child);
+        registerAgentTool(stub.pi, async () => child);
+        const handlers = handlerView(stub, "session_shutdown");
+        const tool = agentTool(stub);
         let idle = false;
-        const ctx = {
+        const ctx = stubContext({
             cwd: process.cwd(),
             isProjectTrusted: () => false,
             isIdle: () => idle,
-            ui: { notify: () => {}, setWidget: () => {} },
-        };
+            ui: stubUi({ setWidget: () => {} }),
+        });
 
         await tool.execute(
             "call-1",
@@ -1676,26 +1706,23 @@ describe("agent extension registration", () => {
             ].join("\n"),
         );
 
-        const handlers: Record<string, Handler[]> = {};
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool() {},
-            registerCommand() {},
-        } as any;
-        registerAgentTool(pi, async () => {
+        const stub = createPiStub();
+        registerAgentTool(stub.pi, async () => {
             throw new Error("not used");
         });
+        const handlers = handlerView(stub, "before_agent_start", "session_shutdown");
         const notifications: string[] = [];
-        const ctx = {
+        const ctx = stubContext({
             cwd,
             isProjectTrusted: () => true,
-            ui: {
-                notify: (message: string) => notifications.push(message),
+            isIdle: () => false,
+            ui: stubUi({
+                notify: (message) => {
+                    notifications.push(message);
+                },
                 setWidget: () => {},
-            },
-        };
+            }),
+        });
 
         await handlers.before_agent_start[0]({ systemPrompt: "Parent" }, ctx);
         await handlers.before_agent_start[0]({ systemPrompt: "Parent" }, ctx);
@@ -1715,27 +1742,24 @@ describe("agent extension registration", () => {
 
     it("registers the temporarily always-enabled trace command", () => {
         const previous = process.env[AGENT_TRACE_ENV];
-        const commands: string[] = [];
-        const pi = {
-            on() {},
-            registerTool() {},
-            registerCommand(name: string) {
-                commands.push(name);
-            },
-        } as any;
+        const stub = createPiStub();
+        const commandNames = () => stub.commands.map((command) => command.name);
 
         try {
             delete process.env[AGENT_TRACE_ENV];
-            registerAgentTool(pi, async () => {
+            registerAgentTool(stub.pi, async () => {
                 throw new Error("not used");
             });
-            expect(commands).toEqual(["agent-trace", "agents"]);
+            expect(commandNames()).toEqual(["agent-trace", "agents"]);
+            expect(stub.requireCommand("agent-trace").description).toBe(
+                "Inspect bounded sanitized traces for delegated agents",
+            );
 
             process.env[AGENT_TRACE_ENV] = "0";
-            registerAgentTool(pi, async () => {
+            registerAgentTool(stub.pi, async () => {
                 throw new Error("not used");
             });
-            expect(commands).toEqual(["agent-trace", "agents", "agent-trace", "agents"]);
+            expect(commandNames()).toEqual(["agent-trace", "agents", "agent-trace", "agents"]);
         } finally {
             if (previous === undefined) delete process.env[AGENT_TRACE_ENV];
             else process.env[AGENT_TRACE_ENV] = previous;

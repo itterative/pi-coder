@@ -3,16 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import type { ExtensionUIContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+
 import { ALLOWED_FILE_ENTRY_TYPE } from "../../src/common/audit";
 import { getUserMemoryDirectory } from "../../src/common/constants";
 import registerScratchpadExtension, { getScratchpadPath } from "../../src/modules/scratchpad";
 import registerFileToolHook from "../../src/tools/file-permissions";
 import registerReadToolHook from "../../src/tools/read";
 import { createPermissionState } from "../../src/modules/sandbox/permission-state";
+import { createPiStub, invoke, stubContext, stubSessionManager, stubUi } from "../helpers/pi-stub";
 
-interface Handler {
-    (event: any, ctx: any): Promise<unknown> | unknown;
-}
+/** Only `bold` is used by the prompts these tests drive; the rest of the theme stays unmodelled. */
+const theme = { bold: (value: string) => value } as ExtensionUIContext["theme"];
 
 describe("file permission session entries", () => {
     let temporaryDirectories: string[] = [];
@@ -23,23 +25,18 @@ describe("file permission session entries", () => {
             const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-scratchpad-cwd-"));
             temporaryDirectories.push(cwd);
 
-            const handlers: Record<string, Handler[]> = {};
-            const pi = {
-                on(event: string, handler: Handler) {
-                    (handlers[event] ??= []).push(handler);
-                },
-                appendEntry() {},
-            } as any;
-            registerScratchpadExtension(pi);
-            registerFileToolHook(pi, operation);
+            const stub = createPiStub();
+            registerScratchpadExtension(stub.pi);
+            registerFileToolHook(stub.pi, operation);
 
-            const sessionManager = {};
-            const ctx = { cwd, hasUI: false, sessionManager };
-            await handlers.session_start[0]({}, ctx);
+            const sessionManager = stubSessionManager();
+            const ctx = stubContext({ cwd, hasUI: false, sessionManager });
+            await invoke(stub.requireHandler("session_start"), {}, ctx);
             const scratchpad = getScratchpadPath(sessionManager)!;
             temporaryDirectories.push(scratchpad);
 
-            const result = await handlers.tool_call[0](
+            const result = await invoke(
+                stub.requireHandler("tool_call"),
                 {
                     toolName: operation,
                     input: { path: path.join(scratchpad, ".env") },
@@ -65,19 +62,14 @@ describe("file permission session entries", () => {
         const outputPath = path.join(outputDirectory, "bash-output.log");
         fs.writeFileSync(outputPath, "full output");
 
-        const handlers: Record<string, Handler[]> = {};
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            appendEntry() {},
-        } as any;
+        const readStub = createPiStub();
         const additionalReadRoots = () => [outputPath];
-        registerFileToolHook(pi, "read", { additionalReadRoots });
-        const ctx = { cwd, hasUI: false, sessionManager: {} };
+        registerFileToolHook(readStub.pi, "read", { additionalReadRoots });
+        const ctx = stubContext({ cwd, hasUI: false, sessionManager: stubSessionManager() });
 
         await expect(
-            handlers.tool_call[0]!(
+            invoke(
+                readStub.requireHandler("tool_call"),
                 {
                     toolName: "read",
                     input: { path: outputPath },
@@ -86,16 +78,11 @@ describe("file permission session entries", () => {
             ),
         ).resolves.toEqual({ block: false });
 
-        const writeHandlers: Record<string, Handler[]> = {};
-        const writePi = {
-            on(event: string, handler: Handler) {
-                (writeHandlers[event] ??= []).push(handler);
-            },
-            appendEntry() {},
-        } as any;
-        registerFileToolHook(writePi, "write", { additionalReadRoots });
+        const writeStub = createPiStub();
+        registerFileToolHook(writeStub.pi, "write", { additionalReadRoots });
         await expect(
-            writeHandlers.tool_call[0]!(
+            invoke(
+                writeStub.requireHandler("tool_call"),
                 {
                     toolName: "write",
                     input: { path: outputPath },
@@ -109,19 +96,14 @@ describe("file permission session entries", () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-memory-cwd-"));
         temporaryDirectories.push(cwd);
 
-        const readHandlers: Record<string, Handler[]> = {};
-        const readPi = {
-            on(event: string, handler: Handler) {
-                (readHandlers[event] ??= []).push(handler);
-            },
-            appendEntry() {},
-        } as any;
-        registerReadToolHook(readPi);
+        const readStub = createPiStub();
+        registerReadToolHook(readStub.pi);
 
         const memoryPath = path.join(getUserMemoryDirectory(), "permission-test.md");
-        const ctx = { cwd, hasUI: false, sessionManager: {} };
+        const ctx = stubContext({ cwd, hasUI: false, sessionManager: stubSessionManager() });
         await expect(
-            readHandlers.tool_call[0]!(
+            invoke(
+                readStub.requireHandler("tool_call"),
                 {
                     toolName: "read",
                     input: { path: memoryPath },
@@ -130,17 +112,11 @@ describe("file permission session entries", () => {
             ),
         ).resolves.toEqual({ block: false });
 
-        const writeHandlers: Record<string, Handler[]> = {};
-        const writePi = {
-            on(event: string, handler: Handler) {
-                (writeHandlers[event] ??= []).push(handler);
-            },
-            appendEntry() {},
-        } as any;
-        registerFileToolHook(writePi, "write");
-
+        const writeStub = createPiStub();
+        registerFileToolHook(writeStub.pi, "write");
         await expect(
-            writeHandlers.tool_call[0]!(
+            invoke(
+                writeStub.requireHandler("tool_call"),
                 {
                     toolName: "write",
                     input: { path: memoryPath },
@@ -156,34 +132,32 @@ describe("file permission session entries", () => {
         temporaryDirectories.push(cwd, folder);
 
         const createRuntime = () => {
-            const handlers: Record<string, Handler[]> = {};
-            const pi = {
-                on(event: string, handler: Handler) {
-                    (handlers[event] ??= []).push(handler);
-                },
-                appendEntry() {},
-            } as any;
-            registerFileToolHook(pi, "read");
-            return handlers;
+            const stub = createPiStub();
+            registerFileToolHook(stub.pi, "read");
+            return stub;
         };
         const first = createRuntime();
         const second = createRuntime();
-        const context = (entries: unknown[]) => ({
-            cwd,
-            hasUI: false,
-            sessionManager: { getBranch: () => entries },
-        });
+        const context = (entries: SessionEntry[]) =>
+            stubContext({
+                cwd,
+                hasUI: false,
+                sessionManager: stubSessionManager({ getBranch: () => entries }),
+            });
+        // Only `type`, `customType`, and `data` are read (src/tools/file-permissions.ts:71); the entry
+        // base fields are irrelevant to this path, so the literal stays as small as it was before.
         const allowedEntry = {
             type: "custom",
             customType: ALLOWED_FILE_ENTRY_TYPE,
             data: { operation: "read", folder },
-        };
+        } as SessionEntry;
         const firstCtx = context([allowedEntry]);
         const secondCtx = context([]);
 
-        await first.session_start[0]({}, firstCtx);
-        await second.session_start[0]({}, secondCtx);
-        const result = await first.tool_call[0](
+        await invoke(first.requireHandler("session_start"), {}, firstCtx);
+        await invoke(second.requireHandler("session_start"), {}, secondCtx);
+        const result = await invoke(
+            first.requireHandler("tool_call"),
             {
                 toolName: "read",
                 input: { path: path.join(folder, "notes.txt") },
@@ -199,31 +173,26 @@ describe("file permission session entries", () => {
         const folder = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-approved-"));
         temporaryDirectories.push(cwd, folder);
 
-        const handlers: Record<string, Handler[]> = {};
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            appendEntry() {},
-        } as any;
-        registerFileToolHook(pi, "read");
+        const stub = createPiStub();
+        registerFileToolHook(stub.pi, "read");
 
-        const ctx = {
+        const ctx = stubContext({
             cwd,
             hasUI: false,
-            sessionManager: {
+            sessionManager: stubSessionManager({
                 getBranch: () => [
                     {
                         type: "custom",
                         customType: ALLOWED_FILE_ENTRY_TYPE,
                         data: { operation: "read", folder },
-                    },
+                    } as SessionEntry,
                 ],
-            },
-        };
+            }),
+        });
 
-        await handlers.session_start[0]({}, ctx);
-        const result = await handlers.tool_call[0](
+        await invoke(stub.requireHandler("session_start"), {}, ctx);
+        const result = await invoke(
+            stub.requireHandler("tool_call"),
             {
                 toolName: "read",
                 input: { path: path.join(folder, "notes.txt") },
@@ -238,21 +207,16 @@ describe("file permission session entries", () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-search-"));
         temporaryDirectories.push(cwd);
 
-        const handlers: Record<string, Handler[]> = {};
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            appendEntry() {},
-        } as any;
-        registerFileToolHook(pi, "read");
+        const stub = createPiStub();
+        registerFileToolHook(stub.pi, "read");
 
-        const result = await handlers.tool_call[0](
+        const result = await invoke(
+            stub.requireHandler("tool_call"),
             {
                 toolName: "grep",
                 input: { pattern: "needle" },
             },
-            { cwd, hasUI: false },
+            stubContext({ cwd, hasUI: false }),
         );
 
         expect(result).toEqual({ block: false });
@@ -263,14 +227,14 @@ describe("file permission session entries", () => {
         const folder = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-approved-"));
         temporaryDirectories.push(cwd, folder);
 
-        const handlers: Record<string, Handler[]> = {};
+        const stub = createPiStub();
         let prompts = 0;
         const state = createPermissionState();
-        const ctx = {
+        const ctx = stubContext({
             cwd,
             hasUI: true,
-            ui: {
-                theme: { bold: (value: string) => value },
+            ui: stubUi({
+                theme,
                 setWorkingVisible() {},
                 notify() {},
                 custom: async () => {
@@ -280,15 +244,9 @@ describe("file permission session entries", () => {
                         displayText: "Yes, and always allow",
                     };
                 },
-            },
-        } as any;
-        const pi = {
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            appendEntry() {},
-        } as any;
-        registerFileToolHook(pi, "read", {
+            }),
+        });
+        registerFileToolHook(stub.pi, "read", {
             state,
             promptContext: ctx,
             restoreSession: false,
@@ -296,8 +254,12 @@ describe("file permission session entries", () => {
         });
 
         const event = { toolName: "read", input: { path: path.join(folder, "notes.txt") } };
-        await expect(handlers.tool_call[0](event, ctx)).resolves.toEqual({ block: false });
-        await expect(handlers.tool_call[0](event, ctx)).resolves.toEqual({ block: false });
+        await expect(invoke(stub.requireHandler("tool_call"), event, ctx)).resolves.toEqual({
+            block: false,
+        });
+        await expect(invoke(stub.requireHandler("tool_call"), event, ctx)).resolves.toEqual({
+            block: false,
+        });
         expect(prompts).toBe(1);
     });
 
@@ -308,30 +270,25 @@ describe("file permission session entries", () => {
             const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-outside-"));
             temporaryDirectories.push(cwd, outside);
 
-            const handlers: Record<string, Handler[]> = {};
-            const pi = {
-                on(event: string, handler: Handler) {
-                    (handlers[event] ??= []).push(handler);
-                },
-                appendEntry() {},
-            } as any;
-            registerFileToolHook(pi, operation);
+            const stub = createPiStub();
+            registerFileToolHook(stub.pi, operation);
             const refusalMessage = "do not access that folder";
-            const ctx = {
+            const ctx = stubContext({
                 cwd,
                 hasUI: true,
-                ui: {
-                    theme: { bold: (value: string) => value },
+                ui: stubUi({
+                    theme,
                     setWorkingVisible() {},
                     custom: async () => ({
                         value: { kind: "no" },
                         message: refusalMessage,
                         displayText: "No, do not access that folder",
                     }),
-                },
-            };
+                }),
+            });
 
-            const result = await handlers.tool_call[0](
+            const result = await invoke(
+                stub.requireHandler("tool_call"),
                 {
                     toolName: operation,
                     input: { path: path.join(outside, "notes.txt") },
@@ -353,28 +310,23 @@ describe("file permission session entries", () => {
             const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-outside-"));
             temporaryDirectories.push(cwd, outside);
 
-            const handlers: Record<string, Handler[]> = {};
-            const pi = {
-                on(event: string, handler: Handler) {
-                    (handlers[event] ??= []).push(handler);
-                },
-                appendEntry() {},
-            } as any;
-            registerFileToolHook(pi, operation);
-            const ctx = {
+            const stub = createPiStub();
+            registerFileToolHook(stub.pi, operation);
+            const ctx = stubContext({
                 cwd,
                 hasUI: true,
-                ui: {
-                    theme: { bold: (value: string) => value },
+                ui: stubUi({
+                    theme,
                     setWorkingVisible() {},
                     custom: async () => ({
                         value: { kind: "no" },
                         displayText: "No",
                     }),
-                },
-            };
+                }),
+            });
 
-            const result = await handlers.tool_call[0](
+            const result = await invoke(
+                stub.requireHandler("tool_call"),
                 {
                     toolName: operation,
                     input: { path: path.join(outside, "notes.txt") },

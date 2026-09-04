@@ -2,13 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import type { ChildAgentFactoryContext } from "../../src/tools/agent/contracts/runs";
+import type { ChildAgentFactoryContext, ChildProgress } from "../../src/tools/agent/contracts/runs";
 import type { AgentCapability, AgentDefinition } from "../../src/tools/agent/definitions/types";
 import { resolveChildGrant, type ChildGrant } from "../../src/tools/agent/child/grant";
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
-import type { ChildProgress, ChildProgressTracker } from "../../src/tools/agent/child/progress";
+import type { ChildProgressTracker } from "../../src/tools/agent/child/progress";
+import { createPiStub, type StubHandler } from "../helpers/pi-stub";
 
 export interface ChildRunMode {
     readonly isolated?: boolean;
@@ -24,9 +25,9 @@ export interface ChildRunMode {
 interface ChildRunInstallation {
     /** Ordered registration log: `on:<event>` and `tool:<name>`. */
     readonly calls: string[];
-    readonly toolCall: Array<(event: unknown, ctx: unknown) => unknown>;
-    readonly toolResult: Array<(event: unknown, ctx: unknown) => unknown>;
-    readonly sessionStart: Array<(event: unknown, ctx: unknown) => unknown>;
+    readonly toolCall: StubHandler[];
+    readonly toolResult: StubHandler[];
+    readonly sessionStart: StubHandler[];
     readonly tools: string[];
 }
 
@@ -129,32 +130,15 @@ export function buildChildRun(
         frames,
         traces,
         install() {
-            const calls: string[] = [];
-            const tools: string[] = [];
-            const toolCall: ChildRunInstallation["toolCall"] = [];
-            const toolResult: ChildRunInstallation["toolResult"] = [];
-            const sessionStart: ChildRunInstallation["sessionStart"] = [];
-            const sink = {
-                on(event: string, handler: unknown) {
-                    calls.push(`on:${event}`);
-                    if (event === "tool_call") {
-                        toolCall.push(handler as (event: unknown, ctx: unknown) => unknown);
-                    }
-                    if (event === "tool_result") {
-                        toolResult.push(handler as (event: unknown, ctx: unknown) => unknown);
-                    }
-                    if (event === "session_start") {
-                        sessionStart.push(handler as (event: unknown, ctx: unknown) => unknown);
-                    }
-                },
-                registerTool(tool: { name: string }) {
-                    calls.push(`tool:${tool.name}`);
-                    tools.push(tool.name);
-                },
-            } as unknown as ExtensionAPI;
-
-            registerChildExtension(tracker, parentContext, cwd, options)(sink);
-            return { calls, toolCall, toolResult, sessionStart, tools };
+            const stub = createPiStub();
+            registerChildExtension(tracker, parentContext, cwd, options)(stub.pi);
+            return {
+                calls: stub.order,
+                toolCall: stub.handlersFor("tool_call"),
+                toolResult: stub.handlersFor("tool_result"),
+                sessionStart: stub.handlersFor("session_start"),
+                tools: stub.tools.map((tool) => tool.name),
+            };
         },
     };
 }

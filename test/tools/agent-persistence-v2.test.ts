@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stubContext, stubUi } from "../helpers/pi-stub";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
@@ -80,11 +81,11 @@ describe("delegated-agent V2 persistence", () => {
         );
         fs.mkdirSync(parentDir, { recursive: true });
         const parent = SessionManager.create(process.cwd(), parentDir);
-        const context = {
+        const context = stubContext({
             cwd: process.cwd(),
-            ui: { notify: vi.fn() },
+            ui: stubUi({ notify: vi.fn() }),
             sessionManager: parent,
-        } as any;
+        });
         const loaded = await loadAgentRunPersistence(context, sessionsDir);
         expect(loaded).toBeDefined();
 
@@ -177,11 +178,11 @@ describe("delegated-agent V2 persistence", () => {
             timestamp: 1,
         });
         const commonLeaf = parent.getLeafId();
-        const context = {
+        const context = stubContext({
             cwd: process.cwd(),
-            ui: { notify: vi.fn() },
+            ui: stubUi({ notify: vi.fn() }),
             sessionManager: parent,
-        } as any;
+        });
         const loaded = await loadAgentRunPersistence(context, sessionsDir);
         expect(loaded).toBeDefined();
 
@@ -451,11 +452,11 @@ describe("delegated-agent V2 persistence", () => {
         const childFile = child.getSessionFile();
         expect(childFile).toBeDefined();
 
-        const context = {
+        const context = stubContext({
             cwd: process.cwd(),
-            ui: { notify: vi.fn() },
+            ui: stubUi({ notify: vi.fn() }),
             sessionManager: parent,
-        } as any;
+        });
         const loaded = await loadAgentRunPersistence(context, sessionsDir);
         expect(loaded).toBeDefined();
         const ownerSessionId = parent.getSessionId();
@@ -1121,11 +1122,11 @@ describe("delegated-agent V2 persistence", () => {
             stopReason: "stop",
             timestamp: 1,
         });
-        const context = {
+        const context = stubContext({
             cwd: process.cwd(),
-            ui: { notify: vi.fn() },
+            ui: stubUi({ notify: vi.fn() }),
             sessionManager: parent,
-        } as any;
+        });
         const loaded = await loadAgentRunPersistence(context, sessionsDir);
         expect(loaded).toBeDefined();
         parent.appendCustomEntry(AGENT_RUN_SNAPSHOT_MARKER, {

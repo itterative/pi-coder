@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stubContext, stubSessionManager, stubUi } from "../helpers/pi-stub";
+import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import {
@@ -69,17 +71,29 @@ async function seedState(
     }
 }
 
-function context(entries: any[], sessionFile: string | undefined, ownerSessionId = "parent-1") {
-    return {
+/** These literals stand in for branch entries; the double only has to carry their ids. */
+type StubEntry = Pick<SessionEntry, "id">;
+
+function context(
+    entries: StubEntry[],
+    sessionFile: string | undefined,
+    ownerSessionId = "parent-1",
+): ExtensionContext {
+    return stubContext({
         cwd: process.cwd(),
-        ui: { notify: vi.fn() },
-        sessionManager: {
+        ui: stubUi({ notify: vi.fn() }),
+        sessionManager: stubSessionManager({
             getSessionFile: () => sessionFile,
             getSessionId: () => ownerSessionId,
             getLeafId: () => entries.at(-1)?.id ?? null,
-            getBranch: () => entries,
-        },
-    } as any;
+            getBranch: () => entries as SessionEntry[],
+            // Intentional absence, spelled explicitly: `loadAgentRunPersistence` feature-detects
+            // `getEntries` to decide whether the session has an entry index, and this suite covers the
+            // branch-only path. Omitting the key instead would make the double report a callable
+            // member and silently move these tests onto the entry-index path.
+            getEntries: undefined,
+        }),
+    });
 }
 
 describe("durable agent run persistence", () => {
