@@ -1,4 +1,10 @@
-import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import type { InlineExtension, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+
+/**
+ * pi accepts either a bare factory or a named record; every capability here is a named record, so
+ * publishers carry the `name`/`hidden`/`factory` members instead of a union that hides them.
+ */
+export type NamedInlineExtension = Exclude<InlineExtension, ExtensionFactory>;
 
 import { hasAgentCapability } from "../../definitions/types";
 import type { AgentCapability, AgentDefinition } from "../../definitions/types";
@@ -39,7 +45,7 @@ export interface ChildCapabilityUnit {
     /** Additional read-only roots this capability publishes. */
     readonly readRoots?: (definition: AgentDefinition) => readonly string[];
     /** The extension this capability registers, or undefined when it needs none. */
-    readonly extension?: (runtime: ChildExtensionRuntime) => InlineExtension;
+    readonly extension?: (runtime: ChildExtensionRuntime) => NamedInlineExtension;
 }
 
 /**

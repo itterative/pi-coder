@@ -242,14 +242,14 @@ describe("parseBashAst", () => {
         });
 
         it("tracks incomplete escaped backticks", () => {
-            const command = commandFor("echo `printf \\\`");
+            const command = commandFor("echo `printf \\`");
             const substitution = command.subshells[0];
 
             expect(substitution).toMatchObject({ content: "printf \\`", complete: false });
         });
 
         it("keeps an outer substitution incomplete around an escaped nested backtick", () => {
-            const command = commandFor("echo $(echo `printf \\\`)");
+            const command = commandFor("echo $(echo `printf \\`)");
             const substitution = command.subshells[0];
 
             expect(substitution?.complete).toBe(false);

@@ -544,7 +544,9 @@ describe("TODO runtime extension", () => {
         fs.writeFileSync(todoPath, validDocument);
         await handler("tool_result")({ toolName: "write" }, ctx);
 
-        const widgetRegistration = registrations.findLast((entry) => entry.content !== undefined);
+        const widgetRegistration = [...registrations]
+            .reverse()
+            .find((entry) => entry.content !== undefined);
         expect(widgetRegistration?.key).toBe(STATUS_WIDGET_ID);
         const widget = (widgetRegistration?.content as (tui: unknown) => PiCoderStatusWidget)({
             requestRender() {},

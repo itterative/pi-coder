@@ -16,7 +16,7 @@ const CONFINEMENT = { enabled: true } as const;
 
 function singleCommand(command: string): BashCommand {
     const parsed = parseBashAst(command);
-    return new BashCommand(parsed.statements[0].commands[0]);
+    return parsed.statements[0].commands[0];
 }
 
 function permission(command: string, permissions: Record<string, Permission> = {}): Permission {
@@ -206,7 +206,7 @@ describe("timeout resolution through the sandbox", () => {
         // A whole-line pattern cannot cover a single segment of a chain, so this exercises the
         // literal segment view alongside the wrapped one. Matching only the wrapped command would
         // let `&&` bypass a rule that names the wrapper.
-        const permissions = {
+        const permissions: Record<string, Permission> = {
             "npm run test:run": "allow:sandbox",
             "timeout *": "deny",
         };

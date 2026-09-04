@@ -11,6 +11,7 @@ import {
     type SelectWithMessageResult,
 } from "../src/tui/select-with-message";
 import { interact, KEY, mockTheme, snapshotText } from "./helpers";
+import { stubContext, stubUi } from "./helpers/pi-stub";
 
 function setup<T>(options: SelectWithMessageOptions<T>, width = 50) {
     let result: SelectWithMessageResult<T> | undefined | "pending" = "pending";
@@ -148,23 +149,21 @@ describe("selectWithMessage", () => {
     it("closes an active dialog when its operation is aborted", async () => {
         const controller = new AbortController();
         const workingVisibility: boolean[] = [];
-        const ctx = {
+        const ctx = stubContext({
             hasUI: true,
-            ui: {
+            ui: stubUi({
                 setWorkingVisible(visible: boolean) {
                     workingVisibility.push(visible);
                 },
-                custom(factory: any) {
-                    return new Promise<SelectWithMessageResult<string> | undefined>(
-                        (resolve, reject) => {
-                            void Promise.resolve(
-                                factory(undefined, mockTheme, undefined, resolve),
-                            ).then(() => controller.abort(), reject);
-                        },
-                    );
+                custom(factory) {
+                    return new Promise<unknown>((resolve, reject) => {
+                        void Promise.resolve(
+                            factory(undefined, mockTheme, undefined, resolve),
+                        ).then(() => controller.abort(), reject);
+                    });
                 },
-            },
-        } as any;
+            }),
+        });
 
         const result = await selectWithMessage(baseOptions, ctx, controller.signal);
 

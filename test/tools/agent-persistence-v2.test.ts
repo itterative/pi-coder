@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stubContext, stubUi } from "../helpers/pi-stub";
+import { stubContext, stubSessionManager, stubUi } from "../helpers/pi-stub";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
@@ -23,7 +23,10 @@ import {
     type PersistedAgentRun,
 } from "../../src/tools/agent/runs/manager";
 import { AGENT_RUN_SNAPSHOT_MARKER } from "../../src/tools/agent/storage/run-markers";
-import type { AgentRefusedWrite } from "../../src/tools/agent/contracts/runs";
+import type {
+    AgentRefusedWrite,
+    ChildAgentFactoryContext,
+} from "../../src/tools/agent/contracts/runs";
 import { openAgentMetadataDatabase } from "../../src/tools/agent/storage/metadata";
 import { upsertAgentRunStateInDatabase } from "../../src/tools/agent/storage/run-state";
 import { upsertAgentRunCatalogRecord } from "../../src/tools/agent/storage/run-catalog";
@@ -92,7 +95,10 @@ describe("delegated-agent V2 persistence", () => {
         const ownerSessionId = parent.getSessionId();
         expect(await loaded!.persistence.save(record("instance-1", ownerSessionId))).toBe(true);
         const firstMarker = parent.getLeafId();
-        expect(parent.getEntry(firstMarker!)?.customType).toBe(AGENT_RUN_SNAPSHOT_MARKER);
+        const markerEntry = firstMarker ? parent.getEntry(firstMarker) : undefined;
+        const markerCustomType =
+            markerEntry?.type === "custom" ? markerEntry.customType : undefined;
+        expect(markerCustomType).toBe(AGENT_RUN_SNAPSHOT_MARKER);
         expect(
             await loaded!.persistence.save({
                 ...record("instance-1", ownerSessionId),
@@ -130,7 +136,7 @@ describe("delegated-agent V2 persistence", () => {
         manager.setPersistence({
             ownerSessionId: "parent-1",
             childSessionDir: "/tmp/agent-child-sessions",
-            save: () => true,
+            save: async () => true,
             deleteChildSession: () => {},
         });
         const restoration = await manager.restore(
@@ -261,7 +267,7 @@ describe("delegated-agent V2 persistence", () => {
         expect(childFile).toBeDefined();
 
         let repairCalls = 0;
-        let restoredContext: any;
+        let restoredContext: ChildAgentFactoryContext | undefined;
         const restoredChild: ChildAgentHandle = {
             sessionFile: childFile,
             prompt: async () => {},
@@ -272,7 +278,7 @@ describe("delegated-agent V2 persistence", () => {
             getFinalOutput: () => "",
             getError: () => undefined,
             getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
-            getSessionLeafId: () => committedLeaf,
+            getSessionLeafId: () => committedLeaf ?? null,
             repairInterrupted: () => {
                 repairCalls++;
                 return 1;
@@ -286,7 +292,7 @@ describe("delegated-agent V2 persistence", () => {
             ownerSessionId: "parent-1",
             usesSnapshotMarkers: true,
             childSessionDir: directory,
-            save: () => true,
+            save: async () => true,
             deleteChildSession: () => {},
         });
         const restoration = await manager.restore(
@@ -315,7 +321,7 @@ describe("delegated-agent V2 persistence", () => {
     });
 
     it("restores starting and running checkpoints as interrupted without replaying them", async () => {
-        const restoredContexts: any[] = [];
+        const restoredContexts: ChildAgentFactoryContext[] = [];
         const repairCalls = new Map<string, number>();
         const manager = new AgentRunManager(async (context) => {
             restoredContexts.push(context);
@@ -330,7 +336,7 @@ describe("delegated-agent V2 persistence", () => {
                 getFinalOutput: () => "",
                 getError: () => undefined,
                 getUsage: () => ({ ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }),
-                getSessionLeafId: () => context.childSessionLeafId,
+                getSessionLeafId: () => context.childSessionLeafId ?? null,
                 repairInterrupted: () => {
                     repairCalls.set(runId, (repairCalls.get(runId) ?? 0) + 1);
                     return 1;
@@ -341,7 +347,7 @@ describe("delegated-agent V2 persistence", () => {
             ownerSessionId: "parent-1",
             usesSnapshotMarkers: true,
             childSessionDir: "/tmp/agent-child-sessions",
-            save: () => true,
+            save: async () => true,
             deleteChildSession: () => {},
         });
 
@@ -624,6 +630,9 @@ describe("delegated-agent V2 persistence", () => {
         releaseBlocker();
         await expect(acquisition).resolves.toBeDefined();
         await closing;
+        // The blocking transaction has settled by here, so awaiting it turns a rejected commit into a
+        // test failure instead of an unhandled rejection nobody reads.
+        await blocker;
 
         const reopened = await openAgentMetadataDatabase(workspacesDir);
         try {
@@ -1084,17 +1093,18 @@ describe("delegated-agent V2 persistence", () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-no-marker-"));
         tempDirs.push(stateDir);
         const sessionsDir = path.join(stateDir, "agent-sessions");
-        const context = {
+        const context = stubContext({
             cwd: process.cwd(),
-            ui: { notify: vi.fn() },
-            sessionManager: {
+            ui: stubUi({ notify: vi.fn() }),
+            // No appendCustomEntry: this case pins the refusal path by leaving it absent.
+            sessionManager: stubSessionManager({
                 getSessionFile: () => "/parent.jsonl",
                 getSessionId: () => "parent-1",
                 getEntries: () => [],
                 getBranch: () => [],
                 getLeafId: () => null,
-            },
-        } as any;
+            }),
+        });
         const loaded = await loadAgentRunPersistence(context, sessionsDir);
         expect(await loaded?.persistence.save(record("instance-no-marker", "parent-1"))).toBe(
             false,

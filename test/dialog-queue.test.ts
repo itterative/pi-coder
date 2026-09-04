@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { EventBus } from "@earendil-works/pi-coding-agent";
+
 import { TUI_DIALOG_EVENT, withDialogQueue } from "../src/tui/dialog-queue";
 
 function deferred() {
@@ -35,7 +37,7 @@ describe("shared dialog queue", () => {
 
     it("emits dialog lifecycle events", async () => {
         const states: boolean[] = [];
-        const events = {
+        const events: EventBus = {
             emit(channel: string, data: unknown) {
                 if (channel === TUI_DIALOG_EVENT && typeof data === "object" && data !== null) {
                     states.push((data as { active: boolean }).active);
@@ -44,7 +46,7 @@ describe("shared dialog queue", () => {
             on() {
                 return () => {};
             },
-        } as any;
+        };
 
         await expect(withDialogQueue(undefined, async () => "done", events)).resolves.toBe("done");
         expect(states).toEqual([true, false]);
@@ -53,7 +55,7 @@ describe("shared dialog queue", () => {
     it("keeps the dialog active event across queued dialogs on one bus", async () => {
         const firstDone = deferred();
         const states: boolean[] = [];
-        const events = {
+        const events: EventBus = {
             emit(channel: string, data: unknown) {
                 if (channel === TUI_DIALOG_EVENT && typeof data === "object" && data !== null) {
                     states.push((data as { active: boolean }).active);
@@ -62,7 +64,7 @@ describe("shared dialog queue", () => {
             on() {
                 return () => {};
             },
-        } as any;
+        };
 
         const first = withDialogQueue(
             undefined,

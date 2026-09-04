@@ -4,6 +4,7 @@ import {
     type AgentToolResult,
     type EventBus,
     type ExtensionAPI,
+    type ExtensionCommandContext,
     type ExtensionContext,
     type ExtensionUIContext,
     type ToolDefinition,
@@ -36,12 +37,28 @@ import {
  * The factory pi hands to `ui.custom`, widened to what a test can actually call it with: these suites
  * drive a real dialog component but have no TUI, no keybindings, and a resolve callback as `done`.
  */
-type StubComponentFactory = (
+/** What a dialog factory receives: a TUI environment plus the resolve callback. */
+export type StubComponentFactory = (
     tui: unknown,
     theme: unknown,
     keybindings: unknown,
     done: (result: unknown) => void,
 ) => unknown;
+
+/**
+ * The second argument of `ui.custom` (`overlay`, `overlayOptions`, `onHandle`). Derived from pi so a
+ * re-shape surfaces here, and distinct from `ExtensionUIDialogOptions`, which carries only `signal`
+ * and `timeout`.
+ */
+export type StubDialogOptions = NonNullable<Parameters<ExtensionUIContext["custom"]>[1]>;
+
+/**
+ * pi's render callbacks require a `ToolRenderContext` that pi does not export, and this project's
+ * tool renderers ignore it entirely (`src/tools/agent/presentation/tool.ts` declares args and theme
+ * only). Tests pass no context rather than fabricating state a renderer might silently read, so if a
+ * renderer ever starts using it the failure is an immediate undefined access, not a made-up value.
+ */
+export const noRenderContext = undefined as never;
 
 /** A recorded handler called through {@link handlerView}: the context is optional, as in the suites. */
 export type RecordedHandler = (event: unknown, ctx?: unknown) => Promise<unknown>;
@@ -203,7 +220,7 @@ export function createPiStub(options: { eventBus?: EventBus | null } = {}): PiSt
  * one place the double is deliberately looser than the real type.
  */
 type UiStubOverrides = Partial<Omit<ExtensionUIContext, "custom">> & {
-    custom?: (factory: StubComponentFactory) => unknown;
+    custom?: (factory: StubComponentFactory, options: StubDialogOptions) => unknown;
 };
 
 export function stubUi(overrides: UiStubOverrides = {}): ExtensionUIContext {
@@ -286,6 +303,31 @@ export function stubSessionContext(
     overrides: Partial<ExtensionContext> = {},
 ): SessionBackedContext {
     return { ...stubContext({ sessionManager, ...overrides }), sessionManager };
+}
+
+/**
+ * The context pi hands a slash-command handler. `ExtensionCommandContext` adds seven session-action
+ * members that a command-handler suite never exercises, and inventing return values for them would
+ * let a test pass on a fabricated answer, so each one fails loudly instead.
+ */
+export function stubCommandContext(
+    overrides: Partial<ExtensionCommandContext> = {},
+): ExtensionCommandContext {
+    const notModelled = (member: string): never => {
+        throw new TypeError(`stubCommandContext does not model ${member}()`);
+    };
+
+    return {
+        ...stubContext(overrides),
+        getSystemPromptOptions: () => notModelled("getSystemPromptOptions"),
+        waitForIdle: async () => notModelled("waitForIdle"),
+        newSession: (_options) => notModelled("newSession"),
+        fork: (_entryId, _options) => notModelled("fork"),
+        navigateTree: (_targetId, _options) => notModelled("navigateTree"),
+        switchSession: (_sessionPath, _options) => notModelled("switchSession"),
+        reload: async () => notModelled("reload"),
+        ...overrides,
+    };
 }
 
 /** What these suites drive a dialog component with: focus, then a raw key sequence. */

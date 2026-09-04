@@ -2,8 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import registerTodoListExtension from "../../../../modules/todolist";
 import type { TodoProgress } from "../../../../modules/todolist/progress";
 import { reportProgress } from "../progress";
-import type { ChildExtensionRuntime } from "./index";
-import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import type { ChildExtensionRuntime, NamedInlineExtension } from "./index";
 
 /**
  * The scratchpad-backed TODO list.
@@ -14,7 +13,7 @@ import type { InlineExtension } from "@earendil-works/pi-coding-agent";
  */
 export const TODOLIST_UNIT = {
     id: "todolist",
-    extension: (runtime: ChildExtensionRuntime): InlineExtension => ({
+    extension: (runtime: ChildExtensionRuntime): NamedInlineExtension => ({
         name: "pi-coder-todolist-child",
         hidden: true,
         factory: (pi: ExtensionAPI) =>

@@ -1,7 +1,6 @@
 import registerMemoryExtension from "../../../../modules/memory";
 import { getUserMemoryDirectory } from "../../../../common/constants";
-import type { ChildExtensionRuntime } from "./index";
-import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import type { ChildExtensionRuntime, NamedInlineExtension } from "./index";
 
 /**
  * Indexed project and user memories.
@@ -14,7 +13,7 @@ import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 export const MEMORIES_UNIT = {
     id: "memories",
     readRoots: () => [getUserMemoryDirectory()],
-    extension: (_runtime: ChildExtensionRuntime): InlineExtension => ({
+    extension: (_runtime: ChildExtensionRuntime): NamedInlineExtension => ({
         name: "pi-coder-memory-child",
         hidden: true,
         factory: registerMemoryExtension,

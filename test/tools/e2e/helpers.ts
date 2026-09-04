@@ -11,11 +11,13 @@ import {
 import { upsertAgentRunCatalogRecordInDatabase } from "../../../src/tools/agent/storage/run-catalog";
 import { loadAgentRunPersistence } from "../../../src/tools/agent/runs/persistence";
 import type { ChildAgentHandle, ParentQuestion } from "../../../src/tools/agent/contracts/runs";
-import type { AgentRunCatalogRecord } from "../../../src/tools/agent/contracts/workspaces";
-import {
-    claimAgentWorkspace,
-    type AgentWorkspace,
-} from "../../../src/tools/agent/workspaces/store";
+import type {
+    AgentRunCatalogRecord,
+    AgentWorkspace,
+} from "../../../src/tools/agent/contracts/workspaces";
+import type { AgentStartContext } from "../../../src/tools/agent/runs/run-state";
+import { claimAgentWorkspace } from "../../../src/tools/agent/workspaces/store";
+import { stubSessionContext } from "../../helpers/pi-stub";
 import {
     createAgentWorkspace,
     updateAgentWorkspace,
@@ -74,12 +76,18 @@ export async function withE2EMetadataDatabase<T>(
     }
 }
 
-export function createE2EContext(paths: E2EPaths, overrides: Record<string, unknown> = {}): any {
+/**
+ * The start context production hands `AgentRunManager.start`. Deliberately has no `ui`: the child
+ * reaches the parent UI through `parentContext`, so a `ui` key here would be inert.
+ */
+export function createE2EContext(
+    paths: E2EPaths,
+    overrides: Partial<AgentStartContext> = {},
+): AgentStartContext {
     return {
         cwd: paths.repository,
         parentCwd: paths.repository,
         parentContext: {},
-        ui: { notify: () => {} },
         ...overrides,
     };
 }
@@ -135,7 +143,7 @@ export function createScriptedChild({
             await onPrompt?.(prompt);
             if (session) {
                 session.appendMessage({ role: "user", content: prompt, timestamp: Date.now() });
-                session.appendMessage({
+                const assistant: Parameters<SessionManager["appendMessage"]>[0] = {
                     role: "assistant",
                     content: [{ type: "text", text: currentOutput }],
                     api: "test",
@@ -144,7 +152,8 @@ export function createScriptedChild({
                     usage: zeroUsage(),
                     stopReason: "stop",
                     timestamp: Date.now(),
-                } as any);
+                };
+                session.appendMessage(assistant);
             }
         },
         abort: async () => {
@@ -162,12 +171,18 @@ export function createScriptedChild({
         getFinalOutput: () => currentOutput,
         getError: () => error,
         getUsage: () => zeroUsage(),
-        getSessionLeafId: () => session?.getLeafId(),
+        // No provider at all when the scripted child has no session: production distinguishes "no
+        // handle" (an optional call yielding undefined) from "handle with no leaf" (null).
+        getSessionLeafId: session ? () => session.getLeafId() : undefined,
     };
 }
 
+/** Load durable run state through a real `ExtensionContext`, the way the extension does. */
 export async function loadE2EPersistence(paths: E2EPaths, sessionManager: SessionManager) {
-    return loadAgentRunPersistence(createE2EContext(paths, { sessionManager }), paths.sessions);
+    return loadAgentRunPersistence(
+        stubSessionContext(sessionManager, { cwd: paths.repository }),
+        paths.sessions,
+    );
 }
 
 export async function createClaimedTaskWorkspace(

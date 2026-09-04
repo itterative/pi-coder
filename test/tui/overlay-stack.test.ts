@@ -8,6 +8,16 @@ import { workspaceBrowserItem } from "../../src/tools/agent/presentation/browser
 import { withOverlayStack } from "../../src/tui/overlay-stack";
 import { mockTheme, renderText } from "../helpers";
 
+/**
+ * `handleTerminalInput` is private on pi's main screen, and driving it with raw terminal bytes is
+ * exactly what these overlay tests do, so the access is one named double cast instead of two inline ones.
+ */
+type TerminalInputDriver = TUI & { handleTerminalInput(data: string): void };
+
+function terminalInput(tui: TuiMainScreen): TerminalInputDriver {
+    return tui as unknown as TerminalInputDriver;
+}
+
 type InputListener = (data: string) => unknown;
 
 function fakeHandle(): OverlayHandle & { focusCount: number } {
@@ -113,13 +123,13 @@ describe("withOverlayStack", () => {
             });
 
             tui.setFocus(permissionDialog);
-            (tui as TUI & { handleTerminalInput(data: string): void }).handleTerminalInput("d");
+            terminalInput(tui).handleTerminalInput("d");
             expect(tui.getFocusedComponent()).toBe(detail);
             await expect(renderText(detail, 100)).toMatchFileSnapshot(
                 "__snapshots__/overlay-stack.workspace-discard-confirmation.txt",
             );
 
-            (tui as TUI & { handleTerminalInput(data: string): void }).handleTerminalInput("y");
+            terminalInput(tui).handleTerminalInput("y");
             await vi.waitFor(() => expect(closed).toBe(true));
         });
     });

@@ -14,7 +14,8 @@ import {
 } from "../../src/tools/agent/presentation/browser-models";
 import { TODO_SNAPSHOT_TYPE } from "../../src/modules/todolist/persistence";
 import { formatAgentSessionTranscripts } from "../../src/tools/agent/presentation/transcript";
-import { KEY, interact, mockTheme, press, renderText, snapshotText } from "../helpers";
+import { KEY, interact, mockTheme, renderText, snapshotText } from "../helpers";
+import { stubCommandContext, stubUi, type StubComponentFactory } from "../helpers/pi-stub";
 
 const current = {
     kind: "current" as const,
@@ -346,8 +347,9 @@ describe("AgentSessionBrowserComponent", () => {
             requestRender: () => {},
         };
         const notify = vi.fn();
-        const custom = (factory: any) => {
-            browser = factory(tui, mockTheme, {}, finish);
+        const custom = (factory: StubComponentFactory) => {
+            // The stub factory hands back `unknown`; production builds the browser component here.
+            browser = factory(tui, mockTheme, {}, finish) as AgentSessionBrowserComponent;
             return customPromise;
         };
         const show = showAgentSessionBrowser(
@@ -362,11 +364,11 @@ describe("AgentSessionBrowserComponent", () => {
                     });
                 },
             },
-            {
+            stubCommandContext({
                 hasUI: true,
                 mode: "tui",
-                ui: { custom, notify },
-            } as any,
+                ui: stubUi({ custom, notify }),
+            }),
         );
 
         await vi.waitFor(() => expect(browser).toBeDefined());

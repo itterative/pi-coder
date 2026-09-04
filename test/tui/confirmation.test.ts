@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import type { TUI } from "@earendil-works/pi-tui";
 
 import { workspaceActionConfirmation } from "../../src/tools/agent/browser";
 import { confirm, ConfirmationComponent } from "../../src/tui/confirmation";
-import { KEY, interact, mockTheme, renderText, snapshotText } from "../helpers";
+import { KEY, interact, mockTheme, renderText, snapshotText, stubTui } from "../helpers";
+import {
+    stubCommandContext,
+    stubUi,
+    type StubComponentFactory,
+    type StubDialogOptions,
+} from "../helpers/pi-stub";
 
 const workspaceActions = ["apply", "retain", "reset", "discard", "release", "recover"] as const;
 
@@ -71,22 +76,31 @@ describe("ConfirmationComponent", () => {
     it("shows as a focused overlay through the helper", async () => {
         let component: ConfirmationComponent | undefined;
         const custom = vi.fn(
-            (factory: any, options: any) =>
-                new Promise<boolean>((resolve) => {
-                    const tui = {
+            (factory: StubComponentFactory, options: StubDialogOptions) =>
+                // `done` is `(result: unknown) => void`, so the stub promise resolves `unknown`; the
+                // boolean the dialog submits still flows through at runtime.
+                new Promise<unknown>((resolve) => {
+                    // The overlay stack needs these three members: `addInputListener` and `setFocus`
+                    // are real `TUI` members, and `getFocusedComponent` is the optional one that
+                    // `overlay-stack.ts` feature-detects, which `FocusAwareTui` models.
+                    const tui = stubTui({
                         addInputListener: () => () => {},
                         getFocusedComponent: () => null,
                         setFocus: () => {},
-                    } as unknown as TUI;
-                    component = factory(tui, mockTheme, {}, resolve);
-                    options.onHandle(fakeHandle());
+                    });
+                    // A stub factory returns `unknown`; this one builds the dialog component.
+                    component = factory(tui, mockTheme, {}, resolve) as ConfirmationComponent;
+                    options.onHandle?.(fakeHandle());
                 }),
         );
-        const resultPromise = confirm({ title: "Confirm", message: "Continue?" }, {
-            hasUI: true,
-            mode: "tui",
-            ui: { custom },
-        } as any);
+        const resultPromise = confirm(
+            { title: "Confirm", message: "Continue?" },
+            stubCommandContext({
+                hasUI: true,
+                mode: "tui",
+                ui: stubUi({ custom }),
+            }),
+        );
 
         await vi.waitFor(() => expect(component).toBeDefined());
         expect(custom).toHaveBeenCalledWith(

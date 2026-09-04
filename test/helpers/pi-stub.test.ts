@@ -6,7 +6,13 @@ import path from "node:path";
 import { SessionManager, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import { zeroUsage } from "./agent-doubles";
-import { createPiStub, stubContext, stubSessionManager, stubUi } from "./pi-stub";
+import {
+    createPiStub,
+    stubCommandContext,
+    stubContext,
+    stubSessionManager,
+    stubUi,
+} from "./pi-stub";
 
 /**
  * These cover the doubles' *ordering* and *presence* contracts — the two things that fail silently.
@@ -117,6 +123,29 @@ describe("stubContext", () => {
         expect(ctx.sessionManager.getSessionId()).toBe(sessionManager.getSessionId());
         ctx.ui.notify("done", "info");
         expect(notify).toHaveBeenCalledWith("done", "info");
+    });
+});
+
+describe("stubCommandContext", () => {
+    it("fails loudly on session actions instead of inventing answers", async () => {
+        const ctx = stubCommandContext();
+
+        expect(() => ctx.getSystemPromptOptions()).toThrow(/does not model getSystemPromptOptions/);
+        await expect(ctx.reload()).rejects.toThrow(/does not model reload/);
+    });
+
+    it("lets a suite model the one action it cares about", async () => {
+        let idled = false;
+        const ctx = stubCommandContext({
+            waitForIdle: async () => {
+                idled = true;
+            },
+        });
+
+        await ctx.waitForIdle();
+        expect(idled).toBe(true);
+        // Overriding one action must not erase the base context members.
+        expect(ctx.cwd).toBe("/tmp/project");
     });
 });
 

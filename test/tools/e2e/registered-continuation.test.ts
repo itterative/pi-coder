@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 const testPaths = vi.hoisted(() => {
     const fsModule = process.getBuiltinModule("node:fs") as typeof import("node:fs");
@@ -29,6 +29,13 @@ vi.mock("../../../src/common/constants", async () => {
 });
 
 import registerAgentTool from "../../../src/tools/agent";
+import type {
+    ChildAgentFactory,
+    ChildAgentFactoryContext,
+    AgentRunDetails,
+} from "../../../src/tools/agent/contracts/runs";
+import { createPiStub, stubSessionContext, stubUi } from "../../helpers/pi-stub";
+import type { AgentWorkspaceResult } from "../../../src/tools/agent/contracts/workspaces";
 import { AgentTraceStore } from "../../../src/tools/agent/observability/trace";
 import { createAgentWorkspaceCheckpoint } from "../../../src/tools/agent/workspaces/checkpoints";
 import * as workspaceFinalization from "../../../src/tools/agent/workspaces/finalization";
@@ -51,10 +58,6 @@ import {
     runGit,
 } from "./helpers";
 
-interface Handler {
-    (event: any, ctx: any): Promise<unknown> | unknown;
-}
-
 const paths = createE2EPathsAtRoot(testPaths.root);
 
 /**
@@ -76,6 +79,40 @@ function traceTail(store: AgentTraceStore, runId: string, count = 14): string {
 }
 
 const handlersToClose: Array<() => Promise<void>> = [];
+
+/**
+ * Narrow the durable identity a later assertion depends on. Reading `details.runId` straight into a
+ * `string` parameter would need a cast, and a cast would keep passing if the tool stopped filling it.
+ */
+function requireRunId(details: AgentRunDetails): string {
+    if (!details.runId) {
+        throw new Error(`agent result carries no runId (status ${details.status ?? "unknown"})`);
+    }
+    return details.runId;
+}
+
+function requireRunInstanceId(details: AgentRunDetails): string {
+    if (!details.runInstanceId) {
+        throw new Error(
+            `agent result carries no runInstanceId (status ${details.status ?? "unknown"})`,
+        );
+    }
+    return details.runInstanceId;
+}
+
+function requireWorkspaceResult(details: AgentRunDetails): AgentWorkspaceResult {
+    const result = details.workspaceResult;
+    if (!result) {
+        throw new Error("agent result carries no workspaceResult");
+    }
+    return result;
+}
+
+/** The text of a tool result's leading content block; image blocks carry nothing to assert on. */
+function firstText(content: Array<TextContent | ImageContent>): string {
+    const block = content[0];
+    return block?.type === "text" ? block.text : "";
+}
 afterEach(async () => {
     for (const close of handlersToClose.splice(0)) await close();
     removeE2EPaths(paths);
@@ -106,11 +143,11 @@ describe("registered continuation lifecycle", () => {
             leaseRunInstanceId: "setup-instance-1",
         });
         const prompts: string[] = [];
-        const factoryContexts: any[] = [];
+        const factoryContexts: ChildAgentFactoryContext[] = [];
         const childSessions: SessionManager[] = [];
         let invocation = 0;
         let failNextSetup = false;
-        const fakeFactory = async (context: any) => {
+        const fakeFactory: ChildAgentFactory = async (context) => {
             invocation++;
             const currentInvocation = invocation;
             if (failNextSetup) {
@@ -138,35 +175,25 @@ describe("registered continuation lifecycle", () => {
                 },
             });
         };
-        const handlers: Record<string, Handler[]> = {};
-        let tool: any;
-        const pi = {
-            events: { emit() {} },
-            on(event: string, handler: Handler) {
-                (handlers[event] ??= []).push(handler);
-            },
-            registerTool(definition: any) {
-                tool = definition;
-            },
-            registerCommand() {},
-            sendMessage() {},
-        } as any;
-        registerAgentTool(pi, fakeFactory, { traceStore });
-        const ctx = {
+        const stub = createPiStub();
+        registerAgentTool(stub.pi, fakeFactory, { traceStore });
+        const tool = stub.requireTool<AgentRunDetails>("agent");
+        const ctx = stubSessionContext(parentSession, {
             cwd: repository,
             isProjectTrusted: () => true,
             isIdle: () => true,
-            sessionManager: parentSession,
-            ui: { notify: () => {}, setWidget: () => {} },
-        };
+            ui: stubUi({ notify: () => {}, setWidget: () => {} }),
+        });
         vi.spyOn(workspaceSetup, "prepareIsolatedWorkspace").mockResolvedValue({
             workspace: provisional,
             ownerSessionId,
             provisionalLeaseRunId: "setup-1",
             provisionalLeaseRunInstanceId: "setup-instance-1",
         });
-        handlersToClose.push(async () => handlers.session_shutdown?.[0]?.({}, ctx));
-        await handlers.session_start[0]({}, ctx);
+        handlersToClose.push(async () => {
+            await stub.requireHandler("session_shutdown")({}, ctx);
+        });
+        await stub.requireHandler("session_start")({}, ctx);
 
         const spawned = await tool.execute(
             "e2e-background-start",
@@ -195,7 +222,7 @@ describe("registered continuation lifecycle", () => {
             undefined,
             ctx,
         );
-        const firstResult = collected.details.workspaceResult;
+        const firstResult = requireWorkspaceResult(collected.details);
         expect(firstResult).toMatchObject({
             workspaceId: provisional.id,
             runId: spawned.details.runId,
@@ -249,8 +276,8 @@ describe("registered continuation lifecycle", () => {
 
         const recycledForOtherWorker = await recycleAgentWorkspaceForReuse(provisional.id, {
             previousOwnerSessionId: ownerSessionId,
-            previousLeaseRunId: spawned.details.runId,
-            previousLeaseRunInstanceId: spawned.details.runInstanceId,
+            previousLeaseRunId: requireRunId(spawned.details),
+            previousLeaseRunInstanceId: requireRunInstanceId(spawned.details),
             ownerSessionId: "other-parent",
             leaseRunId: "worker-y",
             leaseRunInstanceId: "worker-y-instance",
@@ -304,7 +331,7 @@ describe("registered continuation lifecycle", () => {
             runId: revised.details.runId,
             status: "prepared",
         });
-        expect(revised.details.workspaceResult.id).not.toBe(firstResult.id);
+        expect(requireWorkspaceResult(revised.details).id).not.toBe(firstResult.id);
         expect(
             fs.readFileSync(path.join(provisional.worktreePath, "revision-marker.txt"), "utf8"),
         ).toBe("revised\n");
@@ -340,7 +367,7 @@ describe("registered continuation lifecycle", () => {
         );
         expect(setupFailure.details.status).toBe("failed");
         expect(setupFailure.details.setupFailed).toBe(true);
-        expect(setupFailure.content[0].text).toContain("child session could not be reopened");
+        expect(firstText(setupFailure.content)).toContain("child session could not be reopened");
         const workspaceAfterSetupFailure = await getAgentWorkspace(provisional.id);
         expect(workspaceAfterSetupFailure).toMatchObject({
             leaseOwnerSessionId: parentSession.getSessionId(),
@@ -389,7 +416,7 @@ describe("registered continuation lifecycle", () => {
             ctx,
         );
         expect(finalizationFailure.details.status).toBe("failed");
-        expect(finalizationFailure.content[0].text).toContain(finalizationError.message);
+        expect(firstText(finalizationFailure.content)).toContain(finalizationError.message);
         expect(await getAgentWorkspace(provisional.id)).toMatchObject({
             leaseOwnerSessionId: parentSession.getSessionId(),
             leaseRunId: revised.details.runId,
@@ -421,7 +448,7 @@ describe("registered continuation lifecycle", () => {
             ctx,
         );
         expect(continuedAfterDivergence.details.status).toBe("failed");
-        expect(continuedAfterDivergence.content[0].text).toContain("differs from checkpoint");
+        expect(firstText(continuedAfterDivergence.content)).toContain("differs from checkpoint");
         expect(invocation).toBe(5);
         expect(gitOutput(provisional.worktreePath, ["rev-parse", "HEAD"])).toBe(divergentHead);
         const preservedAfterDivergence = await getAgentWorkspace(provisional.id);

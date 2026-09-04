@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { LoadedAgentRunPersistence } from "../../../src/tools/agent/runs/persistence/load";
 
 const testPaths = vi.hoisted(() => {
     const fsModule = process.getBuiltinModule("node:fs") as typeof import("node:fs");
@@ -59,6 +59,14 @@ import {
 
 let paths: E2EPaths;
 
+/** The loader answers `undefined` when a parent session has no file; this flow needs real state. */
+function requireLoaded(loaded: LoadedAgentRunPersistence | undefined): LoadedAgentRunPersistence {
+    if (!loaded) {
+        throw new Error("expected durable agent run state to load for the parent session");
+    }
+    return loaded;
+}
+
 beforeEach(() => {
     fs.rmSync(testRoot, { recursive: true, force: true });
     paths = createE2EPathsAtRoot(testRoot);
@@ -90,7 +98,7 @@ describe("isolated workspace restart e2e", () => {
             content: "Inspect the workspace",
             timestamp: Date.now(),
         });
-        child.appendMessage({
+        const assistant: Parameters<SessionManager["appendMessage"]>[0] = {
             role: "assistant",
             content: [{ type: "text", text: "Waiting" }],
             api: "test",
@@ -99,7 +107,8 @@ describe("isolated workspace restart e2e", () => {
             usage: zeroUsage(),
             stopReason: "stop",
             timestamp: Date.now(),
-        } as any);
+        };
+        child.appendMessage(assistant);
         const childFile = child.getSessionFile();
         expect(childFile).toBeDefined();
         await createAgentWorkspaceCheckpoint(leased.id, {
@@ -113,7 +122,7 @@ describe("isolated workspace restart e2e", () => {
             workspacesDir: paths.state,
         });
 
-        const loaded = await loadE2EPersistence(paths, parent);
+        const loaded = requireLoaded(await loadE2EPersistence(paths, parent));
         expect(loaded).toBeDefined();
         const record: PersistedAgentRun = {
             version: 1,

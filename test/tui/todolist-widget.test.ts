@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createEventBus, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { snapshotText, renderText } from "../helpers";
+import { renderText, snapshotText, stubTui } from "../helpers";
+import { createPiStub, stubContext, stubUi } from "../helpers/pi-stub";
+import { partialRun } from "../helpers/agent-doubles";
 import { TodoListWidget } from "../../src/tui/status";
 import { PiCoderStatusWidget, registerStatusWidget, STATUS_WIDGET_ID } from "../../src/tui/status";
 import { emitTodoStatus } from "../../src/modules/todolist/events";
@@ -46,26 +48,16 @@ function registerStatusForContext(
     ctx: ExtensionContext,
     events: ReturnType<typeof createEventBus>,
 ): (name: string, nextContext?: ExtensionContext) => void {
-    const handlers = new Map<
-        string,
-        Array<(event: unknown, context: ExtensionContext) => unknown>
-    >();
-    registerStatusWidget({
-        events,
-        on(name: string, handler: (event: unknown, context: ExtensionContext) => unknown) {
-            const registered = handlers.get(name) ?? [];
-            registered.push(handler);
-            handlers.set(name, registered);
-        },
-    } as any);
+    const stub = createPiStub({ eventBus: events });
+    registerStatusWidget(stub.pi);
     return (name, nextContext = ctx) => {
-        for (const handler of handlers.get(name) ?? []) handler({}, nextContext);
+        for (const handler of stub.handlersFor(name)) handler({}, nextContext);
     };
 }
 
 describe("TODO widget", () => {
     it("renders bounded progress and status-marked titles", async () => {
-        const widget = new TodoListWidget({ requestRender() {} } as any, todo);
+        const widget = new TodoListWidget(stubTui(), todo);
 
         await expect(snapshotText(renderText(widget, 42))).toMatchFileSnapshot(
             "./__snapshots__/todolist-widget.render.txt",
@@ -74,7 +66,7 @@ describe("TODO widget", () => {
     });
 
     it("scrolls a large list to the first in-progress item", async () => {
-        const widget = new TodoListWidget({ requestRender() {} } as any, largeTodo);
+        const widget = new TodoListWidget(stubTui(), largeTodo);
 
         await expect(snapshotText(renderText(widget, 60))).toMatchFileSnapshot(
             "./__snapshots__/todolist-widget.large.txt",
@@ -119,19 +111,19 @@ describe("TODO widget", () => {
             content: unknown;
             options?: { placement?: string };
         }> = [];
-        const ctx = {
+        const ctx = stubContext({
             mode: "tui",
             hasUI: true,
-            ui: {
+            ui: stubUi({
                 setWidget(key: string, content: unknown, options?: { placement?: string }) {
                     registrations.push({ key, content, options });
                 },
-            },
-        } as unknown as ExtensionContext;
+            }),
+        });
         const events = createEventBus();
         const trigger = registerStatusForContext(ctx, events);
         trigger("session_start");
-        const run = {
+        const run = partialRun({
             runId: "worker-1",
             title: "Implement the feature",
             agent: "worker",
@@ -140,7 +132,7 @@ describe("TODO widget", () => {
             startedAt: Date.now(),
             phase: "Thinking",
             toolCounts: {},
-        } as any;
+        });
 
         emitAgentStatus(events, [run], 0);
         emitTodoStatus(events, todo);
@@ -196,7 +188,7 @@ describe("TODO widget", () => {
     });
 
     it("updates its displayed list without replacing the component", () => {
-        const widget = new TodoListWidget({ requestRender() {} } as any, todo);
+        const widget = new TodoListWidget(stubTui(), todo);
         const updated = {
             ...todo,
             items: todo.items.slice(0, 2),

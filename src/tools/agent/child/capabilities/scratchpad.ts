@@ -1,6 +1,5 @@
 import registerScratchpadExtension from "../../../../modules/scratchpad";
-import type { ChildExtensionRuntime } from "./index";
-import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import type { ChildExtensionRuntime, NamedInlineExtension } from "./index";
 
 /**
  * A private temporary directory for the run.
@@ -11,7 +10,7 @@ import type { InlineExtension } from "@earendil-works/pi-coding-agent";
  */
 export const SCRATCHPAD_UNIT = {
     id: "scratchpad",
-    extension: (_runtime: ChildExtensionRuntime): InlineExtension => ({
+    extension: (_runtime: ChildExtensionRuntime): NamedInlineExtension => ({
         name: "pi-coder-scratchpad-child",
         hidden: true,
         factory: registerScratchpadExtension,

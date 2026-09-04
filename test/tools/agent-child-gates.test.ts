@@ -11,6 +11,7 @@ import {
 } from "../../src/tools/agent/definitions/discovery";
 import type { AgentDefinition } from "../../src/tools/agent/definitions/types";
 import type { ChildProgress } from "../../src/tools/agent/contracts/runs";
+import { stubContext } from "../helpers/pi-stub";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createChildGateRuntime } from "../../src/tools/agent/child/gates";
 import { buildChildRun, probeDefinition, type ChildRunMode } from "./child-run-fixture";
@@ -211,9 +212,7 @@ describe("gate runtime services", () => {
         try {
             runtime.bashOutputs.remember({ fullOutputPath: output });
             expect(runtime.bashOutputs.active()).toEqual([output]);
-            expect(runtime.readRoots({ cwd: fixture.cwd, sessionManager: undefined })).toContain(
-                output,
-            );
+            expect(runtime.readRoots(stubContext({ cwd: fixture.cwd }))).toContain(output);
 
             fs.rmSync(output);
             expect(runtime.bashOutputs.active()).toEqual([]);

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { TUI } from "@earendil-works/pi-tui";
 import { AgentActivityWidget, firstLinePreview, formatToolCounts } from "../../src/tui/status";
+import { partialRun } from "../helpers/agent-doubles";
 
-const runningRun = {
+const runningRun = partialRun({
     runId: "scout-1",
     title: "Inspect the project",
     agent: "scout",
@@ -16,8 +18,7 @@ const runningRun = {
     lastToolActivity: "Reading src/index.ts",
     todo: { completed: 2, total: 5, current: "Implement the feature" },
     toolCounts: { read: 4, grep: 2 },
-    usage: {},
-} as any;
+});
 
 describe("agent activity widget", () => {
     it("formats grouped tool counts", () => {
@@ -31,7 +32,8 @@ describe("agent activity widget", () => {
     });
 
     it("renders a spinner, assistant preview, and tool summary", () => {
-        const widget = new AgentActivityWidget({ requestRender() {} } as any, [runningRun]);
+        // The widget only asks the terminal to redraw, so this is the whole surface it touches.
+        const widget = new AgentActivityWidget({ requestRender() {} } as TUI, [runningRun]);
 
         expect(widget.render(200)).toEqual([
             expect.stringMatching(/^ ⠋ scout-1 · 00:18 · I found the entry points\. $/),

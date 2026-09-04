@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { AskUserResult } from "../../src/tui/ask-user";
+import type { AskUserComponent } from "../../src/tui/ask-user";
 import { askChildUser, type ChildUserQuestion } from "../../src/tools/agent/child";
+import { stubContext, stubUi } from "../helpers/pi-stub";
 import { KEY, mockTheme, renderText } from "../helpers";
 
 const question: ChildUserQuestion = {
@@ -14,28 +15,24 @@ const question: ChildUserQuestion = {
 
 function interactiveContext(actions: Array<"select" | "cancel">) {
     const rendered: string[] = [];
-    return {
-        context: {
-            hasUI: true,
-            mode: "tui",
-            ui: {
-                setWorkingVisible() {},
-                custom(factory: any) {
-                    return new Promise<AskUserResult | undefined>((resolve, reject) => {
-                        void Promise.resolve(
-                            factory(undefined, mockTheme, undefined, resolve),
-                        ).then((component) => {
-                            rendered.push(renderText(component, 80));
-                            component.handleInput(
-                                actions.shift() === "cancel" ? KEY.escape : KEY.enter,
-                            );
-                        }, reject);
-                    });
-                },
-            },
-        } as any,
-        rendered,
-    };
+    const ui = stubUi({
+        setWorkingVisible() {},
+        custom(factory) {
+            return new Promise<unknown>((resolve, reject) => {
+                void Promise.resolve(factory(undefined, mockTheme, undefined, resolve)).then(
+                    (component) => {
+                        // The stub's factory returns `unknown`; this suite drives the real dialog.
+                        const dialog = component as AskUserComponent;
+                        rendered.push(renderText(dialog, 80));
+                        dialog.handleInput(actions.shift() === "cancel" ? KEY.escape : KEY.enter);
+                    },
+                    reject,
+                );
+            });
+        },
+    });
+
+    return { context: stubContext({ hasUI: true, mode: "tui", ui }), rendered };
 }
 
 describe("child-to-user interaction", () => {
@@ -74,15 +71,17 @@ describe("child-to-user interaction", () => {
 
     it("does not open a dialog outside interactive TUI mode", async () => {
         let customCalls = 0;
-        const context = {
+        const context = stubContext({
             hasUI: false,
             mode: "print",
-            ui: {
+            ui: stubUi({
                 custom: () => {
                     customCalls++;
+                    // Never settled: the gate must not open a dialog in this mode.
+                    return new Promise<never>(() => {});
                 },
-            },
-        } as any;
+            }),
+        });
 
         const result = await askChildUser(question, context, "scout");
 
@@ -93,20 +92,20 @@ describe("child-to-user interaction", () => {
 
     it("propagates cancellation after closing the dialog", async () => {
         const controller = new AbortController();
-        const context = {
+        const context = stubContext({
             hasUI: true,
             mode: "tui",
-            ui: {
+            ui: stubUi({
                 setWorkingVisible() {},
-                custom(factory: any) {
-                    return new Promise<AskUserResult | undefined>((resolve, reject) => {
+                custom(factory) {
+                    return new Promise<unknown>((resolve, reject) => {
                         void Promise.resolve(
                             factory(undefined, mockTheme, undefined, resolve),
                         ).then(() => controller.abort(), reject);
                     });
                 },
-            },
-        } as any;
+            }),
+        });
 
         await expect(
             askChildUser(question, context, "scout", controller.signal),

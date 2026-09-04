@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "@earendil-works/pi-ai";
 
-import { AgentContinuationLeaseBusyError } from "../../src/tools/agent/contracts/runs";
+import {
+    AgentContinuationLeaseBusyError,
+    type ChildAgentFactoryContext,
+} from "../../src/tools/agent/contracts/runs";
 import { CONTINUATION_LEASE_RECOVERY_GRACE_MS } from "../../src/tools/agent/runs/run-state";
 import {
     getSafeBashAssessment,
@@ -25,6 +28,7 @@ import {
     AgentActionError,
     AgentRunManager,
     type AgentRunStatus,
+    type AgentRunSummary,
     type AgentRunPersistence,
     type ChildAgentHandle,
     type ParentQuestion,
@@ -50,7 +54,7 @@ class FakeChild implements ChildAgentHandle {
     private error?: string;
     private usage = usage();
     private releaseAbort?: () => void;
-    private sessionLeafId?: string | null;
+    private sessionLeafId: string | null = null;
 
     constructor(
         private readonly steps: Step[],
@@ -70,7 +74,11 @@ class FakeChild implements ChildAgentHandle {
             return;
         }
         this.output = step.output ?? "";
-        this.sessionLeafId = step.leafId;
+        if (step.leafId !== undefined) {
+            // An append-only transcript leaf only ever advances, so a step that does not move the
+            // leaf keeps the previous one instead of reporting "no leaf".
+            this.sessionLeafId = step.leafId;
+        }
         this.question = step.question;
         this.error = step.error;
         if (step.usage) this.usage = addUsage(this.usage, step.usage);
@@ -91,8 +99,9 @@ class FakeChild implements ChildAgentHandle {
         return result;
     }
 
-    getSessionLeafId(): string | null | undefined {
-        return this.sessionLeafId;
+    /** `undefined` means "no handle at all"; a handle whose transcript has no leaf reports `null`. */
+    getSessionLeafId(): string | null {
+        return this.sessionLeafId ?? null;
     }
 
     getProgress() {
@@ -146,7 +155,7 @@ function addUsage(a: Usage, b: Usage): Usage {
     };
 }
 
-function managerWith(child: FakeChild, limit = 4): AgentRunManager {
+function managerWith(child: ChildAgentHandle, limit = 4): AgentRunManager {
     return new AgentRunManager(async () => child, limit);
 }
 
@@ -160,7 +169,7 @@ function durableStore(directory: string) {
     const persistence: AgentRunPersistence = {
         ownerSessionId: "parent-session",
         childSessionDir: directory,
-        save: (record) => {
+        save: async (record) => {
             records.push(structuredClone(record));
             return true;
         },
@@ -303,7 +312,7 @@ describe("AgentRunManager", () => {
         manager.setPersistence({
             ...store.persistence,
             usesSnapshotMarkers: true,
-            acquireContinuationLease: () => ({
+            acquireContinuationLease: async () => ({
                 release: () => {
                     releaseCount++;
                 },
@@ -776,8 +785,8 @@ describe("AgentRunManager", () => {
             ownerSessionId: "parent-session",
             usesSnapshotMarkers: true,
             childSessionDir: process.cwd(),
-            save: () => true,
-            acquireContinuationLease: (_runInstanceId, callback) => {
+            save: async () => true,
+            acquireContinuationLease: async (_runInstanceId, callback) => {
                 onLost = callback;
                 return { release() {} };
             },
@@ -1237,7 +1246,7 @@ describe("AgentRunManager", () => {
             [{ output: "Finished", usage: usage(3, 1) }],
             childFile,
         );
-        let restoredContext: any;
+        let restoredContext: ChildAgentFactoryContext | undefined;
         const secondManager = new AgentRunManager(async (factoryContext) => {
             restoredContext = factoryContext;
             return restoredChild;
@@ -1427,7 +1436,7 @@ describe("AgentRunManager", () => {
         expect(store.records.at(-1)).toMatchObject({ status: "interrupted" });
 
         const restoredChild = new FakeChild([{ output: "Safely continued" }], childFile);
-        let restoredContext: any;
+        let restoredContext: ChildAgentFactoryContext | undefined;
         const secondManager = new AgentRunManager(async (factoryContext) => {
             restoredContext = factoryContext;
             return restoredChild;
@@ -1444,7 +1453,7 @@ describe("AgentRunManager", () => {
             mutating: true,
         });
         expect(restoredChild.prompts).toEqual([]);
-        expect(restoredContext.repairInterrupted).toBe(true);
+        expect(restoredContext?.repairInterrupted).toBe(true);
         const resumed = await secondManager.resume("worker-1", {});
         expect(resumed.details.status).toBe("running");
         await flushBackground();
@@ -1479,8 +1488,8 @@ describe("AgentRunManager", () => {
             ownerSessionId: "parent-session",
             usesSnapshotMarkers: true,
             childSessionDir: os.tmpdir(),
-            save: () => true,
-            acquireContinuationLease: () => {
+            save: async () => true,
+            acquireContinuationLease: async () => {
                 attempts++;
                 if (attempts === 1) {
                     throw new AgentContinuationLeaseBusyError(
@@ -1523,7 +1532,7 @@ describe("AgentRunManager", () => {
         const persistence: AgentRunPersistence = {
             ...store.persistence,
             usesSnapshotMarkers: true,
-            acquireContinuationLease: () => {
+            acquireContinuationLease: async () => {
                 throw new AgentContinuationLeaseBusyError(Date.now() + 60_000);
             },
         };
@@ -1557,7 +1566,7 @@ describe("AgentRunManager", () => {
         const persistence: AgentRunPersistence = {
             ...store.persistence,
             usesSnapshotMarkers: true,
-            acquireContinuationLease: () => {
+            acquireContinuationLease: async () => {
                 attempts++;
                 if (attempts === 1) return { release() {} };
                 throw new AgentContinuationLeaseBusyError(Date.now() + 60_000);
@@ -1589,12 +1598,12 @@ describe("AgentRunManager", () => {
             ownerSessionId: "parent-session",
             usesSnapshotMarkers: true,
             childSessionDir: directory,
-            save: (record) => {
+            save: async (record) => {
                 if (failSaves) return false;
                 records.push(structuredClone(record));
                 return true;
             },
-            acquireContinuationLease: () => ({
+            acquireContinuationLease: async () => ({
                 release: () => {
                     releaseCount++;
                 },

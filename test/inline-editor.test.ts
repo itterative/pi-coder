@@ -219,6 +219,7 @@ describe("InlineEditor — rendering", () => {
         expect(lines.length).toBeGreaterThan(1);
         for (const line of lines) {
             // strip ANSI for width check
+            // eslint-disable-next-line no-control-regex -- ANSI SGR sequences are exactly what this strips
             const plain = line.replace(/\x1b\[[0-9;]*m/g, "").replace(CURSOR_MARKER, "");
             expect(plain.length).toBeLessThanOrEqual(11); // width + cursor char
         }

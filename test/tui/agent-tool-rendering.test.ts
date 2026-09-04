@@ -3,35 +3,17 @@ import { describe, expect, it } from "vitest";
 import { registerAgentTool } from "../../src/tools/agent/presentation/tool";
 import { BACKGROUND_AGENT_WAIT_GUIDANCE } from "../../src/tools/agent/runs/manager";
 import type { AgentParameters } from "../../src/tools/agent/definitions/prompt";
-import type { AgentRunOutcome } from "../../src/tools/agent/contracts/runs";
+import type { AgentRunDetails, AgentRunOutcome } from "../../src/tools/agent/contracts/runs";
 import { cloneUsage, ZERO_USAGE } from "../../src/tools/agent/runs/usage";
 import { mockTheme, renderText, snapshotText } from "../helpers";
-
-interface AgentToolResult {
-    content: Array<{ type: string; text?: string }>;
-    details: Record<string, unknown>;
-}
-
-interface AgentToolDefinition {
-    renderCall: (args: AgentParameters, theme: typeof mockTheme) => unknown;
-    renderResult: (
-        result: AgentToolResult,
-        options: { expanded: boolean; isPartial?: boolean },
-        theme: typeof mockTheme,
-    ) => unknown;
-    execute: (
-        toolCallId: string,
-        args: AgentParameters,
-        signal: AbortSignal | undefined,
-        onUpdate: unknown,
-        ctx: unknown,
-    ) => Promise<AgentToolResult>;
-}
+import { createPiStub, noRenderContext } from "../helpers/pi-stub";
 
 interface AgentRenderCase {
     args: AgentParameters;
     outcome: AgentRunOutcome;
     isPartial?: boolean;
+    /** Filename for this case's snapshot, needed where `args.action` alone would collide. */
+    snapshotName?: string;
 }
 
 const projectTask = "Inspect the project structure.";
@@ -307,34 +289,31 @@ const actionCases: AgentRenderCase[] = [
     },
 ];
 
-function setupAgentTool(expectedOutcome: AgentRunOutcome): AgentToolDefinition {
-    let definition: AgentToolDefinition | undefined;
-    registerAgentTool(
-        {
-            registerTool(value: AgentToolDefinition) {
-                definition = value;
-            },
-        } as any,
-        async () => expectedOutcome,
-    );
-    if (!definition) {
-        throw new Error("Agent tool was not registered.");
-    }
-    return definition;
+function setupAgentTool(expectedOutcome: AgentRunOutcome) {
+    const stub = createPiStub();
+    registerAgentTool(stub.pi, async () => expectedOutcome);
+    return stub.requireTool<AgentRunDetails>("agent");
 }
 
 function renderCallAndResult(
-    tool: AgentToolDefinition,
+    tool: ReturnType<typeof setupAgentTool>,
     args: AgentParameters,
-    result: AgentToolResult,
+    result: Awaited<ReturnType<typeof tool.execute>>,
     expanded: boolean,
     isPartial = false,
 ): string {
-    const call = renderText(tool.renderCall(args, mockTheme) as any, 120);
-    const renderedResult = renderText(
-        tool.renderResult(result, { expanded, isPartial }, mockTheme) as any,
-        120,
+    const callComponent = tool.definition.renderCall?.(args, mockTheme, noRenderContext);
+    const resultComponent = tool.definition.renderResult?.(
+        result,
+        { expanded, isPartial },
+        mockTheme,
+        noRenderContext,
     );
+    if (!callComponent || !resultComponent) {
+        throw new Error("the agent tool must declare both call and result renderers");
+    }
+    const call = renderText(callComponent, 120);
+    const renderedResult = renderText(resultComponent, 120);
     return snapshotText([call, renderedResult].filter((part) => part.length > 0).join("\n"));
 }
 
@@ -352,19 +331,18 @@ describe("agent tool TUI rendering", () => {
         const result = tool.execute("call-manual-background", args, undefined, undefined, {});
 
         return result.then((renderedResult) => {
-            expect(renderText(tool.renderCall(args, mockTheme) as any, 120)).not.toContain(
-                "Ctrl+Alt+B",
+            const call = tool.definition.renderCall?.(args, mockTheme, noRenderContext);
+            const partial = tool.definition.renderResult?.(
+                renderedResult,
+                { expanded: false, isPartial: true },
+                mockTheme,
+                noRenderContext,
             );
-            expect(
-                renderText(
-                    tool.renderResult(
-                        renderedResult,
-                        { expanded: false, isPartial: true },
-                        mockTheme,
-                    ) as any,
-                    120,
-                ),
-            ).not.toContain("Ctrl+Alt+B");
+            if (!call || !partial) {
+                throw new Error("the agent tool must declare both call and result renderers");
+            }
+            expect(renderText(call, 120)).not.toContain("Ctrl+Alt+B");
+            expect(renderText(partial, 120)).not.toContain("Ctrl+Alt+B");
         });
     });
 

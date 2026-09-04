@@ -1,29 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { TUI_DIALOG_EVENT, withDialogQueue } from "../../src/tui/dialog-queue";
+import { stubTui } from "../helpers";
 import { Spinner } from "../../src/tui/spinner";
-
-function fakeTui() {
-    return { requestRender: vi.fn() } as any;
-}
-
-function fakeEvents() {
-    const listeners = new Map<string, (data: unknown) => void>();
-    return {
-        on(channel: string, listener: (data: unknown) => void) {
-            listeners.set(channel, listener);
-            return () => listeners.delete(channel);
-        },
-        emit(channel: string, data: unknown) {
-            listeners.get(channel)?.(data);
-        },
-    } as any;
-}
 
 describe("Spinner", () => {
     it("starts paused when created during an active dialog", async () => {
         vi.useFakeTimers();
-        const tui = fakeTui();
-        const events = fakeEvents();
+        const tui = stubTui();
+        const events = createEventBus();
         let finish!: () => void;
         const dialog = withDialogQueue(
             undefined,
@@ -51,8 +36,8 @@ describe("Spinner", () => {
 
     it("pauses while a dialog event is active", () => {
         vi.useFakeTimers();
-        const tui = fakeTui();
-        const events = fakeEvents();
+        const tui = stubTui();
+        const events = createEventBus();
         const spinner = new Spinner(tui, { frames: ["a", "b"], intervalMs: 10, events });
         spinner.setActive(true);
 
@@ -71,7 +56,7 @@ describe("Spinner", () => {
 
     it("renders frames and requests renders while active", () => {
         vi.useFakeTimers();
-        const tui = fakeTui();
+        const tui = stubTui({ requestRender: vi.fn() });
         const spinner = new Spinner(tui, { frames: ["a", "b"], intervalMs: 10 });
 
         expect(spinner.render(10)).toEqual(["a"]);

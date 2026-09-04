@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -34,8 +33,9 @@ import { BUILTIN_WORKER } from "../../../src/tools/agent/definitions/discovery";
 import { runWorkspaceSetup } from "../../../src/tools/agent/workspaces/setup";
 import { createAgentWorkspace } from "../../../src/tools/agent/workspaces/lifecycle";
 import { getAgentWorkspace } from "../../../src/tools/agent/workspaces/store";
+import type { ChildAgentFactoryContext } from "../../../src/tools/agent/contracts/runs";
+import { stubContext } from "../../helpers/pi-stub";
 import {
-    createE2EContext,
     createE2EPathsAtRoot,
     createScriptedChild,
     initializeRepository,
@@ -59,7 +59,7 @@ describe("isolated workspace setup e2e", () => {
         const workspace = await createAgentWorkspace(paths.repository, {
             workspacesDir: paths.state,
         });
-        const factory = vi.fn(async (context: any) => {
+        const factory = vi.fn(async (context: ChildAgentFactoryContext) => {
             fs.writeFileSync(path.join(context.cwd, "setup-artifact.txt"), "prepared\n");
             return createScriptedChild({ output: "Installed project dependencies" });
         });
@@ -67,7 +67,9 @@ describe("isolated workspace setup e2e", () => {
         const ready = await runWorkspaceSetup(workspace, {
             definition: BUILTIN_WORKER,
             factory,
-            ctx: createE2EContext(paths, { ui: { notify: vi.fn() } }),
+            // `runWorkspaceSetup` reads only `ctx.cwd` and `ctx.ui.notify`, both of which
+            // `stubContext` provides; the start-context helper is the wrong shape here.
+            ctx: stubContext({ cwd: paths.repository }),
             setupRunId: "setup-run-1",
         });
 
@@ -104,7 +106,7 @@ describe("isolated workspace setup e2e", () => {
             runWorkspaceSetup(workspace, {
                 definition: BUILTIN_WORKER,
                 factory,
-                ctx: createE2EContext(paths, { ui: { notify: vi.fn() } }),
+                ctx: stubContext({ cwd: paths.repository }),
                 setupRunId: "setup-run-2",
             }),
         ).rejects.toThrow("dependency unavailable");

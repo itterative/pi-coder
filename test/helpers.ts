@@ -14,7 +14,7 @@
  */
 
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { CURSOR_MARKER } from "@earendil-works/pi-tui";
 
 // Identity theme: no ANSI styling, snapshots show pure layout and text.
@@ -72,6 +72,9 @@ export function renderText(component: Component, width = 50): string {
     return component
         .render(width)
         .map((line) =>
+            // Reverse video is a real control sequence in rendered TUI output, so the pattern has to
+            // contain the escape byte; the rule guards against accidental control characters.
+            // eslint-disable-next-line no-control-regex
             line.replaceAll(CURSOR_MARKER, "").replace(/\x1b\[7m([\s\S])\x1b\[27m/g, "[$1]"),
         )
         .join("\n");
@@ -83,6 +86,23 @@ export function snapshotText(text: string): string {
 }
 
 /**
+ * pi declares `getFocusedComponent` on its concrete TUI base only, so `src/tui/overlay-stack.ts`
+ * feature-detects it through a documented widening. Tests model the same optionality instead of
+ * inventing members on a cast.
+ */
+export type FocusAwareTui = TUI & { getFocusedComponent?: () => Component | null };
+
+/**
+ * A `TUI` double for widget and dialog tests. Widgets only ask the terminal to redraw, and pi's `TUI`
+ * has no partial-construction path, so this is the one place that boundary is cast; pass `overrides`
+ * for the rare suite that exercises focus or input listeners. A suite that needs to count redraws
+ * supplies its own spy: `stubTui({ requestRender: vi.fn() })`.
+ */
+export function stubTui(overrides: Partial<FocusAwareTui> = {}): FocusAwareTui {
+    return { requestRender: () => {}, ...overrides } as FocusAwareTui;
+}
+
+/**
  * Interaction helper that emulates the real TUI loop: a render happens
  * after every keypress. This matters for components whose input handling
  * reads render-computed state (e.g. the InlineEditor's visual-line map for
@@ -90,22 +110,28 @@ export function snapshotText(text: string): string {
  * compute from the same stale render state.
  */
 export function interact(component: Component, width = 50) {
+    // pi types `handleInput` as optional on Component. Binding once keeps `this` on the component,
+    // and naming the missing member up front beats a raw TypeError on the first key of a long flow.
+    const handleInput = component.handleInput?.bind(component);
+    if (!handleInput) {
+        throw new Error(`${component.constructor.name} implements no handleInput to drive`);
+    }
     const render = () => renderText(component, width);
     return {
         press: (...keys: string[]) => {
             for (const key of keys) {
-                component.handleInput(key);
+                handleInput(key);
                 component.render(width);
             }
         },
         type: (text: string) => {
             for (const ch of text) {
-                component.handleInput(ch);
+                handleInput(ch);
                 component.render(width);
             }
         },
         paste: (text: string) => {
-            component.handleInput(`\x1b[200~${text}\x1b[201~`);
+            handleInput(`\x1b[200~${text}\x1b[201~`);
             component.render(width);
         },
         render,

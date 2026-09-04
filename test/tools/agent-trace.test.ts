@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createPiStub, stubCommandContext, stubUi } from "../helpers/pi-stub";
 
 import {
     AgentRunManager,
@@ -82,22 +83,19 @@ describe("delegated-agent traces", () => {
         store.start("scout-1", "scout");
         store.record("scout-1", "session.agent_settled");
         store.finish("scout-1", "completed");
-        let command: any;
-        registerAgentTraceCommand(
-            {
-                registerCommand(_name: string, definition: any) {
-                    command = definition;
-                },
-            } as any,
-            store,
-        );
+        const stub = createPiStub();
+        registerAgentTraceCommand(stub.pi, store);
         const notifications: string[] = [];
-        const ctx = {
+        const ctx = stubCommandContext({
             hasUI: false,
-            ui: { notify: (message: string) => notifications.push(message) },
-        } as any;
+            ui: stubUi({
+                notify: (message) => {
+                    notifications.push(message);
+                },
+            }),
+        });
 
-        await command.handler("scout-1", ctx);
+        await stub.requireCommand("agent-trace").handler("scout-1", ctx);
 
         expect(notifications.join("\n")).toContain("session.agent_settled");
         expect(notifications.join("\n")).toContain("run.terminal");

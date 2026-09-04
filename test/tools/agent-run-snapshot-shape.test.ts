@@ -103,7 +103,12 @@ describe("delegated-agent snapshot validation", () => {
         expect(validated?.usageSnapshot).toBeDefined();
     });
 
-    it.each([
+    // Without the annotation the table widens to a union of row-only and row+payload entries, and
+    // `status: "completed"` degrades to `string`.
+    type RowInput = NonNullable<Parameters<typeof validate>[1]>;
+    type PayloadInput = NonNullable<Parameters<typeof payload>[0]>;
+
+    it.each<[string, { row: RowInput; payload?: PayloadInput }]>([
         ["payload version", { row: { payloadVersion: 1 } }],
         ["owner session", { row: { ownerSessionId: "other" } }],
         ["status column", { row: { status: "completed" } }],

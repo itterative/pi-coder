@@ -3,6 +3,7 @@ import type { EventBus } from "@earendil-works/pi-coding-agent";
 
 import type { AgentContext } from "./context";
 import type { AgentDefinition } from "../definitions/types";
+import type { AgentParameters } from "../definitions/prompt";
 import type { WorkerMutationReport } from "./mutations";
 import type { AgentTraceData } from "./trace";
 import type { TodoProgress } from "../../../modules/todolist/progress";
@@ -109,6 +110,11 @@ export interface AgentRunDetails {
     agent: string;
     agentSource?: string;
     agentFilePath?: string;
+    /**
+     * The tool action this result answers. `renderAgentResult` dispatches on it, so it belongs to the
+     * result contract; derived from the request schema so the two cannot drift apart.
+     */
+    action?: AgentParameters["action"];
     status: AgentRunStatus;
     background?: boolean;
     task: string;

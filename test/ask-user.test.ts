@@ -16,6 +16,7 @@ import {
     type AskUserResult,
 } from "../src/tui/ask-user";
 import { interact, KEY, mockTheme } from "./helpers";
+import { stubContext, stubUi } from "./helpers/pi-stub";
 
 function setup(options: AskUserOptions, width = 50) {
     let result: AskUserResult | undefined | "pending" = "pending";
@@ -145,21 +146,21 @@ describe("askUser", () => {
     it("closes an active dialog when its operation is aborted", async () => {
         const controller = new AbortController();
         const workingVisibility: boolean[] = [];
-        const ctx = {
+        const ctx = stubContext({
             hasUI: true,
-            ui: {
+            ui: stubUi({
                 setWorkingVisible(visible: boolean) {
                     workingVisibility.push(visible);
                 },
-                custom(factory: any) {
-                    return new Promise<AskUserResult | undefined>((resolve, reject) => {
+                custom(factory) {
+                    return new Promise<unknown>((resolve, reject) => {
                         void Promise.resolve(
                             factory(undefined, mockTheme, undefined, resolve),
                         ).then(() => controller.abort(), reject);
                     });
                 },
-            },
-        } as any;
+            }),
+        });
 
         const result = await askUser(baseOptions, ctx, controller.signal);
 

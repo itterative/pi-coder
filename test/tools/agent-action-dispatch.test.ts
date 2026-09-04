@@ -17,6 +17,7 @@ import type {
     AgentWorkspaceResult,
 } from "../../src/tools/agent/contracts/workspaces";
 import { ZERO_USAGE } from "../../src/tools/agent/runs/usage";
+import type { AgentResumeOptions } from "../../src/tools/agent/runs/manager";
 import * as workspaceCheckpoints from "../../src/tools/agent/workspaces/checkpoints";
 import * as workspaceFinalization from "../../src/tools/agent/workspaces/finalization";
 import * as parentActions from "../../src/tools/agent/workspaces/parent-actions";
@@ -117,7 +118,7 @@ function harness(options: HarnessOptions = {}) {
         getRunStatus: vi.fn(() => options.runStatus),
         status: vi.fn(() => pending),
         start: vi.fn(async () => pending),
-        resume: vi.fn(async () => pending),
+        resume: vi.fn(async (_runId: string, _options?: AgentResumeOptions) => pending),
         cancel: vi.fn(async () => pending),
         collect: vi.fn(async () => pending),
         setWorkspaceResultId: vi.fn(async () => {}),

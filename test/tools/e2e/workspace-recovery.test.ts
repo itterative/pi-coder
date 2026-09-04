@@ -429,7 +429,7 @@ describe("isolated workspace recovery e2e", () => {
                 "SELECT reservation_token FROM workspace_results WHERE id = ?",
                 result.id,
             );
-            expect(reservation.reservation_token).toBeNull();
+            expect(reservation?.reservation_token).toBeNull();
         });
     });
 });

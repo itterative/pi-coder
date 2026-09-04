@@ -15,11 +15,16 @@ keep_updated: true
 | --- | --- | --- |
 | the `pi` surface an extension registers into | `test/helpers/pi-stub.ts` → `createPiStub()` | `const pi = { ... } as any` |
 | the context a handler is invoked with | `stubContext()`, `stubUi()`, `stubSessionManager()` | `{ cwd, ui } as any` |
+| invoking a registered slash command | `stubCommandContext()` + `stub.requireCommand(name).handler(args, ctx)` | hand-built `{ hasUI, ui } as any` |
 | a domain object where most fields are irrelevant | `test/helpers/agent-doubles.ts` → `partialRun`, `partialDetails`, `partialWorkspace`, `partialWorkspaceResult`, `partialTracker`, `zeroUsage` | partial literal + cast |
 | a child-session event to feed `updateTracker` | `test/helpers/session-events.ts` → `messageStartEvent`, `textDeltaEvent`, `thinkingDeltaEvent`, `toolExecutionStartEvent`, `toolExecutionEndEvent` | partial event + `as any` |
 | a durable-persistence or state-writer double | `agent-doubles.ts` → `partialPersistence`, `partialStateWriter` | duck-typed object + cast across the two contracts |
 | driving a real dialog component | `pi-stub.ts` → `stubUiWithDialogs(theme)` → `{ ui, dialogs }` | private `custom(factory)` driver per suite |
 | a context whose session manager must **write** entries | `pi-stub.ts` → `stubSessionContext(parent)` / `SessionBackedContext` | `ctx as any` to reach `appendCustomEntry` |
+| a widget's or dialog's terminal environment | `test/helpers.ts` → `stubTui(overrides)` / `FocusAwareTui` | `{ requestRender() {} } as any`, `as unknown as TUI` |
+| a dialog factory and its options, typed | `pi-stub.ts` → `StubComponentFactory`, `StubDialogOptions` | `custom(factory: any, options: any)` |
+| pi's tool-render context (unexported, unused here) | `pi-stub.ts` → `noRenderContext` | `renderText(tool.renderCall(...) as any, w)` |
+| a two-member event bus that records emits | annotate `const events: EventBus = { emit, on }` | `} as any` around a mini bus |
 | a child extension wired the way production wires it | `test/tools/child-run-fixture.ts` → `buildChildRun`, `probeDefinition` | hand-built grant or option bag |
 | driving a TUI component | `test/helpers.ts` → `KEY`, `mockTheme`, `press`, `type`, `paste`, `interact`, `renderText`, `snapshotText` | inline ANSI sequences, hand-rolled key strings |
 | temp dirs, SQLite, git repos for agent lifecycle | `test/tools/e2e/helpers.ts` → `createE2EPaths`, `withE2EMetadataDatabase`, `createScriptedChild`, `insertE2EAgentRun`, `createClaimedTaskWorkspace`, `initializeRepository` | ad-hoc `mkdtemp` plus open-by-hand |
@@ -37,13 +42,23 @@ keep_updated: true
 - `requireCommand(name)` (returns the recorded options), `commands`, `shortcuts`, `entries`, `sentMessages: Array<{ message; options }>` holding pi's own argument pair, so `display` and `details` survive.
 - `handlerView(stub, ...events)` and `invoke(handler, event, ctx)` — see the snapshot rule below.
 
-## Five rules that are easy to get wrong (each already cost a bug)
+`stubCommandContext(overrides?)` covers the other half: `ExtensionCommandContext` extends `ExtensionContext` with seven session actions (`getSystemPromptOptions`, `waitForIdle`, `newSession`, `fork`, `navigateTree`, `switchSession`, `reload`) that a command-handler suite never exercises. Each **throws** `stubCommandContext does not model X()` — inventing a return value would let a test pass on a fabricated answer, and unlike rule 1 these members are required, so absence is not an option. Overrides apply after the base context, so a suite that does exercise one supplies it.
+
+## Pick the context double by the parameter type, not by convenience
+
+`stubContext` satisfies `ExtensionContext`; dialog entry points that declare `ExtensionCommandContext` (`confirm` at `src/tui/confirmation.ts:93`, `showAgentSessionBrowser`) need `stubCommandContext`, and the compiler rejects the swap. The branch each one guards also differs: `src/tui/confirmation.ts:95` requires `hasUI && mode === "tui"`, while `src/tui/ask-user.ts:384` and `src/tui/select-with-message.ts:521` read only `ctx.hasUI` and never `ctx.mode`. Copying one file's override set onto the other silently changes which branch runs.
+
+## Seven rules that are easy to get wrong (each already cost a bug)
 
 1. **Unmodelled members read as absent, never as placeholders.** Production branches on presence: `typeof sessionManager.getEntries === "function"` selects the marker-collection path (`runs/persistence/load.ts`), `pi.registerShortcut?.(...)` feature-detects, `ctx.ui.setWidget?.()` skips. A double answering unknown reads with a callable passes every presence check and quietly moves tests onto different code paths — that is what a throwing-Proxy prototype did before it was replaced. A direct call on an unmodelled member still fails, as `x is not a function`.
 2. **`handlerView` is a snapshot.** Build it only after every extension that registers for those events has run; a suite that registers afterwards gets a stale list (`session_start[0] is not a function`). Move the registration into the setup helper keeping its order — the `registerScratchpad` option in `test/tools/agent-worker.test.ts` exists for exactly that — or read `stub.handlersFor(...)` inline.
 3. **Per-test behavior goes through assignment**, which stays typechecked: `stub.pi.appendEntry = (type, data) => store.push({ type, data })`. For absence, ask for it: `createPiStub({ eventBus: null })` omits the key entirely, which is why the sentinel is `null` and not `undefined` (`undefined` is indistinguishable from "not passed").
 4. **`ui` and `sessionManager` stay partial on purpose.** `stubUi`/`stubSessionManager` take `Partial<...>` and cast once, documented; `ExtensionUIContext.custom` is re-declared because it is a *generic method* (`custom<T>(factory, options): Promise<T>`) and no concrete return value is assignable to `T`.
 5. **`handlerView` wraps handlers in `async`, so it cannot serve a synchronous assertion.** A suite that asserts a handler returns `undefined` *without awaiting* (`expect(check(event, ctx)).toBeUndefined()`) must call `stub.handlersFor("event")[0]` directly, or the promise it gets back changes what the test observes. Discovered while migrating `agent-scout-bash.test.ts`, whose non-UI cases pin exactly that.
+6. **Narrow with a throwing helper, never cast through a gap.** Reading `details.runId` into a `string` parameter, or `content[0].text` off a `TextContent | ImageContent` union, wants `requireRunId(details)` / `requireWorkspaceResult(details)` / `firstText(content)` — see `test/tools/e2e/registered-continuation.test.ts`. A cast keeps compiling when the producer stops filling the field; a throw turns that into a test failure. This is how `tool: any` had been hiding six unguarded reads.
+7. **A context member that production calls unguarded is not decoration.** `runWorkspaceSetup` calls `ctx.ui.notify(...)` directly and `loadAgentRunPersistence` hands `ctx.ui` to the refused-write reporter, so a context double without `ui` crashes instead of feature-detecting — the opposite case from rule 1. Absence is right where the caller writes `?.()` and wrong where it writes `()`; check which one the production path does before omitting a member.
+
+One more blind spot worth knowing: `import type { X } from "..."` erases at runtime, so importing a type from a module that never exported it stays green in Vitest and only surfaces in the single-file probe.
 
 ## Narrowing policy: which casts remain acceptable
 
@@ -52,9 +67,10 @@ New tests get no `any` in any spelling. Where a real signature cannot be impleme
 ## Known drift to fold back
 
 - `test/tools/e2e/helpers.ts` defines its own `zeroUsage()`; `test/helpers/agent-doubles.ts` exports the same thing. Consolidate on the doubles module.
-- `createE2EContext(paths, overrides): any` is the sanctioned e2e context builder (the `testing` memory points at it) but returns `any`; it should build on `stubContext` so its overrides are checked.
-- Remaining hand-built `const pi = {` doubles: `e2e/registered-continuation.test.ts` and `agent-child-interaction.test.ts` — 50 `any` sites left in `test/` as of this writing, of which the largest single concentration is `agent-tool.test.ts`'s neighbours in the `tui/` cluster and `agent.test.ts`.
+- `createE2EContext(paths, overrides)` now returns `AgentStartContext` and deliberately carries **no** `ui` (the start context has no such member; the child reaches the parent UI through `parentContext`). `loadE2EPersistence` builds a real `ExtensionContext` via `stubSessionContext`.
+- `@typescript-eslint/no-explicit-any` is **zero repo-wide**, and `npm run typecheck:tests` reports zero errors for `src` + `test`. The last hand-built `const pi = { ... } as any` double went with the TUI/dialog cluster, so a new `any` or a test-tree type error is a regression from here, not baseline noise.
+- Knip still lists three unused test-side exports that predate the cleanup: `paste` in `test/helpers.ts`, and `assertTemporaryStateDirectory` / `openE2EMetadataDatabase` in `test/tools/e2e/helpers.ts`. Left in place; delete them if you agree nothing external drives them.
 - `LoadedAgentRunPersistence.catalog` is produced (`runs/persistence/load.ts:451`) and **never read** in `src/` or in tests. `partialStateWriter` exists so the fixture stops conflating it with `AgentRunPersistence`, but the field itself is a candidate for removal from the contract — a production change, so confirm intent first.
-- `test/tools/agent.test.ts` holds ~50 of the ~83 test-tree type errors while containing only 2 `any` sites: its debt is genuine signature violations (sync-vs-`Promise` returns, missing event fields), not suppression. Run the single-file probe on it before touching it.
+- `test/tools/agent.test.ts` is probe-clean as of this writing; its 50 type errors came from three root causes (a `getSessionLeafId` return that widened past the interface, `save` returning `boolean` instead of `Promise<boolean>`, and lease grantors returning the lease instead of a promise). Typing one `implements` clause cleared ~35 of them.
 
 Related: `testing` (validation commands and the writing-tests checklist), `agents/architecture` and `agents/safety` (what the child gates do with registered handlers), `complexity-hotspots`.
