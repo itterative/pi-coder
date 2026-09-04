@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import {
@@ -23,6 +24,7 @@ import {
 import { AGENT_RUN_SNAPSHOT_MARKER } from "../../src/tools/agent/storage/run-markers";
 import type { AgentRefusedWrite } from "../../src/tools/agent/contracts/runs";
 import { openAgentMetadataDatabase } from "../../src/tools/agent/storage/metadata";
+import { upsertAgentRunStateInDatabase } from "../../src/tools/agent/storage/run-state";
 import { upsertAgentRunCatalogRecord } from "../../src/tools/agent/storage/run-catalog";
 import {
     listPastAgentSessions,
@@ -866,6 +868,60 @@ describe("delegated-agent V2 persistence", () => {
         await writer.close();
     });
 
+    /**
+     * Close must finish a queued save before it releases leases and closes the database: a save that
+     * observed a closed handle would silently drop durable state the caller already believes is saved.
+     */
+    it("drains a queued save before releasing its lease on close", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-close-drain-"));
+        tempDirs.push(stateDir);
+        const workspacesDir = path.join(stateDir, "workspaces");
+        const database = await openAgentMetadataDatabase(workspacesDir);
+        const writer = createAgentRunStateWriter(
+            process.cwd(),
+            database,
+            (marker) => `marker-${marker.runInstanceId}`,
+        );
+        const runInstanceId = "instance-close-drain";
+
+        let openGate!: () => void;
+        const gate = database.transaction(async () => {
+            await new Promise<void>((resolve) => {
+                openGate = resolve;
+            });
+        }, "IMMEDIATE");
+        await vi.waitFor(() => expect(openGate).toBeTypeOf("function"));
+
+        const saving = writer.save(record(runInstanceId, "parent-1"));
+        const closing = writer.close();
+        openGate();
+        await gate;
+
+        expect(await saving).toMatchObject({ ok: true });
+        await closing;
+
+        const reopened = await openAgentMetadataDatabase(workspacesDir);
+        try {
+            // A lease left behind would keep the next process from continuing the run.
+            expect(
+                (
+                    (await reopened.get(
+                        "SELECT COUNT(*) AS count FROM agent_run_continuation_leases",
+                    )) as { count: number }
+                ).count,
+            ).toBe(0);
+            expect(
+                (
+                    (await reopened.get(
+                        "SELECT COUNT(*) AS count FROM agent_run_continuation_heads WHERE pending = 0",
+                    )) as { count: number }
+                ).count,
+            ).toBe(1);
+        } finally {
+            await reopened.close();
+        }
+    });
+
     it("serializes continuation leases and rejects a stale writer after another process advances the head", async () => {
         const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-contention-"));
         tempDirs.push(stateDir);
@@ -1081,11 +1137,101 @@ describe("delegated-agent V2 persistence", () => {
 
         const restored = await loadAgentRunPersistence(context, sessionsDir);
         expect(restored?.records).toHaveLength(0);
-        expect(restored?.diagnostics).toContain(
+        // Exactly one report for the run: only the active-branch pass diagnoses a missing row, so the
+        // session-head pass must stay silent while it seeds compare-and-set expectations.
+        expect(restored?.diagnostics).toEqual([
             "Could not restore scout-1: parent marker references a missing SQLite snapshot.",
-        );
+        ]);
         loaded?.persistence.close?.();
         restored?.persistence.close?.();
+    });
+
+    /**
+     * Two persistence facades over one parent session stand in for a reloaded parent: the second load
+     * must seed its head expectations from the markers it read, or it would overwrite the checkpoints
+     * the first one committed after the load.
+     */
+    it("rejects a save from a loader whose head was advanced by another writer", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-stale-loader-"));
+        tempDirs.push(stateDir);
+        const sessionsDir = path.join(stateDir, "agent-sessions");
+        const parentDir = path.join(
+            getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }),
+            "parent-1",
+        );
+        fs.mkdirSync(parentDir, { recursive: true });
+        const parent = SessionManager.create(process.cwd(), parentDir);
+        const context = {
+            cwd: process.cwd(),
+            ui: { notify: vi.fn() },
+            sessionManager: parent,
+        } as unknown as ExtensionContext;
+        const ownerSessionId = parent.getSessionId();
+        const runInstanceId = "instance-stale-loader";
+
+        const first = await loadAgentRunPersistence(context, sessionsDir);
+        expect(await first?.persistence.save(record(runInstanceId, ownerSessionId))).toBe(true);
+
+        // The second loader snapshots the head while it still points at the first checkpoint.
+        const refusals: AgentRefusedWrite[] = [];
+        const second = await loadAgentRunPersistence(context, sessionsDir, {
+            onRefusedWrite: (refusal) => refusals.push(refusal),
+        });
+        expect(
+            await first?.persistence.save({
+                ...record(runInstanceId, ownerSessionId),
+                progress: { output: "advanced elsewhere", recentActivity: [] },
+            }),
+        ).toBe(true);
+
+        expect(
+            await second?.persistence.save({
+                ...record(runInstanceId, ownerSessionId),
+                progress: { output: "stale writer", recentActivity: [] },
+            }),
+        ).toBe(false);
+        expect(refusals[0]?.message).toMatch(/stale|another process has already continued/i);
+
+        first?.persistence.close?.();
+        second?.persistence.close?.();
+    });
+
+    /**
+     * Pre-V2 `agent_run_states` rows are read-only compatibility for session facades without an entry
+     * index. A real SDK session must ignore them, or a stale row could resurface as a checkpoint.
+     */
+    it("ignores legacy run-state rows when the parent session has an entry index", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-legacy-ignored-"));
+        tempDirs.push(stateDir);
+        const sessionsDir = path.join(stateDir, "agent-sessions");
+        const parentDir = path.join(
+            getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }),
+            "parent-1",
+        );
+        fs.mkdirSync(parentDir, { recursive: true });
+        const parent = SessionManager.create(process.cwd(), parentDir);
+        const context = {
+            cwd: process.cwd(),
+            ui: { notify: vi.fn() },
+            sessionManager: parent,
+        } as unknown as ExtensionContext;
+
+        const database = await openAgentMetadataDatabase(path.join(stateDir, "workspaces"));
+        try {
+            await upsertAgentRunStateInDatabase(
+                database,
+                record("instance-legacy-row", parent.getSessionId()),
+                parent.getLeafId() ?? "root",
+            );
+        } finally {
+            await database.close();
+        }
+
+        const loaded = await loadAgentRunPersistence(context, sessionsDir);
+        expect(loaded?.persistence.usesSnapshotMarkers).toBe(true);
+        expect(loaded?.records).toHaveLength(0);
+        expect(loaded?.diagnostics).toEqual([]);
+        loaded?.persistence.close?.();
     });
 
     it("selects the persisted child leaf rather than the latest physical leaf", () => {

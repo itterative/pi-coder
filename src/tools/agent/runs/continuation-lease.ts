@@ -142,6 +142,12 @@ export class AgentRunLeaseCoordinator {
         if (persistence?.usesSnapshotMarkers !== true) {
             return undefined;
         }
-        return persistence.acquireContinuationLease;
+        const grant = persistence.acquireContinuationLease;
+        if (!grant) {
+            return undefined;
+        }
+        // The grantor escapes the persistence object and is later called as a plain function, so bind
+        // the receiver here: an implementation backed by a class would otherwise lose its state.
+        return (runInstanceId, onLost) => grant.call(persistence, runInstanceId, onLost);
     }
 }

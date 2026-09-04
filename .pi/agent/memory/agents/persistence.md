@@ -27,6 +27,64 @@ keep_updated: true
 
 Delegated run restoration now uses a small `pi-coder:agent-run-snapshot-v2` parent-tree marker pointing to normalized immutable SQLite run-instance/snapshot rows. Parent marker reachability defines branch state; each physical run receives an internal UUID independent of its branch-local display ID; every new resumable snapshot stores an explicit child transcript leaf. A physical run has one session-wide continuation head: only the parent branch whose latest reachable marker equals that head may resume it, while older branch checkpoints are exposed as read-only history marked as continued elsewhere. Restore selects/resets the child leaf before context construction, and interrupted repair runs only after explicit continuation. The manager captures and persists the child leaf after each settled prompt and before terminal handle disposal; historical browser rows without an exact leaf show an unavailable diagnostic rather than opening the physical latest leaf. Parent marker append is the commit point; V2 checkpoint writes now use renewable SQLite continuation leases, expected-head CAS, and pending head reservations to serialize competing processes and survive marker/head failures. Restoration uses the recorded Pi-process PID as an enabled fast path to reclaim a conclusively dead continuation lease after an abrupt process stop; when PID liveness is unavailable or uncertain, it retries at the recorded lease expiry, and still protects a live competing process. The expiry wait is grace-delayed, abortable during manager shutdown or cancellation of the parent continuation action, and uses an unref'd timer. The catalog remains a rebuildable projection and old custom-entry/current experimental state formats remain non-authoritative. `/agents` now combines active and historical sessions across the current cwd in one Agents view. The current parent’s matching historical entries are replaced with marker-resolved active-branch checkpoints, while other historical sessions use their durable catalog projection. Workspace leases/results now carry physical `runInstanceId` on new runtime paths, with compatibility for older direct callers. Isolated task identities are reserved and transferred from provisional workspace leases before manager setup/prompt execution begins; continuations retain the existing public and physical run identity, while their workspace receives a new result record after successful continuation. Setup failures are marked explicitly and skip workspace-result finalization, preserving the prior prepared result and lease for retry. Collected non-mutating runs can be continued without workspace lease transfer while reusing the persisted child session. V2 tests cover exact-leaf sibling browsing, missing snapshots/leaves, snapshot/marker/catalog failure ordering, stale manager restoration rejection, true sibling parent branches, starting/running-to-interrupted restoration, interrupted repair timing, and session-tree lifecycle restoration. The implementation invariants are maintained in the persistence documentation and regression tests.
 
+### Package layout
+
+`runs/persistence.ts` is now the package `runs/persistence/`, split by the state each module owns. Import
+from `runs/persistence` rather than a file inside it: `moduleResolution: "bundler"` resolves the
+directory, so every import specifier and the `vi.mock` path kept working unchanged. The barrel re-exports
+only the functions callers use; types stay in their owning module, which holds knip findings at the
+pre-split count.
+
+- `session-paths.ts` — `getAgentCwdSessionDir`, the `inside` containment predicate, and
+  `safeExistingChildFile`, which accepts only a regular non-symlink file inside the parent's
+  child-session directory.
+- `catalog-projection.ts` — `catalogRecord` and its `responsePreview` cap: the rebuildable `agent_runs`
+  projection, never the authority for restoration.
+- `lease-ledger.ts` — `CONTINUATION_LEASE_MS`, the `ENABLE_PID_LEASE_RECOVERY` kill switch,
+  `isProcessAlive`, and `ContinuationLeaseLedger`.
+- `journal-heads.ts` — `JournalHeadExpectations`, the continuation-head row shapes, and
+  `initializeAgentRunContinuationHeads`, whose sequence guard still lets a re-adopt claim take over a
+  pending reservation with no live lease.
+- `state-writer.ts` — the `AgentRunStateWriter` interfaces plus `SqliteAgentRunStateWriter` and its factory.
+- `stored-record.ts` — the untrusted-record gate: `parseRecord`, the `normalize*` coercion helpers, and the
+  exported `validateAgentRunSnapshot` seam.
+- `load.ts` — `loadAgentRunPersistence` as a short orchestrator over one function per pipeline phase (`sessionLayout`, `collectParentMarkers`, `collectSessionHeads`, `collectBranchHeads`, `collectLegacyRecords`, `resolveActiveRecords`) plus three classes that own state across calls: `SnapshotValidator` (row lookup + the diagnostics accumulator), `RefusedWriteReporter` (the one-shot user warning over an unbudgeted listener), and `AgentRunPersistenceFacade` (`implements AgentRunPersistence`).
+
+SQL stays inline at the call site that executes it, even where two statements are textually identical: the
+ledger's timer renewal and the commit transaction's renewal bind different arguments, and sharing one
+constant was judged more fragile than the duplication.
+
+### Durable writer structure
+
+`createAgentRunStateWriter` in `state-writer.ts` is a thin factory over `SqliteAgentRunStateWriter`,
+which holds the state that was previously a dozen captured locals. Two small classes own the state clusters that more than one
+method touches: `ContinuationLeaseLedger` (tokens, renewal timers, the sticky lost-run set, and the
+renew/release row writes) and `JournalHeadExpectations` (the compare-and-set expectation that both the
+lease claim and the reserve transaction verify, where the first read of a run adopts whatever the row
+holds and every later read must agree). Keep the factory as the exported seam so call sites and tests do
+not churn when the class changes.
+
+- The save pipeline is `persistQueued` (identity guard, automatic lease, release in `finally`) over
+  `reserveSnapshot` (snapshot row plus head reserved with `pending` set) and `commitSnapshot` (renew,
+  verify the reservation, append the marker, settle the head, then the catalog projection).
+- The marker append is the commit point: a failure in the writes that follow it still reports a
+  successful save and adopts the snapshot as the expected head, because the parent session already
+  references it.
+- `pending` is a bound parameter of one shared head write rather than two near-identical literal
+  statements. Tests assert the resulting row state (`WHERE pending = 1`/`= 0` counts) instead of SQL
+  text, which is what keeps the shared write safe to change.
+- Accepted untested gaps: `verifyReservation` inside the commit transaction cannot be reached through
+  the public API while the `IMMEDIATE` write lock is held, and a rival process is caught by the head CAS
+  instead, so that check is defense-in-depth against a bug in this writer with no regression test.
+  Likewise, adopting the head expectation before versus after the marker append is unobservable, because
+  a save that fails at the append already leaves a committed `pending` reservation whose next save
+  correctly reports stale until restore resolves it. Do not write tests that assert either ordering.
+- A fresh loader adopts the head each run currently holds, because session heads come from the newest valid marker. Compare-and-set protection therefore covers a head that advances _after_ the load, not one that already moved; do not read an unseeded expectation as a hole in the seeding path.
+- The persistence facade is consumed both through its receiver and as a detached callback: `AgentRunLeaseCoordinator.leaseGrantor()` extracts `acquireContinuationLease` and `releaseLeaseIfCurrent` extracts `lease.release`, so both re-wrap with an explicit `fn.call(receiver, ...)`. That binding is what lets the facade and the writer be classes rather than object literals of arrow properties; keep any new extraction site binding its receiver.
+- Close ordering is asserted in tests: drain queued saves, drain in-flight lease acquisitions, release
+  those leases, mark closed, then close the database handle. Releasing after the handle closes or
+  skipping either drain leaves a lease row or a dropped save that the tests catch.
+
 ## Revision authority
 
 Parent `continue` actions resolve through the manager's checkpoints loaded from or written to the active parent branch, while requiring the exact parent session. Continuations retain the public and physical run identity, so the run ID remains stable and a later continuation continues the latest active checkpoint rather than forking from an older source ID. Isolated workers still use workspace lease/result ownership. The manager checkpoint cache is authoritative whenever persistence is active; catalog fallback is limited to persistence-less test/ephemeral contexts. Per-run in-flight persistence is guarded before removal tombstones are written, so fire-and-forget checkpoints cannot race a run’s removal. Persistence shutdown drains serialized saves and continuation-lease releases before closing the SQLite connection.
