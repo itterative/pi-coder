@@ -18,7 +18,7 @@ import {
 import { AutocompleteItem, matchesKey } from "@earendil-works/pi-tui";
 
 import sandboxConfig from "../common/config";
-import { pager, type PagerItem, type PagerState } from "../tui/pager";
+import { pager, type PagerItem } from "../tui/pager";
 
 // Types for config display items
 type ConfigLineType =
@@ -132,18 +132,20 @@ function renderConfigLine(
         case "dim":
             return theme.fg("dim", `  ${line.text}`);
 
-        case "mount":
+        case "mount": {
             const accessColor = line.access === "readonly" ? "warning" : "success";
             return `    ${line.path} → ${theme.fg(accessColor, line.access)}`;
+        }
 
         case "env":
             return `    ${line.key}=${theme.fg("muted", line.value)}`;
 
-        case "inherit-env":
+        case "inherit-env": {
             const actionColor = line.action === "allow" ? "success" : "error";
             return `    ${line.key} → ${theme.fg(actionColor, line.action)}`;
+        }
 
-        case "permission":
+        case "permission": {
             let permColor: ThemeColor;
             switch (line.perm) {
                 case "allow":
@@ -159,6 +161,7 @@ function renderConfigLine(
                     permColor = "muted";
             }
             return `  ${line.pattern} ${theme.fg(permColor, line.perm)}`;
+        }
 
         case "audit-model":
             return `  Model: ${theme.fg("accent", `${line.provider}/${line.model}`)}`;

@@ -10,7 +10,7 @@ export interface ChildUserQuestion {
     options: Array<{ label: string; description?: string }>;
 }
 
-export interface ChildUserAnswerDetails {
+interface ChildUserAnswerDetails {
     unavailable?: boolean;
     canceled?: boolean;
     answer?: string;
@@ -18,7 +18,7 @@ export interface ChildUserAnswerDetails {
     optionIndex?: number;
 }
 
-export interface ChildUserAnswerResult {
+interface ChildUserAnswerResult {
     content: Array<{ type: "text"; text: string }>;
     details: ChildUserAnswerDetails;
 }

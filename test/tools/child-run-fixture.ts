@@ -21,7 +21,7 @@ export interface ChildRunMode {
     readonly parentHasNoSession?: boolean;
 }
 
-export interface ChildRunInstallation {
+interface ChildRunInstallation {
     /** Ordered registration log: `on:<event>` and `tool:<name>`. */
     readonly calls: string[];
     readonly toolCall: Array<(event: unknown, ctx: unknown) => unknown>;
@@ -157,9 +157,4 @@ export function buildChildRun(
             return { calls, toolCall, toolResult, sessionStart, tools };
         },
     };
-}
-
-/** The context pi hands a handler: the child's cwd, its session manager, and a live signal. */
-export function handlerContext(cwd: string): unknown {
-    return { cwd, sessionManager: undefined, signal: new AbortController().signal };
 }

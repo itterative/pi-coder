@@ -22,7 +22,6 @@ import sandbox from "../../../modules/sandbox/bubblewrap";
 import {
     getPathConfinementAssessment,
     getPathConfinementPermission,
-    Heuristic,
     isPathWithinDirectory,
     isSafeHeuristic,
     UnsafeReason,
@@ -390,7 +389,7 @@ export function registerCommandPermissionHooks(
         if (options.defaultBashTimeoutSeconds !== undefined && input.timeout === undefined) {
             input.timeout = options.defaultBashTimeoutSeconds;
         }
-        let permission: Permission = "ask";
+        let permission: Permission;
         let unresolved: string[][] = [];
         const sensitiveRoots = scratchpadRoots(ctx);
         const additionalRoots = getCommandReadRoots(ctx, options.additionalReadRoots ?? []);
@@ -417,7 +416,7 @@ export function registerCommandPermissionHooks(
 
         const sandboxEnabled = sandboxConfig.current?.sandbox.enabled !== false;
         const supported = process.platform === "linux" || process.platform === "freebsd";
-        let bwrap = "";
+        let bwrap: string;
         try {
             bwrap = sandboxEnabled && supported ? ((await lookpath("bwrap")) ?? "") : "";
         } catch (error) {
@@ -470,7 +469,6 @@ export function registerCommandPermissionHooks(
                 reason: blockedReason("bash", event.input as Record<string, unknown>),
             };
         }
-        permission = result.permission ?? permission;
         if (needsPrompt && canToggle) {
             permissionState.bashSandboxed = sandboxedMode.value;
         }

@@ -91,7 +91,7 @@ function tryLoad(path: string): SandboxConfig | null {
                   }
                 : undefined,
         } as SandboxConfig;
-    } catch (e) {
+    } catch {
         return null;
     }
 }

@@ -23,6 +23,11 @@ import {
 import type { AgentRunManager } from "../../src/tools/agent/runs/manager";
 import { ZERO_USAGE } from "../../src/tools/agent/runs/usage";
 
+/** Replaces the checkout path that `workspace()` embeds with a stable token. */
+function normalizeWorkspacePath(text: string): string {
+    return text.split(process.cwd()).join("<repo>");
+}
+
 const liveManager = (...runs: AgentRunSummary[]) =>
     ({
         listRuns: () => runs,
@@ -34,6 +39,10 @@ function workspace(overrides: Partial<AgentWorkspace> = {}): AgentWorkspace {
         id: "workspace-1",
         cwd: "/repo",
         repositoryRoot: "/repo",
+        // Must be a directory that really exists, outside the synthetic `/repo` cwd: the
+        // presentation layer stats the worktree path to tell "review this workspace" from "its
+        // worktree is missing". `normalizeWorkspacePath` keeps this checkout location out of the
+        // file snapshots so they hold on any machine or git worktree.
         worktreePath: process.cwd(),
         slug: "worktree-1",
         baseRevision: "base",
@@ -248,18 +257,18 @@ describe("agent list rendering", () => {
             sections.push(`### ${status}\n${listing.content}`);
         }
 
-        await expect(snapshotText(sections.join("\n\n"))).toMatchFileSnapshot(
-            "__snapshots__/agent-outcomes.list-rows.txt",
-        );
+        await expect(
+            snapshotText(normalizeWorkspacePath(sections.join("\n\n"))),
+        ).toMatchFileSnapshot("__snapshots__/agent-outcomes.list-rows.txt");
     });
 
     it("reports the listing itself as a completed runtime outcome", async () => {
         const outcome = listOutcome(liveManager(run("worker-1")));
 
         expect(outcome.details.updatedAt - outcome.details.startedAt).toBe(0);
-        await expect(snapshotText(stableDetails(outcome))).toMatchFileSnapshot(
-            "__snapshots__/agent-outcomes.list-envelope.txt",
-        );
+        await expect(
+            snapshotText(normalizeWorkspacePath(stableDetails(outcome))),
+        ).toMatchFileSnapshot("__snapshots__/agent-outcomes.list-envelope.txt");
     });
 });
 
@@ -396,9 +405,9 @@ describe("agent list workspace blockers", () => {
             return `### ${label}\n${listOutcome(liveManager(...runs), workspaces).content}`;
         });
 
-        await expect(snapshotText(sections.join("\n\n"))).toMatchFileSnapshot(
-            "__snapshots__/agent-outcomes.workspace-blockers.txt",
-        );
+        await expect(
+            snapshotText(normalizeWorkspacePath(sections.join("\n\n"))),
+        ).toMatchFileSnapshot("__snapshots__/agent-outcomes.workspace-blockers.txt");
     });
 });
 
@@ -440,9 +449,9 @@ describe("agent failure and update outcomes", () => {
                 })(),
         ];
 
-        await expect(snapshotText(sections.join("\n\n"))).toMatchFileSnapshot(
-            "__snapshots__/agent-outcomes.failed.txt",
-        );
+        await expect(
+            snapshotText(normalizeWorkspacePath(sections.join("\n\n"))),
+        ).toMatchFileSnapshot("__snapshots__/agent-outcomes.failed.txt");
     });
 
     it("truncates a start task and keeps a non-start task out of the details", () => {
@@ -468,10 +477,12 @@ describe("agent failure and update outcomes", () => {
         expect(active.details).toBe(activeInput);
         await expect(
             snapshotText(
-                [
-                    `### with activity\n${JSON.stringify(active.content, null, 2)}`,
-                    `### without activity\n${JSON.stringify(idle.content, null, 2)}`,
-                ].join("\n\n"),
+                normalizeWorkspacePath(
+                    [
+                        `### with activity\n${JSON.stringify(active.content, null, 2)}`,
+                        `### without activity\n${JSON.stringify(idle.content, null, 2)}`,
+                    ].join("\n\n"),
+                ),
             ),
         ).toMatchFileSnapshot("__snapshots__/agent-outcomes.update.txt");
     });

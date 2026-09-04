@@ -40,10 +40,6 @@ import { inspectAgentWorkspaceGitState, listAgentWorkspaces } from "./workspaces
 import { createAgentWorkspaceManually } from "./workspaces/setup";
 import { handleWorkspaceAction } from "./workspaces/tui-actions";
 
-function capitalize(text: string): string {
-    return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
 export function workspaceActionConfirmation(
     action: WorkspaceDispositionAction,
     slug: string,

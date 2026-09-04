@@ -11,8 +11,6 @@ import {
     assessment,
     isSafeHeuristic,
     createCwdConfinementState,
-    type FileAccess,
-    type CwdConfinementState,
     type ConfinementDiagnostics,
     type PathConfinementOptions,
     type CwdConfinementOptions,
@@ -124,13 +122,7 @@ export function getPathConfinementAssessment(
     filePath: string,
     options: PathConfinementOptions,
 ): HeuristicAssessment {
-    const {
-        cwd,
-        config,
-        access = "read",
-        additionalRoots = [],
-        sensitiveAdditionalRoots,
-    } = options;
+    const { cwd, config, additionalRoots = [], sensitiveAdditionalRoots } = options;
     const classification = getPathConfinementPermission(filePath, options);
     if (isSafeHeuristic(classification)) {
         return assessment(classification);

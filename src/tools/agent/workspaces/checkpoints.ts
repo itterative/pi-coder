@@ -8,10 +8,7 @@ import type {
     WorkspaceCheckpointStatus,
 } from "../contracts/workspaces";
 import type { AgentWorkspaceCheckpointCallback } from "../contracts/runs";
-import {
-    openAgentMetadataDatabase as openDatabase,
-    type AgentMetadataDatabase,
-} from "../storage/metadata";
+import { openAgentMetadataDatabase as openDatabase } from "../storage/metadata";
 import { git } from "./git";
 import {
     inspectAgentWorkspaceGitState,

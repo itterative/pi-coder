@@ -116,7 +116,7 @@ export function createScriptedChild({
     session,
     onPrompt,
 }: ScriptedChildOptions = {}): ScriptedChild {
-    let currentOutput = output;
+    const currentOutput = output;
     let pendingQuestion = question;
     let disposed = false;
     let abortCount = 0;

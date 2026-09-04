@@ -17,7 +17,6 @@ import {
     MAX_AGENT_WORKSPACES,
     releaseAgentWorkspaceLease,
     getAgentWorkspace,
-    transferAgentWorkspaceLease,
 } from "./store";
 import {
     createAgentWorkspace,
@@ -210,10 +209,7 @@ export interface WorkspaceReservation {
     provisionalLeaseRunInstanceId: string;
 }
 
-export interface ManualWorkspaceCreationOptions extends Omit<
-    PrepareIsolatedWorkspaceOptions,
-    "manager"
-> {}
+export type ManualWorkspaceCreationOptions = Omit<PrepareIsolatedWorkspaceOptions, "manager">;
 
 /** Create a workspace from the browser and optionally run its setup worker. */
 export async function createAgentWorkspaceManually(

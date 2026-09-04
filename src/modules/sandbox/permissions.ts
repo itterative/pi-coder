@@ -1,13 +1,7 @@
 import sandboxConfig, { SandboxConfigPermissions } from "../../common/config";
 import { BashAst, parseBashAst } from "./bash";
 import { unwrapWrapperCommand } from "./command-wrappers";
-import type {
-    BashAstNode,
-    BashCommand,
-    BashStatement,
-    BashSubstitutionNode,
-    BashWordNode,
-} from "./bash";
+import type { BashCommand, BashStatement, BashSubstitutionNode, BashWordNode } from "./bash";
 
 type PermissionToken = {
     value: string;
@@ -474,7 +468,7 @@ function getPermissions(configPermissions?: SandboxConfigPermissions): Permissio
         return permissions;
     }
 
-    let _permissions: PermissionMatch[] = [];
+    const _permissions: PermissionMatch[] = [];
     let _defaultPermission: Permission = "ask";
 
     try {
@@ -519,11 +513,12 @@ function getPermissions(configPermissions?: SandboxConfigPermissions): Permissio
             } catch (e) {
                 throw new Error(
                     `could not create permission matcher for pattern (${permission[0]}): ${e}`,
+                    { cause: e },
                 );
             }
         }
     } catch (e) {
-        throw new Error(`Failed to parse permissions in config: ${e}`);
+        throw new Error(`Failed to parse permissions in config: ${e}`, { cause: e });
     }
 
     permissions = _permissions;

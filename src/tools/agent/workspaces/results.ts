@@ -436,12 +436,7 @@ export async function prepareAgentWorkspaceApplication(
     workspace: AgentWorkspace,
     options: PrepareAgentWorkspaceApplicationOptions,
 ): Promise<AgentWorkspaceResult> {
-    const {
-        ownerSessionId,
-        leaseRunId,
-        leaseRunInstanceId,
-        baseRevision: requestedBaseRevision,
-    } = options;
+    const { leaseRunId, leaseRunInstanceId, baseRevision: requestedBaseRevision } = options;
     const { database, workspace: current } = await workspaceForLease(workspace.id, options);
     let durableRef: string | undefined;
     try {

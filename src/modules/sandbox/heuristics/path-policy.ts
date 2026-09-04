@@ -391,7 +391,6 @@ export function isPathWithinDirectory(
     }
 
     if (confinement?.resolveSymlinks ?? true) {
-        const resolvedDirectory = resolvePath(directory, resolvedCwd, home);
         const realFile = canonicalizePath(makeAbsolutePath(filePath, resolvedCwd, home));
         const realDirectory = canonicalizePath(makeAbsolutePath(directory, resolvedCwd, home));
 

@@ -122,6 +122,13 @@ function sessionFolderFor(filePath: string, cwd: string): string {
     return path.dirname(resolved);
 }
 
+// Optional note the permission dialog attaches to event.input when the user
+// types one while approving or denying an operation.
+function userNote(input: Record<string, unknown>): string | undefined {
+    const note = input._userMessage;
+    return typeof note === "string" && note.trim() ? note.trim() : undefined;
+}
+
 async function promptForFileAccess(
     operation: FileOperation,
     filePath: string,
@@ -213,7 +220,7 @@ export default function registerFileToolHook(
     });
 
     pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult> => {
-        let isReadLike = false;
+        let isReadLike: boolean;
         if (operation === "read") {
             isReadLike =
                 event.toolName === "read" ||
@@ -300,7 +307,7 @@ export default function registerFileToolHook(
         const choice = result?.value;
 
         if (result?.message) {
-            (event.input as any)._userMessage = result.message;
+            (event.input as Record<string, unknown>)._userMessage = result.message;
         }
 
         if (choice?.kind === "remember") {
@@ -339,7 +346,7 @@ export default function registerFileToolHook(
             operation === "read" ? isReadToolResult(event) : isWriteToolResult(event);
         if (!isMatchingTool) return;
 
-        const userMessage = (event.input as any)._userMessage;
+        const userMessage = userNote(event.input as Record<string, unknown>);
         if (!userMessage) return;
 
         const trimmed = userMessage.trim();

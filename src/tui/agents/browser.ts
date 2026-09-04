@@ -1,7 +1,6 @@
 import path from "node:path";
-import type { EventBus, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, Spacer, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import { isAbortError } from "../../common/abort";
 import type { BuiltinAgentName } from "../../tools/agent/config";
 import type {
     AgentSessionBrowserItem,
@@ -337,7 +336,7 @@ export class AgentSessionBrowserComponent
                 },
                 onKey: (key, state) => this.handleListKey(key, state, options),
                 footerContent: (container, theme, state) => {
-                    let footer = "";
+                    let footer: string;
                     if (state.tab === "agents" && this.loadingAgents) {
                         footer = "Loading…";
                     } else if (state.tab === "workspaces" && this.loadingWorkspaces) {
@@ -520,21 +519,24 @@ export class AgentSessionBrowserComponent
         options: AgentSessionBrowserOptions,
     ): void {
         const confirmAction = options.onConfirmWorkspaceAction;
-        let detail: AgentWorkspaceDetailComponent;
-        detail = new AgentWorkspaceDetailComponent(workspace, options.fixedHeight, {
-            onInspect: () =>
-                options.onWorkspaceInspect?.(detail.workspace) ??
-                "No saved worker result is available.",
-            onConfirmAction: confirmAction
-                ? (action) => confirmAction(detail.workspace, action)
-                : undefined,
-            onAction: async (action) => {
-                const replacement = await options.onWorkspaceAction?.(detail.workspace, action);
-                this.updateWorkspace(workspace, replacement);
-                return replacement;
+        const detail: AgentWorkspaceDetailComponent = new AgentWorkspaceDetailComponent(
+            workspace,
+            options.fixedHeight,
+            {
+                onInspect: () =>
+                    options.onWorkspaceInspect?.(detail.workspace) ??
+                    "No saved worker result is available.",
+                onConfirmAction: confirmAction
+                    ? (action) => confirmAction(detail.workspace, action)
+                    : undefined,
+                onAction: async (action) => {
+                    const replacement = await options.onWorkspaceAction?.(detail.workspace, action);
+                    this.updateWorkspace(workspace, replacement);
+                    return replacement;
+                },
+                onInvalidate: options.onInvalidate,
             },
-            onInvalidate: options.onInvalidate,
-        });
+        );
         this.workspaceDetail = detail;
         detail.initialize(this.theme!);
         detail.setDoneCallback(() => this.closeWorkspaceDetail(detail));

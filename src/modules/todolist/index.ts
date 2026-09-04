@@ -12,13 +12,7 @@ import {
 
 import { getScratchpadPath } from "../scratchpad";
 import { registerTodoBashGuard } from "./bash-guard";
-import {
-    FrontmatterParseError,
-    parseTodoList,
-    type TodoItem,
-    type TodoList,
-    type TodoStatus,
-} from "./parser";
+import { parseTodoList } from "./parser";
 import { summarizeTodoList, type TodoProgress } from "./progress";
 import { emitTodoStatus } from "./events";
 import { appendTodoSnapshot, getTodoSnapshot } from "./persistence";

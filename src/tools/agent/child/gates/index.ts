@@ -45,10 +45,5 @@ export function installChildGates(runtime: ChildGateRuntime): void {
 // Surface the extension factory and the composition test need; each gate's own module is imported
 // directly by whoever installs it, so the individual gates are deliberately not re-exported here.
 export { createChildGateRuntime, type ChildGateRuntime } from "./runtime";
-export { isChildPathAllowed, type ChildPathOptions } from "./confinement";
-export {
-    askChildUser,
-    type ChildUserAnswerDetails,
-    type ChildUserAnswerResult,
-    type ChildUserQuestion,
-} from "./interaction";
+export { isChildPathAllowed } from "./confinement";
+export { askChildUser, type ChildUserQuestion } from "./interaction";

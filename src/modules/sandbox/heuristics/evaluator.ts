@@ -45,7 +45,7 @@ export function isNonPersistentChainOperator(operator: string | null): boolean {
 function isDynamicDirectoryPath(value: string): boolean {
     // Expansion and globbing can select a directory outside the lexical cwd;
     // do not guess what a state-changing builtin will receive.
-    return /[$`*?\[\]~]/.test(value);
+    return /[$`*?[\]~]/.test(value);
 }
 
 function isConfinedDirectoryPath(

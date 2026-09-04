@@ -33,6 +33,13 @@ interface ToolCallEventResult {
     reason?: string;
 }
 
+// Optional note the permission dialog attaches to event.input when the user
+// types one while approving or denying a command.
+function userNote(input: Record<string, unknown>): string | undefined {
+    const note = input._userMessage;
+    return typeof note === "string" && note.trim() ? note.trim() : undefined;
+}
+
 export default function registerBashToolHook(pi: ExtensionAPI) {
     // Runtime-local state must not leak into another parent or child extension
     // instance. Remembered rules are still cleared on each session start.
@@ -259,7 +266,7 @@ Pay attention to these notes as they provide context about the user's preference
                 }
                 // Attach message to input for retrieval in tool_result
                 if (result.message) {
-                    (event.input as any)._userMessage = result.message;
+                    (event.input as Record<string, unknown>)._userMessage = result.message;
                 }
             } else {
                 permission = "deny";
@@ -272,7 +279,7 @@ Pay attention to these notes as they provide context about the user's preference
             permission = "allow";
         }
 
-        let blocked: boolean = true;
+        let blocked: boolean;
         let sandboxed: boolean = true;
         const originalCommand = event.input.command; // Save before sandbox wrapping
 
@@ -309,7 +316,7 @@ Pay attention to these notes as they provide context about the user's preference
         }
 
         if (blocked) {
-            const userMessage = (event.input as any)._userMessage;
+            const userMessage = userNote(event.input as Record<string, unknown>);
             const baseReason = "Command execution blocked by user.";
             const reason = userMessage ? `${baseReason} User message: ${userMessage}` : baseReason;
             return {
@@ -319,7 +326,7 @@ Pay attention to these notes as they provide context about the user's preference
         }
 
         // Track allowed command for audit
-        const userMessage = (event.input as any)._userMessage;
+        const userMessage = userNote(event.input as Record<string, unknown>);
         pi.appendEntry<AllowedCommandEntry>(ALLOWED_COMMAND_ENTRY_TYPE, {
             command: originalCommand,
             permission: sandboxed ? "allow:sandbox" : "allow",
@@ -338,10 +345,10 @@ Pay attention to these notes as they provide context about the user's preference
     });
 
     // Add user message to tool result for allowed commands
-    pi.on("tool_result", async (event, ctx) => {
+    pi.on("tool_result", async (event, _ctx) => {
         if (!isBashToolResult(event)) return;
 
-        const userMessage = (event.input as any)._userMessage;
+        const userMessage = userNote(event.input as Record<string, unknown>);
         if (!userMessage) return;
 
         // Prepend user message to the result content

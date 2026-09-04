@@ -1,11 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import config, {
-    type SandboxConfig,
-    DEFAULT_HOME_MOUNTS,
-    type SandboxConfigHomeMounts,
-} from "../../common/config";
+import config, { type SandboxConfig, DEFAULT_HOME_MOUNTS } from "../../common/config";
 
 export interface SandboxOptions {
     env?: NodeJS.ProcessEnv;

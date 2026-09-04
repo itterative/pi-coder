@@ -25,7 +25,7 @@ import type { AgentWorkspaceActionCallbacks, AgentWorkspaceBrowserOptions } from
 
 export type { AgentWorkspaceAction } from "../../tools/agent/presentation/browser-models";
 
-interface WorkspaceBrowserState extends ListViewState<WorkspaceListItem> {}
+type WorkspaceBrowserState = ListViewState<WorkspaceListItem>;
 
 function itemText(workspace: WorkspaceListItem, theme: Theme): string {
     return workspace.kind === "workspace"

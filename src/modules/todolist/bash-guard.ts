@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {

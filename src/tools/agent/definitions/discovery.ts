@@ -2,12 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
-import {
-    AGENT_CAPABILITIES,
-    READ_ONLY_AGENT_TOOLS,
-    type AgentCapability,
-    type AgentDefinition,
-} from "./types";
+import { AGENT_CAPABILITIES, type AgentCapability, type AgentDefinition } from "./types";
 
 export type { AgentCapability, AgentDefinition, AgentSource } from "./types";
 export {

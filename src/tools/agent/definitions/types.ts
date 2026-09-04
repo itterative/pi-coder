@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 
-import { getUserMemoryDirectory } from "../../../common/constants";
 import type { AgentContextPolicy } from "../contracts/context";
 
 export type AgentSource = "builtin" | "user" | "project";

@@ -61,10 +61,5 @@ export {
     type SafeBashGuardOptions,
     type SafeBashOptions,
 } from "./safe-bash";
-export { isChildPathAllowed, type ChildPathOptions } from "./gates";
-export {
-    askChildUser,
-    type ChildUserAnswerDetails,
-    type ChildUserAnswerResult,
-    type ChildUserQuestion,
-} from "./gates";
+export { isChildPathAllowed } from "./gates";
+export { askChildUser, type ChildUserQuestion } from "./gates";
