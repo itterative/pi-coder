@@ -29,6 +29,7 @@ vi.mock("../../../src/common/constants", async () => {
 });
 
 import registerAgentTool from "../../../src/tools/agent";
+import { AgentTraceStore } from "../../../src/tools/agent/observability/trace";
 import { createAgentWorkspaceCheckpoint } from "../../../src/tools/agent/workspaces/checkpoints";
 import * as workspaceFinalization from "../../../src/tools/agent/workspaces/finalization";
 import * as runCatalog from "../../../src/tools/agent/storage/run-catalog";
@@ -45,6 +46,7 @@ import {
     createScriptedChild,
     gitOutput,
     initializeRepository,
+    loadE2EPersistence,
     removeE2EPaths,
     runGit,
 } from "./helpers";
@@ -55,6 +57,24 @@ interface Handler {
 
 const paths = createE2EPathsAtRoot(testPaths.root);
 
+/**
+ * Render the tail of a run's in-memory trace so a durable-state failure names the lifecycle steps
+ * that led to it. Explicitly injected traces are always recorded, unlike the `PI_CODER_AGENT_TRACE`
+ * gate that production registration uses.
+ */
+function traceTail(store: AgentTraceStore, runId: string, count = 14): string {
+    const trace = store.get(runId);
+    if (!trace) {
+        return `no delegated-agent trace recorded for ${runId}`;
+    }
+    const header = `${trace.runId}: terminal=${trace.terminalStatus ?? "active"}, ${trace.events.length} events, ${trace.droppedEvents} dropped`;
+    const events = trace.events.slice(-count).map((event) => {
+        const data = event.data ? ` ${JSON.stringify(event.data)}` : "";
+        return `#${event.sequence} ${event.type}${data}`;
+    });
+    return [header, ...events].join("\n");
+}
+
 const handlersToClose: Array<() => Promise<void>> = [];
 afterEach(async () => {
     for (const close of handlersToClose.splice(0)) await close();
@@ -62,12 +82,15 @@ afterEach(async () => {
 });
 
 describe("registered continuation lifecycle", () => {
+    // Real git worktrees, a real SQLite metadata database, and a scripted child session: this flow
+    // needs much more than Vitest's 5s default whenever the machine is busy.
     it("persists and continues the real isolated background start/collect session", async () => {
         const repository = paths.repository;
         initializeRepository(repository);
         const parentHead = gitOutput(repository, ["rev-parse", "HEAD"]);
         const parentSession = createParentSession(paths);
         const ownerSessionId = parentSession.getSessionId();
+        const traceStore = new AgentTraceStore();
 
         const created = await createAgentWorkspace(repository, { workspacesDir: paths.state });
         const ready = await updateAgentWorkspace(
@@ -128,7 +151,7 @@ describe("registered continuation lifecycle", () => {
             registerCommand() {},
             sendMessage() {},
         } as any;
-        registerAgentTool(pi, fakeFactory);
+        registerAgentTool(pi, fakeFactory, { traceStore });
         const ctx = {
             cwd: repository,
             isProjectTrusted: () => true,
@@ -188,7 +211,6 @@ describe("registered continuation lifecycle", () => {
         const firstRecord = catalogAfterCollect.find(
             (record) => record.runId === spawned.details.runId,
         );
-        // FIXME: flaky
         expect(firstRecord).toMatchObject({
             ownerSessionId: parentSession.getSessionId(),
             runInstanceId: spawned.details.runInstanceId,
@@ -199,7 +221,30 @@ describe("registered continuation lifecycle", () => {
                 name: "worker",
                 capabilities: expect.arrayContaining(["edit"]),
             }),
-            status: "removed",
+        });
+
+        // The removal tombstone is checked against the marker/snapshot chain instead of the catalog
+        // row above: the catalog is a deliberately lossy projection whose upsert may be dropped when
+        // SQLite is contended, so its status says nothing about durability. `records` is exactly what
+        // a later parent session would restore from, which is the property this test protects. The
+        // trace tail is attached as the assertion message so a failure names the preceding steps.
+        const durableRecords = (await loadE2EPersistence(paths, parentSession))?.records ?? [];
+        const durable = durableRecords.find(
+            (record) => record.runInstanceId === spawned.details.runInstanceId,
+        );
+
+        const diagnostics = () => traceTail(traceStore, spawned.details.runId);
+        expect(
+            traceStore
+                .get(spawned.details.runId)
+                ?.events.filter((event) => event.type.startsWith("persistence.")) ?? [],
+            diagnostics(),
+        ).toEqual([]);
+        expect(durable?.status, diagnostics()).toBe("removed");
+        expect(durable).toMatchObject({
+            runId: spawned.details.runId,
+            terminalStatus: "completed",
+            childSessionLeafId: childSessions[0]?.getLeafId(),
         });
 
         const recycledForOtherWorker = await recycleAgentWorkspaceForReuse(provisional.id, {
@@ -391,5 +436,5 @@ describe("registered continuation lifecycle", () => {
                 status: "prepared",
             },
         });
-    });
+    }, 30_000);
 });

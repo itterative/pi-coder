@@ -39,7 +39,7 @@ Each physical run has a globally unique internal run instance and a session-wide
 
 Before context construction, restoration selects the exact persisted child transcript leaf. The manager captures the leaf after each settled prompt and before terminal handle disposal. This prevents a historical browser row from accidentally opening a newer branch of the child conversation.
 
-Checkpoint writes use SQLite continuation leases, expected-head compare-and-swap, and pending head reservations. Leases serialize competing processes and survive marker/head failures. Restoration may reclaim a lease immediately when the recorded Pi-process PID is conclusively dead; uncertain PID checks fall back to lease expiry. The expiry wait has a grace period, is abortable during shutdown or parent resume cancellation, and uses an unref'd timer.
+Checkpoint writes use SQLite continuation leases, expected-head compare-and-swap, and pending head reservations. Leases serialize competing processes and survive marker/head failures. Restoration may reclaim a lease immediately when the recorded Pi-process PID is conclusively dead; uncertain PID checks fall back to lease expiry. The expiry wait has a grace period, is abortable during shutdown or parent resume cancellation, and uses an unref'd timer. A released run can still be checkpointed: releasing drops the in-process lease claim immediately, so a later write — such as the removal tombstone `collect` stores after a background terminal result — takes a lease of its own instead of relying on one that is still being released.
 
 ## Continue persistence semantics
 

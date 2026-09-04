@@ -21,6 +21,7 @@ import {
     type PersistedAgentRun,
 } from "../../src/tools/agent/runs/manager";
 import { AGENT_RUN_SNAPSHOT_MARKER } from "../../src/tools/agent/storage/run-markers";
+import type { AgentRefusedWrite } from "../../src/tools/agent/contracts/runs";
 import { openAgentMetadataDatabase } from "../../src/tools/agent/storage/metadata";
 import { upsertAgentRunCatalogRecord } from "../../src/tools/agent/storage/run-catalog";
 import {
@@ -631,6 +632,109 @@ describe("delegated-agent V2 persistence", () => {
         } finally {
             await reopened.close();
         }
+    });
+
+    it("reports every refused durable write, not only the first", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-refused-"));
+        tempDirs.push(stateDir);
+        const sessionsDir = path.join(stateDir, "agent-sessions");
+        const parentDir = path.join(
+            getAgentCwdSessionDir(process.cwd(), { agentSessionsDir: sessionsDir }),
+            "parent-refused",
+        );
+        fs.mkdirSync(parentDir, { recursive: true });
+        const parent = SessionManager.create(process.cwd(), parentDir);
+        const refusals: AgentRefusedWrite[] = [];
+        const notify = vi.fn();
+        const context = {
+            cwd: process.cwd(),
+            ui: { notify },
+            sessionManager: parent,
+        } as unknown as Parameters<typeof loadAgentRunPersistence>[0];
+        const loaded = await loadAgentRunPersistence(context, sessionsDir, {
+            onRefusedWrite: (refusal) => refusals.push(refusal),
+        });
+        const database = await openAgentMetadataDatabase(path.join(stateDir, "workspaces"));
+        await database.exec(`
+            CREATE TRIGGER fail_every_snapshot_insert
+            BEFORE INSERT ON agent_run_snapshots
+            BEGIN SELECT RAISE(ABORT, 'snapshot failure'); END;
+        `);
+        await database.close();
+
+        const ownerSessionId = parent.getSessionId();
+        expect(await loaded!.persistence.save(record("instance-refused-1", ownerSessionId))).toBe(
+            false,
+        );
+        expect(await loaded!.persistence.save(record("instance-refused-2", ownerSessionId))).toBe(
+            false,
+        );
+        await loaded!.persistence.close?.();
+
+        expect(refusals.map((refusal) => refusal.runInstanceId)).toEqual([
+            "instance-refused-1",
+            "instance-refused-2",
+        ]);
+        expect(refusals[0]?.message).toContain("snapshot failure");
+        // The user-facing warning stays budgeted to one notification per session; the listener does not.
+        expect(notify).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * Reproduction of the collected-run tombstone loss seen under CPU starvation.
+     *
+     * `retainBackgroundResult` releases the run's continuation lease without awaiting it, and a later
+     * `collect` writes the removal tombstone. `save` decides whether it needs its own lease by reading
+     * `activeLeases`, but `releaseLease` only removes that entry in a `finally` after its DELETE
+     * transaction settles, so a save issued in the same turn as the release believes it is covered and
+     * then fails in its second transaction. The open write transaction keeps every queued operation
+     * pending until both calls exist, so the ordering is fixed rather than timing-dependent.
+     */
+    it("persists a save whose lease was released in the same turn", async () => {
+        const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-v2-release-race-"));
+        tempDirs.push(stateDir);
+        const database = await openAgentMetadataDatabase(path.join(stateDir, "workspaces"));
+        const writer = createAgentRunStateWriter(
+            process.cwd(),
+            database,
+            (marker) => `marker-${marker.runInstanceId}`,
+        );
+        const runInstanceId = "instance-release-race";
+        const lease = await writer.acquireContinuationLease!(runInstanceId);
+
+        let openGate!: () => void;
+        const gate = database.transaction(async () => {
+            await new Promise<void>((resolve) => {
+                openGate = resolve;
+            });
+        }, "IMMEDIATE");
+        await vi.waitFor(() => expect(openGate).toBeTypeOf("function"));
+
+        const releasing = lease.release();
+        const saving = writer.save({ ...record(runInstanceId, "parent-1"), status: "removed" });
+        openGate();
+        await gate;
+        await releasing;
+
+        const saved = await saving;
+        expect(saved.ok ? "persisted" : String((saved as { error: unknown }).error)).toBe(
+            "persisted",
+        );
+
+        const reopened = await openAgentMetadataDatabase(path.join(stateDir, "workspaces"));
+        try {
+            expect(
+                await reopened.get(
+                    `SELECT snapshots.status FROM agent_run_snapshots AS snapshots
+                     JOIN agent_run_continuation_heads AS heads ON heads.snapshot_id = snapshots.snapshot_id
+                     WHERE heads.run_instance_id = ?`,
+                    runInstanceId,
+                ),
+            ).toMatchObject({ status: "removed" });
+        } finally {
+            await reopened.close();
+        }
+        await writer.close();
     });
 
     it("preserves commit ordering when snapshot, marker, or catalog writes fail", async () => {

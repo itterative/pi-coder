@@ -15,11 +15,24 @@ import { registerAgentTool as registerAgentToolDefinition } from "./presentation
 
 export { clearCompletedWorkspaceSetupRun } from "./presentation/status";
 
+export interface AgentToolRegistrationOptions {
+    /**
+     * Use this trace store instead of the environment-gated default.
+     *
+     * An injection seam for tests and diagnostics: supplying a store always enables tracing for this
+     * registration, whatever `PI_CODER_AGENT_TRACE` says, and leaves the caller holding the recorded
+     * events so they can be asserted or printed without going through `/agent-trace`.
+     */
+    traceStore?: AgentTraceStore;
+}
+
 export default function registerAgentTool(
     pi: ExtensionAPI,
     factory: ChildAgentFactory = createAgentChild,
+    options: AgentToolRegistrationOptions = {},
 ): void {
-    const traceStore = isAgentTraceEnabled() ? new AgentTraceStore() : undefined;
+    const traceStore =
+        options.traceStore ?? (isAgentTraceEnabled() ? new AgentTraceStore() : undefined);
     const lifecycle = new AgentLifecycle(pi, factory, traceStore);
 
     pi.registerShortcut?.("ctrl+alt+b", {

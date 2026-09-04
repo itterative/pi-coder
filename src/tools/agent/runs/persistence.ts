@@ -9,6 +9,7 @@ import {
     AgentContinuationLeaseBusyError,
     isAgentTerminalStatus,
     type AgentContinuationLease,
+    type AgentRefusedWriteListener,
     type AgentRunPersistence,
     type PersistedAgentRun,
 } from "../contracts/runs";
@@ -296,8 +297,14 @@ export function createAgentRunStateWriter(
 
     const releaseLease = async (runInstanceId: string, token: string): Promise<void> => {
         const active = activeLeases.get(runInstanceId);
-        if (!active || active.token !== token) return;
+        if (!active || active.token !== token) {
+            return;
+        }
         clearInterval(active.timer);
+        // Drop the in-process claim before awaiting the DELETE. A save issued while this release is
+        // still in flight must not read the entry as live ownership, then find it gone by the time it
+        // renews; the queued DELETE runs first, so that save takes a fresh lease of its own instead.
+        activeLeases.delete(runInstanceId);
         try {
             await database.transaction(
                 (transaction) =>
@@ -315,8 +322,6 @@ export function createAgentRunStateWriter(
             );
         } catch {
             // Lease expiry remains the recovery path after a release failure.
-        } finally {
-            activeLeases.delete(runInstanceId);
         }
     };
 
@@ -893,6 +898,16 @@ export interface LoadedAgentRunPersistence {
     diagnostics?: string[];
 }
 
+export interface AgentRunPersistenceOptions {
+    /**
+     * Called for every checkpoint write the durable layer refuses.
+     *
+     * `save` keeps its boolean contract, so without this the reason is only visible in the one-shot
+     * user warning below and is lost entirely for every later failure in the session.
+     */
+    onRefusedWrite?: AgentRefusedWriteListener;
+}
+
 /**
  * Loads durable run state and retains the metadata connection for the lifetime
  * of the persistence writer. Keeping one WAL connection active avoids closing
@@ -902,6 +917,7 @@ export interface LoadedAgentRunPersistence {
 export async function loadAgentRunPersistence(
     ctx: ExtensionContext,
     agentSessionsDir = PI_CODER_AGENT_SESSIONS_DIR,
+    options: AgentRunPersistenceOptions = {},
 ): Promise<LoadedAgentRunPersistence | undefined> {
     if (!ctx.sessionManager.getSessionFile()) return undefined;
     const ownerSessionId = ctx.sessionManager.getSessionId();
@@ -1078,10 +1094,17 @@ export async function loadAgentRunPersistence(
                 );
             }
             if (result.ok) return true;
+            const message =
+                result.error instanceof Error ? result.error.message : String(result.error);
+            // Reported before the budgeted warning so no failure is invisible, and only for writes the
+            // authoritative snapshot path refused: a lost catalog row stays a lossy projection detail.
+            options.onRefusedWrite?.({
+                runId: record.runId,
+                ...(record.runInstanceId ? { runInstanceId: record.runInstanceId } : {}),
+                message,
+            });
             if (!persistenceWarningShown) {
                 persistenceWarningShown = true;
-                const message =
-                    result.error instanceof Error ? result.error.message : String(result.error);
                 ctx.ui.notify(
                     `pi-coder agents: could not persist delegated run state: ${message}`,
                     "warning",

@@ -207,6 +207,23 @@ export class AgentContinuationLeaseBusyError extends Error {
     }
 }
 
+/** A delegated-run checkpoint the durable layer refused to write, together with the reason it gave. */
+export interface AgentRefusedWrite {
+    runId: string;
+    /** Physical run identity, when the record carried one. */
+    runInstanceId?: string;
+    message: string;
+}
+
+/**
+ * Reports every refused durable write.
+ *
+ * `AgentRunPersistence.save` returns only a boolean, so a caller cannot learn the reason from its own
+ * result. This listener exists so diagnostics can see each cause rather than depending on the single
+ * user-facing warning, which is deliberately budgeted to one notification per session.
+ */
+export type AgentRefusedWriteListener = (refusal: AgentRefusedWrite) => void;
+
 export interface AgentRunPersistence {
     ownerSessionId: string;
     /** True when records are V2 marker/snapshot checkpoints. */

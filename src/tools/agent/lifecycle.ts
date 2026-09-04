@@ -330,7 +330,18 @@ export class AgentLifecycle {
     private async restoreManager(ctx: ExtensionContext): Promise<void> {
         let loaded: Awaited<ReturnType<typeof loadAgentRunPersistence>>;
         try {
-            loaded = await loadAgentRunPersistence(ctx);
+            loaded = await loadAgentRunPersistence(ctx, undefined, {
+                // TODO: publish these on the agent event bus and centralize trace
+                // recording, so persistence does not need a tracer threaded from this lifecycle.
+                // `AgentTraceStore.record` is a no-op once a run's trace is absent or pruned, which a
+                // bus consumer would not be.
+                onRefusedWrite: (refusal) => {
+                    this.traceStore?.record(refusal.runId, "persistence.save_refused", {
+                        ...(refusal.runInstanceId ? { runInstanceId: refusal.runInstanceId } : {}),
+                        message: refusal.message,
+                    });
+                },
+            });
         } catch (error) {
             this.manager.setPersistence(undefined);
             const message = error instanceof Error ? error.message : String(error);

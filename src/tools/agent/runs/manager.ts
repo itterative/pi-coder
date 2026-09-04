@@ -1996,7 +1996,8 @@ export class AgentRunManager {
      * 4. Wait for this run's in-flight checkpoint to settle, so a removal tombstone cannot race an
      *    earlier save into being the last write.
      * 5. Optionally write the tombstone; restoration and shutdown skip it so the durable record stays
-     *    restorable.
+     *    restorable. A tombstone that does not reach storage is traced rather than retried: the run is
+     *    already out of service, and another parent may hold the lease by now.
      * 6. Release the continuation lease, and only then dispose the child, so another parent can take
      *    ownership of work that is no longer being written to.
      */
@@ -2023,7 +2024,14 @@ export class AgentRunManager {
         });
         this.registry.forgetTerminal(run.id);
         await this.checkpoints.waitForPending(run.id);
-        if (persistRemoval) await this.persistRun(run, "removed");
+        if (persistRemoval) {
+            if (!(await this.persistRun(run, "removed")) && this.hasPersistence) {
+                this.record(run, "persistence.removal_not_persisted", {
+                    reason,
+                    leaseLost: run.continuationLeaseLost === true,
+                });
+            }
+        }
         await this.leases.release(run);
         this.disposeRun(run);
     }

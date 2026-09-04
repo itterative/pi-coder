@@ -97,8 +97,12 @@ Persisted parent sessions store child transcripts under the extension's private 
 
 The event bus publishes bounded invalidation events; consumers reload authoritative state. `/agent-trace` retains sanitized, bounded timelines for recent runs. Tracing is temporarily enabled during development and should return to the intended `PI_CODER_AGENT_TRACE=1` opt-in before release.
 
+A checkpoint write that the authoritative snapshot path refuses is reported for every failure through `loadAgentRunPersistence`'s `onRefusedWrite` listener, which the lifecycle records as a `persistence.save_refused` trace event carrying the storage reason. The `ui.notify` warning stays one per session, so the listener — not the notification — is the diagnostics channel. Catalog-row losses remain invisible by design because the catalog is an explicitly lossy projection.
+
 ## Deferred work
 
+- Publish persistence and other lifecycle diagnostics on the agent event bus and centralize trace recording, so `AgentTraceStore` is not threaded explicitly from `AgentLifecycle` into `loadAgentRunPersistence` (`onRefusedWrite` today). A bus consumer also survives trace bounds and pruning, which `AgentTraceStore.record` cannot when a run's trace is already gone.
+- Propagate the storage reason from `AgentRunPersistence.save` to callers by widening that contract beyond a boolean, so `requireDurableCheckpoint` and the terminal-downgrade message can name the cause to the parent instead of only to `/agent-trace`.
 - Restore arbitrary continuation of completed child conversations.
 - Add explicit chain and batch workflows.
 - Add transcript/orphan pruning and browser run renaming.
