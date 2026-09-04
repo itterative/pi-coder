@@ -830,12 +830,22 @@ describe("agent extension registration", () => {
             reportProgress = context.onProgress;
             return child;
         });
-        const widgets: Array<string[] | undefined> = [];
         const widgetPlacements: Array<string | undefined> = [];
         let widgetComponent: { render(width: number): string[] } | undefined;
+        const widgets: Array<string[] | undefined> = [];
+        let lastWidgetState: string | undefined;
+        // deduplicate widget renders so microtask changes don't completely change the snapshot
+        const recordWidgetState = (lines: string[] | undefined): void => {
+            const state = lines?.join("\n").trimEnd();
+            if (state === lastWidgetState) {
+                return;
+            }
+            lastWidgetState = state;
+            widgets.push(lines);
+        };
         const widgetTui = {
             requestRender() {
-                if (widgetComponent) widgets.push(widgetComponent.render(200));
+                if (widgetComponent) recordWidgetState(widgetComponent.render(200));
             },
         };
         const ctx = {
@@ -859,10 +869,10 @@ describe("agent extension registration", () => {
                 ) => {
                     if (typeof value === "function") {
                         widgetComponent = value(widgetTui, {});
-                        widgets.push(widgetComponent.render(200));
+                        recordWidgetState(widgetComponent.render(200));
                     } else {
                         widgetComponent = undefined;
-                        widgets.push(value);
+                        recordWidgetState(value);
                     }
                     if (value) widgetPlacements.push(options?.placement);
                 },

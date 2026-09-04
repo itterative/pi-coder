@@ -18,6 +18,8 @@ For a manual permission-prompt check, run `cat /etc/hostname`; without a matchin
 
 Database-backed agent tests must use an explicit temporary state/workspaces directory; integration tests that only exercise agent action presentation should mock catalog access rather than allowing the default `.state/meta.sqlite` path. The project-local `.state/` directory is runtime state and must not be mutated by the test suite. Shared workspace lifecycle E2E tests live under `test/tools/e2e/` and should use its `createE2EPaths`, `createE2EContext`, `withE2EMetadataDatabase`, and `createScriptedChild` helpers so temporary SQLite, context defaults, cleanup, and child handles remain consistent.
 
+TUI widget tests must assert distinct projected **states**, not a trace of render frames. The background-flow recorder in `test/tools/agent-tool.test.ts` dedupes consecutive identical frames before `toMatchFileSnapshot`, because the widget requests a render on every status event, so a raw frame trace snapshots how many microtask boundaries a flow contains and a transient state (`Starting:`) can coalesce into the next frame. Keep that recorder dedupe when adding widget coverage, and prefer `vi.waitFor` over fixed flush counts for background-settling assertions.
+
 Parser benchmarks:
 
 - `npm run bench` runs `test/modules/sandbox/bash.bench.ts`, measuring `parseBashAst()` across simple, medium, and high-complexity command corpora. Benchmarks are separate from `npm run test:run`.
