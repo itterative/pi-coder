@@ -32,7 +32,10 @@ from typing import Any, Iterable, Sequence
 COMPLEXITY_RULE = "complexity"
 COGNITIVE_RULE = "sonarjs/cognitive-complexity"
 RULES = (COMPLEXITY_RULE, COGNITIVE_RULE)
-DEFAULT_THRESHOLDS = {COMPLEXITY_RULE: 10, COGNITIVE_RULE: 15}
+ESLINT_CONFIG_FILE = "eslint.config.mjs"
+COMPLEXITY_CONSTANT = "COMPLEXITY_THRESHOLD"
+COGNITIVE_CONSTANT = "COGNITIVE_COMPLEXITY_THRESHOLD"
+FALLBACK_THRESHOLDS = {COMPLEXITY_RULE: 10, COGNITIVE_RULE: 10}
 SCORE_PATTERN = re.compile(r"complexity of (\d+)", re.IGNORECASE)
 COGNITIVE_SCORE_PATTERN = re.compile(
     r"cognitive complexity from (\d+)", re.IGNORECASE
@@ -93,6 +96,7 @@ class Report:
     findings: list[Finding]
     other_messages: list[dict[str, Any]]
     eslint_exit_code: int | None
+    thresholds: dict[str, int]
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -124,14 +128,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--complexity-threshold",
         type=int,
-        default=DEFAULT_THRESHOLDS[COMPLEXITY_RULE],
-        help="threshold used for complexity severity (default: 10)",
+        default=None,
+        help=f"override complexity threshold from {ESLINT_CONFIG_FILE}",
     )
     parser.add_argument(
         "--cognitive-threshold",
         type=int,
-        default=DEFAULT_THRESHOLDS[COGNITIVE_RULE],
-        help="threshold used for cognitive severity (default: 15)",
+        default=None,
+        help=f"override cognitive threshold from {ESLINT_CONFIG_FILE}",
     )
     parser.add_argument(
         "--top",
@@ -155,9 +159,30 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
     if args.top < 1:
         parser.error("--top must be at least 1")
-    if args.complexity_threshold < 1 or args.cognitive_threshold < 1:
-        parser.error("complexity thresholds must be positive")
+    if args.complexity_threshold is not None and args.complexity_threshold < 1:
+        parser.error("complexity threshold must be positive")
+    if args.cognitive_threshold is not None and args.cognitive_threshold < 1:
+        parser.error("cognitive threshold must be positive")
     return args
+
+
+def load_thresholds(root: Path) -> dict[str, int]:
+    thresholds = FALLBACK_THRESHOLDS.copy()
+    path = root / ESLINT_CONFIG_FILE
+    try:
+        source = path.read_text()
+    except OSError:
+        return thresholds
+
+    constants = {
+        COMPLEXITY_RULE: COMPLEXITY_CONSTANT,
+        COGNITIVE_RULE: COGNITIVE_CONSTANT,
+    }
+    for rule, name in constants.items():
+        match = re.search(rf"\bconst\s+{name}\s*=\s*(\d+)\s*;", source)
+        if match:
+            thresholds[rule] = int(match.group(1))
+    return thresholds
 
 
 def read_json(path: Path | None) -> tuple[Any, int | None]:
@@ -346,7 +371,7 @@ def parse_report(
                     }
                 )
 
-    return Report(len(data), findings, other_messages, exit_code)
+    return Report(len(data), findings, other_messages, exit_code, thresholds)
 
 
 def subsystem(path: str) -> str:
@@ -464,6 +489,10 @@ def summary(report: Report) -> dict[str, Any]:
         "complexity_findings": len(report.findings),
         "other_lint_messages": len(report.other_messages),
         "eslint_exit_code": report.eslint_exit_code,
+        "thresholds": {
+            metric_label(rule): report.thresholds[rule]
+            for rule in RULES
+        },
     }
 
 
@@ -484,7 +513,7 @@ def render_text(report: Report, top: int) -> str:
     for rule in RULES:
         findings = metric_findings(report, rule)
         label = metric_label(rule)
-        threshold = DEFAULT_THRESHOLDS[rule]
+        threshold = report.thresholds[rule]
         if findings:
             threshold = findings[0].threshold
         lines.extend(
@@ -564,9 +593,14 @@ def render_json(report: Report, top: int) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     root = args.root.resolve()
+    configured_thresholds = load_thresholds(root)
     thresholds = {
-        COMPLEXITY_RULE: args.complexity_threshold,
-        COGNITIVE_RULE: args.cognitive_threshold,
+        COMPLEXITY_RULE: args.complexity_threshold
+        if args.complexity_threshold is not None
+        else configured_thresholds[COMPLEXITY_RULE],
+        COGNITIVE_RULE: args.cognitive_threshold
+        if args.cognitive_threshold is not None
+        else configured_thresholds[COGNITIVE_RULE],
     }
 
     try:

@@ -8,7 +8,7 @@ category: workflow
 
 Run the full suite with `npm run test:run` and check types with `npm run typecheck` (or `npx tsc --noEmit`). The tests cover the consolidated TUI, memory, config, and sandbox modules.
 
-Quality checks are available through `npm run lint`, `npm run format:check`, and `npm run knip`; `npm run check` runs typechecking, linting, formatting, tests, and Knip together. ESLint uses the flat config in `eslint.config.mjs`, with cyclomatic and cognitive complexity reported as warnings initially. The repository currently has pre-existing lint, formatting, and Knip findings; do not treat those baseline findings as regressions without comparing changes.
+Quality checks are available through `npm run lint`, `npm run format:check`, and `npm run knip`; `npm run check` runs typechecking, linting, formatting, tests, and Knip together. ESLint uses the flat config in `eslint.config.mjs`, with cyclomatic and cognitive complexity currently reported as warnings. The repository currently has pre-existing lint, formatting, and Knip findings; do not treat those baseline findings as regressions without comparing changes.
 
 Use `./scripts/cognitive_load_report.py` for a detailed complexity overview. It runs ESLint once, tolerates unrelated lint errors, reports both complexity rules, groups findings by file/subsystem, and supports `--target`, `--top`, `--format json`, `--input`, and threshold options.
 

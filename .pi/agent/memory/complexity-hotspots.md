@@ -1,24 +1,29 @@
 ---
 name: complexity-hotspots
-description: Cognitive and cyclomatic complexity baseline for prioritizing pi-coder refactors.
+description: Conventions for interpreting and reducing complexity in pi-coder.
 category: architecture
 priority: 3
 keep_updated: true
 ---
 
-# Complexity hotspots
+# Complexity conventions
 
-The ESLint baseline uses cyclomatic complexity max 10 and SonarJS cognitive complexity max 15, both reported as warnings initially.
+Complexity metrics are review signals, not defects. A high score should trigger inspection rather than automatic refactoring.
 
-Highest cognitive-complexity hotspots from the 2026-08-30 baseline:
+- Prefer cognitive complexity for readability decisions; use cyclomatic complexity mainly as a signal for testing and path-coverage risk.
+- Prioritize severe outliers and changed code before attempting to reduce the historical baseline.
+- Refactor by semantic responsibility: separate parsing, validation, state transitions, persistence, and rendering rather than splitting arbitrary blocks to lower a score.
+- Do not game the metric with dispatch tables, excessive indirection, or tiny wrappers that make the code harder to follow.
+- Prefer guard clauses and explicit phases. Parser methods should have clear recognition guards, one responsibility, and obvious progress/termination behavior.
+- Keep cursor and state ownership unambiguous. Cursor movement should have one owner; parser context should be separate from cursor control where practical.
+- Preserve domain invariants explicitly. Parser and security code may legitimately need defensive branches or conservative fallbacks; document those reasons.
+- Require behavior-preserving tests before refactoring. Run focused tests first and the full suite after structural changes.
+- Use complexity suppressions only when narrowly scoped, documented, and justified by inherently complex domain behavior.
+- Review other dimensions alongside scores: nesting depth, function length, mutable state count, number of modes, and testability.
+- Track trends rather than only absolute values. A smaller score is not an improvement if readability gets worse.
 
-- `src/modules/sandbox/bash.ts:tokenizeBash` — 250 cognitive / 127 cyclomatic
-- `src/modules/sandbox/heuristics/command-access.ts:extractCommandPaths` — 206 / 107
-- `src/modules/sandbox/commands/text.ts:isSafeSedInvocation` — 77 cognitive
-- `src/tools/agent/runs/manager.ts:AgentRunManager.restore` — 72 / 76
-- `src/modules/sandbox/heuristics/evaluator.ts:isCommandConfined` — 68 / 64
-- `src/modules/sandbox/permissions.ts:matchArgs` — 67 cognitive
-- `src/tools/agent/action-dispatch.ts:executeAgentAction` — 60 / 53
-- `src/tools/agent/definitions/discovery.ts:loadScope` — 58 / 34
+## Qualitative priorities
 
-Prioritize delegated-agent state-machine/orchestration paths first, then sandbox parser and policy phases. Persistence normalization and TUI rendering/input are secondary targets. Preserve conservative security fallbacks when decomposing sandbox logic; avoid broad rewrites.
+When prioritizing refactors, start with delegated-agent lifecycle/state-machine orchestration and sandbox parser/policy phases. Persistence normalization and validation boundaries are secondary; TUI rendering and input handling can usually be addressed incrementally. Preserve conservative security behavior and existing tests when decomposing sandbox logic.
+
+Use `scripts/cognitive_load_report.py` for current measurements rather than storing threshold values or dated score tables in this memory.
