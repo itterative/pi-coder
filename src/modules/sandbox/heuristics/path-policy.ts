@@ -1,9 +1,13 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
+import { resolveHomeDirectory } from "../../../common/home-directory";
 import sandboxConfig, { type SandboxConfigCwdConfinement } from "../../../common/config";
+import { DEFAULT_GLOB_MAX_DEPTH } from "./glob-expansion";
 import { parseCustomSafeBashCommands } from "./command-access";
+
+/** Hard ceiling on a configured `globMaxDepth`, so a typo cannot unbound the walk. */
+const GLOB_MAX_DEPTH_LIMIT = 64;
 
 export const SPECIAL_ALLOWED_PATHS = new Set([
     "/dev/null",
@@ -128,6 +132,10 @@ export interface ConfinementOptions {
     sensitivePatterns: RegExp[];
     blockDotfiles: boolean;
     resolveSymlinks: boolean;
+    /** Whether a live glob in a read path slot may be expanded before confinement is checked. */
+    globExpansion: boolean;
+    /** Maximum pattern components `globExpansion` will walk. */
+    globMaxDepth: number;
     /** canonical cwd for symlink resolution; null when unavailable or disabled */
     realCwd: string | null;
     /** Paired lexical/canonical runtime roots such as scratchpads. */
@@ -384,7 +392,7 @@ export function isPathWithinDirectory(
 
     const confinement = resolveConfinementConfig(config);
     const resolvedCwd = path.resolve(cwd);
-    const home = os.homedir();
+    const home = resolveHomeDirectory();
 
     if (!isLexicallyWithin(filePath, directory, resolvedCwd, home)) {
         return false;
@@ -459,6 +467,22 @@ function resolveConfinementConfig(
         : (config ?? undefined);
 }
 
+/**
+ * A missing or unusable depth must never *disable* the bound, so anything that is not a positive
+ * integer falls back to the default instead of reaching a `components.length > NaN` comparison that
+ * is always false. The ceiling keeps a configured value from turning the walk budgets into the only
+ * limit on a single classification.
+ */
+function resolveGlobMaxDepth(value: number | undefined): number {
+    const depth = value ?? DEFAULT_GLOB_MAX_DEPTH;
+
+    if (!Number.isSafeInteger(depth) || depth <= 0) {
+        return DEFAULT_GLOB_MAX_DEPTH;
+    }
+
+    return Math.min(depth, GLOB_MAX_DEPTH_LIMIT);
+}
+
 export function buildConfinementOptions(
     confinement: SandboxConfigCwdConfinement | undefined,
     cwd: string,
@@ -477,7 +501,7 @@ export function buildConfinementOptions(
         }
     }
 
-    const home = os.homedir();
+    const home = resolveHomeDirectory();
     const resolveAdditionalRoots = (roots: readonly string[]): string[] =>
         roots
             .flatMap((root) => {
@@ -516,6 +540,8 @@ export function buildConfinementOptions(
         sensitivePatterns: (confinement?.denyPaths ?? []).map(segmentGlobToRegex),
         blockDotfiles: confinement?.blockDotfiles ?? false,
         resolveSymlinks,
+        globExpansion: confinement?.globExpansion ?? true,
+        globMaxDepth: resolveGlobMaxDepth(confinement?.globMaxDepth),
         realCwd,
         additionalRoots: pairedAdditionalRoots,
     };

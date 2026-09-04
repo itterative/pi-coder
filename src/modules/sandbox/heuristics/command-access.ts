@@ -3,6 +3,7 @@ import type { BashAstNode, BashCommand, BashSubstitutionNode, BashWordNode } fro
 import { CommandTag } from "../commands";
 import type { CommandSpec, FlagSpec } from "../commands";
 import { Heuristic, UnsafeReason, addUnsafeReason, type ConfinementDiagnostics } from "./types";
+import { expandGlobPattern } from "./glob-expansion";
 import {
     SPECIAL_ALLOWED_PATHS,
     REDIRECTION_OPERATORS,
@@ -154,12 +155,23 @@ function handleShortCluster(
 ): number | null {
     const cluster = args[index].slice(1);
 
-    const inspectValue = (value: string, pathContext: boolean, word?: BashWordNode): boolean => {
-        if (
-            (spec.additionalRootOnly && hasDynamicShellExpansion(value)) ||
-            (pathContext && hasUnmodeledPathExpansion(value, word))
-        ) {
-            addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+    const inspectValue = (
+        value: string,
+        pathContext: boolean,
+        word: BashWordNode | undefined,
+        slotWrites: boolean,
+    ): boolean => {
+        const operands = resolveSlotOperands(
+            value,
+            pathContext,
+            word,
+            spec,
+            slotWrites,
+            cwd,
+            options,
+            diagnostics,
+        );
+        if (operands === null) {
             return false;
         }
 
@@ -177,7 +189,7 @@ function handleShortCluster(
             paths.push(...substitution.paths);
             writes.value = writes.value || substitution.heuristic === Heuristic.SAFE_EDIT;
         } else if (pathContext) {
-            paths.push(value);
+            paths.push(...operands);
         }
         return true;
     };
@@ -206,13 +218,25 @@ function handleShortCluster(
                 const value = args[index + 1];
                 if (
                     value === undefined ||
-                    !inspectValue(value, hasPathSlot(flagSpec, 0), wordAt?.(index + 1))
+                    !inspectValue(
+                        value,
+                        hasPathSlot(flagSpec, 0),
+                        wordAt?.(index + 1),
+                        flagSpec?.writes === true,
+                    )
                 ) {
                     return null;
                 }
                 return index + 2;
             }
-            if (!inspectValue(cluster.slice(j + 1), hasPathSlot(flagSpec, 0), wordAt?.(index))) {
+            if (
+                !inspectValue(
+                    cluster.slice(j + 1),
+                    hasPathSlot(flagSpec, 0),
+                    wordAt?.(index),
+                    flagSpec?.writes === true,
+                )
+            ) {
                 return null;
             }
             return index + 1;
@@ -266,6 +290,30 @@ export function hasDynamicShellExpansion(value: string): boolean {
     );
 }
 
+/**
+ * Whether the only expansion left on this word is a leading `~` the shell expands against the
+ * home directory, so the operand is still a single statically known path and can be confined
+ * after expansion.
+ *
+ * The word may carry no quoted content at all. Bash expands `~` only while the login name that
+ * follows it stays unquoted, so `~'/'x` is passed through verbatim even though quote removal
+ * stores it as `~/x`, and a literal `./~` is a repository-controllable name the same way any
+ * other file is. Deciding from the stored value alone would certify an operand the shell never
+ * produces.
+ */
+function isExpandableHomePath(value: string, word: BashWordNode): boolean {
+    if (word.quoted || !word.expansions.tilde || word.substitutions.length > 0) {
+        return false;
+    }
+
+    const { glob, brace, variable } = word.expansions;
+    if (glob || brace || variable) {
+        return false;
+    }
+
+    return value === "~" || value.startsWith("~/");
+}
+
 export function hasUnmodeledPathExpansion(value: string, word?: BashWordNode): boolean {
     if (word !== undefined) {
         const substitution = BashAst.substitutionFor(word, value);
@@ -274,6 +322,9 @@ export function hasUnmodeledPathExpansion(value: string, word?: BashWordNode): b
         }
         if (word.substitutions.length > 0) {
             return true;
+        }
+        if (isExpandableHomePath(value, word)) {
+            return false;
         }
         return hasDynamicShellExpansion(value);
     }
@@ -432,6 +483,116 @@ function inspectShellSubstitution(
 }
 
 /**
+ * Operands for a value whose only live expansion is a glob, or null when it is not expandable.
+ *
+ * `slotWrites` is the read-only scope control, and it is per slot rather than per command: a command
+ * that writes somewhere still performs ordinary reads on its other operands, and gating on the
+ * command-level flag made `sort -o out.txt a*.ts` and `sort a*.ts -o out.txt` answer two different
+ * ways for the same intent.
+ *
+ * The word must carry no quoted content at all. Per-character provenance says *whether* a
+ * metacharacter is live, not which characters arrived inside quotes, and a quoted bracket
+ * expression reads narrower than the literal it stands for: `'[a]'*.ts` matches names beginning
+ * with the three characters `[a]`, while translating `[a]` into a class would match `a.ts` and
+ * miss the file the shell really passes. Checking a set that is not a superset of the operand set
+ * is the one unsound direction, so mixed-quoting words keep prompting. That also keeps patterns
+ * that are never paths at all, such as `find . -name "*.jsonl"`, out of the enumerator.
+ */
+function expandGlobOperands(
+    value: string,
+    word: BashWordNode | undefined,
+    slotWrites: boolean,
+    cwd: string,
+    options: ConfinementOptions,
+): string[] | null {
+    if (!options.globExpansion || slotWrites || word === undefined) {
+        return null;
+    }
+    if (word.quoted || word.substitutions.length > 0) {
+        return null;
+    }
+
+    const { tilde, glob, brace, variable } = word.expansions;
+    if (!glob || tilde || brace || variable) {
+        return null;
+    }
+
+    return expandGlobPattern(value, cwd, options.globMaxDepth);
+}
+
+/**
+ * Whether a *positional* path of this spec is consumed as a destination. Derived from the registry
+ * instead of from the command-level `writes` flag, which says only that the command writes somewhere.
+ * `commands-registry.test.ts` fails if a spec gains a positional destination without one of these
+ * markers, which is what keeps expansion out of destination slots.
+ *
+ * OPEN - currently unobservable, deliberately kept. Replacing the body with `return false` leaves
+ * `npm run test:run` green, because every spec this returns true for is refused earlier by the blanket
+ * check in `evaluator.ts` (`hasAdditionalRootPolicy && argv.some(hasDynamicShellExpansion)`). Measured
+ * across the registry: `rm`, `mkdir`, `rmdir`, `touch`, `truncate`, `tee`, `mv`, `chmod` are all
+ * `writes: true` + `additionalRootOnly`; `cp` is `writes: true` + `additionalRootLastPositional`; and
+ * `sed` is the only one without spec-level writes, reaching in-place editing through a
+ * `requiresAdditionalRoot` flag while carrying a hard-link destination marker. All three shapes satisfy
+ * `hasAdditionalRootPolicy`, so a dynamic positional never survives extraction for any of them.
+ *
+ * It stays because this is the guard that expresses the policy at the decision point: if a future spec
+ * writes to a positional without a root policy (a plausible `patch`, `convert`, or `rsync --delete`
+ * style curation), this is what stops "one approved destination" from becoming "one destination per
+ * match" without anyone having to remember the evaluator's blanket rule. Removing it is a judgement
+ * call, not a cleanup - if you drop it, `commands-registry.test.ts` must be widened to forbid such a
+ * spec outright, and the read-only scope decision in `src/modules/sandbox/PLAN.md` ("reads only,
+ * mutators later") should be re-read first, because today's redundancy is what makes that decision
+ * safe.
+ */
+function positionalsAreDestinations(spec: CommandSpec): boolean {
+    return (
+        spec.writes === true ||
+        spec.additionalRootOnly === true ||
+        spec.additionalRootLastPositional === true ||
+        spec.rejectDirectoryDestination === true ||
+        spec.rejectHardLinkedDestination === true ||
+        spec.rejectHardLinkedPositionals === true
+    );
+}
+
+/**
+ * Resolve one argument value to the filesystem operands it can access, or `null` to refuse it, in
+ * which case the reason is already recorded.
+ *
+ * A data value, a static path, and a modeled command substitution all resolve to the value itself.
+ * A live glob resolves to the operand set the shell may pass, which then faces the ordinary path
+ * checks, so containment and sensitive-name decisions stay in one place. `slotWrites` marks a slot
+ * whose operand is consumed as a write destination, and those never expand: one approved intent must
+ * not become a set of mutations.
+ */
+function resolveSlotOperands(
+    value: string,
+    pathContext: boolean,
+    word: BashWordNode | undefined,
+    spec: CommandSpec,
+    slotWrites: boolean,
+    cwd: string,
+    options: ConfinementOptions,
+    diagnostics?: ConfinementDiagnostics,
+): string[] | null {
+    if (spec.additionalRootOnly && hasDynamicShellExpansion(value)) {
+        addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+        return null;
+    }
+    if (!pathContext || !hasUnmodeledPathExpansion(value, word)) {
+        return [value];
+    }
+
+    const operands = expandGlobOperands(value, word, slotWrites, cwd, options);
+    if (operands !== null) {
+        return operands;
+    }
+
+    addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
+    return null;
+}
+
+/**
  * Extract all filesystem paths accessed by a single known command.
  * Returns null if the command usage cannot be classified safely.
  * args[0] is the command name.
@@ -509,7 +670,7 @@ class CommandPathExtractor {
             return redirectionIndex;
         }
         if (this.isProcessSubstitution(arg, argWord)) {
-            return this.inspectValue(arg, false, argWord) ? index + 1 : null;
+            return this.inspectValue(arg, false, argWord, false) ? index + 1 : null;
         }
 
         const optionIndex = this.inspectOption(index, arg, argWord);
@@ -565,12 +726,28 @@ class CommandPathExtractor {
             this.positionals !== "first-pattern" || hasPatternBypass(this.args, spec);
     }
 
-    private inspectValue(value: string, pathContext: boolean, word?: BashWordNode): boolean {
-        if (
-            (this.activeSpec.additionalRootOnly && hasDynamicShellExpansion(value)) ||
-            (pathContext && hasUnmodeledPathExpansion(value, word))
-        ) {
-            addUnsafeReason(this.diagnostics, UnsafeReason.DYNAMIC_PATH);
+    /**
+     * Inspect one value. `slotWrites` says whether this particular slot is consumed as a write
+     * destination, which is what gates glob expansion; the command-level `this.writes` is a separate
+     * question and only decides SAFE_READONLY versus SAFE_EDIT afterwards.
+     */
+    private inspectValue(
+        value: string,
+        pathContext: boolean,
+        word: BashWordNode | undefined,
+        slotWrites: boolean,
+    ): boolean {
+        const operands = resolveSlotOperands(
+            value,
+            pathContext,
+            word,
+            this.activeSpec,
+            slotWrites,
+            this.cwd,
+            this.options,
+            this.diagnostics,
+        );
+        if (operands === null) {
             return false;
         }
 
@@ -590,14 +767,14 @@ class CommandPathExtractor {
             this.paths.push(...substitution.paths);
             this.writes = this.writes || substitution.heuristic === Heuristic.SAFE_EDIT;
         } else if (pathContext) {
-            this.paths.push(value);
+            this.paths.push(...operands);
         }
         return true;
     }
 
     private inspectPositionalPath(value: string, word?: BashWordNode): boolean {
         const pathCount = this.paths.length;
-        if (!this.inspectValue(value, true, word)) {
+        if (!this.inspectValue(value, true, word, positionalsAreDestinations(this.activeSpec))) {
             return false;
         }
         this.positionalPaths.push(...this.paths.slice(pathCount));
@@ -627,20 +804,25 @@ class CommandPathExtractor {
             return undefined;
         }
         const target = this.args[index + 1];
-        if (target === undefined || !this.inspectValue(target, true)) {
-            return null;
-        }
-
-        const targetSubstitution = parseBashAst(target).singleCommand?.singleSubstitution;
+        const targetSubstitution =
+            target === undefined
+                ? undefined
+                : parseBashAst(target).singleCommand?.singleSubstitution;
         const processTarget =
             targetSubstitution?.kind === "process-input" ||
             targetSubstitution?.kind === "process-output";
-        if (
+        // Known before inspecting the operand, so a glob cannot reach a destination slot.
+        const writesTarget =
+            target !== undefined &&
             !processTarget &&
             arg !== "<" &&
             !target.startsWith("&") &&
-            !SPECIAL_ALLOWED_PATHS.has(target)
-        ) {
+            !SPECIAL_ALLOWED_PATHS.has(target);
+        if (target === undefined || !this.inspectValue(target, true, undefined, writesTarget)) {
+            return null;
+        }
+
+        if (writesTarget) {
             this.writes = true;
         }
         return index + 2;
@@ -678,13 +860,24 @@ class CommandPathExtractor {
 
         const values = flagSpec?.values ?? 0;
         if (values === 0) {
-            if (inline !== undefined && !this.inspectValue(inline, true, argWord)) {
+            if (
+                inline !== undefined &&
+                !this.inspectValue(inline, true, argWord, flagSpec?.writes === true)
+            ) {
                 return null;
             }
             return index + 1;
         }
         if (inline !== undefined) {
-            if (values > 1 || !this.inspectValue(inline, hasPathSlot(flagSpec, 0), argWord)) {
+            if (
+                values > 1 ||
+                !this.inspectValue(
+                    inline,
+                    hasPathSlot(flagSpec, 0),
+                    argWord,
+                    flagSpec?.writes === true,
+                )
+            ) {
                 return null;
             }
             return index + 1;
@@ -697,6 +890,7 @@ class CommandPathExtractor {
                     value,
                     hasPathSlot(flagSpec, slot),
                     this.wordAt(index + 1 + slot),
+                    flagSpec?.writes === true,
                 )
             ) {
                 return null;
@@ -748,11 +942,11 @@ class CommandPathExtractor {
             case "none":
                 return false;
             case "ignore":
-                return this.inspectValue(arg, false, argWord);
+                return this.inspectValue(arg, false, argWord, false);
             case "first-pattern":
                 if (!this.positionalSeen && !this.patternProvided) {
                     this.positionalSeen = true;
-                    return this.inspectValue(arg, false, argWord);
+                    return this.inspectValue(arg, false, argWord, false);
                 }
                 return this.inspectPositionalPath(arg, argWord);
             case "first-path":
@@ -760,7 +954,7 @@ class CommandPathExtractor {
                     this.positionalSeen = true;
                     return this.inspectPositionalPath(arg, argWord);
                 }
-                return this.inspectValue(arg, false, argWord);
+                return this.inspectValue(arg, false, argWord, false);
             case "assignments":
                 return this.inspectAssignment(arg, argWord);
             default:
@@ -780,7 +974,7 @@ class CommandPathExtractor {
         if (isDangerousEnvName(name)) {
             return false;
         }
-        return this.inspectValue(arg.slice(eq + 1), true, argWord);
+        return this.inspectValue(arg.slice(eq + 1), true, argWord, false);
     }
 
     private inspectAstRedirections(): boolean {
@@ -801,16 +995,19 @@ class CommandPathExtractor {
                 }
                 return false;
             }
-            if (!this.inspectValue(target.value, true, target)) {
-                return false;
-            }
-            if (
+            const writesTarget =
                 target.kind !== "process-substitution" &&
                 operator !== "<" &&
                 !operator.includes(">&") &&
-                !SPECIAL_ALLOWED_PATHS.has(target.value)
-            ) {
+                !SPECIAL_ALLOWED_PATHS.has(target.value);
+            if (writesTarget) {
+                // Mark the write before inspecting the target, so a glob in a write position cannot
+                // expand: bash creates one literal file there, and the read-only scope means the
+                // operand set is not ours to choose.
                 this.writes = true;
+            }
+            if (!this.inspectValue(target.value, true, target, writesTarget)) {
+                return false;
             }
         }
         return true;

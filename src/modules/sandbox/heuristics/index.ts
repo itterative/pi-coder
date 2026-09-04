@@ -1,6 +1,6 @@
-import os from "node:os";
 import path from "node:path";
 
+import { resolveHomeDirectory } from "../../../common/home-directory";
 import sandboxConfig, { type SandboxConfigCwdConfinement } from "../../../common/config";
 import type { BashCommand } from "../bash";
 import { type Permission } from "../permissions";
@@ -92,7 +92,7 @@ export function getPathConfinementPermission(
     }
 
     const resolvedCwd = path.resolve(cwd);
-    const home = os.homedir();
+    const home = resolveHomeDirectory();
     const confinementOptions = buildConfinementOptions(
         confinement,
         resolvedCwd,
@@ -138,7 +138,7 @@ export function getPathConfinementAssessment(
     }
 
     const resolvedCwd = path.resolve(cwd);
-    const home = os.homedir();
+    const home = resolveHomeDirectory();
     const confinementOptions = buildConfinementOptions(
         confinement,
         resolvedCwd,

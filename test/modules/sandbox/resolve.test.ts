@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import resolvePermission, {
     resolvePermissionDetails,
     unresolvedPermissionDetails,
@@ -485,6 +485,49 @@ describe("resolvePermissionDetails: decision breakdown", () => {
 
         expect(details.source).toBe("heuristic");
         expect(details.segments.map((segment) => segment.tokens)).toEqual([["cat", "file.txt"]]);
+    });
+
+    it("keeps the literal glob operand in the decision breakdown", () => {
+        // A rule, a suggestion, and a logged segment must name the command the human approved, so
+        // enumeration may widen the checked operands without ever widening the recorded tokens.
+        const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-resolve-glob-"));
+        fs.mkdirSync(path.join(repo, "src"));
+        fs.writeFileSync(path.join(repo, "src/a.ts"), "one\n");
+        fs.writeFileSync(path.join(repo, "src/b.ts"), "two\n");
+        temporaryDirectories.push(repo);
+
+        const details = resolvePermissionDetails("cat src/*.ts", repo, {
+            permissions: {},
+            cwdConfinement: {},
+        });
+
+        expect(details.permission).toBe("allow:sandbox");
+        expect(details.source).toBe("heuristic");
+        expect(details.segments.map((segment) => segment.tokens)).toEqual([["cat", "src/*.ts"]]);
+    });
+
+    it("keeps the literal tilde operand in the decision breakdown", () => {
+        // Tilde expansion happens in classification only. A remembered rule, a suggestion, and a
+        // logged segment must all name the command the human approved, not its expanded form.
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-resolve-home-"));
+        fs.writeFileSync(path.join(home, "notes.txt"), "one\n");
+        temporaryDirectories.push(home);
+        vi.stubEnv("HOME", home);
+        try {
+            const details = resolvePermissionDetails("cat ~/notes.txt", CWD, {
+                permissions: {},
+                cwdConfinement: {},
+                additionalRoots: [home],
+            });
+
+            expect(details.permission).toBe("allow:sandbox");
+            expect(details.source).toBe("heuristic");
+            expect(details.segments.map((segment) => segment.tokens)).toEqual([
+                ["cat", "~/notes.txt"],
+            ]);
+        } finally {
+            vi.unstubAllEnvs();
+        }
     });
 
     it("attributes a rescued chain to the rule that matched", () => {

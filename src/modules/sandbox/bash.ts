@@ -15,6 +15,29 @@ export type BashRedirectionOperator =
     | `${number}>&${number}`
     | `>&${number}`;
 
+/**
+ * Which shell expansions can still act on a word after quote removal.
+ *
+ * The tokenizer knows this per character and nothing downstream can recover it: word values are
+ * stored after quote removal, so a `*` left in the value is either a live glob (`'x'*.ts`) or a
+ * literal one (`'*.ts'`) and the two are indistinguishable from the text alone. Consumers decide
+ * with these flags instead of scanning the value.
+ */
+export interface BashWordExpansions {
+    /** An unquoted leading `~` the shell expands against `$HOME`. */
+    tilde: boolean;
+    /** Unquoted `*`, `?`, `[`, or `]` outside quotes and escapes, i.e. live pathname expansion. */
+    glob: boolean;
+    /** Unquoted `{` or `}`, i.e. a word brace expansion may rewrite. */
+    brace: boolean;
+    /** Unquoted `$name` or `${…}`, which also stays live inside double quotes. */
+    variable: boolean;
+}
+
+function createWordExpansions(): BashWordExpansions {
+    return { tilde: false, glob: false, brace: false, variable: false };
+}
+
 interface BashLexedSubstitution {
     kind: "command" | "backtick" | "process-input" | "process-output";
     value: string;
@@ -41,6 +64,7 @@ interface BashLexedWordToken {
     type: "word";
     value: string;
     protected: boolean;
+    expansions: BashWordExpansions;
     substitutions: BashLexedSubstitution[];
     assignment?: { name: string; value: string };
     heredoc?: BashLexedHeredoc;
@@ -83,6 +107,7 @@ class BashTokenizer {
     private readonly currentArgs: BashLexedToken[] = [];
     private currentArg = "";
     private currentArgProtected = false;
+    private currentExpansions: BashWordExpansions = createWordExpansions();
     private currentSubstitutions: BashLexedSubstitution[] = [];
     private assignmentState: AssignmentState = "candidate";
     private quote: string | null = null;
@@ -180,6 +205,7 @@ class BashTokenizer {
             type: "word",
             value: this.currentArg,
             protected: this.currentArgProtected,
+            expansions: this.currentExpansions,
             substitutions: this.currentSubstitutions,
             ...(assignment === null || assignment === undefined
                 ? {}
@@ -188,6 +214,7 @@ class BashTokenizer {
         this.currentArgs.push(token);
         this.currentArg = "";
         this.currentArgProtected = false;
+        this.currentExpansions = createWordExpansions();
         this.currentSubstitutions = [];
         this.assignmentState = "candidate";
         return token;
@@ -204,6 +231,7 @@ class BashTokenizer {
     }
 
     private appendUnquotedChar(char: string): void {
+        this.noteExpansionChar(char);
         if (this.assignmentState === "candidate") {
             if (char === "=") {
                 const prefix = this.currentArg;
@@ -425,8 +453,51 @@ class BashTokenizer {
             }
             return nextIndex;
         }
+        this.noteExpansionChar(char);
         this.currentArg += char;
         return index + 1;
+    }
+
+    /**
+     * Record the expansions that remain live for the word being built, given the quoting context
+     * the character arrived in. Single quotes and backslash escapes suppress every form below;
+     * double quotes suppress glob and brace expansion but not `$name`.
+     */
+    private noteExpansionChar(char: string): void {
+        if (this.quote === "'") {
+            return;
+        }
+
+        if (this.quote !== null) {
+            if (char === "$" || char === "`") {
+                this.currentExpansions.variable = true;
+            }
+            return;
+        }
+
+        if (char === "~" && this.currentArg === "") {
+            this.currentExpansions.tilde = true;
+            return;
+        }
+
+        switch (char) {
+            case "*":
+            case "?":
+            case "[":
+            case "]":
+                this.currentExpansions.glob = true;
+                break;
+            case "{":
+            case "}":
+                this.currentExpansions.brace = true;
+                break;
+            case "$":
+            case "`":
+                this.currentExpansions.variable = true;
+                break;
+            default:
+                break;
+        }
     }
 
     private parseLineContinuation(index: number): number {
@@ -742,6 +813,7 @@ export interface BashWordNode {
     kind: BashWordKind;
     value: string;
     quoted: boolean;
+    expansions: BashWordExpansions;
     assignment?: { name: string; value: string };
     substitutions: readonly BashSubstitutionNode[];
 }
@@ -823,6 +895,7 @@ function createWordNode(token: BashLexedWordToken): BashWordNode {
         kind,
         value: token.value,
         quoted: token.protected,
+        expansions: token.expansions,
         ...(token.assignment === undefined ? {} : { assignment: token.assignment }),
         substitutions,
     };

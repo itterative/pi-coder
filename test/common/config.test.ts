@@ -502,5 +502,33 @@ describe("config merging", () => {
                 process.env.SANDBOX_CONFIG_PATH_GLOBAL = originalGlobal;
             }
         });
+
+        it("should load and merge the glob expansion controls", () => {
+            // tryLoad() whitelists each cwdConfinement field, so a key that is not listed there is
+            // dropped silently and the heuristic keeps its default. This pins that both glob keys
+            // survive the load and the merge, with the project winning on identical keys.
+            writeGlobalConfig({
+                permissions: {},
+                heuristics: { cwdConfinement: { globExpansion: false, globMaxDepth: 3 } },
+            });
+            writeProjectConfig({
+                sandbox: { mounts: {} },
+                permissions: {},
+                heuristics: { cwdConfinement: { globMaxDepth: 5 } },
+            });
+
+            const originalGlobal = process.env.SANDBOX_CONFIG_PATH_GLOBAL;
+            process.env.SANDBOX_CONFIG_PATH_GLOBAL = globalConfigPath;
+
+            try {
+                clearConfigCache();
+                const loaded = config.load(projectDir);
+
+                expect(loaded.heuristics?.cwdConfinement?.globExpansion).toBe(false);
+                expect(loaded.heuristics?.cwdConfinement?.globMaxDepth).toBe(5);
+            } finally {
+                process.env.SANDBOX_CONFIG_PATH_GLOBAL = originalGlobal;
+            }
+        });
     });
 });

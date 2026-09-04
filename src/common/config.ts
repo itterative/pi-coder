@@ -40,6 +40,14 @@ export interface SandboxConfigCwdConfinement {
     denyPaths?: string[]; // additional sensitive path segment patterns (glob, e.g. "*.secret")
     blockDotfiles?: boolean; // treat any dotfile/dotdir segment as sensitive (default: false)
     resolveSymlinks?: boolean; // verify paths stay within cwd after symlink resolution (default: true)
+    /** Expand unquoted globs in read path slots before confinement (default: true). */
+    globExpansion?: boolean;
+    /**
+     * Maximum `/`-separated components a glob pattern may span when expanded (default: 10). A
+     * non-integer or non-positive value falls back to the default, so a typo can only tighten the
+     * bound, never remove it.
+     */
+    globMaxDepth?: number;
 }
 
 export interface SandboxConfigHeuristics {
@@ -106,6 +114,8 @@ function tryLoad(path: string): SandboxConfig | null {
                                 denyPaths: data.heuristics.cwdConfinement.denyPaths,
                                 blockDotfiles: data.heuristics.cwdConfinement.blockDotfiles,
                                 resolveSymlinks: data.heuristics.cwdConfinement.resolveSymlinks,
+                                globExpansion: data.heuristics.cwdConfinement.globExpansion,
+                                globMaxDepth: data.heuristics.cwdConfinement.globMaxDepth,
                             }
                           : undefined,
                   }
@@ -217,6 +227,8 @@ function mergeCwdConfinement(
         denyPaths: denyPaths.length > 0 ? denyPaths : undefined,
         blockDotfiles: override.blockDotfiles ?? base.blockDotfiles,
         resolveSymlinks: override.resolveSymlinks ?? base.resolveSymlinks,
+        globExpansion: override.globExpansion ?? base.globExpansion,
+        globMaxDepth: override.globMaxDepth ?? base.globMaxDepth,
     };
 }
 

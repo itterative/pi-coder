@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import config, { type SandboxConfig, DEFAULT_HOME_MOUNTS } from "../../common/config";
+import { resolveHomeDirectory } from "../../common/home-directory";
 
 export interface SandboxOptions {
     env?: NodeJS.ProcessEnv;
@@ -130,7 +130,7 @@ function buildMountCmd(sandboxConfig: SandboxConfig, options?: SandboxOptions): 
     // Home mounts - configurable via homeMounts option
     const homeMountsConfig = sandboxConfig.sandbox?.homeMounts;
     if (homeMountsConfig !== false) {
-        const homeDir = env.HOME ?? os.homedir();
+        const homeDir = resolveHomeDirectory(env);
         if (homeDir) {
             let homeMounts: string[];
 
@@ -207,7 +207,7 @@ export default function sandbox(bwrap: string, command: string, options?: Sandbo
     const cmd: string[] = [bwrap];
     const env = options?.env ?? process.env;
     const cwd = options?.cwd ?? process.cwd();
-    const homeDir = env.HOME ?? os.homedir();
+    const homeDir = resolveHomeDirectory(env);
 
     const sandboxConfig = options?.config ?? config.current ?? config.default;
 

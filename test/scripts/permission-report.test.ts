@@ -17,6 +17,7 @@ const SCRIPT = path.join(PI_CODER_EXTENSION_DIR, "scripts", "permission-report.m
 
 interface ReportJson {
     total: number;
+    gapView: "records" | "segments";
     prompted: number;
     blocked: number;
     promptedApproved: Record<
@@ -151,6 +152,41 @@ describe("permission-report script", () => {
         expect(report.heuristicGrants["cat <file>"].count).toBe(1);
         expect(report.unasked["terraform plan"].count).toBe(1);
         expect(report.unasked["terraform plan"].agents).toEqual(["scout"]);
+    });
+
+    it("keeps every uncovered segment visible in one candidate row", () => {
+        // A formatter behind a heredoc used to disappear into the first gap's group.
+        record("npx vitest run && npx prettier --check README.md", {
+            prompt: { outcome: "yes", suggestion: "npx vitest run" },
+        });
+        record("npx vitest run", { prompt: { outcome: "yes" } });
+
+        const report = runReport();
+        expect(report.gapView).toBe("records");
+        expect(Object.keys(report.promptedApproved)).toEqual([
+            "npx vitest run + npx prettier --check",
+            "npx vitest run",
+        ]);
+
+        // --all-gaps counts each uncovered segment on its own row, so the second
+        // segment of the chained line is comparable with the bare one.
+        const exploded = runReport(["--all-gaps"]);
+        expect(exploded.gapView).toBe("segments");
+        expect(exploded.promptedApproved["npx vitest run"].count).toBe(2);
+        expect(exploded.promptedApproved["npx prettier --check"].count).toBe(1);
+    });
+
+    it("removes shell control-flow words from candidate keys", () => {
+        record("for n in 1 2; do echo $n; done", { prompt: { outcome: "yes" } });
+        record("if [ -f README.md ]; then echo yes; fi", { prompt: { outcome: "yes" } });
+
+        // `do`/`then` name the body command, and a bare `done`/`fi` carries nothing,
+        // so neither may stand in for the command a human actually approved.
+        const report = runReport();
+        expect(Object.keys(report.promptedApproved)).toEqual([
+            "for n in + echo $n",
+            "if [ -f + echo yes",
+        ]);
     });
 
     it("counts configured rule hits with the permission they granted", () => {

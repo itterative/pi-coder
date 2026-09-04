@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -13,6 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import sandboxConfig, { type SandboxConfigCwdConfinement } from "../common/config";
+import { resolveHomeDirectory } from "../common/home-directory";
 import { getScratchpadPath } from "../modules/scratchpad";
 import {
     createPermissionState,
@@ -108,7 +108,9 @@ function sessionFolderFor(filePath: string, cwd: string): string {
     // File tools operate on files, so the containing directory is the narrowest
     // useful scope for the "always allow" choice.
     const expanded =
-        filePath === "~" || filePath.startsWith("~/") ? os.homedir() + filePath.slice(1) : filePath;
+        filePath === "~" || filePath.startsWith("~/")
+            ? resolveHomeDirectory() + filePath.slice(1)
+            : filePath;
     const resolved = path.resolve(cwd, expanded);
 
     try {

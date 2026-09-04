@@ -291,6 +291,10 @@ Pay attention to these notes as they provide context about the user's preference
         const userMemoryDirectory = getUserMemoryDirectory();
         const additionalRoots = [...(scratchpadPath ? [scratchpadPath] : []), userMemoryDirectory];
         const readOnlyAdditionalRoots = [userMemoryDirectory];
+        // Stated rather than left to the "unset means exempt" default: the agent gets leeway inside
+        // its own scratchpad, and user-level memories are runtime data it is meant to read and write,
+        // so sensitive-name filtering does not apply under either root.
+        const sensitiveAdditionalRoots = additionalRoots;
         try {
             details = resolvePermissionDetails(
                 event.input.command,
@@ -303,6 +307,7 @@ Pay attention to these notes as they provide context about the user's preference
                         ...permissionState.bashRules,
                     },
                     additionalRoots,
+                    sensitiveAdditionalRoots,
                     readOnlyAdditionalRoots,
                 },
             );

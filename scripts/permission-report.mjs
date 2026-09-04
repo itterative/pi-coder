@@ -18,6 +18,7 @@
  *   --agent <name>     only records from this delegated agent
  *   --prompted         only records where a human was asked
  *   --group-depth <n>  tokens per group key (default: 3)
+ *   --all-gaps         one row per uncovered segment instead of one per record
  *   --limit <n>        rows per section (default: 25)
  *   --json             emit machine-readable aggregates instead of a report
  */
@@ -38,6 +39,7 @@ function describeOptions() {
         "  --agent <name>      filter by delegated agent name",
         "  --prompted          only records that a human was asked about",
         "  --group-depth <n>   tokens per group key (default 3)",
+        "  --all-gaps          count every uncovered segment, not one row per record",
         "  --limit <n>         rows per section (default 25)",
         "  --json              machine-readable aggregates",
         "  --help              this message",
@@ -52,6 +54,7 @@ function parseArgs(argv) {
         agent: undefined,
         prompted: false,
         groupDepth: 3,
+        allGaps: false,
         limit: 25,
         json: false,
         help: false,
@@ -68,6 +71,8 @@ function parseArgs(argv) {
             options.help = true;
         } else if (arg === "--prompted") {
             options.prompted = true;
+        } else if (arg === "--all-gaps") {
+            options.allGaps = true;
         } else if (arg === "--json") {
             options.json = true;
         } else if (arg === "--path") {
@@ -226,6 +231,61 @@ function normalizeToken(token) {
     return token;
 }
 
+/**
+ * Words that carry no command of their own: the record already shows the line,
+ * so they would only add noise to a group key.
+ */
+const CONTROL_FLOW_WORDS = new Set([
+    "do",
+    "done",
+    "then",
+    "else",
+    "elif",
+    "fi",
+    "esac",
+    "in",
+    "{",
+    "}",
+]);
+
+/** Words that introduce the real command of a segment and can be dropped from it. */
+const CONTROL_FLOW_PREFIXES = new Set(["do", "then", "else", "elif", "time"]);
+
+/** Strip a leading control-flow word so `do echo hi` groups as `echo hi`. */
+function dropControlFlowPrefix(tokens) {
+    if (tokens.length > 1 && CONTROL_FLOW_PREFIXES.has(tokens[0])) {
+        return tokens.slice(1);
+    }
+    return [...tokens];
+}
+
+/** True when nothing but control-flow words remains, such as a bare `done`. */
+function isControlFlowNoise(tokens) {
+    return tokens.length > 0 && tokens.every((token) => CONTROL_FLOW_WORDS.has(token));
+}
+
+/**
+ * Uncovered segments of a decision — the part of the line that actually needed
+ * the human, with shell control-flow noise removed. Falls back to the raw
+ * unresolved segments when normalization would leave nothing to group on.
+ */
+function gapSegments(record) {
+    const unresolved = (record.resolution?.segments ?? []).filter(
+        (segment) => segment.source === "unresolved",
+    );
+
+    const gaps = [];
+    for (const segment of unresolved) {
+        const tokens = dropControlFlowPrefix(segment.tokens ?? []);
+        if (isControlFlowNoise(tokens)) {
+            continue;
+        }
+        gaps.push({ ...segment, tokens });
+    }
+
+    return gaps.length > 0 ? gaps : unresolved;
+}
+
 function shapeOf(tokens, depth) {
     if (!Array.isArray(tokens) || tokens.length === 0) {
         return "<empty>";
@@ -238,18 +298,33 @@ function shapeOf(tokens, depth) {
         .join(" ");
 }
 
-function resolutionShape(record, depth) {
-    const segments = record.resolution?.segments ?? [];
-    // The gap that caused the prompt is the interesting part of an approval.
-    const gap = segments.find((segment) => segment.source === "unresolved");
-    if (gap !== undefined) {
-        return shapeOf(gap.tokens, depth);
-    }
-    if (segments.length > 0) {
-        return segments.map((segment) => shapeOf(segment.tokens, depth)).join(" ; ");
+/** Cap a composite key so a long loop stays readable; the `+N` suffix counts the rest. */
+function joinShapes(shapes, max = 3) {
+    if (shapes.length <= max) {
+        return shapes.join(" + ");
     }
 
-    return shapeOf(record.command.trim().split(/\s+/), depth);
+    return `${shapes.slice(0, max).join(" + ")} (+${shapes.length - max})`;
+}
+
+/**
+ * Group keys for one record. A decision with several uncovered segments gets a
+ * composite key by default, so a formatter hiding behind a heredoc stays visible;
+ * `--all-gaps` counts every segment on its own row instead.
+ */
+function recordShapes(record, options) {
+    const gaps = gapSegments(record);
+    if (gaps.length > 0) {
+        const shapes = gaps.map((segment) => shapeOf(segment.tokens, options.groupDepth));
+        return options.allGaps ? shapes : [joinShapes(shapes)];
+    }
+
+    const segments = record.resolution?.segments ?? [];
+    if (segments.length > 0) {
+        return [segments.map((segment) => shapeOf(segment.tokens, options.groupDepth)).join(" ; ")];
+    }
+
+    return [shapeOf(record.command.trim().split(/\s+/), options.groupDepth)];
 }
 
 function bump(map, key, value) {
@@ -310,20 +385,26 @@ function analyze(records, options) {
     const ruleHits = new Map();
 
     for (const record of records) {
-        const key = resolutionShape(record, options.groupDepth);
+        const keys = recordShapes(record, options);
 
         if (record.prompt !== undefined) {
             const target = isApproved(record) ? promptedApproved : promptedDenied;
-            addRecord(bump(target, key, newGroup), record);
+            for (const key of keys) {
+                addRecord(bump(target, key, newGroup), record);
+            }
             continue;
         }
 
         if (record.resolution?.source === "heuristic") {
-            addRecord(bump(heuristicGrants, key, newGroup), record);
+            for (const key of keys) {
+                addRecord(bump(heuristicGrants, key, newGroup), record);
+            }
         } else if (record.resolution?.source === "unresolved") {
             // No human was consulted although nothing covered the command: a
             // headless child denial, or a gate that could not open a dialog.
-            addRecord(bump(unasked, key, newGroup), record);
+            for (const key of keys) {
+                addRecord(bump(unasked, key, newGroup), record);
+            }
         }
 
         const pattern = record.resolution?.pattern;
@@ -393,6 +474,15 @@ function renderGroupSection(title, blurb, map, options) {
     return lines.join("\n");
 }
 
+/** Explain how uncovered segments were counted, since it changes what a row means. */
+function gapViewNote(options) {
+    if (options.allGaps) {
+        return "counting each uncovered segment separately (--all-gaps); counts exceed records";
+    }
+
+    return "one row per record with every uncovered segment joined by ' + ' (--all-gaps splits them)";
+}
+
 function renderReport(records, stats, options) {
     const out = [];
     out.push(`bash permission decision report`);
@@ -407,6 +497,7 @@ function renderReport(records, stats, options) {
     const prompted = records.filter((record) => record.prompt !== undefined).length;
     const denied = records.filter((record) => !isApproved(record)).length;
     out.push(`  prompted: ${prompted}   blocked: ${denied}`);
+    out.push(`  gaps: ${gapViewNote(options)}`);
 
     out.push(
         renderGroupSection(
@@ -518,6 +609,7 @@ function main() {
                 {
                     files,
                     total: records.length,
+                    gapView: options.allGaps ? "segments" : "records",
                     prompted: records.filter((record) => record.prompt !== undefined).length,
                     blocked: records.filter((record) => !isApproved(record)).length,
                     promptedApproved: toPlain(analysis.promptedApproved),

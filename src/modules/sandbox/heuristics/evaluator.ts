@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 
+import { resolveHomeDirectory } from "../../../common/home-directory";
 import { parseBashAst } from "../bash";
 import type { BashAst, BashCommand, BashStatement, BashWordNode } from "../bash";
 import { KNOWN_COMMANDS } from "../commands";
@@ -219,7 +219,7 @@ function applyDirectoryCommand(
         return false;
     }
 
-    const home = os.homedir();
+    const home = resolveHomeDirectory();
     if (command === "popd") {
         return applyPopd(operands, state, rootCwd, home, options);
     }
@@ -374,7 +374,7 @@ function assessDirectoryCommand(
         return undefined;
     }
 
-    const home = os.homedir();
+    const home = resolveHomeDirectory();
     const envConfined = areEnvironmentPathsConfined(envValues, cwd, rootCwd, home, options);
     const commandAllowed =
         options.allowedCommands === null || options.allowedCommands.has(commandName);
@@ -599,7 +599,7 @@ export function isCommandConfined(
         return undefined;
     }
 
-    const home = os.homedir();
+    const home = resolveHomeDirectory();
     const allPaths = [...environment.values, ...access.paths];
     if (!areCommandPathsConfined(allPaths, cwd, rootCwd, home, options, diagnostics)) {
         return undefined;

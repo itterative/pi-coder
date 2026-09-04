@@ -54,12 +54,20 @@ roughly twice `maxBytes`. Delete the file to start clean; nothing else reads it.
 ```sh
 npm run permission-report -- --since 7d
 npm run permission-report -- --prompted --group-depth 4 --limit 40
+npm run permission-report -- --all-gaps        # rank single commands, not whole records
 npm run permission-report -- --json            # for an agent or jq
 ```
 
 The report groups by command _shape_ — file names, paths, numbers, hashes and
 `key=value` arguments collapse to placeholders — so repeated approvals of the same
-kind land on one row. Sections:
+kind land on one row. A chained line can leave several segments uncovered and every
+one of them needed the human, so a prompted row keys on _all_ of them joined by
+`" + "` (capped at three, with a `(+N)` suffix for the rest). Pass `--all-gaps` to
+count each uncovered segment separately when ranking candidates — then a formatter
+hidden behind a heredoc gets its own row, and section counts exceed record counts.
+Shell control-flow words are never a candidate: a leading `do`/`then`/`else`/`time` is
+stripped so the row names the body command, and a segment holding only `done`, `fi`,
+`esac` or `}` is dropped. Sections:
 
 - **APPROVED AFTER PROMPT** — humans kept saying yes to these; the top heuristic or
   rule candidates. The `remembered rule` and `offered rule` lines show what was
@@ -72,8 +80,8 @@ kind land on one row. Sections:
 
 ## Using it to widen coverage
 
-1. Run the report over a real interval (`--since 30d`) and pick a shape that repeats
-   in **APPROVED AFTER PROMPT**.
+1. Run the report over a real interval (`--since 30d --all-gaps`) and pick a shape that
+   repeats in **APPROVED AFTER PROMPT**.
 2. Confirm the refusal sections show nothing contradictory for that shape.
 3. Decide the narrowest correct mechanism:
     - a `CommandSpec` in `src/modules/sandbox/commands/` when the command is

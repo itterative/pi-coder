@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolvePermissionDetails } from "../../../src/modules/sandbox/resolve";
 import {
     CommandTag,
     describeUnsafeReason,
@@ -2886,8 +2887,19 @@ describe("getCwdConfinementPermission", () => {
                 expected: Heuristic.UNSAFE,
             },
             {
-                desc: "glob path expansion falls back",
+                desc: "recursive glob falls back because zsh and bash disagree on **",
+                command: "cat src/**",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "quoted glob is a literal path, not an expansion",
+                command: "cat 'src/*.ts'",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "glob expansion can be switched off",
                 command: "cat src/*",
+                config: { globExpansion: false },
                 expected: Heuristic.UNSAFE,
             },
             {
@@ -3139,6 +3151,485 @@ describe("getCwdConfinementPermission", () => {
             expect(
                 getCwdConfinementPermission("cat /etc/hostname", { cwd: aliasDir, config: {} }),
             ).toBe(Heuristic.UNSAFE);
+        });
+    });
+
+    describe("tilde expansion", () => {
+        const notes = "notes.txt";
+
+        // The classifier expands `~` the way the shell does, so these cases need a real home
+        // directory: confinement also resolves symlinks against it.
+        const withHome = (run: (repo: string, home: string) => void) => {
+            const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-tilde-repo-"));
+            const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-tilde-home-"));
+            fs.writeFileSync(path.join(home, notes), "one\n");
+            fs.mkdirSync(path.join(home, ".ssh"));
+            fs.writeFileSync(path.join(home, ".ssh", "id_rsa"), "key\n");
+            vi.stubEnv("HOME", home);
+            try {
+                run(repo, home);
+            } finally {
+                vi.unstubAllEnvs();
+                fs.rmSync(repo, { recursive: true, force: true });
+                fs.rmSync(home, { recursive: true, force: true });
+            }
+        };
+
+        const assessIn = (repo: string, home: string, command: string) =>
+            getCwdConfinementAssessment(command, {
+                cwd: repo,
+                config: {},
+                additionalRoots: [home],
+            });
+
+        it("grants a read whose only dynamic element is an expandable tilde", () => {
+            withHome((repo, home) => {
+                expect(assessIn(repo, home, `cat ~/${notes}`).classification).toBe(
+                    Heuristic.SAFE_READONLY,
+                );
+                expect(
+                    assessIn(repo, home, `head -5 ~/${notes} && wc -l ~/${notes}`).classification,
+                ).toBe(Heuristic.SAFE_READONLY);
+                expect(assessIn(repo, home, "ls ~").classification).toBe(Heuristic.SAFE_READONLY);
+            });
+        });
+
+        it("matches the direct path check the file tools use", () => {
+            withHome((repo, home) => {
+                const viaCommand = assessIn(repo, home, `cat ~/${notes}`).classification;
+                const viaPath = getPathConfinementAssessment(`~/${notes}`, {
+                    cwd: repo,
+                    config: {},
+                    access: "read",
+                    additionalRoots: [home],
+                }).classification;
+
+                expect(viaPath).toBe(viaCommand);
+            });
+        });
+
+        it("refuses an expansion that lands outside every root", () => {
+            withHome((repo) => {
+                const outside = getCwdConfinementAssessment(`cat ~/${notes}`, {
+                    cwd: repo,
+                    config: {},
+                });
+
+                expect(outside.classification).toBe(Heuristic.UNSAFE);
+                // The refusal is about the expanded operand, not about unrecognized syntax.
+                expect(outside.reasons).toEqual([UnsafeReason.OUTSIDE_CWD]);
+            });
+        });
+
+        it("still confines the expanded target", () => {
+            withHome((repo, home) => {
+                expect(assessIn(repo, home, "cat ~/../escape.txt").reasons).toEqual([
+                    UnsafeReason.OUTSIDE_CWD,
+                ]);
+            });
+        });
+
+        it("applies the sensitive-name filter after expanding", () => {
+            withHome((repo, home) => {
+                // An additional root only bypasses the sensitive filter when the caller says so
+                // explicitly, and that decision must apply to the expanded operand too.
+                const options = {
+                    cwd: repo,
+                    config: {},
+                    additionalRoots: [home],
+                    sensitiveAdditionalRoots: [],
+                };
+
+                expect(getCwdConfinementAssessment(`cat ~/${notes}`, options).classification).toBe(
+                    Heuristic.SAFE_READONLY,
+                );
+                expect(getCwdConfinementAssessment("cat ~/.ssh/id_rsa", options).reasons).toEqual([
+                    UnsafeReason.SENSITIVE_PATH,
+                ]);
+            });
+        });
+
+        it.each([
+            ["single-quoted tilde", "cat '~/.ssh/id_rsa'"],
+            ["escaped tilde", "cat \\~/.ssh/id_rsa"],
+            ["quoted part after the tilde", "cat ~'/'notes.txt"],
+            ["other user", "cat ~root/notes.txt"],
+            ["tilde combined with a glob", "cat ~/*.txt"],
+            ["variable instead of a tilde", "cat $HOME/notes.txt"],
+            ["command substitution", "cat $(echo ~)/notes.txt"],
+        ])("refuses %s instead of guessing", (_description, command) => {
+            withHome((repo, home) => {
+                expect(assessIn(repo, home, command).reasons).toEqual([UnsafeReason.DYNAMIC_PATH]);
+            });
+        });
+
+        it("keeps expanding tildes out of mutating commands", () => {
+            withHome((repo, home) => {
+                // Mutators with an additional-root policy reject dynamic argv before the
+                // expansion rule is consulted, so a `~` operand still prompts.
+                expect(assessIn(repo, home, `touch ~/${notes}`).reasons).toContain(
+                    UnsafeReason.DYNAMIC_PATH,
+                );
+                expect(assessIn(repo, home, `sed -i s/a/b/ ~/${notes}`).classification).toBe(
+                    Heuristic.UNSAFE,
+                );
+            });
+        });
+    });
+
+    describe("glob path expansion (real filesystem)", () => {
+        // Enumeration is a filesystem question, so these cases need real files rather than the
+        // lexical "/project" fixture, where every pattern would match nothing.
+        const withTree = (run: (repo: string) => void) => {
+            const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-glob-repo-"));
+            fs.mkdirSync(path.join(repo, "src/tools/agent/child"), { recursive: true });
+            fs.writeFileSync(path.join(repo, "src/tools/agent/child/a.ts"), "x");
+            fs.writeFileSync(path.join(repo, "src/tools/agent/child/b.ts"), "x");
+            fs.mkdirSync(path.join(repo, ".state"));
+            fs.writeFileSync(path.join(repo, ".state/meta.sqlite"), "x");
+            fs.writeFileSync(path.join(repo, "notes.txt"), "x");
+            fs.writeFileSync(path.join(repo, "key.pem"), "x");
+            fs.writeFileSync(path.join(repo, ".env"), "SECRET=1");
+            fs.symlinkSync("/etc", path.join(repo, "escape"));
+            try {
+                run(repo);
+            } finally {
+                fs.rmSync(repo, { recursive: true, force: true });
+            }
+        };
+
+        const classify = (repo: string, command: string, config = {}) =>
+            getCwdConfinementAssessment(command, { cwd: repo, config }).classification;
+        const reasons = (repo: string, command: string, config = {}) =>
+            getCwdConfinementAssessment(command, { cwd: repo, config }).reasons;
+
+        it.each([
+            ["trailing component", "cat src/tools/agent/child/*.ts"],
+            ["middle component", "wc -l src/tools/*/child/*.ts"],
+            ["single component", "wc -l src/*/*.ts"],
+            ["inside a name", "head -5 no*es.txt"],
+            ["dot-prefixed directory", "ls .state/*.sqlite"],
+            ["zero matches checks the literal operand", "cat missing/*.ts"],
+        ])("grants a read of the expanded set: %s", (_description, command) => {
+            withTree((repo) => {
+                expect(classify(repo, command)).toBe(Heuristic.SAFE_READONLY);
+            });
+        });
+
+        it.each([
+            ["out-of-order range", "cat [z-a].ts"],
+            ["negated out-of-order range", "cat [!z-a].ts"],
+            ["posix class", "cat [[:alpha:]]*.ts"],
+            ["unbalanced bracket", "cat a[.ts"],
+            ["bracket inside a walked component", "cat src/*/[ab].ts"],
+        ])("refuses the unsupported bracket form %s without throwing", (_description, command) => {
+            withTree((repo) => {
+                expect(() => classify(repo, command)).not.toThrow();
+                expect(classify(repo, command)).toBe(Heuristic.UNSAFE);
+            });
+        });
+
+        it("keeps a hostile pattern out of the resolver's failure path", () => {
+            withTree((repo) => {
+                // A throw would escape both gates with no segment breakdown, so the prompt and the
+                // decision log would lose the command that caused it.
+                expect(() =>
+                    resolvePermissionDetails("cat [z-a]*.ts | tail -1", repo, {
+                        permissions: {},
+                        cwdConfinement: {},
+                    }),
+                ).not.toThrow();
+                expect(
+                    resolvePermissionDetails("cat [z-a]*.ts", repo, {
+                        permissions: {},
+                        cwdConfinement: {},
+                    }).permission,
+                ).toBe("ask");
+            });
+        });
+
+        it("refuses when any expanded operand is sensitive", () => {
+            withTree((repo) => {
+                // key.pem matches, so the whole pattern must prompt even though the other
+                // operands are ordinary project files.
+                expect(reasons(repo, "cat *.pem")).toEqual([UnsafeReason.SENSITIVE_PATH]);
+
+                // The same must hold when the sensitive operand is reached through a walk.
+                fs.writeFileSync(path.join(repo, "src/tools/agent/child/deploy.pem"), "x");
+                expect(reasons(repo, "cat src/tools/agent/child/*.pem")).toEqual([
+                    UnsafeReason.SENSITIVE_PATH,
+                ]);
+            });
+        });
+
+        it("does not match hidden entries with a bare star, matching the shell", () => {
+            withTree((repo) => {
+                expect(classify(repo, "cat *")).toBe(Heuristic.UNSAFE);
+
+                // dotglob is off, so `*` cannot reach .env: with the two blockers gone the same
+                // pattern must grant while the sensitive file is still sitting in the directory.
+                fs.rmSync(path.join(repo, "key.pem"));
+                fs.unlinkSync(path.join(repo, "escape"));
+                expect(fs.existsSync(path.join(repo, ".env"))).toBe(true);
+                expect(classify(repo, "cat *")).toBe(Heuristic.SAFE_READONLY);
+            });
+        });
+
+        it("refuses an expanded operand that escapes through a symlink", () => {
+            withTree((repo) => {
+                // The escaping directory is the fixture's own, so the case does not depend on
+                // what happens to exist under the host's /etc.
+                const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-glob-outside-"));
+                fs.writeFileSync(path.join(outside, "hosts"), "x");
+                fs.unlinkSync(path.join(repo, "escape"));
+                fs.symlinkSync(outside, path.join(repo, "escape"));
+                try {
+                    expect(reasons(repo, "cat escape/ho*st")).toEqual([
+                        UnsafeReason.SYMLINK_ESCAPE,
+                    ]);
+                } finally {
+                    fs.rmSync(outside, { recursive: true, force: true });
+                }
+            });
+        });
+        it.each([
+            ["variable prefix", "cat $DIR/*.ts"],
+            ["tilde prefix", "cat ~/*.ts"],
+            ["brace plus glob", "cat src/*.{ts,md}"],
+            ["recursive component", "cat src/**/*.ts"],
+            ["trailing separator", "grep -rn foo src/*/"],
+            ["parent component", "cat ../other/*.ts"],
+            ["quoted prefix with a live glob", "cat 'src/'*.ts"],
+            ["writing slot", "rm *.ts"],
+            ["output slot of a read command", "sort -o out*.txt src/*/*.ts"],
+            ["redirection target", "cat src/*/*.ts > out*.txt"],
+            ["in-place editor", "sed -i s/a/b/ *.ts"],
+            ["find name pattern", 'find . -name "*.ts"'],
+        ])("refuses %s instead of guessing", (_description, command) => {
+            withTree((repo) => {
+                expect(classify(repo, command)).toBe(Heuristic.UNSAFE);
+            });
+        });
+
+        it("honours globExpansion and globMaxDepth", () => {
+            withTree((repo) => {
+                expect(classify(repo, "wc -l src/*/*.ts", { globExpansion: false })).toBe(
+                    Heuristic.UNSAFE,
+                );
+                expect(classify(repo, "wc -l src/*/*.ts", { globMaxDepth: 2 })).toBe(
+                    Heuristic.UNSAFE,
+                );
+                expect(classify(repo, "wc -l src/*/*.ts", { globMaxDepth: 3 })).toBe(
+                    Heuristic.SAFE_READONLY,
+                );
+            });
+        });
+
+        it("refuses a pattern whose operand set is too large to certify", () => {
+            withTree((repo) => {
+                const many = path.join(repo, "many");
+                fs.mkdirSync(many);
+                for (let index = 0; index < 513; index++) {
+                    fs.writeFileSync(path.join(many, `f${index}.txt`), "x");
+                }
+
+                expect(classify(repo, "cat many/*.txt")).toBe(Heuristic.UNSAFE);
+                expect(classify(repo, "cat many/f1*.txt")).toBe(Heuristic.SAFE_READONLY);
+            });
+        });
+        it("checks the literal operand when a pattern matches nothing", () => {
+            withTree((repo) => {
+                const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-glob-outside-"));
+                fs.writeFileSync(path.join(outside, "present.txt"), "x");
+                try {
+                    // bash and zsh both hand the shell's literal pattern to the command (or fail),
+                    // so an unmatched pattern outside the repo must still be refused as a path.
+                    expect(reasons(repo, `cat ${outside}/nomatch-*.txt`)).toEqual([
+                        UnsafeReason.OUTSIDE_CWD,
+                    ]);
+                    expect(classify(repo, `cat ${outside}/present*.txt`)).toBe(Heuristic.UNSAFE);
+                } finally {
+                    fs.rmSync(outside, { recursive: true, force: true });
+                }
+            });
+        });
+
+        it("refuses shell forms whose meaning depends on options we do not model", () => {
+            withTree((repo) => {
+                // Extglob operators are live under `shopt -s extglob` and zsh's default
+                // EXTENDED_GLOB, where `!(*.env)` matches everything except .env — including key.pem.
+                // A literal reading certifies nothing and would grant the whole set.
+                for (const command of ["cat !(*.env)", "cat *(x)y", "cat ?(a)*.ts", "cat a]b"]) {
+                    expect(classify(repo, command)).toBe(Heuristic.UNSAFE);
+                }
+            });
+        });
+
+        it("refuses dot components even when the parent directory is a granted root", () => {
+            const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pi-glob-parent-"));
+            const repo = path.join(parent, "tree");
+            fs.mkdirSync(repo, { recursive: true });
+            fs.writeFileSync(path.join(repo, "a.ts"), "x");
+            fs.writeFileSync(path.join(parent, "outside.ts"), "x");
+            try {
+                const options = { cwd: repo, config: {}, additionalRoots: [parent] };
+
+                expect(getCwdConfinementAssessment("cat ./*.ts", options).reasons).toEqual([
+                    UnsafeReason.DYNAMIC_PATH,
+                ]);
+                // Without the dot-component refusal this enumerates the granted parent and would
+                // accept ../outside.ts. Asserting DYNAMIC_PATH is the point: OUTSIDE_CWD alone would
+                // pass for the wrong reason whenever the parent is not a root.
+                expect(getCwdConfinementAssessment("cat ../*.ts", options).reasons).toEqual([
+                    UnsafeReason.DYNAMIC_PATH,
+                ]);
+            } finally {
+                fs.rmSync(parent, { recursive: true, force: true });
+            }
+        });
+
+        it("refuses a directory it cannot read instead of treating it as empty", () => {
+            withTree((repo) => {
+                const locked = path.join(repo, "locked");
+                fs.mkdirSync(locked);
+                fs.writeFileSync(path.join(locked, "a.ts"), "x");
+                fs.chmodSync(locked, 0o000);
+                try {
+                    const assessment = getCwdConfinementAssessment("cat locked/*.ts", {
+                        cwd: repo,
+                        config: {},
+                    });
+
+                    expect(assessment.reasons).toEqual([UnsafeReason.DYNAMIC_PATH]);
+                } finally {
+                    fs.chmodSync(locked, 0o700);
+                }
+            });
+        });
+
+        it("bounds the entries a single classification may read", () => {
+            withTree((repo) => {
+                // One directory with more entries than GLOB_MAX_ENTRIES, so the second level can
+                // never match and only the entry budget can stop the walk: without it the zero-match
+                // literal fallback would grant `cat huge/*/*.ts`.
+                const huge = path.join(repo, "huge");
+                fs.mkdirSync(huge);
+                for (let index = 0; index < 2050; index++) {
+                    fs.writeFileSync(path.join(huge, `e${index}`), "");
+                }
+                fs.mkdirSync(path.join(repo, "one"));
+                fs.writeFileSync(path.join(repo, "one", "leaf.ts"), "x");
+
+                expect(classify(repo, "cat huge/*/*.ts")).toBe(Heuristic.UNSAFE);
+                // A pattern that does reach a real operand is still granted, so the refusal above is
+                // the budget and not a broken walk.
+                expect(classify(repo, "cat on*/*.ts")).toBe(Heuristic.SAFE_READONLY);
+            });
+        });
+
+        it("counts each operand once, so the cap means operands and not walk steps", () => {
+            withTree((repo) => {
+                const many = path.join(repo, "deep300");
+                for (let index = 0; index < 300; index++) {
+                    fs.mkdirSync(path.join(many, `d${index}`), { recursive: true });
+                    fs.writeFileSync(path.join(many, `d${index}`, "leaf.ts"), "x");
+                }
+
+                // 300 operands reached through 300 nested matches: counting at both levels refused
+                // this as if it had 600.
+                expect(classify(repo, "cat deep300/*/*.ts")).toBe(Heuristic.SAFE_READONLY);
+            });
+        });
+
+        it("grants a path slot consumed by a short-flag cluster", () => {
+            withTree((repo) => {
+                fs.writeFileSync(path.join(repo, "dates.txt"), "2026-01-01\n");
+
+                // `date -f <path>` is a cluster flag with a path slot, so the cluster handler must
+                // give the enumerator the same word provenance the long-flag path does. Refusing
+                // here would be safe but wrong: this operand is confined.
+                expect(classify(repo, "date -f dat*.txt")).toBe(Heuristic.SAFE_READONLY);
+            });
+        });
+
+        it("keeps globbed positionals out of a destination-capable spec", () => {
+            withTree((repo) => {
+                const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-glob-scratch-"));
+                const options = { cwd: repo, config: {}, additionalRoots: [scratch] };
+                try {
+                    // `cp` needs no root policy for the destination here, so the only thing blocking
+                    // this is the slot rule: a spec whose last positional is a destination does not get
+                    // to turn one approval into a set of copies.
+                    expect(
+                        getCwdConfinementAssessment(
+                            `cp src/tools/agent/child/*.ts ${scratch}/copied.ts`,
+                            options,
+                        ).classification,
+                    ).toBe(Heuristic.UNSAFE);
+
+                    // With a literal source the same command is an ordinary confined edit, which is
+                    // what makes the refusal above the slot rule and not an unrelated rejection.
+                    expect(
+                        getCwdConfinementAssessment(
+                            `cp src/tools/agent/child/a.ts ${scratch}/copied.ts`,
+                            options,
+                        ).classification,
+                    ).toBe(Heuristic.SAFE_EDIT);
+                } finally {
+                    fs.rmSync(scratch, { recursive: true, force: true });
+                }
+            });
+        });
+
+        it("expands read operands regardless of where the write flag sits", () => {
+            withTree((repo) => {
+                // The gate is per slot, not per command: `sort` writes only to its `-o` value, so its
+                // positional reads expand in either order. This pair used to answer differently.
+                expect(classify(repo, "sort src/*/*.ts -o sorted.txt")).toBe(Heuristic.SAFE_EDIT);
+                expect(classify(repo, "sort -o sorted.txt src/*/*.ts")).toBe(Heuristic.SAFE_EDIT);
+            });
+        });
+
+        it("refuses a glob in a write slot in either order", () => {
+            withTree((repo) => {
+                // Same command, both flag positions: the destination operand must never expand, so
+                // that one approval cannot truncate every file the pattern reaches.
+                expect(classify(repo, "sort src/a.ts -o out*.txt")).toBe(Heuristic.UNSAFE);
+                expect(classify(repo, "sort -o out*.txt src/a.ts")).toBe(Heuristic.UNSAFE);
+                // The long inline spelling reaches the flag handler through a different branch, so it
+                // needs its own assertion: without it a regression there reads the write slot as a read.
+                expect(classify(repo, "sort src/a.ts --output=out*.txt")).toBe(Heuristic.UNSAFE);
+                expect(classify(repo, "sort --output=out*.txt src/a.ts")).toBe(Heuristic.UNSAFE);
+                expect(classify(repo, "cat src/*/*.ts > out*.txt")).toBe(Heuristic.UNSAFE);
+                expect(classify(repo, "cat src/*/*.ts < in*.nope")).toBe(Heuristic.SAFE_READONLY);
+
+                // A spec whose last positional is a destination refuses globbed positionals entirely:
+                // the source of `cp src/* dest` is safe to expand today, but only because the same
+                // argument shape can name the destination, and the slot rule does not guess.
+                fs.mkdirSync(path.join(repo, "backup"));
+                expect(classify(repo, "cp src/tools/agent/child/*.ts backup/")).toBe(
+                    Heuristic.UNSAFE,
+                );
+                expect(classify(repo, "chmod 600 src/tools/agent/child/*.ts")).toBe(
+                    Heuristic.UNSAFE,
+                );
+            });
+        });
+
+        it("keeps a malformed globMaxDepth from disabling the bound", () => {
+            withTree((repo) => {
+                // A JSON config can carry a non-number, and `components.length > NaN` is always false,
+                // so an unvalidated value would remove the depth bound rather than tighten it.
+                const malformed = "abc" as unknown as number;
+
+                expect(
+                    classify(repo, "cat src/tools/agent/child/*.ts", { globMaxDepth: malformed }),
+                ).toBe(Heuristic.SAFE_READONLY);
+                // Default depth is 10 components, so an 11-component pattern must still be refused.
+                expect(
+                    classify(repo, "cat a/b/c/d/e/f/g/h/i/j/*.ts", { globMaxDepth: malformed }),
+                ).toBe(Heuristic.UNSAFE);
+            });
         });
     });
 

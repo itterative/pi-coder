@@ -97,6 +97,172 @@ describe("parseBashAst", () => {
         });
     });
 
+    describe("word expansion provenance", () => {
+        function expansionsFor(input: string) {
+            const word = commandFor(input).words[1];
+            if (word === undefined) {
+                throw new Error(`fixture produced no second word: ${input}`);
+            }
+            return { ...word.expansions, quoted: word.quoted };
+        }
+
+        // Quote removal destroys the distinction these flags carry, so each case names the
+        // operand the shell actually produces.
+        it.each([
+            [
+                "unquoted tilde",
+                "cat ~/.ssh/id_rsa",
+                { tilde: true, glob: false, brace: false, variable: false, quoted: false },
+            ],
+            [
+                "bare tilde",
+                "cat ~",
+                { tilde: true, glob: false, brace: false, variable: false, quoted: false },
+            ],
+            [
+                "single-quoted tilde stays literal",
+                "cat '~/.ssh/id_rsa'",
+                { tilde: false, glob: false, brace: false, variable: false, quoted: true },
+            ],
+            [
+                "escaped tilde stays literal",
+                "cat \\~/.ssh/id_rsa",
+                { tilde: false, glob: false, brace: false, variable: false, quoted: true },
+            ],
+            [
+                "tilde in double quotes",
+                'cat "~/x"',
+                { tilde: false, glob: false, brace: false, variable: false, quoted: true },
+            ],
+            [
+                "quoted part after the tilde",
+                "cat ~'/'x",
+                { tilde: true, glob: false, brace: false, variable: false, quoted: true },
+            ],
+            [
+                "live glob",
+                "cat *.ts",
+                { tilde: false, glob: true, brace: false, variable: false, quoted: false },
+            ],
+            [
+                "glob metacharacters",
+                "cat x?.ts",
+                { tilde: false, glob: true, brace: false, variable: false, quoted: false },
+            ],
+            [
+                "bracket range",
+                "cat x[0-9].ts",
+                { tilde: false, glob: true, brace: false, variable: false, quoted: false },
+            ],
+            [
+                "glob after a quoted prefix",
+                "cat 'x'*.ts",
+                { tilde: false, glob: true, brace: false, variable: false, quoted: true },
+            ],
+            [
+                "quoted glob is literal",
+                "cat '*.ts'",
+                { tilde: false, glob: false, brace: false, variable: false, quoted: true },
+            ],
+            [
+                "double-quoted glob is literal",
+                'cat "*.ts"',
+                { tilde: false, glob: false, brace: false, variable: false, quoted: true },
+            ],
+            [
+                "escaped glob is literal",
+                "cat \\*.ts",
+                { tilde: false, glob: false, brace: false, variable: false, quoted: true },
+            ],
+            [
+                "brace expansion",
+                "cat a{b,c}.ts",
+                { tilde: false, glob: false, brace: true, variable: false, quoted: false },
+            ],
+            [
+                "quoted braces are literal",
+                'cat "a{b,c}.ts"',
+                { tilde: false, glob: false, brace: false, variable: false, quoted: true },
+            ],
+            [
+                "variable",
+                "cat $HOME/x",
+                { tilde: false, glob: false, brace: false, variable: true, quoted: false },
+            ],
+            [
+                "braced variable",
+                "cat ${HOME}/x",
+                { tilde: false, glob: false, brace: true, variable: true, quoted: false },
+            ],
+            [
+                "variable inside double quotes",
+                'cat "$HOME/x"',
+                { tilde: false, glob: false, brace: false, variable: true, quoted: true },
+            ],
+            [
+                "variable inside single quotes",
+                "cat '$HOME/x'",
+                { tilde: false, glob: false, brace: false, variable: false, quoted: true },
+            ],
+            [
+                "tilde combined with a glob",
+                "cat ~/.pi/*.md",
+                { tilde: true, glob: true, brace: false, variable: false, quoted: false },
+            ],
+            [
+                "static word carries nothing",
+                "cat README.md",
+                { tilde: false, glob: false, brace: false, variable: false, quoted: false },
+            ],
+        ])("reports %s", (_description, input, expected) => {
+            expect(expansionsFor(input)).toEqual(expected);
+        });
+
+        it("records a command substitution as a substitution, not a variable", () => {
+            const command = commandFor("cat $(pwd)/x");
+
+            expect(
+                command.words[1]?.substitutions.map((substitution) => substitution.kind),
+            ).toEqual(["command"]);
+        });
+
+        it("keeps the command name and its arguments provenance separate", () => {
+            const command = commandFor("~/bin/tool --flag=$HOME ~/data.txt");
+
+            expect(command.words.map((word) => word.expansions.tilde)).toEqual([true, false, true]);
+            expect(command.words[1]?.expansions.variable).toBe(true);
+        });
+
+        // These forms are how expansion could be quietly re-enabled by a future lexer change: each
+        // one stores a metacharacter that the shell does not treat as live, and each is refused today
+        // because `quoted` or `substitutions` says so. Values are measured, not assumed.
+        it.each([
+            ["ansi-c quoting", String.raw`cat $'*.ts'`, "$*.ts", true, ["variable"]],
+            ["locale quoting", String.raw`cat $"*.ts"`, "$*.ts", true, ["variable"]],
+            ["substitution inside a live glob", 'cat "a$(id)b"*.ts', "a$(id)b*.ts", true, ["glob"]],
+            ["backtick with a live glob", "cat `id`*.ts", "`id`*.ts", false, ["glob"]],
+            ["process substitution with a glob", "cat <(ls)*.ts", "<(ls)*.ts", false, ["glob"]],
+            ["escaped quote in a live glob", 'cat "a\\"b"*.ts', 'a\\"b*.ts', true, ["glob"]],
+            ["empty quotes before a tilde", "cat ''~/x", "~/x", true, ["tilde"]],
+        ] as const)(
+            "marks %s as carrying content we must not expand",
+            (_description, input, value, quoted, flags) => {
+                const word = commandFor(input).words[1];
+                if (word === undefined) {
+                    throw new Error(`fixture produced no second word: ${input}`);
+                }
+
+                const live = Object.entries(word.expansions)
+                    .filter(([, enabled]) => enabled)
+                    .map(([name]) => name);
+
+                expect(word.value).toBe(value);
+                expect(word.quoted).toBe(quoted);
+                expect(live).toEqual(flags);
+            },
+        );
+    });
+
     describe("escaping and line continuations", () => {
         it.each([
             ["escaped space", "echo hello\\ world", ["echo", "hello world"]],
