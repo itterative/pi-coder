@@ -148,7 +148,7 @@ describe("compaction trace", () => {
         expect(attempt?.attempt).toMatchObject({
             provider: "anthropic",
             model: "stub-model",
-            maxTokens: 8_192,
+            maxTokens: 2_730,
             contextWindow: 200_000,
             toolCount: 2,
             messageCount: 4,

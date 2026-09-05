@@ -31,11 +31,20 @@ in a session, and pi keeps thinking in the live context anyway (`hideThinkingBlo
    with the parent's `ctx.getSystemPrompt()` and its active tools in `agent.state.tools` order, so the request
    is a strict shorter prefix of what the provider already cached. Tools stay in the request and are forbidden
    by `toolChoice: "none"`: removing them would move the prefix. A `toolCall` block in the response rejects
-   the stage.
+   the stage. Stage 1 gets **a third** of the output budget (`segmentBudget`) and is told it is an
+   intermediate, because a generous intermediate becomes a rival draft: measured before that, stage 1 wrote
+   3,207 tokens and the reduce then produced something *longer* than the material it was handed.
 2. **reduce (stage 2, serialized)** — one bounded text-only call over `serializeConversationMinimal(span)` +
-   stage 1's `<segment-checkpoint>` + `<previous-summary>`, producing the persisted summary. Transcript-first
-   on disagreement, checkpoint fills what compression removed.
+   stage 1's `<segment-checkpoint>`, plus `<previous-summary>` **only when stage 1 did not run** (stage 1's
+   instruction already carries it forward, so feeding both invites a union of duplicates). Transcript-first on
+   disagreement, checkpoint fills what compression removed, and the output must be no longer than the
+   checkpoint it was given — merge and drop, never concatenate.
 3. **core default** — `undefined`.
+
+The fit gate is `nativeRequestFits`, which prefers **`ctx.getContextUsage().tokens`** (the provider's own
+count) and only falls back to the chars/4 body estimate; the heuristic measured 1.35x hot on a JSON-heavy
+session and 1.12x on a text one, and a hot estimate silently skips stage 1 on ~200k windows — exactly when
+compaction matters. The live count includes the retained tail, so it is conservative in the right direction.
 
 `overflow` skips stage 1 (the span provably does not fit). Stage 1 failing alone → stage 2 with no segment.
 Stage 2 failing after stage 1 succeeded → **stage 1's text is persisted** (`route: "native"`). Nothing may
@@ -44,8 +53,13 @@ session that can no longer be compacted. `event.signal.aborted` returns `{ cance
 
 ## Measured
 
-- **llama.cpp local (`qwen3.8-27b`)**: stage 1 accepted with `usage: { input: 376, cacheRead: 34339 }` — the
-  cache **is** reachable from a rebuilt request, and a `+tool_choice` body difference did not prevent it.
+- **llama.cpp local (`qwen3.8-27b`), two-stage confirmed**: stage 1 truncated to the span accepted with
+  `usage: { input: 766, cacheRead: 31885 }`, and the `prefix` record showed why: identical `systemChars`
+  (24,619), identical `toolsHash`, 42 leading messages byte-identical, parent body 64 messages vs our 43 —
+  i.e. a real shorter prefix, served from cache, for ~2% of the tokens fresh. Stage 2 cost 6,497 fresh with
+  no cache, which is correct for a one-off. Whole compaction: ~7.3k fresh tokens.
+- Same provider, earlier un-truncated design: `input: 376, cacheRead: 34339` — the first evidence the cache was
+  reachable at all, and that `+tool_choice` does not disturb it.
 - **Hosted `qwen-token-plan/qwen3.8-flash`**, 572-message session, 1M window: an earlier full-live-context
   design recorded `input: 330054, cacheRead: 0` while ordinary turns in that session report `input ≈ 1k,
   cacheRead ≈ 330k`. So that endpoint either will not serve a cache entry to an extended/rewound request or
@@ -104,8 +118,12 @@ or argument named `constructor` otherwise yields a function where a character bu
 - `prefix` — from `prefix-diff.ts`: our stage-1 body (captured via `onPayload`) diffed against the parent's
   last real body (captured via `before_provider_request`, stored as one reference in a `WeakMap` keyed by
   `sessionManager`). Reports **every** content `divergences[]` (`system`, `tools(body)`, `tools(names)`,
-  `messages[i]`, `rewind`), `prefixUsable`, and `parameters[]` for body keys only one side sent — `tool_choice`
-  is a parameter, never a prefix verdict, which is exactly the distinction that mattered in the first run.
+  `messages[i]`), `prefixUsable`, `truncated`, and `parameters[]` for body keys only one side sent. Two rules
+  learned the hard way: `tool_choice` is a **parameter**, never a prefix verdict; and a difference that starts
+  exactly at our appended instruction on a `truncated` request is the designed shape, so it must report
+  `usable: true` / `firstDivergence: "tail"` rather than look broken. Without those, every healthy run reads as
+  a failure. `prefixUsable: false` with `no-parent-payload-captured` means the capture never fired — pi wires
+  `before_provider_request` only on the SDK `createAgentSession` path, so it has gone missing at least once.
 - `model_response` — what the model said before the harness appended anything.
 - `final_summary` — the exact persisted text plus its counts.
 - `outcome` — `two-stage`/`native`/`serialized`/`core-default`/`cancelled`/`disabled`.

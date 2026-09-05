@@ -87,7 +87,10 @@ interface StageContext {
     preparation: CompactionPreparation;
     customInstructions?: string;
     config: CompactionConfig;
+    /** Output budget for the persisted checkpoint (stage 2). */
     maxTokens: number;
+    /** Smaller budget for the intermediate: a stage-1 output the reduce has to re-summarize is wasted work. */
+    segmentTokens: number;
     signal: AbortSignal;
     trace: CompactionTraceRecorder;
 }
@@ -101,6 +104,17 @@ function summaryBudget(reserveTokens: number, modelMaxTokens: number): number {
         return fromReserve;
     }
     return Math.min(fromReserve, modelMaxTokens);
+}
+
+/**
+ * The intermediate gets a third of the final budget.
+ *
+ * Measured before this existed: stage 1 wrote 3,207 tokens and the reduce then produced a longer document
+ * than it was handed, because a generous intermediate is a competing summary. A third keeps it a summary of
+ * facts rather than a rival draft, and floors at 512 so a tiny session still gets a usable pass.
+ */
+function segmentBudget(maxTokens: number): number {
+    return Math.max(512, Math.floor(maxTokens / 3));
 }
 
 function notify(ctx: ExtensionContext, message: string, level: "info" | "warning" = "info"): void {
@@ -127,6 +141,7 @@ function prefixDiffAgainstParent(sessionManager: object, ourPayload: unknown) {
             prefixUsable: false,
             firstDivergence: "no-parent-payload-captured",
             divergences: ["no-parent-payload-captured"],
+            truncated: false,
             parameters: [],
             parentMessageCount: 0,
             ourMessageCount: ours.messageHashes.length,
@@ -180,7 +195,7 @@ function spanMessages(input: StageContext): {
 
 /** Stage 1: the model reads the span it is about to lose, as real messages, with tools forbidden. */
 async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<StageResult> {
-    const { pi, ctx, preparation, maxTokens, signal, trace } = input;
+    const { pi, ctx, preparation, segmentTokens, signal, trace } = input;
     const span = spanMessages(input);
     const tools = activeToolDefinitions(pi);
     const context = buildNativeContext({
@@ -193,8 +208,10 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
         }),
         timestamp: Date.now(),
     });
-    const fields = attemptFields(model, maxTokens, {
+    const reportedContextTokens = ctx.getContextUsage()?.tokens ?? null;
+    const fields = attemptFields(model, segmentTokens, {
         estimatedTokens: estimateRequestTokens(context),
+        reportedContextTokens: reportedContextTokens ?? undefined,
         toolCount: tools.length,
         messageCount: span.messages.length,
         copiedEntries: span.fields.copiedEntries,
@@ -203,7 +220,7 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
         previousSummaryChars: preparation.previousSummary?.length ?? 0,
     });
 
-    if (!nativeRequestFits(context, model.contextWindow, maxTokens)) {
+    if (!nativeRequestFits(context, model.contextWindow, segmentTokens, reportedContextTokens)) {
         const detail = "segment context plus instruction does not fit the window";
         trace.attempt("native", fields, { outcome: "skipped", detail });
         return { ok: false, detail };
@@ -213,7 +230,7 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
         {
             registry: ctx.modelRegistry,
             model,
-            maxTokens,
+            maxTokens: segmentTokens,
             signal,
             sessionId: ctx.sessionManager.getSessionId(),
             onPayload: trace.enabled
@@ -363,6 +380,7 @@ async function compactWithPiCoder(
         customInstructions: event.customInstructions,
         config,
         maxTokens,
+        segmentTokens: segmentBudget(maxTokens),
         signal: event.signal,
         trace,
     };

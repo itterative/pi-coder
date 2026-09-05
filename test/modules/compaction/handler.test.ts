@@ -57,6 +57,7 @@ describe("compaction stages", () => {
             signal?: AbortSignal;
             activeTools?: string[];
             branchThrows?: Error;
+            contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
         } = { responses: [] },
     ) {
         if (input.config) {
@@ -78,6 +79,7 @@ describe("compaction stages", () => {
             signal: input.signal,
             activeTools: input.activeTools,
             branchThrows: input.branchThrows,
+            contextUsage: input.contextUsage,
             model: input.contextWindow
                 ? stubModel({ contextWindow: input.contextWindow })
                 : undefined,
@@ -110,8 +112,8 @@ describe("compaction stages", () => {
         expect(h.optionField(0, "toolChoice")).toBe("none");
         expect(h.optionField(0, "cacheRetention")).toBeUndefined();
         expect(h.optionField(0, "sessionId")).toBe(SESSION_ID);
-        // pi's history budget: 80% of the reserved window, capped by the model's own output limit.
-        expect(h.optionField(0, "maxTokens")).toBe(8_192);
+        // Stage 1 gets a third of pi's history budget: it writes an intermediate, not the final draft.
+        expect(h.optionField(0, "maxTokens")).toBe(2_730);
         expect(h.trailingInstruction(0)).toContain("Do not call any tool");
         expect(h.trailingInstruction(0)).toContain("## Key Decisions");
     });
@@ -191,21 +193,69 @@ describe("compaction stages", () => {
         expect(payload?.details.route).toBe("serialized");
     });
 
-    it("carries the previous checkpoint into the reduce", async () => {
+    it("gives the intermediate a third of the final budget", async () => {
+        const h = build({ responses: [segmentSummary, reducedSummary] });
+        await h.compact();
+
+        expect(h.optionField(0, "maxTokens")).toBe(2_730);
+        expect(h.optionField(1, "maxTokens")).toBe(8_192);
+        expect(h.trailingInstruction(0)).toContain("This is an intermediate pass");
+        expect(h.requestText(1)).toContain("must be no longer than the checkpoint you were given");
+    });
+
+    it("lets stage 1 merge the previous checkpoint, so the reduce is not handed it twice", async () => {
         const h = build({
             responses: [segmentSummary, reducedSummary],
             preparation: { previousSummary: "## Goal\n\nthe earlier checkpoint" },
         });
         await h.compact();
 
-        const segment = h.trailingInstruction(0);
-        expect(segment).toContain("An earlier compaction summary is part of this conversation");
+        expect(h.trailingInstruction(0)).toContain(
+            "An earlier compaction summary is part of this conversation",
+        );
+        expect(h.requestText(1)).not.toContain("<previous-summary>");
+        expect(h.requestText(1)).toContain("<segment-checkpoint>");
+    });
 
-        const request = h.requestText(1);
+    it("hands the previous checkpoint to the reduce when stage 1 did not run", async () => {
+        const h = build({
+            responses: [reducedSummary],
+            preparation: { previousSummary: "## Goal\n\nthe earlier checkpoint" },
+        });
+        await h.compact({ reason: "overflow" });
+
+        expect(h.calls).toHaveLength(1);
+        const request = h.requestText(0);
         expect(request).toContain(
             "<previous-summary>\n## Goal\n\nthe earlier checkpoint\n</previous-summary>",
         );
         expect(request).toContain("Merge everything into it");
+        expect(request).not.toContain("<segment-checkpoint>");
+    });
+
+    it("gates the fit on the provider's own token count, not the chars/4 estimate", async () => {
+        // A 1.2M-character span estimates at ~300k tokens, which would skip stage 1 on a 200k window. The
+        // provider reports 40k, which is the truth the gate should use.
+        const huge = messageChain([
+            { id: "big-1", message: userMessage("q".repeat(1_200_000)) },
+            { id: "kept-1", message: userMessage(KEPT_TEXT) },
+        ]);
+        const trusting = build({
+            responses: [segmentSummary, reducedSummary],
+            branch: huge,
+            contextUsage: { tokens: 40_000, contextWindow: 200_000, percent: 20 },
+        });
+        await trusting.compact();
+        expect(trusting.calls).toHaveLength(2);
+
+        const overflowing = build({
+            responses: [reducedSummary],
+            branch: huge,
+            contextUsage: { tokens: 199_000, contextWindow: 200_000, percent: 100 },
+        });
+        const payload = await overflowing.compact();
+        expect(overflowing.calls).toHaveLength(1);
+        expect(payload?.details.route).toBe("serialized");
     });
 
     it("reduces without a segment checkpoint when stage 1 answers with a tool call", async () => {

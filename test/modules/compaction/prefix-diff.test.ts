@@ -166,7 +166,37 @@ describe("request prefix diffing", () => {
         expect(diff.commonPrefixMessages).toBe(1);
     });
 
-    it("flags a rewind, which cannot reuse an extended prefix", () => {
+    it("treats an instruction-only tail difference on a truncated request as usable", () => {
+        // Stage 1 drops the retained tail and appends one instruction. This is the shape of every healthy
+        // two-stage run, so it must not be reported as a prefix break.
+        const shared = [
+            { role: "user", content: "first" },
+            { role: "assistant", content: [{ type: "text", text: "ok" }] },
+        ];
+        const parent = fingerprint(
+            anthropicBody({
+                messages: [
+                    ...shared,
+                    { role: "tool", tool_call_id: "c1", content: "output" },
+                    { role: "user", content: "keep going" },
+                ],
+            }),
+        );
+        const ours = fingerprint(
+            anthropicBody({
+                messages: [...shared, { role: "user", content: "summarize the span above" }],
+            }),
+        );
+        const diff = diffRequestPrefixes(parent, ours);
+
+        expect(diff.prefixUsable).toBe(true);
+        expect(diff.firstDivergence).toBe("tail");
+        expect(diff.divergences).toEqual([]);
+        expect(diff.truncated).toBe(true);
+        expect(diff.commonPrefixMessages).toBe(2);
+    });
+
+    it("reports a shorter request as truncation, not divergence", () => {
         const parent = fingerprint(
             anthropicBody({
                 messages: [
@@ -178,8 +208,9 @@ describe("request prefix diffing", () => {
         const ours = fingerprint(anthropicBody({ messages: [{ role: "user", content: "first" }] }));
         const diff = diffRequestPrefixes(parent, ours);
 
-        expect(diff.prefixUsable).toBe(false);
-        expect(diff.firstDivergence).toBe("rewind");
+        expect(diff.truncated).toBe(true);
+        expect(diff.divergences).toEqual([]);
+        expect(diff.prefixUsable).toBe(true);
     });
 
     it("fingerprints nested OpenAI tool names", () => {

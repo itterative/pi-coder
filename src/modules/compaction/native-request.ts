@@ -72,9 +72,18 @@ export function nativeRequestFits(
     context: Context,
     contextWindow: number,
     outputBudgetTokens: number,
+    reportedContextTokens?: number | null,
 ): boolean {
     if (contextWindow <= 0) {
         return false;
     }
-    return estimateRequestTokens(context) < contextWindow - outputBudgetTokens;
+    // The provider's own count is ground truth and immune to how hot the chars/4 heuristic runs (measured at
+    // 1.35x on a JSON-heavy session and 1.12x on a text one, which is the difference between stage 1 running
+    // and quietly skipping itself on a 200k window). The live context includes the retained tail that stage 1
+    // drops, so treating it as the requirement is conservative in the direction that matters.
+    const needed =
+        reportedContextTokens && reportedContextTokens > 0
+            ? reportedContextTokens
+            : estimateRequestTokens(context);
+    return needed < contextWindow - outputBudgetTokens;
 }

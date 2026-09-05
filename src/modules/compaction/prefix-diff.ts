@@ -38,6 +38,12 @@ export interface PrefixDiff {
     /** Every content divergence found. Checking all of them, rather than the first, is the whole point. */
     divergences: string[];
     /**
+     * True when we sent fewer messages than the parent's last request. That is stage 1 working as designed:
+     * the span is truncated at the cut point, so the retained tail is absent. Informational, never a
+     * divergence.
+     */
+    truncated: boolean;
+    /**
      * Top-level body keys only one side sent. Informational, never a verdict: `tool_choice` is a request
      * parameter, not prefix content, and a provider that reports a 34k cache read alongside it proves the
      * distinction matters.
@@ -180,9 +186,18 @@ export function diffRequestPrefixes(
         divergences.push(`messages[${String(index)}] (${parent.messageRoles[index]})`);
         break;
     }
-    if (ours.messageHashes.length < parent.messageHashes.length) {
-        // We sent less than the parent already had: a rewind rather than an extension.
-        divergences.push("rewind");
+    const truncated = ours.messageHashes.length < parent.messageHashes.length;
+
+    // Our request is expected to differ where our instruction begins: a truncated stage-1 body that matches
+    // the parent all the way to its own last message is the designed shape, not a mismatch. The `truncated`
+    // test is what separates that from a genuine rewrite of the last shared message, which is the same index
+    // arithmetic and must keep failing.
+    if (
+        truncated &&
+        divergences.length === 1 &&
+        commonPrefixMessages === ours.messageHashes.length - 1
+    ) {
+        divergences.length = 0;
     }
 
     const contentMismatch = divergences.length > 0;
@@ -190,6 +205,7 @@ export function diffRequestPrefixes(
         prefixUsable: !contentMismatch,
         firstDivergence: contentMismatch ? (divergences[0] as string) : "tail",
         divergences,
+        truncated,
         parameters: parameterDifferences(parent.keys, ours.keys),
         ...firstDetail,
         parentMessageCount: parent.messageHashes.length,

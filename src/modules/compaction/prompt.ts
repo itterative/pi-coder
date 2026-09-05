@@ -90,6 +90,10 @@ export function segmentSummaryInstruction(input: SegmentInstructionInput): strin
         "Reply with text only: the checkpoint itself, nothing before or after it.",
         "",
         "Write that checkpoint now, for a fresh context that will see only this text plus the recent turns.",
+        "",
+        "This is an intermediate pass: a second model reads it alongside a transcript and must merge them,",
+        "so compress. Bullets over prose, one line per fact, no quoted tool output longer than a line, and",
+        "nothing you would not want repeated verbatim in the final checkpoint.",
         previous,
         splitTurn,
         "",
@@ -121,31 +125,43 @@ export interface SerializedRequestInput {
  * previous checkpoint, and has to reconcile them into one.
  */
 export function serializedSummarizationRequest(input: SerializedRequestInput): string {
-    const previous: string | undefined = input.previousSummary
-        ? `<previous-summary>\n${input.previousSummary}\n</previous-summary>\n`
-        : undefined;
-    const segment: string | undefined = input.segmentSummary
+    // When stage 1 ran, its checkpoint already carries the previous one forward (its instruction says so),
+    // so handing the reduce the same content twice only invites it to union the duplicates.
+    const previousBlock: string | undefined =
+        input.previousSummary && !input.segmentSummary
+            ? `<previous-summary>\n${input.previousSummary}\n</previous-summary>\n`
+            : undefined;
+    const segmentBlock: string | undefined = input.segmentSummary
         ? `<segment-checkpoint>\n${input.segmentSummary}\n</segment-checkpoint>\n`
         : undefined;
 
-    const lead = input.segmentSummary
-        ? [
-              "<segment-checkpoint> is a summary of the same conversation written by the assistant that",
-              "holds it in context; <conversation> is a minimized transcript of it. Prefer the transcript",
-              "where they disagree, and use the checkpoint where the transcript was compressed away.",
-          ].join(" ")
-        : "The transcript is the whole conversation to summarize; it has been minimized, so tool output may";
-
-    const merge = input.previousSummary
-        ? "The transcript holds only NEW messages since <previous-summary>. Merge everything into it," +
-          " preserving existing content that still matters."
-        : `${lead}. No prior checkpoint exists.`;
+    const guidance: string[] = [];
+    if (segmentBlock) {
+        guidance.push(
+            "<segment-checkpoint> is an intermediate summary of this same conversation, written by the",
+            "assistant that still had it in context; <conversation> is a minimized transcript of it. Prefer",
+            "the transcript where they disagree, and use the checkpoint where the transcript was compressed",
+            "away. Your output replaces both, so it must be no longer than the checkpoint you were given:",
+            "merge and drop, never concatenate.",
+        );
+    } else {
+        guidance.push(
+            "The transcript is the whole conversation to summarize. It has been minimized, so tool output",
+            "may be truncated; do not guess at what was dropped.",
+        );
+    }
+    if (previousBlock) {
+        guidance.push(
+            "The transcript holds only NEW messages since <previous-summary>. Merge everything into it,",
+            "preserving existing content that still matters.",
+        );
+    }
 
     return [
         `<conversation>\n${input.conversationText}\n</conversation>\n`,
-        segment,
-        previous,
-        merge,
+        segmentBlock,
+        previousBlock,
+        guidance.join(" "),
         focusLines(input.customInstructions),
         "",
         FORMAT,

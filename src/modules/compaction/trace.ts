@@ -57,6 +57,8 @@ export interface CompactionAttemptFields {
     contextWindow: number;
     /** Estimated size of what this strategy sends, so a rejected native attempt explains itself. */
     estimatedTokens?: number;
+    /** The provider's own count for the live context, when known: what the fit gate actually used. */
+    reportedContextTokens?: number;
     toolCount?: number;
     messageCount?: number;
     serializedChars?: number;
@@ -111,6 +113,8 @@ export interface CompactionPrefixFields {
     prefixUsable: boolean;
     firstDivergence: string;
     divergences: string[];
+    /** Stage 1 truncates at the cut point by design, so this is never a divergence. */
+    truncated?: boolean;
     /** Request parameters only one side sent, e.g. `+tool_choice`. Not a prefix verdict. */
     parameters: string[];
     parent?: string;

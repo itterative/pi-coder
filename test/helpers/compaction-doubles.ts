@@ -294,6 +294,8 @@ export interface CompactionHarnessInput {
      * the way a provider adapter would, and fails if it tries to replace the payload.
      */
     providerPayload?: unknown;
+    /** What `ctx.getContextUsage()` reports: the provider's own live-context token count. */
+    contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
     /** Override the branch the module reads, or make it fail. */
     branch?: SessionEntry[];
     branchThrows?: Error;
@@ -368,6 +370,7 @@ export function createCompactionHarness(input: CompactionHarnessInput): Compacti
             },
             getSessionId: () => input.sessionId ?? "session-1",
         }),
+        getContextUsage: () => input.contextUsage,
     });
 
     const handler = piStub.requireHandler("session_before_compact");
