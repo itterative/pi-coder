@@ -39,6 +39,7 @@ interface MutableTrace extends AgentTraceSnapshot {
     nextSequence: number;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function isAgentTraceEnabled(value = process.env[AGENT_TRACE_ENV]): boolean {
     // return /^(1|true|yes|on)$/i.test(value?.trim() ?? "");
     // TODO: enabled temporarily while developing the extension

@@ -307,6 +307,8 @@ export class InlineEditor {
      * caller supplies all styling via pre-styled prefixes/placeholder and
      * wraps the returned strings in Text components.
      */
+    // FIXME: will go through this later to see if it's worth reducing the cognitive load
+    // eslint-disable-next-line sonarjs/cognitive-complexity
     renderLines(options: RenderEditLinesOptions): string[] {
         const {
             width,

@@ -228,6 +228,8 @@ export class AskUserComponent implements Component, Focusable {
 
     // ── Content rendering ────────────────────────────────────────────
 
+    // FIXME: will go through this later to see if it's worth reducing the cognitive load
+    // eslint-disable-next-line sonarjs/cognitive-complexity
     private rebuildContent(width: number): void {
         this.contentBox.clear();
 

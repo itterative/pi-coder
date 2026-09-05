@@ -328,6 +328,8 @@ export function registerCommandPermissionHooks(
     const permissionState = options.permissionState ?? createPermissionState();
     const nonIsolated = options.isolated !== true;
 
+    // FIXME: disabled cognitive-load for this function, will see if it's worth refactoring later
+    // eslint-disable-next-line sonarjs/cognitive-complexity
     pi.on("tool_call", async (event, ctx) => {
         const isEdit = isToolCallEventType<"edit", EditToolInput>("edit", event);
         const isWrite = isToolCallEventType<"write", WriteToolInput>("write", event);
