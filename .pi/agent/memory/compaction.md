@@ -186,6 +186,59 @@ edit, and let a test observe it: `nonNegativeNumberField` keeps a `0`, `positive
 
 ## The request chain: hashes retained, bodies dropped
 
+**`observations: 0` means the chain store was just created (reload, `/resume`, restart), not that the prefix
+broke - see the `compaction-chain-blindness` memory for the experiment that proved this, and for the two things
+still worth doing there (a total-vs-on-branch count, and whether to persist ladders).**
+
+## `cached=0` in a development session: what is explained and what is not
+
+**Do not claim memory edits break the cache mid-session. That was measured false on 2026-09-05.** The memory
+index is deliberately frozen: `session_start` restores it from the `pi-memory:memory-index` custom entry in the
+session file instead of rescanning the directory (`src/modules/memory/index.ts:150-177`), and this session's file
+holds exactly **one** such entry, written at 09:22:40 with 14 project + 6 user memories - which is why the index
+in the live system prompt does not list `compaction.md` even though the file exists. Adding, editing, or
+deleting a memory therefore changes the prompt for the *next new session*, not for this one, and not on
+`/reload` or `/resume`.
+
+What is still unexplained is a genuine prompt jump seen in the same trace. `prefix.ourRequest.systemChars` for
+our own stage-1 rebuilds:
+
+| session | time | systemChars | messages |
+| ------- | ---- | ----------- | -------- |
+| 01a0714f | 14:06 | 12817 | 65 |
+| 01a0714f | 14:32 | 24619 | 65 |
+| 01a070e0 | 15:27 | 12817 | 559 |
+| 01a070e0 | 19:42 | 24813 | 363 |
+
+Two unrelated sessions each grew by a near-identical block (+11,802 and +11,996), while `toolsHash` and the
+frozen memory index stayed put. A fixed ~12 KB arriving exactly once more is the signature of a duplicated
+injection, and ~12 KB is about the size of the whole set of extension-contributed blocks (`<memory_system>`,
+`<delegated_agents>`, `<todolist_system>`, `<scratchpad_system>`, `<bash_sandbox>`, project instructions).
+The bash module carries a guard for exactly this class of bug - `if (systemPrompt.includes("<bash_sandbox>"))
+return` at `src/tools/bash/index.ts:247` - which is historical evidence that double-appending has happened here
+before. Unconfirmed: nothing has been captured, only lengths.
+
+Why the trace could not see it: `ourRequest.systemHash` hashes a **320-char excerpt** (`EXCERPT_CHARS`) with
+FNV-1a-32, so `6e84662c` was reported unchanged across 12817, 24619, 24813 and 25294 chars. The chain's shape
+comparison hashes the full text, so `verified=N/M` (sha256 ladder heads over messages) is unaffected - but any
+conclusion of the form "the system prompt did not change" drawn from that field is invalid.
+
+If a duplicated block is real, the costs are ~3k tokens of dead weight on every request in that session, a
+prefix-cache break at the point of duplication, and a plausible shared cause with slow reloads. If it is not
+real, the `cached=0` readings on hosted providers need a different explanation.
+
+## Trace field gotchas
+
+- `ourRequest.systemHash` hashes a **320-char excerpt** (`EXCERPT_CHARS`) with FNV-1a-32, so two system prompts
+  that differ only past char 320 share it; the chain's shape comparison hashes the full text. Same field name,
+  two meanings - `12817` and `24813` chars both hashed to `6e84662c`. The ladder heads that `verified=N/M` rests
+  on are sha256, so the prefix verdict does not inherit this weakness.
+- A `-key` in `prefix.parameters` means the parent sent a key our rebuild dropped. `+tool_choice` is expected
+  (that is our prohibition). `-reasoning_effort` is not: pi's live request carried it and ours does not, so the
+  two differ in a decode parameter. Unresolved whether that is cosmetic for the endpoint's cache.
+- `prefixUsable` is `undefined` in older records rather than absent; read `reference` first - `none` means no
+  ladder covered the branch and the numeric depths are `-1` placeholders, not measurements.
+
 `chain.ts` replaced the parent-body capture. `index.ts` keeps `WeakMap<sessionManager, RequestChain>`, and
 `before_provider_request` calls `observeParentRequest()`, which folds a cumulative head over
 `body.messages` and then **drops the body**:
