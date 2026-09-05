@@ -103,7 +103,7 @@ describe("validateAgentParameters", () => {
         expect(request.context).toEqual(context);
     });
 
-    it("warns when an agent ignores additional context", () => {
+    it("warns only about sections the target agent will not receive", () => {
         const context = {
             sections: [
                 {
@@ -121,9 +121,11 @@ describe("validateAgentParameters", () => {
             ],
         };
 
-        expect(unusedAgentContextWarning("scout", context, undefined)).toBe(
-            'Warning: Agent "scout" does not accept additional context; ignored sections: "parent_summary", "recent_context".',
-        );
+        // No policy means the agent takes every section it is given, so nothing is ignored.
+        expect(unusedAgentContextWarning("scout", context, undefined)).toBeUndefined();
+        expect(
+            unusedAgentContextWarning("scout", context, { sectionIds: [], maxChars: 1_000 }),
+        ).toBeUndefined();
         expect(
             unusedAgentContextWarning("advisor", context, {
                 sectionIds: ["parent_summary"],
@@ -132,22 +134,20 @@ describe("validateAgentParameters", () => {
         ).toBe('Warning: Agent "advisor" ignored additional context section: "recent_context".');
         expect(
             unusedAgentContextWarning(
-                "advisor",
+                "scout",
                 {
                     sections: [
+                        context.sections[0],
                         {
                             id: "parent_summary",
-                            title: "Summary",
-                            content: "Known",
+                            title: "Duplicate summary",
+                            content: "Repeated",
                             source: "parent",
                         },
                     ],
                 },
-                {
-                    sectionIds: ["parent_summary"],
-                    maxChars: 1_000,
-                },
+                undefined,
             ),
-        ).toBeUndefined();
+        ).toBe('Warning: Agent "scout" ignored additional context section: "parent_summary".');
     });
 });

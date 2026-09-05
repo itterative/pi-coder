@@ -486,6 +486,34 @@ describe("AgentRunManager", () => {
         );
     });
 
+    it("renders runtime context for an agent without a context policy", async () => {
+        const child = new FakeChild([{ output: "Found the answer." }]);
+        const manager = managerWith(child);
+
+        await manager.start(
+            BUILTIN_SCOUT,
+            "Inspect the renderer.",
+            {
+                ...context(),
+                agentContext: {
+                    sections: [
+                        {
+                            // No built-in policy lists this ID, and a policy-less scout accepts it.
+                            id: "scratchpad_note",
+                            title: "Scratchpad note",
+                            content: "The parent left the trace here.",
+                            source: "workspace",
+                        },
+                    ],
+                },
+            },
+            {},
+        );
+
+        expect(child.prompts[0]).toContain("### Scratchpad note [workspace]");
+        expect(child.prompts[0]).toContain("The parent left the trace here.");
+    });
+
     it("persists the final child leaf after the prompt settles", async () => {
         const child = new FakeChild(
             [{ output: "Found the answer.", leafId: "leaf-final" }],

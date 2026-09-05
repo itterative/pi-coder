@@ -247,7 +247,7 @@ describe("delegated-agent prompt rendering", () => {
         );
     });
 
-    it("advertises context sections in the parent agent catalog", async () => {
+    it("advertises a narrowing context policy in the parent agent catalog", async () => {
         const prompt = availableAgentsPrompt([BUILTIN_ADVISOR]);
 
         await expect(prompt).toMatchFileSnapshot("__snapshots__/agent-prompt.advisor-catalog.txt");
@@ -282,7 +282,7 @@ describe("delegated-agent prompt rendering", () => {
         );
     });
 
-    it("preserves task-only behavior without a context policy", async () => {
+    it("renders every supplied section for an agent without a context policy", async () => {
         const rendered = renderAgentTask("Inspect the code.", {
             context: {
                 sections: [
@@ -292,10 +292,39 @@ describe("delegated-agent prompt rendering", () => {
                         content: "Additional context",
                         source: "parent",
                     },
+                    {
+                        // An id no built-in policy lists, which a policy-less agent still accepts.
+                        id: "goal",
+                        title: "Goal",
+                        content: "Whatever the parent chose to name it.",
+                        source: "repository",
+                    },
                 ],
             },
         });
 
-        await expect(rendered).toMatchFileSnapshot("__snapshots__/agent-prompt.task-only.txt");
+        await expect(rendered).toMatchFileSnapshot(
+            "__snapshots__/agent-prompt.default-context.txt",
+        );
+    });
+
+    it("bounds a policy-less context block with the default budget", () => {
+        const rendered = renderAgentTask("Inspect the code.", {
+            context: {
+                sections: Array.from({ length: 12 }, (_, index) => ({
+                    id: `section_${index}`,
+                    title: `Section ${index}`,
+                    content: "x".repeat(12_000),
+                    source: "parent" as const,
+                })),
+            },
+        });
+        const contextStart = rendered.indexOf("## Additional delegated context");
+        const blockLength = rendered.length - contextStart;
+
+        expect(contextStart).toBeGreaterThan(-1);
+        expect(blockLength).toBeGreaterThan(0);
+        expect(blockLength).toBeLessThanOrEqual(24_000);
+        expect(rendered).toContain("[context truncated]");
     });
 });

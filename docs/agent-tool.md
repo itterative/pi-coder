@@ -26,7 +26,7 @@ A background `start` returns immediately. Progress appears in the above-editor a
 
 A running foreground `start` or `continue` can be moved to the background with **Ctrl+Alt+B**. The foreground call returns a short control message immediately; progress and the terminal result are then delivered asynchronously. Retrieve the retained result with `collect` after the terminal notification. This shortcut applies when exactly one detachable foreground operation is active; parallel foreground-call selection is not supported yet.
 
-Foreground and background children may use `ask_user` when direct user interaction is allowed and the parent is running in an interactive TUI. They may use `ask_parent` for parent guidance in any mode. The advisor always uses `ask_parent` because its definition disables direct user interaction. If supplied context sections are not accepted by the selected agent, the tool emits a non-blocking warning inside its metadata and continues without that context. Cancellation and shutdown abort active children and close dialogs.
+Foreground and background children may use `ask_user` when direct user interaction is allowed and the parent is running in an interactive TUI. They may use `ask_parent` for parent guidance in any mode. The advisor always uses `ask_parent` because its definition disables direct user interaction. Every agent receives the context sections supplied on `start`; when a narrowing context policy refuses an ID or a repeated ID is dropped, the tool emits a non-blocking warning inside its metadata and continues without that section. Cancellation and shutdown abort active children and close dialogs.
 
 ### Interaction and recovery
 
@@ -47,7 +47,7 @@ Custom definitions live in `~/.pi/agent/agents/*.md` or trusted project `.pi/age
 
 Two capabilities imply others, because they are strengths of one axis rather than independent grants: `command-runner` implies `safe-bash`, and `todolist` implies `scratchpad`. Implications are applied where a definition is read, so the parent-facing catalog and the persisted definition fingerprint both describe the same effective grant.
 
-A definition may select a model and a bounded context policy. Dynamic parent/repository/workspace context belongs in the initial task message, not the system prompt, so the child transcript retains it exactly.
+A definition may select a model and narrow the bounded context sections it accepts. An agent without a policy receives every section it is given under the renderer's default budget, so only a listed policy can refuse IDs. Dynamic parent/repository/workspace context belongs in the initial task message, not the system prompt, so the child transcript retains it exactly.
 
 ## Capabilities, grants, and gates
 

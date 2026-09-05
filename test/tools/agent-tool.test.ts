@@ -546,6 +546,14 @@ describe("agent extension registration", () => {
                             content: "Known",
                             source: "parent",
                         },
+                        {
+                            // Every agent accepts supplied ids now, so the ignored section is the
+                            // repeated one the renderer drops.
+                            id: "parent_summary",
+                            title: "Duplicate summary",
+                            content: "Also known",
+                            source: "parent",
+                        },
                     ],
                 },
             },

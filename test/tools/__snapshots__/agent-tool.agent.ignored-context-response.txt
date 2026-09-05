@@ -9,7 +9,7 @@ Execution: `foreground`
 Title: Inspect
 Collection: not applicable; foreground results are returned directly.
 
-Warning: Agent "scout" does not accept additional context; ignored section: "parent_summary".
+Warning: Agent "scout" ignored additional context section: "parent_summary".
 </metadata>
 
 Done

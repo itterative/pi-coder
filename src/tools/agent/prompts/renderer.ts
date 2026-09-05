@@ -2,6 +2,8 @@ import type { AgentContext, AgentContextPolicy, AgentContextSection } from "../c
 import type { AgentDefinition } from "../definitions/types";
 
 const MAX_CONTEXT_CHARS = 32_000;
+/** Budget for an agent whose definition declares no context policy of its own. */
+const DEFAULT_CONTEXT_MAX_CHARS = 24_000;
 const CONTEXT_TRUNCATION_MARKER = "\n…[context truncated]";
 
 /** Render stable role and protocol instructions as the child system prompt. */
@@ -39,8 +41,8 @@ export function renderAgentTask(
     task: string,
     { context, policy }: RenderAgentTaskOptions = {},
 ): string {
-    const sections = selectSections(context, policy);
-    if (sections.length === 0) return task;
+    const { selected } = partitionContextSections(context, policy);
+    if (selected.length === 0) return task;
 
     const limit = contextLimit(policy);
     const contextPrefix = [
@@ -51,7 +53,7 @@ export function renderAgentTask(
     let renderedContext = contextPrefix;
     let remaining = limit - renderedContext.length;
 
-    for (const section of sections) {
+    for (const section of selected) {
         if (remaining <= 0) break;
         const heading = `### ${cleanLabel(section.title)} [${section.source}]\n`;
         const separatorLength = 2;
@@ -67,67 +69,62 @@ export function renderAgentTask(
     return `${task}\n\n${renderedContext.trimEnd()}`;
 }
 
-/** Returns a parent-facing warning for context that the target agent will ignore. */
+/**
+ * Returns a parent-facing warning for the supplied sections the target agent will not receive.
+ *
+ * Every agent accepts additional context, so this only covers the sections a narrowing policy
+ * refuses and the repeated ids the renderer drops; an agent without a policy warns on neither.
+ */
 export function unusedAgentContextWarning(
     agentName: string,
     context: AgentContext | undefined,
     policy: AgentContextPolicy | undefined,
 ): string | undefined {
-    const unused = unusedContextSections(context, policy);
-    if (unused.length === 0) return undefined;
+    const { dropped } = partitionContextSections(context, policy);
+    if (dropped.length === 0) return undefined;
 
-    const sectionIds = unused.map((section) => JSON.stringify(section.id)).join(", ");
-    const sectionLabel = unused.length === 1 ? "section" : "sections";
-    if (!policy || policy.sectionIds.length === 0) {
-        return [
-            `Warning: Agent ${JSON.stringify(agentName)} does not accept additional context;`,
-            `ignored ${sectionLabel}: ${sectionIds}.`,
-        ].join(" ");
-    }
-
+    const sectionIds = dropped.map((section) => JSON.stringify(section.id)).join(", ");
+    const sectionLabel = dropped.length === 1 ? "section" : "sections";
     return [
         `Warning: Agent ${JSON.stringify(agentName)} ignored additional context`,
         `${sectionLabel}: ${sectionIds}.`,
     ].join(" ");
 }
 
-function selectSections(
+/**
+ * Splits supplied sections into what the agent receives and what it ignores.
+ *
+ * An absent or empty policy accepts every section id, so only a narrowing policy can refuse an id.
+ * A repeated id always keeps its first occurrence.
+ */
+function partitionContextSections(
     context: AgentContext | undefined,
     policy: AgentContextPolicy | undefined,
-): AgentContextSection[] {
-    if (!context || !policy || policy.sectionIds.length === 0) return [];
-    const allowed = new Set(policy.sectionIds);
+): { selected: AgentContextSection[]; dropped: AgentContextSection[] } {
     const selected: AgentContextSection[] = [];
+    const dropped: AgentContextSection[] = [];
+    if (!context) return { selected, dropped };
+
+    const allowed = policy?.sectionIds.length ? new Set(policy.sectionIds) : undefined;
     const seen = new Set<string>();
     for (const section of context.sections) {
-        if (!allowed.has(section.id) || seen.has(section.id)) continue;
+        if (seen.has(section.id) || (allowed && !allowed.has(section.id))) {
+            dropped.push(section);
+            continue;
+        }
         seen.add(section.id);
         selected.push(section);
     }
-    return selected;
+    return { selected, dropped };
 }
 
-function unusedContextSections(
-    context: AgentContext | undefined,
-    policy: AgentContextPolicy | undefined,
-): AgentContextSection[] {
-    if (!context || context.sections.length === 0) return [];
-    if (!policy || policy.sectionIds.length === 0) return [...context.sections];
-
-    const allowed = new Set(policy.sectionIds);
-    const seen = new Set<string>();
-    return context.sections.filter((section) => {
-        if (!allowed.has(section.id)) return true;
-        if (seen.has(section.id)) return true;
-        seen.add(section.id);
-        return false;
-    });
-}
-
+/** A missing or unusable budget falls back to the default, because context is accepted by all. */
 function contextLimit(policy: AgentContextPolicy | undefined): number {
-    if (!policy) return 0;
-    if (!Number.isFinite(policy.maxChars) || policy.maxChars <= 0) return 0;
-    return Math.min(Math.floor(policy.maxChars), MAX_CONTEXT_CHARS);
+    const requested = policy?.maxChars;
+    if (requested === undefined || !Number.isFinite(requested) || requested <= 0) {
+        return Math.min(DEFAULT_CONTEXT_MAX_CHARS, MAX_CONTEXT_CHARS);
+    }
+    return Math.min(Math.floor(requested), MAX_CONTEXT_CHARS);
 }
 
 function cleanLabel(value: string): string {
