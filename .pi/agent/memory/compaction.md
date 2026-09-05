@@ -1,6 +1,6 @@
 ---
 name: compaction
-description: pi-coder's two-stage compaction in src/modules/compaction — native span read then serialized reduce, the in-memory span transcript, cache/prefix measurements, details.route schema, trace stages, config.
+description: pi-coder's two-stage compaction in src/modules/compaction — native span read then serialized reduce, the in-memory span transcript, cache/prefix measurements, details.route schema, trace stages, config, and the failure-handling inventory with its known gaps.
 category: architecture
 priority: 4
 keep_updated: true
@@ -116,8 +116,7 @@ or argument named `constructor` otherwise yields a function where a character bu
   to tell whether the rebuilt prefix was served from cache), estimated tokens, tool/message counts, stage 1's
   `copiedEntries`/`skippedEntries`, stage 2's `serializedChars`/`segmentSummaryChars`.
 - `prefix` — from `prefix-diff.ts`: our stage-1 body (captured via `onPayload`) diffed against the parent's
-  last real body (captured via `before_provider_request`, stored as one reference in a `WeakMap` keyed by
-  `sessionManager`). Reports **every** content `divergences[]` (`system`, `tools(body)`, `tools(names)`,
+  last real body. Reports **every** content `divergences[]` (`system`, `tools(body)`, `tools(names)`,
   `messages[i]`), `prefixUsable`, `truncated`, and `parameters[]` for body keys only one side sent. Two rules
   learned the hard way: `tool_choice` is a **parameter**, never a prefix verdict; and a difference that starts
   exactly at our appended instruction on a `truncated` request is the designed shape, so it must report
@@ -145,6 +144,59 @@ or unknown fields fall back to defaults, because children run this unattended. `
 `serializedMaxTokens`, `keepThinking`, and the per-block char caps govern stage 2; `traceEnabled`/`tracePath`/
 `traceMaxBytes` govern the trace; `model` is accepted but unused — the seam for the planned dedicated
 compaction model, which wants the serialized route since it has no cache prefix to protect.
+
+## The parent-body capture is memory-only
+
+`lastParentPayload` is a module-level `WeakMap` in `index.ts` keyed by the `ctx.sessionManager` instance, set
+by the `before_provider_request` handler and read (never cleared) when stage 1 diffs its own body.
+
+- **Process-local.** A restart or `/reload` starts it empty, so the first compaction in a fresh runtime has
+  nothing to compare against and reports `no-parent-payload-in-this-runtime`. That is not a broken hook.
+- **Per session by identity.** A child's stage 1 compares against that child's own last body.
+- **A reference, not a copy**: pi's own body object (1-2 MB at 330k tokens), replaced each request, released
+  with the manager. Bounded to one per live session; storing the fingerprint instead would trade re-diffing
+  for that retention.
+- **Never persisted, never in the transcript.** Only the derived hashes/counts/320-char excerpts reach the
+  trace file. Deliberately not `pi.appendEntry`: megabytes per compaction in the session file, re-scanned by
+  every `getBranch()` forever, and custom entries never reach the model anyway.
+
+## Failure inventory
+
+Degradation is always toward core, never toward a broken session. Handled today: config off → `undefined`;
+signal already aborted → `{ cancel: true }`; no model; stage 1 **skipped** by the fit gate; provider call
+**threw**; response `stopReason` `error`/`aborted`; response contained a **`toolCall`**; **blank** summary;
+stage 2 failed after stage 1 succeeded → **stage 1's text is persisted** (`route: "native"`) plus a warning;
+both failed → core default plus a warning; any unexpected throw (span copy, tree walk, config read) → outer
+catch → core default.
+
+**We retry nothing at our layer.** pi's `retryProviderRequest` defaults to `maxRetries ?? 0` and we pass no
+`maxRetries`, while core's own compaction passes `getRetrySettings()` — so one 429 kills our attempt where core
+would have waited. Deliberate for now, but it is an asymmetry, not a parity.
+
+Open gaps, agreed 2026-09-05 and **not yet implemented**:
+
+1. **No cause classification.** Context overflow and exhausted quota both land as `rejected` with a message
+   string, yet the right response is opposite: overflow means stage 2 (bounded, no tools) is the fix, while
+   quota/auth means stage 2 is a second doomed request and core's default a third. Reuse pi-ai's
+   `isContextOverflow(message, contextWindow)` (root export; its docs enumerate llama.cpp
+   "exceeds the available context size" and DashScope/Qwen "Range of input length should be [1, X]", and its
+   `NON_OVERFLOW_PATTERNS` suppresses `/rate limit/i`) plus `status`/`headers` on provider errors for
+   401/402/429. Verified statically (types and export surface) only — a `tsx` probe died on module resolution,
+   not on pi.
+2. **`stopReason: "length"` on a summarization response is accepted**, so a checkpoint truncated mid-section
+   becomes the session's memory. Should reject and cascade; pi-ai's `isRecoverableLength` also treats a short
+   `length` stop as context pressure, so this fix does double duty.
+3. **Abort mid-flight returns `undefined`**, so core then issues its own doomed call on the dead controller;
+   returning `{ cancel: true }` once a failure is known to follow an abort is cleaner.
+4. **Children have no UI** (`print` mode), so every warning here reaches only the trace and the run
+   diagnostics: a quota-starved child looks like a normal finish with a mediocre summary.
+5. **Silent-overflow providers** (pi's own doc names z.ai, MiMo, Ollama truncation) could accept a clipped
+   stage-1 input and produce a confident checkpoint of half a conversation. `estimatedTokens`,
+   `reportedContextTokens`, and `usage.input` are all logged now, which is what makes a mismatch check
+   possible later.
+6. **A missing cut point is invisible.** If `preparation.firstKeptEntryId` is not on the path,
+   `spanContextEntries` returns everything and stage 1 silently stops truncating — i.e. it goes back to full
+   price. A `cutFound` field on the stage-1 `attempt` record closes it.
 
 ## Validation
 
