@@ -112,6 +112,18 @@ or argument named `constructor` otherwise yields a function where a character bu
 `id`. Order for a successful two-stage run: `prefix`, `attempt(native)`, `model_response(native)`,
 `attempt(serialized)`, `model_response(serialized)`, `final_summary`, `outcome`.
 
+**Read it with `npm run compaction-report`** (`scripts/compaction-report.mjs`), never by hand-rolling jq joins
+again: it groups records by run id and prints the prefix verdict, one line per stage attempt with its request
+numbers and `in/cached/out`, the persisted summary's size and cut point, then ROUTES / ATTEMPT FAILURES /
+SUSPECTS / PREFIX DIVERGENCES / COST AND CACHE / COMPRESSION aggregates. `--dump[=native|serialized|final|all]`
+prints stage text **verbatim** (the report body only previews it, because a checkpoint is markdown);
+`--suspect`, `--grep <text>`, `--session <prefix>`, `--route`, `--reason`, `--since`, `--runs 0` (all) and
+`--json` cover the rest. Its SUSPECTS flags encode the failure modes below as thresholds —
+`prefix-unusable`, `span-not-truncated`, `degenerate-native-output`, `degenerate-final-summary`,
+`reduce-inflated`, `cache-read-zero`, `blocks-dropped`, `fell-back`, `estimate-skew` — with prose in
+[docs/compaction-trace-report.md](../../../docs/compaction-trace-report.md). It reads rotated `.1` siblings and
+tolerates fields absent in records from older builds, because the file accumulates across checkout.
+
 - `attempt` — per stage: `accepted`/`rejected`/`skipped`, detail, `usage` incl. **`cacheRead`** (the only way
   to tell whether the rebuilt prefix was served from cache), estimated tokens, tool/message counts, stage 1's
   `copiedEntries`/`skippedEntries`, stage 2's `serializedChars`/`segmentSummaryChars`.
