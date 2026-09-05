@@ -94,7 +94,8 @@ export interface ChainMatch {
  *
  * `keys` is what preserves the lesson that `tool_choice` is a parameter rather than a prefix verdict: the
  * symmetric difference against a reference body still shows which knobs one side sent, without holding that
- * body. `systemHash` covers the whole prompt, unlike the 320-char excerpt the trace prints for humans.
+ * body. `systemHash` covers the whole prompt, which is the same quantity `fingerprintSummary()` records for
+ * humans, so the two can be joined without translating between them.
  */
 export interface ChainShape {
     systemHash: string;

@@ -226,14 +226,27 @@ system-prompt shape mismatch - was excluded from the stored fields. The report n
 distinction (`chain=held/branch/comparable`, and an `INVARIANTS` section) instead of leaving it to be derived from
 `chain.ts`.
 
-Why the trace could not see it: `ourRequest.systemHash` hashes a **320-char excerpt** (`EXCERPT_CHARS`) with
-FNV-1a-32, so `6e84662c` was reported unchanged across 12817, 24619, 24813 and 25294 chars. The chain's shape
-comparison hashes the full text, so `verified=N/M` (sha256 ladder heads over messages) is unaffected - but any
-conclusion of the form "the system prompt did not change" drawn from that field is invalid.
+Why the trace could not see it: `ourRequest.systemHash` **used to** hash a 320-char excerpt (`EXCERPT_CHARS`) with
+FNV-1a-32, so `6e84662c` was reported unchanged across 12817, 24619, 24813 and 25294 chars. It now hashes the
+whole system text, the same quantity `requestShape()` hashes, so a recorded hash can be joined to a retained
+shape without translation. `hashes the whole system prompt, not the printed window` in
+`test/modules/compaction/prefix-diff.test.ts` pins both halves, including that the summary and the shape agree.
+Records written before that change cannot support any conclusion of the form "the system prompt did not change".
 
-If a duplicated block is real, the costs are ~3k tokens of dead weight on every request in that session, a
-prefix-cache break at the point of duplication, and a plausible shared cause with slow reloads. If it is not
-real, the `cached=0` readings on hosted providers need a different explanation.
+**The short prompt does not break the cache, and this was worth being wrong about.** The reasoning that said
+otherwise - "the system prompt is the front of the cache key, so a 12 KB difference at byte zero costs the reuse"
+- forgot that the same state that produces the short prompt is a process that has sent **no request yet**. There
+is no cached prefix to invalidate. So `cached=0` on the 15:27 run is the expected reading of a cold process, not
+evidence about the endpoint, and the only cost of the short prompt is that the summarizer is missing extension
+blocks it would normally see - 12 KB cheaper, and no reason to reconstruct anything.
+
+That leaves **19:42 as the one clean hosted data point**, and it is the answer to the question that started this
+work: 97 parent requests observed in that process, our rebuilt stage-1 prefix verified identical to the provider's
+own for all 362 comparable messages, `prompt_cache_key` and `prompt_cache_retention` on the wire - and
+`cached=0` across 222,167 fresh tokens. Either that endpoint does not reuse prompt cache or it does not report
+the reuse; both are outside our control, and only a provider that reports differently can tell them apart. The
+local llama.cpp endpoint does report reuse, which is what makes the silence look like a reporting gap rather than
+a caching one.
 
 ## The prefix funnel, and unknowns the record states itself
 
