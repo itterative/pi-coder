@@ -293,9 +293,10 @@ describe("compaction handler", () => {
         expect(h.calls).toHaveLength(0);
     });
 
-    it("installs nothing but the compaction handler, which is why a child can list it directly", () => {
+    it("installs only the compaction hook plus the payload capture it diffs against", () => {
         const h = build({ responses: [async () => summaryResponse("unused")] });
-        expect(h.piStub.order).toEqual(["on:session_before_compact"]);
+        // A child lists this extension directly, so what it installs has to stay this small.
+        expect(h.piStub.order).toEqual(["on:before_provider_request", "on:session_before_compact"]);
         expect(h.piStub.handlersFor("session_before_compact")).toHaveLength(1);
     });
 

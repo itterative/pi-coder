@@ -33,6 +33,11 @@ export interface SummarizationCall {
     signal?: AbortSignal;
     /** Session id for provider affinity. Omitted on one-off requests that can never reuse a cache. */
     sessionId?: string;
+    /**
+     * Inspects the assembled request body before it is sent. Returning undefined leaves it unchanged, which
+     * is all the compaction trace ever does; used to compare our rebuilt prefix against the parent's.
+     */
+    onPayload?: (payload: unknown) => void;
 }
 
 function responseText(response: AssistantMessage): string {
@@ -120,6 +125,14 @@ export async function summarizeNatively(
         {
             maxTokens: call.maxTokens,
             signal: call.signal,
+            ...(call.onPayload
+                ? {
+                      onPayload: (payload: unknown) => {
+                          call.onPayload?.(payload);
+                          return undefined;
+                      },
+                  }
+                : {}),
             // The field every capable provider understands; the instruction message is the backstop for
             // the ones that do not, and a tool call in the response cascades us off this path.
             toolChoice: "none",

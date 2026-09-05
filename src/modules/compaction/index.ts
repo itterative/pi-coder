@@ -6,6 +6,7 @@ import type {
     SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 
+import { isAgentTraceEnabled } from "../../common/trace";
 import { estimateTextTokens } from "./text";
 import { type CompactionConfig, loadCompactionConfig } from "./config";
 import {
@@ -15,6 +16,7 @@ import {
     liveContextMessages,
     nativeRequestFits,
 } from "./native-request";
+import { diffRequestPrefixes, fingerprintPayload, fingerprintSummary } from "./prefix-diff";
 import { nativeSummarizationInstruction, serializedSummarizationRequest } from "./prompt";
 import { serializeConversationMinimal, serializerOptions } from "./serialize";
 import {
@@ -36,6 +38,7 @@ import {
     type CompactionTraceRecorder,
 } from "./trace";
 import { summarizedSpan, type CompactionPreparation } from "./types";
+import type { CompactionPrefixFields } from "./trace";
 
 /**
  * Compaction that reads the conversation instead of a retyped copy of it.
@@ -86,6 +89,39 @@ interface StrategyInput {
 
 type StrategyOutcome =
     { ok: true; result: CompactionResult; droppedBlocks: number } | { ok: false; detail: string };
+
+/**
+ * The parent's most recent real request body, per session.
+ *
+ * Only ever populated while tracing is on, and it holds one reference rather than a copy: the payload is
+ * what pi built for its own request, so retaining it until the next compaction is the cheapest way to ask
+ * "did my rebuilt request share that cached prefix?".
+ */
+const lastParentPayload = new WeakMap<object, unknown>();
+
+function prefixDiffAgainstParent(
+    sessionManager: object,
+    ourPayload: unknown,
+): CompactionPrefixFields {
+    const ours = fingerprintPayload(ourPayload);
+    const parentPayload = lastParentPayload.get(sessionManager);
+    if (parentPayload === undefined) {
+        return {
+            prefixUsable: false,
+            firstDivergence: "no-parent-payload-captured",
+            parentMessageCount: 0,
+            ourMessageCount: ours.messageHashes.length,
+            commonPrefixMessages: 0,
+            ourRequest: fingerprintSummary(ours),
+        };
+    }
+    const diff = diffRequestPrefixes(fingerprintPayload(parentPayload), ours);
+    return {
+        ...diff,
+        parentRequest: fingerprintSummary(fingerprintPayload(parentPayload)),
+        ourRequest: fingerprintSummary(ours),
+    };
+}
 
 /** pi's own budget for a history summary: most of the reserved window, capped by the model's output limit. */
 function summaryBudget(reserveTokens: number, modelMaxTokens: number): number {
@@ -248,6 +284,11 @@ async function tryNative(input: StrategyInput): Promise<StrategyOutcome> {
                     maxTokens,
                     signal,
                     sessionId: ctx.sessionManager.getSessionId(),
+                    onPayload: trace.enabled
+                        ? (payload) => {
+                              trace.prefix(prefixDiffAgainstParent(ctx.sessionManager, payload));
+                          }
+                        : undefined,
                 },
                 context,
             ),
@@ -366,6 +407,14 @@ async function compactWithPiCoder(
 
 /** Registered for the parent session and for every delegated child. */
 export function registerCompactionExtension(pi: ExtensionAPI): void {
+    if (isAgentTraceEnabled()) {
+        // Dev diagnostic: keep the body pi built for its own last request so a later native compaction
+        // attempt can tell a rebuilt-prefix mismatch from a provider that simply will not serve the cache.
+        pi.on("before_provider_request", (event, ctx) => {
+            lastParentPayload.set(ctx.sessionManager, event.payload);
+        });
+    }
+
     pi.on("session_before_compact", async (event, ctx) => {
         try {
             return await compactWithPiCoder(pi, event, ctx);

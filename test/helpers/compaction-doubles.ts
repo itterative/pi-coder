@@ -288,6 +288,11 @@ export interface CompactionHarnessInput {
     sessionId?: string;
     activeTools?: string[];
     configuredTools?: string[];
+    /**
+     * The body to hand the request's `onPayload` inspector, if the module supplied one. The double calls it
+     * the way a provider adapter would, and fails if it tries to replace the payload.
+     */
+    providerPayload?: unknown;
     /** Override the branch the module reads, or make it fail. */
     branch?: SessionEntry[];
     branchThrows?: Error;
@@ -324,6 +329,13 @@ export function createCompactionHarness(input: CompactionHarnessInput): Compacti
     let index = 0;
     const registry = stubModelRegistry(async (_model, context, options) => {
         calls.push({ context, options });
+        const inspector = payloadInspector(options);
+        if (inspector) {
+            const replacement = inspector(input.providerPayload ?? {});
+            if (replacement !== undefined) {
+                throw new TypeError("compaction must not replace the provider payload it inspects");
+            }
+        }
         const next =
             input.responses[Math.min(index, input.responses.length - 1)] ??
             (async () => summaryResponse("## Goal\n\nunused"));
@@ -417,6 +429,17 @@ export function createCompactionHarness(input: CompactionHarnessInput): Compacti
             return textOfContent(first.content);
         },
     };
+}
+
+/** Read the `onPayload` inspector out of a recorded options object, if one was passed. */
+function payloadInspector(options: unknown): ((payload: unknown) => unknown) | undefined {
+    if (!options || typeof options !== "object") {
+        return undefined;
+    }
+    const candidate = (options as Record<string, unknown>).onPayload;
+    return typeof candidate === "function"
+        ? (candidate as (payload: unknown) => unknown)
+        : undefined;
 }
 
 function textOfContent(content: string | (TextContent | ImageContent)[]): string {

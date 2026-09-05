@@ -31,7 +31,8 @@ import type { SummarizationReason } from "./types";
 const RECORD_VERSION = 1;
 const DISABLED_VALUES = new Set(["0", "false", "no", "off"]);
 
-export type CompactionTraceStage = "attempt" | "model_response" | "final_summary" | "outcome";
+export type CompactionTraceStage =
+    "attempt" | "prefix" | "model_response" | "final_summary" | "outcome";
 
 /** How one strategy attempt ended. */
 export type CompactionAttemptOutcome = "accepted" | "rejected" | "skipped";
@@ -95,7 +96,22 @@ export interface CompactionTraceRecord {
     text?: string;
     usage?: CompactionTraceUsage;
     attempt?: CompactionAttemptFields;
+    prefix?: CompactionPrefixFields;
     final?: CompactionFinalFields;
+}
+
+/** How our rebuilt request compared to the parent session's last real one, which owns the cache. */
+export interface CompactionPrefixFields {
+    /** False when something before the appended instruction differs, so the cache was unreachable. */
+    prefixUsable: boolean;
+    firstDivergence: string;
+    parent?: string;
+    ours?: string;
+    parentMessageCount: number;
+    ourMessageCount: number;
+    commonPrefixMessages: number;
+    parentRequest?: Record<string, unknown>;
+    ourRequest?: Record<string, unknown>;
 }
 
 export interface CompactionTraceTarget {
@@ -133,6 +149,8 @@ export interface CompactionTraceRecorder {
         fields: CompactionAttemptFields,
         result: CompactionAttemptResult,
     ): void;
+    /** How the rebuilt request compared against the parent's cached prefix, when both payloads were seen. */
+    prefix(fields: CompactionPrefixFields): void;
     /** (a) What the model answered with, before the harness appended anything. */
     modelResponse(strategy: SummarizationStrategy, text: string, usage?: Usage): void;
     /** (b) The summary that goes into the `CompactionEntry`, with the counts it was built from. */
@@ -178,6 +196,9 @@ export function createCompactionTraceRecorder(
                 detail: result.detail,
                 usage: usageFields(result.usage),
             });
+        },
+        prefix(fields) {
+            write({ ...base, stage: "prefix", strategy: "native", prefix: fields });
         },
         modelResponse(strategy, text, usage) {
             write({

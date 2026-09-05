@@ -56,10 +56,28 @@ this strategy exists for; `test/modules/compaction/handler.test.ts` has a ~750k-
 between the two thresholds specifically to catch that mistake (verified: reverting the formula to
 `reserveTokens` fails only that test).
 
-Cache-hit caveat, unmeasured: Anthropic-style caching matches prefixes at written breakpoints, so the benefit
-comes from re-sending the whole live context. Post-compaction the next turn is cold either way, because core
-renders the summary as a leading user message. The `attempt` trace record reports `cacheRead` for every
-accepted attempt, which is what turns that caveat into a measurement (see **Trace** below).
+### Measured, 2026-09-05: the cache did not hit
+
+`/compact` on a 572-message parent session (`qwen-token-plan/qwen3.8-flash`, 1M window) recorded
+`attempt native accepted`, `estimatedTokens: 445163`, and `usage: { input: 330054, cacheRead: 0 }` — while
+ordinary turns in that same session report `input` of ~1k with `cacheRead` ~330k. So the rebuilt request was
+charged full price for the entire context, and the minimized route (capped by `serializedMaxTokens`, default
+12k) was cheaper by roughly 25x. Two explanations remain open, and they are not distinguishable from usage
+numbers: the rebuilt body diverged from pi's early in the prefix, or that endpoint will not serve a cache
+entry to a request that extends the conversation. The route choice (native default vs serialized default) is
+**unresolved pending that diff**; `toolCount`/`estimatedTokens` in the record are the hand-built path's, not
+proof of equality.
+
+`src/modules/compaction/prefix-diff.ts` exists to settle it: when tracing is on, the module registers a
+`before_provider_request` handler that keeps a reference to the body pi built for its own last request
+(`WeakMap` keyed by `sessionManager`, never copied, never persisted), passes `onPayload` on the native call,
+and writes a `prefix` stage record with the first divergence named (`keys`, `model`, `system`, `tools(body)`,
+`tools(names)`, `messages[i]`, `rewind`, `tail`, or `no-parent-payload-captured`) plus both fingerprints. A
+record with `prefixUsable: true` and `firstDivergence: "tail"` plus `cacheRead: 0` means the provider, not the
+request. `onPayload` is inspect-only: the double in `compaction-doubles.ts` throws if a handler ever returns a
+replacement body.
+
+Post-compaction the next turn is cold either way, because core renders the summary as a leading user message.
 
 ## Serialized strategy
 

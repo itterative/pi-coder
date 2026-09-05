@@ -51,6 +51,7 @@ describe("compaction trace", () => {
         contextWindow?: number;
         systemPrompt?: string;
         branch?: SessionEntry[];
+        providerPayload?: unknown;
     }) {
         if (input.config) {
             const configPath = path.join(root, "compaction-config.json");
@@ -61,6 +62,7 @@ describe("compaction trace", () => {
             cwd: root,
             responses: input.responses,
             branch: input.branch,
+            providerPayload: input.providerPayload,
             systemPrompt: input.systemPrompt,
             model: input.contextWindow
                 ? stubModel({ contextWindow: input.contextWindow })
@@ -92,7 +94,9 @@ describe("compaction trace", () => {
         const payload = await harness.compact();
 
         const records = readRecords(tracePath);
-        const stages = records.map((record) => record.stage);
+        const stages = records
+            .filter((record) => record.stage !== "prefix")
+            .map((record) => record.stage);
         expect(stages).toEqual(["attempt", "model_response", "final_summary", "outcome"]);
         expect(new Set(records.map((record) => record.id)).size).toBe(1);
 
@@ -104,13 +108,14 @@ describe("compaction trace", () => {
             expect(record.v).toBe(1);
         }
 
+        const byStage = new Map(records.map((record) => [record.stage, record]));
         // (a) exactly what the model said, before the harness appended anything.
-        expect(records[1].text).toBe("## Goal\n\nthe model answer");
+        expect(byStage.get("model_response")?.text).toBe("## Goal\n\nthe model answer");
         // (b) what actually goes into the CompactionEntry.
-        expect(records[2].text).toBe(payload?.summary);
-        expect(records[2].text).toContain("## Tool Ledger");
-        expect(records[2].text).toContain("<read-files>");
-        expect(records[2].final).toMatchObject({
+        expect(byStage.get("final_summary")?.text).toBe(payload?.summary);
+        expect(byStage.get("final_summary")?.text).toContain("## Tool Ledger");
+        expect(byStage.get("final_summary")?.text).toContain("<read-files>");
+        expect(byStage.get("final_summary")?.final).toMatchObject({
             firstKeptEntryId: "kept-1",
             tokensBefore: 190_000,
             summarizedMessages: 4,
@@ -118,17 +123,17 @@ describe("compaction trace", () => {
             readFiles: 1,
             modifiedFiles: 1,
         });
-        expect(records[3].outcome).toBe("native");
+        expect(byStage.get("outcome")?.outcome).toBe("native");
     });
 
     it("records the numbers that decided the strategy, including the cache evidence", async () => {
         const harness = build({ responses: [async () => summaryResponse("## Goal\n\nstub")] });
         await harness.compact();
 
-        const [attempt] = readRecords(tracePath);
-        expect(attempt.strategy).toBe("native");
-        expect(attempt.outcome).toBe("accepted");
-        expect(attempt.attempt).toMatchObject({
+        const attempt = readRecords(tracePath).find((record) => record.stage === "attempt");
+        expect(attempt?.strategy).toBe("native");
+        expect(attempt?.outcome).toBe("accepted");
+        expect(attempt?.attempt).toMatchObject({
             provider: "anthropic",
             model: "stub-model",
             maxTokens: 8_192,
@@ -136,9 +141,14 @@ describe("compaction trace", () => {
             toolCount: 2,
             messageCount: 6,
         });
-        expect(attempt.attempt?.estimatedTokens).toBeGreaterThan(0);
+        expect(attempt?.attempt?.estimatedTokens).toBeGreaterThan(0);
         // The usage on the accepted attempt is how a cache hit is read out of this file.
-        expect(attempt.usage).toMatchObject({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+        expect(attempt?.usage).toMatchObject({
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+        });
     });
 
     it("records a rejected native attempt before the serialized one that saved it", async () => {
@@ -246,6 +256,52 @@ describe("compaction trace", () => {
         expect(records).toHaveLength(1);
         expect(records[0]?.stage).toBe("outcome");
         expect(records[0]?.outcome).toBe("cancelled");
+    });
+
+    it("compares the rebuilt request against the parent's own request body", async () => {
+        const parentBody = {
+            model: "stub-model",
+            system: "the live system prompt",
+            tools: [{ name: "bash", input_schema: { type: "object" } }],
+            messages: [{ role: "user", content: "fix the compaction module" }],
+        };
+        const harness = build({
+            responses: [async () => summaryResponse("## Goal\n\nstub")],
+            providerPayload: {
+                ...parentBody,
+                messages: [...parentBody.messages, { role: "user", content: "instruction" }],
+            },
+        });
+        const seed = harness.piStub.requireHandler("before_provider_request", 0);
+        await seed({ type: "before_provider_request", payload: parentBody }, harness.ctx);
+
+        const records = (await harness.compact(), readRecords(tracePath));
+        const order = records.map((record) => record.stage);
+        expect(order).toEqual(["prefix", "attempt", "model_response", "final_summary", "outcome"]);
+
+        const prefix = records[0]?.prefix;
+        expect(prefix).toMatchObject({
+            prefixUsable: true,
+            firstDivergence: "tail",
+            parentMessageCount: 1,
+            ourMessageCount: 2,
+            commonPrefixMessages: 1,
+        });
+        expect(prefix?.parentRequest).toMatchObject({ model: "stub-model", toolCount: 1 });
+    });
+
+    it("says so when the parent request body was never captured", async () => {
+        const harness = build({
+            responses: [async () => summaryResponse("## Goal\n\nstub")],
+            providerPayload: { model: "stub-model", messages: [] },
+        });
+        await harness.compact();
+
+        const prefix = readRecords(tracePath).find((record) => record.stage === "prefix");
+        expect(prefix?.prefix).toMatchObject({
+            prefixUsable: false,
+            firstDivergence: "no-parent-payload-captured",
+        });
     });
 
     it("rotates the file once it passes the configured size", async () => {
