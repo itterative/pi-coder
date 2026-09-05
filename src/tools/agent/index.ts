@@ -6,11 +6,8 @@ import { createAgentChild } from "./child";
 import { AgentLifecycle } from "./lifecycle";
 import { formatAgentToolContent } from "./presentation/formatting";
 import type { ChildAgentFactory } from "./runs/manager";
-import {
-    AgentTraceStore,
-    isAgentTraceEnabled,
-    registerAgentTraceCommand,
-} from "./observability/trace";
+import { isAgentTraceEnabled } from "../../common/trace";
+import { AgentTraceStore, registerAgentTraceCommand } from "./observability/trace";
 import { registerAgentTool as registerAgentToolDefinition } from "./presentation/tool";
 
 export { clearCompletedWorkspaceSetupRun } from "./presentation/status";

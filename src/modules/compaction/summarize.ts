@@ -1,8 +1,8 @@
 import type { Api, AssistantMessage, Context, Model, Usage } from "@earendil-works/pi-ai";
 import { uuidv7 } from "@earendil-works/pi-ai";
-import type { CompactionResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { SERIALIZATION_SYSTEM_PROMPT, serializedSummarizationRequest } from "./prompt";
+import { SERIALIZATION_SYSTEM_PROMPT } from "./prompt";
 
 /**
  * The two summarization strategies, and the shape their caller cascades over.
@@ -14,17 +14,15 @@ import { SERIALIZATION_SYSTEM_PROMPT, serializedSummarizationRequest } from "./p
 
 export type SummarizationStrategy = "native" | "serialized";
 
-export interface SummarizationAttempt {
-    ok: boolean;
-    strategy: SummarizationStrategy;
-    /** Why this attempt is unusable; surfaced in the UI notice when the whole cascade fails. */
-    detail?: string;
-    result?: CompactionResult;
-}
-
-export interface FailedAttempt extends SummarizationAttempt {
-    ok: false;
-}
+/**
+ * What one strategy call returns: usable summary text, or the reason it is unusable.
+ *
+ * `usage` is reported on both arms — a response that ignored `tool_choice` still cost tokens, and that is
+ * the evidence the trace wants.
+ */
+export type SummarizationAttemptResult =
+    | { ok: true; strategy: SummarizationStrategy; text: string; usage: Usage }
+    | { ok: false; strategy: SummarizationStrategy; detail: string; usage?: Usage };
 
 type ModelRegistry = ExtensionContext["modelRegistry"];
 
@@ -62,11 +60,12 @@ function attemptedToolCall(response: AssistantMessage): string | undefined {
 export function evaluateSummarizationResponse(
     response: AssistantMessage,
     strategy: SummarizationStrategy,
-): { ok: true; text: string; usage: Usage } | FailedAttempt {
+): SummarizationAttemptResult {
     if (response.stopReason === "error" || response.stopReason === "aborted") {
         return {
             ok: false,
             strategy,
+            usage: response.usage,
             detail:
                 response.errorMessage ?? `summarization ${strategy} call ${response.stopReason}`,
         };
@@ -76,14 +75,20 @@ export function evaluateSummarizationResponse(
         return {
             ok: false,
             strategy,
+            usage: response.usage,
             detail: `model called "${tool}" instead of summarizing; this provider does not honor tool_choice none`,
         };
     }
     const text = responseText(response).trim();
     if (!text) {
-        return { ok: false, strategy, detail: "summarization returned an empty summary" };
+        return {
+            ok: false,
+            strategy,
+            usage: response.usage,
+            detail: "summarization returned an empty summary",
+        };
     }
-    return { ok: true, text, usage: response.usage };
+    return { ok: true, strategy, text, usage: response.usage };
 }
 
 async function callForSummary(
@@ -91,7 +96,7 @@ async function callForSummary(
     context: Context,
     options: Record<string, unknown>,
     strategy: SummarizationStrategy,
-): Promise<{ ok: true; text: string; usage: Usage } | FailedAttempt> {
+): Promise<SummarizationAttemptResult> {
     try {
         const response = await call.registry.complete(call.model, context, options);
         return evaluateSummarizationResponse(response, strategy);
@@ -108,7 +113,7 @@ async function callForSummary(
 export async function summarizeNatively(
     call: SummarizationCall,
     context: Context,
-): Promise<{ ok: true; text: string; usage: Usage } | FailedAttempt> {
+): Promise<SummarizationAttemptResult> {
     return callForSummary(
         call,
         context,
@@ -125,27 +130,23 @@ export async function summarizeNatively(
 }
 
 export interface SerializedTranscriptInput {
+    /** The minimized transcript, built by the caller so the trace can see the same text that is sent. */
     conversationText: string;
-    previousSummary?: string;
-    customInstructions?: string;
+    /** The complete request text: transcript, prior summary, format, and focus. */
+    requestText: string;
 }
 
 /** One-off standalone request over a minimized transcript: no cache prefix to protect, no tools to forbid. */
 export async function summarizeSerializedTranscript(
     call: SummarizationCall,
     input: SerializedTranscriptInput,
-): Promise<{ ok: true; text: string; usage: Usage } | FailedAttempt> {
-    const request = serializedSummarizationRequest({
-        conversationText: input.conversationText,
-        previousSummary: input.previousSummary,
-        customInstructions: input.customInstructions,
-    });
+): Promise<SummarizationAttemptResult> {
     const context: Context = {
         systemPrompt: SERIALIZATION_SYSTEM_PROMPT,
         messages: [
             {
                 role: "user",
-                content: [{ type: "text", text: request }],
+                content: [{ type: "text", text: input.requestText }],
                 timestamp: Date.now(),
             },
         ],

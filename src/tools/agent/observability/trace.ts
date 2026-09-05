@@ -11,8 +11,10 @@ import { pager, type PagerItem } from "../../../tui/pager";
 import type { AgentTraceData } from "../contracts/trace";
 
 export type { AgentTraceData, AgentTraceValue } from "../contracts/trace";
+// The switch is pi-coder-wide (compaction traces read it too), so it lives in `common/trace`; re-exported
+// here because this is where agent-side readers and suites have always looked for it.
+export { AGENT_TRACE_ENV, isAgentTraceEnabled } from "../../../common/trace";
 
-export const AGENT_TRACE_ENV = "PI_CODER_AGENT_TRACE";
 const TRACE_VERSION = 1;
 const DEFAULT_MAX_RUNS = 20;
 const DEFAULT_MAX_EVENTS = 400;
@@ -37,13 +39,6 @@ export interface AgentTraceSnapshot {
 
 interface MutableTrace extends AgentTraceSnapshot {
     nextSequence: number;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function isAgentTraceEnabled(value = process.env[AGENT_TRACE_ENV]): boolean {
-    // return /^(1|true|yes|on)$/i.test(value?.trim() ?? "");
-    // TODO: enabled temporarily while developing the extension
-    return true;
 }
 
 export class AgentTraceStore {

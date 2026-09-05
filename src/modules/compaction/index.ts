@@ -1,3 +1,4 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
     CompactionResult,
     ExtensionAPI,
@@ -5,14 +6,16 @@ import type {
     SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 
+import { estimateTextTokens } from "./text";
 import { type CompactionConfig, loadCompactionConfig } from "./config";
 import {
     activeToolDefinitions,
     buildNativeContext,
+    estimateRequestTokens,
     liveContextMessages,
     nativeRequestFits,
 } from "./native-request";
-import { nativeSummarizationInstruction } from "./prompt";
+import { nativeSummarizationInstruction, serializedSummarizationRequest } from "./prompt";
 import { serializeConversationMinimal, serializerOptions } from "./serialize";
 import {
     analyzeSpan,
@@ -20,7 +23,18 @@ import {
     computeFileLists,
     formatFileLists,
 } from "./sections";
-import { summarizeNatively, summarizeSerializedTranscript } from "./summarize";
+import {
+    summarizeNatively,
+    summarizeSerializedTranscript,
+    type SummarizationAttemptResult,
+    type SummarizationStrategy,
+} from "./summarize";
+import {
+    type CompactionAttemptFields,
+    compactionTraceTarget,
+    createCompactionTraceRecorder,
+    type CompactionTraceRecorder,
+} from "./trace";
 import { summarizedSpan, type CompactionPreparation } from "./types";
 
 /**
@@ -67,6 +81,7 @@ interface StrategyInput {
     config: CompactionConfig;
     maxTokens: number;
     signal: AbortSignal;
+    trace: CompactionTraceRecorder;
 }
 
 type StrategyOutcome =
@@ -134,16 +149,74 @@ function detailsFor(
     return { version: 1, strategy, provider: model.provider, model: model.id, droppedBlocks };
 }
 
+/** One strategy attempt: run it, then record what went out, what came back, and what was persisted. */
+const DOES_NOT_FIT = "live context plus instruction does not fit the window";
+
+/** The request-side numbers every attempt record carries, whatever strategy ran. */
+function attemptFields(
+    model: Model<Api>,
+    maxTokens: number,
+    extra: Partial<CompactionAttemptFields>,
+): CompactionAttemptFields {
+    return {
+        provider: model.provider,
+        model: model.id,
+        maxTokens,
+        contextWindow: model.contextWindow,
+        ...extra,
+    };
+}
+
+/** Run one strategy, then record what it sent, what came back, and what was persisted. */
+async function runAttempt(
+    input: StrategyInput,
+    model: Model<Api>,
+    strategy: SummarizationStrategy,
+    fields: CompactionAttemptFields,
+    call: () => Promise<SummarizationAttemptResult>,
+    droppedBlocks: number,
+): Promise<StrategyOutcome> {
+    const { preparation, trace } = input;
+    const attempt = await call();
+    if (!attempt.ok) {
+        const detail = attempt.detail ?? "unusable summary";
+        trace.attempt(strategy, fields, { outcome: "rejected", detail, usage: attempt.usage });
+        return { ok: false, detail };
+    }
+
+    trace.attempt(strategy, fields, { outcome: "accepted", usage: attempt.usage });
+    trace.modelResponse(strategy, attempt.text, attempt.usage);
+
+    const result = composeResult(
+        preparation,
+        attempt.text,
+        attempt.usage,
+        detailsFor(model, strategy, droppedBlocks),
+    );
+    const details = result.details as PiCoderCompactionDetails;
+    trace.final(strategy, result.summary, {
+        firstKeptEntryId: result.firstKeptEntryId,
+        tokensBefore: result.tokensBefore,
+        summarizedMessages: details.summarizedMessages,
+        droppedBlocks: details.droppedBlocks,
+        readFiles: details.readFiles.length,
+        modifiedFiles: details.modifiedFiles.length,
+    });
+    return { ok: true, result, droppedBlocks };
+}
+
 async function tryNative(input: StrategyInput): Promise<StrategyOutcome> {
-    const { pi, ctx, preparation, maxTokens, signal } = input;
+    const { pi, ctx, preparation, maxTokens, signal, trace } = input;
     if (!ctx.model) {
         return { ok: false, detail: "no model selected" };
     }
     const model = ctx.model;
+    const messages = liveContextMessages(ctx);
+    const tools = activeToolDefinitions(pi);
     const context = buildNativeContext({
         systemPrompt: ctx.getSystemPrompt(),
-        tools: activeToolDefinitions(pi),
-        messages: liveContextMessages(ctx),
+        tools,
+        messages,
         instruction: nativeSummarizationInstruction({
             preparation,
             customInstructions: input.customInstructions,
@@ -151,32 +224,35 @@ async function tryNative(input: StrategyInput): Promise<StrategyOutcome> {
         }),
         timestamp: Date.now(),
     });
+    const fields = attemptFields(model, maxTokens, {
+        estimatedTokens: estimateRequestTokens(context),
+        toolCount: tools.length,
+        messageCount: messages.length,
+        customInstructions: input.customInstructions,
+        previousSummaryChars: preparation.previousSummary?.length ?? 0,
+    });
     if (!nativeRequestFits(context, model.contextWindow, maxTokens)) {
-        return { ok: false, detail: "live context plus instruction does not fit the window" };
+        trace.attempt("native", fields, { outcome: "skipped", detail: DOES_NOT_FIT });
+        return { ok: false, detail: DOES_NOT_FIT };
     }
-    const attempt = await summarizeNatively(
-        {
-            registry: ctx.modelRegistry,
-            model,
-            maxTokens,
-            signal,
-            sessionId: ctx.sessionManager.getSessionId(),
-        },
-        context,
+    return runAttempt(
+        input,
+        model,
+        "native",
+        fields,
+        () =>
+            summarizeNatively(
+                {
+                    registry: ctx.modelRegistry,
+                    model,
+                    maxTokens,
+                    signal,
+                    sessionId: ctx.sessionManager.getSessionId(),
+                },
+                context,
+            ),
+        0,
     );
-    if (!attempt.ok) {
-        return { ok: false, detail: attempt.detail ?? "unusable summary" };
-    }
-    return {
-        ok: true,
-        result: composeResult(
-            preparation,
-            attempt.text,
-            attempt.usage,
-            detailsFor(model, "native", 0),
-        ),
-        droppedBlocks: 0,
-    };
 }
 
 async function trySerialized(input: StrategyInput): Promise<StrategyOutcome> {
@@ -189,27 +265,33 @@ async function trySerialized(input: StrategyInput): Promise<StrategyOutcome> {
         summarizedSpan(preparation),
         serializerOptions(config),
     );
-    const attempt = await summarizeSerializedTranscript(
-        { registry: ctx.modelRegistry, model, maxTokens, signal },
-        {
-            conversationText: serialized.text,
-            previousSummary: preparation.previousSummary,
-            customInstructions: input.customInstructions,
-        },
-    );
-    if (!attempt.ok) {
-        return { ok: false, detail: attempt.detail ?? "unusable summary" };
-    }
-    return {
-        ok: true,
-        result: composeResult(
-            preparation,
-            attempt.text,
-            attempt.usage,
-            detailsFor(model, "serialized", serialized.droppedBlocks),
-        ),
+    const requestText = serializedSummarizationRequest({
+        conversationText: serialized.text,
+        previousSummary: preparation.previousSummary,
+        customInstructions: input.customInstructions,
+    });
+    const fields = attemptFields(model, maxTokens, {
+        estimatedTokens: estimateTextTokens(requestText),
+        // The transcript still names the tools it describes, so report the real active set.
+        toolCount: activeToolDefinitions(input.pi).length,
+        messageCount: 1,
+        serializedChars: serialized.text.length,
         droppedBlocks: serialized.droppedBlocks,
-    };
+        customInstructions: input.customInstructions,
+        previousSummaryChars: preparation.previousSummary?.length ?? 0,
+    });
+    return runAttempt(
+        input,
+        model,
+        "serialized",
+        fields,
+        () =>
+            summarizeSerializedTranscript(
+                { registry: ctx.modelRegistry, model, maxTokens, signal },
+                { conversationText: serialized.text, requestText },
+            ),
+        serialized.droppedBlocks,
+    );
 }
 
 async function compactWithPiCoder(
@@ -218,12 +300,23 @@ async function compactWithPiCoder(
     ctx: ExtensionContext,
 ): Promise<{ cancel: true } | { compaction: CompactionResult } | undefined> {
     const config = loadCompactionConfig(ctx.cwd);
+    const trace = createCompactionTraceRecorder(
+        {
+            cwd: ctx.cwd,
+            session: ctx.sessionManager.getSessionId(),
+            reason: event.reason,
+            willRetry: event.willRetry,
+        },
+        compactionTraceTarget(config),
+    );
     if (!config.enabled) {
+        trace.outcome("disabled");
         return undefined;
     }
     if (event.signal.aborted) {
         // The user cancelled this compaction. Say so, rather than letting core run a doomed request
         // against an already-aborted controller.
+        trace.outcome("cancelled");
         return { cancel: true };
     }
     const preparation = event.preparation;
@@ -239,12 +332,14 @@ async function compactWithPiCoder(
         config,
         maxTokens,
         signal: event.signal,
+        trace,
     };
     const failures: string[] = [];
 
     if (event.reason !== "overflow") {
         const native = await tryNative(strategyInput);
         if (native.ok) {
+            trace.outcome("native");
             return { compaction: native.result };
         }
         failures.push(`native: ${native.detail}`);
@@ -252,6 +347,7 @@ async function compactWithPiCoder(
 
     const serialized = await trySerialized(strategyInput);
     if (serialized.ok) {
+        trace.outcome("serialized");
         notify(
             ctx,
             serialized.droppedBlocks > 0
@@ -263,6 +359,7 @@ async function compactWithPiCoder(
     }
     failures.push(`serialized: ${serialized.detail}`);
 
+    trace.outcome("core-default", failures.join("; "));
     notify(ctx, `pi-coder compaction fell back to pi's default: ${failures.join("; ")}`, "warning");
     return undefined;
 }

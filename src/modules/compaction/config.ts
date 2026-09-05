@@ -29,6 +29,12 @@ export interface CompactionConfig {
     serializedNoteChars: number;
     /** Reserved for the planned side-model strategy; unused by the current cascade. */
     model?: string;
+    /** Write the per-stage compaction trace under `.state/`. `isAgentTraceEnabled()` gates it as well. */
+    traceEnabled: boolean;
+    /** Trace file location; a relative path resolves against the working directory. */
+    tracePath?: string;
+    /** Rotate the trace into a single `.1` generation once it grows past this many bytes. */
+    traceMaxBytes: number;
 }
 
 export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
@@ -40,6 +46,8 @@ export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
     serializedToolResultChars: 400,
     serializedErrorResultChars: 1_000,
     serializedNoteChars: 200,
+    traceEnabled: true,
+    traceMaxBytes: 1_048_576,
 };
 
 export interface CompactionConfigLocations {
@@ -97,6 +105,15 @@ function nonNegativeNumberField(value: unknown): number | undefined {
     return Math.floor(value);
 }
 
+/** A trimmed string from the file, or undefined for absent, blank, and non-string values. */
+function stringField(value: unknown): string | undefined {
+    if (typeof value !== "string") {
+        return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+}
+
 function readConfigFile(filePath: string | undefined): Partial<CompactionConfig> {
     if (!filePath || !fs.existsSync(filePath)) {
         return {};
@@ -111,8 +128,8 @@ function readConfigFile(filePath: string | undefined): Partial<CompactionConfig>
         return {};
     }
     const record = parsed as Record<string, unknown>;
-    const model =
-        typeof record.model === "string" && record.model.trim() ? record.model.trim() : undefined;
+    const model = stringField(record.model);
+    const tracePath = stringField(record.tracePath);
     return {
         enabled: booleanField(record.enabled),
         keepThinking: booleanField(record.keepThinking),
@@ -122,7 +139,10 @@ function readConfigFile(filePath: string | undefined): Partial<CompactionConfig>
         serializedToolResultChars: nonNegativeNumberField(record.serializedToolResultChars),
         serializedErrorResultChars: nonNegativeNumberField(record.serializedErrorResultChars),
         serializedNoteChars: nonNegativeNumberField(record.serializedNoteChars),
+        traceEnabled: booleanField(record.traceEnabled),
+        traceMaxBytes: positiveNumberField(record.traceMaxBytes),
         ...(model ? { model } : {}),
+        ...(tracePath ? { tracePath } : {}),
     };
 }
 
@@ -133,6 +153,7 @@ export function loadCompactionConfig(cwd: string): CompactionConfig {
     const project = readConfigFile(locations.project);
     const defaults = DEFAULT_COMPACTION_CONFIG;
     const model = project.model ?? global.model;
+    const tracePath = project.tracePath ?? global.tracePath;
     return {
         enabled: project.enabled ?? global.enabled ?? defaults.enabled,
         keepThinking: project.keepThinking ?? global.keepThinking ?? defaults.keepThinking,
@@ -160,6 +181,9 @@ export function loadCompactionConfig(cwd: string): CompactionConfig {
             project.serializedNoteChars ??
             global.serializedNoteChars ??
             defaults.serializedNoteChars,
+        traceEnabled: project.traceEnabled ?? global.traceEnabled ?? defaults.traceEnabled,
+        traceMaxBytes: project.traceMaxBytes ?? global.traceMaxBytes ?? defaults.traceMaxBytes,
         ...(model ? { model } : {}),
+        ...(tracePath ? { tracePath } : {}),
     };
 }

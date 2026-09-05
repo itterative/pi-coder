@@ -58,8 +58,8 @@ between the two thresholds specifically to catch that mistake (verified: reverti
 
 Cache-hit caveat, unmeasured: Anthropic-style caching matches prefixes at written breakpoints, so the benefit
 comes from re-sending the whole live context. Post-compaction the next turn is cold either way, because core
-renders the summary as a leading user message. The TUI reports no strategy or usage today; check the session
-JSONL `details` and provider usage until someone wants that surfaced.
+renders the summary as a leading user message. The `attempt` trace record reports `cacheRead` for every
+accepted attempt, which is what turns that caveat into a measurement (see **Trace** below).
 
 ## Serialized strategy
 
@@ -83,6 +83,28 @@ authority. The model is told to write pi's skeleton **only** and to skip the har
 native tail is unchanged. `details` keeps `readFiles`/`modifiedFiles` under those exact names: core extracts
 them from the previous compaction entry to build the cumulative file ledger, so renaming them breaks tracking
 silently rather than loudly. `version: 1` and `strategy` sit alongside them.
+
+## Trace
+
+`src/modules/compaction/trace.ts` appends one JSONL record per stage to
+`<pi-coder-install>/.state/compaction-trace.jsonl` (mode `0600`, directory `0700`, rotated into a single
+`.1` generation once it passes `traceMaxBytes`). Every record of one compaction shares an `id`:
+
+- `attempt` — one per strategy, written once that attempt is over: `accepted` / `rejected` / `skipped`, the
+  detail, and `usage` including `cacheRead`, which is the only way to tell whether re-sending the live
+  context actually reused the provider's cached prefix. Also carries the estimated request size and tool /
+  message counts, plus the serialized route's transcript and dropped-block counts.
+- `model_response` — what the model said, before the harness appended anything.
+- `final_summary` — the exact text written into the `CompactionEntry`, with the counts it came from.
+- `outcome` — how the whole compaction ended: `native`, `serialized`, `core-default`, `cancelled`, `disabled`.
+
+It follows `isAgentTraceEnabled()`, the same development switch the delegated-agent timelines use, and is
+separately disableable with `COMPACTION_TRACE=0` or relocatable with `COMPACTION_TRACE_PATH`; `traceEnabled`,
+`tracePath`, and `traceMaxBytes` live in the config file. That switch moved to `src/common/trace.ts` (re-
+exported unchanged from `tools/agent/observability/trace.ts`, so agent-side imports did not move) because a
+session module must not reach into the agent tool to ask whether it may write a file. Writing never throws,
+and with tracing off the recorder is a no-op behind the same API, so the cascade reads identically either way.
+The records hold raw summary text, so treat the file like a transcript.
 
 ## Configuration
 

@@ -1,13 +1,33 @@
 import type { Usage } from "@earendil-works/pi-ai";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
+    Api,
+    AssistantMessage,
+    Context,
+    ImageContent,
+    Model,
+    TextContent,
+} from "@earendil-works/pi-ai";
+import type {
+    ExtensionContext,
+    ExtensionUIContext,
     FileOperations,
     SessionBeforeCompactEvent,
     SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 
+import { registerCompactionExtension } from "../../src/modules/compaction";
 import type { CompactionPreparation, ContextMessage } from "../../src/modules/compaction/types";
 import { zeroUsage } from "./agent-doubles";
+import {
+    createPiStub,
+    stubContext,
+    stubModel,
+    stubModelRegistry,
+    stubSessionManager,
+    stubToolInfo,
+    stubUi,
+    type PiStub,
+} from "./pi-stub";
 
 /**
  * Context-message, compaction-preparation, and provider-response doubles for the compaction module.
@@ -192,5 +212,244 @@ function assistantResponse(content: AssistantMessage["content"], usage?: Usage):
         usage: usage ?? zeroUsage(),
         stopReason: "stop",
         timestamp: 0,
+    };
+}
+
+/** A span with the shapes the two strategies treat differently: thinking, a tool call, and its result. */
+export function sampleSpan(readBody: string): ContextMessage[] {
+    return [
+        userMessage("fix the compaction module"),
+        assistantMessage({
+            thinking: "reasoning the fallback must not carry",
+            text: "reading the module",
+            calls: [
+                { id: "c1", name: "read", arguments: { path: "src/modules/compaction/index.ts" } },
+            ],
+        }),
+        toolResultMessage({ callId: "c1", tool: "read", text: readBody }),
+        assistantMessage({ text: "the read gave me what I needed" }),
+    ];
+}
+
+/** The tail compaction keeps verbatim. */
+export function sampleKept(): ContextMessage[] {
+    return [
+        userMessage("and keep this turn in context"),
+        assistantMessage({ text: "acknowledged" }),
+    ];
+}
+
+/** One recorded provider call: the exact context and options the module assembled. */
+export interface RecordedCompactionCall {
+    context: Context;
+    options: unknown;
+}
+
+/** The `CompactionResult` pi was handed, narrowed from the handler's `unknown` payload. */
+export interface CompactionPayload {
+    summary: string;
+    firstKeptEntryId: string;
+    tokensBefore: number;
+    usage?: Usage;
+    details: Record<string, unknown>;
+}
+
+export interface CompactionHarness {
+    /** Every provider call the module made, in order. */
+    readonly calls: RecordedCompactionCall[];
+    readonly piStub: PiStub;
+    readonly ctx: ExtensionContext;
+    /** Drive the registered `session_before_compact` handler once. */
+    compact(
+        eventOverrides?: Partial<SessionBeforeCompactEvent>,
+    ): Promise<CompactionPayload | undefined>;
+    /** The raw handler result, for suites that assert `undefined` or `{ cancel: true }` directly. */
+    invoke(eventOverrides?: Partial<SessionBeforeCompactEvent>): Promise<unknown>;
+    /** Read one field of the options object pi's registry was called with. */
+    optionField(callIndex: number, key: string): unknown;
+    /** The trailing user message of a recorded request, which is where the instruction goes. */
+    trailingInstruction(callIndex: number): string;
+    /** Text of every non-assistant message in a recorded request, joined. */
+    sentText(callIndex: number): string;
+    /** Text of the single user message a serialized request consists of. */
+    requestText(callIndex: number): string;
+}
+
+export interface CompactionHarnessInput {
+    cwd: string;
+    responses: Array<() => Promise<AssistantMessage>>;
+    span?: ContextMessage[];
+    kept?: ContextMessage[];
+    preparation?: Partial<CompactionPreparation>;
+    model?: Model<Api>;
+    notify?: ExtensionUIContext["notify"];
+    hasUI?: boolean;
+    systemPrompt?: string;
+    sessionId?: string;
+    activeTools?: string[];
+    configuredTools?: string[];
+    /** Override the branch the module reads, or make it fail. */
+    branch?: SessionEntry[];
+    branchThrows?: Error;
+    signal?: AbortSignal;
+}
+
+/**
+ * A wired compaction module: registered against a recording `pi`, driven by a recording model registry,
+ * over a `ctx.sessionManager` double that answers exactly the two members production calls.
+ *
+ * Suites pass fixtures and read `calls`; they never hand-build an `ExtensionContext` or a registry.
+ */
+export function createCompactionHarness(input: CompactionHarnessInput): CompactionHarness {
+    const span = input.span ?? sampleSpan("READ BODY");
+    const kept = input.kept ?? sampleKept();
+    const branch =
+        input.branch ??
+        messageChain([
+            ...span.map((message, index) => ({ id: `span-${String(index)}`, message })),
+            ...kept.map((message, index) => ({
+                id: index === 0 ? "kept-1" : `kept-${String(index + 1)}`,
+                message,
+            })),
+        ]);
+    const calls: RecordedCompactionCall[] = [];
+
+    const piStub = createPiStub();
+    registerCompactionExtension(piStub.pi);
+    piStub.toolSurface.all = (input.configuredTools ?? ["read", "bash", "agent"]).map((name) =>
+        stubToolInfo(name),
+    );
+    piStub.toolSurface.active = input.activeTools ?? ["bash", "read"];
+
+    let index = 0;
+    const registry = stubModelRegistry(async (_model, context, options) => {
+        calls.push({ context, options });
+        const next =
+            input.responses[Math.min(index, input.responses.length - 1)] ??
+            (async () => summaryResponse("## Goal\n\nunused"));
+        index += 1;
+        return await next();
+    });
+
+    const ctx = stubContext({
+        cwd: input.cwd,
+        model: input.model ?? stubModel(),
+        modelRegistry: registry,
+        hasUI: input.hasUI ?? false,
+        ui: stubUi({ notify: input.notify ?? (() => {}) }),
+        getSystemPrompt: () => input.systemPrompt ?? "the live system prompt",
+        sessionManager: stubSessionManager({
+            getBranch: () => {
+                if (input.branchThrows) {
+                    throw input.branchThrows;
+                }
+                return branch;
+            },
+            getSessionId: () => input.sessionId ?? "session-1",
+        }),
+    });
+
+    const handler = piStub.requireHandler("session_before_compact");
+
+    function event(overrides: Partial<SessionBeforeCompactEvent> = {}): SessionBeforeCompactEvent {
+        return compactEvent({
+            preparation: compactionPreparation({
+                firstKeptEntryId: "kept-1",
+                messagesToSummarize: span,
+                fileOps: fileOperations({
+                    read: new Set(["src/index.ts"]),
+                    edited: new Set(["src/modules/compaction/index.ts"]),
+                }),
+                ...input.preparation,
+            }),
+            branchEntries: branch,
+            signal: input.signal ?? new AbortController().signal,
+            ...overrides,
+        });
+    }
+
+    async function invoke(overrides: Partial<SessionBeforeCompactEvent> = {}): Promise<unknown> {
+        return await handler(event(overrides), ctx);
+    }
+
+    function recorded(callIndex: number): RecordedCompactionCall {
+        const call = calls[callIndex];
+        if (!call) {
+            throw new TypeError(`no recorded call at index ${String(callIndex)}`);
+        }
+        return call;
+    }
+
+    return {
+        calls,
+        piStub,
+        ctx,
+        compact: async (overrides) => narrowCompactionPayload(await invoke(overrides)),
+        invoke,
+        optionField(callIndex, key) {
+            const { options } = recorded(callIndex);
+            if (!options || typeof options !== "object") {
+                throw new TypeError(`recorded options are not an object: ${String(options)}`);
+            }
+            return (options as Record<string, unknown>)[key];
+        },
+        trailingInstruction(callIndex) {
+            const { context } = recorded(callIndex);
+            const last = context.messages[context.messages.length - 1];
+            if (!last || last.role !== "user") {
+                throw new TypeError("expected the request to end with a user message");
+            }
+            return textOfContent(last.content);
+        },
+        sentText(callIndex) {
+            const { context } = recorded(callIndex);
+            return context.messages
+                .filter((one) => one.role !== "assistant")
+                .map((one) => textOfContent(one.content))
+                .join("\n");
+        },
+        requestText(callIndex) {
+            const { context } = recorded(callIndex);
+            const first = context.messages[0];
+            if (!first || first.role !== "user") {
+                throw new TypeError("expected the serialized request to be one user message");
+            }
+            return textOfContent(first.content);
+        },
+    };
+}
+
+function textOfContent(content: string | (TextContent | ImageContent)[]): string {
+    if (typeof content === "string") {
+        return content;
+    }
+    return content.map((block) => (block.type === "text" ? block.text : "[image]")).join("");
+}
+
+/** Narrow the handler's `{ compaction } | { cancel } | undefined` result, failing on any other shape. */
+export function narrowCompactionPayload(result: unknown): CompactionPayload | undefined {
+    if (result === undefined) {
+        return undefined;
+    }
+    if (!result || typeof result !== "object") {
+        throw new TypeError(`unexpected handler result: ${String(result)}`);
+    }
+    const record = result as Record<string, unknown>;
+    if (record.cancel !== undefined) {
+        return undefined;
+    }
+    const compaction = record.compaction as Record<string, unknown> | undefined;
+    if (!compaction) {
+        throw new TypeError(`handler returned neither compaction nor cancel: ${String(result)}`);
+    }
+    if (typeof compaction.summary !== "string") {
+        throw new TypeError("compaction payload has no summary text");
+    }
+    return {
+        summary: compaction.summary,
+        firstKeptEntryId: String(compaction.firstKeptEntryId),
+        tokensBefore: Number(compaction.tokensBefore),
+        usage: compaction.usage as Usage | undefined,
+        details: (compaction.details ?? {}) as Record<string, unknown>,
     };
 }

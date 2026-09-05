@@ -26,6 +26,13 @@ export const SANDBOX_CONFIG_PATH = process.env.SANDBOX_CONFIG_PATH;
  */
 export const BASH_DECISION_LOG_PATH = path.join(PI_CODER_STATE_DIR, "bash-log.jsonl");
 
+/**
+ * Development trace of what each compaction actually sent and got back: one JSONL record per stage, so the
+ * raw model response and the composed summary can be read side by side. Extension-local runtime state like
+ * the bash decision log; relocate with `COMPACTION_TRACE_PATH` and disable with `COMPACTION_TRACE=0`.
+ */
+export const COMPACTION_TRACE_PATH = path.join(PI_CODER_STATE_DIR, "compaction-trace.jsonl");
+
 /** User-level pi agent memories shared by the parent and delegated agents. */
 export function getUserMemoryDirectory(): string {
     return path.join(os.homedir(), ".pi", "agent", "memory");

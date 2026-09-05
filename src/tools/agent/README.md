@@ -96,8 +96,12 @@ extension list, run the manual pass:
    `.pi/settings.json`, or pick a small-context model — and start a scout whose task reads many files.
 2. Open `/agents`, select the run, and confirm its trace records `session.compaction_start` and
    `session.compaction_end` with a reason, and that the run keeps going afterward.
-3. Read the child's session JSONL: the `compaction` entry's `details.strategy` names the route that ran,
-   its `usage` is non-zero (so session totals keep counting summarization work), and `summary` opens with
-   pi's `## Goal` section, which is what the transcript preview renders.
+3. Read `.state/compaction-trace.jsonl` (see [Diagnostic traces](#diagnostic-traces) for the switch) and
+   confirm the four stages for one `id`: `attempt` (which strategy ran, its estimated tokens, and `usage`
+   including `cacheRead`), `model_response` (what the model actually said), `final_summary` (what was
+   persisted), and `outcome`. Then open the child's session JSONL and check the `compaction` entry's
+   `details.strategy` matches, its `usage` is non-zero (so session totals keep counting summarization
+   work), and `summary` opens with pi's `## Goal` section, which is what the transcript preview renders.
 4. Repeat once against a provider that ignores `tool_choice` (for example the local llama.cpp provider).
-   The expected outcome is `strategy: "serialized"` in the entry, not a stalled or failed run.
+   The expected outcome is an `attempt` record with `outcome: "rejected"` whose detail names the tool the
+   model called, followed by an accepted `serialized` attempt — not a stalled or failed run.
