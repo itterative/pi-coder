@@ -97,7 +97,14 @@ describe("compaction trace", () => {
         const stages = records
             .filter((record) => record.stage !== "prefix")
             .map((record) => record.stage);
-        expect(stages).toEqual(["attempt", "model_response", "final_summary", "outcome"]);
+        expect(stages).toEqual([
+            "attempt",
+            "model_response",
+            "attempt",
+            "model_response",
+            "final_summary",
+            "outcome",
+        ]);
         expect(new Set(records.map((record) => record.id)).size).toBe(1);
 
         for (const record of records) {
@@ -109,8 +116,12 @@ describe("compaction trace", () => {
         }
 
         const byStage = new Map(records.map((record) => [record.stage, record]));
-        // (a) exactly what the model said, before the harness appended anything.
-        expect(byStage.get("model_response")?.text).toBe("## Goal\n\nthe model answer");
+        const modelResponses = records.filter((record) => record.stage === "model_response");
+        // (a) exactly what each model said, before the harness appended anything.
+        expect(modelResponses.map((record) => record.text)).toEqual([
+            "## Goal\n\nthe model answer",
+            "## Goal\n\nthe model answer",
+        ]);
         // (b) what actually goes into the CompactionEntry.
         expect(byStage.get("final_summary")?.text).toBe(payload?.summary);
         expect(byStage.get("final_summary")?.text).toContain("## Tool Ledger");
@@ -123,14 +134,15 @@ describe("compaction trace", () => {
             readFiles: 1,
             modifiedFiles: 1,
         });
-        expect(byStage.get("outcome")?.outcome).toBe("native");
+        expect(byStage.get("outcome")?.outcome).toBe("two-stage");
     });
 
     it("records the numbers that decided the strategy, including the cache evidence", async () => {
         const harness = build({ responses: [async () => summaryResponse("## Goal\n\nstub")] });
         await harness.compact();
 
-        const attempt = readRecords(tracePath).find((record) => record.stage === "attempt");
+        const records = readRecords(tracePath);
+        const attempt = records.find((record) => record.stage === "attempt");
         expect(attempt?.strategy).toBe("native");
         expect(attempt?.outcome).toBe("accepted");
         expect(attempt?.attempt).toMatchObject({
@@ -139,7 +151,8 @@ describe("compaction trace", () => {
             maxTokens: 8_192,
             contextWindow: 200_000,
             toolCount: 2,
-            messageCount: 6,
+            messageCount: 4,
+            copiedEntries: 4,
         });
         expect(attempt?.attempt?.estimatedTokens).toBeGreaterThan(0);
         // The usage on the accepted attempt is how a cache hit is read out of this file.
@@ -149,6 +162,13 @@ describe("compaction trace", () => {
             cacheRead: 0,
             cacheWrite: 0,
         });
+
+        const reduce = records.filter((record) => record.stage === "attempt")[1];
+        expect(reduce?.strategy).toBe("serialized");
+        expect(reduce?.attempt).toMatchObject({ messageCount: 1, toolCount: 0 });
+        // Both stages are answered by the same stub response in this suite, so the reduce is handed exactly
+        // the segment text it should report having received.
+        expect(reduce?.attempt?.segmentSummaryChars).toBe("## Goal\n\nstub".length);
     });
 
     it("records a rejected native attempt before the serialized one that saved it", async () => {
@@ -168,8 +188,8 @@ describe("compaction trace", () => {
         ]);
         expect(attempts[0]?.detail).toContain("does not honor tool_choice none");
         expect(attempts[0]?.usage).toBeDefined();
-        // The serialized request still names the tools its transcript describes, it just cannot call them.
-        expect(attempts[1]?.attempt).toMatchObject({ toolCount: 2, messageCount: 1 });
+        expect(attempts[1]?.attempt).toMatchObject({ toolCount: 0, messageCount: 1 });
+        expect(attempts[1]?.attempt?.segmentSummaryChars).toBe(0);
         expect(records.find((record) => record.stage === "outcome")?.outcome).toBe("serialized");
     });
 
@@ -239,7 +259,8 @@ describe("compaction trace", () => {
         expect(records.some((record) => record.stage === "final_summary")).toBe(false);
         const outcome = records.find((record) => record.stage === "outcome");
         expect(outcome?.outcome).toBe("core-default");
-        expect(outcome?.detail).toContain("native: provider unavailable");
+        expect(outcome?.detail).toContain("segment: provider unavailable");
+        expect(outcome?.detail).toContain("reduce: summarization returned an empty summary");
     });
 
     it("records a cancelled compaction without calling the provider", async () => {
@@ -277,7 +298,15 @@ describe("compaction trace", () => {
 
         const records = (await harness.compact(), readRecords(tracePath));
         const order = records.map((record) => record.stage);
-        expect(order).toEqual(["prefix", "attempt", "model_response", "final_summary", "outcome"]);
+        expect(order).toEqual([
+            "prefix",
+            "attempt",
+            "model_response",
+            "attempt",
+            "model_response",
+            "final_summary",
+            "outcome",
+        ]);
 
         const prefix = records[0]?.prefix;
         expect(prefix).toMatchObject({

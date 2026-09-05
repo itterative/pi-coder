@@ -1,13 +1,12 @@
 import type { CompactionPreparation } from "./types";
 
 /**
- * The prompts both summarization strategies send.
+ * The prompts both compaction stages send.
  *
- * Two different requests need two different framings. The native one is a continuation of a live
- * conversation whose model already has tools, a working context, and a reason to keep going, so most of its
- * length is spent closing that off: no tools, no continuation, summarize what precedes the retained tail.
- * The serialized one is a standalone call about a text transcript, where pi's "do not continue the
- * conversation" framing is enough on its own.
+ * Stage 1 is a continuation of the conversation itself: the model has its tools, its working context, and a
+ * reason to keep going, so most of this length is spent closing that off — no tools, no continuation, and
+ * only the part that is about to be dropped. Stage 2 is a standalone reduce over a minimized transcript plus
+ * stage 1's output, where the framing has to say what each input is for.
  */
 
 /** pi's own section skeleton, kept comparable so existing renderers and readers keep working. */
@@ -48,10 +47,7 @@ const OWNERSHIP = [
     "messages, and identifiers: they are the parts that cannot be reconstructed later.",
 ].join("\n");
 
-export interface SummarizationDirectiveInput {
-    preparation: CompactionPreparation;
-    customInstructions?: string;
-}
+const FORMAT = ["Use this exact format:", "", PI_SECTIONS, "", OWNERSHIP].join("\n");
 
 /** Extra focus from `/compact <instructions>`, or undefined when the caller gave none. */
 function focusLines(customInstructions?: string): string | undefined {
@@ -62,41 +58,42 @@ function focusLines(customInstructions?: string): string | undefined {
     return `Additional focus: ${trimmed}`;
 }
 
+export interface SegmentInstructionInput {
+    preparation: CompactionPreparation;
+    customInstructions?: string;
+}
+
 /**
- * Instruction appended to the live conversation for the native strategy.
- *
- * The retained tail is named explicitly: without it the model summarizes the recent turns it can still see
- * verbatim, and the checkpoint pays twice for the same content.
+ * Stage 1: appended to the truncated live conversation, whose tools are deliberately left intact so the
+ * request stays a strict prefix of what the provider already cached. `tool_choice: "none"` carries the
+ * prohibition; the wording below is the backstop for endpoints that ignore that field.
  */
-export function nativeSummarizationInstruction(
-    input: SummarizationDirectiveInput & { retainedMessageCount: number },
-): string {
-    const { preparation, retainedMessageCount } = input;
+export function segmentSummaryInstruction(input: SegmentInstructionInput): string {
+    const { preparation } = input;
     const previous: string | undefined = preparation.previousSummary
         ? [
-              "A compaction summary of earlier work is already in this conversation.",
-              "Carry forward everything from it that still matters, move finished items from In Progress to",
-              "Done, and drop what is genuinely obsolete.",
+              "An earlier compaction summary is part of this conversation. Carry forward everything in it",
+              "that still matters, move finished items from In Progress to Done, and drop what is genuinely",
+              "obsolete.",
           ].join(" ")
         : undefined;
     const splitTurn: string | undefined = preparation.isSplitTurn
-        ? "Part of the current turn is retained verbatim: summarize its earlier half and stop where the retained half begins."
+        ? "This span ends partway through a turn whose remainder is retained verbatim; summarize only the" +
+          " part shown here."
         : undefined;
+
     return [
-        "The conversation above is being compacted into a checkpoint that a fresh context will rely on.",
-        "Do not call any tool. Do not continue the work, do not re-read files, and do not ask questions.",
-        "Reply with text only: the summary itself, nothing before or after it.",
+        "Everything above is about to be dropped from this conversation and replaced by a checkpoint.",
+        "The most recent turns are retained as-is and are not included here.",
         "",
-        `The last ~${String(retainedMessageCount)} messages are retained verbatim after compaction, so`,
-        "summarize only what precedes them. Do not restate their contents.",
+        "Do not call any tool. Do not continue the work, do not re-read files, do not ask questions.",
+        "Reply with text only: the checkpoint itself, nothing before or after it.",
+        "",
+        "Write that checkpoint now, for a fresh context that will see only this text plus the recent turns.",
         previous,
         splitTurn,
         "",
-        "Use this exact format:",
-        "",
-        PI_SECTIONS,
-        "",
-        OWNERSHIP,
+        FORMAT,
         focusLines(input.customInstructions),
     ]
         .filter((line): line is string => line !== undefined)
@@ -104,38 +101,54 @@ export function nativeSummarizationInstruction(
 }
 
 export const SERIALIZATION_SYSTEM_PROMPT = [
-    "You are a context summarization assistant. You read a conversation between a user and an AI coding",
-    "agent, then output a structured checkpoint summary in the exact format requested.",
+    "You are a context summarization assistant. You read a conversation transcript and the segment",
+    "checkpoint an earlier pass wrote about it, then output one structured checkpoint summary in the exact",
+    "format requested.",
     "You have no tools in this request. Do not continue the conversation, do not respond to questions in",
     "it, and do not emit tool calls. Output only the structured summary.",
 ].join("\n");
 
 export interface SerializedRequestInput {
     conversationText: string;
+    /** Stage 1's output, when the native pass produced one. */
+    segmentSummary?: string;
     previousSummary?: string;
     customInstructions?: string;
 }
 
-/** Standalone request over a minimized transcript, used for overflow recovery and strategy fallback. */
+/**
+ * Stage 2: the reduce. It sees the minimized transcript, stage 1's native reading of the same span, and the
+ * previous checkpoint, and has to reconcile them into one.
+ */
 export function serializedSummarizationRequest(input: SerializedRequestInput): string {
     const previous: string | undefined = input.previousSummary
         ? `<previous-summary>\n${input.previousSummary}\n</previous-summary>\n`
         : undefined;
+    const segment: string | undefined = input.segmentSummary
+        ? `<segment-checkpoint>\n${input.segmentSummary}\n</segment-checkpoint>\n`
+        : undefined;
+
+    const lead = input.segmentSummary
+        ? [
+              "<segment-checkpoint> is a summary of the same conversation written by the assistant that",
+              "holds it in context; <conversation> is a minimized transcript of it. Prefer the transcript",
+              "where they disagree, and use the checkpoint where the transcript was compressed away.",
+          ].join(" ")
+        : "The transcript is the whole conversation to summarize; it has been minimized, so tool output may";
+
     const merge = input.previousSummary
-        ? "The transcript holds only NEW messages since <previous-summary>. Merge them into it, preserving" +
-          " existing content that still matters."
-        : "No prior summary exists, so this transcript is the whole history to summarize.";
+        ? "The transcript holds only NEW messages since <previous-summary>. Merge everything into it," +
+          " preserving existing content that still matters."
+        : `${lead}. No prior checkpoint exists.`;
+
     return [
         `<conversation>\n${input.conversationText}\n</conversation>\n`,
+        segment,
         previous,
         merge,
         focusLines(input.customInstructions),
         "",
-        "Use this exact format:",
-        "",
-        PI_SECTIONS,
-        "",
-        OWNERSHIP,
+        FORMAT,
     ]
         .filter((line): line is string => line !== undefined)
         .join("\n");

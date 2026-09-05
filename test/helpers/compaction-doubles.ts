@@ -7,12 +7,13 @@ import type {
     Model,
     TextContent,
 } from "@earendil-works/pi-ai";
-import type {
-    ExtensionContext,
-    ExtensionUIContext,
-    FileOperations,
-    SessionBeforeCompactEvent,
-    SessionEntry,
+import {
+    buildContextEntries as piBuildContextEntries,
+    type ExtensionContext,
+    type ExtensionUIContext,
+    type FileOperations,
+    type SessionBeforeCompactEvent,
+    type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 
 import { registerCompactionExtension } from "../../src/modules/compaction";
@@ -351,6 +352,14 @@ export function createCompactionHarness(input: CompactionHarnessInput): Compacti
         ui: stubUi({ notify: input.notify ?? (() => {}) }),
         getSystemPrompt: () => input.systemPrompt ?? "the live system prompt",
         sessionManager: stubSessionManager({
+            // The two members the compaction module calls unguarded. `buildContextEntries()` is pi's own
+            // resolution of the branch, so a fixture cannot drift from what a real session reports.
+            buildContextEntries: () => {
+                if (input.branchThrows) {
+                    throw input.branchThrows;
+                }
+                return piBuildContextEntries(branch);
+            },
             getBranch: () => {
                 if (input.branchThrows) {
                     throw input.branchThrows;

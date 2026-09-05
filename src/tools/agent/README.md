@@ -96,12 +96,17 @@ extension list, run the manual pass:
    `.pi/settings.json`, or pick a small-context model — and start a scout whose task reads many files.
 2. Open `/agents`, select the run, and confirm its trace records `session.compaction_start` and
    `session.compaction_end` with a reason, and that the run keeps going afterward.
-3. Read `.state/compaction-trace.jsonl` (see [Diagnostic traces](#diagnostic-traces) for the switch) and
-   confirm the four stages for one `id`: `attempt` (which strategy ran, its estimated tokens, and `usage`
-   including `cacheRead`), `model_response` (what the model actually said), `final_summary` (what was
-   persisted), and `outcome`. Then open the child's session JSONL and check the `compaction` entry's
-   `details.strategy` matches, its `usage` is non-zero (so session totals keep counting summarization
-   work), and `summary` opens with pi's `## Goal` section, which is what the transcript preview renders.
-4. Repeat once against a provider that ignores `tool_choice` (for example the local llama.cpp provider).
-   The expected outcome is an `attempt` record with `outcome: "rejected"` whose detail names the tool the
-   model called, followed by an accepted `serialized` attempt — not a stalled or failed run.
+3. Read `.state/compaction-trace.jsonl` (see [Diagnostic traces](#diagnostic-traces) for the switch). A
+   successful run writes seven records sharing one `id`: `prefix`, `attempt(native)`,
+   `model_response(native)`, `attempt(serialized)`, `model_response(serialized)`, `final_summary`, `outcome`.
+   The two `model_response` records are the stage outputs; `final_summary` is the exact text persisted. Check
+   that the native `attempt` reports `outcome: "accepted"` with a non-zero `usage.cacheRead` (that is the
+   cache being reused), that `copiedEntries` is non-zero and `skippedEntries` is small, and that
+   `prefix.firstDivergence` is `"tail"` with `prefixUsable: true`. Then open the child's session JSONL and
+   check the `compaction` entry's `details.route` matches the `outcome`, its `usage` is non-zero (so session
+   totals keep counting summarization work), and `summary` opens with pi's `## Goal` section, which is what the
+   transcript preview renders.
+4. Repeat once against a provider that ignores `tool_choice` (for example the local llama.cpp provider, which
+   is also the easiest place to see a real `cacheRead` on the native `attempt`). The expected outcome is a
+   rejected native `attempt` whose detail names the tool the model called, an `outcome: "serialized"` record
+   with `details.route: "serialized"` — not a stalled or failed run.

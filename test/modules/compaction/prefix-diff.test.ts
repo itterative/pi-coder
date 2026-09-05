@@ -110,13 +110,41 @@ describe("request prefix diffing", () => {
         expect(diffRequestPrefixes(plain, reordered).firstDivergence).toContain("tools(names)");
     });
 
-    it("reports an added or removed top-level field before anything else", () => {
+    it("reports a parameter difference without calling it a prefix break", () => {
         const parent = fingerprint(anthropicBody({ extra: { prompt_cache_key: "session-1" } }));
-        const ours = fingerprint(anthropicBody({}));
+        const ours = fingerprint(anthropicBody({ extra: { tool_choice: "none" } }));
         const diff = diffRequestPrefixes(parent, ours);
 
+        // llama.cpp served a 34k cache read on a request that carried `tool_choice` and pi's did not, so a
+        // parameter difference must never be reported as the reason a prefix was unusable.
+        expect(diff.prefixUsable).toBe(true);
+        expect(diff.firstDivergence).toBe("tail");
+        expect(diff.parameters).toEqual(["+tool_choice", "-prompt_cache_key"]);
+        expect(diff.divergences).toEqual([]);
+    });
+
+    it("lists every content divergence instead of stopping at the first", () => {
+        const parent = fingerprint(anthropicBody({ system: "prompt a" }));
+        const ours = fingerprint(
+            anthropicBody({
+                system: "prompt b",
+                tools: [{ name: "other", input_schema: { type: "object" } }],
+                messages: [
+                    { role: "user", content: "changed" },
+                    { role: "assistant", content: [{ type: "text", text: "ok" }] },
+                ],
+            }),
+        );
+        const diff = diffRequestPrefixes(parent, ours);
+
+        expect(diff.divergences).toEqual([
+            "system",
+            "tools(names): read vs other",
+            "messages[0] (user)",
+        ]);
+        expect(diff.firstDivergence).toBe("system");
         expect(diff.prefixUsable).toBe(false);
-        expect(diff.firstDivergence).toBe("keys:-prompt_cache_key");
+        expect(diff.commonPrefixMessages).toBe(0);
     });
 
     it("points at the first message that differs", () => {

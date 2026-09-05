@@ -1,6 +1,6 @@
 ---
 name: compaction
-description: pi-coder's replacement compaction path in src/modules/compaction — the native-continuation/serialized cascade, its cache and tool_choice invariants, the details schema, and the config file.
+description: pi-coder's two-stage compaction in src/modules/compaction — native span read then serialized reduce, the in-memory span transcript, cache/prefix measurements, details.route schema, trace stages, config.
 category: architecture
 priority: 4
 keep_updated: true
@@ -8,129 +8,132 @@ keep_updated: true
 
 # Compaction
 
-pi owns compaction; pi-coder overrides it by registering one `session_before_compact` handler in
+pi owns compaction; pi-coder replaces it with one `session_before_compact` handler in
 `src/modules/compaction/index.ts` (`registerCompactionExtension`), installed for the parent from
 `src/index.ts` and for every child as the `pi-coder-compaction` entry in
-`src/tools/agent/child/index.ts:childExtensionEntries`. Reading `pi`'s
-`docs/compaction.md` and `dist/core/compaction/compaction.js` before changing this is worth it: the
-invariants below were found by reading core, not by trial.
+`src/tools/agent/child/index.ts:childExtensionEntries`. Read pi's `docs/compaction.md` and
+`dist/core/compaction/compaction.js` before changing this; every invariant below came from reading core, not
+from guessing. Returning `undefined` hands the compaction back to core.
 
-## Why it exists
+## Why
 
-Core serializes the summarized span to text (`serializeConversation`) and sends it as a one-off request with
-`cacheRetention: "none"` and a fresh `sessionId`. That serialization is heavy in exactly the places that do
-not help a summarizer — `[Assistant thinking]:` arrives **untruncated** (thinking is normally the largest
-block in a session, and pi keeps it in the live context; `hideThinkingBlock` is display-only), tool results
-get a fixed non-exported 2000-character cap per tool regardless of what the tool returns, and no overall
-budget exists — and because the request opts out of caching, all of that bulk is billed as fresh input. The
-replacement reads the real conversation instead of a retyped copy of it.
+Core serializes the summarized span (`serializeConversation`): `[Assistant thinking]:` **untruncated**, tool
+results at a non-exported fixed 2000 chars, no overall budget — then sends it with `cacheRetention: "none"`
+and a fresh `sessionId`, so all of that bulk is billed as fresh input. Thinking is normally the largest block
+in a session, and pi keeps thinking in the live context anyway (`hideThinkingBlock` is display-only).
 
-## The cascade
+## Pipeline
 
-`native` → `serialized` → **core default** (return `undefined`). `overflow` skips straight to `serialized`,
-because by definition the live context no longer fits. Every failure is a returned value, never an
-exception: the outer `try` in `registerCompactionExtension` catches anything that escapes, warns, and returns
-`undefined` so core's default path runs — a bug here costs summary quality and never leaves a session
-uncompactable. A response that
-contains a `toolCall` block is treated as a strategy failure (we sit outside the agent loop, so those calls
-would never execute, and a model that ignored `tool_choice` will ignore the rest of the directive).
-`event.signal.aborted` returns `{ cancel: true }` rather than issuing a doomed request.
+1. **segment (stage 1, native)** — `span-session.ts` copies pi's resolved context entries
+   (`ctx.sessionManager.buildContextEntries()`) truncated at `preparation.firstKeptEntryId` into
+   `SessionManager.inMemory(cwd)`, and `convertToLlm(spanManager.buildSessionContext().messages)` yields the
+   discarded span as **real message objects** — previous checkpoint included, retained tail excluded. Built
+   with the parent's `ctx.getSystemPrompt()` and its active tools in `agent.state.tools` order, so the request
+   is a strict shorter prefix of what the provider already cached. Tools stay in the request and are forbidden
+   by `toolChoice: "none"`: removing them would move the prefix. A `toolCall` block in the response rejects
+   the stage.
+2. **reduce (stage 2, serialized)** — one bounded text-only call over `serializeConversationMinimal(span)` +
+   stage 1's `<segment-checkpoint>` + `<previous-summary>`, producing the persisted summary. Transcript-first
+   on disagreement, checkpoint fills what compression removed.
+3. **core default** — `undefined`.
 
-## Native strategy invariants
+`overflow` skips stage 1 (the span provably does not fit). Stage 1 failing alone → stage 2 with no segment.
+Stage 2 failing after stage 1 succeeded → **stage 1's text is persisted** (`route: "native"`). Nothing may
+throw: the handler catches everything and warns, because a defect here should cost summary quality, never a
+session that can no longer be compacted. `event.signal.aborted` returns `{ cancel: true }`.
 
-The payoff depends on the request being **prefix-identical** to what pi last sent, so:
+## Measured
 
-- system prompt comes from `ctx.getSystemPrompt()` (it reflects the `_systemPromptOverride` that
-  `before_agent_start` installed, pi-coder's own `<memory_system>`/`<scratchpad_system>` blocks included);
-- tools are `pi.getActiveTools()` names mapped back onto `pi.getAllTools()` entries, which preserves
-  `agent.state.tools` order — not configured order, and not every configured tool;
-- messages are `convertToLlm(buildSessionContext(ctx.sessionManager.getBranch()).messages)`, i.e. pi's real
-  active context including previous compaction summaries;
-- options set `toolChoice: "none"` (declared on every pi-ai API option type) and **keep** default
-  `cacheRetention` plus the session's own `sessionId`;
-- output budget mirrors core: `min(0.8 × reserveTokens, model.maxTokens)`.
+- **llama.cpp local (`qwen3.8-27b`)**: stage 1 accepted with `usage: { input: 376, cacheRead: 34339 }` — the
+  cache **is** reachable from a rebuilt request, and a `+tool_choice` body difference did not prevent it.
+- **Hosted `qwen-token-plan/qwen3.8-flash`**, 572-message session, 1M window: an earlier full-live-context
+  design recorded `input: 330054, cacheRead: 0` while ordinary turns in that session report `input ≈ 1k,
+  cacheRead ≈ 330k`. So that endpoint either will not serve a cache entry to an extended/rewound request or
+  does not report it. Sending the whole live context (retained tail included) was the wrong call; truncating
+  at the cut point is the fix, and cost is now bounded by stage 2's `serializedMaxTokens` (12k default).
+- Post-compaction the next turn is cold regardless: core renders the summary as a leading user message
+  (`COMPACTION_SUMMARY_PREFIX`).
 
-`nativeRequestFits` gates on `contextWindow - outputBudget`, **not** on `reserveTokens`. A threshold-triggered
-compaction runs at exactly `contextWindow - reserveTokens`, so re-reserving that window rejects every request
-this strategy exists for; `test/modules/compaction/handler.test.ts` has a ~750k-character fixture that lands
-between the two thresholds specifically to catch that mistake (verified: reverting the formula to
-`reserveTokens` fails only that test).
+## pi gaps found
 
-### Measured, 2026-09-05: the cache did not hit
-
-`/compact` on a 572-message parent session (`qwen-token-plan/qwen3.8-flash`, 1M window) recorded
-`attempt native accepted`, `estimatedTokens: 445163`, and `usage: { input: 330054, cacheRead: 0 }` — while
-ordinary turns in that same session report `input` of ~1k with `cacheRead` ~330k. So the rebuilt request was
-charged full price for the entire context, and the minimized route (capped by `serializedMaxTokens`, default
-12k) was cheaper by roughly 25x. Two explanations remain open, and they are not distinguishable from usage
-numbers: the rebuilt body diverged from pi's early in the prefix, or that endpoint will not serve a cache
-entry to a request that extends the conversation. The route choice (native default vs serialized default) is
-**unresolved pending that diff**; `toolCount`/`estimatedTokens` in the record are the hand-built path's, not
-proof of equality.
-
-`src/modules/compaction/prefix-diff.ts` exists to settle it: when tracing is on, the module registers a
-`before_provider_request` handler that keeps a reference to the body pi built for its own last request
-(`WeakMap` keyed by `sessionManager`, never copied, never persisted), passes `onPayload` on the native call,
-and writes a `prefix` stage record with the first divergence named (`keys`, `model`, `system`, `tools(body)`,
-`tools(names)`, `messages[i]`, `rewind`, `tail`, or `no-parent-payload-captured`) plus both fingerprints. A
-record with `prefixUsable: true` and `firstDivergence: "tail"` plus `cacheRead: 0` means the provider, not the
-request. `onPayload` is inspect-only: the double in `compaction-doubles.ts` throws if a handler ever returns a
-replacement body.
-
-Post-compaction the next turn is cold either way, because core renders the summary as a leading user message.
-
-## Serialized strategy
-
-`src/modules/compaction/serialize.ts` keeps pi's line labels (`[User]:`, `[Assistant thinking]:`,
-`[Assistant]:`, `[Assistant tool calls]:`, `[Tool result]:`, plus `[Bash]`, `[Bash result]`, `[System note]`,
-`[Compaction summary]`) and changes the policy: thinking dropped by default, per-tool result caps that know
-an `agent` report is worth more than `read` output, argument renderings that understand pi-coder's own tools
-(`agent` keeps action/agent/runId/title and reports `taskChars`; unknown tools degrade to sorted **key names
-only**, never values), and newest-first packing under an explicit token ceiling so an overflow request is
-guaranteed to fit. Look up transcript-derived keys through `configured()` (`Object.hasOwn`), not bare
-indexing: a tool or argument named `constructor` otherwise yields a function where a budget belongs.
+- `@earendil-works/pi-agent-core` is nested under `pi-coding-agent/node_modules`, so `src/` must not name it:
+  `AgentMessage`/`CompactionPreparation` types are derived in `types.ts` from `SessionBeforeCompactEvent`.
+- pi's `appendMessage` doc comment references an `appendBranchSummary()` that **does not exist**, so
+  `branch_summary` (and `label`/`session_info`) entries cannot be copied into the span transcript.
+  `buildSpanSession` reports them in `skippedEntries` rather than faking them; stage 2's transcript still
+  contains branch summaries because it is built from `preparation.messagesToSummarize`.
+- `modelRegistry.complete()` does **not** traverse the agent's `onPayload` path, so
+  `before_provider_request` never sees requests we send — that is why the diff needs both hooks.
+- `ctx.getSystemPrompt()` does reflect the `before_agent_start` override (`_systemPromptOverride ??
+  _baseSystemPrompt`), so pi-coder's injected `<memory_system>`/`<scratchpad_system>` blocks are included.
 
 ## Summary and details contract
 
 `summary` = model text + `buildSupplementarySections()` (`## Verbatim Recent Requests`, `## Tool Ledger`,
-`## Delegated Runs`, `## Dropped Context`) + pi's `<read-files>`/`<modified-files>` tail. Those sections are
-computed from the span rather than recalled by the model, which is the point: a wrong count reads as
-authority. The model is told to write pi's skeleton **only** and to skip the harness-owned sections.
+`## Delegated Runs`, `## Dropped Context`, all computed by `analyzeSpan` rather than recalled) + pi's
+`<read-files>`/`<modified-files>` tail. The model is told to write pi's section skeleton **only** and to skip
+the harness-owned ones, so `CompactionSummaryMessageComponent` and the `/agents` transcript keep rendering.
 
-`firstKeptEntryId` and `tokensBefore` pass through from `event.preparation`, so core's default ~20k-token
-native tail is unchanged. `details` keeps `readFiles`/`modifiedFiles` under those exact names: core extracts
-them from the previous compaction entry to build the cumulative file ledger, so renaming them breaks tracking
-silently rather than loudly. `version: 1` and `strategy` sit alongside them.
+`details` = `{ version: 1, route, provider, model, readFiles, modifiedFiles, summarizedMessages,
+droppedBlocks }`. `route` is `"two-stage" | "native" | "serialized"` (renamed from `strategy` when stages
+arrived; core reads only the two file-list keys, which **must keep pi's names** or cumulative file tracking
+breaks silently). `firstKeptEntryId`/`tokensBefore` pass through from `preparation`, so core's default
+~20k-token native tail is unchanged.
+
+## Serializer
+
+`serialize.ts` keeps pi's labels (`[User]:`, `[Assistant thinking]:`, `[Assistant]:`,
+`[Assistant tool calls]:`, `[Tool result]:`, plus `[Bash]`, `[Bash result]`, `[System note]`,
+`[Compaction summary]`) and changes the policy: thinking off by default, per-tool result caps that know an
+`agent` report is worth more than `read` output, argument renderings that understand pi-coder's tools
+(`agent` keeps action/agent/runId/title and reports `taskChars`; unknown tools degrade to sorted argument
+**key names** only), and newest-first packing under `serializedMaxTokens` so an overflow request cannot fail
+to fit. Look up transcript-derived keys through `configured()` (`Object.hasOwn`), never bare indexing: a tool
+or argument named `constructor` otherwise yields a function where a character budget belongs.
 
 ## Trace
 
-`src/modules/compaction/trace.ts` appends one JSONL record per stage to
-`<pi-coder-install>/.state/compaction-trace.jsonl` (mode `0600`, directory `0700`, rotated into a single
-`.1` generation once it passes `traceMaxBytes`). Every record of one compaction shares an `id`:
+`trace.ts` appends one JSONL record per stage to `<pi-coder-install>/.state/compaction-trace.jsonl`
+(`0600`, dir `0700`, rotated to a single `.1` at `traceMaxBytes`), all records of one compaction sharing an
+`id`. Order for a successful two-stage run: `prefix`, `attempt(native)`, `model_response(native)`,
+`attempt(serialized)`, `model_response(serialized)`, `final_summary`, `outcome`.
 
-- `attempt` — one per strategy, written once that attempt is over: `accepted` / `rejected` / `skipped`, the
-  detail, and `usage` including `cacheRead`, which is the only way to tell whether re-sending the live
-  context actually reused the provider's cached prefix. Also carries the estimated request size and tool /
-  message counts, plus the serialized route's transcript and dropped-block counts.
-- `model_response` — what the model said, before the harness appended anything.
-- `final_summary` — the exact text written into the `CompactionEntry`, with the counts it came from.
-- `outcome` — how the whole compaction ended: `native`, `serialized`, `core-default`, `cancelled`, `disabled`.
+- `attempt` — per stage: `accepted`/`rejected`/`skipped`, detail, `usage` incl. **`cacheRead`** (the only way
+  to tell whether the rebuilt prefix was served from cache), estimated tokens, tool/message counts, stage 1's
+  `copiedEntries`/`skippedEntries`, stage 2's `serializedChars`/`segmentSummaryChars`.
+- `prefix` — from `prefix-diff.ts`: our stage-1 body (captured via `onPayload`) diffed against the parent's
+  last real body (captured via `before_provider_request`, stored as one reference in a `WeakMap` keyed by
+  `sessionManager`). Reports **every** content `divergences[]` (`system`, `tools(body)`, `tools(names)`,
+  `messages[i]`, `rewind`), `prefixUsable`, and `parameters[]` for body keys only one side sent — `tool_choice`
+  is a parameter, never a prefix verdict, which is exactly the distinction that mattered in the first run.
+- `model_response` — what the model said before the harness appended anything.
+- `final_summary` — the exact persisted text plus its counts.
+- `outcome` — `two-stage`/`native`/`serialized`/`core-default`/`cancelled`/`disabled`.
 
-It follows `isAgentTraceEnabled()`, the same development switch the delegated-agent timelines use, and is
-separately disableable with `COMPACTION_TRACE=0` or relocatable with `COMPACTION_TRACE_PATH`; `traceEnabled`,
-`tracePath`, and `traceMaxBytes` live in the config file. That switch moved to `src/common/trace.ts` (re-
-exported unchanged from `tools/agent/observability/trace.ts`, so agent-side imports did not move) because a
-session module must not reach into the agent tool to ask whether it may write a file. Writing never throws,
-and with tracing off the recorder is a no-op behind the same API, so the cascade reads identically either way.
-The records hold raw summary text, so treat the file like a transcript.
+Follows `isAgentTraceEnabled()`, which moved to `src/common/trace.ts` (a session module must not reach into
+the agent tool to ask whether it may write a file) and is still re-exported from
+`tools/agent/observability/trace.ts` so agent-side imports did not move. Separately disable with
+`COMPACTION_TRACE=0`, relocate with `COMPACTION_TRACE_PATH`. Writing never throws; with tracing off the
+recorder is a no-op behind the same API. Records hold raw summary text, so **`test/setup.ts` disables the
+trace repo-wide** the way it disables the bash decision log.
 
 ## Configuration
 
 `compaction-config.json`, project (`.pi/`, nearest ancestor) over global (`~/.pi/`), env-overridable with
-`COMPACTION_CONFIG_PATH` / `COMPACTION_CONFIG_PATH_GLOBAL`, mirroring `src/tools/agent/config.ts`. Unknown or
-malformed fields fall back to defaults, because a child runs this unattended. `enabled: false` returns
-`undefined` and restores core's behavior for A/B. `model` is accepted but unused: it is the seam for the
-planned dedicated-compaction-model strategy, which would forfeit the cache prefix and therefore wants the
-serialized path, not the native one. Core's own `compaction.enabled: false` still wins — the event never
-fires. Tests pin both config locations to nonexistent temp paths via `vi.stubEnv` so they can never read the
-developer's own file.
+`COMPACTION_CONFIG_PATH` / `COMPACTION_CONFIG_PATH_GLOBAL`, mirroring `src/tools/agent/config.ts`. Malformed
+or unknown fields fall back to defaults, because children run this unattended. `enabled: false` returns
+`undefined`; core's own `compaction.enabled: false` still wins (the event never fires).
+`serializedMaxTokens`, `keepThinking`, and the per-block char caps govern stage 2; `traceEnabled`/`tracePath`/
+`traceMaxBytes` govern the trace; `model` is accepted but unused — the seam for the planned dedicated
+compaction model, which wants the serialized route since it has no cache prefix to protect.
+
+## Validation
+
+`test/modules/compaction/{serialize,sections,handler,trace,prefix-diff,span-session}.test.ts` — 62 cases, two
+reviewed file snapshots, no provider calls (`createCompactionHarness()` in `test/helpers/compaction-doubles.ts`
+records the contexts and options a `stubModelRegistry` receives). Stage-1 truncation is pinned by a 1.2M-char
+*retained-tail* fixture: if someone re-sends the live context, the fit gate skips stage 1 and that test fails.
+Mutation-verified: reverting the fit formula to `reserveTokens` fails the sizing test; deleting
+`trace.modelResponse(...)` fails two trace tests. Real provider behavior (`tool_choice`, cache serving,
+`toolCall` refusals) and child execution stay manual — see `src/tools/agent/README.md` § "Changing child
+compaction".

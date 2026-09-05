@@ -39,7 +39,7 @@ export type CompactionAttemptOutcome = "accepted" | "rejected" | "skipped";
 
 /** How the compaction as a whole ended. */
 export type CompactionTraceOutcome =
-    "native" | "serialized" | "core-default" | "cancelled" | "disabled";
+    "two-stage" | "native" | "serialized" | "core-default" | "cancelled" | "disabled";
 
 export interface CompactionTraceUsage {
     input: number;
@@ -61,6 +61,11 @@ export interface CompactionAttemptFields {
     messageCount?: number;
     serializedChars?: number;
     droppedBlocks?: number;
+    /** Stage 1 only: transcript entries copied into the in-memory span, and types that could not be. */
+    copiedEntries?: number;
+    skippedEntries?: number;
+    /** Stage 2 only: how much of stage 1's checkpoint it was handed. */
+    segmentSummaryChars?: number;
     customInstructions?: string;
     previousSummaryChars?: number;
 }
@@ -105,6 +110,9 @@ export interface CompactionPrefixFields {
     /** False when something before the appended instruction differs, so the cache was unreachable. */
     prefixUsable: boolean;
     firstDivergence: string;
+    divergences: string[];
+    /** Request parameters only one side sent, e.g. `+tool_choice`. Not a prefix verdict. */
+    parameters: string[];
     parent?: string;
     ours?: string;
     parentMessageCount: number;

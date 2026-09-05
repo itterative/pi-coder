@@ -33,8 +33,16 @@ export interface PayloadFingerprint {
 export interface PrefixDiff {
     /** True when nothing but the appended tail differs, i.e. the cached prefix should have been usable. */
     prefixUsable: boolean;
-    /** First thing that differs: "system", "tools", "tools[n]", "messages[n]", "keys", or "tail". */
+    /** The first content divergence: "model", "system", "tools...", "messages[n]", "rewind", or "tail". */
     firstDivergence: string;
+    /** Every content divergence found. Checking all of them, rather than the first, is the whole point. */
+    divergences: string[];
+    /**
+     * Top-level body keys only one side sent. Informational, never a verdict: `tool_choice` is a request
+     * parameter, not prefix content, and a provider that reports a 34k cache read alongside it proves the
+     * distinction matters.
+     */
+    parameters: string[];
     parent?: string;
     ours?: string;
     parentMessageCount: number;
@@ -127,22 +135,6 @@ export function fingerprintPayload(payload: unknown): PayloadFingerprint {
     };
 }
 
-function firstKeyDifference(parent: string[], ours: string[]): string | undefined {
-    const parentSet = new Set(parent);
-    const ourSet = new Set(ours);
-    for (const key of ourSet) {
-        if (!parentSet.has(key)) {
-            return `+${key}`;
-        }
-    }
-    for (const key of parentSet) {
-        if (!ourSet.has(key)) {
-            return `-${key}`;
-        }
-    }
-    return undefined;
-}
-
 /**
  * Compare the parent request with ours.
  *
@@ -154,70 +146,64 @@ export function diffRequestPrefixes(
     parent: PayloadFingerprint,
     ours: PayloadFingerprint,
 ): PrefixDiff {
-    const base: PrefixDiff = {
-        prefixUsable: true,
-        firstDivergence: "tail",
-        parentMessageCount: parent.messageHashes.length,
-        ourMessageCount: ours.messageHashes.length,
-        commonPrefixMessages: 0,
-    };
+    const divergences: string[] = [];
+    const shared = Math.min(parent.messageHashes.length, ours.messageHashes.length);
+    let commonPrefixMessages = 0;
+    let firstDetail: { parent?: string; ours?: string } = {};
 
-    const keyDifference = firstKeyDifference(parent.keys, ours.keys);
-    if (keyDifference) {
-        return { ...base, prefixUsable: false, firstDivergence: `keys:${keyDifference}` };
-    }
     if (parent.model !== ours.model) {
-        return {
-            ...base,
-            prefixUsable: false,
-            firstDivergence: "model",
-            parent: parent.model,
-            ours: ours.model,
-        };
+        divergences.push("model");
+        firstDetail = { parent: parent.model, ours: ours.model };
     }
     if (parent.systemChars !== ours.systemChars || parent.system !== ours.system) {
-        return {
-            ...base,
-            prefixUsable: false,
-            firstDivergence: "system",
-            parent: `${String(parent.systemChars)} chars: ${parent.system}`,
-            ours: `${String(ours.systemChars)} chars: ${ours.system}`,
-        };
+        divergences.push("system");
+        firstDetail = firstDetail.parent
+            ? firstDetail
+            : {
+                  parent: `${String(parent.systemChars)} chars: ${parent.system}`,
+                  ours: `${String(ours.systemChars)} chars: ${ours.system}`,
+              };
     }
     if (parent.toolsHash !== ours.toolsHash) {
-        return {
-            ...base,
-            prefixUsable: false,
-            firstDivergence:
-                parent.toolNames.join(",") === ours.toolNames.join(",")
-                    ? "tools(body)"
-                    : `tools(names): ${parent.toolNames.join(",")} vs ${ours.toolNames.join(",")}`,
-        };
+        divergences.push(
+            parent.toolNames.join(",") === ours.toolNames.join(",")
+                ? "tools(body)"
+                : `tools(names): ${parent.toolNames.join(",")} vs ${ours.toolNames.join(",")}`,
+        );
     }
 
-    const shared = Math.min(parent.messageHashes.length, ours.messageHashes.length);
     for (let index = 0; index < shared; index += 1) {
-        if (parent.messageHashes[index] !== ours.messageHashes[index]) {
-            return {
-                ...base,
-                prefixUsable: false,
-                firstDivergence: `messages[${String(index)}] (${parent.messageRoles[index]})`,
-                commonPrefixMessages: index,
-            };
+        if (parent.messageHashes[index] === ours.messageHashes[index]) {
+            commonPrefixMessages += 1;
+            continue;
         }
+        divergences.push(`messages[${String(index)}] (${parent.messageRoles[index]})`);
+        break;
+    }
+    if (ours.messageHashes.length < parent.messageHashes.length) {
+        // We sent less than the parent already had: a rewind rather than an extension.
+        divergences.push("rewind");
     }
 
-    const extra = ours.messageHashes.length - parent.messageHashes.length;
-    if (extra < 0) {
-        // We sent less than the parent had already sent: a rewind, not an extension.
-        return {
-            ...base,
-            prefixUsable: false,
-            firstDivergence: "rewind",
-            commonPrefixMessages: shared,
-        };
-    }
-    return { ...base, commonPrefixMessages: shared };
+    const contentMismatch = divergences.length > 0;
+    return {
+        prefixUsable: !contentMismatch,
+        firstDivergence: contentMismatch ? (divergences[0] as string) : "tail",
+        divergences,
+        parameters: parameterDifferences(parent.keys, ours.keys),
+        ...firstDetail,
+        parentMessageCount: parent.messageHashes.length,
+        ourMessageCount: ours.messageHashes.length,
+        commonPrefixMessages,
+    };
+}
+
+function parameterDifferences(parent: string[], ours: string[]): string[] {
+    const parentSet = new Set(parent);
+    const ourSet = new Set(ours);
+    const added = [...ourSet].filter((key) => !parentSet.has(key)).map((key) => `+${key}`);
+    const removed = [...parentSet].filter((key) => !ourSet.has(key)).map((key) => `-${key}`);
+    return [...added, ...removed];
 }
 
 /** A compact, loggable summary of a fingerprint: never the payload itself. */

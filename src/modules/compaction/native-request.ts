@@ -1,6 +1,5 @@
 import type { Context, Message, Tool } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
-import { buildSessionContext, convertToLlm } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 
 import { estimateTextTokens } from "./text";
 
@@ -27,12 +26,6 @@ export function activeToolDefinitions(pi: ExtensionAPI): Tool[] {
         tools.push({ name: info.name, description: info.description, parameters: info.parameters });
     }
     return tools;
-}
-
-/** The live, compaction-aware context as the provider last saw it, with pi's custom roles flattened away. */
-export function liveContextMessages(ctx: ExtensionContext): Message[] {
-    const entries = ctx.sessionManager.getBranch();
-    return convertToLlm(buildSessionContext(entries).messages);
 }
 
 /** Conservative chars/4 estimate over the exact payload being assembled, matching pi's own heuristic. */

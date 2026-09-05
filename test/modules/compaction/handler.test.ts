@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { CompactionPreparation } from "../../../src/modules/compaction/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -15,18 +16,18 @@ import {
     toolCallResponse,
     userMessage,
 } from "../../helpers/compaction-doubles";
-import type { CompactionPreparation } from "../../../src/modules/compaction/types";
 import { stubModel } from "../../helpers/pi-stub";
 
 const SYSTEM_PROMPT = "the live system prompt";
 const SESSION_ID = "session-1";
+const KEPT_TEXT = "and keep this turn in context";
 
-/** Long enough that the fallback's per-result cap bites, so the two strategies visibly differ. */
+/** Long enough that the fallback's per-result cap bites, so the two stages visibly differ. */
 const READ_BODY = "export const registerCompactionExtension = () => {};\n".repeat(40);
 
 type ResponseFactory = () => Promise<ReturnType<typeof summaryResponse>>;
 
-describe("compaction handler", () => {
+describe("compaction stages", () => {
     let root = "";
 
     beforeEach(() => {
@@ -42,19 +43,22 @@ describe("compaction handler", () => {
         rmSync(root, { recursive: true, force: true });
     });
 
-    function build(input: {
-        responses: ResponseFactory[];
-        notify?: (message: string, level?: "info" | "warning" | "error") => void;
-        hasUI?: boolean;
-        contextWindow?: number;
-        branch?: SessionEntry[];
-        span?: ReturnType<typeof sampleSpan>;
-        preparation?: Partial<CompactionPreparation>;
-        config?: Record<string, unknown>;
-        signal?: AbortSignal;
-        activeTools?: string[];
-        branchThrows?: Error;
-    }) {
+    function build(
+        input: {
+            responses: ResponseFactory[];
+            notify?: (message: string, level?: "info" | "warning" | "error") => void;
+            hasUI?: boolean;
+            contextWindow?: number;
+            branch?: SessionEntry[];
+            span?: ReturnType<typeof sampleSpan>;
+            kept?: ReturnType<typeof sampleKept>;
+            preparation?: Partial<CompactionPreparation>;
+            config?: Record<string, unknown>;
+            signal?: AbortSignal;
+            activeTools?: string[];
+            branchThrows?: Error;
+        } = { responses: [] },
+    ) {
         if (input.config) {
             const configPath = path.join(root, "compaction-config.json");
             writeFileSync(configPath, JSON.stringify(input.config));
@@ -67,8 +71,9 @@ describe("compaction handler", () => {
             sessionId: SESSION_ID,
             notify: input.notify,
             hasUI: input.hasUI,
-            preparation: input.preparation,
             span: input.span ?? sampleSpan(READ_BODY),
+            kept: input.kept,
+            preparation: input.preparation,
             branch: input.branch,
             signal: input.signal,
             activeTools: input.activeTools,
@@ -79,11 +84,26 @@ describe("compaction handler", () => {
         });
     }
 
-    it("sends the live context with the instruction appended and tools disabled", async () => {
-        const h = build({ responses: [async () => summaryResponse("## Goal\n\nstub summary")] });
+    const segmentSummary = async () =>
+        summaryResponse("## Goal\n\nsegment checkpoint from stage one");
+    const reducedSummary = async () => summaryResponse("## Goal\n\nreduced final checkpoint");
+
+    it("stage 1 reads the discarded span and not the retained tail", async () => {
+        const h = build({ responses: [segmentSummary, reducedSummary] });
         const payload = await h.compact();
 
-        expect(h.calls).toHaveLength(1);
+        expect(h.calls).toHaveLength(2);
+        expect(h.sentText(0)).toContain("fix the compaction module");
+        expect(h.sentText(0)).not.toContain(KEPT_TEXT);
+        expect(h.trailingInstruction(0)).toContain("retained as-is and are not included here");
+        expect(payload?.summary).toContain("reduced final checkpoint");
+        expect(payload?.details.route).toBe("two-stage");
+    });
+
+    it("stage 1 keeps the parent's system prompt, tools, and session, with calls disabled", async () => {
+        const h = build({ responses: [segmentSummary, reducedSummary] });
+        await h.compact();
+
         const { context } = h.calls[0];
         expect(context.systemPrompt).toBe(SYSTEM_PROMPT);
         expect(context.tools?.map((tool) => tool.name)).toEqual(["bash", "read"]);
@@ -92,29 +112,12 @@ describe("compaction handler", () => {
         expect(h.optionField(0, "sessionId")).toBe(SESSION_ID);
         // pi's history budget: 80% of the reserved window, capped by the model's own output limit.
         expect(h.optionField(0, "maxTokens")).toBe(8_192);
-
-        expect(h.sentText(0)).toContain("fix the compaction module");
         expect(h.trailingInstruction(0)).toContain("Do not call any tool");
-        expect(h.trailingInstruction(0)).toContain("last ~2 messages are retained verbatim");
         expect(h.trailingInstruction(0)).toContain("## Key Decisions");
-
-        expect(payload?.firstKeptEntryId).toBe("kept-1");
-        expect(payload?.tokensBefore).toBe(190_000);
-        expect(payload?.summary).toContain("stub summary");
-        expect(payload?.usage).toBeDefined();
     });
 
-    it("keeps active tool order rather than configured order", async () => {
-        const h = build({
-            responses: [async () => summaryResponse("## Goal\n\nstub summary")],
-            activeTools: ["agent", "read"],
-        });
-        await h.compact();
-        expect(h.calls[0].context.tools?.map((tool) => tool.name)).toEqual(["agent", "read"]);
-    });
-
-    it("sends the real tool call and its untruncated result", async () => {
-        const h = build({ responses: [async () => summaryResponse("## Goal\n\nstub summary")] });
+    it("sends the real tool call and its untruncated result to stage 1", async () => {
+        const h = build({ responses: [segmentSummary, reducedSummary] });
         await h.compact();
 
         const sent = h.calls[0].context.messages;
@@ -128,8 +131,29 @@ describe("compaction handler", () => {
         expect(result?.role === "toolResult" && textOf(result.content)).toBe(READ_BODY);
     });
 
+    it("stage 2 receives the minimized transcript plus stage 1's checkpoint", async () => {
+        const h = build({ responses: [segmentSummary, reducedSummary] });
+        await h.compact();
+
+        const { context } = h.calls[1];
+        expect(context.systemPrompt).not.toBe(SYSTEM_PROMPT);
+        expect(context.tools).toBeUndefined();
+        expect(h.optionField(1, "cacheRetention")).toBe("none");
+        expect(h.optionField(1, "sessionId")).not.toBe(SESSION_ID);
+
+        const request = h.requestText(1);
+        expect(request).toContain("[User]: fix the compaction module");
+        expect(request).toContain("more characters truncated]");
+        expect(request).not.toContain("reasoning the fallback must not carry");
+        expect(request).toContain(
+            "<segment-checkpoint>\n## Goal\n\nsegment checkpoint from stage one",
+        );
+        expect(request).toContain("Prefer the transcript where they disagree");
+        expect(request).not.toContain("<previous-summary>");
+    });
+
     it("appends the deterministic sections and keeps pi's file-list keys", async () => {
-        const h = build({ responses: [async () => summaryResponse("## Goal\n\nstub summary")] });
+        const h = build({ responses: [segmentSummary, reducedSummary] });
         const payload = await h.compact();
 
         expect(payload?.summary).toContain("## Verbatim Recent Requests");
@@ -142,111 +166,117 @@ describe("compaction handler", () => {
         expect(payload?.summary).toContain(
             "<modified-files>\nsrc/modules/compaction/index.ts\n</modified-files>",
         );
+        expect(payload?.firstKeptEntryId).toBe("kept-1");
+        expect(payload?.tokensBefore).toBe(190_000);
+        expect(payload?.usage).toBeDefined();
 
         expect(payload?.details).toMatchObject({
-            strategy: "native",
+            route: "two-stage",
             version: 1,
             model: "stub-model",
             provider: "anthropic",
             readFiles: ["src/index.ts"],
             modifiedFiles: ["src/modules/compaction/index.ts"],
             summarizedMessages: 4,
-            droppedBlocks: 0,
         });
     });
 
-    it("minimizes the transcript for overflow instead of re-sending a context that just failed", async () => {
-        const h = build({
-            responses: [async () => summaryResponse("## Goal\n\noverflow summary")],
-        });
-        const payload = await h.compact({ reason: "overflow" });
+    it("overflow skips stage 1 entirely", async () => {
+        const h = build({ responses: [reducedSummary] });
+        const payload = await h.compact({ reason: "overflow", willRetry: true });
 
         expect(h.calls).toHaveLength(1);
         expect(h.calls[0].context.tools).toBeUndefined();
-        expect(h.optionField(0, "cacheRetention")).toBe("none");
-        expect(h.optionField(0, "sessionId")).not.toBe(SESSION_ID);
-        expect(h.calls[0].context.systemPrompt).not.toBe(SYSTEM_PROMPT);
-
-        const request = h.requestText(0);
-        expect(request).toContain("[User]: fix the compaction module");
-        expect(request).toContain("[Tool result]: export const registerCompactionExtension");
-        expect(request).toContain("more characters truncated]");
-        expect(request).not.toContain("reasoning the fallback must not carry");
-        expect(request).not.toContain("<previous-summary>");
-        expect(request).toContain("No prior summary exists");
-        expect(payload?.details.strategy).toBe("serialized");
+        expect(h.requestText(0)).not.toContain("<segment-checkpoint>");
+        expect(payload?.details.route).toBe("serialized");
     });
 
-    it("carries the previous summary into the serialized request", async () => {
+    it("carries the previous checkpoint into the reduce", async () => {
         const h = build({
-            responses: [async () => summaryResponse("## Goal\n\nmerged summary")],
+            responses: [segmentSummary, reducedSummary],
             preparation: { previousSummary: "## Goal\n\nthe earlier checkpoint" },
         });
-        await h.compact({ reason: "overflow" });
+        await h.compact();
 
-        const request = h.requestText(0);
+        const segment = h.trailingInstruction(0);
+        expect(segment).toContain("An earlier compaction summary is part of this conversation");
+
+        const request = h.requestText(1);
         expect(request).toContain(
             "<previous-summary>\n## Goal\n\nthe earlier checkpoint\n</previous-summary>",
         );
-        expect(request).toContain("only NEW messages");
+        expect(request).toContain("Merge everything into it");
     });
 
-    it("cascades off a provider that answers the native request with a tool call", async () => {
+    it("reduces without a segment checkpoint when stage 1 answers with a tool call", async () => {
         const h = build({
-            responses: [
-                async () => toolCallResponse("read"),
-                async () => summaryResponse("## Goal\n\nserialized summary"),
-            ],
+            responses: [async () => toolCallResponse("read"), reducedSummary],
         });
         const payload = await h.compact();
 
         expect(h.calls).toHaveLength(2);
         expect(h.optionField(0, "toolChoice")).toBe("none");
-        expect(h.calls[1].context.tools).toBeUndefined();
-        expect(payload?.summary).toContain("serialized summary");
-        expect(payload?.details.strategy).toBe("serialized");
+        expect(h.requestText(1)).not.toContain("<segment-checkpoint>");
+        expect(payload?.summary).toContain("reduced final checkpoint");
+        expect(payload?.details.route).toBe("serialized");
     });
 
-    it("cascades when the live context plus instruction will not fit", async () => {
+    it("persists stage 1's own checkpoint when the reduce fails", async () => {
+        const notices: string[] = [];
         const h = build({
-            responses: [async () => summaryResponse("## Goal\n\nnarrow summary")],
+            hasUI: true,
+            notify: (message) => notices.push(String(message)),
+            responses: [segmentSummary, async () => summaryResponse("   ")],
+        });
+        const payload = await h.compact();
+
+        expect(h.calls).toHaveLength(2);
+        expect(payload?.summary).toContain("segment checkpoint from stage one");
+        expect(payload?.details.route).toBe("native");
+        expect(notices[0]).toContain("reduce stage failed");
+    });
+
+    it("skips stage 1 when the span plus instruction will not fit", async () => {
+        const h = build({
+            responses: [reducedSummary],
             contextWindow: 4_000,
         });
         const payload = await h.compact();
 
         expect(h.calls).toHaveLength(1);
         expect(h.calls[0].context.tools).toBeUndefined();
-        expect(payload?.details.strategy).toBe("serialized");
+        expect(payload?.details.route).toBe("serialized");
     });
 
-    it("goes native on a threshold-sized context, which is the case that triggered compaction", async () => {
-        // 750k characters estimates at ~187.5k tokens: above 200_000 - 16_384 = 183_616, where pi's threshold
-        // fires, and below 200_000 - 8_192 = 191_808, the room the summary output itself needs. A gate that
-        // re-reserved pi's whole `reserveTokens` would reject this request and quietly send every threshold
-        // compaction through the serialized path instead.
-        const thresholdSized = messageChain([
-            { id: "big-1", message: userMessage("q".repeat(750_000)) },
-            { id: "kept-1", message: sampleKept()[0] },
+    it("still runs stage 1 when only the retained tail is too large to resend", async () => {
+        // A 1.2M-character retained tail estimates at ~300k tokens, so a stage that re-sent the whole live
+        // context would skip itself here. Truncating at the cut point is what keeps it runnable.
+        const hugeKept = userMessage("k".repeat(1_200_000));
+        const branch = messageChain([
+            { id: "span-0", message: userMessage("fix the compaction module") },
+            { id: "kept-1", message: hugeKept },
         ]);
         const h = build({
-            responses: [async () => summaryResponse("## Goal\n\nthreshold summary")],
-            branch: thresholdSized,
+            responses: [segmentSummary, reducedSummary],
+            branch,
+            span: [userMessage("fix the compaction module")],
+            kept: [hugeKept],
         });
         const payload = await h.compact();
 
-        expect(h.calls).toHaveLength(1);
-        expect(h.calls[0].context.tools?.map((tool) => tool.name)).toEqual(["bash", "read"]);
-        expect(payload?.details.strategy).toBe("native");
+        expect(h.calls).toHaveLength(2);
+        expect(h.sentText(0)).not.toContain("kkkk");
+        expect(payload?.details.route).toBe("two-stage");
     });
 
-    it("reports to pi's default compaction when both strategies fail", async () => {
+    it("reports to pi's default compaction when both stages fail", async () => {
         const notices: Array<{ message: string; level: string | undefined }> = [];
         const h = build({
             hasUI: true,
             notify: (message, level) => notices.push({ message, level }),
             responses: [
                 async () => {
-                    throw new Error("provider unavailable");
+                    throw new Error("stage one unavailable");
                 },
                 async () => summaryResponse("   "),
             ],
@@ -255,10 +285,8 @@ describe("compaction handler", () => {
         expect(await h.compact()).toBeUndefined();
         expect(h.calls).toHaveLength(2);
         expect(notices[0]?.message).toContain("fell back to pi's default");
-        expect(notices[0]?.message).toContain("native: provider unavailable");
-        expect(notices[0]?.message).toContain(
-            "serialized: summarization returned an empty summary",
-        );
+        expect(notices[0]?.message).toContain("segment: stage one unavailable");
+        expect(notices[0]?.message).toContain("reduce: summarization returned an empty summary");
         expect(notices[0]?.level).toBe("warning");
     });
 
@@ -267,7 +295,7 @@ describe("compaction handler", () => {
         const h = build({
             hasUI: true,
             notify: (message) => notices.push(String(message)),
-            responses: [async () => summaryResponse("unused")],
+            responses: [segmentSummary],
             branchThrows: new Error("session unreadable"),
         });
 
@@ -294,17 +322,13 @@ describe("compaction handler", () => {
     });
 
     it("installs only the compaction hook plus the payload capture it diffs against", () => {
-        const h = build({ responses: [async () => summaryResponse("unused")] });
-        // A child lists this extension directly, so what it installs has to stay this small.
+        const h = build();
         expect(h.piStub.order).toEqual(["on:before_provider_request", "on:session_before_compact"]);
         expect(h.piStub.handlersFor("session_before_compact")).toHaveLength(1);
     });
 
     it("stays out of the way when disabled by config", async () => {
-        const h = build({
-            responses: [async () => summaryResponse("unused")],
-            config: { enabled: false },
-        });
+        const h = build({ responses: [segmentSummary], config: { enabled: false } });
 
         expect(await h.compact()).toBeUndefined();
         expect(h.calls).toHaveLength(0);
@@ -312,27 +336,24 @@ describe("compaction handler", () => {
 
     it("honors the serialized limits from config", async () => {
         const h = build({
-            responses: [async () => summaryResponse("## Goal\n\nconfigured summary")],
-            config: {
-                keepThinking: true,
-                serializedToolResultChars: 20,
-                serializedNoteChars: 0,
-            },
+            responses: [segmentSummary, reducedSummary],
+            config: { keepThinking: true, serializedToolResultChars: 20, serializedNoteChars: 0 },
         });
-        await h.compact({ reason: "overflow" });
+        await h.compact();
 
-        const request = h.requestText(0);
+        const request = h.requestText(1);
         expect(request).toContain("reasoning the fallback must not carry");
         expect(request).toContain("more characters truncated]");
     });
 
-    it("passes manual /compact instructions to the model", async () => {
-        const h = build({ responses: [async () => summaryResponse("## Goal\n\nfocused summary")] });
+    it("passes manual /compact instructions to both stages", async () => {
+        const h = build({ responses: [segmentSummary, reducedSummary] });
         await h.compact({ customInstructions: "keep the database migration notes" });
 
         expect(h.trailingInstruction(0)).toContain(
             "Additional focus: keep the database migration notes",
         );
+        expect(h.requestText(1)).toContain("Additional focus: keep the database migration notes");
     });
 });
 
