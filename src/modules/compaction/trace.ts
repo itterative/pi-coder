@@ -7,6 +7,7 @@ import { uuidv7 } from "@earendil-works/pi-ai";
 import { COMPACTION_TRACE_PATH } from "../../common/constants";
 import { isAgentTraceEnabled } from "../../common/trace";
 import type { CompactionConfig } from "./config";
+import type { SummarizationFailureCause } from "./failure";
 import type { SummarizationStrategy } from "./summarize";
 import type { SummarizationReason } from "./types";
 
@@ -39,7 +40,18 @@ export type CompactionAttemptOutcome = "accepted" | "rejected" | "skipped";
 
 /** How the compaction as a whole ended. */
 export type CompactionTraceOutcome =
-    "two-stage" | "native" | "serialized" | "core-default" | "cancelled" | "disabled";
+    | "two-stage"
+    | "native"
+    | "serialized"
+    | "core-default"
+    | "cancelled"
+    /**
+     * Stopped on purpose: the failure named a cause that no further request can fix (quota, rejected
+     * credentials, rate limit), so the cascade and core's default path were both skipped. Distinct from
+     * `cancelled`, which is the user pressing the key.
+     */
+    | "abandoned"
+    | "disabled";
 
 export interface CompactionTraceUsage {
     input: number;
@@ -82,6 +94,9 @@ export interface CompactionAttemptResult {
      * complete one.
      */
     stopReason?: StopReason;
+    /** Why this attempt failed, and how many resends a `transient` cause bought before it was given up on. */
+    cause?: SummarizationFailureCause;
+    retries?: number;
 }
 
 export interface CompactionFinalFields {
@@ -107,6 +122,9 @@ export interface CompactionTraceRecord {
     detail?: string;
     /** Present on an attempt that received a reply: how the provider said that reply ended. */
     stopReason?: StopReason;
+    /** Why an attempt failed, and how many resends a transient cause bought first. */
+    cause?: SummarizationFailureCause;
+    retries?: number;
     /** The stage payload: the model's answer, then the composed summary. */
     text?: string;
     usage?: CompactionTraceUsage;
@@ -247,6 +265,8 @@ export function createCompactionTraceRecorder(
                 outcome: result.outcome,
                 detail: result.detail,
                 stopReason: result.stopReason,
+                cause: result.cause,
+                retries: result.retries,
                 usage: usageFields(result.usage),
             });
         },

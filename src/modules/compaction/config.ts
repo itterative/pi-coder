@@ -27,6 +27,18 @@ export interface CompactionConfig {
     serializedErrorResultChars: number;
     /** Characters kept per hidden or system custom message. Zero omits them entirely. */
     serializedNoteChars: number;
+    /**
+     * Resends a summarization request this many extra times, and only for a cause a wait can clear
+     * (`transient`): 5xx, transport, a stream that ended early. Quota, rejected credentials, and rate limits are
+     * never resent, and overflow moves straight to the next rung.
+     *
+     * Defaults lower than core's agent-retry settings (3 retries from 2000ms, so 2s/4s/8s) on purpose: this
+     * stall happens inside a turn the user is waiting on, and a compaction that cannot recover hands over
+     * anyway. Two retries from 1000ms costs at most 3s per stage.
+     */
+    retryMaxRetries: number;
+    /** First backoff, doubling per attempt. */
+    retryBaseDelayMs: number;
     /** Reserved for the planned side-model strategy; unused by the current cascade. */
     model?: string;
     /** Write the per-stage compaction trace under `.state/`. `isAgentTraceEnabled()` gates it as well. */
@@ -46,6 +58,8 @@ export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
     serializedToolResultChars: 400,
     serializedErrorResultChars: 1_000,
     serializedNoteChars: 200,
+    retryMaxRetries: 2,
+    retryBaseDelayMs: 1_000,
     traceEnabled: true,
     traceMaxBytes: 1_048_576,
 };
@@ -139,6 +153,9 @@ function readConfigFile(filePath: string | undefined): Partial<CompactionConfig>
         serializedToolResultChars: nonNegativeNumberField(record.serializedToolResultChars),
         serializedErrorResultChars: nonNegativeNumberField(record.serializedErrorResultChars),
         serializedNoteChars: nonNegativeNumberField(record.serializedNoteChars),
+        // `0` is a real value here ("never resend"), so it needs the reader that keeps zero.
+        retryMaxRetries: nonNegativeNumberField(record.retryMaxRetries),
+        retryBaseDelayMs: positiveNumberField(record.retryBaseDelayMs),
         traceEnabled: booleanField(record.traceEnabled),
         traceMaxBytes: positiveNumberField(record.traceMaxBytes),
         ...(model ? { model } : {}),
@@ -181,6 +198,10 @@ export function loadCompactionConfig(cwd: string): CompactionConfig {
             project.serializedNoteChars ??
             global.serializedNoteChars ??
             defaults.serializedNoteChars,
+        retryMaxRetries:
+            project.retryMaxRetries ?? global.retryMaxRetries ?? defaults.retryMaxRetries,
+        retryBaseDelayMs:
+            project.retryBaseDelayMs ?? global.retryBaseDelayMs ?? defaults.retryBaseDelayMs,
         traceEnabled: project.traceEnabled ?? global.traceEnabled ?? defaults.traceEnabled,
         traceMaxBytes: project.traceMaxBytes ?? global.traceMaxBytes ?? defaults.traceMaxBytes,
         ...(model ? { model } : {}),

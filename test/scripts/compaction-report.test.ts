@@ -84,6 +84,7 @@ interface ReportJson {
         routes: Record<string, number>;
         failures: Record<string, number>;
         flags: Record<string, number>;
+        causes: Record<string, number>;
         parameters: Record<string, number>;
         divergences: Record<string, number>;
         models: Record<string, number>;
@@ -381,6 +382,84 @@ describe("compaction-report script", () => {
         expect(keys).toContain("summary-truncated");
         expect(keys).not.toContain("degenerate-final-summary");
         expect(runText(["--suspect"]).stdout).toContain("stage 2 hit the output limit");
+    });
+
+    /**
+     * Before classification, an exhausted quota and a context overflow shared a row in ATTEMPT FAILURES because
+     * their normalized messages looked alike, and the right response to each is the opposite. These are the rows
+     * and flags that keep them apart.
+     */
+    it("separates the causes that end a cascade from the ones that only redirect it", () => {
+        const quota = recorder("sess-quota");
+        quota.prefix(healthyPrefix());
+        quota.attempt("native", nativeFields(), {
+            outcome: "rejected",
+            detail: "429 insufficient_quota: check your billing details",
+            cause: "quota",
+            retries: 0,
+            usage: usage(0, 0),
+        });
+        quota.attempt("serialized", nativeFields({ toolCount: 0, messageCount: 1 }), {
+            outcome: "skipped",
+            detail: "not attempted: quota (an account limit: every rung would fail the same way)",
+            cause: "quota",
+            retries: 0,
+        });
+        quota.outcome("abandoned", "segment: quota");
+
+        const overflow = recorder("sess-overflow");
+        overflow.prefix(healthyPrefix());
+        overflow.attempt("native", nativeFields(), {
+            outcome: "rejected",
+            detail: "400 BadRequest: This model's maximum context length is 131072 tokens",
+            cause: "overflow",
+            retries: 0,
+            usage: usage(0, 0),
+        });
+        overflow.attempt(
+            "serialized",
+            nativeFields({ toolCount: 0, messageCount: 1 }),
+            accepted({}),
+        );
+        overflow.final("serialized", checkpoint("## Goal", 4000), finalFields());
+        overflow.outcome("serialized");
+
+        const report = parseReport();
+        expect(flagKeys(report, "sess-quota")).toContain("compaction-abandoned");
+        expect(flagKeys(report, "sess-overflow")).not.toContain("compaction-abandoned");
+        // A deliberate stop is not a handover: `fell-back` is about core owning the result.
+        expect(flagKeys(report, "sess-quota")).not.toContain("fell-back");
+        expect(report.aggregates.causes["native rejected quota"]).toBe(1);
+        expect(report.aggregates.causes["native rejected overflow"]).toBe(1);
+        expect(report.aggregates.routes.abandoned).toBe(1);
+
+        const text = runText();
+        expect(text.stdout).toContain("CAUSES");
+        expect(text.stdout).toContain("[quota]");
+        expect(text.stdout).toContain("[overflow]");
+    });
+
+    it("flags a transient failure that spent its whole retry budget", () => {
+        const trace = recorder("sess-retries");
+        trace.prefix(healthyPrefix());
+        trace.attempt("native", nativeFields(), {
+            outcome: "rejected",
+            detail: "502 upstream connect error",
+            cause: "transient",
+            retries: 2,
+            usage: usage(0, 0),
+        });
+        trace.attempt("serialized", nativeFields({ toolCount: 0, messageCount: 1 }), {
+            outcome: "rejected",
+            detail: "502 upstream connect error",
+            cause: "transient",
+            retries: 2,
+            usage: usage(0, 0),
+        });
+        trace.outcome("core-default", "segment: 502; reduce: 502");
+
+        expect(flagKeys(parseReport(), "sess-retries")).toContain("retry-exhausted");
+        expect(runText(["--suspect"]).stdout).toContain("resent 2x and still failed");
     });
 
     it("applies the text thresholds uniformly across runs", () => {

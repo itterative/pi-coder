@@ -341,6 +341,8 @@ function describeRun(id, group) {
                 strategy: record.strategy ?? "(none)",
                 outcome: record.outcome ?? "(none)",
                 stopReason: record.stopReason,
+                cause: record.cause,
+                retries: record.retries,
                 detail: record.detail,
                 usage: record.usage,
                 fields: record.attempt ?? {},
@@ -393,6 +395,9 @@ function describeRun(id, group) {
         final,
         route,
         routeDetail,
+        // The last cause the run named: for a run that stopped, that is the reason it stopped, and for a run
+        // that went through it is a leftover from a rung that failed before a later one succeeded.
+        cause: [...attempts].reverse().find((attempt) => attempt.cause !== undefined)?.cause,
         provider: declared?.fields.provider,
         model: declared?.fields.model,
         ...runCost(attempts),
@@ -448,7 +453,11 @@ function failureKey(attempt) {
         .slice(0, 12)
         .join(" ");
 
-    return `${attempt.strategy} ${attempt.outcome}: ${normalized}`;
+    // The cause leads the key: before classification, an exhausted quota and a context overflow shared a row
+    // because their normalized messages looked alike, which is the ambiguity this whole layer exists to remove.
+    const cause = attempt.cause === undefined ? "" : ` [${attempt.cause}]`;
+
+    return `${attempt.strategy} ${attempt.outcome}${cause}: ${normalized}`;
 }
 
 function newGroup() {
@@ -467,6 +476,7 @@ function addRun(group, run, example) {
 
 function analyzeRuns(runs, thresholds) {
     const routes = new Map();
+    const causes = new Map();
     const failures = new Map();
     const flags = new Map();
     const parameters = new Map();
@@ -484,6 +494,16 @@ function analyzeRuns(runs, thresholds) {
         models.set(modelKey, number(models.get(modelKey)) + 1);
 
         for (const attempt of run.attempts) {
+            if (attempt.cause !== undefined) {
+                addRun(
+                    bump(
+                        causes,
+                        `${attempt.strategy} ${attempt.outcome} ${attempt.cause}`,
+                        newGroup,
+                    ),
+                    run,
+                );
+            }
             if (attempt.outcome === "accepted") {
                 continue;
             }
@@ -521,6 +541,7 @@ function analyzeRuns(runs, thresholds) {
 
     return {
         routes,
+        causes,
         failures,
         flags,
         parameters,
@@ -673,6 +694,29 @@ function flagRun(run, options) {
         out.push({
             key: "blocks-dropped",
             detail: `${dropped} transcript blocks left out of the reduce request`,
+        });
+    }
+
+    // Deliberate stops are not fallbacks: core never got the session. Named separately because the fix for
+    // each is outside this codebase - a plan, a key, or a quieter request - and a run that stopped for quota
+    // must not read as a pipeline defect.
+    if (run.route === "abandoned") {
+        out.push({
+            key: "compaction-abandoned",
+            detail: `${run.cause ?? "(no cause named)"} ${run.routeDetail ?? ""}`.trim(),
+        });
+    }
+
+    // A transient failure that used its whole retry budget is the provider being unwell for longer than our
+    // backoff tolerates; worth seeing as a count, because it is the signal to raise the budget or to stop
+    // paying it.
+    const exhausted = run.attempts.find(
+        (attempt) => attempt.outcome !== "accepted" && number(attempt.retries) > 0,
+    );
+    if (exhausted) {
+        out.push({
+            key: "retry-exhausted",
+            detail: `${exhausted.strategy} resent ${String(exhausted.retries)}x and still failed (cause=${exhausted.cause ?? "?"})`,
         });
     }
 
@@ -1014,10 +1058,19 @@ function renderReport(runs, analysis, stats, options) {
     out.push(
         renderCountSection(
             "ROUTES",
-            "how each compaction ended; core-default/cancelled means the pipeline did not own the result",
+            "how each compaction ended; core-default/cancelled/abandoned means the pipeline did not own the result",
             analysis.routes,
             options,
             routeRow,
+        ),
+    );
+    out.push(
+        renderCountSection(
+            "CAUSES",
+            "why each request failed, as classified by pi-ai's own overflow and retry predicates plus our cause policy",
+            analysis.causes,
+            options,
+            (key) => key,
         ),
     );
     out.push(
@@ -1227,6 +1280,7 @@ function toPlainRun(run, flags) {
         durationMs: run.durationMs,
         route: run.route,
         routeDetail: run.routeDetail,
+        cause: run.cause,
         provider: run.provider,
         model: run.model,
         freshTokens: run.freshTokens,
@@ -1241,6 +1295,9 @@ function toPlainRun(run, flags) {
         attempts: run.attempts.map((attempt) => ({
             strategy: attempt.strategy,
             outcome: attempt.outcome,
+            cause: attempt.cause,
+            retries: attempt.retries,
+            stopReason: attempt.stopReason,
             detail: attempt.detail,
             gapMs: attempt.gapMs,
             usage: attempt.usage,
@@ -1314,6 +1371,7 @@ function main() {
                         routes: counts(analysis.routes),
                         failures: counts(analysis.failures),
                         flags: counts(analysis.flags),
+                        causes: counts(analysis.causes),
                         parameters: counts(analysis.parameters),
                         divergences: counts(analysis.divergences),
                         models: counts(analysis.models),

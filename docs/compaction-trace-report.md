@@ -11,10 +11,10 @@ All records of one compaction share a run id, which is what lets the report grou
 | Stage            | What it carries                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `prefix`         | how the rebuilt stage-1 request compared to what pi actually sent, answered by the retained hash ladder: `reference` (`chain`/`none`), `prefixUsable` (**absent**, never false, when nothing was comparable), `commonPrefixMessages` = deepest reference depth that agreed, `comparableDepth`, `referenceDepth`, `observations`, `verifiedThrough`, `truncated`, `parameters[]`, `historyTruncated`, `modelDivergence`, and a fingerprint of our own request |
-| `attempt`        | one per strategy: the request-side numbers (`messageCount`, `estimatedTokens`, `reportedContextTokens`, `contextWindow`, `maxTokens`, `toolCount`, `copiedEntries`, `serializedChars`, `droppedBlocks`, `segmentSummaryChars`, `previousSummaryChars`) and how it ended (`accepted` / `rejected` / `skipped` with `detail`), with `usage`                                                                                                                    |
+| `attempt`        | one per strategy: the request-side numbers (`messageCount`, `estimatedTokens`, `reportedContextTokens`, `contextWindow`, `maxTokens`, `toolCount`, `copiedEntries`, `serializedChars`, `droppedBlocks`, `segmentSummaryChars`, `previousSummaryChars`) and how it ended (`accepted` / `rejected` / `skipped` with `detail`), with `usage`, `stopReason` whenever a reply arrived, `cause`, and `retries`                                                     |
 | `model_response` | what the model answered with, before the harness appended anything                                                                                                                                                                                                                                                                                                                                                                                           |
 | `final_summary`  | the exact persisted text, with `firstKeptEntryId`, `tokensBefore`, `summarizedMessages`, `droppedBlocks`, and the file counts the appended sections were built from                                                                                                                                                                                                                                                                                          |
-| `outcome`        | how the whole compaction ended: `two-stage`, `native`, `serialized`, `core-default`, `cancelled`, `disabled`                                                                                                                                                                                                                                                                                                                                                 |
+| `outcome`        | how the whole compaction ended: `two-stage`, `native`, `serialized`, `core-default`, `cancelled`, `abandoned` (stopped on purpose: the cause named the account, not the request), `disabled`                                                                                                                                                                                                                                                                 |
 
 Costs are development numbers only, and they are counted twice by design: a stage-1 resend shows up here as
 `usage.input`, and the same tokens may also be counted on the parent's next turn elsewhere.
@@ -45,6 +45,12 @@ The report body renders one block per run: the prefix verdict, one line per stag
 numbers and `in/cached/cw/out`, the persisted summary's size and cut point, and any flags. `+Ns` after a
 stage is the gap to the previous record, which is as close to per-stage latency as the trace gets.
 
+`CAUSES` aggregates `strategy outcome cause`, and `ATTEMPT FAILURES` keys each row by its cause
+(`native rejected [quota]: ...`) before normalizing the message. That ordering matters: the two failures that
+look most alike in free text — context overflow and an exhausted account — call for opposite responses, so a
+table that groups them hides the one number that decides it. A skipped stage-2 attempt reading
+`not attempted: <cause>` is the trace's way of distinguishing a deliberate stop from a missing budget.
+
 ## What the flags mean
 
 Each flag names a failure already observed in a live trace, so the report can point at the wrong runs instead
@@ -59,6 +65,8 @@ of leaving the numbers to be compared by eye. They are thresholds, not verdicts 
 | `span-not-truncated`       | stage 1 sent the whole live context instead of the truncated span, i.e. the cut point was never found                                      |
 | `degenerate-native-output` | stage 1 was accepted but answered with far too little text — the shape of a model replying about the instruction rather than to it         |
 | `degenerate-final-summary` | what got persisted is implausibly small, whatever route produced it                                                                        |
+| `compaction-abandoned`     | the run stopped on a cause no request can fix (quota, rejected credentials, rate limit); not a handover, so `fell-back` stays clear        |
+| `retry-exhausted`          | a transient failure used its whole backoff budget and still failed, so the provider was unwell longer than we wait                         |
 | `summary-truncated`        | stage 2 hit the output limit, so the persisted summary is missing its tail. Reading the text cannot tell this from a brief complete answer |
 | `reduce-inflated`          | stage 2's output is many times larger than the checkpoint it was handed, so it wrote a new summary instead of merging one                  |
 | `cache-read-zero`          | a large fresh prompt with no cache read: the span was paid for again                                                                       |

@@ -10,6 +10,7 @@ import {
     createCompactionHarness,
     messageChain,
     sampleKept,
+    failedResponse,
     summaryResponse,
     toolCallResponse,
     truncatedResponse,
@@ -34,7 +35,10 @@ describe("compaction trace", () => {
     beforeEach(() => {
         root = mkdtempSync(path.join(tmpdir(), "pi-coder-compaction-trace-"));
         tracePath = path.join(root, TRACE_FILE);
-        vi.stubEnv("COMPACTION_CONFIG_PATH", path.join(root, "absent.json"));
+        // See the note in handler.test.ts: the retry budget is zeroed so no test waits on a real backoff.
+        const configDefaults = path.join(root, "test-defaults.json");
+        writeFileSync(configDefaults, JSON.stringify({ retryMaxRetries: 0 }));
+        vi.stubEnv("COMPACTION_CONFIG_PATH", configDefaults);
         vi.stubEnv("COMPACTION_CONFIG_PATH_GLOBAL", path.join(root, "absent-global.json"));
         // test/setup.ts disables the trace so no suite can write this checkout's .state; re-enable it here
         // pointed at the suite's own temporary directory.
@@ -239,6 +243,42 @@ describe("compaction trace", () => {
         expect(readRecords(tracePath).find((record) => record.stage === "outcome")?.outcome).toBe(
             "serialized",
         );
+    });
+
+    /**
+     * The cause is what makes these records mineable: `detail` is a free-text message from some provider's own
+     * wording, while `cause` is the one word that says whether the next rung had any chance.
+     */
+    it("records the cause that decided the cascade, and the rung it stopped", async () => {
+        const harness = build({
+            responses: [
+                async () =>
+                    failedResponse("error", "429 insufficient_quota: check your billing details"),
+                async () => {
+                    throw new TypeError("the reduce must not be attempted");
+                },
+            ],
+        });
+        await harness.compact();
+
+        const records = readRecords(tracePath);
+        const attempts = records.filter((record) => record.stage === "attempt");
+        expect(
+            attempts.map((record) => [
+                record.strategy,
+                record.outcome,
+                record.cause,
+                record.retries,
+            ]),
+        ).toEqual([
+            ["native", "rejected", "quota", 0],
+            // The rung that never ran is recorded as skipped rather than left out, so an absent request cannot
+            // be mistaken for an absent budget: the cascade stopped here on purpose.
+            ["serialized", "skipped", "quota", 0],
+        ]);
+        expect(attempts[1]?.detail).toContain("not attempted: quota");
+        expect(attempts[1]?.detail).toContain("an account limit");
+        expect(records.find((record) => record.stage === "outcome")?.outcome).toBe("abandoned");
     });
 
     it("records a skipped attempt with the estimate that made it unfit", async () => {

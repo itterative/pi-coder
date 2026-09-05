@@ -35,7 +35,12 @@ import {
     formatFileLists,
 } from "./sections";
 import { buildSpanSession, skippedEntryCount, spanContextEntries } from "./span-session";
-import { summarizeNatively, summarizeSerializedTranscript } from "./summarize";
+import { type SummarizationFailureCause, causeRationale, isTerminalCause } from "./failure";
+import {
+    summarizeNatively,
+    summarizeSerializedTranscript,
+    type SummarizationRetryPolicy,
+} from "./summarize";
 import {
     type CompactionAttemptFields,
     type CompactionPrefixFields,
@@ -102,7 +107,28 @@ interface StageContext {
     trace: CompactionTraceRecorder;
 }
 
-type StageResult = { ok: true; text: string; usage?: Usage } | { ok: false; detail: string };
+/**
+ * What one rung produced. `cause` is absent when no reply was ever seen — a request the fit gate skipped has
+ * no provider failure to name — and the cascade treats an absent cause as not terminal, since there is nothing
+ * it learned that says the next rung would fail too.
+ */
+type StageResult =
+    | { ok: true; text: string; usage?: Usage; retries: number }
+    | {
+          ok: false;
+          detail: string;
+          cause?: SummarizationFailureCause;
+          retries: number;
+      };
+
+/**
+ * Resend policy for one compaction: only a cause the provider's own wording calls transient earns a retry.
+ *
+ * `sleep` is left unset so the production backoff is the real, abort-aware one; tests inject their own.
+ */
+function retryPolicy(config: CompactionConfig): SummarizationRetryPolicy {
+    return { maxRetries: config.retryMaxRetries, baseDelayMs: config.retryBaseDelayMs };
+}
 
 /** pi's own budget for a history summary: most of the reserved window, capped by the model's output limit. */
 function summaryBudget(reserveTokens: number, modelMaxTokens: number): number {
@@ -331,8 +357,8 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
 
     if (!nativeRequestFits(context, model.contextWindow, segmentTokens, reportedContextTokens)) {
         const detail = "segment context plus instruction does not fit the window";
-        trace.attempt("native", fields, { outcome: "skipped", detail });
-        return { ok: false, detail };
+        trace.attempt("native", fields, { outcome: "skipped", detail, retries: 0 });
+        return { ok: false, detail, retries: 0 };
     }
 
     const attempt = await summarizeNatively(
@@ -340,6 +366,7 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
             registry: ctx.modelRegistry,
             model,
             maxTokens: segmentTokens,
+            retry: retryPolicy(input.config),
             signal,
             sessionId: ctx.sessionManager.getSessionId(),
             onPayload: trace.enabled
@@ -358,17 +385,44 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
             detail,
             usage: attempt.usage,
             stopReason: attempt.stopReason,
+            cause: attempt.cause,
+            retries: attempt.retries,
         });
-        return { ok: false, detail };
+        return { ok: false, detail, cause: attempt.cause, retries: attempt.retries };
     }
 
     trace.attempt("native", fields, {
         outcome: "accepted",
         usage: attempt.usage,
         stopReason: attempt.stopReason,
+        retries: attempt.retries,
     });
     trace.modelResponse("native", attempt.text, attempt.usage);
-    return { ok: true, text: attempt.text, usage: attempt.usage };
+    return { ok: true, text: attempt.text, usage: attempt.usage, retries: attempt.retries };
+}
+
+/**
+ * The stage-2 request numbers, built whether or not the request goes out.
+ *
+ * A rung the cause policy stopped still deserves a record: without one, a report cannot tell "we never had the
+ * transcript to send" from "we had it and chose not to ask".
+ */
+function reduceFields(
+    model: Model<Api>,
+    maxTokens: number,
+    transcript: SerializedConversation,
+    segmentText: string | undefined,
+    extra: Partial<CompactionAttemptFields>,
+): CompactionAttemptFields {
+    return attemptFields(model, maxTokens, {
+        // Stage 2 sends no tools at all: nothing to call, no prefix to protect.
+        toolCount: 0,
+        messageCount: 1,
+        serializedChars: transcript.text.length,
+        droppedBlocks: transcript.droppedBlocks,
+        segmentSummaryChars: segmentText?.length ?? 0,
+        ...extra,
+    });
 }
 
 /** Stage 2: one bounded text-only call that reconciles the transcript with stage 1's checkpoint. */
@@ -386,20 +440,14 @@ async function runReduceStage(
         previousSummary: preparation.previousSummary,
         customInstructions: input.customInstructions,
     });
-    const fields = attemptFields(model, maxTokens, {
+    const fields = reduceFields(model, maxTokens, transcript, segmentText, {
         estimatedTokens: estimateTextTokens(requestText),
-        // Stage 2 sends no tools at all: nothing to call, no prefix to protect.
-        toolCount: 0,
-        messageCount: 1,
-        serializedChars: transcript.text.length,
-        droppedBlocks: transcript.droppedBlocks,
-        segmentSummaryChars: segmentText?.length ?? 0,
         customInstructions: input.customInstructions,
         previousSummaryChars: preparation.previousSummary?.length ?? 0,
     });
 
     const attempt = await summarizeSerializedTranscript(
-        { registry: ctx.modelRegistry, model, maxTokens, signal },
+        { registry: ctx.modelRegistry, model, maxTokens, retry: retryPolicy(input.config), signal },
         { conversationText: transcript.text, requestText },
     );
 
@@ -410,19 +458,23 @@ async function runReduceStage(
             detail,
             usage: attempt.usage,
             stopReason: attempt.stopReason,
+            cause: attempt.cause,
+            retries: attempt.retries,
         });
-        return { ok: false, detail };
+        return { ok: false, detail, cause: attempt.cause, retries: attempt.retries };
     }
     trace.attempt("serialized", fields, {
         outcome: "accepted",
         usage: attempt.usage,
         stopReason: attempt.stopReason,
+        retries: attempt.retries,
     });
     trace.modelResponse("serialized", attempt.text, attempt.usage);
     return {
         ok: true,
         text: attempt.text,
         usage: attempt.usage ?? (segment?.ok ? segment.usage : undefined),
+        retries: attempt.retries,
     };
 }
 
@@ -463,6 +515,21 @@ function routeFor(
         return segmentOk ? "two-stage" : "serialized";
     }
     return segmentOk ? "native" : "serialized";
+}
+
+/**
+ * A failure whose cause says no further request would work: the account, the credentials, or the rate limit is
+ * the problem, not the bytes we sent.
+ *
+ * An absent cause is not terminal. A request the fit gate skipped never reached a provider, so it learned
+ * nothing about whether the next rung would fare better.
+ */
+function terminalCause(result: StageResult | undefined): SummarizationFailureCause | undefined {
+    if (!result || result.ok || !result.cause) {
+        return undefined;
+    }
+
+    return isTerminalCause(result.cause) ? result.cause : undefined;
 }
 
 async function compactWithPiCoder(
@@ -535,6 +602,40 @@ async function compactWithPiCoder(
         return { cancel: true };
     }
 
+    // A cause that names the account rather than the request ends the cascade here: stage 2 would send the same
+    // credentials to the same rate limit, and core's default path would send them a third time. The session is
+    // left exactly as it was, and a threshold-triggered compaction is naturally re-attempted next turn.
+    const stopped = terminalCause(segment);
+    if (stopped) {
+        // An aborted reply is the user stopping, which stays silent like every other cancellation; only a
+        // provider-imposed stop gets a warning, because that is the one the session will not otherwise learn
+        // about.
+        const aborted = stopped === "aborted";
+        failures.push(`segment: ${stopped}`);
+        trace.attempt(
+            "serialized",
+            reduceFields(model, maxTokens, transcript, undefined, {
+                customInstructions: event.customInstructions,
+                previousSummaryChars: preparation.previousSummary?.length ?? 0,
+            }),
+            {
+                outcome: "skipped",
+                detail: `not attempted: ${stopped} (${causeRationale(stopped)})`,
+                cause: stopped,
+                retries: 0,
+            },
+        );
+        trace.outcome(aborted ? "cancelled" : "abandoned", failures.join("; "));
+        if (!aborted) {
+            notify(
+                ctx,
+                `pi-coder compaction stopped: ${stopped} - ${causeRationale(stopped)}`,
+                "warning",
+            );
+        }
+        return { cancel: true };
+    }
+
     const reduced = await runReduceStage(stage, model, transcript, segment).then((result) => {
         if (!result.ok) {
             failures.push(`reduce: ${result.detail}`);
@@ -551,6 +652,20 @@ async function compactWithPiCoder(
         // the warning would claim the session was handed over when the user simply stopped it.
         if (event.signal.aborted) {
             trace.outcome("cancelled", failures.join("; "));
+            return { cancel: true };
+        }
+
+        // Nothing usable came back and the cause says core's own request would fail the same way, so the
+        // handover is skipped too. This is the one place pi-coder declines compaction outright, which is why it
+        // warns rather than staying quiet like the cancellation above.
+        const givenUp = terminalCause(reduced);
+        if (givenUp) {
+            trace.outcome("abandoned", `${failures.join("; ")} (${givenUp})`);
+            notify(
+                ctx,
+                `pi-coder compaction stopped: ${givenUp} - ${causeRationale(givenUp)}`,
+                "warning",
+            );
             return { cancel: true };
         }
 

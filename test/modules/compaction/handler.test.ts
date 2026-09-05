@@ -33,9 +33,13 @@ describe("compaction stages", () => {
 
     beforeEach(() => {
         root = mkdtempSync(path.join(tmpdir(), "pi-coder-compaction-"));
-        // Pin both config locations at paths that do not exist, so no suite can read the developer's own
-        // ~/.pi/compaction-config.json or a file left in this checkout.
-        vi.stubEnv("COMPACTION_CONFIG_PATH", path.join(root, "absent.json"));
+        // Pin both config locations, so no suite can read the developer's own ~/.pi/compaction-config.json or a
+        // file left in this checkout. The project location exists and zeroes the retry budget: the backoff is
+        // real time, and a suite that slept on it would be slow and flaky. The schedule itself is pinned in
+        // summarize.test.ts, where the sleep is injected.
+        const defaults = path.join(root, "test-defaults.json");
+        writeFileSync(defaults, JSON.stringify({ retryMaxRetries: 0 }));
+        vi.stubEnv("COMPACTION_CONFIG_PATH", defaults);
         vi.stubEnv("COMPACTION_CONFIG_PATH_GLOBAL", path.join(root, "absent-global.json"));
     });
 
@@ -63,7 +67,7 @@ describe("compaction stages", () => {
     ) {
         if (input.config) {
             const configPath = path.join(root, "compaction-config.json");
-            writeFileSync(configPath, JSON.stringify(input.config));
+            writeFileSync(configPath, JSON.stringify({ retryMaxRetries: 0, ...input.config }));
             vi.stubEnv("COMPACTION_CONFIG_PATH", configPath);
         }
         return createCompactionHarness({
@@ -403,12 +407,34 @@ describe("compaction stages", () => {
         expect(notes).toEqual([]);
     });
 
-    it("cancels rather than falling back when both stages fail on an aborted controller", async () => {
-        const controller = new AbortController();
+    it("sends no reduce request when stage 1 itself reports an abort", async () => {
+        // The cause policy treats an aborted reply as the user stopping, so the cascade ends here rather than
+        // putting a second request on a controller that may already be dead. It stays silent: nothing was handed
+        // over and nothing went wrong.
         const notes: string[] = [];
         const h = build({
             responses: [
                 async () => failedResponse("aborted", "Request was aborted"),
+                async () => {
+                    throw new TypeError("reduce must not run after an aborted stage 1");
+                },
+            ],
+            notify: (message) => notes.push(message),
+        });
+
+        await expect(h.invoke()).resolves.toEqual({ cancel: true });
+        expect(h.calls).toHaveLength(1);
+        expect(notes).toEqual([]);
+    });
+
+    it("cancels rather than falling back when the abort arrives during the reduce", async () => {
+        // Stage 1 fails on something the policy keeps cascading, so it is the reduce that meets the abort - the
+        // case the pre-reduce guard cannot see.
+        const controller = new AbortController();
+        const notes: string[] = [];
+        const h = build({
+            responses: [
+                async () => toolCallResponse("read"),
                 async () => {
                     controller.abort();
                     return failedResponse("aborted", "This operation was aborted");
@@ -421,6 +447,81 @@ describe("compaction stages", () => {
         await expect(h.invoke()).resolves.toEqual({ cancel: true });
         expect(h.calls).toHaveLength(2);
         expect(notes).toEqual([]);
+    });
+
+    /**
+     * A quota or rate-limit failure is about the account, not the request, so the whole cascade stops: stage 2
+     * would send the same credentials to the same limit, and core's default path a third time. `{ cancel: true }`
+     * is the only return value that means stop, and it leaves the session exactly as it was.
+     */
+    it("stops the cascade when the account is the problem, and says which problem it was", async () => {
+        const notes: string[] = [];
+        const h = build({
+            hasUI: true,
+            responses: [
+                async () =>
+                    failedResponse(
+                        "error",
+                        "429 insufficient_quota: You exceeded your current quota, please check your plan and billing details",
+                    ),
+                async () => {
+                    throw new TypeError("reduce must not run on a quota limit");
+                },
+            ],
+            notify: (message) => notes.push(message),
+        });
+
+        await expect(h.invoke()).resolves.toEqual({ cancel: true });
+        expect(h.calls).toHaveLength(1);
+        // Quota is named even though the status was 429: the block-list is checked before the throttle pattern.
+        expect(notes.join("\n")).toContain("compaction stopped: quota");
+    });
+
+    it("stops on a bare throttle as well, even though pi would have retried it", async () => {
+        const notes: string[] = [];
+        const h = build({
+            hasUI: true,
+            responses: [
+                async () => failedResponse("error", "429 Too Many Requests"),
+                async () => summaryResponse("## Goal\n\nsalvaged\n\n## Progress\n\n- [x] salvaged"),
+            ],
+            notify: (message) => notes.push(message),
+        });
+
+        await expect(h.invoke()).resolves.toEqual({ cancel: true });
+        expect(h.calls).toHaveLength(1);
+        expect(notes.join("\n")).toContain("compaction stopped: rate-limit");
+    });
+
+    it("keeps cascading a transient failure once its retry budget is spent", async () => {
+        const h = build({
+            responses: [
+                async () => failedResponse("error", "500 internal server error"),
+                async () => summaryResponse("## Goal\n\nsalvaged\n\n## Progress\n\n- [x] salvaged"),
+            ],
+        });
+
+        // `retryMaxRetries: 0` comes from the suite's config defaults, so the budget is spent immediately and
+        // the cascade is what remains; the schedule itself is pinned in summarize.test.ts.
+        const payload = await h.compact();
+        expect(payload?.details.route).toBe("serialized");
+        expect(h.calls).toHaveLength(2);
+    });
+
+    it("abandons rather than handing over when the reduce is stopped by the account", async () => {
+        const notes: string[] = [];
+        const h = build({
+            hasUI: true,
+            responses: [
+                async () => toolCallResponse("read"),
+                async () => failedResponse("error", "401 authentication_error: Invalid API key"),
+            ],
+            notify: (message) => notes.push(message),
+        });
+
+        // Returning undefined here would let core spend its own summarization request on rejected credentials.
+        await expect(h.invoke()).resolves.toEqual({ cancel: true });
+        expect(notes.join("\n")).toContain("compaction stopped: auth");
     });
 
     it("installs only the compaction hook plus the payload capture it diffs against", () => {

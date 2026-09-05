@@ -80,6 +80,26 @@ session that can no longer be compacted. `event.signal.aborted` returns `{ cance
   `before_provider_request` never sees requests we send — that is why the diff needs both hooks.
 - `ctx.getSystemPrompt()` does reflect the `before_agent_start` override (`_systemPromptOverride ??
   _baseSystemPrompt`), so pi-coder's injected `<memory_system>`/`<scratchpad_system>` blocks are included.
+- **A provider failure never throws at a `complete()` caller.** pi-ai normalizes it into an `AssistantMessage`
+  with `stopReason: "error"` and `errorMessage`; our `catch` only catches programming errors, so classifying the
+  exception arm as anything but `unknown` would be theatre. There is no typed provider error either: the HTTP
+  status survives only as a string prefix (`"429 ..."`) because both vendored SDKs format `${status} ${msg}`,
+  which pi-ai's own patterns (`/429/`, `/502/`) rely on. Not a contract.
+- **`Retry-After` is unreachable from an extension.** The error object that carries `headers` is discarded in
+  the adapter's catch, and `onResponse` is invoked on the line *after* `retryProviderRequest`, so it never sees a
+  non-2xx for `openai-completions` (our llama.cpp route) or `anthropic-messages`. The only way to honour a
+  server-directed delay is to pass `maxRetries` and let the transport retry do it blindly — blind in both
+  directions: it resends quota-shaped 429s, and its retries never appear in our trace. Upstream ask: surface
+  `status` (or a parsed `retryAfterMs`) on the normalized error.
+- pi-ai's transport retry (`retryProviderRequest`), its status list, and its quota block-list are all
+  module-local, and the package `exports` map has no `./utils/*` subpath. Root-exported and usable:
+  `isContextOverflow(message, contextWindow)`, `isRecoverableLength(message, desiredMaxOutput)`,
+  `isRetryableAssistantError(message)`, `retryAssistantCall(produce, policy, signal, callbacks)`. Naming the
+  *cause* beyond those three is ours, which is why `failure.ts` restates the quota and auth wording and pins it
+  in tests.
+- `ModelRegistry.complete()` does not traverse `sdk.js`'s stream wrapper, so it inherits none of that layer's
+  `timeoutMs`, `maxRetries`, or attribution headers. Consequence worth acting on: **our summarization requests
+  have no client-side deadline at all**, so a stalled endpoint can hold a compaction open indefinitely.
 
 ## Summary and details contract
 
@@ -153,6 +173,16 @@ or unknown fields fall back to defaults, because children run this unattended. `
 `serializedMaxTokens`, `keepThinking`, and the per-block char caps govern stage 2; `traceEnabled`/`tracePath`/
 `traceMaxBytes` govern the trace; `model` is accepted but unused — the seam for the planned dedicated
 compaction model, which wants the serialized route since it has no cache prefix to protect.
+`retryMaxRetries` (default 2, extra attempts after the first) and `retryBaseDelayMs` (default 1000, doubling)
+bound the transient backoff; `0` retries turns resends off entirely. Deliberately below core's agent-retry
+settings (3 from 2000ms, so 2s/4s/8s): this stall happens inside a turn the user is waiting on.
+
+**A field is only configurable once `readConfigFile()` reads it.** That function maps keys through validators
+into an explicit return object, so a field added to `CompactionConfig`, the interface docs, and the loader still
+does nothing unless it is also added there — "unknown fields fall back to defaults" makes the omission silent,
+not an error. `retryMaxRetries` was dead for exactly one test run before `test-defaults.json` proved it: the
+suite slept a real second on a backoff that was supposed to be off. Add the field to `readConfigFile` in the same
+edit, and let a test observe it: `nonNegativeNumberField` keeps a `0`, `positiveNumberField` drops one.
 
 ## The request chain: hashes retained, bodies dropped
 
@@ -268,16 +298,35 @@ catch → core default.
 `maxRetries`, while core's own compaction passes `getRetrySettings()` — so one 429 kills our attempt where core
 would have waited. Deliberate for now, but it is an asymmetry, not a parity.
 
-Open gaps, agreed 2026-09-05 and **not yet implemented**:
+Gap ledger, agreed 2026-09-05; each row says for itself whether it is still open:
 
-1. **No cause classification.** Context overflow and exhausted quota both land as `rejected` with a message
-   string, yet the right response is opposite: overflow means stage 2 (bounded, no tools) is the fix, while
-   quota/auth means stage 2 is a second doomed request and core's default a third. Reuse pi-ai's
-   `isContextOverflow(message, contextWindow)` (root export; its docs enumerate llama.cpp
-   "exceeds the available context size" and DashScope/Qwen "Range of input length should be [1, X]", and its
-   `NON_OVERFLOW_PATTERNS` suppresses `/rate limit/i`) plus `status`/`headers` on provider errors for
-   401/402/429. Verified statically (types and export surface) only — a `tsx` probe died on module resolution,
-   not on pi.
+1. **Context overflow and exhausted quota were indistinguishable. CLOSED 2026-09-05.** Both landed as
+   `rejected` with a free-text message, though the right response to each is the opposite: overflow means the
+   next rung (bounded, no tools) is the fix, while quota means that rung is a second doomed request and core's
+   default a third. `failure.ts` now names the cause — `overflow | truncated | content | rate-limit | quota |
+   auth | transient | aborted | unknown` — and holds the policy that follows, one row per cause with a rationale
+   string that travels into the trace. `transient` is the only cause that resends; `overflow`, `truncated`,
+   `content`, and `unknown` cascade; `rate-limit`, `quota`, and `auth` end the compaction. Abandoning returns
+   `{ cancel: true }`, the only return value that means stop — `undefined` would let core spend a third request
+   on the same account — writes outcome `abandoned`, and warns with the cause, while an `aborted` cause takes the
+   silent `cancelled` path because the user pressed the key.
+
+   The predicates are pi's (`isContextOverflow`, `isRecoverableLength`, `isRetryableAssistantError`) so provider
+   wording is not ours to invent; the *policy* is ours because pi retries throttle-shaped 429s
+   (`retry.js:20-76`) and we never resend a 429, per the rule that 429/401/403 are non-recoverable for that
+   instance of compaction. Ordering matters twice over: overflow is tested first because it is the one failure
+   compaction exists to resolve (same order as core's `_isRetryableError`, `agent-session.js:2083-2088`), and
+   quota is tested before rate-limiting because providers deliver quota with a 429 status — the block-list wording
+   that `retry.js:4-19` keeps module-local is restated and pinned by test. A `length` stop that produced far less
+   than the budget it asked for classifies as `overflow`, which is where gap 2 and gap 1 meet.
+
+   Retries live in `callForSummary`: exponential from `retryBaseDelayMs`, `retryMaxRetries` extra attempts,
+   abort-aware (an abort arriving during the backoff becomes `aborted`, not a provider failure), with the sleep
+   injectable so the schedule is tested without waiting on it. `retries` is traced on every arm, so an answer that
+   arrived after two backoffs is not reported as a clean one. A rung the policy stopped is still recorded —
+   `skipped` with `not attempted: <cause>` — because "chose not to ask" must not read as "never had the
+   transcript". The report keys `ATTEMPT FAILURES` by cause and adds `CAUSES`, `compaction-abandoned`, and
+   `retry-exhausted`; `abandoned` is deliberately outside `fell-back`, since nothing was handed over.
 2. **A `stopReason: "length"` reply was accepted as a complete summary. CLOSED 2026-09-05.** Length can never be
    the detector — a cut-off reply and a brief complete one hold the same bytes up to the cut — so the provider's
    own word now travels out of the response (`SummarizationAttemptResult.stopReason`) into the trace
@@ -287,16 +336,30 @@ Open gaps, agreed 2026-09-05 and **not yet implemented**:
    headings still satisfy it), and refusing costs almost nothing since stage 1's context is cached; **stage 2 keeps**
    the truncated text, because rejecting it would hand the session to pi's default compaction, which re-summarizes
    from scratch under no section contract at all. `summary-truncated` is the report's flag for that survivor.
-   pi-ai's `isRecoverableLength` reads a short `length` stop as context pressure, which is the signal item 1 wants.
+   `isRecoverableLength` decides which kind of `length` stop it was: producing the budget asked for is
+   `truncated`, stopping far short of it is `overflow` — the same split item 1 now names, so the label and the
+   cascade agree.
 2b. **`ToolInfo` hides a field that reaches the wire.** `pi.getAllTools()` returns
    `Pick<ToolDefinition, "name"|"description"|"parameters"|"promptGuidelines"> & {sourceInfo}` and pi keeps the
    full `ToolDefinition` privately (`getToolDefinition` exists on the runner, not on the extension API).
    pi-ai's OpenAI serializer reads `tool.constrainedSampling` to decide `function.strict`
    (`constrained-sampling.js:50`), so a tool declaring it would make pi's `tools` array differ in bytes from
    ours while the extension API cannot see the field at all — the one place our rebuilt prefix is *not*
-   guaranteed by construction. Latent today: no pi built-in and no pi-coder tool declares it. Upstream ask:
-   add the field to the projection, or expose `getToolDefinition`. A `getAllTools()`-based shape hash catches
-   it if it ever fires, which is the main reason the chain records tool names on every shape change.
+   guaranteed by construction. **Latent today, but the field is on the wire already**: for an OpenAI-compatible
+   endpoint `supportsStrictMode` is true (only Moonshot/Together/Cloudflare/NVIDIA are excluded), and
+   `convertTools` emits `strict: strict ?? false`, so every tool in a llama.cpp request carries an explicit
+   `"strict": false`. Our rebuilt tools are `{ name, description, parameters }` and pi-ai fills in the same
+   `false`, which is why the two bodies match byte for byte — that equality depends on nobody declaring the
+   field. If one did, pi would send `true` where we send `false`, and because llama.cpp renders tool
+   definitions into the templated preamble the break would land before any message token: stage 1 pays full
+   price. Detection is the chain's `toolsHash`: a run would read `divergences: ["tools"]` with
+   `reference=none`, `prefixUsable` omitted, and `cache-read-zero`. A grammar-flavored tool diverges the shape
+   further (`type: "custom"` plus a grammar format, and arguments become one required string property), but
+   that path needs `compat.supportsOpenAIGrammarTools`, which defaults to false.
+   Upstream ask: add the field to the `ToolInfo` projection, or expose `getToolDefinition`. Side effect worth
+   knowing: `strict: "require"` against an endpoint without strict mode **throws** inside the adapter, which
+   arrives as `stopReason: "error"` with an unmatched message, classifies as `unknown`, and cascades to stage 2
+   — which sends no tools at all, so it succeeds. The cause policy happens to be the right handler for it.
 3. **Abort mid-flight returned `undefined`, and mislabelled it. CLOSED 2026-09-05.** Seen live as
    `Warning: pi-coder compaction fell back to pi's default: segment: Request was aborted; reduce: This
    operation was aborted`. Two separate faults in that one line: the warning announced a handover nobody asked

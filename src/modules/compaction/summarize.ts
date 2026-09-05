@@ -10,6 +10,13 @@ import { uuidv7 } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import {
+    type FailureClassificationInput,
+    type SummarizationFailureCause,
+    UNCLASSIFIED_THROWN_ERROR,
+    classifySummarizationFailure,
+    summarizationFailureAction,
+} from "./failure";
+import {
     MIN_CHECKPOINT_SECTIONS,
     SERIALIZATION_SYSTEM_PROMPT,
     checkpointSectionCount,
@@ -31,6 +38,11 @@ export type SummarizationStrategy = "native" | "serialized";
  * `usage` is reported on both arms — a response that ignored `tool_choice` still cost tokens, and that is
  * the evidence the trace wants. So is `stopReason`: the trace cannot tell a complete answer from one the
  * output limit cut off unless the provider's own word for it is carried out of the response.
+ *
+ * `cause` names *why* it failed, which is what decides whether the cascade may continue: context overflow and
+ * exhausted quota both arrive as a failed request, and one is fixed by the next rung while the other is doomed
+ * by it. `retries` counts the resends this function's caller performed, so an answer that arrived after two
+ * backoffs is not silently reported as a clean one.
  */
 export type SummarizationAttemptResult =
     | {
@@ -39,6 +51,8 @@ export type SummarizationAttemptResult =
           text: string;
           usage: Usage;
           stopReason: StopReason;
+          /** An accepted answer failed nothing, so there is no cause to name. */
+          retries: number;
       }
     | {
           ok: false;
@@ -46,7 +60,22 @@ export type SummarizationAttemptResult =
           detail: string;
           usage?: Usage;
           stopReason?: StopReason;
+          cause: SummarizationFailureCause;
+          retries: number;
       };
+
+/**
+ * Backoff for the causes a wait can clear.
+ *
+ * `maxRetries` is attempts *after* the first, so the total is `maxRetries + 1`. `sleep` is overridable because
+ * no test should spend real seconds proving a schedule, and because the abort behaviour has to be exercisable
+ * without a race.
+ */
+export interface SummarizationRetryPolicy {
+    maxRetries: number;
+    baseDelayMs: number;
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
 
 type ModelRegistry = ExtensionContext["modelRegistry"];
 
@@ -62,6 +91,8 @@ export interface SummarizationCall {
      * is all the compaction trace ever does; used to compare our rebuilt prefix against the parent's.
      */
     onPayload?: (payload: unknown) => void;
+    /** Absent means no retries, which is what a caller that has not decided on a budget should get. */
+    retry?: SummarizationRetryPolicy;
 }
 
 function responseText(response: AssistantMessage): string {
@@ -89,14 +120,18 @@ function attemptedToolCall(response: AssistantMessage): string | undefined {
 export function evaluateSummarizationResponse(
     response: AssistantMessage,
     strategy: SummarizationStrategy,
+    classification: FailureClassificationInput,
 ): SummarizationAttemptResult {
     const { stopReason, usage } = response;
     if (stopReason === "error" || stopReason === "aborted") {
+        const cause = classifySummarizationFailure(response, classification);
         return {
             ok: false,
             strategy,
             usage,
             stopReason,
+            cause,
+            retries: 0,
             detail: response.errorMessage ?? `summarization ${strategy} call ${stopReason}`,
         };
     }
@@ -107,6 +142,8 @@ export function evaluateSummarizationResponse(
             strategy,
             usage,
             stopReason,
+            cause: "content",
+            retries: 0,
             detail: `model called "${tool}" instead of summarizing; this provider does not honor tool_choice none`,
         };
     }
@@ -117,14 +154,25 @@ export function evaluateSummarizationResponse(
     // truncated text, because the alternative is pi's own compaction, which re-summarizes from scratch under
     // no section contract at all; the trace records the stop reason so the report can flag it instead.
     if (stopReason === "length" && strategy === "native") {
+        // Which of the two a `length` stop means is pi-ai's call, not ours: producing the budget it asked for is
+        // a truncation, while stopping far short of it means the provider had nowhere left to write. The first
+        // says the answer is incomplete, the second says the request was too big, and the cascade reads the
+        // difference as `truncated` versus `overflow`.
+        const cause = classifySummarizationFailure(response, classification);
         return {
             ok: false,
             strategy,
             usage,
             stopReason,
+            cause,
+            retries: 0,
             detail:
-                `summarization native call hit the output limit after ${String(usage.output)} ` +
-                "output tokens; a truncated checkpoint loses the sections after the cut",
+                cause === "overflow"
+                    ? `summarization native call stopped at length after ${String(usage.output)} of ` +
+                      `${String(classification.outputBudgetTokens)} requested output tokens, which reads as ` +
+                      "context pressure rather than a long answer"
+                    : `summarization native call hit the output limit after ${String(usage.output)} ` +
+                      "output tokens; a truncated checkpoint loses the sections after the cut",
         };
     }
     const text = responseText(response).trim();
@@ -134,6 +182,8 @@ export function evaluateSummarizationResponse(
             strategy,
             usage,
             stopReason,
+            cause: "content",
+            retries: 0,
             detail: "summarization returned an empty summary",
         };
     }
@@ -150,31 +200,116 @@ export function evaluateSummarizationResponse(
             strategy,
             usage,
             stopReason,
+            cause: "content",
+            retries: 0,
             detail:
                 `summarization ${strategy} answer carried ${String(sections)} of ` +
                 `${String(MIN_CHECKPOINT_SECTIONS)} required sections: ${text.slice(0, 120)}`,
         };
     }
 
-    return { ok: true, strategy, text, usage, stopReason };
+    return { ok: true, strategy, text, usage, stopReason, retries: 0 };
 }
 
+/**
+ * Sleep that gives up when the signal fires.
+ *
+ * Resolves rather than rejecting on abort: the caller then reads `signal.aborted` and turns the attempt into an
+ * `aborted` failure, which keeps the exit path a value like every other failure in this module.
+ */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+        if (signal?.aborted) {
+            resolve();
+            return;
+        }
+
+        // Both bindings exist before either callback can fire, so each may name the other.
+        const onAbort = () => {
+            clearTimeout(timer);
+            resolve();
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        signal?.addEventListener("abort", onAbort, { once: true });
+    });
+}
+
+/** The delay before retry `index` (0-based), doubling from the policy's base. */
+function backoffDelayMs(policy: SummarizationRetryPolicy, index: number): number {
+    return policy.baseDelayMs * 2 ** index;
+}
+
+async function attemptOnce(
+    call: SummarizationCall,
+    context: Context,
+    options: Record<string, unknown>,
+    strategy: SummarizationStrategy,
+): Promise<SummarizationAttemptResult> {
+    const classification: FailureClassificationInput = {
+        contextWindow: call.model.contextWindow,
+        outputBudgetTokens: call.maxTokens,
+    };
+
+    try {
+        const response = await call.registry.complete(call.model, context, options);
+        return evaluateSummarizationResponse(response, strategy, classification);
+    } catch (error) {
+        // No response at all, so there is no stop reason to report either. pi-ai normalizes provider failures
+        // into an `AssistantMessage`, so reaching this arm means something threw before or after the wire —
+        // which is why its cause stays `unknown` and the policy that follows from it sends no blind resend.
+        return {
+            ok: false,
+            strategy,
+            cause: UNCLASSIFIED_THROWN_ERROR,
+            retries: 0,
+            detail: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+
+/**
+ * Ask the provider once, or as often as the cause and the budget justify.
+ *
+ * Only `transient` failures are resent: every other cause is deterministic in something we cannot change by
+ * trying again — the bytes we sent, the window, the credentials, the account's balance. The schedule is
+ * exponential from the policy's base delay, and an abort arriving during the wait ends the attempt as
+ * `aborted` rather than as a provider failure, because that is what it was.
+ */
 async function callForSummary(
     call: SummarizationCall,
     context: Context,
     options: Record<string, unknown>,
     strategy: SummarizationStrategy,
 ): Promise<SummarizationAttemptResult> {
-    try {
-        const response = await call.registry.complete(call.model, context, options);
-        return evaluateSummarizationResponse(response, strategy);
-    } catch (error) {
-        // No response at all, so there is no stop reason to report either.
-        return {
-            ok: false,
-            strategy,
-            detail: error instanceof Error ? error.message : String(error),
-        };
+    const policy = call.retry;
+    const maxRetries = policy?.maxRetries ?? 0;
+    let retries = 0;
+
+    for (;;) {
+        const result = await attemptOnce(call, context, options, strategy);
+        if (result.ok) {
+            return { ...result, retries };
+        }
+
+        if (summarizationFailureAction(result.cause).retry && policy && retries < maxRetries) {
+            await (policy.sleep ?? abortableSleep)(backoffDelayMs(policy, retries), call.signal);
+            retries++;
+
+            if (call.signal?.aborted) {
+                return {
+                    ...result,
+                    cause: "aborted",
+                    retries,
+                    detail: `aborted during the retry backoff: ${result.detail}`,
+                };
+            }
+            continue;
+        }
+
+        return { ...result, retries };
     }
 }
 
