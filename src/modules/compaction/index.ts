@@ -508,6 +508,15 @@ async function compactWithPiCoder(
         failures.push("segment: skipped (context overflow)");
     }
 
+    if (event.signal.aborted) {
+        // Stage 1 died on a controller that is already dead, so a second request would only burn another one.
+        // Reported as a cancellation rather than a fallback: nothing was handed over, and the session keeps
+        // its history intact.
+        failures.push("reduce: skipped (aborted)");
+        trace.outcome("cancelled", failures.join("; "));
+        return { cancel: true };
+    }
+
     const reduced = await runReduceStage(stage, model, transcript, segment).then((result) => {
         if (!result.ok) {
             failures.push(`reduce: ${result.detail}`);
@@ -519,6 +528,14 @@ async function compactWithPiCoder(
     const produced = reduced?.ok ? reduced : segment?.ok ? segment : undefined;
 
     if (!produced) {
+        // An abort that arrived after both stages had already failed is still a cancellation, not a fallback.
+        // Returning undefined here would let pi issue its own summarization call on the dead controller, and
+        // the warning would claim the session was handed over when the user simply stopped it.
+        if (event.signal.aborted) {
+            trace.outcome("cancelled", failures.join("; "));
+            return { cancel: true };
+        }
+
         trace.outcome("core-default", failures.join("; "));
         notify(
             ctx,

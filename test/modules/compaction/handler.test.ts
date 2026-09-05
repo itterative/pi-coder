@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
     createCompactionHarness,
+    failedResponse,
     messageChain,
     sampleKept,
     sampleSpan,
@@ -374,6 +375,52 @@ describe("compaction stages", () => {
 
         await expect(h.invoke()).resolves.toEqual({ cancel: true });
         expect(h.calls).toHaveLength(0);
+    });
+
+    it("cancels rather than falling back when an abort arrives mid-stage", async () => {
+        // The warning this used to emit claimed pi's default had taken over. It had not: the user stopped the
+        // compaction, and returning undefined would have let pi fire another summarization call on the same
+        // dead controller.
+        const controller = new AbortController();
+        const notes: string[] = [];
+        const h = build({
+            responses: [
+                async () => {
+                    controller.abort();
+                    return failedResponse("aborted", "Request was aborted");
+                },
+                async () => {
+                    throw new TypeError("reduce must not run on an aborted controller");
+                },
+            ],
+            signal: controller.signal,
+            notify: (message) => notes.push(message),
+        });
+
+        await expect(h.invoke()).resolves.toEqual({ cancel: true });
+        // One provider call, not two: the reduce is skipped once the controller is dead.
+        expect(h.calls).toHaveLength(1);
+        expect(notes).toEqual([]);
+    });
+
+    it("cancels rather than falling back when both stages fail on an aborted controller", async () => {
+        const controller = new AbortController();
+        const notes: string[] = [];
+        const h = build({
+            responses: [
+                async () => failedResponse("aborted", "Request was aborted"),
+                async () => {
+                    controller.abort();
+                    return failedResponse("aborted", "This operation was aborted");
+                },
+            ],
+            signal: controller.signal,
+            notify: (message) => notes.push(message),
+        });
+
+        await expect(h.invoke()).resolves.toEqual({ cancel: true });
+        expect(h.calls).toHaveLength(2);
+        expect(notes).toEqual([]);
     });
 
     it("installs only the compaction hook plus the payload capture it diffs against", () => {

@@ -195,6 +195,14 @@ export function summaryResponse(text: string, usage?: Usage): AssistantMessage {
     return assistantResponse([{ type: "text", text }], usage);
 }
 
+/** A provider response that ended badly: the user aborted, or the provider failed with a message. */
+export function failedResponse(
+    stopReason: "aborted" | "error",
+    errorMessage: string,
+): AssistantMessage {
+    return { ...assistantResponse([]), stopReason, errorMessage };
+}
+
 /** A provider response that tried to keep working instead of summarizing. */
 export function toolCallResponse(name = "read"): AssistantMessage {
     return assistantResponse([

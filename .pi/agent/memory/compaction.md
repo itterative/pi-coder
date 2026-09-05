@@ -235,8 +235,15 @@ Open gaps, agreed 2026-09-05 and **not yet implemented**:
    it if it ever fires, which is the main reason the chain records tool names on every shape change., so a checkpoint truncated mid-section
    becomes the session's memory. Should reject and cascade; pi-ai's `isRecoverableLength` also treats a short
    `length` stop as context pressure, so this fix does double duty.
-3. **Abort mid-flight returns `undefined`**, so core then issues its own doomed call on the dead controller;
-   returning `{ cancel: true }` once a failure is known to follow an abort is cleaner.
+3. **Abort mid-flight returned `undefined`, and mislabelled it. CLOSED 2026-09-05.** Seen live as
+   `Warning: pi-coder compaction fell back to pi's default: segment: Request was aborted; reduce: This
+   operation was aborted`. Two separate faults in that one line: the warning announced a handover nobody asked
+   for, and returning `undefined` really did let pi issue its own summarization call against the dead
+   controller. Now guarded twice — before the reduce, so an abort during stage 1 does not burn the second
+   request that produced the `reduce:` half of the message, and after the cascade, so an abort arriving last
+   still outranks the fallback branch. Both write `outcome: "cancelled"` and stay silent, since the user
+   pressed the key. Each guard is killed by its own mutation (`M5`, `M6`).
+
 4. **Children have no UI** (`print` mode), so every warning here reaches only the trace and the run
    diagnostics: a quota-starved child looks like a normal finish with a mediocre summary.
 5. **Silent-overflow providers** (pi's own doc names z.ai, MiMo, Ollama truncation) could accept a clipped
