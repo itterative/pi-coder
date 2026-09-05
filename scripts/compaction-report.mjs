@@ -314,6 +314,16 @@ function normalizePrefix(prefix) {
         // Keep the record's own field names in `--json`, so a reader can grep the same key in both places.
         comparableDepth: prefix.comparableDepth,
         observations: prefix.observations,
+        // The chain funnel: held -> on this branch -> comparable. The record used to print only the last of the
+        // three, which let "nothing observed" and "observed plenty, matched none" share one rendering.
+        chainObservations: prefix.chainObservations,
+        branchObservations: prefix.branchObservations,
+        ourSystemChars: prefix.ourRequest?.systemChars,
+        ourSystemHash: prefix.ourRequest?.systemHash,
+        parentSystemChars: prefix.parentRequest?.systemChars,
+        parentSystemHash: prefix.parentRequest?.systemHash,
+        parentDepth: prefix.parentRequest?.messageCount,
+        unknowns: Array.isArray(prefix.unknowns) ? prefix.unknowns : [],
         historyTruncated: prefix.historyTruncated,
         modelDivergence: prefix.modelDivergence,
         truncated: prefix.truncated,
@@ -539,11 +549,17 @@ function analyzeRuns(runs, thresholds) {
         }
     }
 
+    const invariants = new Map();
+    for (const violation of invariantViolations(runs)) {
+        addRun(bump(invariants, violation.key, newGroup), violation.run, violation.detail);
+    }
+
     return {
         routes,
         causes,
         failures,
         flags,
+        invariants,
         parameters,
         divergences,
         models,
@@ -576,6 +592,69 @@ function checkpointOf(run) {
 }
 
 /**
+ * Cross-field checks that must hold if the instrument itself is honest.
+ *
+ * Each one encodes a guarantee the code makes, so a violation is a bug in the trace rather than a bug in the
+ * cache - a distinction that had to be made by hand on 2026-09-05 and should not have to be made again. Older
+ * records simply lack the fields, which is not a violation.
+ */
+function invariantViolations(runs) {
+    const out = [];
+
+    for (const run of runs) {
+        const prefix = run.prefix;
+        if (prefix === undefined) {
+            continue;
+        }
+
+        const held = prefix.chainObservations;
+        const branch = prefix.branchObservations;
+        const comparable = prefix.observations;
+        const checks = [
+            [
+                typeof held === "number" && typeof branch === "number" && held === 0 && branch > 0,
+                "chain-empty-contradiction",
+                `chain holds nothing yet ${branch} entries are on the branch`,
+            ],
+            [
+                prefix.reference === "none" && typeof branch === "number" && branch > 0,
+                "none-with-branch",
+                `reference=none with ${branch} on-branch entries to compare against`,
+            ],
+            [
+                typeof comparable === "number" &&
+                    comparable > 0 &&
+                    typeof branch === "number" &&
+                    branch === 0,
+                "comparable-without-branch",
+                `${comparable} comparable observations with none on the branch`,
+            ],
+            [
+                prefix.usable === true && number(prefix.comparableDepth) <= 0,
+                "usable-without-depth",
+                "usable=true while comparable depth is zero or negative",
+            ],
+            [
+                typeof prefix.parentSystemHash === "string" &&
+                    typeof prefix.ourSystemHash === "string" &&
+                    prefix.parentSystemHash === prefix.ourSystemHash &&
+                    prefix.parentSystemChars !== prefix.ourSystemChars,
+                "hash-length-conflict",
+                `identical system hash over ${prefix.parentSystemChars}c and ${prefix.ourSystemChars}c prompts`,
+            ],
+        ];
+
+        for (const [violated, key, detail] of checks) {
+            if (violated) {
+                out.push({ run, key, detail });
+            }
+        }
+    }
+
+    return out;
+}
+
+/**
  * Automated suspicion. Every flag names a failure mode already seen in a live trace, so the report can point
  * at the runs that are wrong instead of leaving the reader to compare numbers by eye.
  */
@@ -601,6 +680,48 @@ function flagRun(run, options) {
             key: "no-prefix-reference",
             detail: `no hash ladder covered this branch; ${prefix.ourCount ?? 0} messages went unverified`,
         });
+    }
+
+    // The three states that all render as `obs=0`, named apart. They have nothing in common with each other, and
+    // debugging the wrong one is how a whole afternoon goes: an empty chain is a cold process, an off-branch
+    // chain is navigation, and an incomparable chain is a prompt or tool-set difference.
+    const held = prefix?.chainObservations;
+    const onBranch = prefix?.branchObservations;
+    if (typeof held === "number" && typeof onBranch === "number") {
+        const comparable = number(prefix.observations);
+
+        if (held === 0) {
+            out.push({
+                key: "chain-empty",
+                detail:
+                    "no parent request observed in this process since the chain was created " +
+                    "(restart, reload, or a freshly built session view)",
+            });
+        } else if (onBranch === 0) {
+            out.push({
+                key: "chain-off-branch",
+                detail: `chain holds ${held} entries, none with a leaf on this branch`,
+            });
+        } else if (comparable === 0) {
+            out.push({
+                key: "chain-incomparable",
+                detail: `${onBranch} on-branch entries share neither our system prompt nor our tool set`,
+            });
+        }
+
+        // A same-length, different-hash pair is prompt drift that no size figure can show; the reverse used to be
+        // the normal reading, because the recorded hash covered only a 320-char excerpt.
+        if (
+            typeof prefix.ourSystemHash === "string" &&
+            typeof prefix.parentSystemHash === "string" &&
+            prefix.ourSystemHash !== prefix.parentSystemHash &&
+            prefix.ourSystemChars === prefix.parentSystemChars
+        ) {
+            out.push({
+                key: "system-prompt-drift",
+                detail: `same length (${prefix.ourSystemChars}c), different system prompt`,
+            });
+        }
     }
 
     // The reference existed but nothing in it reached the depth our span carried: no verdict is possible, and
@@ -922,6 +1043,20 @@ function renderRunBlock(run, flags, options) {
             `obs=${dash(prefix.observations)}`,
             `first=${prefix.first}`,
         ];
+
+        // `chain=held/branch/comparable` and `sys=ours/parent` are the two pairs that decide whether a prefix
+        // verdict means anything, so they belong on the line rather than one flag deeper.
+        if (typeof prefix.chainObservations === "number") {
+            bits.push(
+                `chain=${prefix.chainObservations}/${prefix.branchObservations}/${prefix.observations}`,
+            );
+        }
+        if (typeof prefix.ourSystemChars === "number") {
+            bits.push(`sys=${prefix.ourSystemChars}c`);
+            if (typeof prefix.parentSystemChars === "number") {
+                bits.push(`parent-sys=${prefix.parentSystemChars}c`);
+            }
+        }
         if (prefix.truncated === true) {
             bits.push("truncated");
         }
@@ -977,6 +1112,12 @@ function renderRunBlock(run, flags, options) {
 
     for (const flag of flags) {
         lines.push(`    ! ${flag.key}: ${flag.detail}`);
+    }
+
+    // What the record cannot answer, in its own words. Printed apart from suspects because these are not
+    // findings about the run, they are statements about the instrument's reach.
+    for (const unknown of run.prefix?.unknowns ?? []) {
+        lines.push(`    ~ cannot tell: ${unknown}`);
     }
 
     return lines.join("\n");
@@ -1087,6 +1228,15 @@ function renderReport(runs, analysis, stats, options) {
             "SUSPECTS",
             "automated flags, each one a failure mode already observed in a live trace",
             analysis.flags,
+            options,
+            exampleRow,
+        ),
+    );
+    out.push(
+        renderCountSection(
+            "INVARIANTS",
+            "cross-field checks that must hold; a violation is a bug in the instrument, not in the cache",
+            analysis.invariants,
             options,
             exampleRow,
         ),
@@ -1371,6 +1521,7 @@ function main() {
                         routes: counts(analysis.routes),
                         failures: counts(analysis.failures),
                         flags: counts(analysis.flags),
+                        invariants: counts(analysis.invariants),
                         causes: counts(analysis.causes),
                         parameters: counts(analysis.parameters),
                         divergences: counts(analysis.divergences),

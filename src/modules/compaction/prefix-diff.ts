@@ -23,6 +23,8 @@ export interface PayloadFingerprint {
     model: string;
     system: string;
     systemChars: number;
+    /** Hash of the whole system text. `system` above is only an excerpt, so hashing it would miss any drift past the excerpt boundary. */
+    systemFullHash: string;
     toolNames: string[];
     toolsHash: string;
     /** One hash per message in body order, including role-only entries. */
@@ -108,6 +110,7 @@ export function fingerprintPayload(payload: unknown): PayloadFingerprint {
         model: typeof record.model === "string" ? record.model : "",
         system: excerpt(system.text),
         systemChars: system.chars,
+        systemFullHash: hash(system.text),
         toolNames: tools.map(toolName),
         toolsHash: hash(tools),
         messageHashes: messages.map((message) => hash(message)),
@@ -148,7 +151,10 @@ export function fingerprintSummary(fingerprint: PayloadFingerprint): Record<stri
         model: fingerprint.model,
         keys: fingerprint.keys,
         systemChars: fingerprint.systemChars,
-        systemHash: hash(fingerprint.system),
+        // Whole-text hash, so this field means the same thing as `requestShape().systemHash`. It used to hash
+        // the 320-char excerpt, which reported `6e84662c` unchanged across a prompt that grew from 12817 to
+        // 24813 chars - a field that cannot see the thing it is named for is worse than no field.
+        systemHash: fingerprint.systemFullHash,
         toolsHash: fingerprint.toolsHash,
         toolCount: fingerprint.toolNames.length,
         messageCount: fingerprint.messageHashes.length,

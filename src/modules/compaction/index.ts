@@ -21,7 +21,13 @@ import {
     requestMessages,
     requestShape,
 } from "./prefix-diff";
-import { messageLadder, pathIdSet, RequestChain, type ChainShape } from "./chain";
+import {
+    messageLadder,
+    pathIdSet,
+    RequestChain,
+    type ChainObservation,
+    type ChainShape,
+} from "./chain";
 import { segmentSummaryInstruction, serializedSummarizationRequest } from "./prompt";
 import {
     serializeConversationMinimal,
@@ -212,20 +218,24 @@ function prefixVerdict(
     const shape = requestShape(ourPayload);
     const ours = fingerprintPayload(ourPayload);
     const branch = sessionManager.getBranch();
+    const pathIds = pathIdSet(branch);
+    const chain = chainFor(sessionManager);
+    const onBranch = chain.branchObservations(pathIds);
+    const parent = onBranch[onBranch.length - 1];
     // Fold only the span. `buildNativeContext` appends exactly one instruction message, and pi never sent
     // that one, so leaving it in the ladder would guarantee a mismatch at our own last depth and re-raise the
     // tail artifact the chain exists to avoid.
     const spanMessages = Math.max(0, messages.length - 1);
-    const match = chainFor(sessionManager).match({
+    const match = chain.match({
         spanLadder: messageLadder(messages.slice(0, spanMessages)),
-        pathIds: pathIdSet(branch),
+        pathIds,
         shape,
     });
 
     // Only depths the reference actually covered *and* our span reached are checkable; pi's deeper requests
     // say nothing about a truncated span.
     const verifiedThrough = match.comparableDepth > 0 && match.verifiedTo >= match.comparableDepth;
-    const divergences = shapeDivergences(sessionManager, shape, match);
+    const divergences = shapeDivergences(parent, shape, match);
 
     if (match.firstMismatchDepth !== null) {
         divergences.push(`messages[${String(match.firstMismatchDepth)}]`);
@@ -252,9 +262,18 @@ function prefixVerdict(
         referenceLeafId: match.referenceLeafId,
         currentLeafId: sessionManager.getLeafId(),
         observations: match.compared,
+        chainObservations: chain.size,
+        branchObservations: onBranch.length,
+        parentRequest: parentRequestFields(parent),
         historyTruncated: match.truncatedHistory,
         modelDivergence: match.modelDivergence,
         ourRequest: fingerprintSummary(ours),
+        unknowns: prefixUnknowns({
+            held: chain.size,
+            onBranch: onBranch.length,
+            compared: match.compared,
+            retentionDropped: match.truncatedHistory,
+        }),
     };
 }
 
@@ -265,19 +284,11 @@ function prefixVerdict(
  * and tool set - which is a real reason the cache cannot answer, and worth naming as one.
  */
 function shapeDivergences(
-    sessionManager: SessionShapeView,
+    newest: ChainObservation | undefined,
     shape: ChainShape,
     match: { reference: "chain" | "none"; compared: number },
 ): string[] {
-    if (match.reference !== "chain" || match.compared > 0) {
-        return [];
-    }
-
-    const onPath = chainFor(sessionManager).branchObservations(
-        pathIdSet(sessionManager.getBranch()),
-    );
-    const newest = onPath[onPath.length - 1];
-    if (newest === undefined) {
+    if (match.reference !== "chain" || match.compared > 0 || newest === undefined) {
         return [];
     }
 
@@ -290,6 +301,62 @@ function shapeDivergences(
     }
 
     return out;
+}
+
+/** The parent side of the shape comparison, present whenever anything on this branch was observed. */
+function parentRequestFields(observation: ChainObservation | undefined) {
+    if (observation === undefined) {
+        return undefined;
+    }
+
+    return {
+        model: observation.model,
+        systemChars: observation.systemChars,
+        systemHash: observation.systemHash,
+        toolsHash: observation.toolsHash,
+        messageCount: observation.depth,
+        leafId: observation.leafId,
+    };
+}
+
+/**
+ * Name what a prefix verdict cannot answer.
+ *
+ * `observations: 0` covers three states that have nothing to do with each other - nothing held, held but off the
+ * current branch, and on the branch yet incomparable - and a reader who cannot tell them apart will debug the
+ * wrong one. That ambiguity cost a full investigation on 2026-09-05, so each state now gets its own sentence.
+ */
+function prefixUnknowns(input: {
+    held: number;
+    onBranch: number;
+    compared: number;
+    retentionDropped: boolean;
+}): string[] {
+    const unknowns: string[] = [];
+
+    if (input.held === 0) {
+        unknowns.push(
+            "chain empty: no parent request observed in this process since the chain was created",
+        );
+    } else if (input.onBranch === 0) {
+        unknowns.push(
+            `chain holds ${String(input.held)} but none on this branch: prefix reuse unverifiable here`,
+        );
+    } else if (input.compared === 0) {
+        unknowns.push(
+            `${String(input.onBranch)} on-branch requests share neither our system prompt nor tool set: prefix reuse unverifiable`,
+        );
+    }
+
+    if (input.compared === 0) {
+        unknowns.push("cache reuse: this run cannot tell a miss from an unverifiable prefix");
+    }
+
+    if (input.retentionDropped) {
+        unknowns.push("retention dropped older ladders: shallow depths may be unverifiable");
+    }
+
+    return unknowns;
 }
 
 /** The request-side numbers every attempt record carries, whatever stage ran. */

@@ -8,13 +8,13 @@ the session transcript can still be examined after the fact. The writer is `src/
 
 All records of one compaction share a run id, which is what lets the report group them.
 
-| Stage            | What it carries                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `prefix`         | how the rebuilt stage-1 request compared to what pi actually sent, answered by the retained hash ladder: `reference` (`chain`/`none`), `prefixUsable` (**absent**, never false, when nothing was comparable), `commonPrefixMessages` = deepest reference depth that agreed, `comparableDepth`, `referenceDepth`, `observations`, `verifiedThrough`, `truncated`, `parameters[]`, `historyTruncated`, `modelDivergence`, and a fingerprint of our own request |
-| `attempt`        | one per strategy: the request-side numbers (`messageCount`, `estimatedTokens`, `reportedContextTokens`, `contextWindow`, `maxTokens`, `toolCount`, `copiedEntries`, `serializedChars`, `droppedBlocks`, `segmentSummaryChars`, `previousSummaryChars`) and how it ended (`accepted` / `rejected` / `skipped` with `detail`), with `usage`, `stopReason` whenever a reply arrived, `cause`, and `retries`                                                     |
-| `model_response` | what the model answered with, before the harness appended anything                                                                                                                                                                                                                                                                                                                                                                                           |
-| `final_summary`  | the exact persisted text, with `firstKeptEntryId`, `tokensBefore`, `summarizedMessages`, `droppedBlocks`, and the file counts the appended sections were built from                                                                                                                                                                                                                                                                                          |
-| `outcome`        | how the whole compaction ended: `two-stage`, `native`, `serialized`, `core-default`, `cancelled`, `abandoned` (stopped on purpose: the cause named the account, not the request), `disabled`                                                                                                                                                                                                                                                                 |
+| Stage            | What it carries                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prefix`         | how the rebuilt stage-1 request compared to what pi actually sent, answered by the retained hash ladder: `reference` (`chain`/`none`), `prefixUsable` (**absent**, never false, when nothing was comparable), `commonPrefixMessages` = deepest reference depth that agreed, `comparableDepth`, `referenceDepth`, `observations` (comparable), `chainObservations` (held), `branchObservations` (on this branch), `verifiedThrough`, `truncated`, `parameters[]`, `historyTruncated`, `modelDivergence`, `unknowns[]`, and fingerprints of our own request and of the newest on-branch parent request |
+| `attempt`        | one per strategy: the request-side numbers (`messageCount`, `estimatedTokens`, `reportedContextTokens`, `contextWindow`, `maxTokens`, `toolCount`, `copiedEntries`, `serializedChars`, `droppedBlocks`, `segmentSummaryChars`, `previousSummaryChars`) and how it ended (`accepted` / `rejected` / `skipped` with `detail`), with `usage`, `stopReason` whenever a reply arrived, `cause`, and `retries`                                                                                                                                                                                             |
+| `model_response` | what the model answered with, before the harness appended anything                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `final_summary`  | the exact persisted text, with `firstKeptEntryId`, `tokensBefore`, `summarizedMessages`, `droppedBlocks`, and the file counts the appended sections were built from                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `outcome`        | how the whole compaction ended: `two-stage`, `native`, `serialized`, `core-default`, `cancelled`, `abandoned` (stopped on purpose: the cause named the account, not the request), `disabled`                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 Costs are development numbers only, and they are counted twice by design: a stage-1 resend shows up here as
 `usage.input`, and the same tokens may also be counted on the parent's next turn elsewhere.
@@ -25,6 +25,25 @@ Costs are development numbers only, and they are counted twice by design: a stag
 manager, about seventy bytes per request instead of a two-megabyte body. The report reads only the verdict the
 chain wrote into the `prefix` record; see the `compaction` memory for why comparison happens at the
 reference's depths and why an absent reference must never be printed as a failed one.
+
+Three counts describe how much of that store could be used, and they are reported separately because each zero
+means something different:
+
+| field                | meaning                                                | what a zero says                                                                                        |
+| -------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `chainObservations`  | entries held in this process, unfiltered               | nothing has been observed since the chain was created: restart, reload, or a freshly built session view |
+| `branchObservations` | entries whose leaf sits on the current branch          | entries exist, but they belong to a branch that was navigated away from                                 |
+| `observations`       | entries that also share our system prompt and tool set | the branch's requests were built under a different prompt or tool set than ours                         |
+
+`prefix.parentRequest` carries the newest on-branch entry's shape — model, system-prompt length and hash, tool
+hash, depth, leaf id — as the twin of `prefix.ourRequest`, so "did our rebuild send what pi sends" is a field
+comparison rather than an inference. Both sides hash the whole system text: `ourRequest.systemHash` used to hash
+a 320-char excerpt, which reported no change across a prompt that had grown from 12,817 to 24,813 characters.
+
+One guarantee is worth knowing before reasoning from these numbers: `reference: "none"` is only reachable when
+`branchObservations` is zero, and `"chain"` with `observations: 0` is the shape-mismatch case. That distinction
+settled a live question about whether an empty verdict meant a cold store or a filtered one, and the report now
+checks it as an invariant instead of leaving it to be derived.
 
 ## Reading it
 
@@ -45,6 +64,18 @@ The report body renders one block per run: the prefix verdict, one line per stag
 numbers and `in/cached/cw/out`, the persisted summary's size and cut point, and any flags. `+Ns` after a
 stage is the gap to the previous record, which is as close to per-stage latency as the trace gets.
 
+The prefix line adds `chain=held/branch/comparable` and `sys=<our chars>c`, plus `parent-sys=<chars>c` when a
+branch reference existed, because those pairs decide whether the verdict on that same line means anything. A run
+can also print `~ cannot tell:` lines: statements from the record about what it cannot answer, kept apart from
+flags because they describe the instrument's reach rather than the run's behaviour. `chain-empty` beside
+`cache-read-zero` is the pair that means "we do not know whether the cache was reused", and the record now says
+so rather than leaving a zero to be read as a measurement.
+
+`INVARIANTS` lists cross-field checks — an empty chain that reports entries on the branch, `reference=none` with
+entries to compare, a usable verdict with no comparable depth, matching hashes over differently sized prompts.
+A violation there is a bug in the trace, not in the cache, which is the distinction that has to be made before
+any other conclusion in this file is worth anything.
+
 `CAUSES` aggregates `strategy outcome cause`, and `ATTEMPT FAILURES` keys each row by its cause
 (`native rejected [quota]: ...`) before normalizing the message. That ordering matters: the two failures that
 look most alike in free text — context overflow and an exhausted account — call for opposite responses, so a
@@ -61,6 +92,10 @@ of leaving the numbers to be compared by eye. They are thresholds, not verdicts 
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `prefix-unusable`          | a comparable reference depth disagreed with our rebuild, so stage 1 could not reuse the provider's cached prefix                           |
 | `no-prefix-reference`      | no observation covered this branch, so the cache question is unanswered. Not a failure - and the case the old code reported as one         |
+| `chain-empty`              | no parent request had been observed in this process when the verdict was taken: restart, reload, or a fresh session view                   |
+| `chain-off-branch`         | the chain holds entries and none of them sit on the current branch, so a fork or a rewind is why there is no reference                     |
+| `chain-incomparable`       | on-branch requests exist but were built under a different system prompt or tool set, which is also a real reason the cache cannot answer   |
+| `system-prompt-drift`      | ours and the parent's system prompts hash apart at the same length — drift no size figure can show                                         |
 | `prefix-uncomparable`      | a reference existed but every request in it was deeper than the truncated span, so nothing could be compared                               |
 | `span-not-truncated`       | stage 1 sent the whole live context instead of the truncated span, i.e. the cut point was never found                                      |
 | `degenerate-native-output` | stage 1 was accepted but answered with far too little text — the shape of a model replying about the instruction rather than to it         |

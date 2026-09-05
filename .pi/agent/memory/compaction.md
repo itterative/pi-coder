@@ -211,12 +211,20 @@ our own stage-1 rebuilds:
 | 01a070e0 | 19:42 | 24813 | 363 |
 
 Two unrelated sessions each grew by a near-identical block (+11,802 and +11,996), while `toolsHash` and the
-frozen memory index stayed put. A fixed ~12 KB arriving exactly once more is the signature of a duplicated
-injection, and ~12 KB is about the size of the whole set of extension-contributed blocks (`<memory_system>`,
-`<delegated_agents>`, `<todolist_system>`, `<scratchpad_system>`, `<bash_sandbox>`, project instructions).
-The bash module carries a guard for exactly this class of bug - `if (systemPrompt.includes("<bash_sandbox>"))
-return` at `src/tools/bash/index.ts:247` - which is historical evidence that double-appending has happened here
-before. Unconfirmed: nothing has been captured, only lengths.
+frozen memory index stayed put. **Resolved: nothing was duplicated.** 12,817 is the base prompt - pi's own
+instructions plus project context plus the frozen memory appendix, which is why it was byte-identical across two
+different sessions - and the ~24.7k values are that plus the blocks `before_agent_start` installs, which vary by
+session (`<delegated_agents>`, `<todolist_system>`, `<scratchpad_system>`, `<bash_sandbox>` and the per-session
+scratchpad path), which is why they differ from each other by a few hundred chars. So the short prompt is what
+`ctx.getSystemPrompt()` returns **before the first turn of a process**, and the pairing is exact: `obs=0` and a
+short prompt occurred together in all five records because both are the first-request state, not because one
+caused the other.
+
+What makes that a certainty rather than a guess: `reference: "none"` is only reachable when the chain holds
+nothing on the current branch, so the alternative reading - a full chain whose entries were all filtered out by a
+system-prompt shape mismatch - was excluded from the stored fields. The report now prints and checks that
+distinction (`chain=held/branch/comparable`, and an `INVARIANTS` section) instead of leaving it to be derived from
+`chain.ts`.
 
 Why the trace could not see it: `ourRequest.systemHash` hashes a **320-char excerpt** (`EXCERPT_CHARS`) with
 FNV-1a-32, so `6e84662c` was reported unchanged across 12817, 24619, 24813 and 25294 chars. The chain's shape
@@ -227,12 +235,37 @@ If a duplicated block is real, the costs are ~3k tokens of dead weight on every 
 prefix-cache break at the point of duplication, and a plausible shared cause with slow reloads. If it is not
 real, the `cached=0` readings on hosted providers need a different explanation.
 
+## The prefix funnel, and unknowns the record states itself
+
+One quantity, three names, because each zero has a different cause and the old single `observations: 0` could not
+tell them apart:
+
+- `chainObservations` - entries held in this process, unfiltered.
+- `branchObservations` - entries whose recorded leaf sits on the current branch.
+- `observations` - entries that additionally share our system prompt and tool set (`ChainMatch.compared`).
+
+`parentRequest` mirrors `ourRequest` with the newest on-branch entry's shape (model, `systemChars`, `systemHash`,
+`toolsHash`, depth, leaf id) whether or not it was comparable, so a prompt or tool-set difference between our
+rebuild and pi's live requests is a field comparison instead of an argument. `unknowns[]` states what the record
+cannot answer, and the report prints those as `~ cannot tell:` lines apart from flags: a flag describes the run, an
+unknown describes the instrument. `scripts/compaction-report.mjs` adds four suspects from the funnel
+(`chain-empty`, `chain-off-branch`, `chain-incomparable`, `system-prompt-drift`) and an `INVARIANTS` section of
+cross-field checks - `reference=none` with entries on the branch, an empty chain reporting branch entries, a
+usable verdict with no comparable depth, matching hashes over differently sized prompts, comparable observations
+with none on the branch. A violation there means the trace is lying, and it must be believed before any cache
+conclusion is.
+
+Naming rule for future fields: the trace record and `pi_coder_debug` must use the **same key** for the same
+quantity, or the ambiguity this pass removed comes back through a second surface. See
+`docs/pi-coder-debug-tool.md`.
+
 ## Trace field gotchas
 
-- `ourRequest.systemHash` hashes a **320-char excerpt** (`EXCERPT_CHARS`) with FNV-1a-32, so two system prompts
-  that differ only past char 320 share it; the chain's shape comparison hashes the full text. Same field name,
-  two meanings - `12817` and `24813` chars both hashed to `6e84662c`. The ladder heads that `verified=N/M` rests
-  on are sha256, so the prefix verdict does not inherit this weakness.
+- `ourRequest.systemHash` hashes the **whole** system text as of the funnel pass, matching `requestShape()`, so
+  equal hashes do mean equal prompts. Records written before that change hashed only a 320-char excerpt
+  (`EXCERPT_CHARS`) and cannot be re-read as evidence that a prompt was stable - `6e84662c` was reported
+  unchanged across 12817, 24619, 24813 and 25294 chars. The ladder heads that `verified=N/M` rests on are
+  sha256 over messages and never had this weakness.
 - A `-key` in `prefix.parameters` means the parent sent a key our rebuild dropped. `+tool_choice` is expected
   (that is our prohibition). `-reasoning_effort` is not: pi's live request carried it and ours does not, so the
   two differ in a decode parameter. Unresolved whether that is cosmetic for the endpoint's cache.

@@ -416,13 +416,30 @@ describe("compaction trace", () => {
             referenceDepth: 1,
             observations: 1,
         });
-        // Nothing is retained of the parent body, so the record describes only our own.
+        // The chain keeps hashes and counts, never bodies. The record names the parent's shape so that a prompt
+        // or tool-set difference is visible without a second guess, and still carries no message content from
+        // either side of the comparison.
         expect(prefix?.ourRequest).toMatchObject({
             model: "stub-model",
             toolCount: 1,
             messageCount: 2,
         });
-        expect(JSON.stringify(prefix ?? {})).not.toContain("parentRequest");
+        expect(prefix?.parentRequest).toMatchObject({
+            model: "stub-model",
+            messageCount: 1,
+            leafId: "kept-2",
+            systemHash: expect.any(String),
+        });
+        expect(JSON.stringify(prefix ?? {})).not.toContain('"content"');
+        // Both sides now hash the whole system text, so an equal pair of hashes really does mean an equal
+        // prompt. The recorded hash used to cover a 320-char excerpt, which reported no change across a prompt
+        // that had grown from 12817 to 24813 chars.
+        expect(prefix?.ourRequest?.systemHash).toBe(prefix?.parentRequest?.systemHash);
+        // The funnel, reported at each stage rather than only at the last one.
+        expect(prefix?.chainObservations).toBe(1);
+        expect(prefix?.branchObservations).toBe(1);
+        expect(prefix?.observations).toBe(1);
+        expect(prefix?.unknowns).toEqual([]);
     });
 
     it("leaves the prefix verdict unknown rather than unusable when nothing was observed", async () => {
@@ -444,6 +461,17 @@ describe("compaction trace", () => {
         });
         // This is the case that used to read as a broken rebuild: no reference is not evidence of divergence.
         expect((prefix?.prefix ?? {}).prefixUsable).toBeUndefined();
+        // And the state that an hour of debugging turned on: an empty chain is not a filtered chain, and the
+        // record has to say which one it is because both used to print `observations: 0`.
+        expect(prefix?.prefix).toMatchObject({
+            chainObservations: 0,
+            branchObservations: 0,
+            observations: 0,
+        });
+        expect(prefix?.prefix?.parentRequest).toBeUndefined();
+        expect(prefix?.prefix?.unknowns).toContain(
+            "chain empty: no parent request observed in this process since the chain was created",
+        );
     });
 
     it("rotates the file once it passes the configured size", async () => {

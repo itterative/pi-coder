@@ -172,6 +172,17 @@ function healthyPrefix(overrides: Partial<CompactionPrefixFields> = {}): Compact
         referenceLeafId: "leaf-43",
         currentLeafId: "leaf-43",
         observations: 3,
+        chainObservations: 3,
+        branchObservations: 3,
+        parentRequest: {
+            model: "test-model",
+            systemChars: 1200,
+            systemHash: "aaaabbbb",
+            toolsHash: "ccccdddd",
+            messageCount: 43,
+            leafId: "leaf-43",
+        },
+        unknowns: [],
         historyTruncated: false,
         modelDivergence: null,
         ...overrides,
@@ -331,6 +342,11 @@ describe("compaction-report script", () => {
                 commonPrefixMessages: -1,
                 referenceDepth: -1,
                 observations: 0,
+                // A run with no reference has nothing on its branch either; a fixture that claimed otherwise
+                // would contradict the guarantee the invariant section checks.
+                chainObservations: 0,
+                branchObservations: 0,
+                parentRequest: undefined,
             }),
         );
         trace.attempt("native", nativeFields(), accepted({ usage: usage(2000, 1500, 30000) }));
@@ -343,6 +359,117 @@ describe("compaction-report script", () => {
         expect(keys).toContain("no-prefix-reference");
         expect(keys).not.toContain("prefix-unusable");
         expect(runText(["--session", "sess-no-reference"]).stdout).toContain("reference=none");
+    });
+
+    it("names which of the three chain states left the reference empty", () => {
+        // Held, on-branch, comparable: three different zeros that the record used to render identically, and
+        // picking the wrong one sends the reader to the wrong subsystem.
+        const states: [string, string, Partial<CompactionPrefixFields>][] = [
+            [
+                "sess-cold",
+                "chain-empty",
+                { chainObservations: 0, branchObservations: 0, observations: 0 },
+            ],
+            [
+                "sess-off-branch",
+                "chain-off-branch",
+                { chainObservations: 9, branchObservations: 0, observations: 0 },
+            ],
+            [
+                "sess-incomparable",
+                "chain-incomparable",
+                { chainObservations: 9, branchObservations: 4, observations: 0 },
+            ],
+        ];
+
+        for (const [session, , fields] of states) {
+            const trace = recorder(session);
+            trace.prefix(healthyPrefix({ reference: "chain", prefixUsable: undefined, ...fields }));
+            trace.attempt("native", nativeFields(), accepted({ usage: usage(2000, 1500, 30000) }));
+            const summary = checkpoint("## Goal", 4000);
+            trace.modelResponse("native", summary);
+            trace.final("native", summary, finalFields());
+            trace.outcome("native");
+        }
+
+        const report = parseReport();
+        expect(flagKeys(report, "sess-cold")).toContain("chain-empty");
+        expect(flagKeys(report, "sess-off-branch")).toContain("chain-off-branch");
+        expect(flagKeys(report, "sess-incomparable")).toContain("chain-incomparable");
+        // The funnel prints, oldest state first: held / on branch / comparable.
+        expect(runText(["--session", "sess-off-branch"]).stdout).toContain("chain=9/0/0");
+    });
+
+    it("flags a prompt difference that no length figure could show", () => {
+        const trace = recorder("sess-drift");
+        trace.prefix(
+            healthyPrefix({
+                ourRequest: { systemChars: 1200, systemHash: "ourhash000" },
+                parentRequest: {
+                    model: "test-model",
+                    systemChars: 1200,
+                    systemHash: "parent000",
+                    toolsHash: "ccccdddd",
+                    messageCount: 43,
+                    leafId: "leaf-43",
+                },
+            }),
+        );
+        trace.attempt("native", nativeFields(), accepted({ usage: usage(2000, 1500, 30000) }));
+        const summary = checkpoint("## Goal", 4000);
+        trace.modelResponse("native", summary);
+        trace.final("native", summary, finalFields());
+        trace.outcome("native");
+
+        // Equal length, unequal hash: the case where a size would have read as "unchanged".
+        expect(flagKeys(parseReport(), "sess-drift")).toContain("system-prompt-drift");
+        expect(runText(["--session", "sess-drift"]).stdout).toContain("sys=1200c");
+    });
+
+    it("reports a broken instrument as an invariant violation, not as a finding", () => {
+        const trace = recorder("sess-contradiction");
+        // reference=none is only reachable with nothing on the branch, so this record cannot be honest about
+        // both fields at once.
+        trace.prefix(
+            healthyPrefix({ reference: "none", prefixUsable: undefined, branchObservations: 3 }),
+        );
+        trace.attempt("native", nativeFields(), accepted({ usage: usage(2000, 1500, 30000) }));
+        const summary = checkpoint("## Goal", 4000);
+        trace.modelResponse("native", summary);
+        trace.final("native", summary, finalFields());
+        trace.outcome("native");
+
+        const text = runText([]).stdout;
+        expect(text).toContain("INVARIANTS");
+        expect(text).toContain("none-with-branch");
+    });
+
+    it("prints what the record cannot answer, apart from what it suspects", () => {
+        const trace = recorder("sess-unknowns");
+        trace.prefix(
+            healthyPrefix({
+                reference: "none",
+                prefixUsable: undefined,
+                divergences: ["no-reference"],
+                firstDivergence: "no-reference",
+                commonPrefixMessages: -1,
+                referenceDepth: -1,
+                observations: 0,
+                chainObservations: 0,
+                branchObservations: 0,
+                parentRequest: undefined,
+                unknowns: ["cache reuse: this run cannot tell a miss from an unverifiable prefix"],
+            }),
+        );
+        trace.attempt("native", nativeFields(), accepted({ usage: usage(2000, 1500, 30000) }));
+        const summary = checkpoint("## Goal", 4000);
+        trace.modelResponse("native", summary);
+        trace.final("native", summary, finalFields());
+        trace.outcome("native");
+
+        expect(runText(["--session", "sess-unknowns"]).stdout).toContain(
+            "~ cannot tell: cache reuse: this run cannot tell a miss from an unverifiable prefix",
+        );
     });
 
     it("says so when the reference is real but shallower than the span", () => {

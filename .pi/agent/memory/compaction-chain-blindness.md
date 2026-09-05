@@ -18,29 +18,30 @@ reload created a fresh chain, and the compaction ran before enough parent reques
 for that branch. `obs=0` is a **cold store**, and with hashes instead of bodies it cannot be backfilled from the
 session file. Keep the sections below as the record of how to read this, not as an open defect.
 
-Two things remain genuinely open, and they are the reason to keep this file:
+One thing remains open, and it is the reason to keep this file:
 
-1. **The trace cannot distinguish "store empty" from "store full, filter rejected it".** It prints one number
-   where two are needed. Add `chainObservations` (held, unfiltered) beside `observations` (on-branch), plus the
-   session id the chain was created under. That combination would have settled this in one reading instead of
-   costing an experiment and a reload.
-2. **The first compaction after a reload, `/resume`, or restart is unverifiable**, because the store is
-   process-local. This is a design limit, not a bug. Bounding the keying by `getSessionId()` fixes only the
-   two-managers-in-one-process case, which the 19:42 data says is not currently happening. Persisting ladders to
-   `.state/` (~70 bytes per request, pruned by branch) is the only thing that fixes reload blindness, and it is
-   the restart-durability half of the original brief. Ask before doing it.
+- **The first compaction after a reload, `/resume`, or restart is unverifiable**, because the store is
+  process-local. This is a design limit, not a bug. Bounding the keying by `getSessionId()` fixes only the
+  two-managers-in-one-process case, which the 19:42 data says is not currently happening. Persisting ladders to
+  `.state/` (~70 bytes per request, pruned by branch) is the only thing that fixes reload blindness, and it is
+  the restart-durability half of the original brief. Agreed as the sqlite workstream; not built yet.
+
+The other item - the trace printing one number where three are needed - shipped the same evening. See
+`## The prefix funnel` in the `compaction` memory for the field names and `docs/compaction-trace-report.md` for
+how they read.
 
 Read this before touching `src/modules/compaction/chain.ts`, `prefixVerdict()`, or the `prefix` trace record,
 and before concluding anything about a `cache-read-zero` suspect: an empty chain means the **instrument** is
 blind, which makes every cache conclusion from that run uninterpretable.
 
-## Evidence (trace `.state/compaction-trace.jsonl`, 4 runs, 2026-09-05)
+## Evidence (trace `.state/compaction-trace.jsonl`, 5 runs, 2026-09-05)
 
 ```
-14:06:10 two-stage    sess=01a0714f ref=chain obs=10
-14:32:10 core-default sess=01a0714f ref=none  obs=0     <- same session, 26 min later
-14:52:02 two-stage    sess=01a071fd ref=chain obs=13
-15:27:51 two-stage    sess=01a070e0 ref=none  obs=0     <- 557 msgs, 373k input, 400k ctx
+14:06:10 two-stage    sess=01a0714f ref=chain obs=10  sys=24619c
+14:32:10 core-default sess=01a0714f ref=none  obs= 0  sys=12817c   <- same session, 26 min later
+14:52:02 two-stage    sess=01a071fd ref=chain obs=13  sys=25294c
+15:27:51 two-stage    sess=01a070e0 ref=none  obs= 0  sys=12817c   <- 557 msgs, 373k input, 400k ctx
+19:42:41 two-stage    sess=01a070e0 ref=chain obs=97  sys=24813c   <- usable=true, verified=362/362
 ```
 
 `01a070e0` is the pi-coder development session itself. It had been compacted once before 15:27 (the `final`
@@ -48,15 +49,29 @@ record says `keptFrom=3898fb95`), and between that compaction and the 15:27 one,
 went out (a long implementation exchange). A chain cannot forget, and the 14:06 -> 14:32 transition happened in
 **the same session id**, so the store was replaced or the read path rejected what the write path kept.
 
-## Why "cold after an extension reload" is not the explanation
+## The argument that misled me
 
-One observation is sufficient. `RequestChain.observe()` stores the *cumulative* ladder of the request, so a
-single `before_provider_request` after any reload covers every prefix depth the compaction needs. `obs=0`
-therefore requires that **zero** parent requests were observed, not merely that the process was young.
+I wrote this, and it is valid and useless at once:
 
-Both `obs=0` runs are plausibly a session's *second* compaction, which is the shape to chase first.
+> One observation is sufficient. `RequestChain.observe()` stores the *cumulative* ladder of the request, so a
+> single `before_provider_request` after any reload covers every prefix depth the compaction needs. `obs=0`
+> therefore requires that **zero** parent requests were observed, not merely that the process was young.
+
+The premise and the inference are both right - `obs=0` does require zero observations. What I got wrong was the
+close: I treated "a reload cannot explain this" as "a reload did not do this", and concluded the reload story was
+refuted when it was only constrained. The reload explanation needed one more link to be airtight, and that link
+was sitting in the same records unexamined: the 12,817-char system prompt, which only occurs *before the first
+turn of a process*. `observations: 0` and a base-only prompt are two views of one event, and the second one dated
+the first.
+
+Sufficient does not mean present. When a piece of reasoning rules an explanation out by requiring it to be more
+specific than the evidence, the fix is to go find the field that makes it specific - not to keep reasoning.
 
 ## Candidate mechanisms, cheapest to rule out first
+
+All three below are dead, and the 19:42 run killed them: 97 observations were held, on the branch, and
+comparable, from the same store the compaction handler read. So the hook fires, write and read share the chain,
+and the branch filter keeps what it should. What remained was the cold store.
 
 1. **The branch filter rejects entries that exist.** `match()` keeps an observation only when its recorded
    `leafId` is in `pathIdSet(sessionManager.getBranch())`. If `getLeafId()` returns null, or returns an id that
@@ -68,7 +83,18 @@ Both `obs=0` runs are plausibly a session's *second* compaction, which is the sh
 3. **The hook genuinely does not fire** on the loaded instance (registration or reload lifecycle). Would also
    explain a total of zero.
 
-## Diagnostic to add before anything else
+## Diagnostic that shipped (same day), with one field dropped
+
+What went in is a four-level distinction rather than three fields: `chainObservations` (held),
+`branchObservations` (leaf on the current branch), `observations` (comparable - same system prompt and tool set),
+`parentRequest` mirroring `ourRequest`, `unknowns[]`, four funnel suspects, and an `INVARIANTS` section. The
+plan's `chainSession` was dropped: it existed to separate candidate 2, which the 19:42 data killed.
+
+The reason one number was not enough is in `chain.ts`: the `observations` the record printed was
+`ChainMatch.compared`, which is already shape-filtered. An empty chain and a request whose prompt differed from
+the parent's therefore looked identical, and only one of them is a bug.
+
+Original notes, kept as history:
 
 Three fields on the `prefix` record, no behaviour change:
 

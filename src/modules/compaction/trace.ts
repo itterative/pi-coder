@@ -177,6 +177,30 @@ export interface CompactionPrefixFields {
     currentLeafId: string | null;
     /** Comparable observations on this branch, i.e. how much of the ladder actually overlapped. */
     observations: number;
+    /**
+     * Chain entries held in this process, before any filter. Zero means no parent request has been observed
+     * since the store was created, which is what a restart, a reload, or a freshly built session view looks
+     * like from inside a compaction.
+     */
+    chainObservations: number;
+    /** Chain entries whose leaf sits on the current branch, before the shape filter. */
+    branchObservations: number;
+    /**
+     * The newest on-branch request as the chain recorded it, comparable or not.
+     *
+     * Absent when nothing was on the branch. This is the parent side of `ourRequest`, so "did our rebuild carry
+     * the same system prompt and tool set as pi's live requests" is a field comparison rather than an inference.
+     */
+    parentRequest?: {
+        model: string;
+        systemChars: number;
+        systemHash: string;
+        toolsHash: string;
+        messageCount: number;
+        leafId: string | null;
+    };
+    /** What this record cannot answer, stated rather than left for the reader to infer from a zero. */
+    unknowns: string[];
     /** The retention cap dropped older observations, so shallow depths may be unverifiable. */
     historyTruncated: boolean;
     /** `parent -> ours` when the reference request used a different model. */
