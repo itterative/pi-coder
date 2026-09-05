@@ -60,8 +60,8 @@ describe("request shape fingerprinting", () => {
     });
 
     it("hashes the whole system prompt, not the printed window", () => {
-        // A 24 KB prompt that differs only at character 9000 must not look cached-and-fine, which is why the
-        // shape hash reads raw text while the human-facing summary keeps the short excerpt.
+        // A 24 KB prompt that differs only at character 9000 must not look unchanged, which is why both hashes
+        // read raw text while the human-facing excerpt stays short.
         // Same length on purpose: a windowed hash would call these identical, and a length check too.
         const head = "a".repeat(4000);
         const before = requestShape(anthropicBody({ system: `${head}first` }));
@@ -70,6 +70,21 @@ describe("request shape fingerprinting", () => {
         expect(before.systemHash).not.toBe(after.systemHash);
         expect(before.systemChars).toBe(after.systemChars);
         expect(fingerprintPayload(anthropicBody({ system: head })).system).toContain("…");
+
+        // The record's own field must carry the same guarantee. It used to hash the 320-char excerpt, which
+        // reported `6e84662c` unchanged across a session whose prompt grew from 12,817 to 24,813 chars - a field
+        // that cannot see what it is named for reads as evidence of stability while contradicting it.
+        const summaryBefore = fingerprintSummary(
+            fingerprintPayload(anthropicBody({ system: `${head}first` })),
+        );
+        const summaryAfter = fingerprintSummary(
+            fingerprintPayload(anthropicBody({ system: `${head}other` })),
+        );
+        expect(summaryBefore.systemHash).not.toBe(summaryAfter.systemHash);
+        expect(summaryBefore.systemChars).toBe(summaryAfter.systemChars);
+        // One name, one meaning: the recorded hash is the hash the chain compares on, so a reader can join a
+        // `prefix.ourRequest.systemHash` to a retained shape without translating between the two.
+        expect(summaryBefore.systemHash).toBe(before.systemHash);
     });
 
     it("separates a changed tool body from a changed tool set", () => {

@@ -29,7 +29,8 @@ export interface SandboxConfigAudit {
 export interface SandboxConfigDecisionLog {
     enabled?: boolean; // default: true
     path?: string; // default: .state/bash-log.jsonl next to this extension
-    maxBytes?: number; // rotate to `<path>.1` past this size (default: 8 MiB)
+    maxBytes?: number; // rotate once the live file passes this size (default: 8 MiB)
+    generations?: number; // rotated copies kept, live file excluded: `.1` ... `.N` (default: 10)
 }
 
 export interface SandboxConfigCwdConfinement {
@@ -102,6 +103,7 @@ function tryLoad(path: string): SandboxConfig | null {
                       enabled: data.decisionLog.enabled,
                       path: data.decisionLog.path,
                       maxBytes: data.decisionLog.maxBytes,
+                      generations: data.decisionLog.generations,
                   }
                 : undefined,
             heuristics: data.heuristics

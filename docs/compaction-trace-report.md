@@ -2,7 +2,9 @@
 
 Every compaction the extension owns appends a few JSONL records so a pipeline whose intermediates never reach
 the session transcript can still be examined after the fact. The writer is `src/modules/compaction/trace.ts`
-(`.state/compaction-trace.jsonl`, rotated into a `.1` sibling); the reader is `scripts/compaction-report.mjs`.
+(`.state/compaction-trace.jsonl`, rotated into `traceGenerations` sibling segments and read back oldest first);
+the reader is `scripts/compaction-report.ts`, run through tsx because it shares `src/common/record-log.ts` with
+the writer.
 
 ## What is recorded
 

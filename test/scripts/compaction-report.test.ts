@@ -18,7 +18,9 @@ import {
     type CompactionTraceTarget,
 } from "../../src/modules/compaction/trace";
 
-const SCRIPT = path.join(PI_CODER_EXTENSION_DIR, "scripts", "compaction-report.mjs");
+const SCRIPT = path.join(PI_CODER_EXTENSION_DIR, "scripts", "compaction-report.ts");
+/** The report is TypeScript because it shares the record log with the recorder; tsx loads it without a build. */
+const TSX = ["--import", "tsx"];
 
 /**
  * A real llama.cpp trimmed run. It exists so "what a healthy run looks like" is pinned
@@ -78,6 +80,7 @@ interface ReportRun {
 interface ReportJson {
     total: number;
     skipped: number;
+    malformed: number;
     suspects: number;
     runs: ReportRun[];
     aggregates: {
@@ -120,6 +123,7 @@ function recorder(session: string, reason = "manual"): CompactionTraceRecorder {
         enabled: true,
         filePath: logPath,
         maxBytes: 64 * 1024 * 1024,
+        generations: 10,
     };
 
     return createCompactionTraceRecorder(
@@ -215,7 +219,7 @@ function writeHealthyRun(session: string): void {
 }
 
 function runScript(args: string[]): ScriptResult {
-    const result = spawnSync(process.execPath, [SCRIPT, "--path", logPath, ...args], {
+    const result = spawnSync(process.execPath, [...TSX, SCRIPT, "--path", logPath, ...args], {
         encoding: "utf8",
     });
 
@@ -700,14 +704,15 @@ describe("compaction-report script", () => {
             `${JSON.stringify({ ts: new Date().toISOString(), command: "npm test", surface: "parent" })}\n`,
         );
 
-        // This fixture deliberately contains junk, so stderr carries a skip note: read the JSON directly
-        // rather than through the strict `parseReport` helper.
+        // This fixture deliberately contains junk: one foreign object and one torn line. Both are counted,
+        // separately, and neither is guessed at - so read the JSON directly rather than through `parseReport`.
         const junky = runScript(["--json"]);
         expect(junky.status).toBe(0);
         const report = JSON.parse(junky.stdout) as ReportJson;
         expect(report.total).toBe(2);
-        // Only the foreign JSON object counts as skipped; an unparsable line is reported on stderr instead.
+        // A record from another tool is `skipped`; a line that cannot be parsed at all is `malformed`.
         expect(report.skipped).toBe(1);
+        expect(report.malformed).toBe(1);
 
         const legacy = report.runs.find((run) => run.session === "sess-legacy");
         expect(legacy?.prefix?.divergences).toEqual([]);
@@ -716,10 +721,11 @@ describe("compaction-report script", () => {
         // `truncated` is absent in this old record, so the span flag must not fire on an unknown.
         expect(legacy?.flags.map((flag) => flag.key)).toEqual(["prefix-unusable", "fell-back"]);
 
-        // The unparsable line is reported where it belongs: stderr, not the report body.
+        // The same counts reach the human report, where a gap has to be visible in the header.
         const result = runScript([]);
         expect(result.status).toBe(0);
-        expect(result.stderr).toContain("skipping unparsable line");
+        expect(result.stdout).toContain("(1 foreign skipped) (1 unreadable)");
+        expect(result.stderr).not.toContain("unparsable");
     });
 
     it("reads a rotated sibling along with the current log", () => {
@@ -782,9 +788,11 @@ describe("compaction-report script", () => {
     });
 
     it("reads the captured llama.cpp run as a healthy compaction", () => {
-        const result = spawnSync(process.execPath, [SCRIPT, "--path", HEALTHY_FIXTURE, "--json"], {
-            encoding: "utf8",
-        });
+        const result = spawnSync(
+            process.execPath,
+            [...TSX, SCRIPT, "--path", HEALTHY_FIXTURE, "--json"],
+            { encoding: "utf8" },
+        );
         expect(result.status, result.stderr).toBe(0);
         const report = JSON.parse(result.stdout) as ReportJson;
 
@@ -809,7 +817,7 @@ describe("compaction-report script", () => {
 
         const text = spawnSync(
             process.execPath,
-            [SCRIPT, "--path", HEALTHY_FIXTURE, "--runs", "1"],
+            [...TSX, SCRIPT, "--path", HEALTHY_FIXTURE, "--runs", "1"],
             {
                 encoding: "utf8",
             },

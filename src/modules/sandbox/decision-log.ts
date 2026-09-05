@@ -1,8 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
-
 import sandboxConfig from "../../common/config";
 import { BASH_DECISION_LOG_PATH } from "../../common/constants";
+import { createJsonlRecordLog, type RecordLog } from "../../common/record-log";
 import type { Permission } from "./permissions";
 import type { BashDecisionSegment, ResolvePermissionDetails, SegmentSource } from "./resolve";
 
@@ -15,8 +13,13 @@ import type { BashDecisionSegment, ResolvePermissionDetails, SegmentSource } fro
  */
 
 const RECORD_VERSION = 1;
-/** Rotate instead of growing past this size (single previous generation kept). */
+/** Rotate instead of growing past this size. */
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+/**
+ * Rotated copies kept, live file excluded. At eight MiB each this can hold eighty MiB of decisions, which on a
+ * compressing filesystem costs a couple of MiB - the reason the old single generation was worth replacing.
+ */
+const DEFAULT_GENERATIONS = 10;
 const DISABLED_VALUES = new Set(["0", "false", "no", "off"]);
 
 export interface BashDecisionRecord {
@@ -77,6 +80,7 @@ interface DecisionLogConfig {
     enabled: boolean;
     filePath: string;
     maxBytes: number;
+    generations: number;
 }
 
 /** Treat an unset or blank value as absent so config and defaults can apply. */
@@ -100,28 +104,29 @@ export function getDecisionLogConfig(): DecisionLogConfig {
         enabled,
         filePath: envPath ?? nonEmpty(config?.path) ?? BASH_DECISION_LOG_PATH,
         maxBytes: config?.maxBytes ?? DEFAULT_MAX_BYTES,
+        generations: config?.generations ?? DEFAULT_GENERATIONS,
     };
 }
 
-function currentSize(filePath: string): number {
-    try {
-        return fs.statSync(filePath).size;
-    } catch {
-        return 0;
-    }
-}
+/**
+ * One log per target, so append and rotation health accumulates across a session instead of per decision.
+ */
+const decisionLogs = new Map<string, RecordLog<BashDecisionRecord>>();
 
-/** Rotate the log to a single `.1` generation once it grows past the cap. */
-function rotateIfNeeded(filePath: string, maxBytes: number): void {
-    if (currentSize(filePath) <= maxBytes) {
-        return;
+function decisionLog(config: DecisionLogConfig): RecordLog<BashDecisionRecord> {
+    const key = `${config.filePath}|${String(config.maxBytes)}|${String(config.generations)}`;
+    const existing = decisionLogs.get(key);
+    if (existing !== undefined) {
+        return existing;
     }
 
-    try {
-        fs.renameSync(filePath, `${filePath}.1`);
-    } catch {
-        // A failed rotation must not lose the decision; appending continues.
-    }
+    const created = createJsonlRecordLog<BashDecisionRecord>({
+        filePath: config.filePath,
+        maxBytes: config.maxBytes,
+        generations: config.generations,
+    });
+    decisionLogs.set(key, created);
+    return created;
 }
 
 function segmentRecords(segments: readonly BashDecisionSegment[]): BashDecisionSegment[] {
@@ -168,14 +173,5 @@ export function logBashDecision(input: BashDecisionInput): void {
         ...(input.note === undefined ? {} : { note: input.note }),
     };
 
-    try {
-        fs.mkdirSync(path.dirname(config.filePath), { recursive: true, mode: 0o700 });
-        rotateIfNeeded(config.filePath, config.maxBytes);
-        fs.appendFileSync(config.filePath, `${JSON.stringify(record)}\n`, {
-            encoding: "utf8",
-            mode: 0o600,
-        });
-    } catch {
-        // Diagnostics are best-effort only.
-    }
+    decisionLog(config).append(record);
 }

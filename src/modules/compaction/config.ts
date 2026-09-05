@@ -47,6 +47,12 @@ export interface CompactionConfig {
     tracePath?: string;
     /** Rotate the trace into a single `.1` generation once it grows past this many bytes. */
     traceMaxBytes: number;
+    /**
+     * Rotated copies of the trace kept, the live file excluded, so `10` retains `file` plus `file.1` ... `file.10`.
+     * Kept because the cap is what makes history short rather than large: on a filesystem that already compresses
+     * these lines, an extra nine generations costs a few hundred KB.
+     */
+    traceGenerations: number;
 }
 
 export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
@@ -62,6 +68,7 @@ export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
     retryBaseDelayMs: 1_000,
     traceEnabled: true,
     traceMaxBytes: 1_048_576,
+    traceGenerations: 10,
 };
 
 export interface CompactionConfigLocations {
@@ -158,6 +165,7 @@ function readConfigFile(filePath: string | undefined): Partial<CompactionConfig>
         retryBaseDelayMs: positiveNumberField(record.retryBaseDelayMs),
         traceEnabled: booleanField(record.traceEnabled),
         traceMaxBytes: positiveNumberField(record.traceMaxBytes),
+        traceGenerations: nonNegativeNumberField(record.traceGenerations),
         ...(model ? { model } : {}),
         ...(tracePath ? { tracePath } : {}),
     };
@@ -204,6 +212,8 @@ export function loadCompactionConfig(cwd: string): CompactionConfig {
             project.retryBaseDelayMs ?? global.retryBaseDelayMs ?? defaults.retryBaseDelayMs,
         traceEnabled: project.traceEnabled ?? global.traceEnabled ?? defaults.traceEnabled,
         traceMaxBytes: project.traceMaxBytes ?? global.traceMaxBytes ?? defaults.traceMaxBytes,
+        traceGenerations:
+            project.traceGenerations ?? global.traceGenerations ?? defaults.traceGenerations,
         ...(model ? { model } : {}),
         ...(tracePath ? { tracePath } : {}),
     };

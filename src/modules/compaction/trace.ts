@@ -1,10 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
 
 import type { StopReason, Usage } from "@earendil-works/pi-ai";
 import { uuidv7 } from "@earendil-works/pi-ai";
 
 import { COMPACTION_TRACE_PATH } from "../../common/constants";
+import { createJsonlRecordLog, type RecordLog } from "../../common/record-log";
 import { isAgentTraceEnabled } from "../../common/trace";
 import type { CompactionConfig } from "./config";
 import type { SummarizationFailureCause } from "./failure";
@@ -212,6 +212,8 @@ export interface CompactionTraceTarget {
     enabled: boolean;
     filePath: string;
     maxBytes: number;
+    /** Rotated copies kept, live file excluded. See `CompactionConfig["traceGenerations"]`. */
+    generations: number;
 }
 
 /** Resolve the trace target: the shared switch first, then this feature's own env and config overrides. */
@@ -227,6 +229,7 @@ export function compactionTraceTarget(config: CompactionConfig): CompactionTrace
         enabled,
         filePath: configuredPath ? path.resolve(configuredPath) : COMPACTION_TRACE_PATH,
         maxBytes: config.traceMaxBytes,
+        generations: config.traceGenerations,
     };
 }
 
@@ -275,7 +278,7 @@ export function createCompactionTraceRecorder(
         if (!target.enabled) {
             return;
         }
-        appendRecord({ v: RECORD_VERSION, id, ts: new Date().toISOString(), ...record }, target);
+        traceLog(target).append({ v: RECORD_VERSION, id, ts: new Date().toISOString(), ...record });
     };
 
     return {
@@ -328,32 +331,25 @@ function usageFields(usage: Usage | undefined): CompactionTraceUsage | undefined
     };
 }
 
-function currentSize(filePath: string): number {
-    try {
-        return fs.statSync(filePath).size;
-    } catch {
-        return 0;
-    }
-}
+/**
+ * One log per target, so append and rotation health accumulates across runs rather than per recorder. The key
+ * includes the rotation settings because a config change mid-session is a different store, not the same one
+ * behaving differently.
+ */
+const traceLogs = new Map<string, RecordLog<CompactionTraceRecord>>();
 
-/** Keep the file small by rotating it into a single `.1` generation once it passes the cap. */
-function rotateIfNeeded(filePath: string, maxBytes: number): void {
-    if (currentSize(filePath) <= maxBytes) {
-        return;
+function traceLog(target: CompactionTraceTarget): RecordLog<CompactionTraceRecord> {
+    const key = `${target.filePath}|${String(target.maxBytes)}|${String(target.generations)}`;
+    const existing = traceLogs.get(key);
+    if (existing !== undefined) {
+        return existing;
     }
-    try {
-        fs.renameSync(filePath, `${filePath}.1`);
-    } catch {
-        // A failed rotation must not lose the record; appending continues.
-    }
-}
 
-function appendRecord(record: CompactionTraceRecord, target: CompactionTraceTarget): void {
-    try {
-        fs.mkdirSync(path.dirname(target.filePath), { recursive: true, mode: 0o700 });
-        rotateIfNeeded(target.filePath, target.maxBytes);
-        fs.appendFileSync(target.filePath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-    } catch {
-        // Best effort, by design: the trace explains compaction, it never gates it.
-    }
+    const created = createJsonlRecordLog<CompactionTraceRecord>({
+        filePath: target.filePath,
+        maxBytes: target.maxBytes,
+        generations: target.generations,
+    });
+    traceLogs.set(key, created);
+    return created;
 }

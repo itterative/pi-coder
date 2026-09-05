@@ -13,10 +13,13 @@ import {
     type ResolvePermissionDetails,
 } from "../../src/modules/sandbox/resolve";
 
-const SCRIPT = path.join(PI_CODER_EXTENSION_DIR, "scripts", "permission-report.mjs");
+const SCRIPT = path.join(PI_CODER_EXTENSION_DIR, "scripts", "permission-report.ts");
+/** Shared with the compaction report: both read through `src/common/record-log.ts`, so both need tsx. */
+const TSX = ["--import", "tsx"];
 
 interface ReportJson {
     total: number;
+    malformed: number;
     gapView: "records" | "segments";
     prompted: number;
     blocked: number;
@@ -62,7 +65,7 @@ function record(command: string, overrides: RecordOverrides = {}): void {
 }
 
 function runScript(args: string[], file: string = logPath): ScriptResult {
-    const result = spawnSync(process.execPath, [SCRIPT, "--path", file, ...args], {
+    const result = spawnSync(process.execPath, [...TSX, SCRIPT, "--path", file, ...args], {
         encoding: "utf8",
     });
 
@@ -221,7 +224,7 @@ describe("permission-report script", () => {
         expect(runReport(["--since", "7d"]).total).toBe(1);
     });
 
-    it("filters by surface and reports unparsable lines on stderr", () => {
+    it("filters by surface and counts an unreadable line instead of warning about it", () => {
         record("aws s3 ls", {
             surface: "child",
             agentName: "worker",
@@ -236,9 +239,11 @@ describe("permission-report script", () => {
 
         const result = runScript(["--surface", "child", "--json"]);
         expect(result.status).toBe(0);
-        expect(result.stderr).toContain("skipping unparsable line");
+        expect(result.stderr).not.toContain("unparsable");
 
         const report = JSON.parse(result.stdout) as ReportJson;
+        // The torn line is a counted gap in the store, visible without scraping stderr.
+        expect(report.malformed).toBe(1);
         expect(report.total).toBe(1);
         expect(Object.keys(report.promptedDenied)).toEqual(["aws s3 ls"]);
     });
@@ -250,7 +255,9 @@ describe("permission-report script", () => {
     });
 
     it("rejects an unknown argument", () => {
-        const result = spawnSync(process.execPath, [SCRIPT, "--nonsense"], { encoding: "utf8" });
+        const result = spawnSync(process.execPath, [...TSX, SCRIPT, "--nonsense"], {
+            encoding: "utf8",
+        });
         expect(result.status).toBe(2);
         expect(result.stderr).toContain("unknown argument");
     });

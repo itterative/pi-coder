@@ -9,16 +9,17 @@
  * rather than leaving a human to rebuild the join with jq each time.
  *
  * Usage:
- *   node scripts/compaction-report.mjs [options]
+ *   npm run compaction-report -- [options]
  */
 
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createJsonlRecordLog, discoverGenerations } from "../src/common/record-log";
+
 // ---------------------------------------------------------------- arg parsing
 
-const USAGE = `usage: node scripts/compaction-report.mjs [options]\n${describeOptions()}`;
+const USAGE = `usage: npm run compaction-report -- [options]\n${describeOptions()}`;
 
 const ROUTES = new Set([
     "two-stage",
@@ -37,7 +38,7 @@ const DUMP_STAGES = new Set(["all", "native", "serialized", "final"]);
 function describeOptions() {
     return [
         "  --path <file>       log (default $COMPACTION_TRACE_PATH or .state/compaction-trace.jsonl; a",
-        "                      sibling `.1` rotation file is included automatically)",
+        "                      every retained generation is read automatically, oldest first)",
         "  --since <dur>       only newer than 90m | 24h | 7d",
         "  --session <prefix>  only runs whose session id starts with this",
         "  --grep <text>       only runs whose stage text contains this (case-insensitive)",
@@ -181,36 +182,27 @@ function nonEmpty(value) {
     return trimmed ? trimmed : undefined;
 }
 
-function collectFiles(explicitPath) {
-    const primary = explicitPath ?? defaultLogPath();
-    if (!fs.existsSync(primary)) {
-        return [];
-    }
+/**
+ * Every retained generation, read through the same log the recorder writes.
+ *
+ * Sharing the reader is the point of this file: segment naming, oldest-first ordering, and torn-line tolerance
+ * were each reimplemented per script, and a report that disagrees with its own recorder about which files hold
+ * history is worse than no report. `maxBytes: 0` disables rotation, because reading is never a reason to roll
+ * the file being described.
+ */
+function openTraceLog(explicitPath) {
+    const filePath = explicitPath ?? defaultLogPath();
 
-    const rotated = `${primary}.1`;
-    return fs.existsSync(rotated) ? [rotated, primary] : [primary];
-}
-
-function* readRecords(file) {
-    const lines = fs.readFileSync(file, "utf8").split("\n");
-    let lineNumber = 0;
-
-    for (const line of lines) {
-        lineNumber += 1;
-        if (line.trim() === "") {
-            continue;
-        }
-
-        try {
-            yield JSON.parse(line);
-        } catch {
-            process.stderr.write(`${file}:${lineNumber}: skipping unparsable line\n`);
-        }
-    }
+    return createJsonlRecordLog({
+        filePath,
+        maxBytes: 0,
+        generations: discoverGenerations(filePath),
+    });
 }
 
 function loadRecords(options) {
-    const files = collectFiles(options.path);
+    const log = openTraceLog(options.path);
+    const files = log.stats().files;
     if (files.length === 0) {
         throw new Error(
             `no compaction trace found at ${options.path ?? defaultLogPath()}\n` +
@@ -218,33 +210,31 @@ function loadRecords(options) {
         );
     }
 
-    const cutoff = options.since === undefined ? null : Date.now() - parseDuration(options.since);
+    const cutoff =
+        options.since === undefined ? undefined : Date.now() - parseDuration(options.since);
     const records = [];
     let skipped = 0;
 
-    for (const file of files) {
-        for (const record of readRecords(file)) {
-            if (!isTraceRecord(record)) {
-                skipped += 1;
-                continue;
-            }
-            if (cutoff !== null && Date.parse(record.ts) < cutoff) {
-                continue;
-            }
-            const matchesSession =
-                options.session === undefined || String(record.session).startsWith(options.session);
-            if (!matchesSession) {
-                continue;
-            }
-            if (options.reason !== undefined && record.reason !== options.reason) {
-                continue;
-            }
-
-            records.push(record);
+    for (const record of log.read({ since: cutoff })) {
+        if (!isTraceRecord(record)) {
+            skipped += 1;
+            continue;
         }
+
+        const matchesSession =
+            options.session === undefined || String(record.session).startsWith(options.session);
+        if (!matchesSession) {
+            continue;
+        }
+
+        if (options.reason !== undefined && record.reason !== options.reason) {
+            continue;
+        }
+
+        records.push(record);
     }
 
-    return { records, files, skipped };
+    return { records, files, skipped, malformed: log.stats().malformed };
 }
 
 /** Shape check only: an unrelated JSONL line must not become a run. */
@@ -655,6 +645,60 @@ function invariantViolations(runs) {
 }
 
 /**
+ * The three states that all render as `obs=0`, named apart.
+ *
+ * They have nothing in common with each other, and debugging the wrong one is how a whole afternoon goes: an
+ * empty chain is a cold process, an off-branch chain is navigation, and an incomparable chain is a prompt or
+ * tool-set difference. Records written before these fields existed produce nothing, rather than a `chain-empty`
+ * that is really just an older build.
+ */
+function chainFunnelSuspects(prefix) {
+    const held = prefix?.chainObservations;
+    const onBranch = prefix?.branchObservations;
+    if (typeof held !== "number" || typeof onBranch !== "number") {
+        return [];
+    }
+
+    const comparable = number(prefix.observations);
+    const out = [];
+
+    if (held === 0) {
+        out.push({
+            key: "chain-empty",
+            detail:
+                "no parent request observed in this process since the chain was created " +
+                "(restart, reload, or a freshly built session view)",
+        });
+    } else if (onBranch === 0) {
+        out.push({
+            key: "chain-off-branch",
+            detail: `chain holds ${held} entries, none with a leaf on this branch`,
+        });
+    } else if (comparable === 0) {
+        out.push({
+            key: "chain-incomparable",
+            detail: `${onBranch} on-branch entries share neither our system prompt nor our tool set`,
+        });
+    }
+
+    // A same-length, different-hash pair is prompt drift that no size figure can show; the reverse used to be
+    // the normal reading, because the recorded hash covered only a 320-char excerpt.
+    if (
+        typeof prefix.ourSystemHash === "string" &&
+        typeof prefix.parentSystemHash === "string" &&
+        prefix.ourSystemHash !== prefix.parentSystemHash &&
+        prefix.ourSystemChars === prefix.parentSystemChars
+    ) {
+        out.push({
+            key: "system-prompt-drift",
+            detail: `same length (${prefix.ourSystemChars}c), different system prompt`,
+        });
+    }
+
+    return out;
+}
+
+/**
  * Automated suspicion. Every flag names a failure mode already seen in a live trace, so the report can point
  * at the runs that are wrong instead of leaving the reader to compare numbers by eye.
  */
@@ -682,47 +726,7 @@ function flagRun(run, options) {
         });
     }
 
-    // The three states that all render as `obs=0`, named apart. They have nothing in common with each other, and
-    // debugging the wrong one is how a whole afternoon goes: an empty chain is a cold process, an off-branch
-    // chain is navigation, and an incomparable chain is a prompt or tool-set difference.
-    const held = prefix?.chainObservations;
-    const onBranch = prefix?.branchObservations;
-    if (typeof held === "number" && typeof onBranch === "number") {
-        const comparable = number(prefix.observations);
-
-        if (held === 0) {
-            out.push({
-                key: "chain-empty",
-                detail:
-                    "no parent request observed in this process since the chain was created " +
-                    "(restart, reload, or a freshly built session view)",
-            });
-        } else if (onBranch === 0) {
-            out.push({
-                key: "chain-off-branch",
-                detail: `chain holds ${held} entries, none with a leaf on this branch`,
-            });
-        } else if (comparable === 0) {
-            out.push({
-                key: "chain-incomparable",
-                detail: `${onBranch} on-branch entries share neither our system prompt nor our tool set`,
-            });
-        }
-
-        // A same-length, different-hash pair is prompt drift that no size figure can show; the reverse used to be
-        // the normal reading, because the recorded hash covered only a 320-char excerpt.
-        if (
-            typeof prefix.ourSystemHash === "string" &&
-            typeof prefix.parentSystemHash === "string" &&
-            prefix.ourSystemHash !== prefix.parentSystemHash &&
-            prefix.ourSystemChars === prefix.parentSystemChars
-        ) {
-            out.push({
-                key: "system-prompt-drift",
-                detail: `same length (${prefix.ourSystemChars}c), different system prompt`,
-            });
-        }
-    }
+    out.push(...chainFunnelSuspects(prefix));
 
     // The reference existed but nothing in it reached the depth our span carried: no verdict is possible, and
     // an earlier version of this code called that "unusable".
@@ -1169,7 +1173,8 @@ function renderReport(runs, analysis, stats, options) {
     out.push(`  files:    ${stats.files.join(", ")}`);
     out.push(
         `  records:  ${stats.recordCount} in ${runs.length} run(s)` +
-            `${stats.skipped > 0 ? ` (${stats.skipped} unparsable/foreign skipped)` : ""}`,
+            `${stats.skipped > 0 ? ` (${stats.skipped} foreign skipped)` : ""}` +
+            `${stats.malformed > 0 ? ` (${stats.malformed} unreadable)` : ""}`,
     );
     if (runs.length > 0) {
         out.push(`  span:     ${runs[0].startedAt} → ${runs[runs.length - 1].endedAt}`);
@@ -1480,6 +1485,7 @@ function main() {
             records: records.records,
             files: records.files,
             skipped: records.skipped,
+            malformed: records.malformed,
             recordCount: records.records.length,
         };
     } catch (error) {
@@ -1510,6 +1516,7 @@ function main() {
                     files: stats.files,
                     records: stats.recordCount,
                     skipped: stats.skipped,
+                    malformed: stats.malformed,
                     total: runs.length,
                     suspects: analysis.suspects.length,
                     thresholds: {

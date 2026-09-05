@@ -8,10 +8,11 @@
  * must not be widened), and what the existing rules and suggestions actually do.
  *
  * Usage:
- *   node scripts/permission-report.mjs [options]
+ *   npm run permission-report -- [options]
  *
  *   --path <file>      log file (default: $SANDBOX_DECISION_LOG_PATH or the
- *                      extension's .state/bash-log.jsonl; a sibling `.1`
+ *                      extension's .state/bash-log.jsonl; every retained
+ *                      generation is read automatically, oldest first
  *                      rotation file is included automatically)
  *   --since <dur>      only records newer than this age, e.g. 90m, 24h, 7d
  *   --surface <name>   parent | child
@@ -23,13 +24,14 @@
  *   --json             emit machine-readable aggregates instead of a report
  */
 
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createJsonlRecordLog, discoverGenerations } from "../src/common/record-log";
+
 // ---------------------------------------------------------------- arg parsing
 
-const USAGE = `usage: node scripts/permission-report.mjs [options]\n${describeOptions()}`;
+const USAGE = `usage: npm run permission-report -- [options]\n${describeOptions()}`;
 
 function describeOptions() {
     return [
@@ -138,36 +140,24 @@ function nonEmpty(value) {
     return trimmed ? trimmed : undefined;
 }
 
-function collectFiles(explicitPath) {
-    const primary = explicitPath ?? defaultLogPath();
-    if (!fs.existsSync(primary)) {
-        return [];
-    }
+/**
+ * Read the decision log through the same store the permission gate writes with, so segment naming, ordering,
+ * and torn-line tolerance are decided once. `maxBytes: 0` disables rotation: reporting is not a reason to roll
+ * the file being reported on.
+ */
+function openDecisionLog(explicitPath) {
+    const filePath = explicitPath ?? defaultLogPath();
 
-    const rotated = `${primary}.1`;
-    return fs.existsSync(rotated) ? [rotated, primary] : [primary];
-}
-
-function* readRecords(file) {
-    const lines = fs.readFileSync(file, "utf8").split("\n");
-    let lineNumber = 0;
-
-    for (const line of lines) {
-        lineNumber += 1;
-        if (line.trim() === "") {
-            continue;
-        }
-
-        try {
-            yield JSON.parse(line);
-        } catch {
-            process.stderr.write(`${file}:${lineNumber}: skipping unparsable line\n`);
-        }
-    }
+    return createJsonlRecordLog({
+        filePath,
+        maxBytes: 0,
+        generations: discoverGenerations(filePath),
+    });
 }
 
 function loadRecords(options) {
-    const files = collectFiles(options.path);
+    const log = openDecisionLog(options.path);
+    const files = log.stats().files;
     if (files.length === 0) {
         throw new Error(
             `no decision log found at ${options.path ?? defaultLogPath()}\n` +
@@ -175,38 +165,28 @@ function loadRecords(options) {
         );
     }
 
-    const cutoff = options.since === undefined ? null : Date.now() - parseDuration(options.since);
+    const cutoff =
+        options.since === undefined ? undefined : Date.now() - parseDuration(options.since);
     const records = [];
     let skipped = 0;
 
-    for (const file of files) {
-        for (const record of readRecords(file)) {
-            if (
-                record === null ||
-                typeof record !== "object" ||
-                typeof record.command !== "string"
-            ) {
-                skipped += 1;
-                continue;
-            }
-            if (cutoff !== null && Date.parse(record.ts ?? "") < cutoff) {
-                continue;
-            }
-            if (options.surface !== undefined && record.surface !== options.surface) {
-                continue;
-            }
-            if (options.agent !== undefined && record.agent !== options.agent) {
-                continue;
-            }
-            if (options.prompted && record.prompt === undefined) {
-                continue;
-            }
-
-            records.push(record);
+    for (const record of log.read({ since: cutoff })) {
+        if (record === null || typeof record !== "object" || typeof record.command !== "string") {
+            skipped += 1;
+            continue;
         }
+
+        if (options.surface !== undefined && record.surface !== options.surface) {
+            continue;
+        }
+        if (options.prompted && record.prompt === undefined) {
+            continue;
+        }
+
+        records.push(record);
     }
 
-    return { records, files, skipped };
+    return { records, files, skipped, malformed: log.stats().malformed };
 }
 
 // --------------------------------------------------------------- aggregation
@@ -488,7 +468,9 @@ function renderReport(records, stats, options) {
     out.push(`bash permission decision report`);
     out.push(`  files:   ${stats.files.join(", ")}`);
     out.push(
-        `  records: ${records.length}${stats.skipped > 0 ? ` (${stats.skipped} unparsable skipped)` : ""}`,
+        `  records: ${records.length}` +
+            `${stats.skipped > 0 ? ` (${stats.skipped} foreign skipped)` : ""}` +
+            `${stats.malformed > 0 ? ` (${stats.malformed} unreadable)` : ""}`,
     );
     if (records.length > 0) {
         out.push(`  span:    ${records[0].ts} → ${records[records.length - 1].ts}`);
@@ -572,11 +554,13 @@ function main() {
     let records;
     let files;
     let skipped;
+    let malformed;
     try {
         const loaded = loadRecords(options);
         records = loaded.records;
         files = loaded.files;
         skipped = loaded.skipped;
+        malformed = loaded.malformed;
     } catch (error) {
         process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
         process.exitCode = 1;
@@ -608,6 +592,7 @@ function main() {
             `${JSON.stringify(
                 {
                     files,
+                    malformed,
                     total: records.length,
                     gapView: options.allGaps ? "segments" : "records",
                     prompted: records.filter((record) => record.prompt !== undefined).length,
@@ -625,7 +610,9 @@ function main() {
         return;
     }
 
-    process.stdout.write(`${renderReport(records, { files, skipped, analysis }, options)}\n`);
+    process.stdout.write(
+        `${renderReport(records, { files, skipped, malformed, analysis }, options)}\n`,
+    );
 }
 
 main();
