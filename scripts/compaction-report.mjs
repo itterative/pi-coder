@@ -309,6 +309,7 @@ function normalizePrefix(prefix) {
         referenceDepth: prefix.referenceDepth ?? prefix.parentMessageCount,
         ourCount: prefix.ourMessageCount,
         verifiedThrough: prefix.verifiedThrough,
+        comparable: prefix.comparableDepth,
         observations: prefix.observations,
         historyTruncated: prefix.historyTruncated,
         modelDivergence: prefix.modelDivergence,
@@ -577,6 +578,20 @@ function flagRun(run, options) {
         });
     }
 
+    // The reference existed but nothing in it reached the depth our span carried: no verdict is possible, and
+    // an earlier version of this code called that "unusable".
+    const uncomparable =
+        prefix !== undefined &&
+        prefix.reference === "chain" &&
+        typeof prefix.comparable === "number" &&
+        prefix.comparable <= 0;
+    if (uncomparable) {
+        out.push({
+            key: "prefix-uncomparable",
+            detail: `reference reached depth ${dash(prefix.referenceDepth)}, the span carried ${dash(prefix.ourCount)}`,
+        });
+    }
+
     if (
         prefix !== undefined &&
         prefix.reference === "chain" &&
@@ -838,7 +853,7 @@ function renderRunBlock(run, flags, options) {
         const bits = [
             `reference=${prefix.reference}`,
             `usable=${dash(prefix.usable)}`,
-            `verified=${dash(prefix.common)}/${dash(prefix.referenceDepth)}`,
+            `verified=${dash(prefix.common)}/${dash(prefix.comparable ?? prefix.referenceDepth)}`,
             `ours=${dash(prefix.ourCount)}`,
             `obs=${dash(prefix.observations)}`,
             `first=${prefix.first}`,

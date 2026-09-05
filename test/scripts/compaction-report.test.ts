@@ -149,6 +149,7 @@ function healthyPrefix(overrides: Partial<CompactionPrefixFields> = {}): Compact
         parameters: ["+tool_choice"],
         ourMessageCount: 43,
         commonPrefixMessages: 42,
+        comparableDepth: 42,
         referenceDepth: 43,
         verifiedThrough: true,
         referenceLeafId: "leaf-43",

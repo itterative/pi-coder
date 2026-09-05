@@ -8,16 +8,23 @@ the session transcript can still be examined after the fact. The writer is `src/
 
 All records of one compaction share a run id, which is what lets the report group them.
 
-| Stage            | What it carries                                                                                                                                                                                                                                                                                                                           |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `prefix`         | how the rebuilt stage-1 request compared to the parent session's last real request: `prefixUsable`, `firstDivergence`, `divergences[]`, `parameters[]`, `truncated`, and the message counts on both sides, plus a fingerprint of each request (system/tools hashes, key list)                                                             |
-| `attempt`        | one per strategy: the request-side numbers (`messageCount`, `estimatedTokens`, `reportedContextTokens`, `contextWindow`, `maxTokens`, `toolCount`, `copiedEntries`, `serializedChars`, `droppedBlocks`, `segmentSummaryChars`, `previousSummaryChars`) and how it ended (`accepted` / `rejected` / `skipped` with `detail`), with `usage` |
-| `model_response` | what the model answered with, before the harness appended anything                                                                                                                                                                                                                                                                        |
-| `final_summary`  | the exact persisted text, with `firstKeptEntryId`, `tokensBefore`, `summarizedMessages`, `droppedBlocks`, and the file counts the appended sections were built from                                                                                                                                                                       |
-| `outcome`        | how the whole compaction ended: `two-stage`, `native`, `serialized`, `core-default`, `cancelled`, `disabled`                                                                                                                                                                                                                              |
+| Stage            | What it carries                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `prefix`         | how the rebuilt stage-1 request compared to what pi actually sent, answered by the retained hash ladder: `reference` (`chain`/`none`), `prefixUsable` (**absent**, never false, when nothing was comparable), `commonPrefixMessages` = deepest reference depth that agreed, `comparableDepth`, `referenceDepth`, `observations`, `verifiedThrough`, `truncated`, `parameters[]`, `historyTruncated`, `modelDivergence`, and a fingerprint of our own request |
+| `attempt`        | one per strategy: the request-side numbers (`messageCount`, `estimatedTokens`, `reportedContextTokens`, `contextWindow`, `maxTokens`, `toolCount`, `copiedEntries`, `serializedChars`, `droppedBlocks`, `segmentSummaryChars`, `previousSummaryChars`) and how it ended (`accepted` / `rejected` / `skipped` with `detail`), with `usage`                                                                                                                    |
+| `model_response` | what the model answered with, before the harness appended anything                                                                                                                                                                                                                                                                                                                                                                                           |
+| `final_summary`  | the exact persisted text, with `firstKeptEntryId`, `tokensBefore`, `summarizedMessages`, `droppedBlocks`, and the file counts the appended sections were built from                                                                                                                                                                                                                                                                                          |
+| `outcome`        | how the whole compaction ended: `two-stage`, `native`, `serialized`, `core-default`, `cancelled`, `disabled`                                                                                                                                                                                                                                                                                                                                                 |
 
 Costs are development numbers only, and they are counted twice by design: a stage-1 resend shows up here as
 `usage.input`, and the same tokens may also be counted on the parent's next turn elsewhere.
+
+## Where the reference comes from
+
+`chain.ts` folds a cumulative hash over every message array pi sends and keeps it in memory keyed by session
+manager, about seventy bytes per request instead of a two-megabyte body. The report reads only the verdict the
+chain wrote into the `prefix` record; see the `compaction` memory for why comparison happens at the
+reference's depths and why an absent reference must never be printed as a failed one.
 
 ## Reading it
 
@@ -46,7 +53,9 @@ of leaving the numbers to be compared by eye. They are thresholds, not verdicts 
 
 | Flag                       | What it means                                                                                                                      |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `prefix-unusable`          | something before the appended instruction differed, so stage 1 could not reuse the provider's cached prefix                        |
+| `prefix-unusable`          | a comparable reference depth disagreed with our rebuild, so stage 1 could not reuse the provider's cached prefix                   |
+| `no-prefix-reference`      | no observation covered this branch, so the cache question is unanswered. Not a failure - and the case the old code reported as one |
+| `prefix-uncomparable`      | a reference existed but every request in it was deeper than the truncated span, so nothing could be compared                       |
 | `span-not-truncated`       | stage 1 sent the whole live context instead of the truncated span, i.e. the cut point was never found                              |
 | `degenerate-native-output` | stage 1 was accepted but answered with far too little text — the shape of a model replying about the instruction rather than to it |
 | `degenerate-final-summary` | what got persisted is implausibly small, whatever route produced it                                                                |

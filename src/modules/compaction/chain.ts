@@ -23,6 +23,17 @@ import { createHash } from "node:crypto";
 /** Memory bound, not a correctness bound: 2000 observations is ~140 KB of hex. */
 const MAX_OBSERVATIONS = 2000;
 
+/**
+ * How many recent requests keep their whole ladder, not just their final head.
+ *
+ * A stage-1 span is truncated at the cut point, so it is routinely *shorter* than every request pi made in
+ * this process - which is what happened on the first llama.cpp run after this shipped: ten observations, none
+ * of them at a depth our 64-message span could meet, and a verdict of "unusable" for a request that was
+ * probably fine. The ladder is computed anyway, so retaining the newest few costs about twenty bytes per
+ * message and turns "cannot tell" back into an exact answer.
+ */
+const LADDER_RETENTION = 2;
+
 /** Short enough to keep records readable, long enough that a 64-bit space will not collide by accident. */
 const HEAD_CHARS = 16;
 
@@ -57,6 +68,15 @@ export interface ChainMatch {
     referenceDepth: number;
     /** Shallowest disagreement between the two, when there was one. */
     firstMismatchDepth: number | null;
+    /**
+     * Deepest reference depth our rebuild was even long enough to compare.
+     *
+     * This is what separates "the prefix mismatched" from "we could not check". A stage-1 span is truncated at
+     * the cut point, so it can be shorter than every request pi made in this process - which is exactly what
+     * the first version of this code mistook for a divergence, reporting `prefixUsable: false` for a run whose
+     * request was in fact fine.
+     */
+    comparableDepth: number;
     /** Observations on this branch that were comparable (same system and tools shape). */
     compared: number;
     /** True when observations were dropped by the cap, so shallow depths may be unverifiable. */
@@ -83,6 +103,11 @@ export interface ChainShape {
     toolNames: string[];
     keys: string[];
     model: string;
+}
+
+/** Identifies the system prompt, tool set and model a ladder was folded under. */
+export function shapeKey(shape: ChainShape): string {
+    return digest(`${shape.systemHash}\u001f${shape.toolsHash}\u001f${shape.model}`);
 }
 
 /** sha256 over the concatenation, truncated. */
@@ -124,6 +149,11 @@ export function messageLadder(messages: readonly unknown[]): Map<number, string>
 /** One entry per observed request, newest last, pruned from the front past the cap. */
 export class RequestChain {
     private readonly observations: ChainObservation[] = [];
+    private readonly ladders: {
+        leafId: string | null;
+        heads: Map<number, string>;
+        shapeKey?: string;
+    }[] = [];
     private droppedCount = 0;
     private lastToolsHash: string | undefined;
     private lastSystemHash: string | undefined;
@@ -150,6 +180,15 @@ export class RequestChain {
     }): void {
         const ladder = messageLadder(input.messages);
         const head = ladder.get(input.messages.length) ?? "";
+
+        this.ladders.unshift({
+            leafId: input.leafId,
+            heads: ladder,
+            shapeKey: shapeKey(input.shape),
+        });
+        if (this.ladders.length > LADDER_RETENTION) {
+            this.ladders.length = LADDER_RETENTION;
+        }
         const toolsChanged = input.shape.toolsHash !== this.lastToolsHash;
         const systemChanged = input.shape.systemHash !== this.lastSystemHash;
 
@@ -179,28 +218,33 @@ export class RequestChain {
      * Match a rebuilt request against the observations that belong to this branch.
      *
      * `pathIds` is the root-to-leaf id set from `getBranch()`, which is what makes the answer branch-correct
-     * without any invalidation logic: an observation taken on a branch that was navigated away from simply has
-     * a leaf id that is not on the path, so it cannot be chosen as a reference. Depth order decides among the
-     * rest, because the deepest usable reference is the one that covers the most messages.
+     * without any invalidation logic: an observation taken on a branch that was navigated away from sim    /**
+     * Match a rebuilt request against the references that belong to this branch.
+     *
+     * `pathIds` is the root-to-leaf id set from `getBranch()`, which is what makes the answer branch-correct
+     * without any invalidation logic: a request observed on a branch that was navigated away from has a leaf id
+     * that is not on the path, so it cannot be chosen as a reference. Depth order decides among the rest,
+     * because the deepest usable reference covers the most messages.
+     *
+     * @param spanLadder heads for the messages that will actually be sent, **excluding** whatever the caller
+     * appends on top of them. Including an appended instruction guarantees a mismatch at the caller's own last
+     * depth, since no reference ever sent it.
      */
     match(input: {
-        ladder: Map<number, string>;
+        spanLadder: Map<number, string>;
         pathIds: Set<string>;
         shape: ChainShape;
     }): ChainMatch {
         const onPath = this.observations.filter(
             (observation) => observation.leafId !== null && input.pathIds.has(observation.leafId),
         );
+        const referenceDepth = onPath.reduce((best, o) => Math.max(best, o.depth), -1);
 
-        const deepest = onPath.reduce((best, observation) => Math.max(best, observation.depth), -1);
-
-        if (onPath.length === 0 || deepest < 1) {
+        if (onPath.length === 0 || referenceDepth < 1) {
             return {
                 reference: "none",
-                verifiedTo: -1,
-                referenceDepth: deepest,
-                firstMismatchDepth: null,
-                compared: 0,
+                ...EMPTY_COMPARISON,
+                referenceDepth,
                 truncatedHistory: this.droppedCount > 0,
                 parameters: [],
                 modelDivergence: null,
@@ -208,9 +252,65 @@ export class RequestChain {
             };
         }
 
-        let verifiedTo = -1;
-        let firstMismatchDepth: number | null = null;
-        let compared = 0;
+        const ladders = this.matchRetainedLadders(input);
+        const heads = this.matchObservations(input, onPath);
+        const merged = mergeComparisons(ladders, heads);
+
+        return {
+            reference: "chain",
+            ...merged,
+            referenceDepth,
+            truncatedHistory: this.droppedCount > 0,
+            parameters: parameterDelta(input.shape.keys, heads.reference?.keys ?? []),
+            modelDivergence:
+                heads.reference !== undefined && heads.reference.model !== input.shape.model
+                    ? `${heads.reference.model} -> ${input.shape.model}`
+                    : null,
+            referenceLeafId: heads.reference?.leafId ?? null,
+        };
+    }
+
+    /**
+     * Compare at every depth of the retained ladders.
+     *
+     * These carry the verdict for a truncated span, which is why they are worth retaining: a span cut to 64
+     * messages meets nothing in a set of per-request heads that all sit at depth 70 or deeper.
+     */
+    private matchRetainedLadders(input: {
+        spanLadder: Map<number, string>;
+        pathIds: Set<string>;
+        shape: ChainShape;
+    }): DepthComparison {
+        let current = { ...EMPTY_COMPARISON };
+        const wanted = shapeKey(input.shape);
+
+        for (const retained of this.ladders) {
+            if (retained.leafId === null || !input.pathIds.has(retained.leafId)) {
+                continue;
+            }
+            if (retained.shapeKey !== wanted) {
+                continue;
+            }
+
+            for (const [depth, head] of retained.heads) {
+                const ours = input.spanLadder.get(depth);
+                if (ours === undefined) {
+                    continue;
+                }
+
+                current = foldDepth(current, depth, ours === head);
+            }
+        }
+
+        return current;
+    }
+
+    /** Compare the single head each observed request ended at, and keep the newest for the shape report. */
+    private matchObservations(
+        input: { spanLadder: Map<number, string>; shape: ChainShape },
+        onPath: ChainObservation[],
+    ): DepthComparison & { reference?: ChainObservation } {
+        let current = { ...EMPTY_COMPARISON };
         let reference: ChainObservation | undefined;
 
         for (const observation of onPath) {
@@ -221,39 +321,34 @@ export class RequestChain {
                 continue;
             }
 
-            compared += 1;
-            // Newest wins for the informational comparisons; depth order handles the rest.
+            // Newest wins for the informational fields; depth order carries the verdict.
             reference = observation;
-            const ours = input.ladder.get(observation.depth);
+            current = { ...current, compared: current.compared + 1 };
+
+            const ours = input.spanLadder.get(observation.depth);
             if (ours === undefined) {
-                // Our rebuild is shorter than this reference, so it cannot say anything about depth d.
+                // Our span is shorter than this request, so it can say nothing about that depth.
                 continue;
             }
 
-            if (ours === observation.head) {
-                verifiedTo = Math.max(verifiedTo, observation.depth);
-                continue;
-            }
-
-            if (firstMismatchDepth === null || observation.depth < firstMismatchDepth) {
-                firstMismatchDepth = observation.depth;
-            }
+            current = foldDepth(current, observation.depth, ours === observation.head);
         }
 
-        return {
-            reference: "chain",
-            verifiedTo,
-            referenceDepth: deepest,
-            firstMismatchDepth,
-            compared,
-            truncatedHistory: this.droppedCount > 0,
-            parameters: parameterDelta(input.shape.keys, reference?.keys ?? []),
-            modelDivergence:
-                reference !== undefined && reference.model !== input.shape.model
-                    ? `${reference.model} -> ${input.shape.model}`
-                    : null,
-            referenceLeafId: reference?.leafId ?? null,
-        };
+        return { ...current, reference };
+    }
+
+    /**
+     * Heads at every depth of the retained requests, newest first.
+     *
+     * Only these make a truncated span checkable, because they are the only entries that carry a head at a
+     * depth pi never sent a full request at.
+     */
+    retainedLadders(): { leafId: string | null; heads: Map<number, string>; shapeKey: string }[] {
+        return this.ladders.map((ladder) => ({
+            leafId: ladder.leafId,
+            heads: ladder.heads,
+            shapeKey: ladder.shapeKey ?? "",
+        }));
     }
 
     /** Diagnostics only: the observations a lookup would consider, oldest first. */
@@ -262,6 +357,61 @@ export class RequestChain {
             (observation) => observation.leafId !== null && pathIds.has(observation.leafId),
         );
     }
+}
+
+/** What comparing one depth can tell us, independent of which reference source supplied it. */
+interface DepthComparison {
+    /** Deepest depth that agreed. */
+    verifiedTo: number;
+    /** Deepest depth that was comparable at all, agreement aside. */
+    comparableDepth: number;
+    /** Shallowest disagreement. */
+    firstMismatchDepth: number | null;
+    /** References considered after the shape filter. */
+    compared: number;
+}
+
+const EMPTY_COMPARISON: DepthComparison = {
+    verifiedTo: -1,
+    comparableDepth: -1,
+    firstMismatchDepth: null,
+    compared: 0,
+};
+
+/** Fold one depth comparison. A disagreement is still comparable, and matters for where to look next. */
+function foldDepth(current: DepthComparison, depth: number, agrees: boolean): DepthComparison {
+    const comparable = Math.max(current.comparableDepth, depth);
+
+    if (agrees) {
+        return {
+            ...current,
+            comparableDepth: comparable,
+            verifiedTo: Math.max(current.verifiedTo, depth),
+        };
+    }
+
+    return {
+        ...current,
+        comparableDepth: comparable,
+        firstMismatchDepth:
+            current.firstMismatchDepth === null
+                ? depth
+                : Math.min(current.firstMismatchDepth, depth),
+    };
+}
+
+/** Combine the two reference sources: any agreement counts, the shallowest disagreement wins. */
+function mergeComparisons(a: DepthComparison, b: DepthComparison): DepthComparison {
+    const mismatches = [a.firstMismatchDepth, b.firstMismatchDepth].filter(
+        (depth): depth is number => depth !== null,
+    );
+
+    return {
+        verifiedTo: Math.max(a.verifiedTo, b.verifiedTo),
+        comparableDepth: Math.max(a.comparableDepth, b.comparableDepth),
+        firstMismatchDepth: mismatches.length > 0 ? Math.min(...mismatches) : null,
+        compared: a.compared + b.compared,
+    };
 }
 
 /** `+key` was sent only by us, `-key` only by the reference. Mirrors the old body-to-body report. */

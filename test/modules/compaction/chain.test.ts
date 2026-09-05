@@ -49,7 +49,9 @@ function matchOf(
     options: { path?: string[]; shape?: ChainShape } = {},
 ) {
     return chain.match({
-        ladder: messageLadder(body),
+        // Mirrors the production caller: the last message is the instruction we append, which no reference
+        // ever sent, so it is outside the span being verified.
+        spanLadder: messageLadder(body.slice(0, -1)),
         pathIds: pathIdSet((options.path ?? [LEAF_A]).map((id) => ({ id }))),
         shape: options.shape ?? shape(),
     });
@@ -111,6 +113,51 @@ describe("request chain", () => {
         expect(match.firstMismatchDepth).toBe(3);
     });
 
+    it("still answers when the span is shorter than every request pi sent", () => {
+        // The first llama.cpp run after the chain shipped: ten observations at depths 70-87, a span truncated
+        // to 64 messages, and a verdict that read the mismatch as the prefix being unusable.
+        const full = messages(87);
+        const chain = new RequestChain();
+        chain.observe({ leafId: LEAF_A, messages: full, shape: shape() });
+
+        const span = [...full.slice(0, 63), { role: "user", content: "summarize this" }];
+        const match = matchOf(chain, span);
+
+        expect(match.reference).toBe("chain");
+        expect(match.comparableDepth).toBe(63);
+        expect(match.verifiedTo).toBe(63);
+        expect(match.firstMismatchDepth).toBeNull();
+        // pi's own request went deeper than the span, which is truncation working as designed.
+        expect(match.referenceDepth).toBe(87);
+    });
+
+    it("localizes the exact message where a truncated span stops matching", () => {
+        const full = messages(87);
+        const chain = new RequestChain();
+        chain.observe({ leafId: LEAF_A, messages: full, shape: shape() });
+
+        const span = full.slice(0, 63);
+        span[40] = { role: "assistant", content: "rewritten in our rebuild" };
+        const match = matchOf(chain, [...span, { role: "user", content: "summarize this" }]);
+
+        // Message index 40 is folded into head(41), so everything up to 40 still agrees.
+        expect(match.verifiedTo).toBe(40);
+        expect(match.comparableDepth).toBe(63);
+        expect(match.firstMismatchDepth).toBe(41);
+    });
+
+    it("refuses to compare a retained ladder built under a different shape", () => {
+        const full = messages(20);
+        const chain = new RequestChain();
+        chain.observe({ leafId: LEAF_A, messages: full, shape: shape() });
+
+        const match = matchOf(chain, [...full, { role: "user", content: "instruction" }], {
+            shape: shape({ toolsHash: "tools-2" }),
+        });
+        expect(match.compared).toBe(0);
+        expect(match.comparableDepth).toBe(-1);
+    });
+
     it("ignores a reference taken on a branch that is no longer the current one", () => {
         const body = messages(6);
         const chain = chainWith([LEAF_B, body]);
@@ -155,7 +202,7 @@ describe("request chain", () => {
         chain.observe({ leafId: LEAF_A, messages: body, shape: shape() });
 
         const match = chain.match({
-            ladder: messageLadder(body),
+            spanLadder: messageLadder(body),
             pathIds: pathIdSet([{ id: LEAF_A }]),
             shape: shape({ keys: ["messages", "model", "tool_choice", "tools"] }),
         });
@@ -167,7 +214,9 @@ describe("request chain", () => {
         const body = messages(2);
         const chain = chainWith([LEAF_A, body]);
 
-        const match = matchOf(chain, body, { shape: shape({ model: "other-model" }) });
+        const match = matchOf(chain, [...body, { role: "user", content: "instruction" }], {
+            shape: shape({ model: "other-model" }),
+        });
         expect(match.modelDivergence).toBe("test-model -> other-model");
         expect(match.verifiedTo).toBe(2);
     });

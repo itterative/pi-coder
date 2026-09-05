@@ -142,7 +142,9 @@ export interface CompactionPrefixFields {
     commonPrefixMessages: number;
     /** Deepest reference depth available on the current branch. */
     referenceDepth: number;
-    /** True when every reference depth at or below our span agreed. */
+    /** Deepest reference depth our span was long enough to compare; -1 when none was. */
+    comparableDepth: number;
+    /** True when every comparable reference depth agreed. */
     verifiedThrough: boolean;
     /** Leaf id the verdict was taken from, and the leaf we are building for. */
     referenceLeafId: string | null;

@@ -186,15 +186,19 @@ function prefixVerdict(
     const shape = requestShape(ourPayload);
     const ours = fingerprintPayload(ourPayload);
     const branch = sessionManager.getBranch();
+    // Fold only the span. `buildNativeContext` appends exactly one instruction message, and pi never sent
+    // that one, so leaving it in the ladder would guarantee a mismatch at our own last depth and re-raise the
+    // tail artifact the chain exists to avoid.
+    const spanMessages = Math.max(0, messages.length - 1);
     const match = chainFor(sessionManager).match({
-        ladder: messageLadder(messages),
+        spanLadder: messageLadder(messages.slice(0, spanMessages)),
         pathIds: pathIdSet(branch),
         shape,
     });
 
-    const spanMessages = Math.max(0, messages.length - 1);
-    const checkableUpTo = Math.min(spanMessages, match.referenceDepth);
-    const verifiedThrough = checkableUpTo > 0 && match.verifiedTo >= checkableUpTo;
+    // Only depths the reference actually covered *and* our span reached are checkable; pi's deeper requests
+    // say nothing about a truncated span.
+    const verifiedThrough = match.comparableDepth > 0 && match.verifiedTo >= match.comparableDepth;
     const divergences = shapeDivergences(sessionManager, shape, match);
 
     if (match.firstMismatchDepth !== null) {
@@ -209,7 +213,7 @@ function prefixVerdict(
 
     return {
         reference: match.reference,
-        prefixUsable: hasReference ? verifiedThrough : undefined,
+        prefixUsable: hasReference && match.comparableDepth > 0 ? verifiedThrough : undefined,
         firstDivergence: divergences[0] ?? (verifiedThrough ? "verified" : "tail"),
         divergences,
         truncated: spanMessages < match.referenceDepth,
@@ -217,6 +221,7 @@ function prefixVerdict(
         ourMessageCount: messages.length,
         commonPrefixMessages: match.verifiedTo,
         referenceDepth: match.referenceDepth,
+        comparableDepth: match.comparableDepth,
         verifiedThrough,
         referenceLeafId: match.referenceLeafId,
         currentLeafId: sessionManager.getLeafId(),

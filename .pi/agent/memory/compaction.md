@@ -164,16 +164,24 @@ head(k) = sha256(head(k-1) + 0x1f + JSON.stringify(messages[k-1]))   truncated t
 ```
 
 One observation per provider request: `{leafId, depth, head, systemHash, toolsHash, systemChars, keys,
-model, toolNames?}` — `toolNames` only when the shape changed. About seventy bytes where a body was one to two
+model, toolNames?}` — `toolNames` only when the shape changed — plus the **whole ladder** for the newest two
+requests (`LADDER_RETENTION`). The retention is not an optimization: a truncated span is shallower than every
+request pi made in a resumed process, and the first llama.cpp run after this shipped had ten observations at
+depths 70-87 against a 64-message span, so nothing was comparable and the code called that `usable: false`.
+Only per-request records can localize a mismatch; only a ladder can say anything at all about a short span. About seventy bytes where a body was one to two
 megabytes, so the cap is a memory bound rather than a correctness one (`MAX_OBSERVATIONS = 2000`, ~140 KB),
 and dropping the oldest only costs resolution on depths compaction passed long ago.
 
 Four consequences, each learned from a real trace:
 
-- **Branch-correct by construction.** `match()` filters observations to leaf ids on `getBranch()`, so a
-  request captured on a branch that was navigated away from cannot be chosen as a reference. This replaces the
-  old bug where navigating back produced a confident `prefixUsable: false` plus `div=messages[42], rewind` —
-  the number was right, the verdict was wrong, because the reference came from a dead branch.
+- **Branch-correct by construction.** `match()` filters observations to leaf ids on `getBranch()`, so a request
+  captured on a branch that was navigated away from cannot be chosen as a reference.
+- **The span ladder excludes our appended instruction.** `prefixVerdict` folds `messages.slice(0, -1)`, because
+  `buildNativeContext` adds exactly one message no reference ever sent. Folding it would guarantee a mismatch at
+  our own last depth. That is the same trap the body-to-body diff hit: its `div=messages[42] (assistant),
+  rewind` record — which I first explained as a stale-branch artifact — was our instruction sitting where pi had
+  a real assistant message, and the collapse rule that should have forgiven it required exactly one divergence
+  while the non-content `rewind` label made it two. Corrected here so the wrong story does not outlive the code.
 - **`prefixUsable` is omitted, never `false`, when no reference exists.** "Could not tell" and "misaligned"
   were one value, and a cold process after a restart read as a broken rebuild. The record now carries
   `reference: "none"` and `firstDivergence: "no-reference"`.
