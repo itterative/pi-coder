@@ -20,6 +20,18 @@ import {
 
 const SCRIPT = path.join(PI_CODER_EXTENSION_DIR, "scripts", "compaction-report.mjs");
 
+/**
+ * A real llama.cpp trimmed run. It exists so "what a healthy run looks like" is pinned
+ * down rather than argued from a live log - and so a flag that starts firing on absent
+ * data, which one of these did, fails a test instead of costing an afternoon.
+ */
+const HEALTHY_FIXTURE = path.join(
+    PI_CODER_EXTENSION_DIR,
+    "test",
+    "fixtures",
+    "compaction-trace.healthy.jsonl",
+);
+
 interface ReportFlag {
     key: string;
     detail: string;
@@ -40,8 +52,10 @@ interface ReportPrefix {
     divergences: string[];
     reference?: string;
     verifiedTo?: number;
+    comparableDepth?: number;
     referenceDepth?: number;
     observations?: number;
+    verifiedThrough?: boolean;
 }
 
 interface ReportRun {
@@ -54,6 +68,8 @@ interface ReportRun {
     cachedTokens: number;
     checkpointChars: number;
     finalChars: number;
+    observations?: number;
+    texts?: Record<string, string>;
     attempts: ReportAttempt[];
     prefix?: ReportPrefix;
     flags: ReportFlag[];
@@ -533,6 +549,45 @@ describe("compaction-report script", () => {
         // --text 0 hides the preview entirely, which is the compact view.
         expect(runText(["--runs", "1", "--text", "0"]).stdout).not.toContain("said:");
         expect(runText(["--runs", "0"]).stdout).toContain("RUNS (1 matching, showing 1 newest");
+    });
+
+    it("reads the captured llama.cpp run as a healthy compaction", () => {
+        const result = spawnSync(process.execPath, [SCRIPT, "--path", HEALTHY_FIXTURE, "--json"], {
+            encoding: "utf8",
+        });
+        expect(result.status, result.stderr).toBe(0);
+        const report = JSON.parse(result.stdout) as ReportJson;
+
+        expect(report.total).toBe(1);
+        const [run] = report.runs;
+        expect(run.route).toBe("two-stage");
+        expect(run.prefix?.reference).toBe("chain");
+        expect(run.prefix?.usable).toBe(true);
+        // The claim this fixture exists to hold: all 19 span messages verified against the branch's ladder.
+        expect(run.prefix?.verifiedTo).toBe(19);
+        expect(run.prefix?.comparableDepth).toBe(19);
+        // pi's own deepest request on the branch carried 33 messages while the truncated span held 19, so this
+        // is truncation plus full verification: every depth the span reached agreed.
+        expect(run.prefix?.referenceDepth).toBe(33);
+        expect(run.prefix?.verifiedThrough).toBe(true);
+        expect(run.prefix?.observations).toBe(13);
+        expect(run.cachedTokens).toBeGreaterThan(run.freshTokens);
+        expect(run.checkpointChars).toBe(5802);
+        expect(run.finalChars).toBe(5411);
+        // Only the estimate note survives: chars/4 was 42% under this provider's own count.
+        expect(run.flags.map((flag) => flag.key)).toEqual(["estimate-skew"]);
+
+        const text = spawnSync(
+            process.execPath,
+            [SCRIPT, "--path", HEALTHY_FIXTURE, "--runs", "1"],
+            {
+                encoding: "utf8",
+            },
+        );
+        expect(text.stdout).toContain("reference=chain  usable=true  verified=19/19");
+        expect(text.stdout).not.toContain("degenerate-native-output");
+        // The fixture carries no `model_response` records, so nothing reconstructs stage text.
+        expect(report.runs[0].texts ?? {}).not.toHaveProperty("native");
     });
 
     it("rejects unusable arguments before reading the log", () => {

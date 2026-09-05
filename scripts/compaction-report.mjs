@@ -304,12 +304,15 @@ function normalizePrefix(prefix) {
         first: prefix.firstDivergence ?? "(unknown)",
         divergences: Array.isArray(prefix.divergences) ? prefix.divergences : [],
         parameters: Array.isArray(prefix.parameters) ? prefix.parameters : [],
-        common: prefix.commonPrefixMessages,
+        // Named for what it is: the deepest reference depth the rebuild agreed with, not an index into our own
+        // array. `--json` callers read this field directly.
+        verifiedTo: prefix.commonPrefixMessages,
         // Pre-chain records named the reference depth `parentMessageCount`.
         referenceDepth: prefix.referenceDepth ?? prefix.parentMessageCount,
         ourCount: prefix.ourMessageCount,
         verifiedThrough: prefix.verifiedThrough,
-        comparable: prefix.comparableDepth,
+        // Keep the record's own field names in `--json`, so a reader can grep the same key in both places.
+        comparableDepth: prefix.comparableDepth,
         observations: prefix.observations,
         historyTruncated: prefix.historyTruncated,
         modelDivergence: prefix.modelDivergence,
@@ -583,8 +586,8 @@ function flagRun(run, options) {
     const uncomparable =
         prefix !== undefined &&
         prefix.reference === "chain" &&
-        typeof prefix.comparable === "number" &&
-        prefix.comparable <= 0;
+        typeof prefix.comparableDepth === "number" &&
+        prefix.comparableDepth <= 0;
     if (uncomparable) {
         out.push({
             key: "prefix-uncomparable",
@@ -614,11 +617,17 @@ function flagRun(run, options) {
         });
     }
 
-    const nativeChars = run.texts.get("native")?.length ?? 0;
-    if (native?.outcome === "accepted" && nativeChars < options.minChars) {
+    // Only judge an answer that is actually here. The `model_response` record is separate from the attempt, so
+    // a trimmed or rotated log - or a fixture that omits it deliberately - must not read as an empty reply.
+    const nativeText = run.texts.get("native");
+    if (
+        native?.outcome === "accepted" &&
+        nativeText !== undefined &&
+        nativeText.length < options.minChars
+    ) {
         out.push({
             key: "degenerate-native-output",
-            detail: `stage 1 accepted with ${nativeChars} chars: ${snippet(run.texts.get("native"), 90)}`,
+            detail: `stage 1 accepted with ${nativeText.length} chars: ${snippet(nativeText, 90)}`,
         });
     }
 
@@ -853,7 +862,7 @@ function renderRunBlock(run, flags, options) {
         const bits = [
             `reference=${prefix.reference}`,
             `usable=${dash(prefix.usable)}`,
-            `verified=${dash(prefix.common)}/${dash(prefix.comparable ?? prefix.referenceDepth)}`,
+            `verified=${dash(prefix.verifiedTo)}/${dash(prefix.comparableDepth ?? prefix.referenceDepth)}`,
             `ours=${dash(prefix.ourCount)}`,
             `obs=${dash(prefix.observations)}`,
             `first=${prefix.first}`,
@@ -1342,5 +1351,14 @@ function runText(run) {
 function counts(map) {
     return Object.fromEntries([...map.entries()].map(([key, value]) => [key, countOf(value)]));
 }
+
+// A closed pipe (`| head`, a pager quitting) must not print a stack trace over the report.
+process.stdout.on("error", (error) => {
+    if (error.code === "EPIPE") {
+        process.exit(0);
+    }
+
+    throw error;
+});
 
 main();

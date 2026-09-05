@@ -68,4 +68,12 @@ of leaving the numbers to be compared by eye. They are thresholds, not verdicts 
 ## Validation
 
 `test/scripts/compaction-report.test.ts` feeds the script records written by the **real** recorder, so the
-fixture cannot drift from the trace schema. Only the schema-drift case writes raw lines, deliberately.
+fixture cannot drift from the trace schema.
+
+It also pins one **real** run: `test/fixtures/compaction-trace.healthy.jsonl` is a llama.cpp compaction
+for the repository — provider renamed, `cwd` and session id replaced with deterministic stand-ins,
+timestamps re-based while keeping their millisecond offsets, and the checkpoint text swapped for a synthetic
+block of the same length. The `model_response` records are dropped entirely, which is what caught a flag that
+fired on absent data rather than an empty answer. The test asserts the verdict a healthy run must produce
+(`reference=chain`, all 19 span messages verified against a 33-message reference). Only the schema-drift case
+writes raw lines, deliberately.

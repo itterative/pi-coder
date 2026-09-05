@@ -198,6 +198,52 @@ being on. Nothing here gates compaction: stage 1 is built and sent identically w
 exists. `parameters[]` survives as a set difference over body keys, which keeps the "`tool_choice` is a
 parameter, not a verdict" lesson expressible without retaining a body.
 
+## A rebuilt Context is not byte-stable (pi stamps `Date.now()`)
+
+`buildSpanSession()` re-appends each entry into an in-memory `SessionManager`, and pi gives a `custom_message`
+entry a fresh timestamp as it goes. Replaying the same session file twice produced message `timestamp` values
+1.5 seconds apart, which varied every downstream cumulative hash. Not a live cache bug, for two independent
+reasons: provider adapters do not serialize `timestamp`, and `prefixVerdict()` folds `requestMessages(payload)`
+— the **body** pi-ai built — rather than the `Context` objects, so the chain compares wire shapes on both
+sides. That asymmetry is why `verified=19/19` was meaningful and is worth preserving if this is ever refactored.
+
+It is still a latent hazard: any adapter that forwarded unknown fields would turn it into a real prefix break at
+that message. So hash a `{ role, content }` projection when a golden value must be stable — see
+`requestShaped()` in the session fixture test — and do not assume the system prompt is the time-varying part:
+`core/system-prompt.js` contains no date.
+
+## Live fixture
+
+`test/fixtures/compaction-trace.healthy.jsonl` — one real llama.cpp run, trimmed to the five records the verdict
+depends on (`prefix`, both `attempt`s, `final_summary`, `outcome`), deterministic session/record ids, timestamps re-based with offsets kept,
+checkpoint text replaced by a synthetic block of identical length. Used by `test/scripts/compaction-report.test.ts`
+to pin "what healthy looks like" (`usable=true`, `verifiedTo=19` at `comparableDepth=19` against
+`referenceDepth=33`, only `estimate-skew` flagged). Two lessons it encoded: keep `--json` field names equal to the
+record's own names, and never let a flag fire because a record was **absent** — that is what a rotated or trimmed
+log looks like, not an empty model answer.
+
+## First clean live verdict (2026-09-05, llama.cpp, fresh session)
+
+```
+prefix      reference=chain  usable=true  verified=19/19  obs=13  first=verified  truncated  params=+tool_choice
+native      accepted  in=3854  cached=23.9k   out=2513   msgs=18  copied=29  est=29.5k  rep=50.9k   70.8s
+serialized  accepted  in=4036  cached=0       out=4674   ser=6816c  dropped=0  seg=5802c  prev=0     88.4s
+final       5411c via=serialized  keptFrom=cb008170  before=50.9k  summarized=18
+```
+
+What each number licenses us to believe:
+
+- **`verified=19/19` from a cold process** proves the retained-ladder design, not just the rebuild: no body was
+  held, thirteen observations on the branch answered, and the span matched all of them. This is the first live
+  confirmation of the claim the earlier warm-capture runs only suggested.
+- **86% cache reuse on stage 1** (3,854 fresh of 27.7k) is the two-stage design paying for itself on local
+  hardware: the fresh part is the instruction we append, which is the intended shape.
+- **`cached=0` on the reduce is expected and cheap**, not a regression: stage 2 is a different system prompt, no
+  tools, one message, so it shares no prefix with anything. 4k tokens.
+- **`estimate-skew: -42%` is informational.** chars/4 under-estimated here and over-estimated by 21% on the
+  hosted provider, so it swings both ways; the fit gate used `rep=50.9k`, which is why the run went ahead. Keep
+  the flag as a report-only observation and do not "fix" the estimate by trusting it.
+
 ## Failure inventory
 
 Degradation is always toward core, never toward a broken session. Handled today: config off → `undefined`;
