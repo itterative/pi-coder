@@ -329,7 +329,7 @@ describe("compaction trace", () => {
         const prefix = readRecords(tracePath).find((record) => record.stage === "prefix");
         expect(prefix?.prefix).toMatchObject({
             prefixUsable: false,
-            firstDivergence: "no-parent-payload-captured",
+            firstDivergence: "no-parent-payload-in-this-runtime",
         });
     });
 

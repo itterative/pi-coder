@@ -137,10 +137,13 @@ function prefixDiffAgainstParent(sessionManager: object, ourPayload: unknown) {
     const ours = fingerprintPayload(ourPayload);
     const parentPayload = lastParentPayload.get(sessionManager);
     if (parentPayload === undefined) {
+        // Named for its actual cause. The capture is a per-process map, so this also means "no real turn has
+        // gone out in this runtime yet" - after a restart or /reload, a compaction reached stage 1 before any
+        // parent request was seen. It is not evidence that the hook is broken.
         return {
             prefixUsable: false,
-            firstDivergence: "no-parent-payload-captured",
-            divergences: ["no-parent-payload-captured"],
+            firstDivergence: "no-parent-payload-in-this-runtime",
+            divergences: ["no-parent-payload-in-this-runtime"],
             truncated: false,
             parameters: [],
             parentMessageCount: 0,

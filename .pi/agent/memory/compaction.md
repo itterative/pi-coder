@@ -122,8 +122,9 @@ or argument named `constructor` otherwise yields a function where a character bu
   learned the hard way: `tool_choice` is a **parameter**, never a prefix verdict; and a difference that starts
   exactly at our appended instruction on a `truncated` request is the designed shape, so it must report
   `usable: true` / `firstDivergence: "tail"` rather than look broken. Without those, every healthy run reads as
-  a failure. `prefixUsable: false` with `no-parent-payload-captured` means the capture never fired — pi wires
-  `before_provider_request` only on the SDK `createAgentSession` path, so it has gone missing at least once.
+  a failure. `firstDivergence: "no-parent-payload-in-this-runtime"` is not a broken hook: the capture is a
+  per-process map, so a compaction that runs after a restart or `/reload` — before any real parent turn in that
+  runtime — legitimately has nothing to compare against.
 - `model_response` — what the model said before the harness appended anything.
 - `final_summary` — the exact persisted text plus its counts.
 - `outcome` — `two-stage`/`native`/`serialized`/`core-default`/`cancelled`/`disabled`.
