@@ -51,19 +51,20 @@ Each flag names a failure already observed in a live trace, so the report can po
 of leaving the numbers to be compared by eye. They are thresholds, not verdicts — `--min-chars` and
 `--inflate-factor` exist to move them.
 
-| Flag                       | What it means                                                                                                                      |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `prefix-unusable`          | a comparable reference depth disagreed with our rebuild, so stage 1 could not reuse the provider's cached prefix                   |
-| `no-prefix-reference`      | no observation covered this branch, so the cache question is unanswered. Not a failure - and the case the old code reported as one |
-| `prefix-uncomparable`      | a reference existed but every request in it was deeper than the truncated span, so nothing could be compared                       |
-| `span-not-truncated`       | stage 1 sent the whole live context instead of the truncated span, i.e. the cut point was never found                              |
-| `degenerate-native-output` | stage 1 was accepted but answered with far too little text — the shape of a model replying about the instruction rather than to it |
-| `degenerate-final-summary` | what got persisted is implausibly small, whatever route produced it                                                                |
-| `reduce-inflated`          | stage 2's output is many times larger than the checkpoint it was handed, so it wrote a new summary instead of merging one          |
-| `cache-read-zero`          | a large fresh prompt with no cache read: the span was paid for again                                                               |
-| `blocks-dropped`           | transcript blocks left out of the reduce request at the serialization cap, so the summary covers a truncated view                  |
-| `fell-back`                | the run ended in `core-default`, `cancelled`, or with no outcome record at all                                                     |
-| `estimate-skew`            | the chars/4 estimate diverged from the provider's own context count by enough that the fit gate decided on a stale number          |
+| Flag                       | What it means                                                                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `prefix-unusable`          | a comparable reference depth disagreed with our rebuild, so stage 1 could not reuse the provider's cached prefix                           |
+| `no-prefix-reference`      | no observation covered this branch, so the cache question is unanswered. Not a failure - and the case the old code reported as one         |
+| `prefix-uncomparable`      | a reference existed but every request in it was deeper than the truncated span, so nothing could be compared                               |
+| `span-not-truncated`       | stage 1 sent the whole live context instead of the truncated span, i.e. the cut point was never found                                      |
+| `degenerate-native-output` | stage 1 was accepted but answered with far too little text — the shape of a model replying about the instruction rather than to it         |
+| `degenerate-final-summary` | what got persisted is implausibly small, whatever route produced it                                                                        |
+| `summary-truncated`        | stage 2 hit the output limit, so the persisted summary is missing its tail. Reading the text cannot tell this from a brief complete answer |
+| `reduce-inflated`          | stage 2's output is many times larger than the checkpoint it was handed, so it wrote a new summary instead of merging one                  |
+| `cache-read-zero`          | a large fresh prompt with no cache read: the span was paid for again                                                                       |
+| `blocks-dropped`           | transcript blocks left out of the reduce request at the serialization cap, so the summary covers a truncated view                          |
+| `fell-back`                | the run ended in `core-default`, `cancelled`, or with no outcome record at all                                                             |
+| `estimate-skew`            | the chars/4 estimate diverged from the provider's own context count by enough that the fit gate decided on a stale number                  |
 
 ## Validation
 

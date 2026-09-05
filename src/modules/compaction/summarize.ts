@@ -1,4 +1,11 @@
-import type { Api, AssistantMessage, Context, Model, Usage } from "@earendil-works/pi-ai";
+import type {
+    Api,
+    AssistantMessage,
+    Context,
+    Model,
+    StopReason,
+    Usage,
+} from "@earendil-works/pi-ai";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -22,11 +29,24 @@ export type SummarizationStrategy = "native" | "serialized";
  * What one strategy call returns: usable summary text, or the reason it is unusable.
  *
  * `usage` is reported on both arms — a response that ignored `tool_choice` still cost tokens, and that is
- * the evidence the trace wants.
+ * the evidence the trace wants. So is `stopReason`: the trace cannot tell a complete answer from one the
+ * output limit cut off unless the provider's own word for it is carried out of the response.
  */
 export type SummarizationAttemptResult =
-    | { ok: true; strategy: SummarizationStrategy; text: string; usage: Usage }
-    | { ok: false; strategy: SummarizationStrategy; detail: string; usage?: Usage };
+    | {
+          ok: true;
+          strategy: SummarizationStrategy;
+          text: string;
+          usage: Usage;
+          stopReason: StopReason;
+      }
+    | {
+          ok: false;
+          strategy: SummarizationStrategy;
+          detail: string;
+          usage?: Usage;
+          stopReason?: StopReason;
+      };
 
 type ModelRegistry = ExtensionContext["modelRegistry"];
 
@@ -70,13 +90,14 @@ export function evaluateSummarizationResponse(
     response: AssistantMessage,
     strategy: SummarizationStrategy,
 ): SummarizationAttemptResult {
-    if (response.stopReason === "error" || response.stopReason === "aborted") {
+    const { stopReason, usage } = response;
+    if (stopReason === "error" || stopReason === "aborted") {
         return {
             ok: false,
             strategy,
-            usage: response.usage,
-            detail:
-                response.errorMessage ?? `summarization ${strategy} call ${response.stopReason}`,
+            usage,
+            stopReason,
+            detail: response.errorMessage ?? `summarization ${strategy} call ${stopReason}`,
         };
     }
     const tool = attemptedToolCall(response);
@@ -84,8 +105,26 @@ export function evaluateSummarizationResponse(
         return {
             ok: false,
             strategy,
-            usage: response.usage,
+            usage,
+            stopReason,
             detail: `model called "${tool}" instead of summarizing; this provider does not honor tool_choice none`,
+        };
+    }
+    // A reply cut off by the output limit is missing its tail, and for stage 1 that is the worst place to
+    // discover it: the checkpoint is stage 2's input, so a section lost to the cut is lost from the session's
+    // memory permanently, and the section guard cannot see it (the surviving headings still count). Stage 1 is
+    // also the cheap rung - its context is cached - so cascading costs almost nothing. Stage 2 keeps the
+    // truncated text, because the alternative is pi's own compaction, which re-summarizes from scratch under
+    // no section contract at all; the trace records the stop reason so the report can flag it instead.
+    if (stopReason === "length" && strategy === "native") {
+        return {
+            ok: false,
+            strategy,
+            usage,
+            stopReason,
+            detail:
+                `summarization native call hit the output limit after ${String(usage.output)} ` +
+                "output tokens; a truncated checkpoint loses the sections after the cut",
         };
     }
     const text = responseText(response).trim();
@@ -93,7 +132,8 @@ export function evaluateSummarizationResponse(
         return {
             ok: false,
             strategy,
-            usage: response.usage,
+            usage,
+            stopReason,
             detail: "summarization returned an empty summary",
         };
     }
@@ -108,14 +148,15 @@ export function evaluateSummarizationResponse(
         return {
             ok: false,
             strategy,
-            usage: response.usage,
+            usage,
+            stopReason,
             detail:
                 `summarization ${strategy} answer carried ${String(sections)} of ` +
                 `${String(MIN_CHECKPOINT_SECTIONS)} required sections: ${text.slice(0, 120)}`,
         };
     }
 
-    return { ok: true, strategy, text, usage: response.usage };
+    return { ok: true, strategy, text, usage, stopReason };
 }
 
 async function callForSummary(
@@ -128,6 +169,7 @@ async function callForSummary(
         const response = await call.registry.complete(call.model, context, options);
         return evaluateSummarizationResponse(response, strategy);
     } catch (error) {
+        // No response at all, so there is no stop reason to report either.
         return {
             ok: false,
             strategy,

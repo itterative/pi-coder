@@ -353,11 +353,20 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
 
     if (!attempt.ok) {
         const detail = attempt.detail ?? "unusable segment checkpoint";
-        trace.attempt("native", fields, { outcome: "rejected", detail, usage: attempt.usage });
+        trace.attempt("native", fields, {
+            outcome: "rejected",
+            detail,
+            usage: attempt.usage,
+            stopReason: attempt.stopReason,
+        });
         return { ok: false, detail };
     }
 
-    trace.attempt("native", fields, { outcome: "accepted", usage: attempt.usage });
+    trace.attempt("native", fields, {
+        outcome: "accepted",
+        usage: attempt.usage,
+        stopReason: attempt.stopReason,
+    });
     trace.modelResponse("native", attempt.text, attempt.usage);
     return { ok: true, text: attempt.text, usage: attempt.usage };
 }
@@ -396,10 +405,19 @@ async function runReduceStage(
 
     if (!attempt.ok) {
         const detail = attempt.detail ?? "unusable checkpoint";
-        trace.attempt("serialized", fields, { outcome: "rejected", detail, usage: attempt.usage });
+        trace.attempt("serialized", fields, {
+            outcome: "rejected",
+            detail,
+            usage: attempt.usage,
+            stopReason: attempt.stopReason,
+        });
         return { ok: false, detail };
     }
-    trace.attempt("serialized", fields, { outcome: "accepted", usage: attempt.usage });
+    trace.attempt("serialized", fields, {
+        outcome: "accepted",
+        usage: attempt.usage,
+        stopReason: attempt.stopReason,
+    });
     trace.modelResponse("serialized", attempt.text, attempt.usage);
     return {
         ok: true,

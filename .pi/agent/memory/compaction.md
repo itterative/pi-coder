@@ -120,13 +120,15 @@ prints stage text **verbatim** (the report body only previews it, because a chec
 `--suspect`, `--grep <text>`, `--session <prefix>`, `--route`, `--reason`, `--since`, `--runs 0` (all) and
 `--json` cover the rest. Its SUSPECTS flags encode the failure modes below as thresholds —
 `prefix-unusable`, `span-not-truncated`, `degenerate-native-output`, `degenerate-final-summary`,
-`reduce-inflated`, `cache-read-zero`, `blocks-dropped`, `fell-back`, `estimate-skew` — with prose in
+`reduce-inflated`, `cache-read-zero`, `blocks-dropped`, `summary-truncated`, `fell-back`, `estimate-skew` — with prose in
 [docs/compaction-trace-report.md](../../../docs/compaction-trace-report.md). It reads rotated `.1` siblings and
 tolerates fields absent in records from older builds, because the file accumulates across checkout.
 
 - `attempt` — per stage: `accepted`/`rejected`/`skipped`, detail, `usage` incl. **`cacheRead`** (the only way
-  to tell whether the rebuilt prefix was served from cache), estimated tokens, tool/message counts, stage 1's
-  `copiedEntries`/`skippedEntries`, stage 2's `serializedChars`/`segmentSummaryChars`.
+  to tell whether the rebuilt prefix was served from cache), **`stopReason`** whenever a reply arrived (the only
+  way to tell a truncated summary from a brief one), estimated tokens, tool/message counts, stage 1's
+  `copiedEntries`/`skippedEntries`, stage 2's `serializedChars`/`segmentSummaryChars`. A `skipped` attempt has no
+  `stopReason` or `usage`: the request never went out.
 - `prefix` — the verdict from `chain.ts` against our `onPayload` body: which reference answered, how deep the
   agreement went, and the parameters only one side sent. Two rules survive from the body-to-body era:
   `tool_choice` is a **parameter**, never a prefix verdict, and an absent reference is **unknown**, never
@@ -212,7 +214,15 @@ that message. So hash a `{ role, content }` projection when a golden value must 
 `requestShaped()` in the session fixture test — and do not assume the system prompt is the time-varying part:
 `core/system-prompt.js` contains no date.
 
-## Live fixture
+## Live fixtures
+
+`test/fixtures/session/llamacpp-post-compaction.jsonl` is pi's own output: a 50-entry branch carrying a
+`compaction` mid-branch, with the `custom_message`, `model_change`, and `thinking_level_change` entries no
+hand-built branch in this suite has. `test/modules/compaction/session-fixture.test.ts` replays that tree through
+the span builder and pins what the live run recorded in the trace beside it (29 entries copied, 18 messages,
+nothing skipped), so the two fixtures vouch for each other and a change to slicing, copying, or message
+conversion trips a golden head hash. Slice the branch with `getBranch()`, never `buildContextEntries()`: the
+latter answers with pi's post-compaction view, which has already folded that history into a summary.
 
 `test/fixtures/compaction-trace.healthy.jsonl` — one real llama.cpp run, trimmed to the five records the verdict
 depends on (`prefix`, both `attempt`s, `final_summary`, `outcome`), deterministic session/record ids, timestamps re-based with offsets kept,
@@ -248,7 +258,8 @@ What each number licenses us to believe:
 
 Degradation is always toward core, never toward a broken session. Handled today: config off → `undefined`;
 signal already aborted → `{ cancel: true }`; no model; stage 1 **skipped** by the fit gate; provider call
-**threw**; response `stopReason` `error`/`aborted`; response contained a **`toolCall`**; **blank** summary;
+**threw**; response `stopReason` `error`/`aborted`; a **`length`** stop on stage 1; response contained a
+**`toolCall`**; **blank** summary;
 stage 2 failed after stage 1 succeeded → **stage 1's text is persisted** (`route: "native"`) plus a warning;
 both failed → core default plus a warning; any unexpected throw (span copy, tree walk, config read) → outer
 catch → core default.
@@ -267,9 +278,16 @@ Open gaps, agreed 2026-09-05 and **not yet implemented**:
    `NON_OVERFLOW_PATTERNS` suppresses `/rate limit/i`) plus `status`/`headers` on provider errors for
    401/402/429. Verified statically (types and export surface) only — a `tsx` probe died on module resolution,
    not on pi.
-2. **`stopReason: "length"` on a summarization response is accepted.** Partly mitigated: a length-truncated
-   reply usually loses a section and is now rejected by the shape guard, but a truncation that keeps two
-   headings still passes.
+2. **A `stopReason: "length"` reply was accepted as a complete summary. CLOSED 2026-09-05.** Length can never be
+   the detector — a cut-off reply and a brief complete one hold the same bytes up to the cut — so the provider's
+   own word now travels out of the response (`SummarizationAttemptResult.stopReason`) into the trace
+   (`CompactionAttemptResult.stopReason`, on every arm that got a reply at all). The two rungs answer differently
+   deliberately: **stage 1 refuses** a `length` stop, because its checkpoint is stage 2's input and a section lost
+   to the cut is gone from the session's memory for good, the section guard cannot see the loss (the surviving
+   headings still satisfy it), and refusing costs almost nothing since stage 1's context is cached; **stage 2 keeps**
+   the truncated text, because rejecting it would hand the session to pi's default compaction, which re-summarizes
+   from scratch under no section contract at all. `summary-truncated` is the report's flag for that survivor.
+   pi-ai's `isRecoverableLength` reads a short `length` stop as context pressure, which is the signal item 1 wants.
 2b. **`ToolInfo` hides a field that reaches the wire.** `pi.getAllTools()` returns
    `Pick<ToolDefinition, "name"|"description"|"parameters"|"promptGuidelines"> & {sourceInfo}` and pi keeps the
    full `ToolDefinition` privately (`getToolDefinition` exists on the runner, not on the extension API).
@@ -278,9 +296,7 @@ Open gaps, agreed 2026-09-05 and **not yet implemented**:
    ours while the extension API cannot see the field at all — the one place our rebuilt prefix is *not*
    guaranteed by construction. Latent today: no pi built-in and no pi-coder tool declares it. Upstream ask:
    add the field to the projection, or expose `getToolDefinition`. A `getAllTools()`-based shape hash catches
-   it if it ever fires, which is the main reason the chain records tool names on every shape change., so a checkpoint truncated mid-section
-   becomes the session's memory. Should reject and cascade; pi-ai's `isRecoverableLength` also treats a short
-   `length` stop as context pressure, so this fix does double duty.
+   it if it ever fires, which is the main reason the chain records tool names on every shape change.
 3. **Abort mid-flight returned `undefined`, and mislabelled it. CLOSED 2026-09-05.** Seen live as
    `Warning: pi-coder compaction fell back to pi's default: segment: Request was aborted; reduce: This
    operation was aborted`. Two separate faults in that one line: the warning announced a handover nobody asked
@@ -324,9 +340,11 @@ Open gaps, agreed 2026-09-05 and **not yet implemented**:
 
 ## Validation
 
-`test/modules/compaction/{serialize,sections,handler,trace,prefix-diff,span-session}.test.ts` — 62 cases, two
-reviewed file snapshots, no provider calls (`createCompactionHarness()` in `test/helpers/compaction-doubles.ts`
-records the contexts and options a `stubModelRegistry` receives). Stage-1 truncation is pinned by a 1.2M-char
+`test/modules/compaction/{serialize,sections,handler,trace,prefix-diff,span-session,summarize,prompt,chain,session-fixture}.test.ts`
+plus `test/scripts/compaction-report.test.ts` — 111 cases, two reviewed file snapshots, no provider calls
+(`createCompactionHarness()` in `test/helpers/compaction-doubles.ts` records the contexts and options a
+`stubModelRegistry` receives, and `evaluateSummarizationResponse` is pure so the accept/reject policy is testable
+directly). Stage-1 truncation is pinned by a 1.2M-char
 *retained-tail* fixture: if someone re-sends the live context, the fit gate skips stage 1 and that test fails.
 Mutation-verified: reverting the fit formula to `reserveTokens` fails the sizing test; deleting
 `trace.modelResponse(...)` fails two trace tests. Real provider behavior (`tool_choice`, cache serving,

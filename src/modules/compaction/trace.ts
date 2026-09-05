@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { Usage } from "@earendil-works/pi-ai";
+import type { StopReason, Usage } from "@earendil-works/pi-ai";
 import { uuidv7 } from "@earendil-works/pi-ai";
 
 import { COMPACTION_TRACE_PATH } from "../../common/constants";
@@ -76,6 +76,12 @@ export interface CompactionAttemptResult {
     outcome: CompactionAttemptOutcome;
     detail?: string;
     usage?: Usage;
+    /**
+     * The provider's own word for how the reply ended, when a reply arrived. `"length"` on an accepted attempt
+     * means the summary is missing its tail, which no amount of text inspection can tell apart from a short
+     * complete one.
+     */
+    stopReason?: StopReason;
 }
 
 export interface CompactionFinalFields {
@@ -99,6 +105,8 @@ export interface CompactionTraceRecord {
     strategy?: SummarizationStrategy;
     outcome?: CompactionAttemptOutcome | CompactionTraceOutcome;
     detail?: string;
+    /** Present on an attempt that received a reply: how the provider said that reply ended. */
+    stopReason?: StopReason;
     /** The stage payload: the model's answer, then the composed summary. */
     text?: string;
     usage?: CompactionTraceUsage;
@@ -238,6 +246,7 @@ export function createCompactionTraceRecorder(
                 attempt: fields,
                 outcome: result.outcome,
                 detail: result.detail,
+                stopReason: result.stopReason,
                 usage: usageFields(result.usage),
             });
         },

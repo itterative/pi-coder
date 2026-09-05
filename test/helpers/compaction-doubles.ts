@@ -203,6 +203,16 @@ export function failedResponse(
     return { ...assistantResponse([]), stopReason, errorMessage };
 }
 
+/**
+ * A provider response the output limit cut off.
+ *
+ * The text looks finished because it is whatever arrived before the stop; only `stopReason` distinguishes this
+ * from a short complete summary, which is why the strategy has to read it rather than guess from length.
+ */
+export function truncatedResponse(text: string, usage?: Usage): AssistantMessage {
+    return { ...assistantResponse([{ type: "text", text }], usage), stopReason: "length" };
+}
+
 /** A provider response that tried to keep working instead of summarizing. */
 export function toolCallResponse(name = "read"): AssistantMessage {
     return assistantResponse([

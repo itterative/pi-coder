@@ -340,6 +340,7 @@ function describeRun(id, group) {
             attempts.push({
                 strategy: record.strategy ?? "(none)",
                 outcome: record.outcome ?? "(none)",
+                stopReason: record.stopReason,
                 detail: record.detail,
                 usage: record.usage,
                 fields: record.attempt ?? {},
@@ -628,6 +629,16 @@ function flagRun(run, options) {
         out.push({
             key: "degenerate-native-output",
             detail: `stage 1 accepted with ${nativeText.length} chars: ${snippet(nativeText, 90)}`,
+        });
+    }
+
+    // Stage 2 keeps a truncated answer on purpose - the alternative is pi's own compaction - so the trace's
+    // stop reason is the only sign that the persisted summary is missing its tail. Reading the text cannot
+    // tell a cut-off answer from a brief complete one.
+    if (serialized?.outcome === "accepted" && serialized.stopReason === "length") {
+        out.push({
+            key: "summary-truncated",
+            detail: `stage 2 hit the output limit; the persisted ${String(finalChars)} chars are missing their tail`,
         });
     }
 

@@ -12,8 +12,10 @@ import {
     sampleKept,
     summaryResponse,
     toolCallResponse,
+    truncatedResponse,
     userMessage,
 } from "../../helpers/compaction-doubles";
+import { zeroUsage } from "../../helpers/agent-doubles";
 import { stubModel } from "../../helpers/pi-stub";
 
 const TRACE_FILE = "compaction-trace.jsonl";
@@ -208,6 +210,35 @@ describe("compaction trace", () => {
         expect(attempts[1]?.attempt).toMatchObject({ toolCount: 0, messageCount: 1 });
         expect(attempts[1]?.attempt?.segmentSummaryChars).toBe(0);
         expect(records.find((record) => record.stage === "outcome")?.outcome).toBe("serialized");
+    });
+
+    /**
+     * A reply the output limit cut off is indistinguishable from a short complete one by reading it, so this is
+     * the whole of the evidence. Stage 1 refuses it because the checkpoint feeds stage 2 and its context is
+     * cached anyway; stage 2 keeps it because the alternative is pi re-summarizing the session from scratch.
+     */
+    it("refuses a truncated stage 1 answer and records the stop reason on both rungs", async () => {
+        const checkpoint = "## Goal\n\nstub\n\n## Progress\n\n- [x] stub";
+        const harness = build({
+            responses: [
+                async () => truncatedResponse(checkpoint, { ...zeroUsage(), output: 8000 }),
+                async () => truncatedResponse(checkpoint, { ...zeroUsage(), output: 1200 }),
+            ],
+        });
+        await harness.compact();
+
+        const attempts = readRecords(tracePath).filter((record) => record.stage === "attempt");
+        expect(
+            attempts.map((record) => [record.strategy, record.outcome, record.stopReason]),
+        ).toEqual([
+            ["native", "rejected", "length"],
+            ["serialized", "accepted", "length"],
+        ]);
+        expect(attempts[0]?.detail).toContain("hit the output limit after 8000 output tokens");
+        // The truncated reduce answer still becomes the session's summary, which is the trade being made.
+        expect(readRecords(tracePath).find((record) => record.stage === "outcome")?.outcome).toBe(
+            "serialized",
+        );
     });
 
     it("records a skipped attempt with the estimate that made it unfit", async () => {

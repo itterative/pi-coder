@@ -359,6 +359,30 @@ describe("compaction-report script", () => {
         expect(flagKeys(parseReport(), "sess-shallow")).toContain("prefix-reference-shallow");
     });
 
+    /**
+     * Stage 2 keeps a truncated answer deliberately, so nothing downstream looks at it twice. The stop reason
+     * is the only sign that the summary written into the session is missing its tail, and the text cannot say:
+     * a cut-off answer and a brief complete one are the same bytes up to where the cut happened.
+     */
+    it("flags the run where the persisted summary was cut short by the output limit", () => {
+        const trace = recorder("sess-truncated");
+        trace.prefix(healthyPrefix());
+        trace.attempt("native", nativeFields(), accepted({ usage: usage(4000, 900, 30000) }));
+        trace.attempt(
+            "serialized",
+            nativeFields({ toolCount: 0, messageCount: 1, droppedBlocks: 0 }),
+            accepted({ usage: usage(9000, 12800), stopReason: "length" }),
+        );
+        // Long enough to pass every size threshold: only the stop reason knows this summary was cut.
+        trace.final("serialized", checkpoint("## Goal", 4000), finalFields());
+        trace.outcome("serialized");
+
+        const keys = flagKeys(parseReport(), "sess-truncated");
+        expect(keys).toContain("summary-truncated");
+        expect(keys).not.toContain("degenerate-final-summary");
+        expect(runText(["--suspect"]).stdout).toContain("stage 2 hit the output limit");
+    });
+
     it("applies the text thresholds uniformly across runs", () => {
         writeHealthyRun("sess-healthy");
         const trace = recorder("sess-short");
