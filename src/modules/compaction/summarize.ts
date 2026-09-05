@@ -2,7 +2,11 @@ import type { Api, AssistantMessage, Context, Model, Usage } from "@earendil-wor
 import { uuidv7 } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { SERIALIZATION_SYSTEM_PROMPT } from "./prompt";
+import {
+    MIN_CHECKPOINT_SECTIONS,
+    SERIALIZATION_SYSTEM_PROMPT,
+    checkpointSectionCount,
+} from "./prompt";
 
 /**
  * The two summarization strategies, and the shape their caller cascades over.
@@ -93,6 +97,24 @@ export function evaluateSummarizationResponse(
             detail: "summarization returned an empty summary",
         };
     }
+
+    // A reply that carries the demanded sections is the only thing the rest of the pipeline can use: the
+    // headings are what `sections.ts` reads, so this is a usability check rather than a style one. It exists
+    // because a real 2026-09-05 run answered with 35 tokens of "I don't have any prior thinking to
+    // reproduce" - non-empty, fluent, and useless as the session's memory - and was accepted on that basis.
+    // Rejecting cascades to the serialized strategy, the rung that can still produce something.
+    const sections = checkpointSectionCount(text);
+    if (sections < MIN_CHECKPOINT_SECTIONS) {
+        return {
+            ok: false,
+            strategy,
+            usage: response.usage,
+            detail:
+                `summarization ${strategy} answer carried ${String(sections)} of ` +
+                `${String(MIN_CHECKPOINT_SECTIONS)} required sections: ${text.slice(0, 120)}`,
+        };
+    }
+
     return { ok: true, strategy, text, usage: response.usage };
 }
 

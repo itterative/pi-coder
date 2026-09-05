@@ -127,15 +127,10 @@ tolerates fields absent in records from older builds, because the file accumulat
 - `attempt` — per stage: `accepted`/`rejected`/`skipped`, detail, `usage` incl. **`cacheRead`** (the only way
   to tell whether the rebuilt prefix was served from cache), estimated tokens, tool/message counts, stage 1's
   `copiedEntries`/`skippedEntries`, stage 2's `serializedChars`/`segmentSummaryChars`.
-- `prefix` — from `prefix-diff.ts`: our stage-1 body (captured via `onPayload`) diffed against the parent's
-  last real body. Reports **every** content `divergences[]` (`system`, `tools(body)`, `tools(names)`,
-  `messages[i]`), `prefixUsable`, `truncated`, and `parameters[]` for body keys only one side sent. Two rules
-  learned the hard way: `tool_choice` is a **parameter**, never a prefix verdict; and a difference that starts
-  exactly at our appended instruction on a `truncated` request is the designed shape, so it must report
-  `usable: true` / `firstDivergence: "tail"` rather than look broken. Without those, every healthy run reads as
-  a failure. `firstDivergence: "no-parent-payload-in-this-runtime"` is not a broken hook: the capture is a
-  per-process map, so a compaction that runs after a restart or `/reload` — before any real parent turn in that
-  runtime — legitimately has nothing to compare against.
+- `prefix` — the verdict from `chain.ts` against our `onPayload` body: which reference answered, how deep the
+  agreement went, and the parameters only one side sent. Two rules survive from the body-to-body era:
+  `tool_choice` is a **parameter**, never a prefix verdict, and an absent reference is **unknown**, never
+  `false`.
 - `model_response` — what the model said before the harness appended anything.
 - `final_summary` — the exact persisted text plus its counts.
 - `outcome` — `two-stage`/`native`/`serialized`/`core-default`/`cancelled`/`disabled`.
@@ -157,20 +152,43 @@ or unknown fields fall back to defaults, because children run this unattended. `
 `traceMaxBytes` govern the trace; `model` is accepted but unused — the seam for the planned dedicated
 compaction model, which wants the serialized route since it has no cache prefix to protect.
 
-## The parent-body capture is memory-only
+## The request chain: hashes retained, bodies dropped
 
-`lastParentPayload` is a module-level `WeakMap` in `index.ts` keyed by the `ctx.sessionManager` instance, set
-by the `before_provider_request` handler and read (never cleared) when stage 1 diffs its own body.
+`chain.ts` replaced the parent-body capture. `index.ts` keeps `WeakMap<sessionManager, RequestChain>`, and
+`before_provider_request` calls `observeParentRequest()`, which folds a cumulative head over
+`body.messages` and then **drops the body**:
 
-- **Process-local.** A restart or `/reload` starts it empty, so the first compaction in a fresh runtime has
-  nothing to compare against and reports `no-parent-payload-in-this-runtime`. That is not a broken hook.
-- **Per session by identity.** A child's stage 1 compares against that child's own last body.
-- **A reference, not a copy**: pi's own body object (1-2 MB at 330k tokens), replaced each request, released
-  with the manager. Bounded to one per live session; storing the fingerprint instead would trade re-diffing
-  for that retention.
-- **Never persisted, never in the transcript.** Only the derived hashes/counts/320-char excerpts reach the
-  trace file. Deliberately not `pi.appendEntry`: megabytes per compaction in the session file, re-scanned by
-  every `getBranch()` forever, and custom entries never reach the model anyway.
+```
+head(0) = sha256("pi-coder/compaction-chain/v1")
+head(k) = sha256(head(k-1) + 0x1f + JSON.stringify(messages[k-1]))   truncated to 16 hex
+```
+
+One observation per provider request: `{leafId, depth, head, systemHash, toolsHash, systemChars, keys,
+model, toolNames?}` — `toolNames` only when the shape changed. About seventy bytes where a body was one to two
+megabytes, so the cap is a memory bound rather than a correctness one (`MAX_OBSERVATIONS = 2000`, ~140 KB),
+and dropping the oldest only costs resolution on depths compaction passed long ago.
+
+Four consequences, each learned from a real trace:
+
+- **Branch-correct by construction.** `match()` filters observations to leaf ids on `getBranch()`, so a
+  request captured on a branch that was navigated away from cannot be chosen as a reference. This replaces the
+  old bug where navigating back produced a confident `prefixUsable: false` plus `div=messages[42], rewind` —
+  the number was right, the verdict was wrong, because the reference came from a dead branch.
+- **`prefixUsable` is omitted, never `false`, when no reference exists.** "Could not tell" and "misaligned"
+  were one value, and a cold process after a restart read as a broken rebuild. The record now carries
+  `reference: "none"` and `firstDivergence: "no-reference"`.
+- **Comparing at the *reference's* depths makes tail-awareness unnecessary.** Our body is the span plus one
+  appended instruction, and every reference depth is at or below the span, so the instruction is never inside
+  the window being checked. The `truncated && divergence-at-our-last-message` special case that the
+  body-to-body diff needed is gone from `src`; `diffRequestPrefixes` no longer exists.
+- **The system prompt must be hashed whole.** `requestShape()` hashes raw text while the human-facing
+  `fingerprintPayload()` keeps a 320-char excerpt, because a 24 KB prompt differing only at character 9000 is
+  exactly the drift an excerpt would hide.
+
+Cost is a full re-hash per request (single-digit milliseconds on an 880-message body) and is gated by tracing
+being on. Nothing here gates compaction: stage 1 is built and sent identically whether or not any observation
+exists. `parameters[]` survives as a set difference over body keys, which keeps the "`tool_choice` is a
+parameter, not a verdict" lesson expressible without retaining a body.
 
 ## Failure inventory
 
@@ -195,7 +213,18 @@ Open gaps, agreed 2026-09-05 and **not yet implemented**:
    `NON_OVERFLOW_PATTERNS` suppresses `/rate limit/i`) plus `status`/`headers` on provider errors for
    401/402/429. Verified statically (types and export surface) only — a `tsx` probe died on module resolution,
    not on pi.
-2. **`stopReason: "length"` on a summarization response is accepted**, so a checkpoint truncated mid-section
+2. **`stopReason: "length"` on a summarization response is accepted.** Partly mitigated: a length-truncated
+   reply usually loses a section and is now rejected by the shape guard, but a truncation that keeps two
+   headings still passes.
+2b. **`ToolInfo` hides a field that reaches the wire.** `pi.getAllTools()` returns
+   `Pick<ToolDefinition, "name"|"description"|"parameters"|"promptGuidelines"> & {sourceInfo}` and pi keeps the
+   full `ToolDefinition` privately (`getToolDefinition` exists on the runner, not on the extension API).
+   pi-ai's OpenAI serializer reads `tool.constrainedSampling` to decide `function.strict`
+   (`constrained-sampling.js:50`), so a tool declaring it would make pi's `tools` array differ in bytes from
+   ours while the extension API cannot see the field at all — the one place our rebuilt prefix is *not*
+   guaranteed by construction. Latent today: no pi built-in and no pi-coder tool declares it. Upstream ask:
+   add the field to the projection, or expose `getToolDefinition`. A `getAllTools()`-based shape hash catches
+   it if it ever fires, which is the main reason the chain records tool names on every shape change., so a checkpoint truncated mid-section
    becomes the session's memory. Should reject and cascade; pi-ai's `isRecoverableLength` also treats a short
    `length` stop as context pressure, so this fix does double duty.
 3. **Abort mid-flight returns `undefined`**, so core then issues its own doomed call on the dead controller;
@@ -206,7 +235,29 @@ Open gaps, agreed 2026-09-05 and **not yet implemented**:
    stage-1 input and produce a confident checkpoint of half a conversation. `estimatedTokens`,
    `reportedContextTokens`, and `usage.input` are all logged now, which is what makes a mismatch check
    possible later.
-6. **A missing cut point is invisible.** If `preparation.firstKeptEntryId` is not on the path,
+6. **A degenerate stage-1 answer is accepted. CLOSED 2026-09-05.** On a live run stage 1 answered 509k tokens
+   of context with 35 tokens of *"I don't have any prior thinking to reproduce — this is the first turn of our
+   conversation, so there is no previous internal reasoning that exists to be audited verbatim."* Non-empty,
+   fluent, useless, and accepted, so the run persisted as `route: "two-stage"` over a 169-char checkpoint. Now:
+   `prompt.ts` owns `CHECKPOINT_SECTIONS` (lowercase **words**, beside the format they come from, so the
+   instruction and the guard cannot drift), `MIN_CHECKPOINT_SECTIONS = 2`, and
+   `checkpointSectionCount(text)`; `summarize.ts` rejects below that with a `detail` quoting the reply head,
+   which cascades to the serialized rung. Both regexes are module constants, and a heading resolves to one
+   section by its first recognized word — so `## Constraints & Preferences` counts once and a single heading
+   can never satisfy the guard twice. Deliberately **not** in `src`: any character or token floor, because
+   length is provider- and language-dependent; it stays a report flag (`degenerate-native-output`) where the
+   threshold is a free knob. The baiting clause is also gone — `splitTurn` now says the remainder is "kept
+   as-is below", and the instruction adds "It is your only input: do not describe, reproduce, or audit any
+   reasoning, thinking, or internal process" (core leaves reasoning enabled for these calls,
+   `compaction.js:426`).
+
+7. **Stage 2's transcript cap silently shrinks the input.** `config.ts:36` `maxChars: 48_000` made
+   `serializeConversationMinimal` drop **702 message blocks** on that same run, so the persisted summary covered
+   a truncated view — and because stage 1 failed, the capped reduce was the *only* real input. These are
+   independent knobs: fixing stage 1 does not raise the cap, and raising the cap does not fix stage 1. Watch
+   `blocks-dropped` and `degenerate-native-output` separately in `npm run compaction-report -- --suspect`.
+
+8. **A missing cut point is invisible.** If `preparation.firstKeptEntryId` is not on the path,
    `spanContextEntries` returns everything and stage 1 silently stops truncating — i.e. it goes back to full
    price. A `cutFound` field on the stage-1 `attempt` record closes it.
 

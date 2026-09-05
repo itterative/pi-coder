@@ -49,6 +49,79 @@ const OWNERSHIP = [
 
 const FORMAT = ["Use this exact format:", "", PI_SECTIONS, "", OWNERSHIP].join("\n");
 
+/**
+ * The words that identify a demanded section, lowercase and single-word.
+ *
+ * Matching on words rather than whole titles is what makes the guard survive real replies: `## Key Decisions`
+ * and `## key decisions:` and `## Decisions` all name the same section. The words are kept next to the format
+ * they police so the two cannot drift apart.
+ */
+export const CHECKPOINT_SECTIONS = [
+    "goal",
+    "constraints",
+    "preferences",
+    "progress",
+    "blocked",
+    "decisions",
+    "key",
+    "next",
+    "steps",
+    "critical",
+    "context",
+];
+
+/**
+ * How many sections a reply needs to count as a checkpoint.
+ *
+ * Two, not one: a model that misreads the request answers with a single heading over an apology, which is the
+ * shape a size heuristic cannot see and this one can. It is not a judgment about brevity - a short session
+ * legitimately fills several sections with "(none)" - so this is the only content requirement the pipeline
+ * enforces.
+ */
+export const MIN_CHECKPOINT_SECTIONS = 2;
+
+/** A level-2 heading. `### Done` is level three, so `##` plus a space rules it out. */
+const HEADING_LINE = /^##\s+(.+?)\s*$/;
+
+/** Words inside a heading, lowercased. Stateless with `String.match`, which ignores `lastIndex` here. */
+const WORD_PATTERN = /[a-z]+/g;
+
+const SECTION_WORDS = new Set(CHECKPOINT_SECTIONS);
+
+/**
+ * The section a heading names, identified by its first recognized word.
+ *
+ * One identity per heading, so `## Constraints & Preferences` counts as the single section it is instead of
+ * two, while a reply that repeats `## Goal` still counts that section once.
+ */
+function sectionOf(heading: string): string | undefined {
+    const words = heading.toLowerCase().match(WORD_PATTERN);
+    if (words === null) {
+        return undefined;
+    }
+
+    return words.find((word) => SECTION_WORDS.has(word));
+}
+
+/** How many distinct demanded sections a reply carries. */
+export function checkpointSectionCount(text: string): number {
+    const present = new Set<string>();
+
+    for (const line of text.split("\n")) {
+        const heading = HEADING_LINE.exec(line);
+        if (heading === null) {
+            continue;
+        }
+
+        const section = sectionOf(heading[1] as string);
+        if (section !== undefined) {
+            present.add(section);
+        }
+    }
+
+    return present.size;
+}
+
 /** Extra focus from `/compact <instructions>`, or undefined when the caller gave none. */
 function focusLines(customInstructions?: string): string | undefined {
     const trimmed = customInstructions?.trim();
@@ -78,8 +151,8 @@ export function segmentSummaryInstruction(input: SegmentInstructionInput): strin
           ].join(" ")
         : undefined;
     const splitTurn: string | undefined = preparation.isSplitTurn
-        ? "This span ends partway through a turn whose remainder is retained verbatim; summarize only the" +
-          " part shown here."
+        ? "This span ends partway through a turn whose remainder is kept as-is below; summarize only the part" +
+          " shown here."
         : undefined;
 
     return [
@@ -90,6 +163,9 @@ export function segmentSummaryInstruction(input: SegmentInstructionInput): strin
         "Reply with text only: the checkpoint itself, nothing before or after it.",
         "",
         "Write that checkpoint now, for a fresh context that will see only this text plus the recent turns.",
+        "",
+        "Summarize the conversation above. It is your only input: do not describe, reproduce, or audit any",
+        "reasoning, thinking, or internal process of your own, and do not answer the instruction itself.",
         "",
         "This is an intermediate pass: a second model reads it alongside a transcript and must merge them,",
         "so compress. Bullets over prose, one line per fact, no quoted tool output longer than a line, and",

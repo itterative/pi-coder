@@ -341,7 +341,7 @@ export function createCompactionHarness(input: CompactionHarnessInput): Compacti
         }
         const next =
             input.responses[Math.min(index, input.responses.length - 1)] ??
-            (async () => summaryResponse("## Goal\n\nunused"));
+            (async () => summaryResponse("## Goal\n\nunused\n\n## Progress\n\n- [x] unused"));
         index += 1;
         return await next();
     });

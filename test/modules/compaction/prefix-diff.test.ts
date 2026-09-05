@@ -90,9 +90,7 @@ describe("request shape fingerprinting", () => {
 
     it("sorts body keys so a parameter difference reads as a set difference", () => {
         const shape = requestShape(anthropicBody({ extra: { tool_choice: "none" } }));
-        expect(shape.keys).toEqual(
-            [...shape.keys].sort((a, b) => a.localeCompare(b)),
-        );
+        expect(shape.keys).toEqual([...shape.keys].sort((a, b) => a.localeCompare(b)));
         expect(shape.keys).toContain("tool_choice");
     });
 
@@ -110,7 +108,10 @@ describe("request shape fingerprinting", () => {
     it("summarizes a fingerprint without any conversation text", () => {
         const summary = fingerprintSummary(
             fingerprintPayload(
-                anthropicBody({ system: "the prompt", messages: [{ role: "user", content: "secret" }] }),
+                anthropicBody({
+                    system: "the prompt",
+                    messages: [{ role: "user", content: "secret" }],
+                }),
             ),
         );
 

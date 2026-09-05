@@ -43,7 +43,11 @@ function chainWith(...observations: [string, unknown[]][]): RequestChain {
     return chain;
 }
 
-function matchOf(chain: RequestChain, body: unknown[], options: { path?: string[]; shape?: ChainShape } = {}) {
+function matchOf(
+    chain: RequestChain,
+    body: unknown[],
+    options: { path?: string[]; shape?: ChainShape } = {},
+) {
     return chain.match({
         ladder: messageLadder(body),
         pathIds: pathIdSet((options.path ?? [LEAF_A]).map((id) => ({ id }))),
@@ -90,11 +94,17 @@ describe("request chain", () => {
     it("names the exact depth where the rebuild stopped matching", () => {
         // pi sent these on three requests, so depths 2, 3 and 4 each carry a reference head.
         const base = messages(4);
-        const chain = chainWith([LEAF_A, base.slice(0, 2)], [LEAF_A, base.slice(0, 3)], [LEAF_A, base]);
-
-        const drifted = base.slice(0, 3).map((message, index) =>
-            index === 2 ? { role: "assistant", content: "rewritten" } : message,
+        const chain = chainWith(
+            [LEAF_A, base.slice(0, 2)],
+            [LEAF_A, base.slice(0, 3)],
+            [LEAF_A, base],
         );
+
+        const drifted = base
+            .slice(0, 3)
+            .map((message, index) =>
+                index === 2 ? { role: "assistant", content: "rewritten" } : message,
+            );
         const match = matchOf(chain, [...drifted, { role: "user", content: base[3] }]);
 
         expect(match.verifiedTo).toBe(2);
@@ -130,7 +140,9 @@ describe("request chain", () => {
         const body = messages(4);
         const chain = chainWith([LEAF_A, body]);
 
-        const match = matchOf(chain, body, { shape: shape({ systemHash: "sys-2", systemChars: 4000 }) });
+        const match = matchOf(chain, body, {
+            shape: shape({ systemHash: "sys-2", systemChars: 4000 }),
+        });
         expect(match.reference).toBe("chain");
         expect(match.compared).toBe(0);
         expect(match.verifiedTo).toBe(-1);

@@ -296,13 +296,22 @@ function normalizePrefix(prefix) {
     }
 
     return {
+        // `none` means no hash ladder covered this branch, which is not the same as a mismatch: the old
+        // records reported both as `prefixUsable: false`, and that cost a whole debugging pass.
+        reference:
+            prefix.reference ?? (prefix.parentMessageCount === undefined ? "unknown" : "body"),
         usable: prefix.prefixUsable,
         first: prefix.firstDivergence ?? "(unknown)",
         divergences: Array.isArray(prefix.divergences) ? prefix.divergences : [],
         parameters: Array.isArray(prefix.parameters) ? prefix.parameters : [],
         common: prefix.commonPrefixMessages,
-        parentCount: prefix.parentMessageCount,
+        // Pre-chain records named the reference depth `parentMessageCount`.
+        referenceDepth: prefix.referenceDepth ?? prefix.parentMessageCount,
         ourCount: prefix.ourMessageCount,
+        verifiedThrough: prefix.verifiedThrough,
+        observations: prefix.observations,
+        historyTruncated: prefix.historyTruncated,
+        modelDivergence: prefix.modelDivergence,
         truncated: prefix.truncated,
     };
 }
@@ -559,6 +568,28 @@ function flagRun(run, options) {
         });
     }
 
+    // An absent reference is not a failure, but it is a blind spot worth listing: it is the case where the
+    // cache question genuinely cannot be answered from this record.
+    if (prefix !== undefined && prefix.reference === "none") {
+        out.push({
+            key: "no-prefix-reference",
+            detail: `no hash ladder covered this branch; ${prefix.ourCount ?? 0} messages went unverified`,
+        });
+    }
+
+    if (
+        prefix !== undefined &&
+        prefix.reference === "chain" &&
+        typeof prefix.referenceDepth === "number" &&
+        typeof prefix.ourCount === "number" &&
+        prefix.referenceDepth < prefix.ourCount - 1
+    ) {
+        out.push({
+            key: "prefix-reference-shallow",
+            detail: `reference reached depth ${prefix.referenceDepth}, the span had ${prefix.ourCount - 1}`,
+        });
+    }
+
     // Stage 1 truncates by design, so a non-truncated span means the cut point was never found and the whole
     // live context went out again at full price.
     if (prefix !== undefined && prefix.truncated === false) {
@@ -805,12 +836,22 @@ function renderRunBlock(run, flags, options) {
     if (run.prefix !== undefined) {
         const prefix = run.prefix;
         const bits = [
+            `reference=${prefix.reference}`,
             `usable=${dash(prefix.usable)}`,
-            `first=${prefix.first}`,
-            `common=${dash(prefix.common)}/${dash(prefix.parentCount)}`,
+            `verified=${dash(prefix.common)}/${dash(prefix.referenceDepth)}`,
             `ours=${dash(prefix.ourCount)}`,
-            `truncated=${dash(prefix.truncated)}`,
+            `obs=${dash(prefix.observations)}`,
+            `first=${prefix.first}`,
         ];
+        if (prefix.truncated === true) {
+            bits.push("truncated");
+        }
+        if (prefix.historyTruncated === true) {
+            bits.push("history-capped");
+        }
+        if (prefix.modelDivergence) {
+            bits.push(`model=${prefix.modelDivergence}`);
+        }
         if (prefix.parameters.length > 0) {
             bits.push(`params=${prefix.parameters.join(",")}`);
         }

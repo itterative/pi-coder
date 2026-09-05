@@ -72,7 +72,11 @@ describe("compaction trace", () => {
 
     it("writes nothing while disabled, which is how the suites stay out of the repo's .state", async () => {
         vi.stubEnv("COMPACTION_TRACE", "0");
-        const harness = build({ responses: [async () => summaryResponse("## Goal\n\nstub")] });
+        const harness = build({
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
+        });
         await harness.compact();
         expect(existsSync(tracePath)).toBe(false);
     });
@@ -80,7 +84,9 @@ describe("compaction trace", () => {
     it("honors traceEnabled false from config when no env switch is set", async () => {
         vi.stubEnv("COMPACTION_TRACE", "");
         const harness = build({
-            responses: [async () => summaryResponse("## Goal\n\nstub")],
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
             config: { traceEnabled: false },
         });
         await harness.compact();
@@ -89,7 +95,12 @@ describe("compaction trace", () => {
 
     it("records the model response and the composed summary under one id", async () => {
         const harness = build({
-            responses: [async () => summaryResponse("## Goal\n\nthe model answer")],
+            responses: [
+                async () =>
+                    summaryResponse(
+                        "## Goal\n\nthe model answer\n\n## Progress\n\n- [x] the model answer",
+                    ),
+            ],
         });
         const payload = await harness.compact();
 
@@ -119,8 +130,8 @@ describe("compaction trace", () => {
         const modelResponses = records.filter((record) => record.stage === "model_response");
         // (a) exactly what each model said, before the harness appended anything.
         expect(modelResponses.map((record) => record.text)).toEqual([
-            "## Goal\n\nthe model answer",
-            "## Goal\n\nthe model answer",
+            "## Goal\n\nthe model answer\n\n## Progress\n\n- [x] the model answer",
+            "## Goal\n\nthe model answer\n\n## Progress\n\n- [x] the model answer",
         ]);
         // (b) what actually goes into the CompactionEntry.
         expect(byStage.get("final_summary")?.text).toBe(payload?.summary);
@@ -138,7 +149,11 @@ describe("compaction trace", () => {
     });
 
     it("records the numbers that decided the strategy, including the cache evidence", async () => {
-        const harness = build({ responses: [async () => summaryResponse("## Goal\n\nstub")] });
+        const harness = build({
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
+        });
         await harness.compact();
 
         const records = readRecords(tracePath);
@@ -168,14 +183,16 @@ describe("compaction trace", () => {
         expect(reduce?.attempt).toMatchObject({ messageCount: 1, toolCount: 0 });
         // Both stages are answered by the same stub response in this suite, so the reduce is handed exactly
         // the segment text it should report having received.
-        expect(reduce?.attempt?.segmentSummaryChars).toBe("## Goal\n\nstub".length);
+        expect(reduce?.attempt?.segmentSummaryChars).toBe(
+            "## Goal\n\nstub\n\n## Progress\n\n- [x] stub".length,
+        );
     });
 
     it("records a rejected native attempt before the serialized one that saved it", async () => {
         const harness = build({
             responses: [
                 async () => toolCallResponse("read"),
-                async () => summaryResponse("## Goal\n\nsalvaged"),
+                async () => summaryResponse("## Goal\n\nsalvaged\n\n## Progress\n\n- [x] salvaged"),
             ],
         });
         await harness.compact();
@@ -199,7 +216,9 @@ describe("compaction trace", () => {
             { id: "kept-1", message: sampleKept()[0] },
         ]);
         const harness = build({
-            responses: [async () => summaryResponse("## Goal\n\nnarrow")],
+            responses: [
+                async () => summaryResponse("## Goal\n\nnarrow\n\n## Progress\n\n- [x] narrow"),
+            ],
             contextWindow: 200_000,
             branch: thresholdSized,
         });
@@ -212,7 +231,9 @@ describe("compaction trace", () => {
         expect(native?.outcome).toBe("accepted");
 
         const tooNarrow = build({
-            responses: [async () => summaryResponse("## Goal\n\nnarrow")],
+            responses: [
+                async () => summaryResponse("## Goal\n\nnarrow\n\n## Progress\n\n- [x] narrow"),
+            ],
             contextWindow: 4_000,
             branch: thresholdSized,
         });
@@ -227,7 +248,9 @@ describe("compaction trace", () => {
 
     it("records the transcript counts for an overflow compaction", async () => {
         const harness = build({
-            responses: [async () => summaryResponse("## Goal\n\noverflow")],
+            responses: [
+                async () => summaryResponse("## Goal\n\noverflow\n\n## Progress\n\n- [x] overflow"),
+            ],
             systemPrompt: "a prompt long enough to push the estimate past four thousand tokens",
         });
         await harness.compact({ reason: "overflow", willRetry: true });
@@ -287,7 +310,9 @@ describe("compaction trace", () => {
             messages: [{ role: "user", content: "fix the compaction module" }],
         };
         const harness = build({
-            responses: [async () => summaryResponse("## Goal\n\nstub")],
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
             providerPayload: {
                 ...parentBody,
                 messages: [...parentBody.messages, { role: "user", content: "instruction" }],
@@ -321,13 +346,19 @@ describe("compaction trace", () => {
             observations: 1,
         });
         // Nothing is retained of the parent body, so the record describes only our own.
-        expect(prefix?.ourRequest).toMatchObject({ model: "stub-model", toolCount: 1, messageCount: 2 });
+        expect(prefix?.ourRequest).toMatchObject({
+            model: "stub-model",
+            toolCount: 1,
+            messageCount: 2,
+        });
         expect(JSON.stringify(prefix ?? {})).not.toContain("parentRequest");
     });
 
     it("leaves the prefix verdict unknown rather than unusable when nothing was observed", async () => {
         const harness = build({
-            responses: [async () => summaryResponse("## Goal\n\nstub")],
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
             providerPayload: { model: "stub-model", messages: [] },
         });
         await harness.compact();
@@ -346,7 +377,9 @@ describe("compaction trace", () => {
 
     it("rotates the file once it passes the configured size", async () => {
         const harness = build({
-            responses: [async () => summaryResponse("## Goal\n\nstub")],
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
             config: { traceMaxBytes: 1 },
         });
         await harness.compact();
@@ -354,7 +387,11 @@ describe("compaction trace", () => {
     });
 
     it("keeps the trace file readable only by its owner", async () => {
-        const harness = build({ responses: [async () => summaryResponse("## Goal\n\nstub")] });
+        const harness = build({
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
+        });
         await harness.compact();
         expect(statSync(tracePath).mode & 0o777).toBe(0o600);
     });

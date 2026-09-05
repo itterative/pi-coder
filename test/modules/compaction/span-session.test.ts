@@ -34,7 +34,11 @@ function buildBranch() {
         manager,
         toolResultMessage({ callId: "c1", tool: "read", text: "file contents here" }),
     );
-    const compaction = manager.appendCompaction("## Goal\n\nearlier checkpoint", first, 1000);
+    const compaction = manager.appendCompaction(
+        "## Goal\n\nearlier checkpoint\n\n## Progress\n\n- [x] earlier checkpoint",
+        first,
+        1000,
+    );
     const second = append(manager, userMessage("second request"));
     const mailbox = manager.appendCustomMessageEntry(
         "pi-coder:agent-mailbox",
@@ -149,7 +153,11 @@ describe("stage-1 span transcript", () => {
 
     it("keeps a compaction entry that is first on the path", () => {
         const manager = SessionManager.inMemory("/tmp");
-        manager.appendCompaction("## Goal\n\nsolo checkpoint", "nonexistent-entry-id", 10);
+        manager.appendCompaction(
+            "## Goal\n\nsolo checkpoint\n\n## Progress\n\n- [x] solo checkpoint",
+            "nonexistent-entry-id",
+            10,
+        );
         append(manager, userMessage("after the checkpoint"));
 
         const built = buildSpanSession(manager.buildContextEntries(), "/tmp");

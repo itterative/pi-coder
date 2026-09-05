@@ -87,8 +87,13 @@ describe("compaction stages", () => {
     }
 
     const segmentSummary = async () =>
-        summaryResponse("## Goal\n\nsegment checkpoint from stage one");
-    const reducedSummary = async () => summaryResponse("## Goal\n\nreduced final checkpoint");
+        summaryResponse(
+            "## Goal\n\nsegment checkpoint from stage one\n\n## Progress\n\n- [x] segment checkpoint from stage one",
+        );
+    const reducedSummary = async () =>
+        summaryResponse(
+            "## Goal\n\nreduced final checkpoint\n\n## Progress\n\n- [x] reduced final checkpoint",
+        );
 
     it("stage 1 reads the discarded span and not the retained tail", async () => {
         const h = build({ responses: [segmentSummary, reducedSummary] });

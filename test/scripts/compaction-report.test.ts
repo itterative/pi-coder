@@ -257,7 +257,9 @@ describe("compaction-report script", () => {
         // reproduce", which is non-empty and therefore accepted, after which stage 2 rebuilt the summary.
         const trace = recorder("sess-refusal");
         const refusal = "I don't have any prior thinking to reproduce.";
-        trace.prefix(healthyPrefix({ referenceDepth: 880, ourMessageCount: 839, commonPrefixMessages: 838 }));
+        trace.prefix(
+            healthyPrefix({ referenceDepth: 880, ourMessageCount: 839, commonPrefixMessages: 838 }),
+        );
         trace.attempt(
             "native",
             nativeFields({
@@ -298,6 +300,48 @@ describe("compaction-report script", () => {
         expect(text.stdout).toContain("702 transcript blocks left out");
     });
 
+    it("separates an absent reference from an unusable one", () => {
+        // Before the hash ladder, both of these were written as `prefixUsable: false` with a zero match count,
+        // which made a cold process look like a broken rebuild.
+        const trace = recorder("sess-no-reference");
+        trace.prefix(
+            healthyPrefix({
+                reference: "none",
+                prefixUsable: undefined,
+                firstDivergence: "no-reference",
+                divergences: ["no-reference"],
+                commonPrefixMessages: -1,
+                referenceDepth: -1,
+                observations: 0,
+            }),
+        );
+        trace.attempt("native", nativeFields(), accepted({ usage: usage(2000, 1500, 30000) }));
+        const summary = checkpoint("## Goal", 4000);
+        trace.modelResponse("native", summary);
+        trace.final("native", summary, finalFields());
+        trace.outcome("native");
+
+        const keys = flagKeys(parseReport(), "sess-no-reference");
+        expect(keys).toContain("no-prefix-reference");
+        expect(keys).not.toContain("prefix-unusable");
+        expect(runText(["--session", "sess-no-reference"]).stdout).toContain("reference=none");
+    });
+
+    it("says so when the reference is real but shallower than the span", () => {
+        const trace = recorder("sess-shallow");
+        // The chain only reached depth 400 while the span carried 838 messages: matched, but only partly checkable.
+        trace.prefix(
+            healthyPrefix({ referenceDepth: 400, ourMessageCount: 839, commonPrefixMessages: 400 }),
+        );
+        trace.attempt("native", nativeFields(), accepted({ usage: usage(2000, 1500, 30000) }));
+        const summary = checkpoint("## Goal", 4000);
+        trace.modelResponse("native", summary);
+        trace.final("native", summary, finalFields());
+        trace.outcome("native");
+
+        expect(flagKeys(parseReport(), "sess-shallow")).toContain("prefix-reference-shallow");
+    });
+
     it("applies the text thresholds uniformly across runs", () => {
         writeHealthyRun("sess-healthy");
         const trace = recorder("sess-short");
@@ -325,7 +369,9 @@ describe("compaction-report script", () => {
     it("keeps a span that never truncated visible as its own failure", () => {
         const trace = recorder("sess-notruncated");
         // The missing-cut-point case: stage 1 sent the whole live context instead of the truncated span.
-        trace.prefix(healthyPrefix({ truncated: false, ourMessageCount: 880, referenceDepth: 880 }));
+        trace.prefix(
+            healthyPrefix({ truncated: false, ourMessageCount: 880, referenceDepth: 880 }),
+        );
         trace.attempt("native", nativeFields(), accepted({ usage: usage(5000, 1500, 30000) }));
         trace.modelResponse("native", checkpoint("## Goal", 4000));
         trace.final("native", checkpoint("## Goal", 4000), finalFields());
