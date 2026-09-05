@@ -1,0 +1,239 @@
+### user and assistant turns
+
+[User]: compact this session please
+
+[Assistant]: working on it
+
+### known tool calls
+
+[Assistant tool calls]: read(path="src/index.ts", offset=10, limit=50); bash(command="line of output line of output line of output line of output line of output line of output line of output line of output line of output line of output line of output line of output line of output line  [... 5799 more characters truncated]", timeout=30); edit(path="a.ts", edits=3); write(path="b.ts", contentChars=6000); grep(pattern="compact", path="src", glob="*.ts"); agent(action="start", agent="scout", title="Recon", taskChars=6000); ask_user(title="Which?")
+
+### unknown tool call
+
+[Assistant tool calls]: mystery_tool(alpha, zeta)
+
+### tool results
+
+[Tool result]: line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of ou [... 5600 more characters truncated]
+
+[Tool result]: bash failed — line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of ou [... 5000 more characters truncated]
+
+[Tool result]: line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+ [... 4800 more characters truncated]
+
+### bash execution and injected notes
+
+[Bash]: npm test (exit 1)
+
+[Bash result]: line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of output
+line of ou [... 5600 more characters truncated]
+
+[Bash]: git status (exit 0)
+
+[Bash result]: M src/index.ts
+
+[System note]: pi-coder:agent-mailbox: background run finished
+
+### earlier summaries
+
+[Compaction summary]: ## Goal
+
+Earlier goal that must survive.
+
+[User]: continue

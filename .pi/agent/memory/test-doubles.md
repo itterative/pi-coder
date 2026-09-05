@@ -26,6 +26,7 @@ keep_updated: true
 | pi's tool-render context (unexported, unused here) | `pi-stub.ts` → `noRenderContext` | `renderText(tool.renderCall(...) as any, w)` |
 | a two-member event bus that records emits | annotate `const events: EventBus = { emit, on }` | `} as any` around a mini bus |
 | a child extension wired the way production wires it | `test/tools/child-run-fixture.ts` → `buildChildRun`, `probeDefinition` | hand-built grant or option bag |
+| a compaction event, summarized span, or provider summary response | `test/helpers/compaction-doubles.ts` → `compactEvent`, `compactionPreparation`, `userMessage`/`assistantMessage`/`toolResultMessage`/`bashExecutionMessage`/`customMessage`/`compactionSummaryMessage`, `messageChain`, `fileOperations`, `summaryResponse`, `toolCallResponse` | hand-built `AgentMessage` literals, or a `SessionManager` transcript you then have to parse |
 | driving a TUI component | `test/helpers.ts` → `KEY`, `mockTheme`, `press`, `type`, `paste`, `interact`, `renderText`, `snapshotText` | inline ANSI sequences, hand-rolled key strings |
 | temp dirs, SQLite, git repos for agent lifecycle | `test/tools/e2e/helpers.ts` → `createE2EPaths`, `withE2EMetadataDatabase`, `createScriptedChild`, `insertE2EAgentRun`, `createClaimedTaskWorkspace`, `initializeRepository` | ad-hoc `mkdtemp` plus open-by-hand |
 | template-string fixtures without indentation | `test/modules/memory/utils.ts` → `dedent` | manual leading-space stripping |
@@ -35,6 +36,10 @@ keep_updated: true
 `createPiStub({ eventBus?: EventBus | null })` records the seven `pi` members production calls (`on`, `registerTool`, `registerCommand`, `registerShortcut`, `appendEntry`, `sendMessage`, `events`) and exposes:
 
 - `pi` — typed `ExtensionAPI`, one boundary cast inside the helper rather than one per suite.
+- `toolSurface` — `{ active: string[]; all: StubToolInfo[] }`, what `pi.getActiveTools()` and `pi.getAllTools()`
+  answer from. Assign it before invoking a handler (`stub.toolSurface.active = ["bash", "read"]`); order is
+  meaningful, because a handler that rebuilds a provider request has to reproduce pi's tool array exactly.
+  `stubToolInfo(name)` builds an entry without pi's unexported `SourceInfo`, which nothing reads.
 - `order` — **cross-member** registration log: `on:<event>`, `tool:<name>`, `command:<name>`, `shortcut:<key>`. Separate recorders cannot express interleaving, and handler registration order *is* permission precedence in `child/gates/`.
 - `handlersFor(event)`, `requireHandler(event, index?)` — handlers in registration order; the `require` form fails naming the event and listing what was registered.
 - `requireTool<Details>(name)`, `tools` — `Details` re-materializes the result generic pi erases from `ToolDefinition.execute`, so a suite does not cast every call. The `tools` array itself stays heterogeneous, so that generic is asserted once inside `requireTool`.
@@ -47,6 +52,8 @@ keep_updated: true
 ## Pick the context double by the parameter type, not by convenience
 
 `stubContext` satisfies `ExtensionContext`; dialog entry points that declare `ExtensionCommandContext` (`confirm` at `src/tui/confirmation.ts:93`, `showAgentSessionBrowser`) need `stubCommandContext`, and the compiler rejects the swap. The branch each one guards also differs: `src/tui/confirmation.ts:95` requires `hasUI && mode === "tui"`, while `src/tui/ask-user.ts:384` and `src/tui/select-with-message.ts:521` read only `ctx.hasUI` and never `ctx.mode`. Copying one file's override set onto the other silently changes which branch runs.
+
+Two more context members had no double at all until the compaction suite needed them: `stubModel(overrides?)` for `ctx.model` (a wide-window non-reasoning stand-in whose `contextWindow` and `maxTokens` a suite can move, which is what the native-request fit gate reads), and `stubModelRegistry(complete)` for `ctx.modelRegistry`, which answers only `complete` — pi's `ModelRegistry` is a class surface with no partial construction path, so that single cast lives in the helper and an unmodelled member still fails at the call.
 
 ## Seven rules that are easy to get wrong (each already cost a bug)
 

@@ -1,0 +1,165 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+/**
+ * Pi-coder compaction settings.
+ *
+ * Mirrors `src/tools/agent/config.ts`: project file wins over the global file, both optional, and both
+ * locations env-overridable so a suite or a shell can point at a temporary file. Absence of a field is
+ * never an error: compaction runs unattended in a delegated child, where a bad config read must degrade
+ * to defaults rather than block a run.
+ */
+export interface CompactionConfig {
+    /** When false, pi-coder does not intercept compaction and pi's default path runs untouched. */
+    enabled: boolean;
+    /** Include assistant thinking in the serialized fallback. It is the heaviest block and rarely carries decisions the visible text does not. */
+    keepThinking: boolean;
+    /** Ceiling for the serialized fallback request, in estimated tokens. Oldest messages are dropped first. */
+    serializedMaxTokens: number;
+    /** Characters kept per assistant text block in the serialized fallback. */
+    serializedAssistantChars: number;
+    /** Characters kept per user message in the serialized fallback. Kept generous: user text is the ground truth for goals and constraints. */
+    serializedUserChars: number;
+    /** Characters kept per successful tool result. */
+    serializedToolResultChars: number;
+    /** Characters kept per failed tool result, which is what feeds the summary's Blocked section. */
+    serializedErrorResultChars: number;
+    /** Characters kept per hidden or system custom message. Zero omits them entirely. */
+    serializedNoteChars: number;
+    /** Reserved for the planned side-model strategy; unused by the current cascade. */
+    model?: string;
+}
+
+export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
+    enabled: true,
+    keepThinking: false,
+    serializedMaxTokens: 12_000,
+    serializedAssistantChars: 1_200,
+    serializedUserChars: 2_000,
+    serializedToolResultChars: 400,
+    serializedErrorResultChars: 1_000,
+    serializedNoteChars: 200,
+};
+
+export interface CompactionConfigLocations {
+    global: string;
+    project?: string;
+}
+
+function globalConfigPath(): string {
+    return (
+        process.env.COMPACTION_CONFIG_PATH_GLOBAL ??
+        path.join(os.homedir(), ".pi", "compaction-config.json")
+    );
+}
+
+function projectConfigPath(cwd: string): string | undefined {
+    const override = process.env.COMPACTION_CONFIG_PATH;
+    if (override) {
+        return override;
+    }
+    let current = path.resolve(cwd);
+    for (let index = 0; index < 20; index += 1) {
+        const candidate = path.join(current, ".pi", "compaction-config.json");
+        if (fs.existsSync(candidate)) {
+            return candidate;
+        }
+        const parent = path.dirname(current);
+        if (parent === current) {
+            break;
+        }
+        current = parent;
+    }
+    return undefined;
+}
+
+export function compactionConfigLocations(cwd: string): CompactionConfigLocations {
+    return { global: globalConfigPath(), project: projectConfigPath(cwd) };
+}
+
+function booleanField(value: unknown): boolean | undefined {
+    return typeof value === "boolean" ? value : undefined;
+}
+
+function positiveNumberField(value: unknown): number | undefined {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+        return undefined;
+    }
+    return Math.floor(value);
+}
+
+/** A `0` in the config means "omit", which `positiveNumberField` would drop, so it gets its own reader. */
+function nonNegativeNumberField(value: unknown): number | undefined {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        return undefined;
+    }
+    return Math.floor(value);
+}
+
+function readConfigFile(filePath: string | undefined): Partial<CompactionConfig> {
+    if (!filePath || !fs.existsSync(filePath)) {
+        return {};
+    }
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    } catch {
+        return {};
+    }
+    if (!parsed || typeof parsed !== "object") {
+        return {};
+    }
+    const record = parsed as Record<string, unknown>;
+    const model =
+        typeof record.model === "string" && record.model.trim() ? record.model.trim() : undefined;
+    return {
+        enabled: booleanField(record.enabled),
+        keepThinking: booleanField(record.keepThinking),
+        serializedMaxTokens: positiveNumberField(record.serializedMaxTokens),
+        serializedAssistantChars: positiveNumberField(record.serializedAssistantChars),
+        serializedUserChars: positiveNumberField(record.serializedUserChars),
+        serializedToolResultChars: nonNegativeNumberField(record.serializedToolResultChars),
+        serializedErrorResultChars: nonNegativeNumberField(record.serializedErrorResultChars),
+        serializedNoteChars: nonNegativeNumberField(record.serializedNoteChars),
+        ...(model ? { model } : {}),
+    };
+}
+
+/** Resolve defaults, then the global file, then the project file. */
+export function loadCompactionConfig(cwd: string): CompactionConfig {
+    const locations = compactionConfigLocations(cwd);
+    const global = readConfigFile(locations.global);
+    const project = readConfigFile(locations.project);
+    const defaults = DEFAULT_COMPACTION_CONFIG;
+    const model = project.model ?? global.model;
+    return {
+        enabled: project.enabled ?? global.enabled ?? defaults.enabled,
+        keepThinking: project.keepThinking ?? global.keepThinking ?? defaults.keepThinking,
+        serializedMaxTokens:
+            project.serializedMaxTokens ??
+            global.serializedMaxTokens ??
+            defaults.serializedMaxTokens,
+        serializedAssistantChars:
+            project.serializedAssistantChars ??
+            global.serializedAssistantChars ??
+            defaults.serializedAssistantChars,
+        serializedUserChars:
+            project.serializedUserChars ??
+            global.serializedUserChars ??
+            defaults.serializedUserChars,
+        serializedToolResultChars:
+            project.serializedToolResultChars ??
+            global.serializedToolResultChars ??
+            defaults.serializedToolResultChars,
+        serializedErrorResultChars:
+            project.serializedErrorResultChars ??
+            global.serializedErrorResultChars ??
+            defaults.serializedErrorResultChars,
+        serializedNoteChars:
+            project.serializedNoteChars ??
+            global.serializedNoteChars ??
+            defaults.serializedNoteChars,
+        ...(model ? { model } : {}),
+    };
+}

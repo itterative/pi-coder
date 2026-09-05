@@ -8,7 +8,9 @@ import {
     type ExtensionContext,
     type ExtensionUIContext,
     type ToolDefinition,
+    type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 
 /**
  * Test doubles for the two `pi` surfaces a suite has to fabricate: `ExtensionAPI` (what an extension
@@ -93,6 +95,41 @@ interface StubTool<Details = unknown> {
     ): Promise<AgentToolResult<Details>>;
 }
 
+/**
+ * `ToolInfo` without pi's source metadata. Nothing in this project reads where a tool was registered from,
+ * and `SourceInfo` is not exported from pi's root, so the double reports only what production consults.
+ */
+export type StubToolInfo = Omit<ToolInfo, "sourceInfo">;
+
+/** A configured tool as `pi.getAllTools()` reports it. Override the description or schema when a suite cares. */
+export function stubToolInfo(name: string, overrides: Partial<StubToolInfo> = {}): StubToolInfo {
+    return {
+        name,
+        description: `stub description for ${name}`,
+        // TypeBox schemas carry brand symbols no test can construct honestly; the value is only ever
+        // forwarded into a provider request, where a suite asserts identity rather than contents.
+        parameters: { type: "object", properties: {} } as unknown as ToolInfo["parameters"],
+        ...overrides,
+    };
+}
+
+/** The `ExtensionContext.model` a handler sees: a small non-reasoning stand-in with a wide window. */
+export function stubModel(overrides: Partial<Model<Api>> = {}): Model<Api> {
+    return {
+        id: "stub-model",
+        name: "Stub Model",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://example.invalid",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+        contextWindow: 200_000,
+        maxTokens: 8_192,
+        ...overrides,
+    };
+}
+
 export interface PiStub {
     /** Pass this to the extension factory under test. */
     readonly pi: ExtensionAPI;
@@ -104,6 +141,12 @@ export interface PiStub {
     readonly entries: Array<{ customType: string; data: unknown }>;
     /** One entry per call, holding pi's own argument pair rather than a narrowed projection. */
     readonly sentMessages: Array<{ message: SentMessage; options: unknown }>;
+    /**
+     * The read-only tool surface `pi.getActiveTools()` and `pi.getAllTools()` answer from. Assign before
+     * invoking a handler: `stub.toolSurface.active = ["bash", "read"]`, and the order is meaningful — a
+     * handler that rebuilds a provider request has to reproduce pi's tool array exactly.
+     */
+    readonly toolSurface: { active: string[]; all: StubToolInfo[] };
     /** Handlers registered for one event, in registration order. */
     handlersFor(event: string): StubHandler[];
     /** The handler registered for `event` at `index`; fails naming the event when absent. */
@@ -130,6 +173,7 @@ export function createPiStub(options: { eventBus?: EventBus | null } = {}): PiSt
     const entries: Array<{ customType: string; data: unknown }> = [];
     const sentMessages: Array<{ message: SentMessage; options: unknown }> = [];
     const handlers = new Map<string, StubHandler[]>();
+    const toolSurface: { active: string[]; all: StubToolInfo[] } = { active: [], all: [] };
 
     return {
         pi: {
@@ -162,6 +206,8 @@ export function createPiStub(options: { eventBus?: EventBus | null } = {}): PiSt
             sendMessage(message: SentMessage, opts?: unknown) {
                 sentMessages.push({ message, options: opts });
             },
+            getActiveTools: () => [...toolSurface.active],
+            getAllTools: () => toolSurface.all.map((tool) => ({ ...tool })),
         } as unknown as ExtensionAPI,
         order,
         tools,
@@ -169,6 +215,7 @@ export function createPiStub(options: { eventBus?: EventBus | null } = {}): PiSt
         shortcuts,
         entries,
         sentMessages,
+        toolSurface,
         handlersFor(event: string): StubHandler[] {
             return handlers.get(event) ?? [];
         },
@@ -256,6 +303,18 @@ export function handlerView<E extends string>(
  */
 export async function invoke(handler: StubHandler, event: unknown, ctx: unknown): Promise<unknown> {
     return await handler(event, ctx);
+}
+
+/**
+ * A registry that answers only `complete`, which is the one member the compaction module calls. pi's
+ * `ModelRegistry` is a class surface with no partial construction path, so the boundary is cast once here
+ * rather than once per suite. Unmodelled members stay absent: a handler that starts calling something else
+ * fails instead of reading a placeholder.
+ */
+export function stubModelRegistry(
+    complete: ExtensionContext["modelRegistry"]["complete"],
+): ExtensionContext["modelRegistry"] {
+    return { complete } as ExtensionContext["modelRegistry"];
 }
 
 /**

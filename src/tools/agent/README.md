@@ -82,3 +82,22 @@ The layers and their rules are in [Capabilities, grants, and gates](docs/agent-t
 Pinned by `test/tools/agent-child-gates.test.ts` (which gates a child arms, in order) and
 `test/tools/agent-child-decisions.test.ts` (the resulting allow/block truth table). Use
 `test/tools/child-run-fixture.ts` for new child-side tests rather than hand-writing an option bag.
+
+### Changing child compaction
+
+A child compacts its own transcript, and it does so through pi-coder's replacement path: `child/index.ts`
+lists `pi-coder-compaction` as its own hidden extension entry (not a capability — nothing grants or revokes
+it, and it registers no tools). See `src/modules/compaction/` for the cascade and its config file.
+
+No suite can prove the provider call works, so after changing the cascade, the request shape, or the child
+extension list, run the manual pass:
+
+1. Make compaction fire cheaply — lower `compaction.reserveTokens` and `compaction.keepRecentTokens` in
+   `.pi/settings.json`, or pick a small-context model — and start a scout whose task reads many files.
+2. Open `/agents`, select the run, and confirm its trace records `session.compaction_start` and
+   `session.compaction_end` with a reason, and that the run keeps going afterward.
+3. Read the child's session JSONL: the `compaction` entry's `details.strategy` names the route that ran,
+   its `usage` is non-zero (so session totals keep counting summarization work), and `summary` opens with
+   pi's `## Goal` section, which is what the transcript preview renders.
+4. Repeat once against a provider that ignores `tool_choice` (for example the local llama.cpp provider).
+   The expected outcome is `strategy: "serialized"` in the entry, not a stalled or failed run.

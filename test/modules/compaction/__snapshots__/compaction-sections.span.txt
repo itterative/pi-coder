@@ -1,0 +1,18 @@
+## Verbatim Recent Requests
+- "first request"
+- "second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very long tail second request with a very lon [... 1079 more characters truncated]"
+
+## Tool Ledger
+- agent x2
+- read x2, 1 failed
+- total 4 tool calls, 1 failed
+
+## Delegated Runs
+- start scout Map the compaction path
+- collect [01abc]
+- run ids seen: 01abc
+- recover later ids with agent(action="list")
+
+## Dropped Context
+- 8 messages were summarized into this checkpoint; context resumes at entry kept-9.
+- 3 older message blocks were left out of the summarization request itself, so they are not represented here.

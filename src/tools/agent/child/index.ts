@@ -7,6 +7,7 @@ import {
     type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { READ_ONLY_AGENT_TOOLS } from "../definitions/discovery";
+import { registerCompactionExtension } from "../../../modules/compaction";
 import { capabilityExtensions } from "./capabilities";
 import { registerChildExtension } from "./extension";
 import { childProtocolPrompt } from "./prompt";
@@ -71,6 +72,14 @@ function childExtensionEntries(request: ChildAssemblyRequest): InlineExtension[]
             name: grant.extensionKind,
             hidden: true,
             factory: registerChildExtension(tracker, parentContext, cwd, grant.extensionOptions),
+        },
+        // A child compacts its own transcript, and pi's default serialization costs it exactly what it costs
+        // the parent. Not a capability: nothing grants or revokes it, and it registers no tools, so it sits
+        // outside the unit registry rather than as another row in it.
+        {
+            name: "pi-coder-compaction",
+            hidden: true,
+            factory: registerCompactionExtension,
         },
     ];
 
