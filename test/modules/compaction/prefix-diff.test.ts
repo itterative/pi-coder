@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
-    diffRequestPrefixes,
     fingerprintPayload,
     fingerprintSummary,
+    requestMessages,
+    requestShape,
 } from "../../../src/modules/compaction/prefix-diff";
+
+/**
+ * These fixtures are deliberately payload-shaped, not `Context`-shaped: the module's whole job is reading a
+ * body pi already serialized, whose shape differs per API.
+ */
 
 /** Anthropic-style body: `system` is a top-level string and tools carry `input_schema`. */
 function anthropicBody(input: {
@@ -38,198 +44,89 @@ function openaiBody(input: { system?: string; tools?: unknown[]; messages?: unkn
     };
 }
 
-function fingerprint(body: unknown) {
-    return fingerprintPayload(body);
-}
-
-describe("request prefix diffing", () => {
-    it("treats an appended instruction as a usable prefix", () => {
-        const parent = fingerprint(anthropicBody({}));
-        const ours = fingerprint(
-            anthropicBody({
-                messages: [
-                    { role: "user", content: "first" },
-                    { role: "assistant", content: [{ type: "text", text: "ok" }] },
-                    { role: "user", content: "summarize this" },
-                ],
-            }),
-        );
-
-        expect(diffRequestPrefixes(parent, ours)).toMatchObject({
-            prefixUsable: true,
-            firstDivergence: "tail",
-            parentMessageCount: 2,
-            ourMessageCount: 3,
-            commonPrefixMessages: 2,
-        });
+describe("request shape fingerprinting", () => {
+    it("reads the system prompt from an Anthropic-style body", () => {
+        const shape = requestShape(anthropicBody({ system: "be terse" }));
+        expect(shape.systemChars).toBe("be terse".length);
+        expect(shape.model).toBe("claude-sonnet");
+        expect(shape.toolNames).toEqual(["read"]);
     });
 
-    it("names a system prompt divergence with both excerpts", () => {
-        const parent = fingerprint(anthropicBody({ system: "prompt with the memory block" }));
-        const ours = fingerprint(anthropicBody({ system: "prompt without it" }));
-        const diff = diffRequestPrefixes(parent, ours);
-
-        expect(diff.prefixUsable).toBe(false);
-        expect(diff.firstDivergence).toBe("system");
-        expect(diff.parent).toContain("memory block");
-        expect(diff.ours).toContain("without it");
+    it("finds the system prompt inside an OpenAI-style message array", () => {
+        const shape = requestShape(openaiBody({ system: "be terse" }));
+        expect(shape.systemChars).toBe("be terse".length);
+        expect(shape.toolNames).toEqual(["read"]);
+        expect(shape.model).toBe("qwen3.8-flash");
     });
 
-    it("sees the system prompt inside an OpenAI-style body", () => {
-        const parent = fingerprint(openaiBody({ system: "alpha" }));
-        const ours = fingerprint(openaiBody({ system: "beta" }));
-        const diff = diffRequestPrefixes(parent, ours);
+    it("hashes the whole system prompt, not the printed window", () => {
+        // A 24 KB prompt that differs only at character 9000 must not look cached-and-fine, which is why the
+        // shape hash reads raw text while the human-facing summary keeps the short excerpt.
+        // Same length on purpose: a windowed hash would call these identical, and a length check too.
+        const head = "a".repeat(4000);
+        const before = requestShape(anthropicBody({ system: `${head}first` }));
+        const after = requestShape(anthropicBody({ system: `${head}other` }));
 
-        expect(diff.firstDivergence).toBe("system");
-        expect(diff.parent).toContain("alpha");
+        expect(before.systemHash).not.toBe(after.systemHash);
+        expect(before.systemChars).toBe(after.systemChars);
+        expect(fingerprintPayload(anthropicBody({ system: head })).system).toContain("…");
     });
 
     it("separates a changed tool body from a changed tool set", () => {
-        const marked = fingerprint(
-            anthropicBody({
-                tools: [
-                    {
-                        name: "read",
-                        input_schema: { type: "object" },
-                        cache_control: { type: "ephemeral" },
-                    },
-                ],
-            }),
+        const sameNames = requestShape(
+            anthropicBody({ tools: [{ name: "read", input_schema: { type: "object" } }] }),
         );
-        const plain = fingerprint(anthropicBody({}));
-        expect(diffRequestPrefixes(plain, marked).firstDivergence).toBe("tools(body)");
+        const reshaped = requestShape(
+            anthropicBody({ tools: [{ name: "read", input_schema: { type: "string" } }] }),
+        );
+        const renamed = requestShape(
+            anthropicBody({ tools: [{ name: "grep", input_schema: { type: "object" } }] }),
+        );
 
-        const reordered = fingerprint(
-            anthropicBody({
-                tools: [
-                    { name: "bash", input_schema: { type: "object" } },
-                    { name: "read", input_schema: { type: "object" } },
-                ],
-            }),
-        );
-        expect(diffRequestPrefixes(plain, reordered).firstDivergence).toContain("tools(names)");
+        expect(sameNames.toolsHash).not.toBe(reshaped.toolsHash);
+        expect(sameNames.toolNames).toEqual(reshaped.toolNames);
+        expect(renamed.toolNames).not.toEqual(sameNames.toolNames);
     });
 
-    it("reports a parameter difference without calling it a prefix break", () => {
-        const parent = fingerprint(anthropicBody({ extra: { prompt_cache_key: "session-1" } }));
-        const ours = fingerprint(anthropicBody({ extra: { tool_choice: "none" } }));
-        const diff = diffRequestPrefixes(parent, ours);
-
-        // llama.cpp served a 34k cache read on a request that carried `tool_choice` and pi's did not, so a
-        // parameter difference must never be reported as the reason a prefix was unusable.
-        expect(diff.prefixUsable).toBe(true);
-        expect(diff.firstDivergence).toBe("tail");
-        expect(diff.parameters).toEqual(["+tool_choice", "-prompt_cache_key"]);
-        expect(diff.divergences).toEqual([]);
-    });
-
-    it("lists every content divergence instead of stopping at the first", () => {
-        const parent = fingerprint(anthropicBody({ system: "prompt a" }));
-        const ours = fingerprint(
-            anthropicBody({
-                system: "prompt b",
-                tools: [{ name: "other", input_schema: { type: "object" } }],
-                messages: [
-                    { role: "user", content: "changed" },
-                    { role: "assistant", content: [{ type: "text", text: "ok" }] },
-                ],
-            }),
+    it("sorts body keys so a parameter difference reads as a set difference", () => {
+        const shape = requestShape(anthropicBody({ extra: { tool_choice: "none" } }));
+        expect(shape.keys).toEqual(
+            [...shape.keys].sort((a, b) => a.localeCompare(b)),
         );
-        const diff = diffRequestPrefixes(parent, ours);
-
-        expect(diff.divergences).toEqual([
-            "system",
-            "tools(names): read vs other",
-            "messages[0] (user)",
-        ]);
-        expect(diff.firstDivergence).toBe("system");
-        expect(diff.prefixUsable).toBe(false);
-        expect(diff.commonPrefixMessages).toBe(0);
-    });
-
-    it("points at the first message that differs", () => {
-        const parent = fingerprint(anthropicBody({}));
-        const ours = fingerprint(
-            anthropicBody({
-                messages: [
-                    { role: "user", content: "first" },
-                    {
-                        role: "assistant",
-                        content: [{ type: "text", text: "edited after the fact" }],
-                    },
-                ],
-            }),
-        );
-        const diff = diffRequestPrefixes(parent, ours);
-
-        expect(diff.firstDivergence).toBe("messages[1] (assistant)");
-        expect(diff.commonPrefixMessages).toBe(1);
-    });
-
-    it("treats an instruction-only tail difference on a truncated request as usable", () => {
-        // Stage 1 drops the retained tail and appends one instruction. This is the shape of every healthy
-        // two-stage run, so it must not be reported as a prefix break.
-        const shared = [
-            { role: "user", content: "first" },
-            { role: "assistant", content: [{ type: "text", text: "ok" }] },
-        ];
-        const parent = fingerprint(
-            anthropicBody({
-                messages: [
-                    ...shared,
-                    { role: "tool", tool_call_id: "c1", content: "output" },
-                    { role: "user", content: "keep going" },
-                ],
-            }),
-        );
-        const ours = fingerprint(
-            anthropicBody({
-                messages: [...shared, { role: "user", content: "summarize the span above" }],
-            }),
-        );
-        const diff = diffRequestPrefixes(parent, ours);
-
-        expect(diff.prefixUsable).toBe(true);
-        expect(diff.firstDivergence).toBe("tail");
-        expect(diff.divergences).toEqual([]);
-        expect(diff.truncated).toBe(true);
-        expect(diff.commonPrefixMessages).toBe(2);
-    });
-
-    it("reports a shorter request as truncation, not divergence", () => {
-        const parent = fingerprint(
-            anthropicBody({
-                messages: [
-                    { role: "user", content: "first" },
-                    { role: "assistant", content: [{ type: "text", text: "ok" }] },
-                ],
-            }),
-        );
-        const ours = fingerprint(anthropicBody({ messages: [{ role: "user", content: "first" }] }));
-        const diff = diffRequestPrefixes(parent, ours);
-
-        expect(diff.truncated).toBe(true);
-        expect(diff.divergences).toEqual([]);
-        expect(diff.prefixUsable).toBe(true);
-    });
-
-    it("fingerprints nested OpenAI tool names", () => {
-        const summary = fingerprintSummary(fingerprintPayload(openaiBody({})));
-        expect(summary).toMatchObject({
-            model: "qwen3.8-flash",
-            toolCount: 1,
-            messageCount: 2,
-            lastMessageRole: "user",
-        });
-        expect(summary.systemChars).toBe("the prompt".length);
+        expect(shape.keys).toContain("tool_choice");
     });
 
     it("survives a payload it cannot understand", () => {
-        expect(fingerprintSummary(fingerprintPayload(undefined))).toMatchObject({
-            model: "",
-            toolCount: 0,
-            messageCount: 0,
+        for (const junk of [undefined, null, "text", 7, [], {}]) {
+            const shape = requestShape(junk);
+            expect(shape.systemHash).toBeTruthy();
+            expect(shape.toolsHash).toBeTruthy();
+            expect(shape.toolNames).toEqual([]);
+            expect(shape.keys).toEqual([]);
+            expect(requestMessages(junk)).toEqual([]);
+        }
+    });
+
+    it("summarizes a fingerprint without any conversation text", () => {
+        const summary = fingerprintSummary(
+            fingerprintPayload(
+                anthropicBody({ system: "the prompt", messages: [{ role: "user", content: "secret" }] }),
+            ),
+        );
+
+        expect(summary).toMatchObject({
+            model: "claude-sonnet",
+            systemChars: "the prompt".length,
+            toolCount: 1,
+            messageCount: 1,
+            lastMessageRole: "user",
         });
-        expect(fingerprintSummary(fingerprintPayload("not an object")).keys).toEqual([]);
+        expect(JSON.stringify(summary)).not.toContain("secret");
+        expect(typeof summary.systemHash).toBe("string");
+    });
+
+    it("returns the message array exactly as it was sent", () => {
+        const messages = [{ role: "user", content: "first" }];
+        expect(requestMessages(anthropicBody({ messages }))).toBe(messages);
     });
 });

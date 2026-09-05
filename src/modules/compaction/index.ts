@@ -15,7 +15,13 @@ import {
     estimateRequestTokens,
     nativeRequestFits,
 } from "./native-request";
-import { diffRequestPrefixes, fingerprintPayload, fingerprintSummary } from "./prefix-diff";
+import {
+    fingerprintPayload,
+    fingerprintSummary,
+    requestMessages,
+    requestShape,
+} from "./prefix-diff";
+import { messageLadder, pathIdSet, RequestChain, type ChainShape } from "./chain";
 import { segmentSummaryInstruction, serializedSummarizationRequest } from "./prompt";
 import {
     serializeConversationMinimal,
@@ -32,6 +38,7 @@ import { buildSpanSession, skippedEntryCount, spanContextEntries } from "./span-
 import { summarizeNatively, summarizeSerializedTranscript } from "./summarize";
 import {
     type CompactionAttemptFields,
+    type CompactionPrefixFields,
     compactionTraceTarget,
     createCompactionTraceRecorder,
     type CompactionTraceOutcome,
@@ -125,39 +132,133 @@ function notify(ctx: ExtensionContext, message: string, level: "info" | "warning
 }
 
 /**
- * The parent's most recent real request body, per session.
- *
- * Only ever populated while tracing is on, and it holds one reference rather than a copy: the payload is
- * what pi built for its own request, so retaining it until the next compaction is the cheapest way to ask
- * "did my rebuilt request share that cached prefix?".
+ * The structural view of a session manager this module needs. Declared locally because pi's own subpath
+ * types are not importable from an extension bundle, and a fingerprint does not care about the rest.
  */
-const lastParentPayload = new WeakMap<object, unknown>();
+interface SessionShapeView {
+    getLeafId(): string | null;
+    getBranch(): { id: string }[];
+}
 
-function prefixDiffAgainstParent(sessionManager: object, ourPayload: unknown) {
-    const ours = fingerprintPayload(ourPayload);
-    const parentPayload = lastParentPayload.get(sessionManager);
-    if (parentPayload === undefined) {
-        // Named for its actual cause. The capture is a per-process map, so this also means "no real turn has
-        // gone out in this runtime yet" - after a restart or /reload, a compaction reached stage 1 before any
-        // parent request was seen. It is not evidence that the hook is broken.
-        return {
-            prefixUsable: false,
-            firstDivergence: "no-parent-payload-in-this-runtime",
-            divergences: ["no-parent-payload-in-this-runtime"],
-            truncated: false,
-            parameters: [],
-            parentMessageCount: 0,
-            ourMessageCount: ours.messageHashes.length,
-            commonPrefixMessages: 0,
-            ourRequest: fingerprintSummary(ours),
-        };
+/**
+ * pi's request history per session, as hash ladders rather than bodies.
+ *
+ * The body pi built is megabytes and one turn deep; a cumulative head is sixty bytes, so this can retain every
+ * request in the session and stay branch-correct. Keyed by the session manager, so a delegated child compares
+ * against its own history and the entry is released with the session.
+ */
+const requestChains = new WeakMap<SessionShapeView, RequestChain>();
+
+function chainFor(sessionManager: SessionShapeView): RequestChain {
+    const existing = requestChains.get(sessionManager);
+    if (existing !== undefined) {
+        return existing;
     }
-    const parent = fingerprintPayload(parentPayload);
+
+    const chain = new RequestChain();
+    requestChains.set(sessionManager, chain);
+    return chain;
+}
+
+/** Called for every provider request, including a child's: hash it now, keep nothing else. */
+function observeParentRequest(sessionManager: SessionShapeView, payload: unknown): void {
+    chainFor(sessionManager).observe({
+        leafId: sessionManager.getLeafId(),
+        messages: requestMessages(payload),
+        shape: requestShape(payload),
+    });
+}
+
+/**
+ * Did our rebuilt request share the prefix the provider already has?
+ *
+ * Answered by folding our own message ladder against the retained heads, at the reference's depths. Two
+ * consequences are load-bearing. A reference only counts when its leaf is on the current branch, so
+ * navigating back can no longer produce a confident wrong answer about a forked request. And with no
+ * reference at all the record says so and leaves `prefixUsable` undefined, rather than reporting the old
+ * `false` plus `commonPrefixMessages: 0` that made a cold process look like a broken rebuild.
+ */
+function prefixVerdict(
+    sessionManager: SessionShapeView,
+    ourPayload: unknown,
+): CompactionPrefixFields {
+    const messages = requestMessages(ourPayload);
+    const shape = requestShape(ourPayload);
+    const ours = fingerprintPayload(ourPayload);
+    const branch = sessionManager.getBranch();
+    const match = chainFor(sessionManager).match({
+        ladder: messageLadder(messages),
+        pathIds: pathIdSet(branch),
+        shape,
+    });
+
+    const spanMessages = Math.max(0, messages.length - 1);
+    const checkableUpTo = Math.min(spanMessages, match.referenceDepth);
+    const verifiedThrough = checkableUpTo > 0 && match.verifiedTo >= checkableUpTo;
+    const divergences = shapeDivergences(sessionManager, shape, match);
+
+    if (match.firstMismatchDepth !== null) {
+        divergences.push(`messages[${String(match.firstMismatchDepth)}]`);
+    }
+
+    const hasReference = match.reference === "chain";
+    if (!hasReference) {
+        // Stated as a divergence so a reader cannot mistake an empty verdict for a passing one.
+        divergences.push("no-reference");
+    }
+
     return {
-        ...diffRequestPrefixes(parent, ours),
-        parentRequest: fingerprintSummary(parent),
+        reference: match.reference,
+        prefixUsable: hasReference ? verifiedThrough : undefined,
+        firstDivergence: divergences[0] ?? (verifiedThrough ? "verified" : "tail"),
+        divergences,
+        truncated: spanMessages < match.referenceDepth,
+        parameters: match.parameters,
+        ourMessageCount: messages.length,
+        commonPrefixMessages: match.verifiedTo,
+        referenceDepth: match.referenceDepth,
+        verifiedThrough,
+        referenceLeafId: match.referenceLeafId,
+        currentLeafId: sessionManager.getLeafId(),
+        observations: match.compared,
+        historyTruncated: match.truncatedHistory,
+        modelDivergence: match.modelDivergence,
         ourRequest: fingerprintSummary(ours),
     };
+}
+
+/**
+ * Label the shape differences, which a head cannot localize on its own.
+ *
+ * `compared === 0` with observations present means nothing on this branch was built with this system prompt
+ * and tool set - which is a real reason the cache cannot answer, and worth naming as one.
+ */
+function shapeDivergences(
+    sessionManager: SessionShapeView,
+    shape: ChainShape,
+    match: { reference: "chain" | "none"; compared: number },
+): string[] {
+    if (match.reference !== "chain" || match.compared > 0) {
+        return [];
+    }
+
+    const onPath = chainFor(sessionManager).branchObservations(
+        pathIdSet(sessionManager.getBranch()),
+    );
+    const newest = onPath[onPath.length - 1];
+    if (newest === undefined) {
+        return [];
+    }
+
+    const out: string[] = [];
+    if (newest.systemHash !== shape.systemHash) {
+        out.push(`system(${String(newest.systemChars)} -> ${String(shape.systemChars)} chars)`);
+    }
+    if (newest.toolsHash !== shape.toolsHash) {
+        out.push("tools");
+    }
+
+    return out;
 }
 
 /** The request-side numbers every attempt record carries, whatever stage ran. */
@@ -238,7 +339,7 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
             sessionId: ctx.sessionManager.getSessionId(),
             onPayload: trace.enabled
                 ? (payload) => {
-                      trace.prefix(prefixDiffAgainstParent(ctx.sessionManager, payload));
+                      trace.prefix(prefixVerdict(ctx.sessionManager, payload));
                   }
                 : undefined,
         },
@@ -468,7 +569,7 @@ export function registerCompactionExtension(pi: ExtensionAPI): void {
         // Dev diagnostic: keep the body pi built for its own last request so a later stage-1 request can
         // tell a rebuilt-prefix mismatch from a provider that simply will not serve the cache.
         pi.on("before_provider_request", (event, ctx) => {
-            lastParentPayload.set(ctx.sessionManager, event.payload);
+            observeParentRequest(ctx.sessionManager, event.payload);
         });
     }
 

@@ -34,6 +34,16 @@ interface ReportAttempt {
     droppedBlocks?: number;
 }
 
+interface ReportPrefix {
+    usable?: boolean;
+    truncated?: boolean;
+    divergences: string[];
+    reference?: string;
+    verifiedTo?: number;
+    referenceDepth?: number;
+    observations?: number;
+}
+
 interface ReportRun {
     id: string;
     session: string;
@@ -45,7 +55,7 @@ interface ReportRun {
     checkpointChars: number;
     finalChars: number;
     attempts: ReportAttempt[];
-    prefix?: { usable?: boolean; truncated?: boolean; divergences: string[] };
+    prefix?: ReportPrefix;
     flags: ReportFlag[];
 }
 
@@ -131,14 +141,21 @@ function finalFields(overrides: Partial<CompactionFinalFields> = {}): Compaction
 
 function healthyPrefix(overrides: Partial<CompactionPrefixFields> = {}): CompactionPrefixFields {
     return {
+        reference: "chain",
         prefixUsable: true,
-        firstDivergence: "tail",
+        firstDivergence: "verified",
         divergences: [],
         truncated: true,
         parameters: ["+tool_choice"],
-        parentMessageCount: 43,
         ourMessageCount: 43,
         commonPrefixMessages: 42,
+        referenceDepth: 43,
+        verifiedThrough: true,
+        referenceLeafId: "leaf-43",
+        currentLeafId: "leaf-43",
+        observations: 3,
+        historyTruncated: false,
+        modelDivergence: null,
         ...overrides,
     };
 }
@@ -240,7 +257,7 @@ describe("compaction-report script", () => {
         // reproduce", which is non-empty and therefore accepted, after which stage 2 rebuilt the summary.
         const trace = recorder("sess-refusal");
         const refusal = "I don't have any prior thinking to reproduce.";
-        trace.prefix(healthyPrefix({ parentMessageCount: 880, ourMessageCount: 839 }));
+        trace.prefix(healthyPrefix({ referenceDepth: 880, ourMessageCount: 839, commonPrefixMessages: 838 }));
         trace.attempt(
             "native",
             nativeFields({
@@ -308,7 +325,7 @@ describe("compaction-report script", () => {
     it("keeps a span that never truncated visible as its own failure", () => {
         const trace = recorder("sess-notruncated");
         // The missing-cut-point case: stage 1 sent the whole live context instead of the truncated span.
-        trace.prefix(healthyPrefix({ truncated: false, ourMessageCount: 880 }));
+        trace.prefix(healthyPrefix({ truncated: false, ourMessageCount: 880, referenceDepth: 880 }));
         trace.attempt("native", nativeFields(), accepted({ usage: usage(5000, 1500, 30000) }));
         trace.modelResponse("native", checkpoint("## Goal", 4000));
         trace.final("native", checkpoint("## Goal", 4000), finalFields());
@@ -378,7 +395,7 @@ describe("compaction-report script", () => {
                 prefix: {
                     prefixUsable: false,
                     firstDivergence: "keys:+tool_choice",
-                    parentMessageCount: 42,
+                    referenceDepth: 42,
                     ourMessageCount: 44,
                     commonPrefixMessages: 0,
                 },

@@ -279,7 +279,7 @@ describe("compaction trace", () => {
         expect(records[0]?.outcome).toBe("cancelled");
     });
 
-    it("compares the rebuilt request against the parent's own request body", async () => {
+    it("verifies the rebuilt request against the parent's observed requests", async () => {
         const parentBody = {
             model: "stub-model",
             system: "the live system prompt",
@@ -309,17 +309,23 @@ describe("compaction trace", () => {
         ]);
 
         const prefix = records[0]?.prefix;
+        // Our span is the parent's messages, so it must verify at the only depth the reference covers.
         expect(prefix).toMatchObject({
+            reference: "chain",
             prefixUsable: true,
-            firstDivergence: "tail",
-            parentMessageCount: 1,
+            verifiedThrough: true,
+            firstDivergence: "verified",
             ourMessageCount: 2,
             commonPrefixMessages: 1,
+            referenceDepth: 1,
+            observations: 1,
         });
-        expect(prefix?.parentRequest).toMatchObject({ model: "stub-model", toolCount: 1 });
+        // Nothing is retained of the parent body, so the record describes only our own.
+        expect(prefix?.ourRequest).toMatchObject({ model: "stub-model", toolCount: 1, messageCount: 2 });
+        expect(JSON.stringify(prefix ?? {})).not.toContain("parentRequest");
     });
 
-    it("says so when the parent request body was never captured", async () => {
+    it("leaves the prefix verdict unknown rather than unusable when nothing was observed", async () => {
         const harness = build({
             responses: [async () => summaryResponse("## Goal\n\nstub")],
             providerPayload: { model: "stub-model", messages: [] },
@@ -328,9 +334,14 @@ describe("compaction trace", () => {
 
         const prefix = readRecords(tracePath).find((record) => record.stage === "prefix");
         expect(prefix?.prefix).toMatchObject({
-            prefixUsable: false,
-            firstDivergence: "no-parent-payload-in-this-runtime",
+            reference: "none",
+            commonPrefixMessages: -1,
+            referenceDepth: -1,
+            firstDivergence: "no-reference",
+            divergences: ["no-reference"],
         });
+        // This is the case that used to read as a broken rebuild: no reference is not evidence of divergence.
+        expect((prefix?.prefix ?? {}).prefixUsable).toBeUndefined();
     });
 
     it("rotates the file once it passes the configured size", async () => {

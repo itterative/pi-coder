@@ -368,6 +368,14 @@ export function createCompactionHarness(input: CompactionHarnessInput): Compacti
                 }
                 return branch;
             },
+            // pi's leaf is the last entry on the current branch, so a fixture derives it the same way
+            // rather than inventing an id the chain could never match.
+            getLeafId: () => {
+                if (input.branchThrows) {
+                    throw input.branchThrows;
+                }
+                return branch.length > 0 ? branch[branch.length - 1].id : null;
+            },
             getSessionId: () => input.sessionId ?? "session-1",
         }),
         getContextUsage: () => input.contextUsage,

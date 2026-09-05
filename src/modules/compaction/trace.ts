@@ -107,22 +107,52 @@ export interface CompactionTraceRecord {
     final?: CompactionFinalFields;
 }
 
-/** How our rebuilt request compared to the parent session's last real one, which owns the cache. */
+/**
+ * How our rebuilt request compared to what pi actually sent, as answered by `chain.ts`.
+ *
+ * The reference is a retained hash ladder, not a request body, so two rules follow from that and both matter
+ * more than the verdict itself:
+ *
+ * - `prefixUsable` is **omitted**, never `false`, when no on-branch reference existed. Before the ladder, an
+ *   absent reference was reported as an unusable prefix with a `commonPrefixMessages: 0`, and a cold process
+ *   after a restart read exactly like a broken rebuild.
+ * - `commonPrefixMessages` is the deepest *reference depth* our rebuild agreed with, not a message index of
+ *   ours. Pi's depths are dense (one or two messages per request), so the answer is exact, and a shorter
+ *   rebuilt span can only be verified down to the depths the reference actually covers: hence
+ *   `referenceDepth` and `verifiedThrough`.
+ *
+ * Because the comparison happens at the reference's own depths, our appended instruction is never inside the
+ * window being checked. The "is a tail-only difference a failure?" question that cost a whole debugging pass
+ * under the body-to-body diff does not arise here.
+ */
 export interface CompactionPrefixFields {
-    /** False when something before the appended instruction differs, so the cache was unreachable. */
-    prefixUsable: boolean;
+    /** Which reference answered: retained chain observations, or nothing usable. */
+    reference: "chain" | "none";
+    /** Undefined when there was no reference to compare against. */
+    prefixUsable?: boolean;
+    /** `verified` | `messages[<depth>]` | `system` | `tools` | `no-reference`. */
     firstDivergence: string;
     divergences: string[];
-    /** Stage 1 truncates at the cut point by design, so this is never a divergence. */
+    /** True when our span is shorter than the reference: stage 1 truncating at the cut point, by design. */
     truncated?: boolean;
-    /** Request parameters only one side sent, e.g. `+tool_choice`. Not a prefix verdict. */
+    /** Body keys only one side sent, e.g. `+tool_choice`. Informational, never a verdict. */
     parameters: string[];
-    parent?: string;
-    ours?: string;
-    parentMessageCount: number;
     ourMessageCount: number;
+    /** Deepest reference depth our hashes agreed with. -1 when nothing agreed. */
     commonPrefixMessages: number;
-    parentRequest?: Record<string, unknown>;
+    /** Deepest reference depth available on the current branch. */
+    referenceDepth: number;
+    /** True when every reference depth at or below our span agreed. */
+    verifiedThrough: boolean;
+    /** Leaf id the verdict was taken from, and the leaf we are building for. */
+    referenceLeafId: string | null;
+    currentLeafId: string | null;
+    /** Comparable observations on this branch, i.e. how much of the ladder actually overlapped. */
+    observations: number;
+    /** The retention cap dropped older observations, so shallow depths may be unverifiable. */
+    historyTruncated: boolean;
+    /** `parent -> ours` when the reference request used a different model. */
+    modelDivergence: string | null;
     ourRequest?: Record<string, unknown>;
 }
 

@@ -1,18 +1,18 @@
 /**
- * Payload-level prefix diffing, to answer one question: did the summarization request share the
- * conversation's cached prefix, or did it diverge before the messages did?
+ * Payload fingerprinting for the compaction trace.
  *
- * Provider usage numbers cannot answer that. `cacheRead: 0` is reported both when the request body
- * diverged at the first token and when the endpoint simply will not serve a cache entry to a request that
- * extends or rewinds the conversation. So this module compares the two bodies pi actually built — the
- * parent's last real request, captured at `before_provider_request`, and our own, captured at the
- * `onPayload` option — and reports the first divergence by name: system prompt, tool array, a specific
- * message, or only the tail we added.
+ * Provider usage numbers cannot answer the prefix question on their own. `cacheRead: 0` is reported both when
+ * the request body diverged at the first token and when the endpoint simply will not serve a cache entry to a
+ * request that extends or rewinds the conversation. So a request is reduced to hashes and counts here, and
+ * `chain.ts` retains those per turn: our rebuilt body is then matched against what pi actually sent, at the
+ * exact depth where the two stop agreeing.
  *
  * Payloads are shaped per API (`system` string for Anthropic-style, a system/developer message for
  * OpenAI-style; `tools` with `input_schema` or `parameters`), so nothing here assumes one: fields are read
  * best-effort and anything unrecognized is compared by hash, which is exactly what a cache key does.
  */
+
+import type { ChainShape } from "./chain";
 
 /** A short head of each side of a divergence, so the report says *what* differs, not just where. */
 const EXCERPT_CHARS = 320;
@@ -28,33 +28,6 @@ export interface PayloadFingerprint {
     /** One hash per message in body order, including role-only entries. */
     messageHashes: string[];
     messageRoles: string[];
-}
-
-export interface PrefixDiff {
-    /** True when nothing but the appended tail differs, i.e. the cached prefix should have been usable. */
-    prefixUsable: boolean;
-    /** The first content divergence: "model", "system", "tools...", "messages[n]", "rewind", or "tail". */
-    firstDivergence: string;
-    /** Every content divergence found. Checking all of them, rather than the first, is the whole point. */
-    divergences: string[];
-    /**
-     * True when we sent fewer messages than the parent's last request. That is stage 1 working as designed:
-     * the span is truncated at the cut point, so the retained tail is absent. Informational, never a
-     * divergence.
-     */
-    truncated: boolean;
-    /**
-     * Top-level body keys only one side sent. Informational, never a verdict: `tool_choice` is a request
-     * parameter, not prefix content, and a provider that reports a 34k cache read alongside it proves the
-     * distinction matters.
-     */
-    parameters: string[];
-    parent?: string;
-    ours?: string;
-    parentMessageCount: number;
-    ourMessageCount: number;
-    /** How many leading messages were identical. */
-    commonPrefixMessages: number;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -87,14 +60,15 @@ function excerpt(value: unknown): string {
 
 const SYSTEM_ROLES = new Set(["system", "developer"]);
 
+/** Raw text, not an excerpt: the hash over it must cover drift past what the record prints. */
 function systemText(payload: Record<string, unknown>): { text: string; chars: number } {
     const direct = payload.system;
     if (typeof direct === "string") {
-        return { text: excerpt(direct), chars: direct.length };
+        return { text: direct, chars: direct.length };
     }
     if (direct !== undefined && direct !== null) {
         const text = safeStringify(direct);
-        return { text: excerpt(text), chars: text.length };
+        return { text, chars: text.length };
     }
     const messages = Array.isArray(payload.messages) ? payload.messages : [];
     for (const entry of messages) {
@@ -104,7 +78,7 @@ function systemText(payload: Record<string, unknown>): { text: string; chars: nu
                 typeof message.content === "string"
                     ? message.content
                     : safeStringify(message.content);
-            return { text: excerpt(text), chars: text.length };
+            return { text, chars: text.length };
         }
     }
     return { text: "", chars: 0 };
@@ -132,7 +106,7 @@ export function fingerprintPayload(payload: unknown): PayloadFingerprint {
     return {
         keys: Object.keys(record).sort(),
         model: typeof record.model === "string" ? record.model : "",
-        system: system.text,
+        system: excerpt(system.text),
         systemChars: system.chars,
         toolNames: tools.map(toolName),
         toolsHash: hash(tools),
@@ -142,84 +116,30 @@ export function fingerprintPayload(payload: unknown): PayloadFingerprint {
 }
 
 /**
- * Compare the parent request with ours.
+ * Everything about a request worth retaining forever: hashes, counts, and names, never content.
  *
- * Ours is expected to differ at the very end: we append one user instruction, and pi's own cache markers
- * move with it. Anything that diverges before that endangers the whole prefix, because these providers hash
- * a prefix rather than a suffix.
+ * This is the unit `RequestChain` keeps per turn. It reports the whole system-prompt hash, unlike the
+ * human-facing summary below, because its job is to notice drift rather than to describe it.
  */
-export function diffRequestPrefixes(
-    parent: PayloadFingerprint,
-    ours: PayloadFingerprint,
-): PrefixDiff {
-    const divergences: string[] = [];
-    const shared = Math.min(parent.messageHashes.length, ours.messageHashes.length);
-    let commonPrefixMessages = 0;
-    let firstDetail: { parent?: string; ours?: string } = {};
+export function requestShape(payload: unknown): ChainShape {
+    const record = asRecord(payload);
+    const system = systemText(record);
+    const tools = toolsOf(record);
 
-    if (parent.model !== ours.model) {
-        divergences.push("model");
-        firstDetail = { parent: parent.model, ours: ours.model };
-    }
-    if (parent.systemChars !== ours.systemChars || parent.system !== ours.system) {
-        divergences.push("system");
-        firstDetail = firstDetail.parent
-            ? firstDetail
-            : {
-                  parent: `${String(parent.systemChars)} chars: ${parent.system}`,
-                  ours: `${String(ours.systemChars)} chars: ${ours.system}`,
-              };
-    }
-    if (parent.toolsHash !== ours.toolsHash) {
-        divergences.push(
-            parent.toolNames.join(",") === ours.toolNames.join(",")
-                ? "tools(body)"
-                : `tools(names): ${parent.toolNames.join(",")} vs ${ours.toolNames.join(",")}`,
-        );
-    }
-
-    for (let index = 0; index < shared; index += 1) {
-        if (parent.messageHashes[index] === ours.messageHashes[index]) {
-            commonPrefixMessages += 1;
-            continue;
-        }
-        divergences.push(`messages[${String(index)}] (${parent.messageRoles[index]})`);
-        break;
-    }
-    const truncated = ours.messageHashes.length < parent.messageHashes.length;
-
-    // Our request is expected to differ where our instruction begins: a truncated stage-1 body that matches
-    // the parent all the way to its own last message is the designed shape, not a mismatch. The `truncated`
-    // test is what separates that from a genuine rewrite of the last shared message, which is the same index
-    // arithmetic and must keep failing.
-    if (
-        truncated &&
-        divergences.length === 1 &&
-        commonPrefixMessages === ours.messageHashes.length - 1
-    ) {
-        divergences.length = 0;
-    }
-
-    const contentMismatch = divergences.length > 0;
     return {
-        prefixUsable: !contentMismatch,
-        firstDivergence: contentMismatch ? (divergences[0] as string) : "tail",
-        divergences,
-        truncated,
-        parameters: parameterDifferences(parent.keys, ours.keys),
-        ...firstDetail,
-        parentMessageCount: parent.messageHashes.length,
-        ourMessageCount: ours.messageHashes.length,
-        commonPrefixMessages,
+        systemHash: hash(system.text),
+        toolsHash: hash(tools),
+        systemChars: system.chars,
+        toolNames: tools.map(toolName),
+        keys: Object.keys(record).sort(),
+        model: typeof record.model === "string" ? record.model : "",
     };
 }
 
-function parameterDifferences(parent: string[], ours: string[]): string[] {
-    const parentSet = new Set(parent);
-    const ourSet = new Set(ours);
-    const added = [...ourSet].filter((key) => !parentSet.has(key)).map((key) => `+${key}`);
-    const removed = [...parentSet].filter((key) => !ourSet.has(key)).map((key) => `-${key}`);
-    return [...added, ...removed];
+/** The message array exactly as the provider receives it, so hashing it means the same thing on both sides. */
+export function requestMessages(payload: unknown): unknown[] {
+    const record = asRecord(payload);
+    return Array.isArray(record.messages) ? record.messages : [];
 }
 
 /** A compact, loggable summary of a fingerprint: never the payload itself. */
