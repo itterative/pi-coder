@@ -4,8 +4,10 @@ import { describe, expect, it } from "vitest";
 
 import {
     buildSpanSession,
+    previousFoldWindowStart,
     skippedEntryCount,
     spanContextEntries,
+    stageOneSpanEntries,
 } from "../../../src/modules/compaction/span-session";
 import { assistantMessage, toolResultMessage, userMessage } from "../../helpers/compaction-doubles";
 
@@ -172,5 +174,29 @@ describe("stage-1 span transcript", () => {
         expect(built.copiedEntries).toBe(2);
         expect(text).toContain("solo checkpoint");
         expect(text).toContain("after the checkpoint");
+    });
+});
+
+describe("stage-1 window", () => {
+    it("has no window start before the first fold, and no cut without a named entry", () => {
+        const manager = SessionManager.inMemory("/tmp");
+        append(manager, userMessage("nothing compacted yet"));
+        const entries = manager.getBranch();
+
+        expect(previousFoldWindowStart(entries)).toBeUndefined();
+        expect(stageOneSpanEntries(entries, "no-such-entry").cutFound).toBe(false);
+    });
+
+    it("leaves a first fold's span untouched, which is why early folds looked clean", () => {
+        const branch = buildBranch();
+        const entries = branch.manager.getBranch();
+
+        // The only compaction here keeps the very first entry, so the window cannot drop anything: hoisting runs
+        // once either way and one summary is already newest-first. Folds at or beyond two are where the resolved
+        // list and this window part company, which `session-fixture.test.ts` measures on a recorded session.
+        expect(previousFoldWindowStart(entries)).toBe(branch.first);
+        expect(stageOneSpanEntries(entries, branch.tail).entries).toEqual(
+            spanContextEntries(entries, branch.tail).entries,
+        );
     });
 });

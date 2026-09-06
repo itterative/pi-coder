@@ -1,6 +1,11 @@
 import path from "node:path";
 
-import { SessionManager, convertToLlm } from "@earendil-works/pi-coding-agent";
+import {
+    buildContextEntries,
+    buildSessionContext,
+    convertToLlm,
+    SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -8,8 +13,10 @@ import { PI_CODER_EXTENSION_DIR } from "../../../src/common/constants";
 import { messageLadder } from "../../../src/modules/compaction/chain";
 import {
     buildSpanSession,
+    previousFoldWindowStart,
     skippedEntryCount,
     spanContextEntries,
+    stageOneSpanEntries,
 } from "../../../src/modules/compaction/span-session";
 
 /**
@@ -84,6 +91,165 @@ function traceAttempt(strategy: string): Record<string, unknown> {
 
     return line?.attempt as Record<string, unknown>;
 }
+
+/**
+ * The third fold of a real hosted session - the case that broke stage 1's prefix cache.
+ *
+ * Two earlier summaries are inside this span window, and pi's resolved context orders them in a way that is
+ * neither file order nor newest-first: the newest is hoisted to the front and the older one rides along inline.
+ * Copying that already-hoisted list into a fresh session hoists a second time and promotes the *older* summary,
+ * so the body stopped being a prefix of what the provider had cached at exactly its second message - the
+ * `first=messages[2]` the recorded trace carries, reproduced here rather than inferred from it.
+ */
+const HOSTED = path.join(
+    PI_CODER_EXTENSION_DIR,
+    "test",
+    "fixtures",
+    "session",
+    "hosted-three-folds.jsonl",
+);
+/** Fold three's retained-tail boundary, fold two's own entry, and fold two's boundary. */
+const HOSTED_CUT = "934f4af4";
+const HOSTED_NEWER_SUMMARY = "bfbcc08f";
+const HOSTED_WINDOW_START = "883585c1";
+
+function wireKey(messages: unknown[]): string[] {
+    return requestShaped(messages).map((message) => JSON.stringify(message));
+}
+
+function summaryIndices(messages: unknown[]): number[] {
+    return (messages as { content?: unknown }[]).flatMap((message, index) =>
+        JSON.stringify(message.content).includes("compacted into the following summary")
+            ? [index]
+            : [],
+    );
+}
+
+/**
+ * Whether stage 1's messages appear in pi's live body in the same order.
+ *
+ * Order is the whole defect, and an index comparison would blame a benign difference: a `model_change` entry
+ * carries no message, so the two lists are not the same length. A cursor answers the question that matters -
+ * is this body drawn from that one, without shuffling.
+ */
+function orderAlignment(ours: unknown[], live: unknown[]): { ok: boolean; detail: string } {
+    const ourKeys = wireKey(ours);
+    const liveKeys = wireKey(live);
+    let cursor = 0;
+    for (const [index, key] of ourKeys.entries()) {
+        const found = liveKeys.slice(cursor).indexOf(key);
+        if (found < 0) {
+            return {
+                ok: false,
+                detail: `ours[${String(index)}] not found at or after live[${String(cursor)}]`,
+            };
+        }
+        cursor += found + 1;
+    }
+
+    return { ok: true, detail: `${String(ourKeys.length)} messages in live order` };
+}
+
+/** The entry fold three *wrote*, which did not exist while its stage-1 request was in flight. */
+const HOSTED_RESULT = "d2c7b72e";
+
+function foldThreeReplay() {
+    const manager = SessionManager.open(HOSTED);
+    const branch = manager.getBranch();
+    const cutIndex = branch.findIndex((entry) => entry.id === HOSTED_CUT);
+    // The branch as it stood when stage 1 ran: the retained-tail boundary is present (the slice needs to find it),
+    // and the compaction this fold produced is not.
+    const atRequest = branch.slice(
+        0,
+        branch.findIndex((entry) => entry.id === HOSTED_RESULT),
+    );
+    const leafId = String(atRequest[atRequest.length - 1].id);
+
+    // pi's own live body at that leaf: the same entries, resolved once.
+    const live = convertToLlm(buildSessionContext(atRequest, leafId).messages);
+
+    // The same function production calls, window and all.
+    const span = stageOneSpanEntries(atRequest, HOSTED_CUT);
+    const windowStart = previousFoldWindowStart(atRequest);
+    const built = buildSpanSession(span.entries, manager.getCwd());
+    const ours = convertToLlm(built.sessionManager.buildSessionContext().messages);
+
+    // The source this replaces: pi's already-hoisted resolved view, sliced at the cut and copied into a fresh
+    // session, which hoists a second time. Built here so the fix has a counterfactual to be measured against.
+    const resolvedSpan = spanContextEntries(buildContextEntries(atRequest, leafId), HOSTED_CUT);
+    const unwindowed = spanContextEntries(atRequest, HOSTED_CUT);
+    const resolvedBuilt = buildSpanSession(resolvedSpan.entries, manager.getCwd());
+    const shuffled = convertToLlm(resolvedBuilt.sessionManager.buildSessionContext().messages);
+
+    return {
+        atRequest,
+        branch,
+        cutIndex,
+        live,
+        ours,
+        shuffled,
+        span,
+        unwindowed,
+        windowStart,
+    };
+}
+
+describe("hosted three-fold fixture", () => {
+    it("pairs the window with core's boundaryStart: the previous fold's first kept entry", () => {
+        const { cutIndex, span, windowStart } = foldThreeReplay();
+
+        expect(cutIndex).toBeGreaterThan(0);
+        expect(windowStart).toBe(HOSTED_WINDOW_START);
+        expect(span.cutFound).toBe(true);
+    });
+
+    it("keeps every summary pi's live body carries, and none it dropped", () => {
+        const { live, ours } = foldThreeReplay();
+
+        expect(summaryIndices(ours)).toHaveLength(2);
+        expect(summaryIndices(live)).toHaveLength(2);
+    });
+
+    it("sends stage 1's body in the order the provider already read it", () => {
+        const { live, ours } = foldThreeReplay();
+        const alignment = orderAlignment(ours, live);
+
+        expect(alignment.detail).toContain("in live order");
+        expect(alignment.ok).toBe(true);
+
+        // The specific shuffle: newest summary first, older one later, never the reverse.
+        const oursSummaries = summaryIndices(ours);
+        const liveSummaries = summaryIndices(live);
+        expect(oursSummaries[0]).toBe(liveSummaries[0]);
+        expect(oursSummaries[1]).toBeGreaterThan(oursSummaries[0] ?? 0);
+    });
+
+    it("is the difference between a prefix and a shuffle, measured against the old source", () => {
+        const { live, ours, shuffled, span, unwindowed } = foldThreeReplay();
+
+        expect(orderAlignment(ours, live).ok).toBe(true);
+        // The witness: the same entries, taken from the resolved view, come out in an order pi never sent.
+        expect(orderAlignment(shuffled, live).ok).toBe(false);
+        // They lead with the *older* summary - a summary sits at index 0 either way, which is why position alone
+        // says nothing and identity does.
+        expect(wireKey(shuffled)[0]).not.toBe(wireKey(live)[0]);
+        expect(wireKey(ours)[0]).toBe(wireKey(live)[0]);
+        // And the window is load-bearing on its own, not just the ordering: without it the span reaches past the
+        // last fold into text no provider ever cached.
+        expect(unwindowed.entries.length).toBeGreaterThan(span.entries.length);
+    });
+
+    it("reads the window the way core walks it, oldest entry first", () => {
+        const { branch, span } = foldThreeReplay();
+        const summaries = span.entries.filter((entry) => entry.type === "compaction");
+
+        // File order in, hoisted order out: the copy hands pi's builder chronological input, which is the only
+        // way its single hoist lands the newest summary at the front.
+        expect(summaries.map((entry) => entry.id)).toEqual(["15efdff2", HOSTED_NEWER_SUMMARY]);
+        expect(branch.length).toBeGreaterThan(0);
+        expect(span.cutFound).toBe(true);
+    });
+});
 
 describe("recorded session fixture", () => {
     it("opens through pi's own loader and keeps its shape", () => {

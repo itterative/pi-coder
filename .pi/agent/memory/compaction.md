@@ -468,10 +468,37 @@ the two artifacts vouch for each other the way the llama.cpp pair does. What it 
   because the boundary row was itself post-fold. The field counts rejections, never trouble.
 - **No live `cutMoved` yet.** All three folds used core's boundary, so the repair path is unit- and mutation-tested
   but unexercised in the wild; forcing one needs a small-window route (the local 200k model), not the 1M hosted one.
-- **A known instrument gap, pinned rather than smoothed:** `prefix-unusable` fires on a healthy post-fold run
-  (`verified=1/95`, `first=messages[2]`), because every older cached body carries the *previous* summary near its
-  front. Until the report gets a state of its own for that, the flag is a standing false alarm on second-and-later
-  folds - which buries the real divergence it exists to catch.
+- **`first=messages[2]` was a real defect, and I had written it off.** This file called it a standing false alarm
+  on second-and-later folds; that reading was wrong. The body sample added to the chain named it in the first
+  session that diverged (`at messages[2] ours=user/4902c/e8332c11 pi=user/13368c/f7830572`): same role, present on
+  both sides, different index. A flag you cannot explain is not a false alarm - see **Stage 1's span window**.
+
+## Stage 1's span window (2026-09-06, `stageOneSpanEntries`)
+
+pi's resolved context (`buildContextEntries`, `session-manager.js:198`) hoists the **newest** `compaction` entry to
+the front and lets any older summary inside the kept range ride along **at its file position**. That order is
+neither file order nor newest-first, and the hoist is **not idempotent**: hand it back its own output and the
+*last* compaction entry in the list - the older one - takes the front slot.
+
+Stage 1 built its body through exactly that trap. `spanMessages` sliced pi's **resolved** list at the cut and
+copied it into a fresh in-memory session, so the hoist ran a second time and the older summary jumped to index 0.
+With one summary in range (fold 2) hoisting is a no-op, which is why folds 1 and 2 looked clean; with two (fold 3
+onward) the request stops being a prefix of the cached prompt at precisely its second message. Measured cost on the
+run that caught it: `in=41.8k cached=7168` - 83% of a 40k-token stage-1 prompt re-read fresh, every fold.
+
+The fix is to stop feeding an already-hoisted list to a non-idempotent builder. `stageOneSpanEntries(branch,
+firstKeptEntryId)` takes the **file-order window** core itself walks - `previousFoldWindowStart` is the newest
+fold's `firstKeptEntryId`, mirroring `prepareCompaction`'s `boundaryStart` - up to the cut, so the hoist runs once
+on chronological input and reproduces pi's order, and entries older than the last fold, which no provider ever
+cached, leave the span. Two things that look like bugs and are not: the wire format drops `timestamp`, so the fresh
+stamps `appendCompaction` mints are inert for cache alignment (`requestShaped` in the fixture test says so), and
+`keptEntry` still comes from the resolved-or-branch list, because only that answers whether the boundary's count
+survives into the cached prefix.
+
+`test/modules/compaction/session-fixture.test.ts` pins this on `hosted-three-folds.jsonl`, whose fold-3 window
+holds two summaries, and carries a counterfactual: the same entries taken from the resolved view must **not**
+align. Order, not membership, is the invariant, so the assertions compare message identity at each position - the
+front slot holds *a* summary either way, which is why index alone proves nothing.
 
 `test/fixtures/session/llamacpp-post-compaction.jsonl` is pi's own output: a 51-entry branch carrying a
 `compaction` at its tip (`firstKeptEntryId: 3162e48e`), with the `custom_message`, `model_change`, and

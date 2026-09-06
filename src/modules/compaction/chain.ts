@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { collapseWhitespace, truncateHead } from "./text";
+
 /**
  * A fingerprint of every request pi has sent in this session, kept as hashes instead of bodies.
  *
@@ -13,8 +15,9 @@ import { createHash } from "node:crypto";
  *
  * What is kept per request: the leaf id it was built for, its depth, the running head, and the system/tools
  * shape. That is roughly seventy bytes rather than two megabytes, which is why this can hold a session's
- * whole request history instead of its last body. What is lost against holding the body: the ability to show
- * the text that differed, so a mismatch names a depth and the operator goes and looks.
+ * whole request history instead of its last body. Alongside it, for up to `MAX_SAMPLED_REQUESTS` requests, the
+ * first few messages of the body in reduced form - role, size, hash, a short excerpt - so that when heads
+ * disagree the log can name the message that disagreed instead of only the depth at which it happened.
  *
  * Nothing here gates compaction. Every field is a diagnostic; the request is built and sent the same way
  * whether or not any observation exists.
@@ -201,6 +204,74 @@ export function messageLadder(messages: readonly unknown[]): Map<number, string>
     return ladder;
 }
 
+/** How many leading messages of a request keep a body sample: divergences are shallow, so the head is enough. */
+const LEADING_SAMPLE_MESSAGES = 50;
+/** How many requests keep one. A sample is a few hundred bytes, so a thousand costs under a megabyte. */
+const MAX_SAMPLED_REQUESTS = 1000;
+/** Per-message excerpt ceiling: enough to tell two similar messages apart at a glance. */
+const SAMPLE_EXCERPT_CHARS = 160;
+
+/** One request's leading message, reduced to what identifies it without holding its body. */
+export interface MessageSample {
+    /** 0-based position in the body, i.e. depth - 1. */
+    index: number;
+    role: string;
+    /** Size of the canonical form `fold()` hashes, so a length difference is visible without the text. */
+    chars: number;
+    /** Hash over that same canonical form, so a head delta can be traced to exactly one message. */
+    hash: string;
+    excerpt: string;
+}
+
+/** The first few messages of a body, sampled only so a divergence can be named rather than located. */
+export function sampleMessages(messages: readonly unknown[]): MessageSample[] {
+    return messages.slice(0, LEADING_SAMPLE_MESSAGES).map((message, index) => {
+        const canonicalForm = canonical(message);
+        const role = (message as { role?: unknown } | null | undefined)?.role;
+
+        return {
+            index,
+            role: typeof role === "string" ? role : typeof message === "string" ? "string" : "?",
+            chars: canonicalForm.length,
+            hash: digest(canonicalForm),
+            excerpt: collapseWhitespace(truncateHead(canonicalForm, SAMPLE_EXCERPT_CHARS)),
+        };
+    });
+}
+
+/**
+ * One readable line naming what disagreed, for the trace's `divergences` array.
+ *
+ * Null when the depth is past what either side sampled: the sample covers the leading messages, and a divergence
+ * deeper than that is still worth the depth alone, which the caller already records.
+ */
+export function divergenceLine(
+    depth: number,
+    ours: readonly MessageSample[],
+    theirs: readonly MessageSample[] | null,
+): string | null {
+    const ourMessage = ours[depth - 1];
+    if (ourMessage === undefined) {
+        return null;
+    }
+
+    const theirMessage = theirs?.[depth - 1];
+    const left = `${ourMessage.role}/${String(ourMessage.chars)}c/${ourMessage.hash.slice(0, 8)}`;
+    const right =
+        theirMessage === undefined
+            ? "untracked"
+            : `${theirMessage.role}/${String(theirMessage.chars)}c/${theirMessage.hash.slice(0, 8)}`;
+
+    return `at messages[${String(depth)}] ours=${left} pi=${right}`;
+}
+
+/** One retained request's per-depth heads, which is what a rebuild is compared against. */
+interface LadderRecord {
+    leafId: string | null;
+    heads: Map<number, string>;
+    shapeKey?: string;
+}
+
 /** A retained ladder as it comes back from a previous process. */
 export interface RestoredLadder {
     leafId: string | null;
@@ -218,11 +289,9 @@ export interface ChainRecorded {
 /** One entry per observed request, newest last, pruned from the front past the cap. */
 export class RequestChain {
     private readonly observations: ChainObservation[] = [];
-    private readonly ladders: {
-        leafId: string | null;
-        heads: Map<number, string>;
-        shapeKey?: string;
-    }[] = [];
+    private readonly ladders: LadderRecord[] = [];
+    /** Newest first, pruned from the back: the leading messages of the last thousand requests. */
+    private readonly samples: { leafId: string | null; sample: MessageSample[] }[] = [];
     private droppedCount = 0;
     private lastToolsHash: string | undefined;
     private lastSystemHash: string | undefined;
@@ -276,6 +345,11 @@ export class RequestChain {
         if (this.ladders.length > LADDER_RETENTION) {
             this.ladders.length = LADDER_RETENTION;
         }
+
+        this.samples.unshift({ leafId: input.leafId, sample: sampleMessages(input.messages) });
+        if (this.samples.length > MAX_SAMPLED_REQUESTS) {
+            this.samples.length = MAX_SAMPLED_REQUESTS;
+        }
         const toolsChanged = input.shape.toolsHash !== this.lastToolsHash;
         const systemChanged = input.shape.systemHash !== this.lastSystemHash;
 
@@ -308,6 +382,25 @@ export class RequestChain {
         }
 
         return { observation: recorded, heads: [...ladder.values()] };
+    }
+
+    /**
+     * The retained sample for one request, by leaf id: what the heads say *disagreed*, in their own words.
+     *
+     * A reference sampled before this process started, or one past the ring, answers null, and the caller logs
+     * that absence rather than leaving the record to imply agreement.
+     */
+    sampleFor(leafId: string | null): MessageSample[] | null {
+        if (leafId === null) {
+            return null;
+        }
+
+        return this.samples.find((entry) => entry.leafId === leafId)?.sample ?? null;
+    }
+
+    /** How many requests this process has sampled, so an absent side in a divergence log reads as untracked. */
+    get sampledRequests(): number {
+        return this.samples.length;
     }
 
     /**

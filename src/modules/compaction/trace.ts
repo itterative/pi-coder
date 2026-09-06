@@ -3,6 +3,7 @@ import path from "node:path";
 import type { StopReason, Usage } from "@earendil-works/pi-ai";
 import { uuidv7 } from "@earendil-works/pi-ai";
 
+import type { MessageSample } from "./chain";
 import { COMPACTION_TRACE_PATH } from "../../common/constants";
 import { createJsonlRecordLog, type RecordLog } from "../../common/record-log";
 import { isAgentTraceEnabled, PROCESS_INSTANCE } from "../../common/trace";
@@ -192,9 +193,28 @@ export interface CompactionTraceRecord {
  * window being checked. The "is a tail-only difference a failure?" question that cost a whole debugging pass
  * under the body-to-body diff does not arise here.
  */
+/** The two bodies a prefix disagreement was found between, as far as either is still retained. */
+export interface PrefixDivergence {
+    /** 1-based depth whose running head first differed, i.e. message `depth - 1` is the odd one out. */
+    depth: number;
+    /** Our request's leading messages, sampled from the body about to be sent. */
+    ours: MessageSample[];
+    /** The credited reference's leading messages, or null when this process never retained them. */
+    theirs: MessageSample[] | null;
+    /** How many requests were sampled at all, so a null `theirs` reads as "untracked" and not "nothing wrong". */
+    sampledRequests: number;
+}
+
 export interface CompactionPrefixFields {
     /** Which reference answered: retained chain observations, or nothing usable. */
     reference: "chain" | "none";
+    /**
+     * Present only when heads disagreed: both bodies' leading messages, so the record says *what* disagreed.
+     *
+     * Written on the mismatch and nowhere else, which is the whole reason the chain retains a sample of each
+     * request instead of only its hashes.
+     */
+    divergence?: PrefixDivergence;
     /** Undefined when there was no reference to compare against. */
     prefixUsable?: boolean;
     /** `verified` | `messages[<depth>]` | `system` | `tools` | `no-reference` | `<field>:<a>!=<b>`. */

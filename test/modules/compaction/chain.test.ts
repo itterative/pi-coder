@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { chainMessages as messages, chainShape as shape } from "../../helpers/compaction-doubles";
 import {
+    divergenceLine,
     messageLadder,
     pathIdSet,
     RequestChain,
+    sampleMessages,
     shapeKey,
     type ChainShape,
 } from "../../../src/modules/compaction/chain";
@@ -282,5 +284,65 @@ describe("request chain", () => {
         expect(match.reference).toBe("none");
         expect(match.compared).toBe(0);
         expect(match.truncatedHistory).toBe(false);
+    });
+});
+
+describe("body samples", () => {
+    it("retains a sample for requests deeper than the ladder ring reaches", () => {
+        const bodies = Array.from({ length: 12 }, (_, index) =>
+            messages(4, `b${String(index)}`),
+        ) as [string, unknown[]][];
+        const chain = chainWith(
+            ...bodies.map((body, index) => [`leaf-${String(index)}`, body] as [string, unknown[]]),
+        );
+
+        // Heads are kept for the newest couple of requests, but a credited reference can be much older, and a
+        // divergence against it is exactly the case that needs the body. Far apart by design: if sample retention
+        // were ever tied back to the ladder ring, this is the test that says so.
+        expect(chain.sampleFor("leaf-0")).not.toBeNull();
+        expect(chain.sampledRequests).toBe(12);
+    });
+
+    it("answers null for a leaf this process never observed", () => {
+        const chain = chainWith([LEAF_A, messages(3)]);
+
+        expect(chain.sampleFor("leaf-unknown")).toBeNull();
+        expect(chain.sampleFor(null)).toBeNull();
+    });
+
+    it("hashes a sampled message with the same form the ladder folds", () => {
+        const body = messages(3);
+        const retained = chainWith([LEAF_A, body]).sampleFor(LEAF_A) ?? [];
+        const fresh = sampleMessages(body);
+
+        expect(retained.map((entry) => entry.index)).toEqual(fresh.map((entry) => entry.index));
+        expect(retained[1]?.hash).toBe(fresh[1]?.hash);
+
+        // The head is cumulative, so only a per-message hash can point at one message: identical bodies agree,
+        // one edited message disagrees at its own index and nowhere else.
+        const edited = sampleMessages([
+            { role: "user", content: "m0" },
+            { role: "assistant", content: "changed" },
+        ]);
+        expect(edited[0]?.hash).toBe(fresh[0]?.hash);
+        expect(edited[1]?.hash).not.toBe(fresh[1]?.hash);
+    });
+
+    it("records a long message's size without retaining it whole", () => {
+        const [only] = sampleMessages([{ role: "user", content: "x".repeat(20_000) }]);
+
+        expect(only?.chars).toBeGreaterThan(19_000);
+        expect(only?.excerpt.length).toBeLessThan(only?.chars ?? 0);
+    });
+
+    it("names both sides of a divergence, or says the reference was never tracked", () => {
+        const ours = sampleMessages(messages(3));
+        const theirs = sampleMessages(messages(3, "other"));
+
+        expect(divergenceLine(2, ours, theirs)).toContain("at messages[2]");
+        expect(divergenceLine(2, ours, theirs)).toContain("pi=assistant");
+        expect(divergenceLine(2, ours, null)).toContain("pi=untracked");
+        // Past the sampled head there is nothing to name, and the depth alone stays the whole record.
+        expect(divergenceLine(9, ours, theirs)).toBeNull();
     });
 });

@@ -54,12 +54,54 @@ export interface SpanCut {
 export function spanContextEntries(
     contextEntries: SessionEntry[],
     firstKeptEntryId: string,
+    windowStartEntryId?: string,
 ): SpanCut {
     const cut = contextEntries.findIndex((entry) => entry.id === firstKeptEntryId);
     if (cut < 0) {
         return { entries: contextEntries, cutFound: false };
     }
-    return { entries: contextEntries.slice(0, cut), cutFound: true };
+
+    // An id the list does not contain keeps the whole window rather than narrowing it: the caller asked for less,
+    // and dropping entries nobody named is the one mistake a stage-1 transcript cannot take back.
+    const named =
+        windowStartEntryId === undefined
+            ? 0
+            : contextEntries.findIndex((entry) => entry.id === windowStartEntryId);
+    const start = Math.max(0, named);
+    return { entries: contextEntries.slice(start, cut), cutFound: true };
+}
+
+/**
+ * Where the span window starts: the entry the previous fold kept first, or nothing when there is no previous fold.
+ *
+ * pi's resolved context begins there and drops everything older, so a span that reaches past it would re-read
+ * text no provider has cached. Pair it with the file-order branch: the window is what core's own
+ * `prepareCompaction` walks (`boundaryStart` to the cut), and copying it in that order lets pi's summary hoisting
+ * run exactly once instead of a second time on an already-hoisted list.
+ */
+export function previousFoldWindowStart(branch: readonly SessionEntry[]): string | undefined {
+    for (let index = branch.length - 1; index >= 0; index -= 1) {
+        const entry = branch[index];
+        if (entry?.type === "compaction") {
+            return entry.firstKeptEntryId;
+        }
+    }
+
+    return undefined;
+}
+
+/**
+ * Stage 1's span: the file-order window core itself walks, from the previous fold's boundary to the cut.
+ *
+ * The two arguments belong together and a caller that splits them is how the depth-2 divergence happened. pi's
+ * resolved context hoists the newest summary to the front and lets older ones ride inline; slice *that* list and
+ * copy it into a fresh session and pi's hoisting runs a second time on already-hoisted input, promoting the older
+ * summary instead. Feeding the chronological window instead runs the hoist once and reproduces pi's order, so the
+ * body stays a prefix of what the provider cached. `previousFoldWindowStart` also drops entries older than the
+ * last fold, which no provider has cached and stage 1 has no business re-reading.
+ */
+export function stageOneSpanEntries(branch: SessionEntry[], firstKeptEntryId: string): SpanCut {
+    return spanContextEntries(branch, firstKeptEntryId, previousFoldWindowStart(branch));
 }
 
 export function buildSpanSession(entries: SessionEntry[], cwd: string): SpanSession {

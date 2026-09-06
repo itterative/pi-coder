@@ -35,11 +35,14 @@ import {
 import {
     messageLadder,
     pathIdSet,
+    divergenceLine,
+    sampleMessages,
     RequestChain,
     type ChainObservation,
     type ChainShape,
 } from "./chain";
 import { segmentSummaryInstruction, serializedSummarizationRequest } from "./prompt";
+import type { PrefixDivergence } from "./trace";
 import {
     serializeConversationMinimal,
     serializerOptions,
@@ -51,7 +54,7 @@ import {
     computeFileLists,
     formatFileLists,
 } from "./sections";
-import { buildSpanSession, skippedEntryCount, spanContextEntries } from "./span-session";
+import { buildSpanSession, skippedEntryCount, stageOneSpanEntries } from "./span-session";
 import { type SummarizationFailureCause, causeRationale, isTerminalCause } from "./failure";
 import {
     summarizeNatively,
@@ -309,6 +312,31 @@ function observeParentRequest(
  * reference at all the record says so and leaves `prefixUsable` undefined, rather than reporting the old
  * `false` plus `commonPrefixMessages: 0` that made a cold process look like a broken rebuild.
  */
+/**
+ * Name the message the heads disagreed on, from the two bodies' retained leading samples.
+ *
+ * Ours is sampled fresh from the body about to go out; theirs is whatever this process retained of the credited
+ * reference. When nothing was retained - a reference from before this process started - the record says so rather
+ * than printing a comparison that did not happen, because a depth alone is the thing that could not be diagnosed
+ * after the fact.
+ */
+function sampledDivergence(
+    chain: RequestChain,
+    ourMessages: unknown[],
+    referenceLeafId: string | null,
+    depth: number,
+    divergences: string[],
+): PrefixDivergence {
+    const ours = sampleMessages(ourMessages);
+    const theirs = chain.sampleFor(referenceLeafId);
+    const line = divergenceLine(depth, ours, theirs);
+    if (line !== null) {
+        divergences.push(line);
+    }
+
+    return { depth, ours, theirs, sampledRequests: chain.sampledRequests };
+}
+
 function prefixVerdict(
     sessionManager: SessionShapeView,
     ourPayload: unknown,
@@ -343,8 +371,11 @@ function prefixVerdict(
     const verifiedThrough = match.comparableDepth > 0 && match.verifiedTo >= match.comparableDepth;
     const divergences = shapeDivergences(parent, shape, match);
 
+    let divergence: PrefixDivergence | undefined;
     if (match.firstMismatchDepth !== null) {
-        divergences.push(`messages[${String(match.firstMismatchDepth)}]`);
+        const depth = match.firstMismatchDepth;
+        divergences.push(`messages[${String(depth)}]`);
+        divergence = sampledDivergence(chain, messages, match.referenceLeafId, depth, divergences);
     }
 
     const hasReference = match.reference === "chain";
@@ -375,6 +406,7 @@ function prefixVerdict(
     }
 
     return {
+        divergence,
         reference: match.reference,
         prefixUsable: hasReference && match.comparableDepth > 0 ? verifiedThrough : undefined,
         firstDivergence: divergences[0] ?? (verifiedThrough ? "verified" : "tail"),
@@ -620,7 +652,10 @@ function spanMessages(input: StageContext): {
     // counted by a provider if it survives into the resolved context, which is what stage 1's request is built
     // from. A compaction between them would put a summary message where the count was taken.
     const entries = contextEntry ? resolved : branch;
-    const span = spanContextEntries(entries, cut.firstKeptEntryId);
+    // The window, not the resolved list: see `stageOneSpanEntries`. `entries` stays the source of `keptEntry`,
+    // because a count is only exact if the boundary survived into the resolved view, and the window's order says
+    // nothing about that.
+    const span = stageOneSpanEntries(branch, cut.firstKeptEntryId);
     const built = buildSpanSession(span.entries, ctx.cwd);
     const messages = convertToLlm(built.sessionManager.buildSessionContext().messages);
 
