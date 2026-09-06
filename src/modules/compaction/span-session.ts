@@ -80,14 +80,9 @@ export function spanContextEntries(
  * run exactly once instead of a second time on an already-hoisted list.
  */
 export function previousFoldWindowStart(branch: readonly SessionEntry[]): string | undefined {
-    for (let index = branch.length - 1; index >= 0; index -= 1) {
-        const entry = branch[index];
-        if (entry?.type === "compaction") {
-            return entry.firstKeptEntryId;
-        }
-    }
+    const newest = branch.findLast((entry) => entry.type === "compaction");
 
-    return undefined;
+    return newest?.type === "compaction" ? newest.firstKeptEntryId : undefined;
 }
 
 /**
@@ -101,7 +96,42 @@ export function previousFoldWindowStart(branch: readonly SessionEntry[]): string
  * last fold, which no provider has cached and stage 1 has no business re-reading.
  */
 export function stageOneSpanEntries(branch: SessionEntry[], firstKeptEntryId: string): SpanCut {
-    return spanContextEntries(branch, firstKeptEntryId, previousFoldWindowStart(branch));
+    const windowStart = previousFoldWindowStart(branch);
+    const span = spanContextEntries(branch, firstKeptEntryId, windowStart);
+
+    return includeNewestCheckpoint(branch, span, windowStart);
+}
+
+/**
+ * Put the newest checkpoint in the window when the window fell short of it.
+ *
+ * A live body begins with the newest checkpoint, hoisted to the front wherever its row sits, and the retained tail
+ * pi keeps starts at that row's own `firstKeptEntryId`. So when this fold's cut lands inside that retained tail -
+ * the usual case for a fold close behind another - the window ends before the checkpoint row, and stage 1 sends a
+ * body missing the message pi has cached at position 1. Measured live: `at messages[2] ours=assistant/1082c
+ * pi=user/11910c`, with every later message aligned one place apart - the same depth-2 shape as the ordering bug
+ * above, arriving from the other side.
+ *
+ * Appending is the load-bearing detail, not the inclusion. A copied fold row hoists only if it is last among them,
+ * and by the time it is appended `firstCopiedId` has resolved, so its `firstKeptEntryId` names an entry the copy
+ * really contains and pi keeps everything ahead of it instead of dropping it.
+ */
+function includeNewestCheckpoint(
+    branch: SessionEntry[],
+    span: SpanCut,
+    windowStart: string | undefined,
+): SpanCut {
+    if (windowStart === undefined || !span.cutFound) {
+        // No fold yet: there is no checkpoint to hoist and nothing to make room for.
+        return span;
+    }
+
+    const newest = branch.findLast((entry) => entry.type === "compaction");
+    if (newest === undefined || span.entries.some((entry) => entry.id === newest.id)) {
+        return span;
+    }
+
+    return { entries: [...span.entries, newest], cutFound: true };
 }
 
 export function buildSpanSession(entries: SessionEntry[], cwd: string): SpanSession {

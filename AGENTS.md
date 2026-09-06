@@ -12,6 +12,7 @@ pi-coder is a pi extension providing coding-oriented memory, sandbox, TUI, and d
 
 ## Code styleguide
 
+- Reach for the `ES2023` array methods the project target already promises - `findLast`, `findLastIndex`, `toSorted`, `toReversed` - instead of hand-rolling reverse loops or copy-then-sort. `tsconfig.json` sets `target: ES2024`, so they are available in `src/` and in tests alike.
 - Prefer guard clauses to reduce nesting. Always use braces, including for guard clauses and other single-statement control-flow bodies.
 - Avoid nested ternary expressions. Replace complex conditional expressions with guard clauses, explicit branches, or named intermediate values.
 - Separate logical phases within a function with blank lines, especially validation, state updates, side effects, and result construction.

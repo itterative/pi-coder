@@ -251,6 +251,81 @@ describe("hosted three-fold fixture", () => {
     });
 });
 
+/**
+ * A real session whose second fold cuts inside the retained tail - the shape the three-fold fixture cannot reach.
+ *
+ * Captured 2026-09-06 from the run that logged `at messages[2] ours=assistant/1082c/7b163faf
+ * pi=user/11910c/99b51f75`. Both folds' `firstKeptEntryId` rows are assistants inside the previous fold's retained
+ * tail, so the newest checkpoint row sits AFTER this fold's cut and the window slice misses it, while pi's live
+ * body still begins with that checkpoint. Untrimmed and unedited: real ids, real provider counts.
+ */
+const CUT_BEFORE = path.join(
+    PI_CODER_EXTENSION_DIR,
+    "test",
+    "fixtures",
+    "session",
+    "hosted-cut-before-checkpoint.jsonl",
+);
+/** The second fold's own row, which did not exist while its stage-1 request was in flight. */
+const CUT_BEFORE_RESULT = "8d61f3d7";
+const CUT_BEFORE_CUT = "406f434b";
+
+function cutBeforeCheckpointReplay() {
+    const manager = SessionManager.open(CUT_BEFORE);
+    const branch = manager.getBranch();
+    const atRequest = branch.slice(
+        0,
+        branch.findIndex((entry) => entry.id === CUT_BEFORE_RESULT),
+    );
+    const leafId = String(atRequest[atRequest.length - 1].id);
+    const live = convertToLlm(buildSessionContext(atRequest, leafId).messages);
+
+    const windowStart = previousFoldWindowStart(atRequest);
+    const plain = spanContextEntries(atRequest, CUT_BEFORE_CUT, windowStart);
+    const span = stageOneSpanEntries(atRequest, CUT_BEFORE_CUT);
+
+    const built = buildSpanSession(span.entries, manager.getCwd());
+    const ours = convertToLlm(built.sessionManager.buildSessionContext().messages);
+    const plainBuilt = buildSpanSession(plain.entries, manager.getCwd());
+    const missing = convertToLlm(plainBuilt.sessionManager.buildSessionContext().messages);
+
+    return { atRequest, live, missing, ours, plain, span };
+}
+
+describe("hosted cut-before-checkpoint fixture", () => {
+    it("has the premise: the window slice stops short of the newest checkpoint row", () => {
+        const { plain, span } = cutBeforeCheckpointReplay();
+
+        expect(plain.cutFound).toBe(true);
+        expect(plain.entries.some((entry) => entry.type === "compaction")).toBe(false);
+        // One row added, and it is the checkpoint - not a wider slice that quietly re-reads dropped history.
+        expect(span.entries.length).toBe(plain.entries.length + 1);
+        expect(span.entries.at(-1)?.type).toBe("compaction");
+    });
+
+    it("sends the checkpoint pi already has at its front", () => {
+        const { live, ours } = cutBeforeCheckpointReplay();
+
+        expect(summaryIndices(ours)[0]).toBe(0);
+        expect(wireKey(ours)[0]).toBe(wireKey(live)[0]);
+        expect(orderAlignment(ours, live).ok).toBe(true);
+    });
+
+    it("is the difference the append makes, measured against the same live body", () => {
+        const { live, missing, ours } = cutBeforeCheckpointReplay();
+
+        // The unfixed body is not shuffled, it is short: it drops the leading checkpoint and keeps everything
+        // after it in pi's order. So an order-only comparison says nothing here - identity at position 0, and the
+        // message count, are what separate this from the ordering bug the three-fold fixture pins.
+        expect(summaryIndices(missing)).toEqual([]);
+        expect(summaryIndices(live)[0]).toBe(0);
+        expect(wireKey(missing)[0]).not.toBe(wireKey(live)[0]);
+        expect(ours.length).toBe(missing.length + 1);
+        expect(wireKey(ours).slice(1)).toEqual(wireKey(missing));
+        expect(orderAlignment(missing, live).ok).toBe(true);
+    });
+});
+
 describe("recorded session fixture", () => {
     it("opens through pi's own loader and keeps its shape", () => {
         const manager = SessionManager.open(FIXTURE);

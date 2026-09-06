@@ -495,6 +495,21 @@ stamps `appendCompaction` mints are inert for cache alignment (`requestShaped` i
 `keptEntry` still comes from the resolved-or-branch list, because only that answers whether the boundary's count
 survives into the cached prefix.
 
+**The same depth-2 signature has a second cause: the window can miss the checkpoint row entirely.** A live body
+begins with the newest checkpoint no matter where its row sits, and the retained tail starts at that row's own
+`firstKeptEntryId` - so when a fold's cut lands inside that retained tail, the chronological window `[previous
+fold's firstKept, cut)` ends *before* the checkpoint row and stage 1 sends a body that is simply short of the
+cached front message: `at messages[2] ours=assistant/1082c pi=user/11910c`, with everything after aligned one place
+apart. `stageOneSpanEntries` closes it by appending the newest fold row when the slice lacks it - appending, not
+prepending, because a copied row hoists only when it is last among the fold rows, and only by then has
+`firstCopiedId` resolved so its `firstKeptEntryId` names an entry the copy contains. `hosted-three-folds` cannot
+reach this shape (both of its fold rows fall inside the window), which is why a second real session became a
+fixture: `hosted-cut-before-checkpoint.jsonl`.
+
+Lesson for reading these logs: **an order-only comparison cannot see this defect.** Dropping a leading message
+leaves an ordered subsequence, so alignment passes and only message identity at position 0 and the length differ.
+Shuffled placement and a missing head both surface as `first=messages[2]` and are told apart exactly that way.
+
 `test/modules/compaction/session-fixture.test.ts` pins this on `hosted-three-folds.jsonl`, whose fold-3 window
 holds two summaries, and carries a counterfactual: the same entries taken from the resolved view must **not**
 align. Order, not membership, is the invariant, so the assertions compare message identity at each position - the
