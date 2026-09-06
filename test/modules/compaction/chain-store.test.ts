@@ -81,6 +81,57 @@ describe("compaction chain store", () => {
             .map((line) => String((JSON.parse(line) as Record<string, unknown>).stage));
     }
 
+    it("carries the decode values across a restart", () => {
+        // The values, not just the key names: `keys` says both bodies sent `enable_thinking`, and only the value
+        // can say pi's was true while a rebuild's came back false - the difference that moves a templated prefix.
+        const shape = chainShape({
+            maxTokens: 4096,
+            enableThinking: true,
+            reasoningEffort: "high",
+            imageBlocks: 2,
+        });
+        record({ leafId: "leaf-a", depth: 3, shape });
+
+        const restored = new RequestChain();
+        restored.restore(loadChain(target, SESSION));
+
+        const [row] = restored.branchObservations(new Set(["leaf-a"]));
+        expect(row).toMatchObject({
+            maxTokens: 4096,
+            enableThinking: true,
+            reasoningEffort: "high",
+            imageBlocks: 2,
+        });
+    });
+
+    it("reads a row written before the decode fields existed as unknown, never as false or zero", () => {
+        record({ leafId: "leaf-a", depth: 3 });
+
+        const rows = fs
+            .readFileSync(file, "utf8")
+            .split("\n")
+            .filter((line) => line.trim().length > 0)
+            .map((line) => JSON.parse(line) as Record<string, unknown>);
+        for (const row of rows) {
+            delete row.maxTokens;
+            delete row.enableThinking;
+            delete row.reasoningEffort;
+            delete row.imageBlocks;
+        }
+        fs.writeFileSync(file, `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`);
+
+        const restored = new RequestChain();
+        restored.restore(loadChain(target, SESSION));
+        const [row] = restored.branchObservations(new Set(["leaf-a"]));
+
+        expect(row.maxTokens).toBeNull();
+        expect(row.enableThinking).toBeNull();
+        expect(row.reasoningEffort).toBeNull();
+        // Zero is a real count here, so an absent field must not arrive as one: a session that genuinely had no
+        // images and a row that never recorded them have to stay tellable apart.
+        expect(row.imageBlocks).toBeNull();
+    });
+
     it("follows its own switch while sharing the trace location and rotation", () => {
         const config = { ...DEFAULT_COMPACTION_CONFIG, enabled: true, tracePath: file };
 

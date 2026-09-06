@@ -52,6 +52,11 @@ export interface ChainObservation {
     /** Top-level body keys, sorted: catches `prompt_cache_key` and marker differences. */
     keys: string[];
     model: string;
+    /** Decode scalars, mirrored from `ChainShape`. See its field docs for what `null` does and does not mean. */
+    maxTokens: number | null;
+    enableThinking: boolean | null;
+    reasoningEffort: string | null;
+    imageBlocks: number | null;
     ts: number;
 }
 
@@ -66,10 +71,18 @@ export interface ChainMatch {
     verifiedTo: number;
     /** Deepest reference depth available on this branch. */
     referenceDepth: number;
-    /** Shallowest disagreement between the two, when there was one. */
+    /**
+     * Shallowest disagreement **inside the credited reference**, or null when it agreed throughout.
+     *
+     * Scoped to one reference deliberately. Heads are cumulative, so a reference that disagrees at depth k
+     * disagrees at every depth past k too: inside one reference the mismatch is always deeper than the
+     * agreement, and `firstMismatchDepth > verifiedTo` is the only shape it can take. The aggregate this
+     * replaced printed `verified 728/728` beside a divergence at message 59 because the two numbers came from
+     * different references - a figure describing two measurements is not a measurement.
+     */
     firstMismatchDepth: number | null;
     /**
-     * Deepest reference depth our rebuild was even long enough to compare.
+     * Deepest depth the credited reference was long enough to compare.
      *
      * This is what separates "the prefix mismatched" from "we could not check". A stage-1 span is truncated at
      * the cut point, so it can be shorter than every request pi made in this process - which is exactly what
@@ -79,14 +92,38 @@ export interface ChainMatch {
     comparableDepth: number;
     /** Observations on this branch that were comparable (same system and tools shape). */
     compared: number;
+    /**
+     * Comparable references that disagreed somewhere, excluding the credited one.
+     *
+     * Where a stale pre-compaction ladder surfaces: it still passes the branch and shape filters, so it
+     * disagrees at a depth the live prefix never reached. Counted rather than merged, so the printed depths
+     * stay about one request and the disagreement is not hidden either. Exclusion is by identity, not leaf id:
+     * a retained ladder and its own observation share a leaf and are separate references.
+     */
+    disagreeingReferences: number;
+    /** Whether the credited reference was an observed request or one of the retained ladders. */
+    referenceSource: "observation" | "ladder" | null;
     /** True when observations were dropped by the cap, so shallow depths may be unverifiable. */
     truncatedHistory: boolean;
-    /** Body keys only one side sent, against the newest comparable reference. Informational. */
+    /**
+     * Body keys only one side sent, against the credited reference. Informational, and empty both when the
+     * bodies matched and when no reference could be credited - the trace says which by whether `reference`
+     * is `chain`.
+     */
     parameters: string[];
-    /** The reference's model, when it differed from ours. */
+    /** The credited reference's model, when it differed from ours. */
     modelDivergence: string | null;
-    /** Leaf id of the observation the verdict was taken from. */
+    /** Leaf id of the reference these depths were taken from; null when nothing was credited. */
     referenceLeafId: string | null;
+    /**
+     * The credited reference's own row, so every comparison in a verdict is against one request.
+     *
+     * Null when the credited reference was a ladder whose paired observation has since been pruned, or when
+     * nothing was credited at all. Callers that mirror or diff against "the parent request" must use this and
+     * say so when it is absent - diffing against a *different* request than the one that set the depths is how
+     * `firstDivergence` and `verifiedTo` came to disagree with each other in a live record.
+     */
+    referenceObservation: ChainObservation | null;
 }
 
 /**
@@ -96,6 +133,11 @@ export interface ChainMatch {
  * symmetric difference against a reference body still shows which knobs one side sent, without holding that
  * body. `systemHash` covers the whole prompt, which is the same quantity `fingerprintSummary()` records for
  * humans, so the two can be joined without translating between them.
+ *
+ * The scalars below are **deliberately not part of `shapeKey()`**. A thinking toggle or an image-block count
+ * changing is exactly the thing the verdict should be able to *see*, and folding it into the shape would turn
+ * "these two requests differ in a parameter that moves the prefix" into "these two requests are not comparable"
+ * - which is the difference between a diagnosis and a shrug.
  */
 export interface ChainShape {
     systemHash: string;
@@ -104,6 +146,18 @@ export interface ChainShape {
     toolNames: string[];
     keys: string[];
     model: string;
+    /**
+     * Decode and content-shape scalars, as values rather than key presence.
+     *
+     * `keys` can say that both sides sent `enable_thinking`; only these can say one sent `true` and the other
+     * `false`, which on the templating servers is a prefix difference the key set cannot express. `null` means
+     * the body carried no such field - or, for a row persisted by an older build, that the value was never
+     * recorded. Both read as unknown, never as a measurement.
+     */
+    maxTokens: number | null;
+    enableThinking: boolean | null;
+    reasoningEffort: string | null;
+    imageBlocks: number | null;
 }
 
 /** Identifies the system prompt, tool set and model a ladder was folded under. */
@@ -237,6 +291,10 @@ export class RequestChain {
             systemChars: input.shape.systemChars,
             keys: input.shape.keys,
             model: input.shape.model,
+            maxTokens: input.shape.maxTokens,
+            enableThinking: input.shape.enableThinking,
+            reasoningEffort: input.shape.reasoningEffort,
+            imageBlocks: input.shape.imageBlocks,
             toolNames: toolsChanged || systemChanged ? input.shape.toolNames : undefined,
             ts: Date.now(),
         });
@@ -334,102 +392,132 @@ export class RequestChain {
             return {
                 reference: "none",
                 ...EMPTY_COMPARISON,
+                compared: 0,
+                disagreeingReferences: 0,
+                referenceSource: null,
                 referenceDepth,
                 truncatedHistory: this.droppedCount > 0,
                 parameters: [],
                 modelDivergence: null,
                 referenceLeafId: null,
+                referenceObservation: null,
             };
         }
 
-        const ladders = this.matchRetainedLadders(input);
-        const heads = this.matchObservations(input, onPath);
-        const merged = mergeComparisons(ladders, heads);
+        // Each reference is compared on its own, then one of them is credited with the verdict. Averaging or
+        // min/max-ing across references is what let a live 728-deep agreement and a stale ladder's mismatch at 59
+        // print as one verdict.
+        const candidates: ReferenceComparison[] = [];
+        let compared = 0;
+
+        for (const ladder of this.ladders) {
+            const result = this.compareLadder(input, ladder);
+            if (result !== null) {
+                candidates.push(result);
+            }
+        }
+
+        for (const [ordinal, observation] of onPath.entries()) {
+            const result = this.compareObservation(input, observation, ordinal);
+            if (result === null) {
+                continue;
+            }
+            candidates.push(result);
+
+            // `compared` keeps the meaning the trace already reports: comparable observations, not derived ladders.
+            compared++;
+        }
+
+        const credited = pickCreditedReference(candidates);
+        // A retained ladder describes a request that was also observed, so the paired row is where the key set
+        // and model come from. Absent one (pruned past the cap) leaves the deltas unknown, not empty-by-agreement.
+        const creditedObservation =
+            credited === null
+                ? undefined
+                : onPath.find((observation) => observation.leafId === credited.leafId);
 
         return {
             reference: "chain",
-            ...merged,
+            verifiedTo: credited?.verifiedTo ?? -1,
+            comparableDepth: credited?.comparableDepth ?? -1,
+            firstMismatchDepth: credited?.firstMismatchDepth ?? null,
+            compared,
+            disagreeingReferences: candidates.filter(
+                (candidate) => candidate.firstMismatchDepth !== null && candidate !== credited,
+            ).length,
+            referenceSource: credited?.source ?? null,
             referenceDepth,
             truncatedHistory: this.droppedCount > 0,
             // A reference whose keys are unknown is not a reference that sent nothing: reporting
             // `+messages,+model,+tools` for that case would be an invented measurement.
             parameters:
-                heads.reference === undefined
+                creditedObservation === undefined
                     ? []
-                    : parameterDelta(input.shape.keys, heads.reference.keys),
+                    : parameterDelta(input.shape.keys, creditedObservation.keys),
             modelDivergence:
-                heads.reference !== undefined && heads.reference.model !== input.shape.model
-                    ? `${heads.reference.model} -> ${input.shape.model}`
+                creditedObservation !== undefined && creditedObservation.model !== input.shape.model
+                    ? `${creditedObservation.model} -> ${input.shape.model}`
                     : null,
-            referenceLeafId: heads.reference?.leafId ?? null,
+            referenceLeafId: credited?.leafId ?? null,
+            referenceObservation: creditedObservation ?? null,
         };
     }
 
     /**
-     * Compare at every depth of the retained ladders.
+     * Compare at every depth of one retained ladder.
      *
      * These carry the verdict for a truncated span, which is why they are worth retaining: a span cut to 64
      * messages meets nothing in a set of per-request heads that all sit at depth 70 or deeper.
      */
-    private matchRetainedLadders(input: {
-        spanLadder: Map<number, string>;
-        pathIds: Set<string>;
-        shape: ChainShape;
-    }): DepthComparison {
-        let current = { ...EMPTY_COMPARISON };
-        const wanted = shapeKey(input.shape);
-
-        for (const retained of this.ladders) {
-            if (retained.leafId === null || !input.pathIds.has(retained.leafId)) {
-                continue;
-            }
-            if (retained.shapeKey !== wanted) {
-                continue;
-            }
-
-            for (const [depth, head] of retained.heads) {
-                const ours = input.spanLadder.get(depth);
-                if (ours === undefined) {
-                    continue;
-                }
-
-                current = foldDepth(current, depth, ours === head);
-            }
+    private compareLadder(
+        input: { spanLadder: Map<number, string>; pathIds: Set<string>; shape: ChainShape },
+        ladder: { leafId: string | null; heads: Map<number, string>; shapeKey?: string },
+    ): ReferenceComparison | null {
+        // Branch-correctness first: a ladder folded on a branch that was navigated away from cannot be a
+        // reference for this one, however well its heads match.
+        if (ladder.leafId === null || !input.pathIds.has(ladder.leafId)) {
+            return null;
+        }
+        if (ladder.shapeKey !== shapeKey(input.shape)) {
+            return null;
         }
 
-        return current;
+        let current = { ...EMPTY_COMPARISON };
+
+        for (const [depth, head] of ladder.heads) {
+            const ours = input.spanLadder.get(depth);
+            if (ours === undefined) {
+                continue;
+            }
+
+            current = foldDepth(current, depth, ours === head);
+        }
+
+        return { ...current, leafId: ladder.leafId, source: "ladder", ordinal: -1 };
     }
 
-    /** Compare the single head each observed request ended at, and keep the newest for the shape report. */
-    private matchObservations(
+    /** Compare the single head one observed request ended at. */
+    private compareObservation(
         input: { spanLadder: Map<number, string>; shape: ChainShape },
-        onPath: ChainObservation[],
-    ): DepthComparison & { reference?: ChainObservation } {
+        observation: ChainObservation,
+        ordinal: number,
+    ): ReferenceComparison | null {
+        if (observation.systemHash !== input.shape.systemHash) {
+            return null;
+        }
+        if (observation.toolsHash !== input.shape.toolsHash) {
+            return null;
+        }
+
         let current = { ...EMPTY_COMPARISON };
-        let reference: ChainObservation | undefined;
+        const ours = input.spanLadder.get(observation.depth);
 
-        for (const observation of onPath) {
-            if (observation.systemHash !== input.shape.systemHash) {
-                continue;
-            }
-            if (observation.toolsHash !== input.shape.toolsHash) {
-                continue;
-            }
-
-            // Newest wins for the informational fields; depth order carries the verdict.
-            reference = observation;
-            current = { ...current, compared: current.compared + 1 };
-
-            const ours = input.spanLadder.get(observation.depth);
-            if (ours === undefined) {
-                // Our span is shorter than this request, so it can say nothing about that depth.
-                continue;
-            }
-
+        if (ours !== undefined) {
+            // Our span is shorter than this request, so it says nothing about that depth.
             current = foldDepth(current, observation.depth, ours === observation.head);
         }
 
-        return { ...current, reference };
+        return { ...current, leafId: observation.leafId, source: "observation", ordinal };
     }
 
     /**
@@ -466,6 +554,15 @@ interface DepthComparison {
     compared: number;
 }
 
+/** One reference's answer, kept whole so a verdict can name the reference it came from. */
+interface ReferenceComparison extends DepthComparison {
+    leafId: string | null;
+    /** Whether this came from an observed request or a derived ladder. */
+    source: "observation" | "ladder";
+    /** Position among the on-branch observations, oldest first; ladders carry no ordinal. */
+    ordinal: number;
+}
+
 const EMPTY_COMPARISON: DepthComparison = {
     verifiedTo: -1,
     comparableDepth: -1,
@@ -495,18 +592,46 @@ function foldDepth(current: DepthComparison, depth: number, agrees: boolean): De
     };
 }
 
-/** Combine the two reference sources: any agreement counts, the shallowest disagreement wins. */
-function mergeComparisons(a: DepthComparison, b: DepthComparison): DepthComparison {
-    const mismatches = [a.firstMismatchDepth, b.firstMismatchDepth].filter(
-        (depth): depth is number => depth !== null,
-    );
+/**
+ * The reference the verdict is taken from: the deepest agreement, and among equals the one that saw most.
+ *
+ * Order is deliberate. Depth first because that is the claim being made - the deepest agreement is the best
+ * evidence about the cache. Coverage second because among references that agreed equally far, the one that
+ * compared more can say more: preferring a *clean* reference instead, as an earlier draft did, made the
+ * shallowest reference win by default and hid the mismatch that was the whole point of the run. Everything that
+ * loses is still counted in `disagreeingReferences`, so nothing is discarded by this choice.
+ */
+function pickCreditedReference(
+    candidates: readonly ReferenceComparison[],
+): ReferenceComparison | null {
+    let best: ReferenceComparison | null = null;
 
-    return {
-        verifiedTo: Math.max(a.verifiedTo, b.verifiedTo),
-        comparableDepth: Math.max(a.comparableDepth, b.comparableDepth),
-        firstMismatchDepth: mismatches.length > 0 ? Math.min(...mismatches) : null,
-        compared: a.compared + b.compared,
-    };
+    for (const candidate of candidates) {
+        best = best === null ? candidate : creditWinner(candidate, best);
+    }
+
+    return best;
+}
+
+function creditWinner(
+    candidate: ReferenceComparison,
+    best: ReferenceComparison,
+): ReferenceComparison {
+    if (candidate.verifiedTo !== best.verifiedTo) {
+        return candidate.verifiedTo > best.verifiedTo ? candidate : best;
+    }
+
+    if (candidate.comparableDepth !== best.comparableDepth) {
+        return candidate.comparableDepth > best.comparableDepth ? candidate : best;
+    }
+
+    // An observed request is the thing that was actually sent; a ladder is derived from one.
+    if (candidate.source !== best.source) {
+        return candidate.source === "observation" ? candidate : best;
+    }
+
+    // Newest wins last, matching the oldest-first order the observations are stored in.
+    return candidate.ordinal >= best.ordinal ? candidate : best;
 }
 
 /** `+key` was sent only by us, `-key` only by the reference. Mirrors the old body-to-body report. */

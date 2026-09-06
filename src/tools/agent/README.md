@@ -118,3 +118,5 @@ extension list, run the manual pass:
    empty. A `-reasoning_effort` or a returned `+tool_choice` means our body no longer matches pi's turn request,
    which is the cache argument for both rules. If the model config sets sampling parameters (`top_p`, `min_p`,
    `chat_template_kwargs`), both attempts should carry them and `parameters` should show no `-` for any of them.
+   Key parity is not the end of it: check the run's `div=` for a value difference such as
+   `enable_thinking:true!=false`, which `params=` cannot show because both bodies sent the key.

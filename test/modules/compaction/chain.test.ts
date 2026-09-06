@@ -5,6 +5,7 @@ import {
     messageLadder,
     pathIdSet,
     RequestChain,
+    shapeKey,
     type ChainShape,
 } from "../../../src/modules/compaction/chain";
 
@@ -93,6 +94,58 @@ describe("request chain", () => {
 
         expect(match.verifiedTo).toBe(2);
         expect(match.firstMismatchDepth).toBe(3);
+    });
+
+    it("credits one reference and counts the others where they disagreed", () => {
+        // The shape a live record showed: a stale ladder left from before an earlier compaction is still on the
+        // branch and still the same shape, so it disagrees at a shallow depth while the live prefix agrees all
+        // the way through. Merging across references printed `verified 728/728` beside `messages[59]` - two
+        // measurements under one label.
+        const base = messages(6);
+        const chain = new RequestChain();
+
+        chain.restore({
+            observations: [],
+            ladders: [
+                {
+                    leafId: LEAF_A,
+                    heads: messageLadder([
+                        ...base.slice(0, 2),
+                        { role: "user", content: "pre-summary text" },
+                    ]),
+                    shapeKey: shapeKey(shape()),
+                },
+            ],
+        });
+        // One live request, so the restored ladder is still inside the retention window and still able to
+        // disagree - which is exactly the state a session reaches right after a reload.
+        chain.observe({ leafId: LEAF_A, messages: base, shape: shape() });
+
+        const match = matchOf(chain, [...base, { role: "user", content: "instruction" }]);
+
+        expect(match.verifiedTo).toBe(6);
+        expect(match.comparableDepth).toBe(6);
+        // The credited reference agreed throughout, so no divergence may be printed from the other one.
+        expect(match.firstMismatchDepth).toBeNull();
+        expect(match.disagreeingReferences).toBe(1);
+        expect(match.referenceSource).toBe("observation");
+    });
+
+    it("credits a retained ladder when the span is shorter than every request pi sent", () => {
+        const base = messages(8);
+        const chain = chainWith([LEAF_A, base]);
+
+        const match = matchOf(chain, [
+            ...base.slice(0, 3),
+            { role: "user", content: "instruction" },
+        ]);
+
+        expect(match.verifiedTo).toBe(3);
+        expect(match.comparableDepth).toBe(3);
+        // Named, because "verified 3/3" from a ladder is evidence about the request that ladder came from, and
+        // the reader should be able to tell that from a request pi actually sent at depth 3.
+        expect(match.referenceSource).toBe("ladder");
+        expect(match.referenceLeafId).toBe(LEAF_A);
     });
 
     it("still answers when the span is shorter than every request pi sent", () => {

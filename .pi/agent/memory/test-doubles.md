@@ -41,6 +41,10 @@ keep_updated: true
   answer from. Assign it before invoking a handler (`stub.toolSurface.active = ["bash", "read"]`); order is
   meaningful, because a handler that rebuilds a provider request has to reproduce pi's tool array exactly.
   `stubToolInfo(name)` builds an entry without pi's unexported `SourceInfo`, which nothing reads.
+- `thinkingSurface` — `{ level: string; unsupported: boolean }`, what `pi.getThinkingLevel()` answers with
+  (default `"medium"`). Assign `level` to set the session's thinking level; `unsupported = true` makes the getter
+  **throw**, which is how a suite reaches a caller that guards the read - an absent accessor on an older pi build
+  arrives as a `TypeError`, so one guard shape covers both.
 - `order` — **cross-member** registration log: `on:<event>`, `tool:<name>`, `command:<name>`, `shortcut:<key>`. Separate recorders cannot express interleaving, and handler registration order *is* permission precedence in `child/gates/`.
 - `handlersFor(event)`, `requireHandler(event, index?)` — handlers in registration order; the `require` form fails naming the event and listing what was registered.
 - `requireTool<Details>(name)`, `tools` — `Details` re-materializes the result generic pi erases from `ToolDefinition.execute`, so a suite does not cast every call. The `tools` array itself stays heterogeneous, so that generic is asserted once inside `requireTool`.
@@ -54,7 +58,7 @@ keep_updated: true
 
 `stubContext` satisfies `ExtensionContext`; dialog entry points that declare `ExtensionCommandContext` (`confirm` at `src/tui/confirmation.ts:93`, `showAgentSessionBrowser`) need `stubCommandContext`, and the compiler rejects the swap. The branch each one guards also differs: `src/tui/confirmation.ts:95` requires `hasUI && mode === "tui"`, while `src/tui/ask-user.ts:384` and `src/tui/select-with-message.ts:521` read only `ctx.hasUI` and never `ctx.mode`. Copying one file's override set onto the other silently changes which branch runs.
 
-Two more context members had no double at all until the compaction suite needed them: `stubModel(overrides?)` for `ctx.model` (a wide-window non-reasoning stand-in whose `contextWindow` and `maxTokens` a suite can move, which is what the native-request fit gate reads), and `stubModelRegistry(complete)` for `ctx.modelRegistry`, which answers only `complete` — pi's `ModelRegistry` is a class surface with no partial construction path, so that single cast lives in the helper and an unmodelled member still fails at the call.
+Two more context members had no double at all until the compaction suite needed them: `stubModel(overrides?)` for `ctx.model` (a wide-window non-reasoning stand-in whose `contextWindow`, `maxTokens`, `reasoning` and `samplingParams` a suite can move - the first two are what the native-request fit gate reads, the other two are what decides whether thinking and sampling parameters reach a request body), and `stubModelRegistry(complete)` for `ctx.modelRegistry`, which answers only `complete` — pi's `ModelRegistry` is a class surface with no partial construction path, so that single cast lives in the helper and an unmodelled member still fails at the call.
 
 ## Seven rules that are easy to get wrong (each already cost a bug)
 

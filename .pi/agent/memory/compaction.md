@@ -155,6 +155,9 @@ tolerates fields absent in records from older builds, because the file accumulat
 - `prefix` — the verdict from `chain.ts` against our `onPayload` body: which reference answered, how deep the
   agreement went, and the parameters only one side sent. Two rules survive from the body-to-body era: an extra
   body key is a **parameter**, never a prefix verdict, and an absent reference is **unknown**, never `false`.
+  `referenceLeafId`, `referenceSource`, `otherDisagreements` and `firstMismatchDepth` all belong to **one**
+  credited reference; `parentRequest` mirrors that same row, and the decode scalars on both sides are compared by
+  value into `divergences` (**a verdict names one reference** below).
 - `model_response` — what the model said before the harness appended anything.
 - `final_summary` — the exact persisted text plus its counts.
 - `outcome` — `two-stage`/`native`/`serialized`/`core-default`/`cancelled`/`disabled`.
@@ -463,6 +466,41 @@ Two consequences worth knowing before someone calls them bugs:
   `prefix.parameters`. No live record has ever shown one, which is the evidence that neither local route
   configures sampling parameters today - the fix closes a latent break for other people's configs, not an active
   one for ours.
+
+## A verdict names one reference (2026-09-06)
+
+A live record read `verified=728/728, usable=true` and `firstDivergence: messages[59]` at once, and both were
+"true" — because `match()` folded `max(verifiedTo)` and `min(firstMismatchDepth)` across every comparable
+reference: every on-branch observation *and* every retained ladder. A stale ladder left from before an earlier
+compaction is still on the branch and still the same shape, so it can disagree at 59 while the live prefix agrees
+through 728. Two measurements, one label. It also meant the shallowest stale row could pin the printed divergence
+for the rest of a session.
+
+Now each reference is compared alone (`compareLadder`, `compareObservation`) and one is credited: deepest
+agreement first, then widest coverage, then an observed request over a derived ladder, then newest. The credited
+reference supplies `verifiedTo`, `comparableDepth`, `firstMismatchDepth`, `parameters`, `modelDivergence` and the
+`parentRequest` mirror; the losers are counted in `disagreeingReferences` rather than dropped. Cumulative heads
+give the invariant the report now checks: **inside one reference a mismatch is always deeper than its agreement**,
+so `firstMismatchDepth <= verifiedTo` means the instrument merged references again.
+
+An earlier draft of the tie-break preferred a reference with no mismatch, which quietly handed the verdict to the
+shallowest row and hid the mismatch that was the point of the run. Coverage wins; clean-ness does not.
+
+**Values, not just key names.** `keys` and `parameters` can only report a body key one side sent, so pi's
+`enable_thinking: true` against our `false` printed as agreement. `ChainShape` now carries four content-free
+scalars - `maxTokens`, `enableThinking`, `reasoningEffort` (top-level, chat-template kwarg, or Anthropic's
+`effort`), and `imageBlocks` - mirrored onto the persisted row, restored as `null` when an older row never
+recorded them, and compared by `decodeDivergences` in `index.ts` into `divergences[]`. They are deliberately
+**not** part of `shapeKey()`: a thinking toggle or an image count has to stay comparable, because
+"these differ in a parameter that moves the prefix" is a diagnosis and "we cannot compare them" is a shrug.
+`max_completion_tokens` is recorded but never flagged - stage 1's cap is the design, not a defect. A reference
+that recorded *no* cap at all came from a build that recorded no scalars, which is stated in `unknowns[]` as
+`decode values unknown: ...` rather than left to read as agreement; that every real body carries an output cap is
+what makes the absence diagnosable instead of merely suspicious.
+
+An image-count difference is the only route to seeing pi's per-turn rewrites at all: `blockImages` replaces every
+image block with a placeholder and the `context` event lets other extensions rewrite messages, neither of which
+is readable from the extension API. Count plus `messages[k]` is the diagnosis; the count alone is nothing.
 
 ## First clean live verdict (2026-09-05, llama.cpp, fresh session)
 

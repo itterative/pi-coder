@@ -476,6 +476,93 @@ describe("compaction trace", () => {
         expect(prefix?.unknowns).toEqual([]);
     });
 
+    it("names a decode value difference the key set cannot see", async () => {
+        // Both bodies carry `enable_thinking`, so `parameters` comes back empty and the record would read as a
+        // clean match. Only the values know that pi thought and our rebuild was told not to - the difference that
+        // decides whether a templating server can reuse its prefix at all.
+        const parentBody = {
+            model: "stub-model",
+            system: "the live system prompt",
+            tools: [{ name: "bash", input_schema: { type: "object" } }],
+            enable_thinking: true,
+            reasoning_effort: "high",
+            messages: [{ role: "user", content: "fix the compaction module" }],
+        };
+        const harness = build({
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
+            providerPayload: {
+                ...parentBody,
+                enable_thinking: false,
+                messages: [...parentBody.messages, { role: "user", content: "instruction" }],
+            },
+        });
+        const observe = harness.piStub.requireHandler("before_provider_request", 0);
+        await observe({ type: "before_provider_request", payload: parentBody }, harness.ctx);
+
+        await harness.compact();
+
+        const prefix = readRecords(tracePath).find((record) => record.stage === "prefix")?.prefix;
+
+        expect(prefix?.divergences).toContain("enable_thinking:true!=false");
+        // Keys identical, values not: this is the blind spot, pinned so it cannot come back as a clean verdict.
+        expect(prefix?.parameters).toEqual([]);
+        expect(prefix?.ourRequest).toMatchObject({
+            enableThinking: false,
+            maxTokens: null,
+        });
+        expect(prefix?.parentRequest).toMatchObject({
+            enableThinking: true,
+            reasoningEffort: "high",
+        });
+        // An effort our body never sent is unknown, not a second difference: no `reasoning_effort:` line.
+        expect(prefix?.divergences ?? []).not.toContain("reasoning_effort:high!=(null)");
+        expect(prefix).toMatchObject({
+            referenceSource: "observation",
+            otherDisagreements: 0,
+            firstMismatchDepth: null,
+            firstDivergence: "enable_thinking:true!=false",
+        });
+    });
+
+    it("states the blind spot when the reference predates the decode fields", async () => {
+        // A row recorded by an older build carries no values at all. Silence there would read as agreement, so
+        // the record has to say it cannot tell - which is the same rule that made an empty chain print as
+        // unknown rather than as a cache miss.
+        const parentBody = {
+            model: "stub-model",
+            system: "the live system prompt",
+            tools: [{ name: "bash", input_schema: { type: "object" } }],
+            messages: [{ role: "user", content: "fix the compaction module" }],
+        };
+        const harness = build({
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
+            providerPayload: {
+                ...parentBody,
+                max_completion_tokens: 2048,
+                messages: [...parentBody.messages, { role: "user", content: "instruction" }],
+            },
+        });
+        const observe = harness.piStub.requireHandler("before_provider_request", 0);
+        await observe({ type: "before_provider_request", payload: parentBody }, harness.ctx);
+
+        await harness.compact();
+
+        const prefix = readRecords(tracePath).find((record) => record.stage === "prefix")?.prefix;
+
+        expect(prefix?.unknowns).toContain(
+            "decode values unknown: the credited reference was recorded before these fields existed",
+        );
+        // Unknown is not a difference: no value may be claimed against a reference that recorded none.
+        const claimed = (prefix?.divergences ?? []).filter(
+            (text) => text.startsWith("enable_thinking:") || text.startsWith("reasoning_effort:"),
+        );
+        expect(claimed).toEqual([]);
+    });
+
     it("verifies the first compaction after a restart from the persisted chain alone", async () => {
         // The claim the store exists for. A reload hands the extension a new session manager for the same session
         // id, so the chain in memory is empty; without persistence that first compaction reports an empty chain

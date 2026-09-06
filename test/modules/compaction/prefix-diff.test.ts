@@ -6,6 +6,7 @@ import {
     requestMessages,
     requestShape,
 } from "../../../src/modules/compaction/prefix-diff";
+import { shapeKey } from "../../../src/modules/compaction/chain";
 
 /**
  * These fixtures are deliberately payload-shaped, not `Context`-shaped: the module's whole job is reading a
@@ -101,6 +102,78 @@ describe("request shape fingerprinting", () => {
         expect(sameNames.toolsHash).not.toBe(reshaped.toolsHash);
         expect(sameNames.toolNames).toEqual(reshaped.toolNames);
         expect(renamed.toolNames).not.toEqual(sameNames.toolNames);
+    });
+
+    it("reads decode values that key presence cannot express", () => {
+        // Both bodies below carry `enable_thinking`: only the value says one request thinks and the other does
+        // not, which on the templating servers is a prefix difference the key set is blind to.
+        const shape = requestShape({
+            ...openaiBody({}),
+            enable_thinking: true,
+            reasoning_effort: "high",
+            max_completion_tokens: 4096,
+        });
+        expect(shape).toMatchObject({
+            enableThinking: true,
+            reasoningEffort: "high",
+            maxTokens: 4096,
+        });
+
+        const off = requestShape({ ...openaiBody({}), enable_thinking: false });
+        expect(off.enableThinking).toBe(false);
+        // Absent, not "low": a body that never sent the effort must not read as any particular level.
+        expect(off.reasoningEffort).toBeNull();
+        expect(off.maxTokens).toBeNull();
+    });
+
+    it("finds the thinking switch and effort where other servers put them", () => {
+        // vLLM and SGLang take the switch as a chat-template kwarg; Anthropic's adaptive shape calls the level
+        // `effort` and puts the cap in `max_tokens`.
+        const kwargs = requestShape({
+            ...openaiBody({}),
+            chat_template_kwargs: { enable_thinking: true },
+            effort: "medium",
+        });
+        expect(kwargs.enableThinking).toBe(true);
+        expect(kwargs.reasoningEffort).toBe("medium");
+
+        const anthropic = requestShape(anthropicBody({ system: "p" }));
+        expect(anthropic.maxTokens).toBe(1000);
+    });
+
+    it("counts image blocks across content shapes", () => {
+        const shape = requestShape(
+            openaiBody({
+                messages: [
+                    {
+                        role: "user",
+                        content: [
+                            { type: "text", text: "look" },
+                            { type: "image_url", image_url: { url: "data:image/png;base64,…" } },
+                        ],
+                    },
+                    { role: "user", content: "string content has no blocks" },
+                    { role: "assistant", content: [{ type: "image", source: {} }] },
+                ],
+            }),
+        );
+
+        expect(shape.imageBlocks).toBe(2);
+    });
+
+    it("keeps scalar differences out of the shape key", () => {
+        // A thinking toggle has to stay comparable. Folding the scalars into the shape would turn "these two
+        // requests differ in a parameter that moves the prefix" into "these two requests cannot be compared",
+        // which is a shrug where the diagnosis belongs.
+        const thinking = requestShape({
+            ...openaiBody({}),
+            enable_thinking: true,
+            reasoning_effort: "high",
+            max_completion_tokens: 100,
+        });
+        const plain = requestShape({ ...openaiBody({}), enable_thinking: false });
+
+        expect(shapeKey(thinking)).toBe(shapeKey(plain));
     });
 
     it("sorts body keys so a parameter difference reads as a set difference", () => {

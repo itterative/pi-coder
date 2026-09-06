@@ -32,6 +32,48 @@ export interface PayloadFingerprint {
     /** One hash per message in body order, including role-only entries. */
     messageHashes: string[];
     messageRoles: string[];
+    /** Decode and content-shape values, shared with `ChainShape`. `null` means the body carried no such field. */
+    maxTokens: number | null;
+    enableThinking: boolean | null;
+    reasoningEffort: string | null;
+    imageBlocks: number | null;
+}
+
+/** First top-level key in `names` holding a number, else null: absent and zero are different facts. */
+function numberField(record: Record<string, unknown>, names: string[]): number | null {
+    for (const name of names) {
+        const value = record[name];
+        if (typeof value === "number" && Number.isFinite(value)) {
+            return value;
+        }
+    }
+
+    return null;
+}
+
+function stringField(record: Record<string, unknown>, names: string[]): string | null {
+    for (const name of names) {
+        const value = record[name];
+        if (typeof value === "string") {
+            return value;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * The thinking switch, from either shape servers use: a top-level `enable_thinking` (qwen-compatible) or the
+ * nested chat-template kwarg (vLLM, SGLang). Nothing found is null, not false.
+ */
+function thinkingSwitch(record: Record<string, unknown>): boolean | null {
+    const direct = record.enable_thinking;
+    if (typeof direct === "boolean") {
+        return direct;
+    }
+
+    const kwargs = asRecord(record.chat_template_kwargs);
+    return typeof kwargs.enable_thinking === "boolean" ? kwargs.enable_thinking : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -103,6 +145,34 @@ function toolName(tool: unknown): string {
     return nestedName(tool) ?? nestedName(asRecord(tool).function) ?? "<unnamed>";
 }
 
+/**
+ * Image blocks in the message array, counted not sampled.
+ *
+ * The reason this is worth a field: pi applies its own per-turn rewrite when the user disables image reading,
+ * replacing each block with a short text placeholder, and no extension API reports that setting. A rebuilt
+ * prefix that diverges at message k while the two sides count different numbers of images is that case, and a
+ * count is the only form of it this module is allowed to keep.
+ */
+function countImageBlocks(messages: readonly unknown[]): number {
+    let count = 0;
+
+    for (const entry of messages) {
+        const content = asRecord(entry).content;
+        if (!Array.isArray(content)) {
+            continue;
+        }
+
+        for (const block of content) {
+            const type = asRecord(block).type;
+            if (type === "image" || type === "image_url") {
+                count++;
+            }
+        }
+    }
+
+    return count;
+}
+
 export function fingerprintPayload(payload: unknown): PayloadFingerprint {
     const record = asRecord(payload);
     const messages = Array.isArray(record.messages) ? record.messages : [];
@@ -118,6 +188,10 @@ export function fingerprintPayload(payload: unknown): PayloadFingerprint {
         toolsHash: hash(tools),
         messageHashes: messages.map((message) => hash(message)),
         messageRoles: messages.map((message) => String(asRecord(message).role ?? "?")),
+        maxTokens: numberField(record, ["max_completion_tokens", "max_tokens"]),
+        enableThinking: thinkingSwitch(record),
+        reasoningEffort: stringField(record, ["reasoning_effort", "effort"]),
+        imageBlocks: countImageBlocks(messages),
     };
 }
 
@@ -139,7 +213,16 @@ export function requestShape(payload: unknown): ChainShape {
         toolNames: tools.map(toolName),
         keys: Object.keys(record).sort(),
         model: typeof record.model === "string" ? record.model : "",
+        maxTokens: numberField(record, ["max_completion_tokens", "max_tokens"]),
+        enableThinking: thinkingSwitch(record),
+        reasoningEffort: stringField(record, ["reasoning_effort", "effort"]),
+        imageBlocks: countImageBlocks(messagesOf(record)),
     };
+}
+
+/** The message array exactly as the provider receives it, so hashing it means the same thing on both sides. */
+function messagesOf(record: Record<string, unknown>): unknown[] {
+    return Array.isArray(record.messages) ? record.messages : [];
 }
 
 /** The message array exactly as the provider receives it, so hashing it means the same thing on both sides. */
@@ -162,5 +245,10 @@ export function fingerprintSummary(fingerprint: PayloadFingerprint): Record<stri
         toolCount: fingerprint.toolNames.length,
         messageCount: fingerprint.messageHashes.length,
         lastMessageRole: fingerprint.messageRoles[fingerprint.messageRoles.length - 1],
+        // Values, not key presence: `keys` reports `enable_thinking` on both sides whether it is true or false.
+        maxTokens: fingerprint.maxTokens,
+        enableThinking: fingerprint.enableThinking,
+        reasoningEffort: fingerprint.reasoningEffort,
+        imageBlocks: fingerprint.imageBlocks,
     };
 }

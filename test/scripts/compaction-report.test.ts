@@ -436,6 +436,62 @@ describe("compaction-report script", () => {
         expect(runText(["--session", "sess-drift"]).stdout).toContain("sys=1200c");
     });
 
+    it("lifts a decode value difference into the line, the suspect list, and the table", () => {
+        // `parameters` is empty on purpose: identical key sets over different values is exactly what the value
+        // tier exists to catch, and it must not read as a clean prefix verdict.
+        const trace = recorder("sess-decode");
+        trace.prefix(
+            healthyPrefix({
+                parameters: [],
+                divergences: ["enable_thinking:true!=false"],
+                firstDivergence: "enable_thinking:true!=false",
+                referenceSource: "ladder",
+                otherDisagreements: 2,
+                ourRequest: { enableThinking: true, maxTokens: 4096 },
+                parentRequest: {
+                    model: "test-model",
+                    systemChars: 1200,
+                    systemHash: "aaaabbbb",
+                    toolsHash: "ccccdddd",
+                    messageCount: 43,
+                    leafId: "leaf-43",
+                    enableThinking: false,
+                    maxTokens: 4096,
+                },
+            }),
+        );
+        const summary = checkpoint("## Goal", 4000);
+        trace.attempt("native", nativeFields(), accepted({ usage: usage(2000, 1500, 30000) }));
+        trace.modelResponse("native", summary);
+        trace.final("native", summary, finalFields());
+        trace.outcome("native");
+
+        const text = runText().stdout;
+        expect(text).toContain("div=enable_thinking:true!=false");
+        // Which reference the depths came from, and that others disagreed somewhere without moving them.
+        expect(text).toContain("ref=ladder");
+        expect(text).toContain("elsewhere=2");
+        expect(text).toContain("enable_thinking=ours:true parent:false");
+        expect(flagKeys(parseReport(), "sess-decode")).toContain("decode-divergence");
+    });
+
+    it("flags a disagreement printed inside the agreement it should have sat below", () => {
+        // Heads are cumulative, so a mismatch within one reference is always deeper than that reference's
+        // agreement. A record claiming both at once merged two references into one verdict - the bug the
+        // credited-reference pass removed, kept dead by this check.
+        const trace = recorder("sess-merged");
+        trace.prefix(healthyPrefix({ commonPrefixMessages: 42, firstMismatchDepth: 20 }));
+        const summary = checkpoint("## Goal", 4000);
+        trace.attempt("native", nativeFields(), accepted({ usage: usage(2000, 1500, 30000) }));
+        trace.modelResponse("native", summary);
+        trace.final("native", summary, finalFields());
+        trace.outcome("native");
+
+        const text = runText().stdout;
+        expect(text).toContain("INVARIANTS");
+        expect(text).toContain("mismatch-inside-verified");
+    });
+
     it("reports a broken instrument as an invariant violation, not as a finding", () => {
         const trace = recorder("sess-contradiction");
         // reference=none is only reachable with nothing on the branch, so this record cannot be honest about

@@ -96,16 +96,31 @@ numbers and `in/cached/cw/out`, the persisted summary's size and cut point, and 
 stage is the gap to the previous record, which is as close to per-stage latency as the trace gets.
 
 The prefix line adds `chain=held/branch/comparable` and `sys=<our chars>c`, plus `parent-sys=<chars>c` when a
-branch reference existed, because those pairs decide whether the verdict on that same line means anything. A run
+branch reference existed, because those pairs decide whether the verdict on that same line means anything. `div=`
+now carries value differences too (`enable_thinking:true!=false`), which `params=` cannot show: a key set says both
+bodies sent the field, and only the values know they meant opposite things by it. `PREFIX DECODE VALUES` tallies
+the same pairs across runs, skipping `max_completion_tokens` — stage 1 caps its output by design, so that one
+differs on every run and a table row for it would be noise with a name. A run
 can also print `~ cannot tell:` lines: statements from the record about what it cannot answer, kept apart from
 flags because they describe the instrument's reach rather than the run's behaviour. `chain-empty` beside
 `cache-read-zero` is the pair that means "we do not know whether the cache was reused", and the record now says
-so rather than leaving a zero to be read as a measurement.
+so rather than leaving a zero to be read as a measurement. The same rule reaches the decode values: a credited
+reference recorded by an older build carries none of them, and prints
+`decode values unknown: the credited reference was recorded before these fields existed` instead of leaving the
+missing comparison to read as a passing one.
 
 `INVARIANTS` lists cross-field checks — an empty chain that reports entries on the branch, `reference=none` with
-entries to compare, a usable verdict with no comparable depth, matching hashes over differently sized prompts.
-A violation there is a bug in the trace, not in the cache, which is the distinction that has to be made before
-any other conclusion in this file is worth anything.
+entries to compare, a usable verdict with no comparable depth, matching hashes over differently sized prompts, and
+a disagreement printed at or above the depth its own reference was credited through. A violation there is a bug in
+the trace, not in the cache, which is the distinction that has to be made before any other conclusion in this file
+is worth anything.
+
+The last of those is worth stating on its own, because it was violated by the instrument rather than caught by it:
+heads are cumulative, so within one reference a mismatch can only sit deeper than that reference's agreement.
+`verified=728/728` beside `first=messages[59]` could therefore only ever have meant two references merged into one
+verdict, which is what the record used to do. Now `referenceLeafId` names the single request the depths belong to,
+`ref=ladder` says the answer came from a retained ladder rather than a request at that depth, and `elsewhere=N`
+counts how many other comparable references disagreed somewhere — visible, but no longer able to move a number.
 
 `CAUSES` aggregates `strategy outcome cause`, and `ATTEMPT FAILURES` keys each row by its cause
 (`native rejected [quota]: ...`) before normalizing the message. That ordering matters: the two failures that
@@ -119,26 +134,27 @@ Each flag names a failure already observed in a live trace, so the report can po
 of leaving the numbers to be compared by eye. They are thresholds, not verdicts — `--min-chars` and
 `--inflate-factor` exist to move them.
 
-| Flag                       | What it means                                                                                                                              |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `prefix-unusable`          | a comparable reference depth disagreed with our rebuild, so stage 1 could not reuse the provider's cached prefix                           |
-| `no-prefix-reference`      | no observation covered this branch, so the cache question is unanswered. Not a failure - and the case the old code reported as one         |
-| `chain-empty`              | no persisted row for this session was readable, so nothing in the retained file records a request for it                                   |
-| `chain-off-branch`         | the chain holds entries and none of them sit on the current branch, so a fork or a rewind is why there is no reference                     |
-| `chain-incomparable`       | on-branch requests exist but were built under a different system prompt or tool set, which is also a real reason the cache cannot answer   |
-| `system-prompt-drift`      | ours and the parent's system prompts hash apart at the same length — drift no size figure can show                                         |
-| `prefix-uncomparable`      | a reference existed but every request in it was deeper than the truncated span, so nothing could be compared                               |
-| `span-not-truncated`       | stage 1 sent the whole live context instead of the truncated span, i.e. the cut point was never found                                      |
-| `degenerate-native-output` | stage 1 was accepted but answered with far too little text — the shape of a model replying about the instruction rather than to it         |
-| `degenerate-final-summary` | what got persisted is implausibly small, whatever route produced it                                                                        |
-| `compaction-abandoned`     | the run stopped on a cause no request can fix (quota, rejected credentials, rate limit); not a handover, so `fell-back` stays clear        |
-| `retry-exhausted`          | a transient failure used its whole backoff budget and still failed, so the provider was unwell longer than we wait                         |
-| `summary-truncated`        | stage 2 hit the output limit, so the persisted summary is missing its tail. Reading the text cannot tell this from a brief complete answer |
-| `reduce-inflated`          | stage 2's output is many times larger than the checkpoint it was handed, so it wrote a new summary instead of merging one                  |
-| `cache-read-zero`          | a large fresh prompt with no cache read: the span was paid for again                                                                       |
-| `blocks-dropped`           | transcript blocks left out of the reduce request at the serialization cap, so the summary covers a truncated view                          |
-| `fell-back`                | the run ended in `core-default`, `cancelled`, or with no outcome record at all                                                             |
-| `estimate-skew`            | the chars/4 estimate diverged from the provider's own context count by enough that the fit gate decided on a stale number                  |
+| Flag                       | What it means                                                                                                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prefix-unusable`          | a comparable reference depth disagreed with our rebuild, so stage 1 could not reuse the provider's cached prefix                                                     |
+| `no-prefix-reference`      | no observation covered this branch, so the cache question is unanswered. Not a failure - and the case the old code reported as one                                   |
+| `chain-empty`              | no persisted row for this session was readable, so nothing in the retained file records a request for it                                                             |
+| `chain-off-branch`         | the chain holds entries and none of them sit on the current branch, so a fork or a rewind is why there is no reference                                               |
+| `chain-incomparable`       | on-branch requests exist but were built under a different system prompt or tool set, which is also a real reason the cache cannot answer                             |
+| `system-prompt-drift`      | ours and the parent's system prompts hash apart at the same length — drift no size figure can show                                                                   |
+| `prefix-uncomparable`      | a reference existed but every request in it was deeper than the truncated span, so nothing could be compared                                                         |
+| `span-not-truncated`       | stage 1 sent the whole live context instead of the truncated span, i.e. the cut point was never found                                                                |
+| `degenerate-native-output` | stage 1 was accepted but answered with far too little text — the shape of a model replying about the instruction rather than to it                                   |
+| `degenerate-final-summary` | what got persisted is implausibly small, whatever route produced it                                                                                                  |
+| `compaction-abandoned`     | the run stopped on a cause no request can fix (quota, rejected credentials, rate limit); not a handover, so `fell-back` stays clear                                  |
+| `retry-exhausted`          | a transient failure used its whole backoff budget and still failed, so the provider was unwell longer than we wait                                                   |
+| `summary-truncated`        | stage 2 hit the output limit, so the persisted summary is missing its tail. Reading the text cannot tell this from a brief complete answer                           |
+| `reduce-inflated`          | stage 2's output is many times larger than the checkpoint it was handed, so it wrote a new summary instead of merging one                                            |
+| `cache-read-zero`          | a large fresh prompt with no cache read: the span was paid for again                                                                                                 |
+| `decode-divergence`        | our rebuild and the credited reference agree on body _keys_ but differ on a value that moves the prefix on templating servers (thinking switch, effort, image count) |
+| `blocks-dropped`           | transcript blocks left out of the reduce request at the serialization cap, so the summary covers a truncated view                                                    |
+| `fell-back`                | the run ended in `core-default`, `cancelled`, or with no outcome record at all                                                                                       |
+| `estimate-skew`            | the chars/4 estimate diverged from the provider's own context count by enough that the fit gate decided on a stale number                                            |
 
 ## Validation
 

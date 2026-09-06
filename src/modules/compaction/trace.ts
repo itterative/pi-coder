@@ -158,7 +158,7 @@ export interface CompactionPrefixFields {
     reference: "chain" | "none";
     /** Undefined when there was no reference to compare against. */
     prefixUsable?: boolean;
-    /** `verified` | `messages[<depth>]` | `system` | `tools` | `no-reference`. */
+    /** `verified` | `messages[<depth>]` | `system` | `tools` | `no-reference` | `<field>:<a>!=<b>`. */
     firstDivergence: string;
     divergences: string[];
     /** True when our span is shorter than the reference: stage 1 truncating at the cut point, by design. */
@@ -174,8 +174,30 @@ export interface CompactionPrefixFields {
     comparableDepth: number;
     /** True when every comparable reference depth agreed. */
     verifiedThrough: boolean;
-    /** Leaf id the verdict was taken from, and the leaf we are building for. */
+    /**
+     * Leaf id the verdict was taken from, and the leaf we are building for.
+     *
+     * `verifiedThrough`, `comparableDepth`, `firstDivergence` and `parameters` all describe *this* reference and
+     * nothing else: an agreement credited to one request used to print beside a mismatch discovered by another.
+     */
     referenceLeafId: string | null;
+    /** Whether the credited reference was a request pi sent or a retained ladder derived from one. */
+    referenceSource?: "observation" | "ladder" | null;
+    /**
+     * Comparable references that disagreed somewhere, excluding the credited one.
+     *
+     * Mostly a stale pre-compaction ladder - still on the branch, still the same shape, describing a prefix that
+     * no longer exists. Counted so it is visible without letting it move the printed depths.
+     */
+    otherDisagreements?: number;
+    /**
+     * The credited reference's own shallowest disagreement, as a depth rather than a `messages[n]` string.
+     *
+     * The report checks it against `commonPrefixMessages`: heads are cumulative, so a mismatch inside one
+     * reference always sits deeper than that reference's agreement, and a record where it does not means two
+     * references were merged into one verdict.
+     */
+    firstMismatchDepth?: number | null;
     currentLeafId: string | null;
     /** Comparable observations on this branch, i.e. how much of the ladder actually overlapped. */
     observations: number;
@@ -200,6 +222,11 @@ export interface CompactionPrefixFields {
         toolsHash: string;
         messageCount: number;
         leafId: string | null;
+        /** Decode values as the reference carried them; absent in records from before the field existed. */
+        maxTokens?: number | null;
+        enableThinking?: boolean | null;
+        reasoningEffort?: string | null;
+        imageBlocks?: number | null;
     };
     /** What this record cannot answer, stated rather than left for the reader to infer from a zero. */
     unknowns: string[];

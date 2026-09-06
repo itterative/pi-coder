@@ -290,7 +290,6 @@ function prefixVerdict(
     const pathIds = pathIdSet(branch);
     const chain = chainFor(sessionManager, cwd);
     const onBranch = chain.branchObservations(pathIds);
-    const parent = onBranch[onBranch.length - 1];
     // Fold only the span. `buildNativeContext` appends exactly one instruction message, and pi never sent
     // that one, so leaving it in the ladder would guarantee a mismatch at our own last depth and re-raise the
     // tail artifact the chain exists to avoid.
@@ -300,6 +299,12 @@ function prefixVerdict(
         pathIds,
         shape,
     });
+
+    // The mirror describes the request the depths were credited to, not merely the newest one on the branch:
+    // `parameters`, `modelDivergence` and the value deltas below are all measured against that reference, and a
+    // record printing two different parents is the conflation this pass exists to remove. When nothing could be
+    // credited - the case `shapeDivergences` explains - the newest on-branch row is the only thing to name.
+    const parent = match.referenceObservation ?? onBranch[onBranch.length - 1];
 
     // Only depths the reference actually covered *and* our span reached are checkable; pi's deeper requests
     // say nothing about a truncated span.
@@ -316,6 +321,26 @@ function prefixVerdict(
         divergences.push("no-reference");
     }
 
+    divergences.push(...decodeDivergences(match.referenceObservation, shape));
+
+    const unknowns = prefixUnknowns({
+        held: chain.size,
+        onBranch: onBranch.length,
+        compared: match.compared,
+        retentionDropped: match.truncatedHistory,
+        hydration: chain.hydration,
+    });
+
+    // Every real body carries an output cap, so a reference that recorded none came from a build that recorded
+    // none of the decode scalars. Without this statement the absence would read as "no value difference" - the
+    // pass-by-silence this module keeps having to design out.
+    const reference = match.referenceObservation;
+    if (reference !== null && maxTokensUnknown(reference, shape)) {
+        unknowns.push(
+            "decode values unknown: the credited reference was recorded before these fields existed",
+        );
+    }
+
     return {
         reference: match.reference,
         prefixUsable: hasReference && match.comparableDepth > 0 ? verifiedThrough : undefined,
@@ -329,6 +354,9 @@ function prefixVerdict(
         comparableDepth: match.comparableDepth,
         verifiedThrough,
         referenceLeafId: match.referenceLeafId,
+        referenceSource: match.referenceSource,
+        otherDisagreements: match.disagreeingReferences,
+        firstMismatchDepth: match.firstMismatchDepth,
         currentLeafId: sessionManager.getLeafId(),
         observations: match.compared,
         chainObservations: chain.size,
@@ -337,13 +365,7 @@ function prefixVerdict(
         historyTruncated: match.truncatedHistory,
         modelDivergence: match.modelDivergence,
         ourRequest: fingerprintSummary(ours),
-        unknowns: prefixUnknowns({
-            held: chain.size,
-            onBranch: onBranch.length,
-            compared: match.compared,
-            retentionDropped: match.truncatedHistory,
-            hydration: chain.hydration,
-        }),
+        unknowns,
     };
 }
 
@@ -386,7 +408,59 @@ function parentRequestFields(observation: ChainObservation | undefined) {
         toolsHash: observation.toolsHash,
         messageCount: observation.depth,
         leafId: observation.leafId,
+        // Values, so the mirror can be compared against `ourRequest` at the level `keys` cannot reach.
+        maxTokens: observation.maxTokens,
+        enableThinking: observation.enableThinking,
+        reasoningEffort: observation.reasoningEffort,
+        imageBlocks: observation.imageBlocks,
     };
+}
+
+/**
+ * Whether the credited reference cannot answer the decode comparison.
+ *
+ * Our side always fingerprints a live body, so only the reference can be the one that never recorded a value.
+ */
+function maxTokensUnknown(reference: ChainObservation, shape: ChainShape): boolean {
+    return reference.maxTokens === null && shape.maxTokens !== null;
+}
+
+/**
+ * Decode and image-count differences against the credited reference, where both sides recorded a value.
+ *
+ * These are the divergences a key set cannot see: both bodies may carry `enable_thinking`, and only their
+ * values know that one said `true` while the other said `false`. `max_completion_tokens` is left out on
+ * purpose - stage 1 caps its output by design, so it differs on every run, and a flag that fires on every
+ * run is noise with a suspect name. Its values are still recorded on both sides for anyone who wants them.
+ */
+function decodeDivergences(reference: ChainObservation | null, shape: ChainShape): string[] {
+    if (reference === null) {
+        return [];
+    }
+
+    const out: string[] = [];
+
+    if (reference.enableThinking !== null && shape.enableThinking !== null) {
+        if (reference.enableThinking !== shape.enableThinking) {
+            out.push(
+                `enable_thinking:${String(reference.enableThinking)}!=${String(shape.enableThinking)}`,
+            );
+        }
+    }
+
+    if (reference.reasoningEffort !== null && shape.reasoningEffort !== null) {
+        if (reference.reasoningEffort !== shape.reasoningEffort) {
+            out.push(`reasoning_effort:${reference.reasoningEffort}!=${shape.reasoningEffort}`);
+        }
+    }
+
+    if (reference.imageBlocks !== null && shape.imageBlocks !== null) {
+        if (reference.imageBlocks !== shape.imageBlocks) {
+            out.push(`imageBlocks:${String(reference.imageBlocks)}!=${String(shape.imageBlocks)}`);
+        }
+    }
+
+    return out;
 }
 
 /**

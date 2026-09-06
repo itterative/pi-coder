@@ -59,6 +59,16 @@ export interface ChainRequestRecord extends EnvelopeRecord {
     systemChars: number;
     model: string;
     keys: string[];
+    /**
+     * Decode and content-shape values, so a difference `keys` cannot express survives a restart. `null` is a
+     * real state: the body carried no such field. Rows written before these fields existed omit them entirely,
+     * which the reader below resolves to the same `null` rather than to `false` or `0` - the version number is
+     * not consulted, because nothing reads it and these fields are additive.
+     */
+    maxTokens: number | null;
+    enableThinking: boolean | null;
+    reasoningEffort: string | null;
+    imageBlocks: number | null;
     ts: string;
 }
 
@@ -205,6 +215,10 @@ export function recordChainRequest(
         systemChars: observation.systemChars,
         model: observation.model,
         keys: observation.keys,
+        maxTokens: observation.maxTokens,
+        enableThinking: observation.enableThinking,
+        reasoningEffort: observation.reasoningEffort,
+        imageBlocks: observation.imageBlocks,
         ts: now,
     };
     log.append(request);
@@ -375,8 +389,26 @@ function toObservation(record: ChainRequestRecord): ChainObservation {
         systemChars: record.systemChars,
         keys: record.keys,
         model: record.model,
+        // Typed as present, read as optional: a row from before these fields existed holds none of them, and
+        // "not recorded" must not arrive as `false` or `0` on the far side of a restart.
+        maxTokens: numberOf(record.maxTokens),
+        enableThinking: booleanOf(record.enableThinking),
+        reasoningEffort: stringOf(record.reasoningEffort),
+        imageBlocks: numberOf(record.imageBlocks),
         ts: Date.parse(record.ts),
     };
+}
+
+function numberOf(value: unknown): number | null {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function booleanOf(value: unknown): boolean | null {
+    return typeof value === "boolean" ? value : null;
+}
+
+function stringOf(value: unknown): string | null {
+    return typeof value === "string" ? value : null;
 }
 
 function toLadder(record: ChainLadderRecord): RestoredLadder {

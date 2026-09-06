@@ -353,6 +353,22 @@ function normalizePrefix(prefix) {
         parentSystemChars: prefix.parentRequest?.systemChars,
         parentSystemHash: prefix.parentRequest?.systemHash,
         parentDepth: prefix.parentRequest?.messageCount,
+        // Which request the depths above describe, and how many other references disagreed somewhere. A verdict
+        // used to merge min/max across every reference, which let one stale ladder set the printed divergence.
+        referenceLeafId: prefix.referenceLeafId,
+        referenceSource: prefix.referenceSource,
+        otherDisagreements: prefix.otherDisagreements,
+        firstMismatchDepth: prefix.firstMismatchDepth,
+        // Decode values, one pair per line. `parameters` compares key sets, so a thinking flag that differs in
+        // value only shows up here - or in `divergences`, which the writer fills from these.
+        ourEnableThinking: prefix.ourRequest?.enableThinking,
+        parentEnableThinking: prefix.parentRequest?.enableThinking,
+        ourReasoningEffort: prefix.ourRequest?.reasoningEffort,
+        parentReasoningEffort: prefix.parentRequest?.reasoningEffort,
+        ourImageBlocks: prefix.ourRequest?.imageBlocks,
+        parentImageBlocks: prefix.parentRequest?.imageBlocks,
+        ourMaxTokens: prefix.ourRequest?.maxTokens,
+        parentMaxTokens: prefix.parentRequest?.maxTokens,
         unknowns: Array.isArray(prefix.unknowns) ? prefix.unknowns : [],
         historyTruncated: prefix.historyTruncated,
         modelDivergence: prefix.modelDivergence,
@@ -521,6 +537,7 @@ function analyzeRuns(runs, thresholds) {
     const flags = new Map();
     const parameters = new Map();
     const divergences = new Map();
+    const decodeValues = new Map();
     const models = new Map();
     const suspects = [];
     const withUsage = [];
@@ -558,6 +575,9 @@ function analyzeRuns(runs, thresholds) {
             const key = divergence.replaceAll(/\[\d+\]/g, "[i]");
             divergences.set(key, number(divergences.get(key)) + 1);
         }
+        for (const value of decodeValuePairs(run.prefix)) {
+            decodeValues.set(value, number(decodeValues.get(value)) + 1);
+        }
 
         if (run.reuse !== null) {
             withUsage.push(run);
@@ -592,11 +612,46 @@ function analyzeRuns(runs, thresholds) {
         invariants,
         parameters,
         divergences,
+        decodeValues,
         models,
         suspects,
         withUsage,
         compression,
     };
+}
+
+/**
+ * Decode values both sides recorded, where the two differ.
+ *
+ * `parameters` compares key sets, so `enable_thinking: true` against `false` - the difference that decides
+ * whether a templating server rebuilds its whole prefix - is invisible there. `max_completion_tokens` is left
+ * out on purpose: stage 1 caps its output by design, so it differs on every run, and a row that always fills
+ * the table teaches nothing from it.
+ */
+function decodeValuePairs(prefix) {
+    if (prefix === undefined) {
+        return [];
+    }
+
+    const pairs = [
+        ["enable_thinking", prefix.ourEnableThinking, prefix.parentEnableThinking],
+        ["reasoning_effort", prefix.ourReasoningEffort, prefix.parentReasoningEffort],
+        ["image blocks", prefix.ourImageBlocks, prefix.parentImageBlocks],
+    ];
+    const out = [];
+
+    for (const [name, ours, theirs] of pairs) {
+        // Unknown on either side is not a difference. A record from before the field existed, or a body that
+        // never carried it, must not read as a mismatch.
+        if (ours === undefined || theirs === undefined || ours === null || theirs === null) {
+            continue;
+        }
+        if (ours !== theirs) {
+            out.push(`${name}=ours:${String(ours)} parent:${String(theirs)}`);
+        }
+    }
+
+    return out;
 }
 
 function bump(map, key, factory) {
@@ -663,6 +718,16 @@ function invariantViolations(runs) {
                 prefix.usable === true && number(prefix.comparableDepth) <= 0,
                 "usable-without-depth",
                 "usable=true while comparable depth is zero or negative",
+            ],
+            [
+                // Heads are cumulative, so within one reference a disagreement can only sit deeper than the
+                // agreement. A violation means two different references are being printed as one verdict - the
+                // bug that lived here before the credited-reference pass.
+                typeof prefix.firstMismatchDepth === "number" &&
+                    typeof prefix.verifiedTo === "number" &&
+                    prefix.firstMismatchDepth <= prefix.verifiedTo,
+                "mismatch-inside-verified",
+                `divergence at depth ${prefix.firstMismatchDepth} inside agreement credited through ${prefix.verifiedTo}`,
             ],
             [
                 typeof prefix.parentSystemHash === "string" &&
@@ -767,6 +832,22 @@ function flagRun(run, options) {
     }
 
     out.push(...chainFunnelSuspects(prefix));
+
+    // A key-set comparison cannot see a value: both bodies can carry `enable_thinking` and disagree on what it
+    // says. The writer already names these in `divergences`; lifting them into a flag keeps a run with a silent
+    // parameter difference from reading as clean.
+    const decode = prefix?.divergences.filter((text) =>
+        /^(enable_thinking|reasoning_effort|imageBlocks):/.test(String(text)),
+    );
+    if (decode !== undefined && decode.length > 0) {
+        const image = decode.some((text) => String(text).startsWith("imageBlocks:"))
+            ? "; an image-count difference is pi's per-turn rewrite (blockImages or a context handler), not our rebuild"
+            : "";
+        out.push({
+            key: "decode-divergence",
+            detail: `${decode.join(", ")} - a parameter difference inside the prefix region on templating servers${image}`,
+        });
+    }
 
     // The reference existed but nothing in it reached the depth our span carried: no verdict is possible, and
     // an earlier version of this code called that "unusable".
@@ -1115,6 +1196,14 @@ function renderRunBlock(run, flags, options) {
         if (prefix.parameters.length > 0) {
             bits.push(`params=${prefix.parameters.join(",")}`);
         }
+        // Where the verdict came from, so a depth printed beside it cannot be read as describing some other
+        // request: `ref=ladder` means a retained ladder of a past request answered, not a request of that depth.
+        if (prefix.referenceSource === "ladder") {
+            bits.push("ref=ladder");
+        }
+        if (typeof prefix.otherDisagreements === "number" && prefix.otherDisagreements > 0) {
+            bits.push(`elsewhere=${prefix.otherDisagreements}`);
+        }
         if (prefix.divergences.length > 0) {
             bits.push(`div=${prefix.divergences.join(",")}`);
         }
@@ -1310,6 +1399,15 @@ function renderReport(runs, analysis, stats, options) {
             "PREFIX DIVERGENCES",
             "content that actually differed, indexed messages collapsed to [i]",
             analysis.divergences,
+            options,
+            (key) => key,
+        ),
+    );
+    out.push(
+        renderCountSection(
+            "PREFIX DECODE VALUES",
+            "parameter values a key set cannot tell apart - both bodies can carry `enable_thinking` and mean different things by it",
+            analysis.decodeValues,
             options,
             (key) => key,
         ),
@@ -1592,6 +1690,7 @@ function main() {
                         failures: counts(analysis.failures),
                         flags: counts(analysis.flags),
                         invariants: counts(analysis.invariants),
+                        decodeValues: counts(analysis.decodeValues),
                         causes: counts(analysis.causes),
                         parameters: counts(analysis.parameters),
                         divergences: counts(analysis.divergences),

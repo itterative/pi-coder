@@ -53,6 +53,12 @@ export function chainShape(overrides: Partial<ChainShape> = {}): ChainShape {
         toolNames: ["read", "bash"],
         keys: ["messages", "model", "tools"],
         model: "test-model",
+        // Null by default: a fixture that never mentions thinking or images describes a body carrying neither,
+        // which is the state the value comparison must treat as unknown rather than as agreement.
+        maxTokens: null,
+        enableThinking: null,
+        reasoningEffort: null,
+        imageBlocks: null,
         ...overrides,
     };
 }
