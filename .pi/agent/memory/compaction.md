@@ -31,7 +31,9 @@ in a session, and pi keeps thinking in the live context anyway (`hideThinkingBlo
    with the parent's `ctx.getSystemPrompt()` and its active tools in `agent.state.tools` order, so the request
    is a strict shorter prefix of what the provider already cached. Tools stay in the request - removing them
    would move the prefix - and the prohibition is the instruction text, because `tool_choice` is not sent (see
-   **`tool_choice` is not sent** below). A `toolCall` block in the response rejects the stage; a call the server
+   **`tool_choice` is not sent** below). Stage 1 also forwards the session's thinking level as `reasoningEffort`
+   so the thinking parameters match pi's turn requests (**stage 1 forwards the thinking level** below); stage 2
+   deliberately does not. A `toolCall` block in the response rejects the stage; a call the server
    leaves unparsed arrives as text and is **not** detected. Stage 1 gets **a third** of the output budget (`segmentBudget`) and is told it is an
    intermediate, because a generous intermediate becomes a rival draft: measured before that, stage 1 wrote
    3,207 tokens and the reduce then produced something *longer* than the material it was handed.
@@ -288,10 +290,11 @@ is guesswork. The report names the newest load and how many older ones contribut
   (`EXCERPT_CHARS`) and cannot be re-read as evidence that a prompt was stable - `6e84662c` was reported
   unchanged across 12817, 24619, 24813 and 25294 chars. The ladder heads that `verified=N/M` rests on are
   sha256 over messages and never had this weakness.
-- `prefix.parameters` should now be **empty**: after dropping `tool_choice` we add no body key pi does not send,
-  so anything in it is a real difference to explain. A `-key` means the parent sent a key our rebuild dropped -
-  `-reasoning_effort` is the known outstanding one (pi's live request carried it and ours does not, and whether
-  that is cosmetic for the endpoint's cache is unresolved). See **`tool_choice` is not sent**.
+- `prefix.parameters` should be **empty** on a healthy run: we no longer add a key pi's turn requests lack
+  (`tool_choice`, dropped) and no longer omit one they carry (`reasoning_effort` and `enable_thinking`,
+  forwarded). Anything left in it is a real difference to explain; a `-key` means the parent sent something our
+  rebuild dropped. If `+tool_choice` reappears, someone re-added the option for portability - read the comment at
+  its old call site first.
 - `prefixUsable` is `undefined` in older records rather than absent; read `reference` first - `none` means no
   ladder covered the branch and the numeric depths are `-1` placeholders, not measurements.
 
@@ -403,6 +406,40 @@ rejection should come back as `attempt.outcome: rejected` with a `stopReason` of
 `stop` carrying prose. If it still arrives as text, that is the residual gap this note describes - and the
 one case worth adding a tail-shape detector for.
 
+
+## Stage 1 forwards the thinking level (2026-09-06)
+
+Omitting it was not neutral, and the reason is the same one that made `tool_choice` worth removing: the cache
+entry stage 1 wants was created by pi's **turn** requests, and on the compatible branches pi-ai renders
+`enable_thinking = !!options.reasoningEffort` before it maps the level through `model.thinkingLevelMap`. So a
+request that never asks gets `enable_thinking: false` and no effort key, while pi's has `true` plus the user's
+level - and a server that folds the thinking flag into the templated preamble puts that difference in prefix
+territory, where it costs the whole cache read.
+
+`turnThinkingEffort` in `summarize.ts` sends the level under the same two conditions under which pi's turn
+request would carry it (the model supports reasoning, and the level is not off), and the caller reads the level
+from `pi.getThinkingLevel()` inside a `try/catch`. That guard is for **the build**, not for children: every bound
+session answers the getter from its own state, so a delegated child has its own level and stage 1 is matched
+against that child's turns, which is what parity means there. The catch covers a method absent on an older
+running pi and a handler surface that refuses the call; a presence check would cover only the first. Two details
+that are easy to get wrong:
+
+- We call `modelRegistry.complete()`, which takes **API-level** options, so the field is `reasoningEffort`
+  holding a *level*. The `reasoning` -> `reasoningEffort` translation lives in `streamSimple`, which we do not
+  use - the same reason `toolChoice` reached the wire as `tool_choice` for us.
+- Passing `"off"` through is not the same as dropping it: `!!"off"` is truthy, so it would flip `enable_thinking`
+  to `true`. Hence the collapse to `undefined`.
+
+Stage 2 does not forward it, on purpose: it has no cached prefix (own system prompt, no tools, `cacheRetention:
+"none"`, fresh session id), and thinking tokens come out of the same output budget as the summary - on the one
+rung that *keeps* a `length`-truncated answer.
+
+**Instrument lesson:** `prefix.parameters` is a set difference over body **keys**, so it cannot see a value
+disagreement. `enable_thinking: true` versus `false` would have read as agreement while the request differed in
+the parameter that decides whether the model thinks. Key sets caught this case only because the effort key was
+absent; a fix that added `max_completion_tokens: 4369` vs `512` would be invisible. Recording a few scalars
+(effort, thinking on/off, max tokens) on both the chain row and `ourRequest` would be content-free and is the
+follow-up `cutFound` should be grouped with.
 
 ## First clean live verdict (2026-09-05, llama.cpp, fresh session)
 

@@ -63,6 +63,8 @@ describe("compaction stages", () => {
             activeTools?: string[];
             branchThrows?: Error;
             contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
+            /** Reasoning-capable model, for the tests about what goes on the wire for thinking. */
+            reasoningModel?: boolean;
         } = { responses: [] },
     ) {
         if (input.config) {
@@ -85,9 +87,10 @@ describe("compaction stages", () => {
             activeTools: input.activeTools,
             branchThrows: input.branchThrows,
             contextUsage: input.contextUsage,
-            model: input.contextWindow
-                ? stubModel({ contextWindow: input.contextWindow })
-                : undefined,
+            model: stubModel({
+                ...(input.contextWindow ? { contextWindow: input.contextWindow } : {}),
+                ...(input.reasoningModel ? { reasoning: true } : {}),
+            }),
         });
     }
 
@@ -129,6 +132,44 @@ describe("compaction stages", () => {
         expect(h.optionField(0, "maxTokens")).toBe(2_730);
         expect(h.trailingInstruction(0)).toContain("Do not call any tool");
         expect(h.trailingInstruction(0)).toContain("## Key Decisions");
+    });
+
+    it("stage 1 sends the session thinking level, and stage 2 does not", async () => {
+        // The cache entry stage 1 is trying to hit was made by a pi turn request that carried these parameters,
+        // and on the compatible branches pi-ai renders `enable_thinking` from this option's truthiness - so a
+        // silent omission is a different request, not the same one truncated.
+        const h = build({ responses: [segmentSummary, reducedSummary], reasoningModel: true });
+        h.piStub.thinkingSurface.level = "high";
+        await h.compact();
+
+        expect(h.optionField(0, "reasoningEffort")).toBe("high");
+        // Stage 2 has no cached prefix, and thinking tokens would compete with the budget of the one rung that
+        // keeps a `length`-truncated answer.
+        expect(h.optionField(1, "reasoningEffort")).toBeUndefined();
+    });
+
+    it("sends no thinking parameter when the model cannot reason or the level is off", async () => {
+        // The guard is pi's own, because the wire shape has to be pi's too: "off" means pi drops the option and
+        // renders enable_thinking false, while a literal "off" passed through would do the opposite.
+        const off = build({ responses: [segmentSummary, reducedSummary], reasoningModel: true });
+        off.piStub.thinkingSurface.level = "off";
+        await off.compact();
+        expect(off.optionField(0, "reasoningEffort")).toBeUndefined();
+
+        const plain = build({ responses: [segmentSummary, reducedSummary] });
+        plain.piStub.thinkingSurface.level = "high";
+        await plain.compact();
+        expect(plain.optionField(0, "reasoningEffort")).toBeUndefined();
+    });
+
+    it("compacts normally on a runtime that provides no thinking level", async () => {
+        const h = build({ responses: [segmentSummary, reducedSummary], reasoningModel: true });
+        h.piStub.thinkingSurface.unsupported = true;
+
+        const payload = await h.compact();
+
+        expect(h.optionField(0, "reasoningEffort")).toBeUndefined();
+        expect(payload?.details.route).toBe("two-stage");
     });
 
     it("sends the real tool call and its untruncated result to stage 1", async () => {

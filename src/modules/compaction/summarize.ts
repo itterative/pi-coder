@@ -9,6 +9,8 @@ import type {
 import { uuidv7 } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import type { ThinkingLevel } from "./types";
+
 import {
     type FailureClassificationInput,
     type SummarizationFailureCause,
@@ -86,6 +88,12 @@ export interface SummarizationCall {
     signal?: AbortSignal;
     /** Session id for provider affinity. Omitted on one-off requests that can never reuse a cache. */
     sessionId?: string;
+    /**
+     * The session's thinking level. Only the native rung reads it: stage 1 exists to be a shorter prefix of a
+     * request the provider already cached, and pi's turn requests carry thinking parameters. The serialized
+     * rung has no cached prefix to protect and spends its whole budget on text, so it leaves this unset.
+     */
+    thinkingLevel?: ThinkingLevel;
     /**
      * Inspects the assembled request body before it is sent. Returning undefined leaves it unchanged, which
      * is all the compaction trace ever does; used to compare our rebuilt prefix against the parent's.
@@ -290,6 +298,7 @@ async function callForSummary(
     strategy: SummarizationStrategy,
 ): Promise<SummarizationAttemptResult> {
     const policy = call.retry;
+    const sleep = policy?.sleep ?? abortableSleep;
     const maxRetries = policy?.maxRetries ?? 0;
     let retries = 0;
 
@@ -300,7 +309,7 @@ async function callForSummary(
         }
 
         if (summarizationFailureAction(result.cause).retry && policy && retries < maxRetries) {
-            await (policy.sleep ?? abortableSleep)(backoffDelayMs(policy, retries), call.signal);
+            await sleep(backoffDelayMs(policy, retries), call.signal);
             retries++;
 
             if (call.signal?.aborted) {
@@ -319,6 +328,33 @@ async function callForSummary(
 }
 
 /**
+ * The thinking level to put on the wire, or undefined for a request that must carry no thinking parameters.
+ *
+ * The guard mirrors pi's own (a model that supports reasoning, and a level that is not off), because the aim is
+ * to send what pi's turn request would send. Absence is not neutral here: on the qwen-compatible branches
+ * pi-ai renders `enable_thinking` from the truthiness of this option, so omitting the level asked for thinking
+ * *disabled* while pi's cached request had it enabled - a difference these servers fold into the templated
+ * preamble, which is prefix territory, and invisible to a key-set comparison.
+ */
+function turnThinkingEffort(
+    model: Model<Api>,
+    level: ThinkingLevel | undefined,
+): ThinkingLevel | undefined {
+    if (!model.reasoning || level === undefined) {
+        return undefined;
+    }
+
+    // pi's model-level union includes "off" while the session getter is typed without it, so the runtime value
+    // can still be "off" - and a string is truthy, which would render the flag the wrong way round.
+    const requested: string = level;
+    if (requested === "off") {
+        return undefined;
+    }
+
+    return level;
+}
+
+/**
  * Continue the live conversation with a summarize instruction, tools still attached.
  *
  * The tools are deliberately left in the request: they sit before the messages in the serialized body, so
@@ -329,12 +365,17 @@ export async function summarizeNatively(
     call: SummarizationCall,
     context: Context,
 ): Promise<SummarizationAttemptResult> {
+    const effort = turnThinkingEffort(call.model, call.thinkingLevel);
+
     return callForSummary(
         call,
         context,
         {
             maxTokens: call.maxTokens,
             signal: call.signal,
+            // Present exactly when pi's turn request would present it, absent otherwise: the adapter renders
+            // `enable_thinking` from this option's truthiness, then maps the level through `thinkingLevelMap`.
+            ...(effort === undefined ? {} : { reasoningEffort: effort }),
             ...(call.onPayload
                 ? {
                       onPayload: (payload: unknown) => {

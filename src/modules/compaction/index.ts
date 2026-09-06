@@ -61,7 +61,7 @@ import {
     type CompactionTraceOutcome,
     type CompactionTraceRecorder,
 } from "./trace";
-import { summarizedSpan, type CompactionPreparation } from "./types";
+import { summarizedSpan, type CompactionPreparation, type ThinkingLevel } from "./types";
 import { estimateTextTokens } from "./text";
 
 /**
@@ -132,6 +132,24 @@ type StageResult =
           cause?: SummarizationFailureCause;
           retries: number;
       };
+
+/**
+ * The session's thinking level, or undefined when it cannot be read.
+ *
+ * Every bound session provides one - `AgentSession` answers it from its own state - so a delegated child has its
+ * own level and parity is with that child's turns, not the parent's. What this has to survive is about the build
+ * rather than the runtime: an extension compiled against a newer pi than the one running, where the method is
+ * absent, or a session whose handler surface refuses the call. A catch covers both, where a presence check would
+ * cover only the first - and the stakes are the same either way, since the module's outer catch would otherwise
+ * degrade that compaction to core's default over a value that decides nothing but cache reuse.
+ */
+function sessionThinkingLevel(pi: ExtensionAPI): ThinkingLevel | undefined {
+    try {
+        return pi.getThinkingLevel();
+    } catch {
+        return undefined;
+    }
+}
 
 /**
  * Resend policy for one compaction: only a cause the provider's own wording calls transient earns a retry.
@@ -467,7 +485,7 @@ function spanMessages(input: StageContext): {
     };
 }
 
-/** Stage 1: the model reads the span it is about to lose, as real messages, with tools forbidden. */
+/** Stage 1: the model reads the span it is about to lose, as real messages, with its tools left attached. */
 async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<StageResult> {
     const { pi, ctx, preparation, segmentTokens, signal, trace } = input;
     const span = spanMessages(input);
@@ -508,6 +526,7 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
             retry: retryPolicy(input.config),
             signal,
             sessionId: ctx.sessionManager.getSessionId(),
+            thinkingLevel: sessionThinkingLevel(pi),
             onPayload: trace.enabled
                 ? (payload) => {
                       trace.prefix(prefixVerdict(ctx.sessionManager, payload, ctx.cwd));

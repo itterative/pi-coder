@@ -113,3 +113,7 @@ extension list, run the manual pass:
    check cannot see: a call the server leaves unparsed arrives as text at the end of the summary and is
    accepted, which is why `tool_choice` is no longer sent at all. Inspect the tail of the native
    `model_response` text for a stray `</tool_call>`.
+5. On a reasoning-capable model with a thinking level selected, check that the native `attempt` carries
+   `reasoningEffort` equal to that level while the serialized one carries none, and that `prefix.parameters` is
+   empty. A `-reasoning_effort` or a returned `+tool_choice` means our body no longer matches pi's turn request,
+   which is the cache argument for both rules.

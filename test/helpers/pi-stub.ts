@@ -147,6 +147,12 @@ export interface PiStub {
      * handler that rebuilds a provider request has to reproduce pi's tool array exactly.
      */
     readonly toolSurface: { active: string[]; all: StubToolInfo[] };
+    /**
+     * What `pi.getThinkingLevel()` answers with. Assign `level` to set the session's configured thinking level;
+     * set `unsupported` to model a runtime whose session handler does not provide the getter at all, which a
+     * caller must survive rather than fail the operation over.
+     */
+    readonly thinkingSurface: { level: string; unsupported: boolean };
     /** Handlers registered for one event, in registration order. */
     handlersFor(event: string): StubHandler[];
     /** The handler registered for `event` at `index`; fails naming the event when absent. */
@@ -174,6 +180,10 @@ export function createPiStub(options: { eventBus?: EventBus | null } = {}): PiSt
     const sentMessages: Array<{ message: SentMessage; options: unknown }> = [];
     const handlers = new Map<string, StubHandler[]>();
     const toolSurface: { active: string[]; all: StubToolInfo[] } = { active: [], all: [] };
+    const thinkingSurface: { level: string; unsupported: boolean } = {
+        level: "medium",
+        unsupported: false,
+    };
 
     return {
         pi: {
@@ -208,6 +218,12 @@ export function createPiStub(options: { eventBus?: EventBus | null } = {}): PiSt
             },
             getActiveTools: () => [...toolSurface.active],
             getAllTools: () => toolSurface.all.map((tool) => ({ ...tool })),
+            getThinkingLevel: () => {
+                if (thinkingSurface.unsupported) {
+                    throw new Error("pi stub: this runtime provides no thinking level");
+                }
+                return thinkingSurface.level;
+            },
         } as unknown as ExtensionAPI,
         order,
         tools,
@@ -216,6 +232,7 @@ export function createPiStub(options: { eventBus?: EventBus | null } = {}): PiSt
         entries,
         sentMessages,
         toolSurface,
+        thinkingSurface,
         handlersFor(event: string): StubHandler[] {
             return handlers.get(event) ?? [];
         },

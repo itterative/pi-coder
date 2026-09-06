@@ -1,4 +1,13 @@
-import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+
+/**
+ * The session's configured thinking level, as pi's own getter types it.
+ *
+ * `ThinkingLevel` lives in `@earendil-works/pi-agent-core`, which we do not name in `src/` for the reason
+ * written below, and pi-ai's entry point does not re-export it either. Deriving it from the getter keeps pi
+ * authoritative: a pi-side change to the level set fails here instead of drifting from a hand-copied union.
+ */
+export type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 
 /**
  * pi's compaction preparation, derived from the event type rather than imported.
