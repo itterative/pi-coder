@@ -116,4 +116,5 @@ extension list, run the manual pass:
 5. On a reasoning-capable model with a thinking level selected, check that the native `attempt` carries
    `reasoningEffort` equal to that level while the serialized one carries none, and that `prefix.parameters` is
    empty. A `-reasoning_effort` or a returned `+tool_choice` means our body no longer matches pi's turn request,
-   which is the cache argument for both rules.
+   which is the cache argument for both rules. If the model config sets sampling parameters (`top_p`, `min_p`,
+   `chat_template_kwargs`), both attempts should carry them and `parameters` should show no `-` for any of them.

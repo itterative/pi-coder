@@ -294,7 +294,8 @@ is guesswork. The report names the newest load and how many older ones contribut
   (`tool_choice`, dropped) and no longer omit one they carry (`reasoning_effort` and `enable_thinking`,
   forwarded). Anything left in it is a real difference to explain; a `-key` means the parent sent something our
   rebuild dropped. If `+tool_choice` reappears, someone re-added the option for portability - read the comment at
-  its old call site first.
+  its old call site first. A `-top_p`, `-min_p` or `-chat_template_kwargs` is a model with configured sampling
+  parameters whose merge went missing again (see **the model's own sampling parameters are merged**).
 - `prefixUsable` is `undefined` in older records rather than absent; read `reference` first - `none` means no
   ladder covered the branch and the numeric depths are `-1` placeholders, not measurements.
 
@@ -440,6 +441,28 @@ the parameter that decides whether the model thinks. Key sets caught this case o
 absent; a fix that added `max_completion_tokens: 4369` vs `512` would be invisible. Recording a few scalars
 (effort, thinking on/off, max tokens) on both the chain row and `ourRequest` would be content-free and is the
 follow-up `cutFound` should be grouped with.
+
+## The model's own sampling parameters are merged (2026-09-06)
+
+pi's turn request goes through `streamSimple` -> `buildBaseOptions`, which sets
+`samplingParams: {...model.samplingParams, ...options.samplingParams}`, and `buildParams` finishes with
+`Object.assign(params, options.samplingParams)` - **last, so these keys override the named fields**. Our
+`modelRegistry.complete()` path never runs `buildBaseOptions`, so anything a user configured on the model
+(`top_p`, `top_k`, `min_p`, `repetition_penalty`, `chat_template_kwargs`) reached pi's body and not ours. On
+llama.cpp, vLLM and SGLang that is prefix territory, because those land in the chat template; the type doc is
+explicit that only the OpenAI-compatible adapters read it, so elsewhere the merge is inert rather than a second
+behavior.
+
+`callForSummary` now does the merge, which puts it on **both** rungs: stage 1 for parity, stage 2 because a
+configured `repetition_penalty` exists to fix that model's output habits and the summarizer is the same model.
+Two consequences worth knowing before someone calls them bugs:
+
+- A configured `max_completion_tokens` overrides our stage budget here, exactly as it overrides pi's turn budget
+  there. Parity, not a leak - but it means `segmentBudget` is a default, not a guarantee.
+- Detectable, not silent: the adapter assigns these as keys, so a missing merge shows up as `-top_p` in
+  `prefix.parameters`. No live record has ever shown one, which is the evidence that neither local route
+  configures sampling parameters today - the fix closes a latent break for other people's configs, not an active
+  one for ours.
 
 ## First clean live verdict (2026-09-05, llama.cpp, fresh session)
 

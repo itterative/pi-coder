@@ -302,8 +302,19 @@ async function callForSummary(
     const maxRetries = policy?.maxRetries ?? 0;
     let retries = 0;
 
+    // pi merges the model's own sampling parameters in `buildBaseOptions`, which the registry's `complete()`
+    // path never runs, so a `top_p` or `chat_template_kwargs` configured for the model would reach pi's request
+    // and not ours. On the templating servers that is a prefix break, and on every server it is the user's
+    // decode settings quietly not applying. `buildBaseOptions` merges per key with per-request values winning;
+    // no caller here sets them, so the model's defaults are the whole of it - a future caller must merge
+    // explicitly rather than let this spread clobber it. Worth naming: the adapter assigns these last, so a
+    // configured `max_completion_tokens` overrides our stage budget exactly as it overrides pi's turn budget.
+    const modelDefaults = call.model.samplingParams;
+    const requestOptions: Record<string, unknown> =
+        modelDefaults === undefined ? options : { ...options, samplingParams: modelDefaults };
+
     for (;;) {
-        const result = await attemptOnce(call, context, options, strategy);
+        const result = await attemptOnce(call, context, requestOptions, strategy);
         if (result.ok) {
             return { ...result, retries };
         }

@@ -65,6 +65,8 @@ describe("compaction stages", () => {
             contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
             /** Reasoning-capable model, for the tests about what goes on the wire for thinking. */
             reasoningModel?: boolean;
+            /** Sampling parameters configured on the model, for the merge that `complete()` bypasses. */
+            samplingParams?: Record<string, unknown>;
         } = { responses: [] },
     ) {
         if (input.config) {
@@ -90,6 +92,7 @@ describe("compaction stages", () => {
             model: stubModel({
                 ...(input.contextWindow ? { contextWindow: input.contextWindow } : {}),
                 ...(input.reasoningModel ? { reasoning: true } : {}),
+                ...(input.samplingParams ? { samplingParams: input.samplingParams } : {}),
             }),
         });
     }
@@ -170,6 +173,25 @@ describe("compaction stages", () => {
 
         expect(h.optionField(0, "reasoningEffort")).toBeUndefined();
         expect(payload?.details.route).toBe("two-stage");
+    });
+
+    it("both rungs carry the model's configured sampling parameters", async () => {
+        // pi merges these in buildBaseOptions and our complete() path skips that layer, so without the merge a
+        // llama.cpp or vLLM config would land in pi's body and not ours: a prefix break on the servers that fold
+        // them into the chat template, and ignored decode settings everywhere else.
+        const h = build({
+            responses: [segmentSummary, reducedSummary],
+            samplingParams: { top_p: 0.9, min_p: 0.05 },
+        });
+        await h.compact();
+
+        expect(h.optionField(0, "samplingParams")).toEqual({ top_p: 0.9, min_p: 0.05 });
+        expect(h.optionField(1, "samplingParams")).toEqual({ top_p: 0.9, min_p: 0.05 });
+
+        // Absent rather than empty: a model that configures nothing should not add an option to assign.
+        const plain = build({ responses: [segmentSummary, reducedSummary] });
+        await plain.compact();
+        expect(plain.optionField(0, "samplingParams")).toBeUndefined();
     });
 
     it("sends the real tool call and its untruncated result to stage 1", async () => {
