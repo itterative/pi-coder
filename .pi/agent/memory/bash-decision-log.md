@@ -6,7 +6,7 @@ category: workflow
 
 # Bash permission decision log
 
-Development tooling: every bash permission decision is appended to a durable JSONL log so approval patterns can be mined offline and turned into heuristics or curated rules. Writer `src/modules/sandbox/decision-log.ts`, reader `scripts/permission-report.mjs` (`npm run permission-report`), prose in [docs/bash-decision-log.md](../../../docs/bash-decision-log.md).
+Development tooling: every bash permission decision is appended to a durable JSONL log so approval patterns can be mined offline and turned into heuristics or curated rules. Writer `src/modules/sandbox/decision-log.ts`, reader `scripts/permission-report.ts` (`npm run permission-report`), prose in [docs/bash-decision-log.md](../../../docs/bash-decision-log.md).
 
 ## Recording
 
@@ -14,7 +14,7 @@ Development tooling: every bash permission decision is appended to a durable JSO
 - Not recorded: the read-only child confinement gate (`src/tools/agent/child/gates/confinement.ts`), which classifies below the `command` rung without the resolver and never prompts, nor file-access or agent-gate approvals.
 - Each record carries the per-segment breakdown from `resolvePermissionDetails()`: `source` (`policy`/`heuristic`/`unresolved`), the matched rule `pattern` (`null` when the `**` default decided), `permission` when resolved, `coveredBy` (`segment`/`whole-line` for a rule match, otherwise `null`), and unwrapped `tokens` — the same single unwrap transform suggestions use, so a logged segment and a remembered rule name the same command.
 - Writing is best-effort: `logBashDecision()` swallows every failure, because a logging problem must never change whether a command runs. One `appendFileSync` line per decision, file mode `0600`.
-- Location `.state/bash-log.jsonl` by default (`BASH_DECISION_LOG_PATH`, extension-local gitignored runtime state, so an isolated worker worktree records into its own copy). Precedence is environment over config: `SANDBOX_DECISION_LOG` (`0`/`false`/`no`/`off`) and `SANDBOX_DECISION_LOG_PATH` beat `decisionLog.enabled` / `.path`; blank env values count as unset. Past `decisionLog.maxBytes` (default 8 MiB) the file rotates to a single `.1` generation, so history is bounded.
+- Location `.state/bash-log.jsonl` by default (`BASH_DECISION_LOG_PATH`, extension-local gitignored runtime state, so an isolated worker worktree records into its own copy). Precedence is environment over config: `SANDBOX_DECISION_LOG` (`0`/`false`/`no`/`off`) and `SANDBOX_DECISION_LOG_PATH` beat `decisionLog.enabled` / `.path`; blank env values count as unset. Past `decisionLog.maxBytes` (default 8 MiB) the log rotates, keeping `decisionLog.generations` copies (default 10) plus the live file; `.1` is the newest rotated segment. Rotation, appending, and generation discovery are shared with the compaction trace through `src/common/record-log.ts`, and `npm run permission-report` (a `.ts` script run under `node --import tsx` for exactly that reason) reads every generation that still exists, oldest first.
 
 ## Mining
 

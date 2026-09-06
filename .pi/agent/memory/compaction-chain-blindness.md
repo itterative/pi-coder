@@ -18,13 +18,14 @@ reload created a fresh chain, and the compaction ran before enough parent reques
 for that branch. `obs=0` is a **cold store**, and with hashes instead of bodies it cannot be backfilled from the
 session file. Keep the sections below as the record of how to read this, not as an open defect.
 
-One thing remains open, and it is the reason to keep this file:
+Both items below are now closed, and the second is why this file is kept:
 
-- **The first compaction after a reload, `/resume`, or restart is unverifiable**, because the store is
-  process-local. This is a design limit, not a bug. Bounding the keying by `getSessionId()` fixes only the
-  two-managers-in-one-process case, which the 19:42 data says is not currently happening. Persisting ladders to
-  `.state/` (~70 bytes per request, pruned by branch) is the only thing that fixes reload blindness, and it is
-  the restart-durability half of the original brief. Agreed as the sqlite workstream; not built yet.
+- ~~The first compaction after a reload, `/resume`, or restart is unverifiable.~~ **Fixed 2026-09-05 by
+  persisting the chain** (`src/modules/compaction/chain-store.ts`): request rows and periodic full ladders share
+  the trace file, and a chain hydrates once at creation. `chainObservations: 0` is now a statement about the
+  session rather than the process, which was the whole ambiguity in the table above. The restart-durability half
+  of the original brief is done; the `compaction` memory records the caps, the cadence, and why
+  `LADDER_RETENTION = 2` does not need raising for long sessions.
 
 The other item - the trace printing one number where three are needed - shipped the same evening. See
 `## The prefix funnel` in the `compaction` memory for the field names and `docs/compaction-trace-report.md` for
@@ -103,7 +104,7 @@ Three fields on the `prefix` record, no behaviour change:
 - `newestLeafId` (or a boolean `leafOnBranch`) - what `getLeafId()` returned at observe time vs membership in
   `pathIdSet(getBranch())` at match time.
 
-Total vs on-branch separates 1 from 2/3; the leaf fields separate 1 from 2. `scripts/compaction-report.mjs`
+Total vs on-branch separates 1 from 2/3; the leaf fields separate 1 from 2. `scripts/compaction-report.ts`
 already tolerates absent fields (older builds), so add the display as `obs=<on>/<total>` and update the handful
 of report tests that assert the `obs=` substring. The healthy fixture (`test/fixtures/compaction-trace.healthy.jsonl`)
 has no `chainObservations`, so its golden `observations=13` stays valid.

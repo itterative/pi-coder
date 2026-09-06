@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { chainMessages as messages, chainShape as shape } from "../../helpers/compaction-doubles";
 import {
     messageLadder,
     pathIdSet,
@@ -11,25 +12,6 @@ import {
  * The chain is the only thing standing between "our rebuild matched" and "we could not tell", so these cases
  * are about what a verdict is allowed to claim: matched at which depth, on which branch, under which shape.
  */
-
-function shape(overrides: Partial<ChainShape> = {}): ChainShape {
-    return {
-        systemHash: "sys-1",
-        toolsHash: "tools-1",
-        systemChars: 100,
-        toolNames: ["read", "bash"],
-        keys: ["messages", "model", "tools"],
-        model: "test-model",
-        ...overrides,
-    };
-}
-
-function messages(count: number, tag = "m"): unknown[] {
-    return Array.from({ length: count }, (_, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: `${tag}${String(index)}`,
-    }));
-}
 
 const LEAF_A = "leaf-a";
 const LEAF_B = "leaf-b";
@@ -144,6 +126,25 @@ describe("request chain", () => {
         expect(match.verifiedTo).toBe(40);
         expect(match.comparableDepth).toBe(63);
         expect(match.firstMismatchDepth).toBe(41);
+    });
+
+    it("keeps a depth-0 observation a reference that says nothing rather than an absent one", () => {
+        // `reference: "none"` has exactly one cause: nothing on the branch. A request that carried no messages
+        // still happened, so collapsing the two would make the report's `none-with-branch` invariant fire on
+        // honest data - and would hide the difference between "nothing to compare" and "nothing to learn".
+        const chain = new RequestChain();
+        chain.observe({ leafId: LEAF_A, messages: [], shape: shape() });
+
+        const verdict = chain.match({
+            spanLadder: messageLadder(messages(3)),
+            pathIds: pathIdSet([{ id: LEAF_A }]),
+            shape: shape(),
+        });
+
+        expect(verdict.reference).toBe("chain");
+        expect(verdict.comparableDepth).toBe(-1);
+        expect(verdict.verifiedTo).toBe(-1);
+        expect(chain.branchObservations(pathIdSet([{ id: LEAF_A }]))).toHaveLength(1);
     });
 
     it("refuses to compare a retained ladder built under a different shape", () => {

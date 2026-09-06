@@ -58,6 +58,8 @@ function describeOptions() {
     ].join("\n");
 }
 
+// NOTE: disabled manually, too strict
+// eslint-disable-next-line sonarjs/cognitive-complexity
 function parseArgs(argv) {
     const options = {
         path: undefined,
@@ -214,8 +216,27 @@ function loadRecords(options) {
         options.since === undefined ? undefined : Date.now() - parseDuration(options.since);
     const records = [];
     let skipped = 0;
+    let chainRows = 0;
+    const instances = new Set();
 
     for (const record of log.read({ since: cutoff })) {
+        // Collected before any filtering: which loads contributed to this file is a question about the file.
+        if (record !== null && typeof record?.instance === "string") {
+            instances.add(record.instance);
+        }
+
+        if (isChainRecord(record)) {
+            // Follows --session like the run records, so the count describes the report being read rather than
+            // the whole file. Which loads contributed stays file-scoped on purpose, one line above.
+            if (
+                options.session === undefined ||
+                String(record.session ?? "").startsWith(options.session)
+            ) {
+                chainRows += 1;
+            }
+            continue;
+        }
+
         if (!isTraceRecord(record)) {
             skipped += 1;
             continue;
@@ -234,7 +255,26 @@ function loadRecords(options) {
         records.push(record);
     }
 
-    return { records, files, skipped, malformed: log.stats().malformed };
+    return {
+        records,
+        files,
+        skipped,
+        malformed: log.stats().malformed,
+        chainRows,
+        instances: [...instances],
+    };
+}
+
+/**
+ * Chain rows share the trace file and belong to no run: they are the recorder's durable memory, one per provider
+ * request plus a ladder every so often. Counted apart so hashes never read as foreign junk.
+ */
+function isChainRecord(record) {
+    return (
+        record !== null &&
+        typeof record === "object" &&
+        (record.stage === "chain_request" || record.stage === "chain_ladder")
+    );
 }
 
 /** Shape check only: an unrelated JSONL line must not become a run. */
@@ -666,8 +706,8 @@ function chainFunnelSuspects(prefix) {
         out.push({
             key: "chain-empty",
             detail:
-                "no parent request observed in this process since the chain was created " +
-                "(restart, reload, or a freshly built session view)",
+                "no persisted row for this session was readable: nothing in the retained trace file " +
+                "records a request for it (persistence was off, the rows rotated away, or it predates this build)",
         });
     } else if (onBranch === 0) {
         out.push({
@@ -1029,6 +1069,8 @@ function zeroToUndefined(value) {
     return value;
 }
 
+// NOTE: disabled manually, too strict
+// eslint-disable-next-line sonarjs/cognitive-complexity
 function renderRunBlock(run, flags, options) {
     const lines = [];
     const head =
@@ -1176,6 +1218,23 @@ function renderReport(runs, analysis, stats, options) {
             `${stats.skipped > 0 ? ` (${stats.skipped} foreign skipped)` : ""}` +
             `${stats.malformed > 0 ? ` (${stats.malformed} unreadable)` : ""}`,
     );
+    if (stats.chainRows > 0) {
+        out.push(
+            `  chain:    ${stats.chainRows} hash rows (the persisted chain: requests and ladders)`,
+        );
+    }
+
+    // Two reloads can share one file with different chains, config, and handlers behind them. Naming the load
+    // that wrote the newest record makes that visible without opening the file.
+    if (stats.instances.length > 0) {
+        const newest = stats.instances[stats.instances.length - 1];
+        const others = stats.instances.length - 1;
+        out.push(
+            `  instance: ${newest}` +
+                `${others > 0 ? ` (${String(others)} older load(s) also in this file)` : ""}`,
+        );
+    }
+
     if (runs.length > 0) {
         out.push(`  span:     ${runs[0].startedAt} → ${runs[runs.length - 1].endedAt}`);
     }
@@ -1486,6 +1545,8 @@ function main() {
             files: records.files,
             skipped: records.skipped,
             malformed: records.malformed,
+            chainRows: records.chainRows,
+            instances: records.instances,
             recordCount: records.records.length,
         };
     } catch (error) {
@@ -1517,6 +1578,8 @@ function main() {
                     records: stats.recordCount,
                     skipped: stats.skipped,
                     malformed: stats.malformed,
+                    chainRows: stats.chainRows,
+                    instances: stats.instances,
                     total: runs.length,
                     suspects: analysis.suspects.length,
                     thresholds: {

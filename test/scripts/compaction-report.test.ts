@@ -81,6 +81,8 @@ interface ReportJson {
     total: number;
     skipped: number;
     malformed: number;
+    chainRows: number;
+    instances: string[];
     suspects: number;
     runs: ReportRun[];
     aggregates: {
@@ -726,6 +728,36 @@ describe("compaction-report script", () => {
         expect(result.status).toBe(0);
         expect(result.stdout).toContain("(1 foreign skipped) (1 unreadable)");
         expect(result.stderr).not.toContain("unparsable");
+    });
+
+    it("counts persisted chain rows apart from run records", () => {
+        writeHealthyRun("sess-chain");
+        appendFileSync(
+            logPath,
+            '{"v":1,"stage":"chain_request","ts":"2026-09-05T19:00:00.000Z","session":"sess-chain",' +
+                '"cwd":"/tmp","leafId":"leaf-1","depth":9,"head":"aabbccdd","systemHash":"sh",' +
+                '"toolsHash":"th","systemChars":10,"model":"m","keys":["messages"]}\n',
+        );
+        appendFileSync(
+            logPath,
+            '{"v":1,"stage":"chain_ladder","ts":"2026-09-05T19:00:00.001Z","session":"sess-chain",' +
+                '"cwd":"/tmp","leafId":"leaf-1","depth":9,"shapeKey":"sk","heads":["aabbccdd"]}\n',
+        );
+
+        const report = parseReport();
+        // Rows the recorder wrote per provider request belong to no compaction: they must not open a run, and
+        // they must not read as foreign junk either. Both counts are stated, neither is merged.
+        expect(report.total).toBe(1);
+        expect(report.skipped).toBe(0);
+        expect(report.malformed).toBe(0);
+        expect(report.chainRows).toBe(2);
+        expect(runText().stdout).toContain("2 hash rows");
+        // The count describes the report being read, so a session filter applies to it too.
+        expect(runText(["--session", "sess-chain"]).stdout).toContain("2 hash rows");
+        expect(runText(["--session", "sess-elsewhere"]).stdout).not.toContain("hash rows");
+        // Every record names the load that wrote it, and the header says how many loads contributed.
+        expect(report.instances).toEqual([expect.stringMatching(/^[0-9a-f]{8}$/)]);
+        expect(runText().stdout).toMatch(/instance: [0-9a-f]{8}/);
     });
 
     it("reads a rotated sibling along with the current log", () => {

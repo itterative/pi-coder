@@ -23,29 +23,58 @@ Costs are development numbers only, and they are counted twice by design: a stag
 
 ## Where the reference comes from
 
-`chain.ts` folds a cumulative hash over every message array pi sends and keeps it in memory keyed by session
-manager, about seventy bytes per request instead of a two-megabyte body. The report reads only the verdict the
-chain wrote into the `prefix` record; see the `compaction` memory for why comparison happens at the
-reference's depths and why an absent reference must never be printed as a failed one.
+`chain.ts` folds a cumulative hash over every message array pi sends, keeps it in memory keyed by session
+manager, and persists it to the trace file. It costs about seventy bytes per request instead of a two-megabyte
+body. The report reads only the verdict the chain wrote into the `prefix` record; see the `compaction` memory for
+why comparison happens at the reference's depths and why an absent reference must never be printed as a failed
+one.
 
 Three counts describe how much of that store could be used, and they are reported separately because each zero
 means something different:
 
-| field                | meaning                                                | what a zero says                                                                                        |
-| -------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `chainObservations`  | entries held in this process, unfiltered               | nothing has been observed since the chain was created: restart, reload, or a freshly built session view |
-| `branchObservations` | entries whose leaf sits on the current branch          | entries exist, but they belong to a branch that was navigated away from                                 |
-| `observations`       | entries that also share our system prompt and tool set | the branch's requests were built under a different prompt or tool set than ours                         |
+| field                | meaning                                                                                        | what a zero says                                                                                            |
+| -------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `chainObservations`  | entries held for this session, restored rows included (a floor: the scan stops once satisfied) | no readable row for this session survived in the retained file - never written, rotated away, or unreadable |
+| `branchObservations` | entries whose leaf sits on the current branch                                                  | entries exist, but they belong to a branch that was navigated away from                                     |
+| `observations`       | entries that also share our system prompt and tool set                                         | the branch's requests were built under a different prompt or tool set than ours                             |
 
 `prefix.parentRequest` carries the newest on-branch entry's shape — model, system-prompt length and hash, tool
 hash, depth, leaf id — as the twin of `prefix.ourRequest`, so "did our rebuild send what pi sends" is a field
 comparison rather than an inference. Both sides hash the whole system text: `ourRequest.systemHash` used to hash
 a 320-char excerpt, which reported no change across a prompt that had grown from 12,817 to 24,813 characters.
 
+Every record carries `instance` besides `ts` and `id`, and the header prints the newest one along with how many
+older loads contributed to the file. Two reloads can leave rows in one log whose chains, config, and registered
+handlers were never the same, and before this field that was unknowable from the data - it had to be reasoned back
+in from timestamps and inference, which is how a wrong story survives long enough to be acted on.
+
 One guarantee is worth knowing before reasoning from these numbers: `reference: "none"` is only reachable when
 `branchObservations` is zero, and `"chain"` with `observations: 0` is the shape-mismatch case. That distinction
 settled a live question about whether an empty verdict meant a cold store or a filtered one, and the report now
 checks it as an invariant instead of leaving it to be derived.
+
+## The persisted chain
+
+Persistence is what turns "this process is young" into a statement about the session. Two kinds of row go into
+the trace file, gated by `chainTraceEnabled` (default on) rather than by body tracing:
+
+| stage           | written                                                 | carries                                                                                      |
+| --------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `chain_request` | every provider request pi makes, including a child's    | the head at that request's depth, its leaf id, and the shape: system hash, tools hash, model |
+| `chain_ladder`  | when the span has grown 32 messages, or on shape change | the heads at every depth of one request, as a dense array                                    |
+
+The ladder rows are what a truncated stage-1 span needs: per-request heads all sit at depth N or deeper, so a
+span cut to 64 messages meets none of them. Reading back walks segments newest-first, stops once it holds a
+ladder and 32 requests, and ends the walk on a `stat` when a segment's mtime predates the session's first entry -
+so the cost tracks what the session needs rather than how much history exists. Because the walk stops as soon as
+it is satisfied, the counts a verdict carries are a floor rather than a census, and `unknowns[]` states when that is
+the case - which also means an empty chain is a statement about the retained file window, not about all history.
+
+These rows contain hashes, depths, and entry ids and never message content, which is why they have their own
+switch: with bodies off, history still accumulates for the next time tracing is on. The verdict itself is only
+recorded while the trace is enabled, so the switch buys continuity of evidence rather than an independent way to
+check stage 1. `COMPACTION_CHAIN_TRACE=0` turns the rows off on its own, and the report counts what remains on a
+`chain:` header line instead of folding them into run records, since they belong to no single compaction.
 
 ## Reading it
 
@@ -94,7 +123,7 @@ of leaving the numbers to be compared by eye. They are thresholds, not verdicts 
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `prefix-unusable`          | a comparable reference depth disagreed with our rebuild, so stage 1 could not reuse the provider's cached prefix                           |
 | `no-prefix-reference`      | no observation covered this branch, so the cache question is unanswered. Not a failure - and the case the old code reported as one         |
-| `chain-empty`              | no parent request had been observed in this process when the verdict was taken: restart, reload, or a fresh session view                   |
+| `chain-empty`              | no persisted row for this session was readable, so nothing in the retained file records a request for it                                   |
 | `chain-off-branch`         | the chain holds entries and none of them sit on the current branch, so a fork or a rewind is why there is no reference                     |
 | `chain-incomparable`       | on-branch requests exist but were built under a different system prompt or tool set, which is also a real reason the cache cannot answer   |
 | `system-prompt-drift`      | ours and the parent's system prompts hash apart at the same length — drift no size figure can show                                         |

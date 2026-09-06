@@ -10,6 +10,12 @@ import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { isAgentTraceEnabled } from "../../common/trace";
 import { type CompactionConfig, loadCompactionConfig } from "./config";
 import {
+    chainTraceTarget,
+    loadChain,
+    recordChainRequest,
+    type ChainTraceTarget,
+} from "./chain-store";
+import {
     activeToolDefinitions,
     buildNativeContext,
     estimateRequestTokens,
@@ -169,7 +175,20 @@ function notify(ctx: ExtensionContext, message: string, level: "info" | "warning
  */
 interface SessionShapeView {
     getLeafId(): string | null;
-    getBranch(): { id: string }[];
+    getBranch(): { id: string; timestamp?: string }[];
+    getSessionId(): string;
+}
+
+/**
+ * Where the chain persists, resolved on each use.
+ *
+ * Deliberately not cached by cwd: the trace location is env-overridable and config-editable, and a per-cwd memo
+ * would freeze the first answer for the life of the process - which is wrong for tests and wrong for a user who
+ * edits the config. Caching buys nothing either: `observe` re-hashes the entire message array on this same path,
+ * so a small config read is noise next to the work it would skip.
+ */
+function chainTargetFor(cwd: string): ChainTraceTarget {
+    return chainTraceTarget(loadCompactionConfig(cwd));
 }
 
 /**
@@ -181,7 +200,15 @@ interface SessionShapeView {
  */
 const requestChains = new WeakMap<SessionShapeView, RequestChain>();
 
-function chainFor(sessionManager: SessionShapeView): RequestChain {
+/**
+ * The chain for a session, folded in from disk exactly once per session manager.
+ *
+ * Hydration belongs here rather than at verdict time so that a chain's own process-written observations can
+ * never overlap the rows it restores: everything this process records is written after the read. One walk of the
+ * branch per chain buys the session's start timestamp, which is what lets the loader skip whole segments on a
+ * stat - and it is once per session, not once per request.
+ */
+function chainFor(sessionManager: SessionShapeView, cwd: string): RequestChain {
     const existing = requestChains.get(sessionManager);
     if (existing !== undefined) {
         return existing;
@@ -189,16 +216,39 @@ function chainFor(sessionManager: SessionShapeView): RequestChain {
 
     const chain = new RequestChain();
     requestChains.set(sessionManager, chain);
+
+    const oldest = sessionManager.getBranch()[0]?.timestamp;
+    const startedMs = typeof oldest === "string" ? Date.parse(oldest) : Number.NaN;
+
+    chain.restore(
+        loadChain(
+            chainTargetFor(cwd),
+            sessionManager.getSessionId(),
+            Number.isNaN(startedMs) ? undefined : startedMs,
+        ),
+    );
+
     return chain;
 }
 
 /** Called for every provider request, including a child's: hash it now, keep nothing else. */
-function observeParentRequest(sessionManager: SessionShapeView, payload: unknown): void {
-    chainFor(sessionManager).observe({
+function observeParentRequest(
+    sessionManager: SessionShapeView,
+    cwd: string,
+    payload: unknown,
+): void {
+    const shape = requestShape(payload);
+    const recorded = chainFor(sessionManager, cwd).observe({
         leafId: sessionManager.getLeafId(),
         messages: requestMessages(payload),
-        shape: requestShape(payload),
+        shape,
     });
+
+    recordChainRequest(
+        chainTargetFor(cwd),
+        { cwd, session: sessionManager.getSessionId(), shape },
+        recorded,
+    );
 }
 
 /**
@@ -213,13 +263,14 @@ function observeParentRequest(sessionManager: SessionShapeView, payload: unknown
 function prefixVerdict(
     sessionManager: SessionShapeView,
     ourPayload: unknown,
+    cwd: string,
 ): CompactionPrefixFields {
     const messages = requestMessages(ourPayload);
     const shape = requestShape(ourPayload);
     const ours = fingerprintPayload(ourPayload);
     const branch = sessionManager.getBranch();
     const pathIds = pathIdSet(branch);
-    const chain = chainFor(sessionManager);
+    const chain = chainFor(sessionManager, cwd);
     const onBranch = chain.branchObservations(pathIds);
     const parent = onBranch[onBranch.length - 1];
     // Fold only the span. `buildNativeContext` appends exactly one instruction message, and pi never sent
@@ -273,6 +324,7 @@ function prefixVerdict(
             onBranch: onBranch.length,
             compared: match.compared,
             retentionDropped: match.truncatedHistory,
+            hydration: chain.hydration,
         }),
     };
 }
@@ -331,13 +383,20 @@ function prefixUnknowns(input: {
     onBranch: number;
     compared: number;
     retentionDropped: boolean;
+    hydration: { scanComplete: boolean; loadFailed: boolean; malformed: number };
 }): string[] {
     const unknowns: string[] = [];
 
-    if (input.held === 0) {
+    if (input.hydration.loadFailed) {
         unknowns.push(
-            "chain empty: no parent request observed in this process since the chain was created",
+            "chain read failed in this process: an empty chain here is evidence of nothing",
         );
+    }
+
+    if (input.held === 0) {
+        // About the session, not the process: the rows are persisted now, so an empty chain no longer means
+        // "this process is young". It means nothing readable survived in the file.
+        unknowns.push("chain empty: no row for this session was found in the retained trace file");
     } else if (input.onBranch === 0) {
         unknowns.push(
             `chain holds ${String(input.held)} but none on this branch: prefix reuse unverifiable here`,
@@ -354,6 +413,19 @@ function prefixUnknowns(input: {
 
     if (input.retentionDropped) {
         unknowns.push("retention dropped older ladders: shallow depths may be unverifiable");
+    }
+
+    if (!input.hydration.scanComplete) {
+        unknowns.push(
+            `chain scan stopped at ${String(input.held)} rows once a ladder and enough requests were in hand` +
+                ": older rows for this session may still be on disk, so the counts above are a floor",
+        );
+    }
+
+    if (input.hydration.malformed > 0) {
+        unknowns.push(
+            `${String(input.hydration.malformed)} persisted chain rows were unreadable and were dropped`,
+        );
     }
 
     return unknowns;
@@ -438,7 +510,7 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
             sessionId: ctx.sessionManager.getSessionId(),
             onPayload: trace.enabled
                 ? (payload) => {
-                      trace.prefix(prefixVerdict(ctx.sessionManager, payload));
+                      trace.prefix(prefixVerdict(ctx.sessionManager, payload, ctx.cwd));
                   }
                 : undefined,
         },
@@ -787,11 +859,16 @@ function outcomeFor(route: CompactionRoute): CompactionTraceOutcome {
 
 /** Registered for the parent session and for every delegated child. */
 export function registerCompactionExtension(pi: ExtensionAPI): void {
-    if (isAgentTraceEnabled()) {
-        // Dev diagnostic: keep the body pi built for its own last request so a later stage-1 request can
-        // tell a rebuilt-prefix mismatch from a provider that simply will not serve the cache.
+    // Registered when either consumer wants observations. The launch cwd stands in for per-project config
+    // here because registration happens once per load: a child in another worktree whose own config enables
+    // chain persistence while bodies are off would go unobserved. `recordChainRequest` still self-gates per
+    // cwd, so the reachable mistake is a missing observation, never a wrong one.
+    if (isAgentTraceEnabled() || chainTargetFor(process.cwd()).enabled) {
+        // Record the hash ladder of the body pi built, so a later stage-1 request can tell a rebuilt-prefix
+        // mismatch from a provider that simply will not serve the cache. The ladder is also persisted, which is
+        // why this stays registered when body tracing is off.
         pi.on("before_provider_request", (event, ctx) => {
-            observeParentRequest(ctx.sessionManager, event.payload);
+            observeParentRequest(ctx.sessionManager, ctx.cwd, event.payload);
         });
     }
 

@@ -3,7 +3,7 @@
 Every bash permission decision is appended to a development log so approval
 patterns can be mined offline and turned into heuristics or curated rules. The
 writer is `src/modules/sandbox/decision-log.ts`; the reader is
-`scripts/permission-report.mjs`.
+`scripts/permission-report.ts`.
 
 ## What is recorded
 
@@ -38,16 +38,20 @@ Default: `.state/bash-log.jsonl` next to the installed extension
 state like the agent session database, so it lives with the checkout that recorded
 it — an isolated worker worktree under `.state/workspaces/` gets its own file.
 
-| Control                            | Effect                                                                 |
-| ---------------------------------- | ---------------------------------------------------------------------- |
-| `SANDBOX_DECISION_LOG=0`           | disable (`0`, `false`, `no`, `off`) — wins over config                 |
-| `SANDBOX_DECISION_LOG_PATH=<file>` | relocate — wins over config                                            |
-| `decisionLog.enabled`              | config enable/disable                                                  |
-| `decisionLog.path`                 | config location                                                        |
-| `decisionLog.maxBytes`             | rotation threshold, default 8 MiB; past it the log moves to `<path>.1` |
+| Control                            | Effect                                                                    |
+| ---------------------------------- | ------------------------------------------------------------------------- |
+| `SANDBOX_DECISION_LOG=0`           | disable (`0`, `false`, `no`, `off`) — wins over config                    |
+| `SANDBOX_DECISION_LOG_PATH=<file>` | relocate — wins over config                                               |
+| `decisionLog.enabled`              | config enable/disable                                                     |
+| `decisionLog.path`                 | config location                                                           |
+| `decisionLog.maxBytes`             | rotation threshold, default 8 MiB; past it the log shifts into `<path>.1` |
+| `decisionLog.generations`          | rotated copies kept, live file excluded; default 10, so `.1` ... `.10`    |
 
-The single `.1` generation is the only history kept, so disk use is bounded at
-roughly twice `maxBytes`. Delete the file to start clean; nothing else reads it.
+Rotation and appending come from `src/common/record-log.ts`, shared with the compaction trace: `.1` is the
+newest rotated segment, the oldest copy past `generations` is dropped, and a report reads every generation that
+still exists, oldest first. Disk use is therefore bounded near `(generations + 1) x maxBytes` logical bytes - and
+far less on a filesystem that compresses, where these records run 20-30x. Delete the file and its `.N` siblings to
+start clean; nothing else reads them.
 
 ## Reading it
 

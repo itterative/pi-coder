@@ -132,7 +132,7 @@ or argument named `constructor` otherwise yields a function where a character bu
 `id`. Order for a successful two-stage run: `prefix`, `attempt(native)`, `model_response(native)`,
 `attempt(serialized)`, `model_response(serialized)`, `final_summary`, `outcome`.
 
-**Read it with `npm run compaction-report`** (`scripts/compaction-report.mjs`), never by hand-rolling jq joins
+**Read it with `npm run compaction-report`** (`scripts/compaction-report.ts`, run under `node --import tsx` so it can share the record log), never by hand-rolling jq joins
 again: it groups records by run id and prints the prefix verdict, one line per stage attempt with its request
 numbers and `in/cached/out`, the persisted summary's size and cut point, then ROUTES / ATTEMPT FAILURES /
 SUSPECTS / PREFIX DIVERGENCES / COST AND CACHE / COMPRESSION aggregates. `--dump[=native|serialized|final|all]`
@@ -171,8 +171,10 @@ trace repo-wide** the way it disables the bash decision log.
 or unknown fields fall back to defaults, because children run this unattended. `enabled: false` returns
 `undefined`; core's own `compaction.enabled: false` still wins (the event never fires).
 `serializedMaxTokens`, `keepThinking`, and the per-block char caps govern stage 2; `traceEnabled`/`tracePath`/
-`traceMaxBytes` govern the trace; `model` is accepted but unused — the seam for the planned dedicated
-compaction model, which wants the serialized route since it has no cache prefix to protect.
+`traceMaxBytes`/`traceGenerations` govern the trace; `chainTraceEnabled` gates the persisted chain rows that share
+the same file, separately because they carry no conversation content - so history keeps accumulating while bodies
+are off. The verdict itself is still only recorded while `traceEnabled` is on (`COMPACTION_CHAIN_TRACE=0`); `model` is accepted but unused — the seam for the
+planned dedicated compaction model, which wants the serialized route since it has no cache prefix to protect.
 `retryMaxRetries` (default 2, extra attempts after the first) and `retryBaseDelayMs` (default 1000, doubling)
 bound the transient backoff; `0` retries turns resends off entirely. Deliberately below core's agent-retry
 settings (3 from 2000ms, so 2s/4s/8s): this stall happens inside a turn the user is waiting on.
@@ -186,9 +188,11 @@ edit, and let a test observe it: `nonNegativeNumberField` keeps a `0`, `positive
 
 ## The request chain: hashes retained, bodies dropped
 
-**`observations: 0` means the chain store was just created (reload, `/resume`, restart), not that the prefix
-broke - see the `compaction-chain-blindness` memory for the experiment that proved this, and for the two things
-still worth doing there (a total-vs-on-branch count, and whether to persist ladders).**
+**`observations: 0` used to mean "this process is young" (reload, `/resume`, restart). Persistence narrowed what
+the number can claim: `chainObservations: 0` now means **no readable row for this session survived in the retained
+trace file** - which is not the same as "never recorded", because persistence may have been off, the rows may have
+rotated out of the window, or the session predates this build. See the `compaction-chain-blindness` memory for the experiment behind it, and the funnel section below
+for the three counts that replaced the single one.**
 
 ## `cached=0` in a development session: what is explained and what is not
 
@@ -253,7 +257,7 @@ a caching one.
 One quantity, three names, because each zero has a different cause and the old single `observations: 0` could not
 tell them apart:
 
-- `chainObservations` - entries held in this process, unfiltered.
+- `chainObservations` - entries held, unfiltered, including rows restored from disk (a floor: the scan stops once it holds a ladder and enough requests, and `unknowns[]` says when it did).
 - `branchObservations` - entries whose recorded leaf sits on the current branch.
 - `observations` - entries that additionally share our system prompt and tool set (`ChainMatch.compared`).
 
@@ -261,7 +265,7 @@ tell them apart:
 `toolsHash`, depth, leaf id) whether or not it was comparable, so a prompt or tool-set difference between our
 rebuild and pi's live requests is a field comparison instead of an argument. `unknowns[]` states what the record
 cannot answer, and the report prints those as `~ cannot tell:` lines apart from flags: a flag describes the run, an
-unknown describes the instrument. `scripts/compaction-report.mjs` adds four suspects from the funnel
+unknown describes the instrument. `scripts/compaction-report.ts` adds four suspects from the funnel
 (`chain-empty`, `chain-off-branch`, `chain-incomparable`, `system-prompt-drift`) and an `INVARIANTS` section of
 cross-field checks - `reference=none` with entries on the branch, an empty chain reporting branch entries, a
 usable verdict with no comparable depth, matching hashes over differently sized prompts, comparable observations
@@ -271,6 +275,11 @@ conclusion is.
 Naming rule for future fields: the trace record and `pi_coder_debug` must use the **same key** for the same
 quantity, or the ambiguity this pass removed comes back through a second surface. See
 `docs/pi-coder-debug-tool.md`.
+
+Every trace record and every persisted chain row carries `instance` - a random id for one extension load, from
+`PROCESS_INSTANCE` in `src/common/trace.ts`. Sessions outlive reloads, and two loads can leave rows in one file
+whose chains, config, and handlers were never the same; without the field, joining a live answer to a recorded one
+is guesswork. The report names the newest load and how many older ones contributed.
 
 ## Trace field gotchas
 
@@ -302,6 +311,17 @@ depths 70-87 against a 64-message span, so nothing was comparable and the code c
 Only per-request records can localize a mismatch; only a ladder can say anything at all about a short span. About seventy bytes where a body was one to two
 megabytes, so the cap is a memory bound rather than a correctness one (`MAX_OBSERVATIONS = 2000`, ~140 KB),
 and dropping the oldest only costs resolution on depths compaction passed long ago.
+
+**Persisted, so those numbers describe the session rather than the process** (`src/modules/compaction/chain-store.ts`).
+Every request appends a `chain_request` row to the trace file, and a `chain_ladder` row lands when depth has grown
+by `LADDER_DEPTH_GROWTH` (32) or as soon as the shape changes. Hydration runs once per chain at creation,
+reading segments newest-first and stopping at the first whose `mtime` predates the session's first entry; rows
+already held are skipped, which is what keeps a second chain over the same session id from counting requests
+twice. Two consequences: `MAX_OBSERVATIONS` is now also the *restore* window, and `LADDER_RETENTION = 2` does
+**not** need raising for long sessions - ladders are cumulative and nested, so one retained ladder at depth N
+already carries a head at every depth ≤ N, and the second slot exists for shape churn rather than length. A row
+caps at `MAX_LADDER_HEADS = 4000` depths. Raise the retention only if a live trace shows `chain=N/N/0` (branch
+entries, none comparable) with shapes alternating.
 
 Four consequences, each learned from a real trace:
 

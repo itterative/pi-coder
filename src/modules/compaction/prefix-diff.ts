@@ -12,6 +12,8 @@
  * best-effort and anything unrecognized is compared by hash, which is exactly what a cache key does.
  */
 
+import { createHash } from "node:crypto";
+
 import type { ChainShape } from "./chain";
 
 /** A short head of each side of a divergence, so the report says *what* differs, not just where. */
@@ -36,15 +38,16 @@ function asRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+/**
+ * sha256 truncated to 16 hex characters - the same digest the chain uses for heads and shape keys.
+ *
+ * This was FNV-1a-32, which was fair when the job was comparing two known bodies inside one process. The
+ * value now decides whether a retained ladder is compared at all, it is persisted, and it is joined across
+ * processes - so a collision would surface as a false `verified=N/N` rather than a cosmetic mix-up.
+ */
 function hash(value: unknown): string {
     const text = typeof value === "string" ? value : safeStringify(value);
-    // FNV-1a: collisions are irrelevant here, this is a dev diagnostic comparing two known bodies.
-    let result = 0x811c9dc5;
-    for (let index = 0; index < text.length; index += 1) {
-        result ^= text.charCodeAt(index);
-        result = Math.imul(result, 0x01000193);
-    }
-    return (result >>> 0).toString(16).padStart(8, "0");
+    return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }
 
 function safeStringify(value: unknown): string {

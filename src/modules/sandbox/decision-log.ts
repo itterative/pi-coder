@@ -7,7 +7,7 @@ import type { BashDecisionSegment, ResolvePermissionDetails, SegmentSource } fro
 /**
  * Append-only record of how every bash command was resolved by the permission
  * gate. This is development tooling: the log is meant to be mined offline (see
- * `scripts/permission-report.mjs`) for command shapes that deserve a heuristic
+ * `scripts/permission-report.ts`) for command shapes that deserve a heuristic
  * or a curated rule, and for approvals that were refused so the same gap is not
  * re-learned.
  */

@@ -147,6 +147,20 @@ export function messageLadder(messages: readonly unknown[]): Map<number, string>
     return ladder;
 }
 
+/** A retained ladder as it comes back from a previous process. */
+export interface RestoredLadder {
+    leafId: string | null;
+    heads: Map<number, string>;
+    shapeKey: string;
+}
+
+/** What one `observe` call produced, so a caller can persist it without rehashing the body. */
+export interface ChainRecorded {
+    observation: ChainObservation;
+    /** Heads for depths 1..depth, in depth order: index 0 is depth 1. */
+    heads: string[];
+}
+
 /** One entry per observed request, newest last, pruned from the front past the cap. */
 export class RequestChain {
     private readonly observations: ChainObservation[] = [];
@@ -158,6 +172,24 @@ export class RequestChain {
     private droppedCount = 0;
     private lastToolsHash: string | undefined;
     private lastSystemHash: string | undefined;
+    /**
+     * Hydration health, reported next to verdicts.
+     *
+     * A scan that stopped early holds a *floor* of rows, and a read that failed holds nothing that deserves to be
+     * read as evidence. Both have to be tellable apart from "this session never made a request", which is the only
+     * reason the funnel counts exist.
+     */
+    private scanComplete = true;
+    private loadFailed = false;
+    private restoredMalformed = 0;
+
+    get hydration(): { scanComplete: boolean; loadFailed: boolean; malformed: number } {
+        return {
+            scanComplete: this.scanComplete,
+            loadFailed: this.loadFailed,
+            malformed: this.restoredMalformed,
+        };
+    }
 
     get size(): number {
         return this.observations.length;
@@ -178,7 +210,7 @@ export class RequestChain {
         leafId: string | null;
         messages: readonly unknown[];
         shape: ChainShape;
-    }): void {
+    }): ChainRecorded {
         const ladder = messageLadder(input.messages);
         const head = ladder.get(input.messages.length) ?? "";
 
@@ -209,17 +241,71 @@ export class RequestChain {
             ts: Date.now(),
         });
 
+        const recorded = this.observations[this.observations.length - 1];
+
         if (this.observations.length > MAX_OBSERVATIONS) {
-            this.observations.splice(0, this.observations.length - MAX_OBSERVATIONS);
-            this.droppedCount += 1;
+            const excess = this.observations.length - MAX_OBSERVATIONS;
+            this.observations.splice(0, excess);
+            this.droppedCount += excess;
+        }
+
+        return { observation: recorded, heads: [...ladder.values()] };
+    }
+
+    /**
+     * Rebuild the chain from persisted records, oldest first.
+     *
+     * Restoring is worth having because it replays facts about bytes that were actually sent. Recomputing heads
+     * from the session is not equivalent and never will be: a reconstructed context is not byte-stable, since pi
+     * stamps timestamps into it, so recomputed hashes would disagree with the provider's cache and the verdict
+     * would fail in the one direction that looks like success.
+     */
+    restore(input: {
+        observations: readonly ChainObservation[];
+        ladders: readonly RestoredLadder[];
+        scanComplete?: boolean;
+        loadFailed?: boolean;
+        malformed?: number;
+    }): void {
+        this.scanComplete = input.scanComplete ?? true;
+        this.loadFailed = input.loadFailed ?? false;
+        this.restoredMalformed = input.malformed ?? 0;
+
+        if (input.observations.length === 0 && input.ladders.length === 0) {
+            return;
+        }
+
+        const wasEmpty = this.observations.length === 0;
+
+        // Restored rows are older by definition: hydration runs when the chain is created, before this process
+        // has written a row of its own, so no overlap is possible. The newest-wins rule in `matchObservations`
+        // walks the list forward, which makes this order load-bearing.
+        this.observations.unshift(...input.observations);
+
+        // Memory stacks ladders newest first, so restored ones belong behind what this process already kept.
+        this.ladders.push(...input.ladders);
+        if (this.ladders.length > LADDER_RETENTION) {
+            this.ladders.length = LADDER_RETENTION;
+        }
+
+        if (this.observations.length > MAX_OBSERVATIONS) {
+            const excess = this.observations.length - MAX_OBSERVATIONS;
+            this.observations.splice(0, excess);
+            this.droppedCount += excess;
+        }
+
+        // Seed the change detectors only for a chain that had not seen a request yet. Otherwise the restored
+        // rows would set the baseline and a shape change this process did make would read as no change.
+        if (wasEmpty) {
+            const newest = this.observations[this.observations.length - 1];
+            if (newest !== undefined) {
+                this.lastSystemHash = newest.systemHash;
+                this.lastToolsHash = newest.toolsHash;
+            }
         }
     }
 
     /**
-     * Match a rebuilt request against the observations that belong to this branch.
-     *
-     * `pathIds` is the root-to-leaf id set from `getBranch()`, which is what makes the answer branch-correct
-     * without any invalidation logic: an observation taken on a branch that was navigated away from sim    /**
      * Match a rebuilt request against the references that belong to this branch.
      *
      * `pathIds` is the root-to-leaf id set from `getBranch()`, which is what makes the answer branch-correct
@@ -241,7 +327,10 @@ export class RequestChain {
         );
         const referenceDepth = onPath.reduce((best, o) => Math.max(best, o.depth), -1);
 
-        if (onPath.length === 0 || referenceDepth < 1) {
+        // A depth-0 row - a payload with no messages array - stays on the `"chain"` path, where it reports
+        // `comparableDepth: -1`. That is a reference able to say nothing, which is not the same state as no
+        // reference, and collapsing the two would put an unfaithful value behind `reference: "none"`.
+        if (onPath.length === 0) {
             return {
                 reference: "none",
                 ...EMPTY_COMPARISON,
@@ -262,7 +351,12 @@ export class RequestChain {
             ...merged,
             referenceDepth,
             truncatedHistory: this.droppedCount > 0,
-            parameters: parameterDelta(input.shape.keys, heads.reference?.keys ?? []),
+            // A reference whose keys are unknown is not a reference that sent nothing: reporting
+            // `+messages,+model,+tools` for that case would be an invented measurement.
+            parameters:
+                heads.reference === undefined
+                    ? []
+                    : parameterDelta(input.shape.keys, heads.reference.keys),
             modelDivergence:
                 heads.reference !== undefined && heads.reference.model !== input.shape.model
                     ? `${heads.reference.model} -> ${input.shape.model}`

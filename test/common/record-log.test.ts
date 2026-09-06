@@ -4,7 +4,11 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createJsonlRecordLog, type EnvelopeRecord } from "../../src/common/record-log";
+import {
+    createJsonlRecordLog,
+    discoverGenerations,
+    type EnvelopeRecord,
+} from "../../src/common/record-log";
 
 interface ProbeRecord extends EnvelopeRecord {
     v?: number;
@@ -188,5 +192,42 @@ describe("record log", () => {
         expect(stats.files).toContain(file);
         expect(stats.bytes).toBeGreaterThan(0);
         expect(() => store.close()).not.toThrow();
+    });
+});
+
+describe("generation discovery", () => {
+    let dir = "";
+    let file = "";
+
+    beforeEach(() => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), "record-log-discovery-"));
+        file = path.join(dir, "log.jsonl");
+    });
+
+    afterEach(() => {
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("counts zero when nothing has rotated", () => {
+        fs.writeFileSync(file, "{}");
+        expect(discoverGenerations(file)).toBe(0);
+    });
+
+    it("counts consecutive segments and stops at the first gap", () => {
+        // A missing `.2` means `.3` can only be left over from a larger budget, and reading past the gap would
+        // splice unrelated history into what a reader believes is this session's continuity.
+        fs.writeFileSync(`${file}.1`, "{}");
+        fs.writeFileSync(`${file}.3`, "{}");
+
+        expect(discoverGenerations(file)).toBe(1);
+    });
+
+    it("respects the scan ceiling", () => {
+        for (let generation = 1; generation <= 5; generation++) {
+            fs.writeFileSync(`${file}.${String(generation)}`, "{}");
+        }
+
+        expect(discoverGenerations(file, 3)).toBe(3);
+        expect(discoverGenerations(file)).toBe(5);
     });
 });

@@ -5,7 +5,7 @@ import { uuidv7 } from "@earendil-works/pi-ai";
 
 import { COMPACTION_TRACE_PATH } from "../../common/constants";
 import { createJsonlRecordLog, type RecordLog } from "../../common/record-log";
-import { isAgentTraceEnabled } from "../../common/trace";
+import { isAgentTraceEnabled, PROCESS_INSTANCE } from "../../common/trace";
 import type { CompactionConfig } from "./config";
 import type { SummarizationFailureCause } from "./failure";
 import type { SummarizationStrategy } from "./summarize";
@@ -111,6 +111,8 @@ export interface CompactionFinalFields {
 export interface CompactionTraceRecord {
     v: number;
     id: string;
+    /** Which extension load wrote this. Two reloads can share a file, and their chains did not survive them. */
+    instance: string;
     ts: string;
     stage: CompactionTraceStage;
     cwd: string;
@@ -274,11 +276,17 @@ export function createCompactionTraceRecorder(
 ): CompactionTraceRecorder {
     const id = uuidv7();
 
-    const write = (record: Omit<CompactionTraceRecord, "id" | "ts" | "v">): void => {
+    const write = (record: Omit<CompactionTraceRecord, "id" | "ts" | "v" | "instance">): void => {
         if (!target.enabled) {
             return;
         }
-        traceLog(target).append({ v: RECORD_VERSION, id, ts: new Date().toISOString(), ...record });
+        traceLog(target).append({
+            v: RECORD_VERSION,
+            id,
+            instance: PROCESS_INSTANCE,
+            ts: new Date().toISOString(),
+            ...record,
+        });
     };
 
     return {

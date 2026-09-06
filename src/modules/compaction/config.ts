@@ -43,6 +43,13 @@ export interface CompactionConfig {
     model?: string;
     /** Write the per-stage compaction trace under `.state/`. `isAgentTraceEnabled()` gates it as well. */
     traceEnabled: boolean;
+    /**
+     * Persist the observed request chain into the trace file so a restart, reload, or resume can still verify
+     * a rebuilt prefix instead of reporting an empty chain. The rows are hashes, depths, and entry ids with no
+     * message content, which is why they have their own switch: turning body recording off should not also
+     * throw away the history that makes the next verdict meaningful.
+     */
+    chainTraceEnabled: boolean;
     /** Trace file location; a relative path resolves against the working directory. */
     tracePath?: string;
     /** Rotate the trace into a single `.1` generation once it grows past this many bytes. */
@@ -67,6 +74,7 @@ export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
     retryMaxRetries: 2,
     retryBaseDelayMs: 1_000,
     traceEnabled: true,
+    chainTraceEnabled: true,
     traceMaxBytes: 1_048_576,
     traceGenerations: 10,
 };
@@ -164,6 +172,7 @@ function readConfigFile(filePath: string | undefined): Partial<CompactionConfig>
         retryMaxRetries: nonNegativeNumberField(record.retryMaxRetries),
         retryBaseDelayMs: positiveNumberField(record.retryBaseDelayMs),
         traceEnabled: booleanField(record.traceEnabled),
+        chainTraceEnabled: booleanField(record.chainTraceEnabled),
         traceMaxBytes: positiveNumberField(record.traceMaxBytes),
         traceGenerations: nonNegativeNumberField(record.traceGenerations),
         ...(model ? { model } : {}),
@@ -211,6 +220,8 @@ export function loadCompactionConfig(cwd: string): CompactionConfig {
         retryBaseDelayMs:
             project.retryBaseDelayMs ?? global.retryBaseDelayMs ?? defaults.retryBaseDelayMs,
         traceEnabled: project.traceEnabled ?? global.traceEnabled ?? defaults.traceEnabled,
+        chainTraceEnabled:
+            project.chainTraceEnabled ?? global.chainTraceEnabled ?? defaults.chainTraceEnabled,
         traceMaxBytes: project.traceMaxBytes ?? global.traceMaxBytes ?? defaults.traceMaxBytes,
         traceGenerations:
             project.traceGenerations ?? global.traceGenerations ?? defaults.traceGenerations,

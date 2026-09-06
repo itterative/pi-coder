@@ -17,6 +17,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { registerCompactionExtension } from "../../src/modules/compaction";
+import type { ChainShape } from "../../src/modules/compaction/chain";
 import type { CompactionPreparation, ContextMessage } from "../../src/modules/compaction/types";
 import { zeroUsage } from "./agent-doubles";
 import {
@@ -39,6 +40,30 @@ import {
  */
 
 const ENTRY_TIMESTAMP = "1970-01-01T00:00:00.000Z";
+
+/**
+ * A `ChainShape` for tests: the non-message part of a request as the chain records it. Override the hashes to
+ * simulate a system prompt or tool set changing between requests, which is what the shape filter compares.
+ */
+export function chainShape(overrides: Partial<ChainShape> = {}): ChainShape {
+    return {
+        systemHash: "sys-1",
+        toolsHash: "tools-1",
+        systemChars: 100,
+        toolNames: ["read", "bash"],
+        keys: ["messages", "model", "tools"],
+        model: "test-model",
+        ...overrides,
+    };
+}
+
+/** A plausible message array of `count` entries: alternating roles with distinct content per index. */
+export function chainMessages(count: number, tag = "m"): unknown[] {
+    return Array.from({ length: count }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `${tag}${String(index)}`,
+    }));
+}
 
 export function userMessage(text: string, timestamp = 0): ContextMessage {
     return { role: "user", content: text, timestamp };

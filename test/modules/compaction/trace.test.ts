@@ -21,11 +21,37 @@ import { stubModel } from "../../helpers/pi-stub";
 
 const TRACE_FILE = "compaction-trace.jsonl";
 
+/**
+ * Run records only. The trace file also carries chain rows, which are written per provider request and belong to
+ * no run, so a test that asserts on one compaction's stages has to say which records it means.
+ */
 function readRecords(filePath: string): CompactionTraceRecord[] {
-    return readFileSync(filePath, "utf8")
-        .split("\n")
-        .filter((line) => line.trim())
-        .map((line) => JSON.parse(line) as CompactionTraceRecord);
+    return readChainRowsSplit(filePath).runs;
+}
+
+function readChainRowsSplit(filePath: string): {
+    runs: CompactionTraceRecord[];
+    chain: Record<string, unknown>[];
+} {
+    const runs: CompactionTraceRecord[] = [];
+    const chain: Record<string, unknown>[] = [];
+
+    for (const line of readFileSync(filePath, "utf8").split("\n")) {
+        if (line.trim() === "") {
+            continue;
+        }
+
+        const record = JSON.parse(line) as Record<string, unknown>;
+        const stage = String(record.stage ?? "");
+        if (stage.startsWith("chain_")) {
+            chain.push(record);
+            continue;
+        }
+
+        runs.push(record as unknown as CompactionTraceRecord);
+    }
+
+    return { runs, chain };
 }
 
 describe("compaction trace", () => {
@@ -43,6 +69,7 @@ describe("compaction trace", () => {
         // test/setup.ts disables the trace so no suite can write this checkout's .state; re-enable it here
         // pointed at the suite's own temporary directory.
         vi.stubEnv("COMPACTION_TRACE", "1");
+        vi.stubEnv("COMPACTION_CHAIN_TRACE", "1");
         vi.stubEnv("COMPACTION_TRACE_PATH", tracePath);
     });
 
@@ -393,6 +420,13 @@ describe("compaction trace", () => {
         await seed({ type: "before_provider_request", payload: parentBody }, harness.ctx);
 
         const records = (await harness.compact(), readRecords(tracePath));
+        // Records name the load that wrote them: a session outlives its reloads, and the chains behind two loads
+        // are not the same chain. Without this, cross-process rows in one file are indistinguishable.
+        const instances = new Set(
+            records.map((entry) => (entry as unknown as { instance: string }).instance),
+        );
+        expect([...instances]).toEqual([expect.stringMatching(/^[0-9a-f]{8}$/)]);
+
         const order = records.map((record) => record.stage);
         expect(order).toEqual([
             "prefix",
@@ -442,6 +476,91 @@ describe("compaction trace", () => {
         expect(prefix?.unknowns).toEqual([]);
     });
 
+    it("verifies the first compaction after a restart from the persisted chain alone", async () => {
+        // The claim the store exists for. A reload hands the extension a new session manager for the same session
+        // id, so the chain in memory is empty; without persistence that first compaction reports an empty chain
+        // and the cache question goes unanswered exactly when it is most likely to have been broken.
+        const parentBody = {
+            model: "stub-model",
+            system: "the live system prompt",
+            tools: [{ name: "bash", input_schema: { type: "object" } }],
+            messages: [{ role: "user", content: "fix the compaction module" }],
+        };
+        const harnessInput = {
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
+            sessionId: "restart-session",
+            providerPayload: {
+                ...parentBody,
+                messages: [...parentBody.messages, { role: "user", content: "instruction" }],
+            },
+        };
+
+        const before = build(harnessInput);
+        const observe = before.piStub.requireHandler("before_provider_request", 0);
+        await observe({ type: "before_provider_request", payload: parentBody }, before.ctx);
+
+        const after = build(harnessInput);
+        await after.compact();
+
+        const prefix = readRecords(tracePath).find((record) => record.stage === "prefix")?.prefix;
+        expect(prefix).toMatchObject({
+            reference: "chain",
+            chainObservations: 1,
+            branchObservations: 1,
+            observations: 1,
+            commonPrefixMessages: 1,
+        });
+        expect(prefix?.prefixUsable).toBe(true);
+        // The rows came off disk, so they name the load that wrote them rather than this one.
+        expect(prefix?.unknowns ?? []).not.toContain(
+            "chain empty: no row for this session was found in the retained trace file",
+        );
+    });
+
+    it("persists the chain into the same file, as rows belonging to no run", async () => {
+        const harness = build({
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
+            providerPayload: { model: "stub-model", messages: [] },
+        });
+        const seed = harness.piStub.requireHandler("before_provider_request", 0);
+        await seed(
+            {
+                type: "before_provider_request",
+                payload: {
+                    model: "stub-model",
+                    system: "base prompt",
+                    tools: [{ name: "bash", input_schema: { type: "object" } }],
+                    messages: [{ role: "user", content: "a sentence that must never reach disk" }],
+                },
+            },
+            harness.ctx,
+        );
+        await harness.compact();
+
+        const { chain } = readChainRowsSplit(tracePath);
+        const stages = chain.map((row) => row.stage);
+        expect(stages).toContain("chain_request");
+        expect(stages).toContain("chain_ladder");
+        // Persisted rows outlive the process that wrote them, so they name it.
+        expect(chain[0]).toHaveProperty("instance");
+
+        const request = chain.find((row) => row.stage === "chain_request");
+        expect(request).toMatchObject({
+            session: expect.any(String),
+            depth: expect.any(Number),
+            head: expect.any(String),
+            systemHash: expect.any(String),
+        });
+        // The whole reason the chain may be persisted while bodies are not: this file holds hashes, depths, and
+        // entry ids. One leaked message would make that claim false.
+        expect(JSON.stringify(chain)).not.toContain("a sentence that must never reach disk");
+        expect(JSON.stringify(chain)).not.toContain("base prompt");
+    });
+
     it("leaves the prefix verdict unknown rather than unusable when nothing was observed", async () => {
         const harness = build({
             responses: [
@@ -470,7 +589,7 @@ describe("compaction trace", () => {
         });
         expect(prefix?.prefix?.parentRequest).toBeUndefined();
         expect(prefix?.prefix?.unknowns).toContain(
-            "chain empty: no parent request observed in this process since the chain was created",
+            "chain empty: no row for this session was found in the retained trace file",
         );
     });
 
