@@ -260,7 +260,11 @@ function writeHealthyRun(session: string): void {
 }
 
 function runScript(args: string[]): BundledScriptResult {
-    return script.run(["--path", logPath, ...args]);
+    // Suites that point the reader at a committed fixture pass their own --path; the default log is the one
+    // written per test into the scratch workspace.
+    const path = args.includes("--path") ? [] : ["--path", logPath];
+
+    return script.run([...path, ...args]);
 }
 
 /** Text mode must succeed silently, so any stderr here is a real bug rather than a skip note. */
@@ -543,14 +547,100 @@ describe("compaction-report script", () => {
         old.final("native", checkpoint("## Goal", 4000), finalFields());
         old.outcome("native");
 
+        // The fourth state: the provider's count of the very body being sent, alongside rejected counts. Both
+        // halves matter - `src=exact` says the number needs no trust, `stale=` says why the next tier was used.
+        const exact = recorder("sess-exact");
+        exact.prefix(healthyPrefix());
+        exact.attempt(
+            "native",
+            nativeFields({
+                estimateSource: "exact-cut",
+                estimatedTokens: 32_308,
+                staleAnchors: 3,
+            }),
+            accepted({ usage: usage(1500, 1500, 31000) }),
+        );
+        exact.modelResponse("native", checkpoint("## Goal", 4000));
+        exact.final("native", checkpoint("## Goal", 4000), finalFields());
+        exact.outcome("native");
+
         expect(runText(["--session", "sess-anchor"]).stdout).toContain("est=32.5k src=anchor");
         expect(runText(["--session", "sess-heuristic"]).stdout).toContain("est=38.4k src=chars4");
         expect(runText(["--session", "sess-oldest"]).stdout).toContain("src=unrecorded");
+        expect(runText(["--session", "sess-exact"]).stdout).toContain(
+            "est=32.3k src=exact stale=3",
+        );
+    });
+
+    it("holds a count of the exact body to a rounding band, and calls a wider one a different body", () => {
+        // `src=exact` is the provider's own number for a body this request is supposed to be, so a disagreement
+        // cannot be estimator noise: either the span is not that body (an entry stage 1 could not copy, a fold
+        // or a model change inside the window) or the count expired. Both are facts about the instrument.
+        const state = (session: string, estimated: number) => {
+            const trace = recorder(session);
+            trace.prefix(healthyPrefix());
+            trace.attempt(
+                "native",
+                nativeFields({ estimateSource: "exact-cut", estimatedTokens: estimated }),
+                accepted({ usage: usage(2000, 1500, 30000) }),
+            );
+            trace.modelResponse("native", checkpoint("## Goal", 4000));
+            trace.final("native", checkpoint("## Goal", 4000), finalFields());
+            trace.outcome("native");
+        };
+
+        // Charged 32.0k for the request: 33.0k is a 3% difference, 38.4k is 20%.
+        state("sess-exact-rounding", 33_000);
+        state("sess-exact-diverged", 38_400);
+
+        const report = parseReport();
+        expect(flagKeys(report, "sess-exact-rounding")).toEqual([]);
+        expect(flagKeys(report, "sess-exact-diverged")).toContain("estimate-skew");
+        expect(flagDetail(report, "sess-exact-diverged", "estimate-skew")).toContain(
+            "count of this body",
+        );
+        expect(flagDetail(report, "sess-exact-diverged", "estimate-skew")).toContain("band 5%");
+        expect(flagDetail(report, "sess-exact-diverged", "estimate-skew")).toContain(
+            "not the body that count describes",
+        );
+    });
+
+    it("says whether the run moved the boundary, in all three states", () => {
+        // A cut that was considered and kept, one that was moved, and a record from before the walk existed. The
+        // last of these is the one that gets read wrong: absence has to print as absence, or a repaired boundary
+        // in a new run looks like it matched an unrepaired one in an old one.
+        const state = (session: string, fields: Partial<CompactionAttemptFields>) => {
+            const trace = recorder(session);
+            trace.prefix(healthyPrefix());
+            trace.attempt(
+                "native",
+                nativeFields(fields),
+                accepted({ usage: usage(2000, 1500, 30000) }),
+            );
+            trace.modelResponse("native", checkpoint("## Goal", 4000));
+            trace.final("native", checkpoint("## Goal", 4000), finalFields());
+            trace.outcome("native");
+        };
+
+        state("sess-cut-kept", {
+            proposedFirstKeptEntryId: "e-41",
+            chosenFirstKeptEntryId: "e-41",
+        });
+        state("sess-cut-moved", {
+            proposedFirstKeptEntryId: "e-41",
+            chosenFirstKeptEntryId: "e-38",
+        });
+        state("sess-cut-predates", {});
+
+        expect(runText(["--session", "sess-cut-kept"]).stdout).toContain("cutMoved=no");
+        expect(runText(["--session", "sess-cut-moved"]).stdout).toContain("cutMoved=to:e-38");
+        expect(runText(["--session", "sess-cut-predates"]).stdout).toContain("cutMoved=unrecorded");
     });
 
     it("holds a span-anchored estimate to the band its own accuracy supports", () => {
-        // Both runs estimated 20% above the provider's count for the same request. That is noise for chars/4,
-        // which measures +40% mean error here, and a fact about an anchored count, which measures +2%. One
+        // Both runs estimated 20% above the provider's count for the same request. That is inside tolerance for
+        // the chars/4 guess - whose live +40% turned out to be mostly an artifact of charging stored rows, since
+        // retired here - and a fact about an anchored count, which measured under 2% on the same turns. One
         // threshold for both would either bury the anchor or cry wolf on the heuristic.
         const state = (session: string, fields: Partial<CompactionAttemptFields>) => {
             const trace = recorder(session);
@@ -1285,5 +1375,72 @@ describe("compaction-report script", () => {
         expect(runScript(["--nope"]).status).toBe(2);
         expect(runScript(["--help"]).stdout).toContain("--dump");
         expect(runScript(["--path", path.join(workspace, "absent.jsonl")]).status).toBe(1);
+    });
+});
+
+/**
+ * The same reader pointed at records a live build actually wrote, rather than at synthetic ones.
+ *
+ * The fixtures above are built by a recorder in this file, which means they can only contain fields this suite
+ * thought to write. These records came off a real session that folded three times, so they are the only place
+ * where `src=exact`, `stale=`, `cutMoved=`, and a post-fold `prefix-unusable` are pinned against data nobody
+ * hand-authored - and where an invariants check can notice a new field contradicting an old one.
+ */
+describe("compaction-report against recorded live runs", () => {
+    const LIVE_FIXTURE = path.join(
+        PI_CODER_EXTENSION_DIR,
+        "test",
+        "fixtures",
+        "compaction-trace.hosted-three-folds.jsonl",
+    );
+
+    it("prints a count, its method, and its rejections for every stage-1 attempt", () => {
+        const text = runText(["--path", LIVE_FIXTURE, "--runs", "0"]).stdout;
+
+        // Two folds produced a count of the exact body; one produced the heuristic because every count in the
+        // span had expired. The three states have to be told apart on the line itself.
+        expect(text).toContain("src=exact");
+        expect(text).toContain("src=chars4 stale=5");
+        expect(text).toContain("src=exact stale=22");
+        // Cut state on a live record: found, and not moved - the honest baseline for a repair path that has not
+        // yet had to fire in the wild.
+        expect(text.match(/cut=found cutMoved=no/g)).toHaveLength(3);
+        // Absence still prints as absence: these records carry the fields, and a stage that never had them must
+        // not inherit a value by default.
+        expect(text).toContain("src=unrecorded");
+    });
+
+    it("keeps a count inside its band and reports nothing as a suspect for sizing", () => {
+        const report = parseReport(["--path", LIVE_FIXTURE]);
+
+        // `estimate-skew` compares our number with what the provider charged for the same request. On the two
+        // exact-count runs that difference was 0.08%, so the flag must stay silent - and the one heuristic run
+        // sits at 3.7%, inside both the 50% band and far inside the 15% it did not earn.
+        const skew = report.runs.flatMap((run) =>
+            run.flags.filter((flag) => flag.key === "estimate-skew"),
+        );
+        expect(skew).toEqual([]);
+    });
+
+    it("names the post-fold prefix divergence it cannot yet distinguish, so the gap stays visible", () => {
+        const text = runText(["--path", LIVE_FIXTURE, "--suspect"]).stdout;
+
+        // After a fold, every older cached body has the *previous* summary near its front, so agreement can only
+        // reach the first message or two. This flag therefore fires on a healthy post-fold run: the report cannot
+        // yet tell that shape from a rebuild that diverged. Pinned as a known limitation until the instrument
+        // gets a state of its own, because a permanent false alarm hides the real one it exists to catch.
+        expect(text).toContain("prefix-unusable");
+        expect(text).toContain("first=messages[2]");
+    });
+
+    it("cross-checks its own fields on real data and finds nothing lying", () => {
+        const text = runText(["--path", LIVE_FIXTURE]).stdout;
+
+        // Three folds, four instances' worth of rows, mixed build provenance: the cross-field checks are the
+        // place a newly added field would contradict an older one, and a violation means the trace cannot be
+        // trusted with any cache conclusion drawn from it.
+        expect(text).toContain("INVARIANTS (0 distinct");
+        expect(text).toContain("PREFIX PARAMETERS (0 distinct");
+        expect(text).toContain("PREFIX DECODE VALUES (0 distinct");
     });
 });

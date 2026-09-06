@@ -34,9 +34,11 @@ in a session, and pi keeps thinking in the live context anyway (`hideThinkingBlo
    **`tool_choice` is not sent** below). Stage 1 also forwards the session's thinking level as `reasoningEffort`
    so the thinking parameters match pi's turn requests (**stage 1 forwards the thinking level** below); stage 2
    deliberately does not. A `toolCall` block in the response rejects the stage; a call the server
-   leaves unparsed arrives as text and is **not** detected. Stage 1 gets **a third** of the output budget (`segmentBudget`) and is told it is an
-   intermediate, because a generous intermediate becomes a rival draft: measured before that, stage 1 wrote
-   3,207 tokens and the reduce then produced something *longer* than the material it was handed.
+   leaves unparsed arrives as text and is **not** detected. Stage 1 and stage 2 get the **same** output cap (see
+   "The budgets behind the fit test" - a cap that binds discards a checkpoint whole) and stage 1 is told it is an
+   intermediate, because a generous intermediate becomes a rival draft: measured before any cap existed, stage 1
+   wrote 3,207 tokens and the reduce then produced something *longer* than the material it was handed. That risk is
+   carried by the instruction and the report's ratio, not by a smaller cap.
 2. **reduce (stage 2, serialized)** — one bounded text-only call over `serializeConversationMinimal(span)` +
    stage 1's `<segment-checkpoint>`, plus `<previous-summary>` **only when stage 1 did not run** (stage 1's
    instruction already carries it forward, so feeding both invites a union of duplicates). Transcript-first on
@@ -45,14 +47,20 @@ in a session, and pi keeps thinking in the live context anyway (`hideThinkingBlo
 3. **core default** — `undefined`.
 
 The fit gate is `nativeRequestFits`, and `fitRequirementTokens` decides what it measures against the window, best
-evidence first: the **span-anchored** count (a provider's own `usage.totalTokens` for a reply inside the span,
-plus chars/4 only for what followed it and for the appended instruction), then
-**`ctx.getContextUsage().tokens`**, then the whole-body chars/4 guess. The middle one is *not* the provider's
-count of the request — see **Requests are sized from the session's own counts** — it counts the retained tail
-stage 1 drops, and it is `null` right after a compaction, which is when compaction usually runs. A hot estimate
-alone used to skip stage 1 on ~200k windows; the anchor is what removed both that and the tail's inflation.
+evidence first: the **exact-cut** count (the provider's own `input + cacheRead + cacheWrite` for the reply sitting
+*at* the cut point, whose request body was exactly this span — see **Requests are sized from the session's own
+counts**), then the **span-anchored** count (a provider's `usage.totalTokens` for a reply inside the span, plus
+chars/4 only for what followed it and for the appended instruction), then **`ctx.getContextUsage().tokens`**, then
+the whole-body chars/4 guess. Every count tier is filtered by `countBoundary`: a number that predates the newest
+`compaction`, `model_change`, or `thinking_level_change` row describes a body that no longer exists and is
+rejected, counted in `staleAnchors`. The last tier is *not* the provider's count of the request — it counts the
+retained tail stage 1 drops, and it is `null` right after a compaction, which is when compaction usually runs. A
+hot estimate alone used to skip stage 1 on ~200k windows; the counts are what removed that and the tail's
+inflation.
 
-`overflow` skips stage 1 (the span provably does not fit). Stage 1 failing alone → stage 2 with no segment.
+`overflow` **attempts** stage 1: it used to be skipped outright, on the reasoning that the live context provably
+does not fit — true of the live context, false of a shorter prefix of it, which is what the cut walk looks for.
+Stage 1 failing alone → stage 2 with no segment.
 Stage 2 failing after stage 1 succeeded → **stage 1's text is persisted** (`route: "native"`). Nothing may
 throw: the handler catches everything and warns, because a defect here should cost summary quality, never a
 session that can no longer be compacted. `event.signal.aborted` returns `{ cancel: true }`.
@@ -117,8 +125,10 @@ the harness-owned ones, so `CompactionSummaryMessageComponent` and the `/agents`
 `details` = `{ version: 1, route, provider, model, readFiles, modifiedFiles, summarizedMessages,
 droppedBlocks }`. `route` is `"two-stage" | "native" | "serialized"` (renamed from `strategy` when stages
 arrived; core reads only the two file-list keys, which **must keep pi's names** or cumulative file tracking
-breaks silently). `firstKeptEntryId`/`tokensBefore` pass through from `preparation`, so core's default
-~20k-token native tail is unchanged.
+breaks silently). `tokensBefore` passes through from `preparation` (it sizes the whole live context, so a moved
+cut does not invalidate it), while `firstKeptEntryId` is **ours to move** — core honors whatever the result
+returns (`agent-session.js:1412-1418`), and `cut.ts` only ever moves it earlier, which keeps that tail at least as
+long as core intended. So core's default ~20k-token native tail is a floor here, not a fixed choice.
 
 ## Serializer
 
@@ -287,6 +297,28 @@ a caching one.
 does it report" to "it reports a hit at 30 KB and nothing at 330 KB" - a size or window threshold, not a silent
 endpoint. Read a hosted `cache-read-zero` as that question, never as proof about our own prefix.
 
+### A verified long prefix with `cached=0`: reuse is not ours to give (2026-09-06)
+
+The 10:16:21 run on session `01a070e0` printed `usable=true verified=649/649 obs=300 first=verified truncated`,
+and the run reported `cached=0` against 347k fresh tokens. That combination settles a question the earlier notes kept reopening: our body was
+a byte-identical prefix of **300** requests this route had already served, with no divergence anywhere in the
+overlap, and the server still read it cold. Nothing about the rebuild - not its length, not its shape, not which
+parts we drop - can account for that, so stop looking for a body-shape cause of low reuse on a local llama.cpp
+route. The two candidates left are both server-side: per-slot prefix-cache eviction between turns (a 200k+ context
+is easy to preempt, and the turns here are minutes apart), and the 4096-token quantization that makes "almost
+nothing reused" print as exactly `4096`/`7168`. Same build, same day, a 52k session got `reuse=82-89%`, which is
+consistent with size-driven eviction rather than anything in our request.
+
+There is **no tool-call pruning in `native-request.ts`** - it never looks at `toolCall` parts. A claim that
+pruning was shortening the reusable prefix circulated in conversation on 2026-09-06 and is false; if some future
+version does prune calls, the above is the measurement that will say whether it costs anything.
+
+One datum that the pairing rule above does not yet cover: the 14:20:29 run on this same session reported
+`sys=12817c` with `parent-sys=12817c` and a chain holding 374 rows, minutes after the 11:31 run reported 24813.
+"Short prompt means a process that has sent no request yet" fits a cold process, not a live 236k session whose
+recent requests also carry the short prompt. Check whether a manual `/compact` resolves the prompt outside an
+active agent run before treating either reading as settled.
+
 ### The instrument names the gate now, not the conjunction
 
 `obs=0` was ambiguous between "nothing on the branch" and "the shape filter rejected everything on it", and the
@@ -417,6 +449,30 @@ that message. So hash a `{ role, content }` projection when a golden value must 
 
 ## Live fixtures
 
+`test/fixtures/session/hosted-three-folds.jsonl` + `test/fixtures/compaction-trace.hosted-three-folds.jsonl` are
+the **first multi-fold pair**, recorded 2026-09-06 from one live hosted session (309 rows, 3 folds at rows 128/137/294)
+whose runs the counting build itself produced (123 records: 4 runs, 102 chain rows). Provider and model strings stay
+raw - the file is read, never replayed, so no test depends on a machine's provider config. `fold-chain.test.ts`
+reproduces the recorded `estimateSource`, `staleAnchors`, and `cutMoved` fields **from the session file alone**, so
+the two artifacts vouch for each other the way the llama.cpp pair does. What it uniquely proves:
+
+- **The fold guard earned its keep on real data.** Fold 2 had three counted replies land after fold 1 - so "a live
+  count exists" was true - but all three sat **below** the boundary in the retained tail, so the span above it held
+  only pre-fold counts. Anchoring on the nearest one sizes a 14,830-token request as 55,874 (**+277%**), which is
+  the direction that reads as a provider clip inside a 15% band and, on a small window, skips stage 1 outright.
+  Scope lesson: the session is the wrong question, the span is the right one.
+- **`exact-cut` on a second provider.** Two of the three folds sized the request within **0.08%** of what the
+  hosted endpoint charged (`49,717` vs `49,679`; `54,798` vs `54,748`) - every prior number in this file came from
+  llama.cpp. Run 1 also served 49.2k of 49.7k from cache on a hosted route (`reuse=87%`).
+- **`stale=` coexists with success.** Fold 3 rejected 22 expired counts and still produced an exact number,
+  because the boundary row was itself post-fold. The field counts rejections, never trouble.
+- **No live `cutMoved` yet.** All three folds used core's boundary, so the repair path is unit- and mutation-tested
+  but unexercised in the wild; forcing one needs a small-window route (the local 200k model), not the 1M hosted one.
+- **A known instrument gap, pinned rather than smoothed:** `prefix-unusable` fires on a healthy post-fold run
+  (`verified=1/95`, `first=messages[2]`), because every older cached body carries the *previous* summary near its
+  front. Until the report gets a state of its own for that, the flag is a standing false alarm on second-and-later
+  folds - which buries the real divergence it exists to catch.
+
 `test/fixtures/session/llamacpp-post-compaction.jsonl` is pi's own output: a 51-entry branch carrying a
 `compaction` at its tip (`firstKeptEntryId: 3162e48e`), with the `custom_message`, `model_change`, and
 `thinking_level_change` entries no hand-built branch in this suite has.
@@ -457,7 +513,8 @@ Measured against a recorded child session's own provider counts (14 turns): whol
 error, +93% worst**; anchored ran **+2.0%**. That spread is why the report keeps two bands — 15% for an anchored
 estimate, 50% for the heuristic — and prints `src=anchor` / `src=chars4` / `src=unrecorded`, so a number never
 arrives without the accuracy it can support. One threshold for both would either bury the anchor or cry wolf on
-the heuristic.
+the heuristic. **Read the correction below before quoting those four numbers again: most of the +39.6% was an
+artifact of charging stored rows, and there is now a tier above this one.**
 
 Three rules worth knowing before "fixing" this:
 
@@ -472,10 +529,157 @@ Three rules worth knowing before "fixing" this:
   ourselves, so no historical usage describes it. `packWithinBudget` therefore still decides which transcript
   blocks survive on a chars/4 estimate — the reason gap 7's budget should come from the window rather than from a
   number this crude.
-- **The anchor over-counts when it predates a fold.** An assistant kept from an older round carries a count of the
-  context *before* a later compaction folded material away, so its number exceeds what this span holds. The
-  20k-token keep makes that rare (the newest assistant below the cut is usually a turn from after the last
-  compaction), and the error is conservative — the estimate-band flag names it rather than the code guessing.
+- **The anchor over-counts when it predates a fold — and that is now refused, not tolerated.** An assistant kept
+  from an older round carries a count of the context *before* a later compaction folded material away, so its
+  number exceeds what this span holds by the whole reclaim. The old text called that "rare" and "conservative";
+  both words were doing work they could not pay for — rare is not never, and "conservative" here means the gate
+  loses stage 1, which is the harm. `countBoundary` (branch timestamps, because `buildContextEntries` reorders
+  and can drop rows) rejects such counts in both tiers and reports them as `staleAnchors`.
+
+## The counts, measured against a real session (2026-09-06, later the same day)
+
+`test/modules/compaction/real-session-sizing.test.ts` now checks sizing against provider numbers instead of
+against our own arithmetic. `llamacpp-post-compaction.jsonl` carries 12 counted assistant turns, each an exact
+measurement of a body this module can rebuild, so a sizing change can fail against a tokenizer.
+
+- **The heuristic's documented error was mostly an artifact, and the +40%/+2% comparison must not be quoted
+  again as it stood.** `estimateEntryTokens` and `estimateRequestTokens` charged
+  `JSON.stringify(storedMessage)` — which for a `toolResult` includes **`details`**, and pi keeps a truncated
+  `read`'s full output a *second* time under `details.truncation.content` (fixture entry `49f16eaf`: 51,134c of
+  content plus 52,318c of details). No provider receives it: `openai-completions.js:998-1015` sends
+  `{role:"tool", content, tool_call_id}`. Measured on one tail: provider 13,289t, stored 26,294t (**+98%**),
+  `{role, content}` 13,237t (**-0.4%**). Over the live span the same heuristic went **+42.2% → -0.3%** by
+  projection alone (and the live record it reproduces says `est=46987` vs `in+cached=32782`). So the counts
+  still outrank chars/4 because they are measurements, not because the guess was 40% blind. pi's own
+  `estimateTokens` (`compaction.js:188-227`) walks content **by role** and never charged `details`, so `rep=` was
+  never inflated — which makes **`est > rep` on one run a free tripwire** that the stored-row bug is back.
+- **Anchored sizing measured within ±1.1% on 11 real turns** (mean -0.2%) once the tail is charged as wire; the
+  recorded span is 32.5k against the provider's 32,308.
+- **The exact-cut tier is the common case, not the lucky one.** `firstKeptEntryId` names the *kept* entry, so when
+  that entry is an assistant with usable usage, its prompt **is** the span: no estimation at all (fixture:
+  32,308, asserted as equality). Measured 3 of 3 real compactions in `.state/agent-sessions/**` cut on an
+  assistant with usable usage, for a structural reason: `findCutPoint` snaps forward to the first *valid* cut
+  point at or after the entry that crossed the keep budget, and a `toolResult` is not valid
+  (`compaction.js:227-240`) — so a mid-turn crossing lands on the assistant that consumed it. `skippedEntries > 0`
+  disqualifies the tier, because a row stage 1 could not append makes our span smaller than the body counted.
+- **Retracted the same day:** the claim that pi's `keepRecentTokens` is a floor that can only overshoot. The
+  forward snap can leave the retained tail **under** budget when the crossing entry is itself a huge `toolResult`
+  swept into the summary. (This fixture did not hit it: live 53,771 − span 32,308 = tail 21,463.)
+- **Report bands are now three:** 5% `exact-cut` (a disagreement there means the request is *not* the body that
+  count describes — check `skippedEnt` and for a fold or model change inside the span), 15% `usage-anchor`, 50%
+  `chars4`. `src=` gained a fourth print state (`exact`) and `stale=` prints only when non-zero.
+
+- **A cut's validity is about ids, not roles — found by fuzzing, not by reading pi.** Three shapes, and pi
+  forbids only one: a tail starting with a `toolResult` orphans the call that went into the summary, a tail
+  starting after a metadata row is fine (the *next* context row's call may sit before the cut, and a provider
+  rejects the request outright rather than degrading), and pi's `findCutPoint` ends by walking the cut index
+  **backwards** over "adjacent metadata entries that do not affect context" (`compaction.js:339-348`), so
+  `firstKeptEntryId` can legitimately name a row that produces no message at all - while pi's
+  `CompactionEntry`/`BranchSummaryEntry` carry an optional `usage` of their own. Any sizing tier that asked "is
+  there a count here" instead of "is this an assistant reply" would report a branch summary's cost as the size of
+  a body it never measured. `cut-invariants.test.ts` pins all three, including a `[call][user][result]` ordering
+  (a tool finishing after the user spoke) where pi's own rule *accepts* the cut and the surviving result cites a
+  call id no provider has ever seen. So an admissibility predicate has to resolve ids and entry types; "pi would
+  never produce it" is not a proof.
+- **(b) and (e) are indistinguishable to pi and must not be conflated by us.** `[assistant][result] | [assistant]`
+  and `[user] | [assistant]` both land on an assistant row with `isSplitTurn` set (`compaction.js:345-350`), both
+  resolve every id, both give an exact count - and the first swallows a tool cycle whose answer survives while the
+  second swallows *the prompt whose answer survives*. Recorded because a future rule stated as "cut at an
+  assistant row" admits both silently.
+
+### Built: choosing our own cut point (`cut.ts`)
+
+The repair path is implemented; what follows is what it is *not*, because that is what a later session will
+otherwise re-derive.
+
+`chooseSpanCut` runs before the transcript is built, with core's boundary as its **ceiling**: it uses core's
+choice whenever that choice is admissible and fits, and only walks **earlier** when it does not. Six conditions,
+each with its own rejection tally so a run that could not be repaired says why:
+resolvable → countable → not-expired-by-boundary → no-orphaned-tool-call → `tail ≥ keepRecentTokens` →
+`span + outputBudget < window`. It also refuses to move at all when `liveTokens` is null, which is the same
+post-fold window where the counts are unavailable — moving a boundary while unable to evaluate the keep budget is
+how a repair becomes a regression.
+
+- **Measurement and admissibility are separate predicates.** `measureSpanAt` answers "what is this span's size, by
+  a count" (an assistant at the cut reads its `prompt`; a user turn at the reads the reply above it via
+  `totalTokens`; anything else is not countable), and `orphanedByPosition` answers "does the tail resolve" — one
+  backward pass maintaining the earliest call index among results below each position, because both conditions are
+  monotone in the earlier direction and that is the whole termination argument. Cutting *at* a tool result is
+  countable and inadmissible; conflating the two is how a size check would be trusted to catch a malformed request.
+- **Only earlier is what keeps the blast radius zero.** The tail grows, so `keepRecentTokens` holds by
+  construction, and core's `messagesToSummarize` stays a **superset** of what is actually dropped — so the file
+  ledger, `previousSummary`, and the split-turn wording remain sound without being recomputed. The cost of the
+  superset is duplication (stage 2's transcript can include rows that survive verbatim in the tail), absorbed by
+  the merge-don't-concatenate rule. A *later* cut inverts that and is the deferred case.
+- **`tokensBefore` is deliberately left as core's.** It is `estimateContextTokens(buildSessionContext(...))` — the
+  whole live context, not "tokens before the cut", despite the name — so a moved boundary does not invalidate it.
+  Re-deriving it from the new span would understate the session.
+- **Two source rows are consulted, in order.** `buildContextEntries()` is sliced for the cut point's *id*, but
+  after a fold the old rows disappear from the resolved view; `getBranch()` is consulted for a boundary that only
+  exists there. `spanMessages` prefers the resolved view and falls back to the branch when the chosen id is not
+  context-visible.
+- **Trace and report**: `chosenFirstKeptEntryId` + `proposedFirstKeptEntryId` on the stage-1 attempt, printed as
+  `cutMoved=no` / `cutMoved=to:<id>` / `cutMoved=unrecorded` — three states, because "the walk abstained" and
+  "this record predates the walk" must not read alike.
+
+**Still not built.** The `exact-anchor` *label* exists; `src=exact` and `src=exact-anchor` both get the 5% band.
+What remains deferred, on purpose: (a) a **later** cut, which would force owning the summarized set and
+`computeFileLists(preparation.fileOps)`; (b) the stored-count **rescue** — `details` on the `compaction` entry
+could carry `spanTokens`/`summaryTokens` so a stale count becomes correctable by
+`prompt_X − Σ(spanTokens_F − summaryTokens_F)` (uniform, since any row still in the body survived every fold that
+dropped rows before it), rather than merely rejected as it is today; forward-only, since old entries and
+`core-default` folds lack the fields.
+
+### The budgets behind the fit test, and one post-condition still missing
+
+`keepRecentTokens` (default 20,000) drives the retained tail, and so drives the cut. `reserveTokens` (default
+16,384) drives the trigger line **only**: it used to set the output budget as well
+(`floor(0.8 x reserve) = 13,107` for stage 2, `/3 = 4,369` for stage 1, which did match the fixtures' live
+`maxTokens`), and that anchoring was the defect - a number about the agent's turn headroom was silently capping
+what a summarizer may answer with. The earlier idea of using `max(keepRecentTokens, reserveTokens)` for the cut
+stays dropped: it would rewrite the user's tail intent whenever they set a high reserve.
+
+What the budget is now (`summarizationBudgetTokens` in `index.ts`, exported, pinned by
+`test/modules/compaction/budget.test.ts` plus handler cases):
+
+- **One number, both stages:** `max(1024, min(model.maxTokens, window - requestTokens - 1024))`, where
+  `requestTokens` is the **whole request as the fit gate charges it** - system prompt, tool schemas, span, appended
+  instruction. Against `~/.pi/agent/models-store.json`, `qwen3.8-flash` reports `maxTokens: 65,536`, so the cap went
+  from a constant 13,107 (4,369 for stage 1) to the model's own ceiling.
+- **A cap must never bind**, because a truncated checkpoint is discarded whole: recorded replies were 2,821t for 9
+  events and 2,313t for the reduce, and the cap was never the reason the model stopped. The rival-draft property the
+  old `1/3` protected (stage 2 once wrote *longer* than the 3,207-token checkpoint handed to it) is carried by the
+  instruction ("must be no longer than the checkpoint you were given") and the report's checkpoint/summary ratio.
+  Rationing the fatal direction was the bug; verbosity is only a cost.
+- **Why the subtracted term is the request and not the span:** the fixed prefix is large - the recorded system
+  prompt alone is 25,694 characters, plus six tool schemas - so `window - span - instruction` overstates the room by
+  thousands of tokens. A `* 0.9` multiplier briefly hid that; it was a haircut on the wrong quantity (2k on a tight
+  window, 94k on a million-token one) and is gone.
+- **`marginTokens` is an optional parameter** (default `SUMMARIZATION_MARGIN_TOKENS`) so a test can state the
+  margin its case assumes instead of hardcoding the shipped number - `budget.test.ts` passes 0, 1,500 and 2,000 to
+  pin the formula and the gate's falsifiability. Hardcoded margins in tests hid a real gap: with the parameter
+  ignored, five tests fail now, but when the value was only ever compared against a copied literal the same mutant
+  passed silently. Don't reintroduce the literals.
+- **The margin is a constant, and the `max(0, ...)` is deliberately unfloored.** The gate is
+  `needed < window - output`; at `budget == window - request` it reduces to `needed < needed` and refuses every run,
+  so some margin must stay. 1,024 is sized to the error in the number subtracted (~1% on a provider count, worse on
+  chars/4), which does not scale with the window. Floors belong on the *request* (`MIN_OUTPUT_TOKENS`, applied by the
+  caller): a floored budget grants room the window lacks, and the gate charges it back.
+- **Three limits were built, tested, and deleted here**, all caught by mutation testing rather than by reading: a
+  `Math.min(need, budget)` clamp a preceding refusal made unreachable; a per-event `2,600 + 60 x messageCount` cap
+  plus the `CHECKPOINT_MIN_USEFUL_TOKENS` floor that existed to repair it; and the `* 0.9`. Any future stage-1-
+  specific number needs a test that fails when it is deleted *and* one that fails when it binds.
+- `reserveTokens` is out of the budget path entirely, which **reverses this file's earlier ruling** that it "feeds
+  the trigger line and the output budget". It drives the trigger line only. `keepRecentTokens` (20,000) still drives
+  the retained tail and so the cut, and `window - span >= tail >= keep` is why the remainder has a practical floor
+  (~20k) without needing a proportional haircut.
+
+Still not implemented, from the same design discussion: the **sanity post-condition** -
+`budget + keepRecentTokens + fixedPrefix < window - reserveTokens` (where `budget` is the
+`summarizationBudgetTokens` number, no longer a reserve-derived constant), flagged when false. Without it, a
+window too small to compact usefully produces a compaction that re-triggers immediately, and the trace shows a
+healthy run rather than an impossible configuration. On a 200k window the terms are ~33k against a 184k line, so
+this only bites on small windows - which is exactly when it is invisible until it hurts.
 
 ## `tool_choice` is not sent (2026-09-06)
 
@@ -549,7 +753,7 @@ configured `repetition_penalty` exists to fix that model's output habits and the
 Two consequences worth knowing before someone calls them bugs:
 
 - A configured `max_completion_tokens` overrides our stage budget here, exactly as it overrides pi's turn budget
-  there. Parity, not a leak - but it means `segmentBudget` is a default, not a guarantee.
+  there. Parity, not a leak - but it means the cap is a default, not a guarantee.
 - Detectable, not silent: the adapter assigns these as keys, so a missing merge shows up as `-top_p` in
   `prefix.parameters`. No live record has ever shown one, which is the evidence that neither local route
   configures sampling parameters today - the fix closes a latent break for other people's configs, not an active
@@ -713,7 +917,10 @@ Gap ledger, agreed 2026-09-05; each row says for itself whether it is still open
    tell those apart, which the flag says out loud; estimate far **below** means the fit gate decided on a number
    too small. The same pair is now much sharper on stage 1, because `estimatedTokens` anchors on a provider count
    from inside the span where one exists (`estimateSource`): +2% mean error instead of +40%, which is why the
-   report keeps a 15% band for anchored estimates and 50% for the heuristic. What stays open is the *other* half
+   report keeps a 15% band for anchored estimates and 50% for the heuristic. **(Both figures later turned out to
+   be inflated by the stored-row artifact in "The counts, measured against a real session" — the tiers are now
+   `exact-cut` 5% / `usage-anchor` 15% / `chars4` 50%, and the 5% one is a count of the very body being sent.)**
+   What stays open is the *other* half
    of the gap: a provider that clips without the token count moving is still invisible, because a clip that the
    provider itself does not count is not a number we can receive.
 6. **A degenerate stage-1 answer is accepted. CLOSED 2026-09-05.** On a live run stage 1 answered 509k tokens
@@ -751,16 +958,48 @@ Gap ledger, agreed 2026-09-05; each row says for itself whether it is still open
 
 ## Validation
 
-`test/modules/compaction/{serialize,sections,handler,trace,prefix-diff,span-session,summarize,prompt,chain,native-sizing,session-fixture}.test.ts`
-plus `test/scripts/compaction-report.test.ts` — 183 cases, two reviewed file snapshots, no provider calls
+`test/modules/compaction/{serialize,sections,handler,trace,prefix-diff,span-session,summarize,prompt,chain,native-sizing,real-session-sizing,fold-chain,cut-shapes,cut-invariants,cut-selection,budget,session-fixture}.test.ts`
+plus `test/scripts/compaction-report.test.ts` — 261 cases, two reviewed file snapshots, no provider calls
 (`createCompactionHarness()` in `test/helpers/compaction-doubles.ts` records the contexts and options a
 `stubModelRegistry` receives, and `evaluateSummarizationResponse` is pure so the accept/reject policy is testable
 directly). Stage-1 truncation is pinned by a 1.2M-char
 *retained-tail* fixture: if someone re-sends the live context, the fit gate skips stage 1 and that test fails.
+`real-session-sizing.test.ts` is the one sizing suite that checks against numbers a provider produced rather than
+ones a fixture claims, so read it before trusting any accuracy claim in this file.
+`cut-shapes.test.ts` is the readable catalogue of cut shapes (located **by role pair, never by index** - the
+recorded session's branch order is its parent chain, not its line order, and hard-coded positions found the wrong
+rows while still passing arithmetic); `cut-invariants.test.ts` is the property version over 8 fixed seeds plus
+3^5 exhaustive short sequences, and `cut-selection.test.ts` is the repair walk's arithmetic: a nine-row branch with
+known counts on both sides of every boundary, one case per rejection condition, and a monotonicity sweep over
+tightening windows. `cut-shapes.test.ts` is the readable catalogue of cut shapes (located **by role pair, never by
+index** - the recorded session's branch order is its parent chain, not its line order, and hard-coded positions
+found the wrong rows while still passing arithmetic).
 Mutation-verified: reverting the fit formula to `reserveTokens` fails the sizing test; deleting
 `trace.modelResponse(...)` fails two trace tests; forcing `cutFound: true` in the stage-1 fields, or
 `cutMissing = false` in the report, each fails exactly one of the two new cut-point tests; disabling the anchored
 branch of `fitRequirementTokens` fails both sizing tests and the handler case where the span fits but the live
-context does not. Real provider behavior (no-tool-call instruction adherence, cache serving,
+context does not. From the 2026-09-06 sizing pass: charging stored rows instead of the wire shape fails 3, dropping
+the `countBoundary` filter fails 3, disabling the exact-cut tier fails 5, widening the 5% band to 50% fails 1, and
+ignoring `skippedEntries` when offering the kept entry fails 1 — the last of which it did **not** do until a test
+was written for it, because the guard had no coverage at all when the mutation was first tried.
+**The fuzz caught itself being vacuous, which is the lesson worth keeping:** the first version survived three of
+four mutations (ignoring `countBoundary`, dropping the assistant-type check from the exact-cut tier, and losing
+the instruction term) because its boundary assertion only ran *when* the result was null, every probe passed
+`extraTokens: 0`, and no generated branch ever contained a metadata row at the cut. Rewritten as a pair of
+directions (admit what is after the boundary, reject what is not) with non-zero instruction terms and metadata
+rows spliced at every position, each of the four now fails exactly one test. A property test that cannot be
+killed is not a property test.
+
+The cut repair was mutation-checked the same way, and all seven killings landed: persisting core's boundary
+instead of ours (1 failure), building the span from core's boundary (1), no walk at all (7), allowing a *later*
+boundary (5), dropping the orphan check (5), ignoring the keep budget (1), and restoring the old unconditional
+`overflow` skip (2). Two of those seven taught something: the first draft of the persist test asserted a
+relationship against itself (`sent < sent + 1`) and would have passed no matter what, and it then failed for the
+right reason once written properly - the harness's default fixtures carry `zeroUsage()`, so a test about count
+driven cuts has to supply counts.
+**Gate fixtures need margin, not coincidence**: the "span plus instruction will not fit" case sat within ~130
+tokens of its own threshold, so the projection improvement made it fit and the test read as a sizing failure. It
+now pins a window that leaves far less room than the request needs, with the arithmetic in the comment.
+Real provider behavior (no-tool-call instruction adherence, cache serving,
 `toolCall` refusals) and child execution stay manual — see `src/tools/agent/README.md` § "Changing child
 compaction".

@@ -199,7 +199,7 @@ describe("compaction trace", () => {
         expect(attempt?.attempt).toMatchObject({
             provider: "anthropic",
             model: "stub-model",
-            maxTokens: 2_730,
+            maxTokens: 8_192,
             contextWindow: 200_000,
             toolCount: 2,
             messageCount: 4,
@@ -277,7 +277,7 @@ describe("compaction trace", () => {
         const checkpoint = "## Goal\n\nstub\n\n## Progress\n\n- [x] stub";
         const harness = build({
             responses: [
-                async () => truncatedResponse(checkpoint, { ...zeroUsage(), output: 8000 }),
+                async () => truncatedResponse(checkpoint, { ...zeroUsage(), output: 8_192 }),
                 async () => truncatedResponse(checkpoint, { ...zeroUsage(), output: 1200 }),
             ],
         });
@@ -290,7 +290,7 @@ describe("compaction trace", () => {
             ["native", "rejected", "length"],
             ["serialized", "accepted", "length"],
         ]);
-        expect(attempts[0]?.detail).toContain("hit the output limit after 8000 output tokens");
+        expect(attempts[0]?.detail).toContain("hit the output limit after 8192 output tokens");
         // The truncated reduce answer still becomes the session's summary, which is the trade being made.
         expect(readRecords(tracePath).find((record) => record.stage === "outcome")?.outcome).toBe(
             "serialized",
@@ -369,20 +369,27 @@ describe("compaction trace", () => {
         expect(skipped?.attempt?.customInstructions).toBe("narrow the scope");
     });
 
-    it("records the transcript counts for an overflow compaction", async () => {
+    it("records the transcript counts for the reduce of an overflow compaction", async () => {
+        // An overflow run still ends in the serialized rung - the reduce is what persists - and that is the fact
+        // this case is about. It no longer *starts* there: overflow now attempts the native read, and only skips
+        // it if the fit gate says the span cannot be sent. So the assertion finds the serialized attempt rather
+        // than assuming it is the first record.
         const harness = build({
             responses: [
                 async () => summaryResponse("## Goal\n\noverflow\n\n## Progress\n\n- [x] overflow"),
+                async () => summaryResponse("## Goal\n\nreduced\n\n## Progress\n\n- [x] reduced"),
             ],
             systemPrompt: "a prompt long enough to push the estimate past four thousand tokens",
         });
         await harness.compact({ reason: "overflow", willRetry: true });
 
         const records = readRecords(tracePath);
-        const attempt = records.find((record) => record.stage === "attempt");
-        expect(attempt?.strategy).toBe("serialized");
+        const attempt = records.find(
+            (record) => record.stage === "attempt" && record.strategy === "serialized",
+        );
+        expect(attempt).toBeDefined();
         expect(attempt?.attempt?.serializedChars).toBeGreaterThan(0);
-        expect(records.find((record) => record.stage === "outcome")?.outcome).toBe("serialized");
+        expect(records.find((record) => record.stage === "outcome")?.outcome).toBe("two-stage");
         expect(records.some((record) => record.stage === "model_response")).toBe(true);
     });
 

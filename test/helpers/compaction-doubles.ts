@@ -128,6 +128,11 @@ export function toolResultMessage(input: {
     text: string;
     isError?: boolean;
     timestamp?: number;
+    /**
+     * Harness bookkeeping that never reaches the provider - pi stores a truncated `read`'s full output under
+     * `details.truncation.content`. Sizing has to ignore it, so a fixture that wants to prove that carries it.
+     */
+    details?: Record<string, unknown>;
 }): ContextMessage {
     return {
         role: "toolResult",
@@ -136,6 +141,7 @@ export function toolResultMessage(input: {
         content: [{ type: "text", text: input.text }],
         isError: input.isError ?? false,
         timestamp: input.timestamp ?? 0,
+        ...(input.details === undefined ? {} : { details: input.details }),
     };
 }
 
@@ -170,8 +176,40 @@ export function messageEntry(
     id: string,
     message: ContextMessage,
     parentId: string | null = null,
+    at: string = ENTRY_TIMESTAMP,
 ): SessionEntry {
-    return { type: "message", id, parentId, timestamp: ENTRY_TIMESTAMP, message };
+    return { type: "message", id, parentId, timestamp: at, message };
+}
+
+/** A compaction row: the marker that makes every token count older than it describe a body that no longer exists. */
+export function compactionMarker(
+    id: string,
+    input: { at: string; firstKeptEntryId: string; tokensBefore?: number; summary?: string },
+): SessionEntry {
+    return {
+        type: "compaction",
+        id,
+        parentId: null,
+        timestamp: input.at,
+        summary: input.summary ?? "a checkpoint of what was dropped",
+        firstKeptEntryId: input.firstKeptEntryId,
+        tokensBefore: input.tokensBefore ?? 0,
+    };
+}
+
+/** A model change: the other event that expires counts, because it replaces the prompt and tool definitions. */
+export function modelChangeMarker(
+    id: string,
+    input: { at: string; provider?: string; modelId?: string },
+): SessionEntry {
+    return {
+        type: "model_change",
+        id,
+        parentId: null,
+        timestamp: input.at,
+        provider: input.provider ?? "anthropic",
+        modelId: input.modelId ?? "other-model",
+    };
 }
 
 /**
@@ -179,11 +217,11 @@ export function messageEntry(
  * branches and only the last one survives into the context.
  */
 export function messageChain(
-    items: Array<{ id: string; message: ContextMessage }>,
+    items: Array<{ id: string; message: ContextMessage; at?: string }>,
 ): SessionEntry[] {
     let parentId: string | null = null;
     return items.map((item) => {
-        const entry = messageEntry(item.id, item.message, parentId);
+        const entry = messageEntry(item.id, item.message, parentId, item.at ?? ENTRY_TIMESTAMP);
         parentId = item.id;
         return entry;
     });

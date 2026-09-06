@@ -28,10 +28,22 @@ export type SummarizationReason = SessionBeforeCompactEvent["reason"];
  * `compactionSummary`, `branchSummary`) as well as the plain `user`/`assistant`/`toolResult` trio.
  */
 /**
- * Where a request-size number came from, which is how far it can be trusted: an exact provider count anchored
- * inside the span being sent, or the chars/4 heuristic over the whole body.
+ * Where a request-size number came from, which is how far it can be trusted, best evidence first:
+ *
+ * - `exact-cut` - the provider's own count of the request whose body *was* this span (the reply sitting at the
+ *   cut point), so nothing about this request is estimated at all.
+ * - `exact-anchor` - the newest count *inside* the span, with nothing after it left to charge: the whole-turn cut
+ *   `[assistant] | [user]`, where the span ends on the counted reply itself.
+ * - `usage-anchor` - the same count, plus chars/4 for whatever followed it.
+ * - `chars4` - the heuristic over the whole body: the only number available right after a fold, before any
+ *   post-fold reply exists.
+ *
+ * "Exact" in the first two means exact *for the stored body*: the instruction stage 1 appends is always its own
+ * chars/4 estimate, because no provider ever counted it, and that is what the 5% band covers rather than 0%.
+ *
+ * These have measurably different error rates, so a reader has to know which number they are being shown.
  */
-export type EstimateSource = "usage-anchor" | "chars4";
+export type EstimateSource = "exact-cut" | "exact-anchor" | "usage-anchor" | "chars4";
 
 export type ContextMessage = CompactionPreparation["messagesToSummarize"][number];
 

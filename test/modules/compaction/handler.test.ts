@@ -12,6 +12,7 @@ import {
     createCompactionHarness,
     failedResponse,
     messageChain,
+    messageEntry,
     sampleKept,
     sampleSpan,
     summaryResponse,
@@ -56,6 +57,10 @@ describe("compaction stages", () => {
             notify?: (message: string, level?: "info" | "warning" | "error") => void;
             hasUI?: boolean;
             contextWindow?: number;
+            /** The model's own output ceiling, which is what the summarization cap is bounded by. */
+            maxTokens?: number;
+            /** Override the parent's system prompt, to charge a large fixed prefix against the cap. */
+            systemPrompt?: string;
             branch?: SessionEntry[];
             span?: ReturnType<typeof sampleSpan>;
             kept?: ReturnType<typeof sampleKept>;
@@ -79,7 +84,7 @@ describe("compaction stages", () => {
         return createCompactionHarness({
             cwd: root,
             responses: input.responses,
-            systemPrompt: SYSTEM_PROMPT,
+            systemPrompt: input.systemPrompt ?? SYSTEM_PROMPT,
             sessionId: SESSION_ID,
             notify: input.notify,
             hasUI: input.hasUI,
@@ -93,6 +98,7 @@ describe("compaction stages", () => {
             contextUsage: input.contextUsage,
             model: stubModel({
                 ...(input.contextWindow ? { contextWindow: input.contextWindow } : {}),
+                ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}),
                 ...(input.reasoningModel ? { reasoning: true } : {}),
                 ...(input.samplingParams ? { samplingParams: input.samplingParams } : {}),
             }),
@@ -133,8 +139,10 @@ describe("compaction stages", () => {
         expect(h.optionField(0, "toolChoice")).toBeUndefined();
         expect(h.optionField(0, "cacheRetention")).toBeUndefined();
         expect(h.optionField(0, "sessionId")).toBe(SESSION_ID);
-        // Stage 1 gets a third of pi's history budget: it writes an intermediate, not the final draft.
-        expect(h.optionField(0, "maxTokens")).toBe(2_730);
+        // Both rungs get the same cap: what this request can afford to answer with, from the model's own output
+        // ceiling and the room the window has left. Stage 1 used to get a third of a reserve-derived number, which
+        // is the cap that truncated a live 94-event checkpoint.
+        expect(h.optionField(0, "maxTokens")).toBe(8_192);
         expect(h.trailingInstruction(0)).toContain("Do not call any tool");
         expect(h.trailingInstruction(0)).toContain("## Key Decisions");
     });
@@ -261,8 +269,24 @@ describe("compaction stages", () => {
         });
     });
 
-    it("overflow skips stage 1 entirely", async () => {
-        const h = build({ responses: [reducedSummary] });
+    it("attempts stage 1 on an overflow compaction, with the span it can actually send", async () => {
+        // The old contract here was "overflow skips stage 1 entirely", on the reasoning that the live context
+        // provably does not fit. That is true of the live context and false of a shorter prefix of it - which is
+        // what the cut walk looks for - so the run is now made and only the fit gate can refuse it.
+        const h = build({ responses: [segmentSummary, reducedSummary] });
+        const payload = await h.compact({ reason: "overflow", willRetry: true });
+
+        expect(h.calls).toHaveLength(2);
+        expect(h.calls[0].context.tools).toHaveLength(2);
+        expect(h.requestText(1)).toContain("<segment-checkpoint>");
+        expect(payload?.details.route).toBe("two-stage");
+    });
+
+    it("falls to the reduce on overflow when no earlier boundary fits either", async () => {
+        // The other half of that change: attempting stage 1 must not mean sending an oversized request. A window
+        // this small leaves no room for a reply at all once the request is in it, so the fit gate stops it and the
+        // rung degrades exactly as it used to.
+        const h = build({ responses: [reducedSummary], contextWindow: 1_600 });
         const payload = await h.compact({ reason: "overflow", willRetry: true });
 
         expect(h.calls).toHaveLength(1);
@@ -271,11 +295,74 @@ describe("compaction stages", () => {
         expect(payload?.details.route).toBe("serialized");
     });
 
-    it("gives the intermediate a third of the final budget", async () => {
+    it("passes a big model's own output ceiling through to the request", async () => {
+        // The defect this whole change answers: `qwen3.8-flash` reports 65,536 in ~/.pi/agent/models-store.json
+        // against a million-token window, and the request went out capped at 4,369 because the number came from
+        // pi's reserveTokens instead. A clamp anywhere on the reserve-derived figure is invisible at the stub's
+        // 8,192 default, so the ceiling has to be tested where it is above every other candidate limit.
+        const h = build({ responses: [segmentSummary, reducedSummary], maxTokens: 65_536 });
+        await h.compact();
+
+        expect(h.optionField(0, "maxTokens")).toBe(65_536);
+        expect(h.optionField(1, "maxTokens")).toBe(65_536);
+    });
+
+    it("skips stage 1 on a window that cannot afford a request plus any legal reply", async () => {
+        // The floor that keeps a request legal (1,024 output tokens) is what makes this window refuse rather than
+        // send: the ~1.3k request fits in 2,000 on its own, but a request plus the smallest answerable reply does
+        // not. Without the floor the ask goes out at zero tokens, which is a provider error rather than a skip.
+        const h = build({ responses: [reducedSummary], contextWindow: 2_000 });
+        const payload = await h.compact();
+
+        expect(h.calls).toHaveLength(1);
+        expect(payload?.details.route).toBe("serialized");
+    });
+
+    it("does not send a zero-token ask when the count and the estimate disagree about the window", async () => {
+        // The case the floor is for, and the direction the disagreement has to go: a span that estimates at ~300k
+        // tokens by chars/4 leaves a 6,000-token window no budget at all, while the provider's own count of that
+        // same body (5,000) looks like it fits. Both numbers are in play at once - the estimate sizes the budget,
+        // the count decides the gate - and dropping the floor would ask for zero output tokens, which the
+        // provider answers with an error instead of a skip. It genuinely does not fit either way: 5,000 + 1,024
+        // is over the window.
+        const h = build({
+            responses: [reducedSummary],
+            span: [userMessage("q".repeat(1_200_000))],
+            contextUsage: { tokens: 5_000, contextWindow: 6_000, percent: 83 },
+            contextWindow: 6_000,
+        });
+        const payload = await h.compact();
+
+        expect(h.calls).toHaveLength(1);
+        expect(payload?.details.route).toBe("serialized");
+    });
+
+    it("charges the system prompt and tool schemas against the cap instead of refusing the run", async () => {
+        // The units bug the multiplier masked: subtracting only the span leaves the system prompt and tool schemas
+        // unbudgeted, so the model's whole ceiling gets demanded and a run that fits looks unfittable.
+        const h = build({
+            responses: [segmentSummary, reducedSummary],
+            contextWindow: 80_000,
+            maxTokens: 65_536,
+            systemPrompt: "s".repeat(240_000),
+        });
+        await h.compact();
+
+        expect(h.calls).toHaveLength(2);
+        const cap = h.optionField(0, "maxTokens") as number;
+        expect(cap).toBeLessThan(65_536);
+    });
+
+    it("gives both stages the same output cap, so no cap can truncate a checkpoint", async () => {
+        // The rule this replaces was "a third of the final budget", where the final budget was itself derived from
+        // pi's reserveTokens: 4,369 tokens on a route whose model reports 65,536. A cap can only ever bind, and the
+        // recorded replies (2,821t for 9 events, 2,313t for the reduce) stopped well short of any of these numbers.
+        // What the fraction protected - a generous intermediate becomes a competing summary - is now carried by the
+        // instruction below and the report's checkpoint/summary ratio rather than by rationing the fatal direction.
         const h = build({ responses: [segmentSummary, reducedSummary] });
         await h.compact();
 
-        expect(h.optionField(0, "maxTokens")).toBe(2_730);
+        expect(h.optionField(0, "maxTokens")).toBe(8_192);
         expect(h.optionField(1, "maxTokens")).toBe(8_192);
         expect(h.trailingInstruction(0)).toContain("This is an intermediate pass");
         expect(h.requestText(1)).toContain("must be no longer than the checkpoint you were given");
@@ -296,11 +383,14 @@ describe("compaction stages", () => {
     });
 
     it("hands the previous checkpoint to the reduce when stage 1 did not run", async () => {
+        // Stage 1 is skipped here by the fit gate rather than by the compaction reason: since overflow started
+        // attempting the native rung, "the reason was overflow" no longer implies "there is no checkpoint".
         const h = build({
             responses: [reducedSummary],
+            contextWindow: 1_600,
             preparation: { previousSummary: "## Goal\n\nthe earlier checkpoint" },
         });
-        await h.compact({ reason: "overflow" });
+        await h.compact({ reason: "threshold" });
 
         expect(h.calls).toHaveLength(1);
         const request = h.requestText(0);
@@ -415,15 +505,136 @@ describe("compaction stages", () => {
     });
 
     it("skips stage 1 when the span plus instruction will not fit", async () => {
+        // Margin, not a coincidence: the request is ~1.3k tokens (the checkpoint instruction is most of it) and
+        // the smallest reply this module will ask for is the 1,024-token request floor, so the window has to leave
+        // less than ~2.3k for the gate to bite. `budget.test.ts` pins the arithmetic behind the floor.
         const h = build({
             responses: [reducedSummary],
-            contextWindow: 4_000,
+            contextWindow: 1_100,
         });
         const payload = await h.compact();
 
         expect(h.calls).toHaveLength(1);
         expect(h.calls[0].context.tools).toBeUndefined();
         expect(payload?.details.route).toBe("serialized");
+    });
+
+    it("persists the boundary it chose, not the one it was handed", async () => {
+        // The whole point of the repair, and the only place it can be checked: core rebuilds the retained
+        // context from the id in this result, so a span shortened for the window and a tail still starting where
+        // core said would split the session's history in two places at once.
+        const branch = messageChain([
+            { id: "s0", message: userMessage("open the module") },
+            {
+                id: "s1",
+                message: assistantMessage({
+                    text: "a counted reply",
+                    usage: countedUsage(4_000, 200),
+                }),
+            },
+            { id: "s2", message: userMessage("next task") },
+            {
+                id: "kept-1",
+                message: assistantMessage({
+                    text: "the reply core cut at",
+                    usage: countedUsage(199_000, 100),
+                }),
+            },
+        ]);
+        const h = build({
+            responses: [segmentSummary, reducedSummary],
+            branch,
+            span: [userMessage("open the module"), assistantMessage({ text: "a counted reply" })],
+            contextUsage: { tokens: 210_000, contextWindow: 200_000, percent: null },
+        });
+        const payload = await h.compact();
+
+        // Core's boundary sits on a reply whose own request measured 199k, which cannot leave a 200k window with
+        // stage 1's answer attached. The earlier whole-turn boundary is countable from `s1`'s 4,200 and fits, so
+        // that is where the span ends - and it is what core is told to keep from.
+        expect(payload?.firstKeptEntryId).toBe("s2");
+        expect(h.calls).toHaveLength(2);
+        // Two span rows plus the instruction: the shorter span actually went out, not just a shorter claim.
+        expect(h.calls[0].context.messages).toHaveLength(3);
+        // Passed through untouched, and correct to be: core's number sizes the whole live context, which a
+        // different boundary does not change. Re-deriving it from the new span would understate the session.
+        expect(payload?.tokensBefore).toBe(190_000);
+    });
+
+    it("governs the gate with the kept reply's own count, when the transcript's shape disagrees", async () => {
+        // The provider counted 199k tokens for the request whose body was this span, so this span *is* 199k,
+        // however few characters the stored rows hold. Charged by shape the same request is ~1.3k and would be
+        // sent straight into a context that cannot take it.
+        const counted = [
+            assistantMessage({ text: KEPT_TEXT, usage: countedUsage(199_000, 100) }),
+            assistantMessage({ text: "acknowledged" }),
+        ];
+        const tooBig = build({ responses: [reducedSummary], kept: counted });
+        const payload = await tooBig.compact();
+
+        expect(tooBig.calls).toHaveLength(1);
+        expect(tooBig.calls[0].context.tools).toBeUndefined();
+        expect(payload?.details.route).toBe("serialized");
+
+        // The same fixture 9k smaller fits the same window with room to spare, so the line above was the count
+        // deciding and not a floor that rejects every request this strategy could ever make.
+        const fits = [
+            assistantMessage({ text: KEPT_TEXT, usage: countedUsage(190_000, 100) }),
+            assistantMessage({ text: "acknowledged" }),
+        ];
+        const ok = build({ responses: [segmentSummary, reducedSummary], kept: fits });
+        const twoStage = await ok.compact();
+
+        expect(ok.calls).toHaveLength(2);
+        expect(ok.calls[0].context.tools).toHaveLength(2);
+        expect(twoStage?.details.route).toBe("two-stage");
+    });
+
+    it("refuses the kept reply's count when stage 1 could not copy everything before it", async () => {
+        // The count at the cut point is only the span's size if our span *is* that reply's body. A row pi
+        // exposes but this module cannot append (branch_summary has no public append in pi 0.84) narrows the
+        // span, and a narrowed span is not the body that number measured - it is smaller, so believing the
+        // count would over-size the request for no reason the trace could explain afterwards.
+        const ask = userMessage("fix the compaction module");
+        const readCall = assistantMessage({ text: "on it", calls: [{ id: "c1", name: "read" }] });
+        const keptReply = assistantMessage({ text: KEPT_TEXT, usage: countedUsage(199_000, 100) });
+        const branch: SessionEntry[] = [
+            messageEntry("span-0", ask, null),
+            messageEntry("span-1", readCall, "span-0"),
+            {
+                type: "branch_summary",
+                id: "bs-1",
+                parentId: "span-1",
+                timestamp: "1970-01-01T00:00:00.000Z",
+                fromId: "span-1",
+                summary: "a branch stage 1 has no way to represent",
+            },
+            messageEntry("kept-1", keptReply, "bs-1"),
+            messageEntry("kept-2", assistantMessage({ text: "acknowledged" }), "kept-1"),
+        ];
+        const h = build({
+            responses: [segmentSummary, reducedSummary],
+            branch,
+            span: [ask, readCall],
+        });
+        const payload = await h.compact();
+
+        // Same 199k count the previous test had the gate obey, and here it is ignored: `skippedEnt=1` is what
+        // separates the two.
+        expect(h.calls).toHaveLength(2);
+        expect(h.calls[0].context.tools).toHaveLength(2);
+        expect(payload?.details.route).toBe("two-stage");
+    });
+
+    it("sizes from the anchor when the kept entry cannot vouch for the span", async () => {
+        // pi's own first kept entry is a user turn here, so no provider request had exactly this body: the
+        // anchored tier has to guess the part after its own anchor, which is the pre-existing behavior and is
+        // worth pinning against a change that quietly starts trusting the wrong row.
+        const h = build({ responses: [segmentSummary, reducedSummary] });
+        const payload = await h.compact();
+
+        expect(h.calls).toHaveLength(2);
+        expect(payload?.details.route).toBe("two-stage");
     });
 
     it("still runs stage 1 when only the retained tail is too large to resend", async () => {

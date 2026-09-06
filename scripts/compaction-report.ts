@@ -1074,10 +1074,17 @@ function flagRun(run, options) {
 /**
  * Thresholds that are not exposed as flags: a run above 50k fresh tokens with no cache read is the shape of
  * "we paid for the whole span again", and an estimate may disagree with the provider's count for the same request
- * by up to 50% either way - whole-body chars/4 sits between -13% and +43% on live runs of this pipeline, so a
- * tighter band would flag the estimator on every run instead of the request. A span-anchored estimate earns the
- * tighter band it can support: measured +2% mean error against +40% for the heuristic on one recorded session,
- * so a 15% disagreement there is a fact about the endpoint rather than about the guess.
+ * by up to 50% either way - that is the band for the chars/4 guess, whose live runs sat between -13% and +43%
+ * while it was charging stored rows (see the retraction below). Tighter bands are earned by better evidence:
+ * an anchored count only has to be right about what followed its anchor (measured within 1.1% on a recorded
+ * session, 15% band), and a count of the exact body being sent has to be right about nothing at all, so any
+ * disagreement there is a fact about the request rather than about a guess (5% band).
+ *
+ * The retraction, because this file used to quote the wrong numbers: the +40% mean error attributed to chars/4
+ * was mostly an artifact of estimating `JSON.stringify(storedMessage)`, which charges a tool result's `details`
+ * - for a truncated `read`, a second full copy of the output - that no provider ever receives. Over the wire
+ * shape the same heuristic measured -0.7% mean on the session that had shown +42.2%. The anchor is still the
+ * better evidence, because it is a count where the heuristic is a proxy, not because the proxy was 40% off.
  */
 const DEFAULT_THRESHOLDS = {
     minChars: 300,
@@ -1085,6 +1092,7 @@ const DEFAULT_THRESHOLDS = {
     expensiveResendTokens: 50000,
     estimateSkew: 0.5,
     anchoredEstimateSkew: 0.15,
+    exactEstimateSkew: 0.05,
 };
 
 /**
@@ -1110,9 +1118,13 @@ function countedPromptTokens(attempt) {
     return total > 0 ? total : null;
 }
 
-/** How far this estimate is allowed to be wrong, which depends on how it was produced. */
+/** How far this number is allowed to be wrong, which depends on how much of it was measured. */
 function estimateTolerance(attempt, options) {
-    if (attempt?.fields?.estimateSource === "usage-anchor") {
+    const source = attempt?.fields?.estimateSource;
+    if (source === "exact-cut" || source === "exact-anchor") {
+        return options.exactEstimateSkew;
+    }
+    if (source === "usage-anchor") {
         return options.anchoredEstimateSkew;
     }
 
@@ -1141,14 +1153,45 @@ function estimateSkew(attempt) {
 function estimateSkewDetail(skew, attempt, tolerance) {
     const estimate = tokens(attempt?.fields?.estimatedTokens);
     const counted = tokens(countedPromptTokens(attempt));
-    const method = attempt?.fields?.estimateSource === "usage-anchor" ? "anchored" : "chars/4";
-    const head = `estimate ${estimate} (${method}) vs ${counted} counted for the same request, band ${String(Math.round(tolerance * 100))}%`;
+    const head = `estimate ${estimate} (${estimateMethod(attempt)}) vs ${counted} counted for the same request, band ${String(Math.round(tolerance * 100))}%`;
+
+    // An exact number is not an estimate of this body; it is the provider's count of a body this one is
+    // supposed to be. Disagreeing past a rounding band says the two bodies differ, which no estimator can cause.
+    if (isExactCount(attempt)) {
+        return (
+            `${head}: the request we sent is not the body that count describes - check the record's ` +
+            `skippedEnt and whether a fold or model change sits inside the span (the counts expire at those)`
+        );
+    }
 
     if (skew > 0) {
         return `${head}: the endpoint may have clipped the input (the silent-overflow shape pi's docs attribute to z.ai, MiMo, Ollama), or the estimate over-reads this content`;
     }
 
     return `${head}: the estimate under-counts what went out, so the fit gate decided on a number too small`;
+}
+
+/** Either of the two tiers that are measurements of this body rather than guesses at it. */
+function isExactCount(attempt) {
+    const source = attempt?.fields?.estimateSource;
+
+    return source === "exact-cut" || source === "exact-anchor";
+}
+
+/** What produced the number, in the words a reader needs to weigh it. */
+function estimateMethod(attempt) {
+    const source = attempt?.fields?.estimateSource;
+    if (source === "exact-cut") {
+        return "count of this body";
+    }
+    if (source === "exact-anchor") {
+        return "count through the last reply";
+    }
+    if (source === "usage-anchor") {
+        return "anchored";
+    }
+
+    return "chars/4";
 }
 
 // -------------------------------------------------------------------- output
@@ -1272,13 +1315,21 @@ function fieldParts(fields, strategy) {
     // three states get a word.
     if (strategy === "native") {
         add("cut", cutState(fields.cutFound));
+        // Whether the boundary this run used is the one core proposed. Three states for the same reason as
+        // `cut=`: "the walk abstained" and "this record predates the walk" must not look alike, and a moved cut
+        // is worth being able to grep for without reading two ids off a line.
+        add("cutMoved", cutMoveState(fields));
     }
     add("est", tokens(fields.estimatedTokens));
-    // A number without its method is how the old comparison got believed. Three states, because "no anchor was
-    // available" and "this record predates the field" are different things to a reader.
+    // A number without its method is how the old comparison got believed. Four states, because "this body had no
+    // count of its own", "the counts here expired", and "this record predates the field" are three different
+    // things to a reader.
     if (typeof fields.estimatedTokens === "number") {
         add("src", estimateSourceLabel(fields.estimateSource));
     }
+    // Only printed when non-zero: an absent field and a rejected count are different statements, and the
+    // report has already been misled by conflating them.
+    add("stale", number(fields.staleAnchors) > 0 ? fields.staleAnchors : undefined);
     add("rep", tokens(fields.reportedContextTokens));
     add("win", tokens(fields.contextWindow));
     add("maxTok", tokens(fields.maxTokens));
@@ -1303,7 +1354,24 @@ function cutState(value) {
     return "unrecorded";
 }
 
+/** Whether stage 1 moved the boundary core chose, or could not say. */
+function cutMoveState(fields) {
+    const chosen = fields.chosenFirstKeptEntryId;
+    const proposed = fields.proposedFirstKeptEntryId;
+    if (typeof chosen !== "string" || typeof proposed !== "string") {
+        return "unrecorded";
+    }
+
+    return chosen === proposed ? "no" : `to:${chosen}`;
+}
+
 function estimateSourceLabel(value) {
+    if (value === "exact-cut") {
+        return "exact";
+    }
+    if (value === "exact-anchor") {
+        return "exact-anchor";
+    }
     if (value === "usage-anchor") {
         return "anchor";
     }

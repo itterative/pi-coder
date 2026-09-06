@@ -1,4 +1,4 @@
-import type { Api, Message, Model, Usage } from "@earendil-works/pi-ai";
+import type { Api, Context, Message, Model, Usage } from "@earendil-works/pi-ai";
 import type {
     CompactionResult,
     ExtensionAPI,
@@ -16,11 +16,14 @@ import {
     recordChainRequest,
     type ChainTraceTarget,
 } from "./chain-store";
+import { chooseSpanCut, type CutDecision } from "./cut";
 import {
     activeToolDefinitions,
     buildNativeContext,
-    estimateAnchoredSpanTokens,
+    countBoundary,
+    countSpanTokens,
     estimateRequestTokens,
+    fitRequirementTokens,
     nativeRequestFits,
 } from "./native-request";
 import {
@@ -113,12 +116,22 @@ interface StageContext {
     preparation: CompactionPreparation;
     customInstructions?: string;
     config: CompactionConfig;
-    /** Output budget for the persisted checkpoint (stage 2). */
+    /** The output cap both stages send: what this request can afford to answer with. */
     maxTokens: number;
     /** Smaller budget for the intermediate: a stage-1 output the reduce has to re-summarize is wasted work. */
-    segmentTokens: number;
     signal: AbortSignal;
     trace: CompactionTraceRecorder;
+    /**
+     * The instruction stage 1 appends, built once by the handler.
+     *
+     * The cut walk needs its size before it can size the request, and the request needs the cut - building it
+     * here is what breaks that circle, because the text depends only on the preparation, never on the boundary.
+     */
+    instruction: string;
+    /** Where the span ends, which may or may not be where core said it did. */
+    cut: CutDecision;
+    /** Core's whole-live-context estimate, passed through untouched: it describes the context, not the cut. */
+    tokensBefore: number;
 }
 
 /**
@@ -162,24 +175,40 @@ function retryPolicy(config: CompactionConfig): SummarizationRetryPolicy {
     return { maxRetries: config.retryMaxRetries, baseDelayMs: config.retryBaseDelayMs };
 }
 
-/** pi's own budget for a history summary: most of the reserved window, capped by the model's output limit. */
-function summaryBudget(reserveTokens: number, modelMaxTokens: number): number {
-    const fromReserve = Math.floor(reserveTokens * 0.8);
-    if (!Number.isFinite(modelMaxTokens) || modelMaxTokens <= 0) {
-        return fromReserve;
-    }
-    return Math.min(fromReserve, modelMaxTokens);
-}
+/** The smallest output allowance that is still a legal provider request. */
+const MIN_OUTPUT_TOKENS = 1024;
+/** Unbudgeted room, sized to the error in `requestTokens` (~1% on a provider count), not to the window. */
+const SUMMARIZATION_MARGIN_TOKENS = 1024;
 
 /**
- * The intermediate gets a third of the final budget.
+ * The room one summarization reply may take - the same cap for both stages.
  *
- * Measured before this existed: stage 1 wrote 3,207 tokens and the reduce then produced a longer document
- * than it was handed, because a generous intermediate is a competing summary. A third keeps it a summary of
- * facts rather than a rival draft, and floors at 512 so a tiny session still gets a usable pass.
+ * This replaces two numbers derived from pi's `reserveTokens` (`0.8 * reserve`, then a third of it for stage 1),
+ * which capped a live 94-event checkpoint at 4,369 tokens on a route whose model reports 65,536: the reply hit the
+ * cap, the truncation check rejected it, and 47.6k fresh input plus 53 seconds bought a discarded document. A cap
+ * can only ever bind, so both stages now get the room the request leaves, and the rival-draft risk the fraction
+ * protected is carried by the instruction and the report's checkpoint/summary ratio instead.
+ *
+ * `requestTokens` is the whole request as the fit gate charges it - system prompt, tool schemas, span, instruction.
+ * Subtracting only the span overstates the room by the fixed prefix, and the margin keeps the gate falsifiable: at
+ * `budget == window - request` it reduces to `needed < needed` and refuses every run.
  */
-function segmentBudget(maxTokens: number): number {
-    return Math.max(512, Math.floor(maxTokens / 3));
+export function summarizationBudgetTokens(input: {
+    modelMaxTokens: number;
+    contextWindow: number;
+    requestTokens: number;
+    /** Overridable so a test can state a case in terms of the margin it is exercising. */
+    marginTokens?: number;
+}): number {
+    const { modelMaxTokens, contextWindow, requestTokens } = input;
+    const margin = input.marginTokens ?? SUMMARIZATION_MARGIN_TOKENS;
+    // Deliberately unfloored: a floor here grants room the window lacks, which the gate charges back to the run.
+    const room = Math.max(0, contextWindow - requestTokens - margin);
+    if (!Number.isFinite(modelMaxTokens) || modelMaxTokens <= 0) {
+        return room;
+    }
+
+    return Math.min(modelMaxTokens, room);
 }
 
 function notify(ctx: ExtensionContext, message: string, level: "info" | "warning" = "info"): void {
@@ -577,35 +606,46 @@ function attemptFields(
 function spanMessages(input: StageContext): {
     messages: Message[];
     entries: SessionEntry[];
+    /** The entry at the chosen boundary, whose own request measured exactly this span. */
+    keptEntry: SessionEntry | undefined;
+    /** Newest fold or shape change: counts from at or before it describe a body that no longer exists. */
+    boundary: number;
     fields: Partial<CompactionAttemptFields>;
 } {
-    const { ctx, preparation } = input;
-    const cut = spanContextEntries(
-        ctx.sessionManager.buildContextEntries(),
-        preparation.firstKeptEntryId,
-    );
-    const span = buildSpanSession(cut.entries, ctx.cwd);
-    const messages = convertToLlm(span.sessionManager.buildSessionContext().messages);
+    const { ctx, cut, preparation } = input;
+    const branch = ctx.sessionManager.getBranch();
+    const resolved = ctx.sessionManager.buildContextEntries();
+    const contextEntry = resolved.some((entry) => entry.id === cut.firstKeptEntryId);
+    // Cutting in the raw branch or in pi's resolved view is not a free choice: the boundary is only already
+    // counted by a provider if it survives into the resolved context, which is what stage 1's request is built
+    // from. A compaction between them would put a summary message where the count was taken.
+    const entries = contextEntry ? resolved : branch;
+    const span = spanContextEntries(entries, cut.firstKeptEntryId);
+    const built = buildSpanSession(span.entries, ctx.cwd);
+    const messages = convertToLlm(built.sessionManager.buildSessionContext().messages);
+
     return {
         messages,
-        entries: cut.entries,
+        entries: span.entries,
+        keptEntry: entries.find((entry) => entry.id === cut.firstKeptEntryId),
+        boundary: countBoundary(branch),
         fields: {
-            copiedEntries: span.copiedEntries,
-            skippedEntries: skippedEntryCount(span.skippedEntries),
-            cutFound: cut.cutFound,
+            copiedEntries: built.copiedEntries,
+            skippedEntries: skippedEntryCount(built.skippedEntries),
+            cutFound: span.cutFound,
+            // Where the span ends, which is core's id unless the repair found that boundary unsendable.
+            chosenFirstKeptEntryId: cut.firstKeptEntryId,
+            proposedFirstKeptEntryId: preparation.firstKeptEntryId,
         },
     };
 }
 
 /** Stage 1: the model reads the span it is about to lose, as real messages, with its tools left attached. */
 async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<StageResult> {
-    const { pi, ctx, preparation, segmentTokens, signal, trace } = input;
+    const { pi, ctx, preparation, signal, trace, cut } = input;
     const span = spanMessages(input);
     const tools = activeToolDefinitions(pi);
-    const instruction = segmentSummaryInstruction({
-        preparation,
-        customInstructions: input.customInstructions,
-    });
+    const instruction = input.instruction;
     const context = buildNativeContext({
         systemPrompt: ctx.getSystemPrompt(),
         tools,
@@ -614,16 +654,37 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
         timestamp: Date.now(),
     });
     const reportedContextTokens = ctx.getContextUsage()?.tokens ?? null;
-    const anchored = estimateAnchoredSpanTokens(span.entries, estimateTextTokens(instruction));
-    const fields = attemptFields(model, segmentTokens, {
-        estimatedTokens: anchored ?? estimateRequestTokens(context),
-        estimateSource: anchored === null ? "chars4" : "usage-anchor",
+    // The exact-cut tier is only exact if our span really was that reply's body, so an entry stage 1 could not
+    // copy rules it out - which `skippedEntries` already records as the reason.
+    const counted = countSpanTokens({
+        spanEntries: span.entries,
+        keptEntry: span.fields.skippedEntries === 0 ? span.keptEntry : undefined,
+        boundary: span.boundary,
+        extraTokens: estimateTextTokens(instruction),
+    });
+    // This stage's own request, not the walk's proposal: when the session carries a count of this body, an
+    // estimate of it is the wrong input for a cap.
+    const requestTokens = fitRequirementTokens({
+        countedRequestTokens: counted.tokens,
+        reportedContextTokens,
+        context,
+    });
+    const maxTokens = Math.max(
+        MIN_OUTPUT_TOKENS,
+        summarizationBudgetTokens({
+            modelMaxTokens: model.maxTokens,
+            contextWindow: model.contextWindow,
+            requestTokens,
+        }),
+    );
+    const fields = attemptFields(model, maxTokens, {
+        ...span.fields,
+        estimatedTokens: counted.tokens ?? estimateRequestTokens(context),
+        estimateSource: counted.tokens === null ? "chars4" : counted.source,
+        staleAnchors: counted.staleAnchors > 0 ? counted.staleAnchors : undefined,
         reportedContextTokens: reportedContextTokens ?? undefined,
         toolCount: tools.length,
         messageCount: span.messages.length,
-        copiedEntries: span.fields.copiedEntries,
-        skippedEntries: span.fields.skippedEntries,
-        cutFound: span.fields.cutFound,
         customInstructions: input.customInstructions,
         previousSummaryChars: preparation.previousSummary?.length ?? 0,
     });
@@ -632,12 +693,15 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
         !nativeRequestFits(
             context,
             model.contextWindow,
-            segmentTokens,
+            maxTokens,
             reportedContextTokens,
-            anchored,
+            counted.tokens,
         )
     ) {
-        const detail = "segment context plus instruction does not fit the window";
+        const detail =
+            cut.movedEarlier === false
+                ? "segment context plus instruction does not fit the window"
+                : "no earlier boundary fits either; segment context plus instruction does not fit";
         trace.attempt("native", fields, { outcome: "skipped", detail, retries: 0 });
         return { ok: false, detail, retries: 0 };
     }
@@ -646,7 +710,7 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
         {
             registry: ctx.modelRegistry,
             model,
-            maxTokens: segmentTokens,
+            maxTokens,
             retry: retryPolicy(input.config),
             signal,
             sessionId: ctx.sessionManager.getSessionId(),
@@ -724,6 +788,11 @@ async function runReduceStage(
     });
     const fields = reduceFields(model, maxTokens, transcript, segmentText, {
         estimatedTokens: estimateTextTokens(requestText),
+        // Stage 2's number is always chars/4 over text this module serialized itself, and it has to say so:
+        // leaving it unset makes a new record read as "predates the field", which is the one state the report
+        // exists to keep apart from a real method. No count can ever apply here - the blob is not a prefix of
+        // anything a provider saw.
+        estimateSource: "chars4",
         customInstructions: input.customInstructions,
         previousSummaryChars: preparation.previousSummary?.length ?? 0,
     });
@@ -765,19 +834,26 @@ function composeResult(
     text: string,
     usage: Usage | undefined,
     details: Omit<PiCoderCompactionDetails, "readFiles" | "modifiedFiles" | "summarizedMessages">,
+    cut: CutDecision,
+    tokensBefore: number,
 ): CompactionResult {
     const analysis = analyzeSpan(summarizedSpan(preparation));
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const sections = buildSupplementarySections({
         analysis,
-        firstKeptEntryId: preparation.firstKeptEntryId,
+        firstKeptEntryId: cut.firstKeptEntryId,
         droppedBlocks: details.droppedBlocks,
     });
     const summary = `${[text, sections].filter(Boolean).join("\n\n")}${formatFileLists(readFiles, modifiedFiles)}`;
+
     return {
         summary,
-        firstKeptEntryId: preparation.firstKeptEntryId,
-        tokensBefore: preparation.tokensBefore,
+        // The boundary we chose, not the one proposed: core rebuilds the retained context from this id, so a
+        // repaired span and a persisted tail that disagree is the failure mode this whole path exists to avoid.
+        firstKeptEntryId: cut.firstKeptEntryId,
+        // Core's whole-live-context estimate, unchanged: it sizes the context, not the cut, so repairing the
+        // boundary leaves it valid. `tokensBefore` is misnamed in pi and trusting its name here would be the bug.
+        tokensBefore,
         usage,
         details: {
             ...details,
@@ -846,7 +922,44 @@ async function compactWithPiCoder(
     }
 
     const preparation = event.preparation;
-    const maxTokens = summaryBudget(preparation.settings.reserveTokens, model.maxTokens);
+    const instruction = segmentSummaryInstruction({
+        preparation,
+        customInstructions: event.customInstructions,
+    });
+    // Core's proposed span, which the walk can only shorten: the conservative side of the two-stage split, and a
+    // budget needs an order of magnitude rather than a count.
+    const proposedSpan = summarizedSpan(preparation);
+    const instructionTokens = estimateTextTokens(instruction);
+    // Charged the way the gate charges it: fixed prefix, span, instruction.
+    const proposedRequest =
+        estimateRequestTokens({ messages: proposedSpan } as Context) +
+        estimateTextTokens(ctx.getSystemPrompt()) +
+        estimateTextTokens(JSON.stringify(activeToolDefinitions(pi)) ?? "");
+    const proposedBudget = summarizationBudgetTokens({
+        modelMaxTokens: model.maxTokens,
+        contextWindow: model.contextWindow,
+        requestTokens: proposedRequest,
+    });
+    // Floored here rather than in the budget, so a degenerate window is a clean skip and not a zero-token ask.
+    const maxTokens = Math.max(MIN_OUTPUT_TOKENS, proposedBudget);
+    // Where to cut, decided before the transcript is built: the repair moves the boundary earlier when core's
+    // choice would make a request the window cannot take, and the two budgets it weighs are stage 1's output and
+    // the instruction it appends, both of which exist at this point.
+    const branch = ctx.sessionManager.getBranch();
+    const cut = chooseSpanCut({
+        branch,
+        proposedFirstKeptEntryId: preparation.firstKeptEntryId,
+        boundary: countBoundary(branch),
+        liveTokens: ctx.getContextUsage()?.tokens ?? null,
+        keepRecentTokens: preparation.settings.keepRecentTokens,
+        contextWindow: model.contextWindow,
+        outputBudgetTokens: maxTokens,
+        instructionTokens,
+    });
+    // Stage 2's material stays core's span; the walk only narrows what stage 1 re-reads. Note the one-way
+    // dependency this implies: the chosen span's own message count is not knowable until the stage is built, and
+    // the stage needs a budget, so the budget is sized from the *proposed* span. The walk only ever moves the
+    // boundary earlier, so that count is an upper bound on the span and this budget is the conservative one.
     const span = summarizedSpan(preparation);
     const transcript = serializeConversationMinimal(span, serializerOptions(config));
     const stage: StageContext = {
@@ -856,24 +969,24 @@ async function compactWithPiCoder(
         customInstructions: event.customInstructions,
         config,
         maxTokens,
-        segmentTokens: segmentBudget(maxTokens),
         signal: event.signal,
         trace,
+        instruction,
+        cut,
+        tokensBefore: preparation.tokensBefore,
     };
 
     const failures: string[] = [];
-    const segment =
-        event.reason === "overflow"
-            ? undefined
-            : await runSegmentStage(stage, model).then((result) => {
-                  if (!result.ok) {
-                      failures.push(`segment: ${result.detail}`);
-                  }
-                  return result;
-              });
-    if (event.reason === "overflow") {
-        failures.push("segment: skipped (context overflow)");
-    }
+    // An overflow-triggered compaction used to skip stage 1 outright, on the reasoning that the live context
+    // provably does not fit. That is true of the live context and false of a shorter prefix of it, which is what
+    // the cut walk exists to find - so the attempt is made, and the fit gate inside it is the thing that decides.
+    const segment = await runSegmentStage(stage, model).then((result) => {
+        if (!result.ok) {
+            failures.push(`segment: ${result.detail}`);
+        }
+
+        return result;
+    });
 
     if (event.signal.aborted) {
         // Stage 1 died on a controller that is already dead, so a second request would only burn another one.
@@ -960,13 +1073,20 @@ async function compactWithPiCoder(
         return undefined;
     }
 
-    const result = composeResult(preparation, produced.text, produced.usage, {
-        version: 1,
-        route,
-        provider: model.provider,
-        model: model.id,
-        droppedBlocks: transcript.droppedBlocks,
-    });
+    const result = composeResult(
+        preparation,
+        produced.text,
+        produced.usage,
+        {
+            version: 1,
+            route,
+            provider: model.provider,
+            model: model.id,
+            droppedBlocks: transcript.droppedBlocks,
+        },
+        cut,
+        stage.tokensBefore,
+    );
     const details = result.details as PiCoderCompactionDetails;
     trace.final(reduced?.ok ? "serialized" : "native", result.summary, {
         firstKeptEntryId: result.firstKeptEntryId,

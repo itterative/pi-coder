@@ -70,17 +70,25 @@ export interface CompactionAttemptFields {
     /**
      * Estimated size of what this strategy sends, so a rejected native attempt explains itself. Comparable with
      * the provider's count for *this request* (`usage.input + cacheRead + cacheWrite`), never with
-     * `reportedContextTokens`: once the span is truncated the two describe different bodies. Stage 1 anchors this
-     * on a provider count taken from inside the span when it can - see `estimateSource`.
+     * `reportedContextTokens`: once the span is truncated the two describe different bodies. Stage 1 sizes this
+     * from the session's own counts when it can - see `estimateSource`.
      */
     estimatedTokens?: number;
     /**
-     * Which method produced `estimatedTokens`: a provider count anchored inside the span, or whole-body chars/4.
-     * The two have measured error rates an order of magnitude apart (+2% against +40% mean on the same recorded
-     * session), so a reader has to know which number they are being shown. Absent on records from before the
-     * anchor existed, which the report prints as its own state.
+     * Which method produced `estimatedTokens`: the provider's count of the very body being sent, a count
+     * anchored inside the span plus a tail estimate, or chars/4 over the whole body. They are not
+     * interchangeable - one is a measurement and two are guesses with measured error rates an order of magnitude
+     * apart - so a reader has to know which number they are being shown. Absent on records from before the
+     * counts existed, which the report prints as its own state.
      */
     estimateSource?: EstimateSource;
+    /**
+     * Stage 1 only: assistant rows inside or at the span that carried a token count but were rejected because
+     * the count predates a compaction or a model/thinking change. Its absence means there was nothing to
+     * reject; its presence beside `estimateSource: "chars4"` means the session *was* counted and the numbers
+     * expired, which is the state right after a fold with no reply since.
+     */
+    staleAnchors?: number;
     /**
      * `ctx.getContextUsage().tokens`: provider usage up to the last reply plus a chars/4 estimate of what
      * followed it, measured over the whole live context - a hybrid, and larger than any truncated request by the
@@ -93,6 +101,14 @@ export interface CompactionAttemptFields {
     droppedBlocks?: number;
     /** Stage 1 only: transcript entries copied into the in-memory span, and types that could not be. */
     copiedEntries?: number;
+    /**
+     * Stage 1 only: the boundary actually used, which is core's unless the repair found that one unsendable.
+     * Printed against `proposedFirstKeptEntryId`, because a moved cut nobody can see is indistinguishable from
+     * one that was never a choice.
+     */
+    chosenFirstKeptEntryId?: string;
+    /** Stage 1 only: the boundary core proposed, kept so a move can be measured after the fact. */
+    proposedFirstKeptEntryId?: string;
     skippedEntries?: number;
     /**
      * Stage 1 only: whether pi's `firstKeptEntryId` named an entry on this branch. False means the span came back
