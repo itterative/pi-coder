@@ -1,12 +1,16 @@
-import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { Usage } from "@earendil-works/pi-ai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PI_CODER_EXTENSION_DIR } from "../../src/common/constants";
+import {
+    bundleScript,
+    type BundledScript,
+    type BundledScriptResult,
+} from "../helpers/script-bundle";
 import type { SummarizationStrategy } from "../../src/modules/compaction/summarize";
 import {
     createCompactionTraceRecorder,
@@ -19,8 +23,6 @@ import {
 } from "../../src/modules/compaction/trace";
 
 const SCRIPT = path.join(PI_CODER_EXTENSION_DIR, "scripts", "compaction-report.ts");
-/** The report is TypeScript because it shares the record log with the recorder; tsx loads it without a build. */
-const TSX = ["--import", "tsx"];
 
 /**
  * A real llama.cpp trimmed run. It exists so "what a healthy run looks like" is pinned
@@ -94,12 +96,6 @@ interface ReportJson {
         divergences: Record<string, number>;
         models: Record<string, number>;
     };
-}
-
-interface ScriptResult {
-    status: number | null;
-    stdout: string;
-    stderr: string;
 }
 
 let workspace = "";
@@ -220,16 +216,12 @@ function writeHealthyRun(session: string): void {
     trace.outcome("two-stage");
 }
 
-function runScript(args: string[]): ScriptResult {
-    const result = spawnSync(process.execPath, [...TSX, SCRIPT, "--path", logPath, ...args], {
-        encoding: "utf8",
-    });
-
-    return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+function runScript(args: string[]): BundledScriptResult {
+    return script.run(["--path", logPath, ...args]);
 }
 
 /** Text mode must succeed silently, so any stderr here is a real bug rather than a skip note. */
-function runText(args: string[] = []): ScriptResult {
+function runText(args: string[] = []): BundledScriptResult {
     const result = runScript([...args]);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stderr).toBe("");
@@ -251,6 +243,18 @@ function flagKeys(report: ReportJson, session: string): string[] {
 
     return (run?.flags ?? []).map((flag) => flag.key);
 }
+
+let script: BundledScript;
+
+beforeAll(() => {
+    // This suite spawns the script 60+ times, so the ~130ms tsx launcher cost per call would dominate;
+    // bundle once and spawn plain node against the bundle (~30ms each) instead.
+    script = bundleScript(SCRIPT, "pi-compaction-report-");
+});
+
+afterAll(() => {
+    script.dispose();
+});
 
 beforeEach(() => {
     workspace = mkdtempSync(path.join(tmpdir(), "pi-compaction-report-"));
@@ -820,11 +824,7 @@ describe("compaction-report script", () => {
     });
 
     it("reads the captured llama.cpp run as a healthy compaction", () => {
-        const result = spawnSync(
-            process.execPath,
-            [...TSX, SCRIPT, "--path", HEALTHY_FIXTURE, "--json"],
-            { encoding: "utf8" },
-        );
+        const result = script.run(["--path", HEALTHY_FIXTURE, "--json"]);
         expect(result.status, result.stderr).toBe(0);
         const report = JSON.parse(result.stdout) as ReportJson;
 
@@ -847,13 +847,7 @@ describe("compaction-report script", () => {
         // Only the estimate note survives: chars/4 was 42% under this provider's own count.
         expect(run.flags.map((flag) => flag.key)).toEqual(["estimate-skew"]);
 
-        const text = spawnSync(
-            process.execPath,
-            [...TSX, SCRIPT, "--path", HEALTHY_FIXTURE, "--runs", "1"],
-            {
-                encoding: "utf8",
-            },
-        );
+        const text = script.run(["--path", HEALTHY_FIXTURE, "--runs", "1"]);
         expect(text.stdout).toContain("reference=chain  usable=true  verified=19/19");
         expect(text.stdout).not.toContain("degenerate-native-output");
         // The fixture carries no `model_response` records, so nothing reconstructs stage text.

@@ -29,6 +29,7 @@ keep_updated: true
 | a compaction event, summarized span, or provider summary response | `test/helpers/compaction-doubles.ts` → `compactEvent`, `compactionPreparation`, `userMessage`/`assistantMessage`/`toolResultMessage`/`bashExecutionMessage`/`customMessage`/`compactionSummaryMessage`, `messageChain`, `fileOperations`, `summaryResponse`, `toolCallResponse` | hand-built `AgentMessage` literals, or a `SessionManager` transcript you then have to parse |
 | driving a TUI component | `test/helpers.ts` → `KEY`, `mockTheme`, `press`, `type`, `paste`, `interact`, `renderText`, `snapshotText` | inline ANSI sequences, hand-rolled key strings |
 | temp dirs, SQLite, git repos for agent lifecycle | `test/tools/e2e/helpers.ts` → `createE2EPaths`, `withE2EMetadataDatabase`, `createScriptedChild`, `insertE2EAgentRun`, `createClaimedTaskWorkspace`, `initializeRepository` | ad-hoc `mkdtemp` plus open-by-hand |
+| a TypeScript script driven as a real CLI (argv, exit codes, stdout) | `test/helpers/script-bundle.ts` → `bundleScript(entry)` → `{ bundle, run, dispose }`; bundle once in `beforeAll`, `dispose()` in `afterAll` | spawning `node --import tsx <script>` per test call (~130ms each: node start plus the tsx loader; the bundle drops each spawn to ~30ms) |
 | template-string fixtures without indentation | `test/modules/memory/utils.ts` → `dedent` | manual leading-space stripping |
 
 ## `createPiStub` surface
