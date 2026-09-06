@@ -1,6 +1,6 @@
 ---
 name: compaction
-description: pi-coder's two-stage compaction in src/modules/compaction — native span read then serialized reduce, the in-memory span transcript, cache/prefix measurements, details.route schema, trace stages, config, and the failure-handling inventory with its known gaps.
+description: "pi-coder's two-stage compaction in src/modules/compaction — native span read then serialized reduce, the in-memory span transcript, cache/prefix measurements, details.route schema, trace stages, config, and the failure-handling inventory with its known gaps. Read first for a short system prompt (12,817c), an unexpected `obs=0`, or any prefix-cache divergence: those are settled facts here, not new findings."
 category: architecture
 priority: 4
 keep_updated: true
@@ -199,7 +199,28 @@ trace file** - which is not the same as "never recorded", because persistence ma
 rotated out of the window, or the session predates this build. See the `compaction-chain-blindness` memory for the experiment behind it, and the funnel section below
 for the three counts that replaced the single one.**
 
-## `cached=0` in a development session: what is explained and what is not
+## `cached=0` and a short system prompt: what is explained and what is not
+
+**Read this before theorizing about a system-prompt divergence or an unexpected `obs=0`.** A prompt of
+**12,817 chars** is pi's base prompt, and it means the compaction ran **outside an active agent run**; the live
+turns of these sessions carry ~24.8k. It costs the cache nothing and it is not a bug in the rebuild. The mechanism,
+now that it is settled: pi holds **two** prompt fields — `ctx.getSystemPrompt()` reads `agent.state.systemPrompt`
+(`core/agent-session.js:596-598` via `:1923`), while the request path uses `_systemPromptOverride ??
+_baseSystemPrompt` (`:286`). The override is set at `:902` and cleared in the `_runAgentPrompt` finally at `:753`,
+but `state.systemPrompt` is only written back to base at `:908` (a turn whose handlers returned no override) and
+`:1779`, so the accessor and the request path can disagree, and a compaction not inside a run sees base.
+
+Two corollaries, both read off the code rather than inferred from a trace:
+
+- **The base prompt is not a prefix of the override.** All five pi-coder `before_agent_start` handlers insert at the
+  same interior anchor `</project_context>`, so the later handler lands *earlier*: base head, `<bash_sandbox>`,
+  `<delegated_agents>`, `<todolist_system>`, `<scratchpad_system>`, `<memory_system>`, then pi's base tail
+  (`<available_skills>` + the cwd line). Only the head up to the anchor and the tail survive, so "re-send base plus
+  our blocks" cannot reproduce a live turn's bytes — and `buildSystemPrompt` is not exported, so base is not
+  re-derivable from what we hold. Do not propose reconstructing the prompt on the strength of a size delta.
+- The scratchpad path inside `<scratchpad_system>`/`<todolist_system>` is **session**-stable, not per-load
+  (`restoreOrCreateScratchpad` replays the `pi-coder:scratchpad` entry), so it is not a cross-restart cache problem
+  either.
 
 **Do not claim memory edits break the cache mid-session. That was measured false on 2026-09-05.** The memory
 index is deliberately frozen: `session_start` restores it from the `pi-memory:memory-index` custom entry in the
@@ -256,6 +277,25 @@ own for all 362 comparable messages, `prompt_cache_key` and `prompt_cache_retent
 the reuse; both are outside our control, and only a provider that reports differently can tell them apart. The
 local llama.cpp endpoint does report reuse, which is what makes the silence look like a reporting gap rather than
 a caching one.
+
+**Updated 2026-09-06: that endpoint does report reuse, so "does not report" is off the table.** A later hosted run
+(10:23, same session) returned `cached=4096` on 26.6k fresh tokens. The question narrowed from "does it cache or
+does it report" to "it reports a hit at 30 KB and nothing at 330 KB" - a size or window threshold, not a silent
+endpoint. Read a hosted `cache-read-zero` as that question, never as proof about our own prefix.
+
+### The instrument names the gate now, not the conjunction
+
+`obs=0` was ambiguous between "nothing on the branch" and "the shape filter rejected everything on it", and the
+suspect asserted *both* halves - on the 10:23 run, where `toolsHash` was identical across three processes and only
+the prompt moved, that pointed at a tool-set change that never happened. `compareObservation` knows which predicate
+fired and reports only a comparison, so `prefixVerdict` now counts rejections per gate (`rejectSystemHash` /
+`rejectToolsHash`, non-exclusive, printed beside the funnel) and every sentence that used to presume derives from
+those counts: the run line shows `rej=4sys/0tools`, `chain-incomparable` prints the counts, and
+`prefix-uncomparable` stays silent when the shape gate emptied the funnel because that cause is already named - two
+flags for one fact is how a reader debugs the wrong one. `incomparable-without-rejection` is the invariant for the
+state `compareObservation` cannot produce: an emptied funnel neither counter accounts for. Records predating the
+counters print "(record predates the rejection counters)" rather than having a cause inferred for them, which is
+what the live 10:23 record still prints.
 
 ## The prefix funnel, and unknowns the record states itself
 

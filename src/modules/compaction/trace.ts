@@ -210,6 +210,19 @@ export interface CompactionPrefixFields {
     /** Chain entries whose leaf sits on the current branch, before the shape filter. */
     branchObservations: number;
     /**
+     * How many on-branch requests each half of the shape filter rejected.
+     *
+     * Counted per gate and not exclusive: an entry differing in both prompt and tools is counted twice, so the two
+     * can sum above `branchObservations`. `observations` is already the count that passed both gates, which is why
+     * there is no third number here - and why a zero on both, with entries on the branch and nothing comparable,
+     * is a contradiction the report flags rather than a state it has to explain.
+     *
+     * The suspects read these rather than restating the filter as a fixed conjunction. The conjunction claimed a
+     * tool-set difference on a run where every row on the branch carried the same tool hash.
+     */
+    rejectSystemHash: number;
+    rejectToolsHash: number;
+    /**
      * The newest on-branch request as the chain recorded it, comparable or not.
      *
      * Absent when nothing was on the branch. This is the parent side of `ourRequest`, so "did our rebuild carry

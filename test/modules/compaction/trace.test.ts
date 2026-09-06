@@ -526,6 +526,80 @@ describe("compaction trace", () => {
         });
     });
 
+    it("names the tool set as the gate that rejected, when only the tools moved", async () => {
+        const parentBody = {
+            model: "stub-model",
+            system: "the live system prompt",
+            tools: [{ name: "bash", input_schema: { type: "object" } }],
+            messages: [{ role: "user", content: "fix the compaction module" }],
+        };
+        const harness = build({
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
+            providerPayload: {
+                ...parentBody,
+                // One tool more than pi sent, prompt identical. A suspect that asserted both halves would blame
+                // the prompt here, which is the false conjunction that cost a debugging pass on live data.
+                tools: [...parentBody.tools, { name: "agent", input_schema: { type: "object" } }],
+                messages: [...parentBody.messages, { role: "user", content: "instruction" }],
+            },
+        });
+        const observe = harness.piStub.requireHandler("before_provider_request", 0);
+        await observe({ type: "before_provider_request", payload: parentBody }, harness.ctx);
+
+        await harness.compact();
+
+        const prefix = readRecords(tracePath).find((record) => record.stage === "prefix")?.prefix;
+        expect(prefix).toMatchObject({
+            observations: 0,
+            branchObservations: 1,
+            rejectSystemHash: 0,
+            rejectToolsHash: 1,
+        });
+        expect(prefix?.unknowns).toContain(
+            "1 on-branch requests are not comparable to ours: 0 differ in the system prompt, 1 in the tool set: prefix reuse unverifiable",
+        );
+        expect(prefix?.divergences).toContain("tools");
+    });
+
+    it("names the system prompt as the gate that rejected, when only the prompt moved", async () => {
+        const parentBody = {
+            model: "stub-model",
+            system: "the live system prompt with the extension blocks",
+            tools: [{ name: "bash", input_schema: { type: "object" } }],
+            messages: [{ role: "user", content: "fix the compaction module" }],
+        };
+        const harness = build({
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
+            providerPayload: {
+                // The idle-process case: `ctx.getSystemPrompt()` answered with pi's base prompt while the tool set
+                // carried on unchanged, so only the prompt half of the filter may report a rejection.
+                ...parentBody,
+                system: "the base prompt, with nothing injected",
+                messages: [...parentBody.messages, { role: "user", content: "instruction" }],
+            },
+        });
+        const observe = harness.piStub.requireHandler("before_provider_request", 0);
+        await observe({ type: "before_provider_request", payload: parentBody }, harness.ctx);
+
+        await harness.compact();
+
+        const prefix = readRecords(tracePath).find((record) => record.stage === "prefix")?.prefix;
+        expect(prefix).toMatchObject({
+            observations: 0,
+            branchObservations: 1,
+            rejectSystemHash: 1,
+            rejectToolsHash: 0,
+        });
+        expect(prefix?.unknowns).toContain(
+            "1 on-branch requests are not comparable to ours: 1 differ in the system prompt, 0 in the tool set: prefix reuse unverifiable",
+        );
+        expect((prefix?.divergences ?? []).some((text) => text.startsWith("system("))).toBe(true);
+    });
+
     it("states the blind spot when the reference predates the decode fields", async () => {
         // A row recorded by an older build carries no values at all. Silence there would read as agreement, so
         // the record has to say it cannot tell - which is the same rule that made an empty chain print as

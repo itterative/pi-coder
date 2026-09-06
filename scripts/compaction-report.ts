@@ -348,6 +348,9 @@ function normalizePrefix(prefix) {
         // three, which let "nothing observed" and "observed plenty, matched none" share one rendering.
         chainObservations: prefix.chainObservations,
         branchObservations: prefix.branchObservations,
+        // Which half of the shape filter rejected the on-branch entries, and how many passed both.
+        rejectSystemHash: prefix.rejectSystemHash,
+        rejectToolsHash: prefix.rejectToolsHash,
         ourSystemChars: prefix.ourRequest?.systemChars,
         ourSystemHash: prefix.ourRequest?.systemHash,
         parentSystemChars: prefix.parentRequest?.systemChars,
@@ -737,6 +740,20 @@ function invariantViolations(runs) {
                 "hash-length-conflict",
                 `identical system hash over ${prefix.parentSystemChars}c and ${prefix.ourSystemChars}c prompts`,
             ],
+            [
+                // Nothing comparable, entries on the branch, and neither hash differs: the filter rejected rows for
+                // a reason the counters cannot name, so either the counters or the filter is lying.
+                typeof branch === "number" &&
+                    branch > 0 &&
+                    typeof comparable === "number" &&
+                    comparable === 0 &&
+                    typeof prefix.rejectSystemHash === "number" &&
+                    typeof prefix.rejectToolsHash === "number" &&
+                    prefix.rejectSystemHash === 0 &&
+                    prefix.rejectToolsHash === 0,
+                "incomparable-without-rejection",
+                `${branch} on-branch entries, none comparable, and no hash differs`,
+            ],
         ];
 
         for (const [violated, key, detail] of checks) {
@@ -747,6 +764,74 @@ function invariantViolations(runs) {
     }
 
     return out;
+}
+
+/**
+ * Say which half of the shape filter rejected, from the counters the record carries.
+ *
+ * The sentence used to be a fixed conjunction - "share neither our system prompt nor our tool set" - and it was
+ * false on the run that made this worth fixing: every entry on the branch carried the same tool hash, and only the
+ * prompt differed. Both counts always print, because this suspect only fires when nothing passed both gates, so a
+ * zero is one gate staying innocent rather than a value that went unmeasured. A record written before the counters
+ * existed names itself as such rather than having a cause inferred for it.
+ */
+function incomparableDetail(prefix) {
+    const onBranch = prefix.branchObservations;
+    const system = prefix.rejectSystemHash;
+    const tools = prefix.rejectToolsHash;
+
+    if (typeof system !== "number" || typeof tools !== "number") {
+        return `${onBranch} on-branch entries were not comparable (record predates the rejection counters)`;
+    }
+
+    return `${onBranch} on-branch entries, ${system} rejected by the system prompt and ${tools} by the tool set`;
+}
+
+/**
+ * Explain a reference that could not reach the span's depth, or stay silent when the shape gate did it.
+ *
+ * A shape rejection and a depth shortfall used to print as one sentence about depths - on the run that prompted
+ * this, a run where nothing had been compared at all, which pointed at the cut point while the request body was
+ * the cause. Where the counters show the shape gate rejected every entry, `chain-incomparable` already names the
+ * cause and a second flag for the same fact would only double-count it.
+ */
+function prefixUncomparableSuspect(prefix) {
+    const uncomparable =
+        prefix !== undefined &&
+        prefix.reference === "chain" &&
+        typeof prefix.comparableDepth === "number" &&
+        prefix.comparableDepth <= 0;
+
+    if (uncomparable === false) {
+        return null;
+    }
+
+    const depths = `reference reached depth ${dash(prefix.referenceDepth)}, the span carried ${dash(prefix.ourCount)}`;
+
+    if (number(prefix.observations) > 0) {
+        return {
+            key: "prefix-uncomparable",
+            detail: `no reference shared a depth with the span: ${depths}`,
+        };
+    }
+
+    if (typeof prefix.rejectSystemHash !== "number" || typeof prefix.rejectToolsHash !== "number") {
+        // A record from before the counters can name no gate, so the depth sentence stands on its own - which is
+        // the ambiguity the counters exist to remove.
+        return { key: "prefix-uncomparable", detail: depths };
+    }
+
+    if (prefix.rejectSystemHash > 0 || prefix.rejectToolsHash > 0) {
+        return null;
+    }
+
+    // Nothing was compared and neither gate rejected anything, which `compareObservation` cannot produce: it
+    // returns a comparison for every row that passes both hashes. `incomparable-without-rejection` flags the
+    // instrument there, and the depth sentence is all this record can honestly say.
+    return {
+        key: "prefix-uncomparable",
+        detail: `no rejection accounts for the empty comparison: ${depths}`,
+    };
 }
 
 /**
@@ -782,7 +867,7 @@ function chainFunnelSuspects(prefix) {
     } else if (comparable === 0) {
         out.push({
             key: "chain-incomparable",
-            detail: `${onBranch} on-branch entries share neither our system prompt nor our tool set`,
+            detail: incomparableDetail(prefix),
         });
     }
 
@@ -849,18 +934,11 @@ function flagRun(run, options) {
         });
     }
 
-    // The reference existed but nothing in it reached the depth our span carried: no verdict is possible, and
-    // an earlier version of this code called that "unusable".
-    const uncomparable =
-        prefix !== undefined &&
-        prefix.reference === "chain" &&
-        typeof prefix.comparableDepth === "number" &&
-        prefix.comparableDepth <= 0;
-    if (uncomparable) {
-        out.push({
-            key: "prefix-uncomparable",
-            detail: `reference reached depth ${dash(prefix.referenceDepth)}, the span carried ${dash(prefix.ourCount)}`,
-        });
+    // The reference existed but nothing in it reached the depth our span carried: no verdict is possible, and an
+    // earlier version of this code called that "unusable".
+    const depthGap = prefixUncomparableSuspect(prefix);
+    if (depthGap !== null) {
+        out.push(depthGap);
     }
 
     if (
@@ -1177,6 +1255,15 @@ function renderRunBlock(run, flags, options) {
             bits.push(
                 `chain=${prefix.chainObservations}/${prefix.branchObservations}/${prefix.observations}`,
             );
+        }
+        // Which gate emptied the funnel, printed beside the empty funnel: a `chain=9/4/0` line otherwise asks the
+        // reader to open the suspects just to learn whether the prompt or the tools moved.
+        if (
+            prefix.observations === 0 &&
+            typeof prefix.rejectSystemHash === "number" &&
+            typeof prefix.rejectToolsHash === "number"
+        ) {
+            bits.push(`rej=${prefix.rejectSystemHash}sys/${prefix.rejectToolsHash}tools`);
         }
         if (typeof prefix.ourSystemChars === "number") {
             bits.push(`sys=${prefix.ourSystemChars}c`);

@@ -1,4 +1,11 @@
-import { appendFileSync, mkdtempSync, renameSync, rmSync } from "node:fs";
+import {
+    appendFileSync,
+    mkdtempSync,
+    readFileSync,
+    renameSync,
+    rmSync,
+    writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -194,6 +201,8 @@ function healthyPrefix(overrides: Partial<CompactionPrefixFields> = {}): Compact
         observations: 3,
         chainObservations: 3,
         branchObservations: 3,
+        rejectSystemHash: 0,
+        rejectToolsHash: 0,
         parentRequest: {
             model: "test-model",
             systemChars: 1200,
@@ -260,6 +269,48 @@ function flagKeys(report: ReportJson, session: string): string[] {
     expect(run, `no run for session ${session}`).toBeDefined();
 
     return (run?.flags ?? []).map((flag) => flag.key);
+}
+
+function flagDetail(report: ReportJson, session: string, key: string): string {
+    const flags = report.runs.find((candidate) => candidate.session === session)?.flags ?? [];
+    const flag = flags.find((candidate) => candidate.key === key);
+    expect(flag, `no ${key} flag for ${session}`).toBeDefined();
+
+    return String(flag?.detail ?? "");
+}
+
+/** A complete native run carrying the prefix record under test. */
+function runWithPrefix(session: string, fields: Partial<CompactionPrefixFields>): void {
+    const trace = recorder(session);
+    const summary = checkpoint("## Goal", 4000);
+    trace.prefix(healthyPrefix(fields));
+    trace.attempt("native", nativeFields(), accepted({ usage: usage(2000, 1500, 30000) }));
+    trace.modelResponse("native", summary);
+    trace.final("native", summary, finalFields());
+    trace.outcome("native");
+}
+
+/**
+ * Schema drift only: a prefix record as a build before the rejection counters wrote it.
+ *
+ * The recorder cannot produce one, and inventing a cause for those records is the failure this guards.
+ */
+function stripCounters(session: string): void {
+    const lines = readFileSync(logPath, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { session?: string; stage?: string; prefix?: unknown });
+
+    for (const line of lines) {
+        if (line.stage !== "prefix" || line.session !== session) {
+            continue;
+        }
+        const prefix = line.prefix as Partial<CompactionPrefixFields>;
+        delete prefix.rejectSystemHash;
+        delete prefix.rejectToolsHash;
+    }
+
+    writeFileSync(logPath, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
 }
 
 let script: BundledScript;
@@ -406,7 +457,26 @@ describe("compaction-report script", () => {
             [
                 "sess-incomparable",
                 "chain-incomparable",
-                { chainObservations: 9, branchObservations: 4, observations: 0 },
+                {
+                    chainObservations: 9,
+                    branchObservations: 4,
+                    observations: 0,
+                    rejectSystemHash: 4,
+                    rejectToolsHash: 0,
+                },
+            ],
+            [
+                "sess-partial",
+                "chain-incomparable",
+                {
+                    // Two of four rejected on the prompt and two comparable: the funnel is not empty, so the
+                    // suspect stays off and only the counts can tell this story.
+                    chainObservations: 9,
+                    branchObservations: 4,
+                    observations: 2,
+                    rejectSystemHash: 2,
+                    rejectToolsHash: 0,
+                },
             ],
         ];
 
@@ -424,8 +494,17 @@ describe("compaction-report script", () => {
         expect(flagKeys(report, "sess-cold")).toContain("chain-empty");
         expect(flagKeys(report, "sess-off-branch")).toContain("chain-off-branch");
         expect(flagKeys(report, "sess-incomparable")).toContain("chain-incomparable");
+        expect(flagKeys(report, "sess-partial")).not.toContain("chain-incomparable");
+        // Which gate rejected, named in the suspect rather than asserted about both halves: the old sentence
+        // claimed a tool-set difference on a run whose tool set was identical.
+        expect(flagDetail(report, "sess-incomparable", "chain-incomparable")).toBe(
+            "4 on-branch entries, 4 rejected by the system prompt and 0 by the tool set",
+        );
         // The funnel prints, oldest state first: held / on branch / comparable.
         expect(runText(["--session", "sess-off-branch"]).stdout).toContain("chain=9/0/0");
+        expect(runText(["--session", "sess-incomparable"]).stdout).toContain("rej=4sys/0tools");
+        expect(runText(["--session", "sess-partial"]).stdout).toContain("chain=9/4/2");
+        expect(runText(["--session", "sess-partial"]).stdout).not.toContain("rej=");
     });
 
     it("flags a prompt difference that no length figure could show", () => {
@@ -508,6 +587,82 @@ describe("compaction-report script", () => {
         const text = runText().stdout;
         expect(text).toContain("INVARIANTS");
         expect(text).toContain("mismatch-inside-verified");
+    });
+
+    it("separates a reference too shallow for the span from one the shape gate rejected", () => {
+        runWithPrefix("sess-depth-gap", {
+            prefixUsable: undefined,
+            comparableDepth: -1,
+            commonPrefixMessages: -1,
+            verifiedThrough: false,
+            observations: 2,
+            referenceDepth: 90,
+            ourMessageCount: 12,
+        });
+        runWithPrefix("sess-shape-gate", {
+            prefixUsable: undefined,
+            comparableDepth: -1,
+            commonPrefixMessages: -1,
+            verifiedThrough: false,
+            observations: 0,
+            chainObservations: 9,
+            branchObservations: 3,
+            rejectSystemHash: 3,
+            rejectToolsHash: 0,
+            ourMessageCount: 12,
+        });
+
+        const report = parseReport();
+        expect(flagKeys(report, "sess-depth-gap")).toContain("prefix-uncomparable");
+        expect(flagDetail(report, "sess-depth-gap", "prefix-uncomparable")).toContain(
+            "no reference shared a depth with the span",
+        );
+        // One fact, one flag. The shape gate is `chain-incomparable`'s to name, and printing a depth sentence over
+        // it pointed at the cut point on a run where the request body was the cause.
+        expect(flagKeys(report, "sess-shape-gate")).not.toContain("prefix-uncomparable");
+        expect(flagKeys(report, "sess-shape-gate")).toContain("chain-incomparable");
+    });
+
+    it("says a record predates the counters rather than guessing a cause for it", () => {
+        runWithPrefix("sess-old-record", {
+            prefixUsable: undefined,
+            comparableDepth: -1,
+            commonPrefixMessages: -1,
+            verifiedThrough: false,
+            observations: 0,
+            chainObservations: 9,
+            branchObservations: 3,
+        });
+        stripCounters("sess-old-record");
+
+        const report = parseReport();
+        expect(flagDetail(report, "sess-old-record", "chain-incomparable")).toContain(
+            "record predates the rejection counters",
+        );
+        expect(runText(["--session", "sess-old-record"]).stdout).not.toContain("rej=");
+        // Without counters the depth flag stays on, since nothing else in the record can say why it fired.
+        expect(flagKeys(report, "sess-old-record")).toContain("prefix-uncomparable");
+        expect(flagDetail(report, "sess-old-record", "prefix-uncomparable")).not.toContain(
+            "no reference shared a depth",
+        );
+    });
+
+    it("flags an emptied funnel that no rejection accounts for", () => {
+        runWithPrefix("sess-unaccounted", {
+            prefixUsable: undefined,
+            comparableDepth: -1,
+            commonPrefixMessages: -1,
+            verifiedThrough: false,
+            observations: 0,
+            chainObservations: 9,
+            branchObservations: 3,
+            rejectSystemHash: 0,
+            rejectToolsHash: 0,
+        });
+
+        // `compareObservation` returns a comparison for every row passing both hashes, so this record describes
+        // an instrument that disagrees with itself, which is not a finding about anyone's cache.
+        expect(runText().stdout).toContain("incomparable-without-rejection");
     });
 
     it("reports a broken instrument as an invariant violation, not as a finding", () => {

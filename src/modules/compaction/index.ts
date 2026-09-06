@@ -290,6 +290,7 @@ function prefixVerdict(
     const pathIds = pathIdSet(branch);
     const chain = chainFor(sessionManager, cwd);
     const onBranch = chain.branchObservations(pathIds);
+    const rejects = shapeRejections(onBranch, shape);
     // Fold only the span. `buildNativeContext` appends exactly one instruction message, and pi never sent
     // that one, so leaving it in the ladder would guarantee a mismatch at our own last depth and re-raise the
     // tail artifact the chain exists to avoid.
@@ -327,6 +328,7 @@ function prefixVerdict(
         held: chain.size,
         onBranch: onBranch.length,
         compared: match.compared,
+        rejects,
         retentionDropped: match.truncatedHistory,
         hydration: chain.hydration,
     });
@@ -361,6 +363,8 @@ function prefixVerdict(
         observations: match.compared,
         chainObservations: chain.size,
         branchObservations: onBranch.length,
+        rejectSystemHash: rejects.system,
+        rejectToolsHash: rejects.tools,
         parentRequest: parentRequestFields(parent),
         historyTruncated: match.truncatedHistory,
         modelDivergence: match.modelDivergence,
@@ -393,6 +397,31 @@ function shapeDivergences(
     }
 
     return out;
+}
+
+/**
+ * Count the on-branch requests each half of the shape filter rejected.
+ *
+ * `compareObservation` knows which predicate fired but reports only a comparison, so a run with nothing
+ * comparable could say no more than "neither our system prompt nor our tool set" - a conjunction that read as a
+ * tool-set difference on a run whose tool set was identical. Re-counting here costs two comparisons per row; the
+ * alternative was widening `ChainMatch` with a diagnostic the match itself never uses. The count is per gate and
+ * deliberately not exclusive: an entry differing in both is counted twice.
+ */
+function shapeRejections(observations: readonly ChainObservation[], shape: ChainShape) {
+    let system = 0;
+    let tools = 0;
+
+    for (const observation of observations) {
+        if (observation.systemHash !== shape.systemHash) {
+            system += 1;
+        }
+        if (observation.toolsHash !== shape.toolsHash) {
+            tools += 1;
+        }
+    }
+
+    return { system, tools };
 }
 
 /** The parent side of the shape comparison, present whenever anything on this branch was observed. */
@@ -474,6 +503,7 @@ function prefixUnknowns(input: {
     held: number;
     onBranch: number;
     compared: number;
+    rejects: { system: number; tools: number };
     retentionDropped: boolean;
     hydration: { scanComplete: boolean; loadFailed: boolean; malformed: number };
 }): string[] {
@@ -494,8 +524,11 @@ function prefixUnknowns(input: {
             `chain holds ${String(input.held)} but none on this branch: prefix reuse unverifiable here`,
         );
     } else if (input.compared === 0) {
+        // Both counts print, zeros included: one number per gate, so a run where only the prompt moved cannot be
+        // read as a tool-set change. `observations === 0` already means no entry passed both gates, so a pair of
+        // zeros here is a contradiction, and the report's invariants name it as one.
         unknowns.push(
-            `${String(input.onBranch)} on-branch requests share neither our system prompt nor tool set: prefix reuse unverifiable`,
+            `${String(input.onBranch)} on-branch requests are not comparable to ours: ${String(input.rejects.system)} differ in the system prompt, ${String(input.rejects.tools)} in the tool set: prefix reuse unverifiable`,
         );
     }
 
