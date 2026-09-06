@@ -163,7 +163,7 @@ export interface CompactionPrefixFields {
     divergences: string[];
     /** True when our span is shorter than the reference: stage 1 truncating at the cut point, by design. */
     truncated?: boolean;
-    /** Body keys only one side sent, e.g. `+tool_choice`. Informational, never a verdict. */
+    /** Body keys only one side sent, e.g. `+presence_penalty`. Informational, never a verdict. */
     parameters: string[];
     ourMessageCount: number;
     /** Deepest reference depth our hashes agreed with. -1 when nothing agreed. */

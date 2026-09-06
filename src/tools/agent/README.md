@@ -106,7 +106,10 @@ extension list, run the manual pass:
    check the `compaction` entry's `details.route` matches the `outcome`, its `usage` is non-zero (so session
    totals keep counting summarization work), and `summary` opens with pi's `## Goal` section, which is what the
    transcript preview renders.
-4. Repeat once against a provider that ignores `tool_choice` (for example the local llama.cpp provider, which
-   is also the easiest place to see a real `cacheRead` on the native `attempt`). The expected outcome is a
-   rejected native `attempt` whose detail names the tool the model called, an `outcome: "serialized"` record
-   with `details.route: "serialized"` — not a stalled or failed run.
+4. Repeat once against a provider whose model answers the checkpoint instruction with a tool call (the local
+   llama.cpp provider is the easiest place to see this, and to see a real `cacheRead` on the native `attempt`).
+   The expected outcome is a rejected native `attempt` whose detail names the tool the model called, an
+   `outcome: "serialized"` record with `details.route: "serialized"` — not a stalled or failed run. What this
+   check cannot see: a call the server leaves unparsed arrives as text at the end of the summary and is
+   accepted, which is why `tool_choice` is no longer sent at all. Inspect the tail of the native
+   `model_response` text for a stray `</tool_call>`.

@@ -1317,7 +1317,7 @@ function renderReport(runs, analysis, stats, options) {
     out.push(
         renderCountSection(
             "PREFIX PARAMETERS",
-            "request keys only one side sent - expected while tool_choice carries the prohibition",
+            "request keys only one side sent - our body should now match what pi sends, so look at any delta",
             analysis.parameters,
             options,
             (key) => key,

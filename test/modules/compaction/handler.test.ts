@@ -112,14 +112,17 @@ describe("compaction stages", () => {
         expect(payload?.details.route).toBe("two-stage");
     });
 
-    it("stage 1 keeps the parent's system prompt, tools, and session, with calls disabled", async () => {
+    it("stage 1 keeps the parent's system prompt, tools, and session, and adds no tool_choice", async () => {
         const h = build({ responses: [segmentSummary, reducedSummary] });
         await h.compact();
 
         const { context } = h.calls[0];
         expect(context.systemPrompt).toBe(SYSTEM_PROMPT);
         expect(context.tools?.map((tool) => tool.name)).toEqual(["bash", "read"]);
-        expect(h.optionField(0, "toolChoice")).toBe("none");
+        // Not sent at all: it was the one body key our request carried that pi's does not, and on a server that
+        // parses in-band calls by grammar, suppressing the parser is worse than not calling one. The stage 1
+        // instruction forbids tool calls in words, and a parsed call in the response rejects this rung.
+        expect(h.optionField(0, "toolChoice")).toBeUndefined();
         expect(h.optionField(0, "cacheRetention")).toBeUndefined();
         expect(h.optionField(0, "sessionId")).toBe(SESSION_ID);
         // Stage 1 gets a third of pi's history budget: it writes an intermediate, not the final draft.
@@ -275,7 +278,8 @@ describe("compaction stages", () => {
         const payload = await h.compact();
 
         expect(h.calls).toHaveLength(2);
-        expect(h.optionField(0, "toolChoice")).toBe("none");
+        // Stage 1 is the rung that sends tools, so this is what identifies the rejected call as the native one.
+        expect(h.calls[0].context.tools).toHaveLength(2);
         expect(h.requestText(1)).not.toContain("<segment-checkpoint>");
         expect(payload?.summary).toContain("reduced final checkpoint");
         expect(payload?.details.route).toBe("serialized");

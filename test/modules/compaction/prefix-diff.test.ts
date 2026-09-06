@@ -104,9 +104,9 @@ describe("request shape fingerprinting", () => {
     });
 
     it("sorts body keys so a parameter difference reads as a set difference", () => {
-        const shape = requestShape(anthropicBody({ extra: { tool_choice: "none" } }));
+        const shape = requestShape(anthropicBody({ extra: { presence_penalty: 0.5 } }));
         expect(shape.keys).toEqual([...shape.keys].sort((a, b) => a.localeCompare(b)));
-        expect(shape.keys).toContain("tool_choice");
+        expect(shape.keys).toContain("presence_penalty");
     });
 
     it("survives a payload it cannot understand", () => {

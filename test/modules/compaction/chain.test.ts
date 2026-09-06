@@ -197,7 +197,7 @@ describe("request chain", () => {
     });
 
     it("reports body keys as parameters rather than a verdict", () => {
-        // `tool_choice` is something we add; the reference never sent it. That must not read as divergence.
+        // A sampling parameter one side added and the other did not is a parameter, not a prefix divergence.
         const body = messages(3);
         const chain = new RequestChain();
         chain.observe({ leafId: LEAF_A, messages: body, shape: shape() });
@@ -205,9 +205,9 @@ describe("request chain", () => {
         const match = chain.match({
             spanLadder: messageLadder(body),
             pathIds: pathIdSet([{ id: LEAF_A }]),
-            shape: shape({ keys: ["messages", "model", "tool_choice", "tools"] }),
+            shape: shape({ keys: ["messages", "model", "presence_penalty", "tools"] }),
         });
-        expect(match.parameters).toEqual(["+tool_choice"]);
+        expect(match.parameters).toEqual(["+presence_penalty"]);
         expect(match.verifiedTo).toBe(3);
     });
 

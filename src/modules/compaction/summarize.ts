@@ -25,7 +25,7 @@ import {
 /**
  * The two summarization strategies, and the shape their caller cascades over.
  *
- * Both are allowed to fail: a provider that ignores `toolChoice`, a summary that comes back empty, a
+ * Both are allowed to fail: a model that answers with a tool call, a summary that comes back empty, a
  * request that turns out too large. Each failure is a value, never an exception, because the handler that
  * owns the cascade must be able to fall through to pi's own compaction rather than abort it.
  */
@@ -35,7 +35,7 @@ export type SummarizationStrategy = "native" | "serialized";
 /**
  * What one strategy call returns: usable summary text, or the reason it is unusable.
  *
- * `usage` is reported on both arms — a response that ignored `tool_choice` still cost tokens, and that is
+ * `usage` is reported on both arms — a response we reject still cost tokens, and that is
  * the evidence the trace wants. So is `stopReason`: the trace cannot tell a complete answer from one the
  * output limit cut off unless the provider's own word for it is carried out of the response.
  *
@@ -114,8 +114,13 @@ function attemptedToolCall(response: AssistantMessage): string | undefined {
  * Turn a provider response into summary text, rejecting anything that tried to keep working.
  *
  * We sit outside the agent loop, so a tool call in this response would never execute. That is not a
- * failure to paper over: a model that ignored `toolChoice: "none"` is a model that will also ignore the
- * rest of the directive, so the caller should cascade to the strategy that sends no tools at all.
+ * failure to paper over: a model that answers the checkpoint instruction by calling a tool is not going to
+ * honour the rest of it either, so the caller cascades to the strategy that sends no tools at all.
+ *
+ * Detection limit, recorded because it is now load-bearing: this looks for a parsed `toolCall` block. A call
+ * that arrives unparsed - literal text at the end of the summary, which is what a server-side template emits
+ * when its grammar is not applied - carries no such block, so it passes as a complete answer, and the section
+ * guard cannot see it either because the surviving headings still count.
  */
 export function evaluateSummarizationResponse(
     response: AssistantMessage,
@@ -144,7 +149,7 @@ export function evaluateSummarizationResponse(
             stopReason,
             cause: "content",
             retries: 0,
-            detail: `model called "${tool}" instead of summarizing; this provider does not honor tool_choice none`,
+            detail: `model called "${tool}" instead of summarizing despite the no-tools instruction`,
         };
     }
     // A reply cut off by the output limit is missing its tail, and for stage 1 that is the worst place to
@@ -313,7 +318,13 @@ async function callForSummary(
     }
 }
 
-/** Continue the live conversation with a summarize instruction and no usable tools. */
+/**
+ * Continue the live conversation with a summarize instruction, tools still attached.
+ *
+ * The tools are deliberately left in the request: they sit before the messages in the serialized body, so
+ * dropping them would move the prefix the provider has already cached. The prohibition is carried by the
+ * instruction text instead, and by this function's caller rejecting a response that ignored it.
+ */
 export async function summarizeNatively(
     call: SummarizationCall,
     context: Context,
@@ -332,9 +343,12 @@ export async function summarizeNatively(
                       },
                   }
                 : {}),
-            // The field every capable provider understands; the instruction message is the backstop for
-            // the ones that do not, and a tool call in the response cascades us off this path.
-            toolChoice: "none",
+            // No `toolChoice: "none"` here, deliberately, though this used to send it. It was the one body key
+            // our rebuilt request carried that pi's own requests do not, so it was the only thing standing
+            // between this request and byte-equality with the cached prefix - and on a server that parses
+            // in-band calls by grammar rather than by parameter, asking for no tool calls plausibly turns that
+            // parser off and gets the call back as text, where no response check can see it. The stage 1
+            // instruction says not to call tools in words; that is the whole prohibition now.
             ...(call.sessionId ? { sessionId: call.sessionId } : {}),
         },
         "native",

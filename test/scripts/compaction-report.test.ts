@@ -165,7 +165,7 @@ function healthyPrefix(overrides: Partial<CompactionPrefixFields> = {}): Compact
         firstDivergence: "verified",
         divergences: [],
         truncated: true,
-        parameters: ["+tool_choice"],
+        parameters: ["+presence_penalty"],
         ourMessageCount: 43,
         commonPrefixMessages: 42,
         comparableDepth: 42,
@@ -697,7 +697,7 @@ describe("compaction-report script", () => {
                 strategy: "native",
                 prefix: {
                     prefixUsable: false,
-                    firstDivergence: "keys:+tool_choice",
+                    firstDivergence: "keys:+presence_penalty",
                     referenceDepth: 42,
                     ourMessageCount: 44,
                     commonPrefixMessages: 0,

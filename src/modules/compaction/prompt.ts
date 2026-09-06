@@ -138,8 +138,9 @@ export interface SegmentInstructionInput {
 
 /**
  * Stage 1: appended to the truncated live conversation, whose tools are deliberately left intact so the
- * request stays a strict prefix of what the provider already cached. `tool_choice: "none"` carries the
- * prohibition; the wording below is the backstop for endpoints that ignore that field.
+ * request stays a strict prefix of what the provider already cached. The wording below is the only thing
+ * forbidding a tool call - `tool_choice` is not sent, both to keep the body key-identical to what pi sends and
+ * because suppressing the parser is worse than not calling one.
  */
 export function segmentSummaryInstruction(input: SegmentInstructionInput): string {
     const { preparation } = input;

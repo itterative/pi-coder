@@ -236,7 +236,7 @@ describe("compaction trace", () => {
             ["native", "rejected"],
             ["serialized", "accepted"],
         ]);
-        expect(attempts[0]?.detail).toContain("does not honor tool_choice none");
+        expect(attempts[0]?.detail).toContain("despite the no-tools instruction");
         expect(attempts[0]?.usage).toBeDefined();
         expect(attempts[1]?.attempt).toMatchObject({ toolCount: 0, messageCount: 1 });
         expect(attempts[1]?.attempt?.segmentSummaryChars).toBe(0);

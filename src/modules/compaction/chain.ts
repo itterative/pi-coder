@@ -92,7 +92,7 @@ export interface ChainMatch {
 /**
  * The parts of a request that are not its messages, small enough to retain for every turn.
  *
- * `keys` is what preserves the lesson that `tool_choice` is a parameter rather than a prefix verdict: the
+ * `keys` is what preserves the lesson that an extra body key is a parameter rather than a prefix verdict: the
  * symmetric difference against a reference body still shows which knobs one side sent, without holding that
  * body. `systemHash` covers the whole prompt, which is the same quantity `fingerprintSummary()` records for
  * humans, so the two can be joined without translating between them.

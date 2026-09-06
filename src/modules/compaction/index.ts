@@ -75,7 +75,7 @@ import { estimateTextTokens } from "./text";
  *    from an in-memory transcript truncated at the cut point. The model reads its own tool calls and results
  *    instead of a paraphrase of them, and because the system prompt and tool array are the parent's, the
  *    request stays a strict prefix of what the provider already cached. Tools are forbidden by
- *    `tool_choice: "none"` rather than removed, since removing them would move the prefix.
+ *    forbidden by the instruction text rather than by `tool_choice`, since removing them moves the prefix.
  * 2. **reduce (serialized)** — one bounded, text-only call over the minimized transcript plus stage 1's
  *    checkpoint plus the previous one, producing the summary that gets persisted.
  * 3. **pi's default** — return `undefined` and let core compact the old way.

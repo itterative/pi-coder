@@ -29,9 +29,10 @@ in a session, and pi keeps thinking in the live context anyway (`hideThinkingBlo
    `SessionManager.inMemory(cwd)`, and `convertToLlm(spanManager.buildSessionContext().messages)` yields the
    discarded span as **real message objects** — previous checkpoint included, retained tail excluded. Built
    with the parent's `ctx.getSystemPrompt()` and its active tools in `agent.state.tools` order, so the request
-   is a strict shorter prefix of what the provider already cached. Tools stay in the request and are forbidden
-   by `toolChoice: "none"`: removing them would move the prefix. A `toolCall` block in the response rejects
-   the stage. Stage 1 gets **a third** of the output budget (`segmentBudget`) and is told it is an
+   is a strict shorter prefix of what the provider already cached. Tools stay in the request - removing them
+   would move the prefix - and the prohibition is the instruction text, because `tool_choice` is not sent (see
+   **`tool_choice` is not sent** below). A `toolCall` block in the response rejects the stage; a call the server
+   leaves unparsed arrives as text and is **not** detected. Stage 1 gets **a third** of the output budget (`segmentBudget`) and is told it is an
    intermediate, because a generous intermediate becomes a rival draft: measured before that, stage 1 wrote
    3,207 tokens and the reduce then produced something *longer* than the material it was handed.
 2. **reduce (stage 2, serialized)** — one bounded text-only call over `serializeConversationMinimal(span)` +
@@ -59,7 +60,7 @@ session that can no longer be compacted. `event.signal.aborted` returns `{ cance
   i.e. a real shorter prefix, served from cache, for ~2% of the tokens fresh. Stage 2 cost 6,497 fresh with
   no cache, which is correct for a one-off. Whole compaction: ~7.3k fresh tokens.
 - Same provider, earlier un-truncated design: `input: 376, cacheRead: 34339` — the first evidence the cache was
-  reachable at all, and that `+tool_choice` does not disturb it.
+  reachable at all, and that the `tool_choice` we sent then did not disturb it (we no longer send it).
 - **Hosted `qwen-token-plan/qwen3.8-flash`**, 572-message session, 1M window: an earlier full-live-context
   design recorded `input: 330054, cacheRead: 0` while ordinary turns in that session report `input ≈ 1k,
   cacheRead ≈ 330k`. So that endpoint either will not serve a cache entry to an extended/rewound request or
@@ -150,9 +151,8 @@ tolerates fields absent in records from older builds, because the file accumulat
   `copiedEntries`/`skippedEntries`, stage 2's `serializedChars`/`segmentSummaryChars`. A `skipped` attempt has no
   `stopReason` or `usage`: the request never went out.
 - `prefix` — the verdict from `chain.ts` against our `onPayload` body: which reference answered, how deep the
-  agreement went, and the parameters only one side sent. Two rules survive from the body-to-body era:
-  `tool_choice` is a **parameter**, never a prefix verdict, and an absent reference is **unknown**, never
-  `false`.
+  agreement went, and the parameters only one side sent. Two rules survive from the body-to-body era: an extra
+  body key is a **parameter**, never a prefix verdict, and an absent reference is **unknown**, never `false`.
 - `model_response` — what the model said before the harness appended anything.
 - `final_summary` — the exact persisted text plus its counts.
 - `outcome` — `two-stage`/`native`/`serialized`/`core-default`/`cancelled`/`disabled`.
@@ -288,9 +288,10 @@ is guesswork. The report names the newest load and how many older ones contribut
   (`EXCERPT_CHARS`) and cannot be re-read as evidence that a prompt was stable - `6e84662c` was reported
   unchanged across 12817, 24619, 24813 and 25294 chars. The ladder heads that `verified=N/M` rests on are
   sha256 over messages and never had this weakness.
-- A `-key` in `prefix.parameters` means the parent sent a key our rebuild dropped. `+tool_choice` is expected
-  (that is our prohibition). `-reasoning_effort` is not: pi's live request carried it and ours does not, so the
-  two differ in a decode parameter. Unresolved whether that is cosmetic for the endpoint's cache.
+- `prefix.parameters` should now be **empty**: after dropping `tool_choice` we add no body key pi does not send,
+  so anything in it is a real difference to explain. A `-key` means the parent sent a key our rebuild dropped -
+  `-reasoning_effort` is the known outstanding one (pi's live request carried it and ours does not, and whether
+  that is cosmetic for the endpoint's cache is unresolved). See **`tool_choice` is not sent**.
 - `prefixUsable` is `undefined` in older records rather than absent; read `reference` first - `none` means no
   ladder covered the branch and the numeric depths are `-1` placeholders, not measurements.
 
@@ -346,7 +347,7 @@ Four consequences, each learned from a real trace:
 
 Cost is a full re-hash per request (single-digit milliseconds on an 880-message body) and is gated by tracing
 being on. Nothing here gates compaction: stage 1 is built and sent identically whether or not any observation
-exists. `parameters[]` survives as a set difference over body keys, which keeps the "`tool_choice` is a
+exists. `parameters[]` survives as a set difference over body keys, which keeps the "an extra body key is a
 parameter, not a verdict" lesson expressible without retaining a body.
 
 ## A rebuilt Context is not byte-stable (pi stamps `Date.now()`)
@@ -381,7 +382,31 @@ to pin "what healthy looks like" (`usable=true`, `verifiedTo=19` at `comparableD
 record's own names, and never let a flag fire because a record was **absent** — that is what a rotated or trimmed
 log looks like, not an empty model answer.
 
+## `tool_choice` is not sent (2026-09-06)
+
+Stage 1 used to send `toolChoice: "none"` while keeping the parent's tool definitions, on the theory that the
+field is the portable way to forbid calls and the instruction text is the backstop. Dropped, for two reasons that
+point the same direction:
+
+- It was the **only** body key our rebuilt request carried that pi's own requests do not, so it was the one thing
+  standing between this request and byte-equality with what the provider already cached.
+- On a server that recognizes in-band calls by applying a grammar rather than by honoring a parameter, asking for
+  no tool calls plausibly switches that parser off - and then the call comes back as **text**.
+
+The second is inference from one run, not a proven mechanism: `01a07567` (2026-09-06 06:30, llama.cpp
+`qwen3.8-27b`) accepted stage 1 at `stopReason: stop` with a summary whose last line was a bare </tool_call> - the model's own tool invocation, in the summary that got
+accepted and handed to stage 2. Whatever switched the parser off, the shape of the evidence is that we ask
+for no tool calls and get one as prose.
+
+Verify on the next stage-1 run: `prefix.parameters` should be empty, and if the model still calls, the
+rejection should come back as `attempt.outcome: rejected` with a `stopReason` of `toolUse` rather than a
+`stop` carrying prose. If it still arrives as text, that is the residual gap this note describes - and the
+one case worth adding a tail-shape detector for.
+
+
 ## First clean live verdict (2026-09-05, llama.cpp, fresh session)
+
+Recorded while stage 1 still sent `tool_choice`, which is why `params=+tool_choice` appears below.
 
 ```
 prefix      reference=chain  usable=true  verified=19/19  obs=13  first=verified  truncated  params=+tool_choice
@@ -529,6 +554,6 @@ plus `test/scripts/compaction-report.test.ts` — 111 cases, two reviewed file s
 directly). Stage-1 truncation is pinned by a 1.2M-char
 *retained-tail* fixture: if someone re-sends the live context, the fit gate skips stage 1 and that test fails.
 Mutation-verified: reverting the fit formula to `reserveTokens` fails the sizing test; deleting
-`trace.modelResponse(...)` fails two trace tests. Real provider behavior (`tool_choice`, cache serving,
+`trace.modelResponse(...)` fails two trace tests. Real provider behavior (no-tool-call instruction adherence, cache serving,
 `toolCall` refusals) and child execution stay manual — see `src/tools/agent/README.md` § "Changing child
 compaction".
