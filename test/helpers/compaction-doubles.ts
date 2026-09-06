@@ -19,7 +19,7 @@ import {
 import { registerCompactionExtension } from "../../src/modules/compaction";
 import type { ChainShape } from "../../src/modules/compaction/chain";
 import type { CompactionPreparation, ContextMessage } from "../../src/modules/compaction/types";
-import { zeroUsage } from "./agent-doubles";
+import { countedUsage, zeroUsage } from "./agent-doubles";
 import {
     createPiStub,
     stubContext,
@@ -181,10 +181,72 @@ export function messageEntry(
     return { type: "message", id, parentId, timestamp: at, message };
 }
 
+/**
+ * A `custom_message` entry, which is what an extension writes with `appendCustomMessageEntry`.
+ *
+ * Distinct from a `message` entry carrying `customMessage(...)`: this one is a *session entry type*, and
+ * `buildContextEntries` (`session-manager.js:177`) turns it into a user message, so it costs tokens in every
+ * later request. Sizing that charges it nothing understates the tail it sits in, which is what the pi-memory and
+ * scratchpad markers this repo writes would do.
+ */
+export function customMessageEntry(
+    id: string,
+    customType: string,
+    content: string,
+    input: { display?: boolean; details?: unknown; parentId?: string | null; at?: string } = {},
+): SessionEntry {
+    return {
+        type: "custom_message",
+        id,
+        parentId: input.parentId ?? null,
+        timestamp: input.at ?? ENTRY_TIMESTAMP,
+        customType,
+        content,
+        display: input.display ?? false,
+        ...(input.details === undefined ? {} : { details: input.details }),
+    };
+}
+
+/**
+ * A `custom` entry: harness state, and the neighbour a `custom_message` is confused with.
+ *
+ * `buildContextEntries` falls through to `return []` for it, so it reaches no request and must cost nothing - the
+ * assertion that keeps the two apart is that one of them is free and the other is not.
+ */
+export function customEntry(
+    id: string,
+    customType: string,
+    data: unknown,
+    input: { parentId?: string | null; at?: string } = {},
+): SessionEntry {
+    return {
+        type: "custom",
+        id,
+        parentId: input.parentId ?? null,
+        timestamp: input.at ?? ENTRY_TIMESTAMP,
+        customType,
+        data,
+    };
+}
+
 /** A compaction row: the marker that makes every token count older than it describe a body that no longer exists. */
 export function compactionMarker(
     id: string,
-    input: { at: string; firstKeptEntryId: string; tokensBefore?: number; summary?: string },
+    input: {
+        at: string;
+        firstKeptEntryId: string;
+        tokensBefore?: number;
+        summary?: string;
+        /**
+         * What this fold can vouch for in tokens: its counted request, the fixed prefix inside that count, the
+         * span it removed (their difference), and the summary that replaced it. Give the whole set and the fold
+         * can account for a count it expired; leave any of it out - as every row written before these fields
+         * existed does - and the rescue has nothing to work with.
+         */
+        countedBodyTokens?: number;
+        fixedPrefixTokens?: number;
+        summaryTokens?: number;
+    },
 ): SessionEntry {
     return {
         type: "compaction",
@@ -194,6 +256,18 @@ export function compactionMarker(
         summary: input.summary ?? "a checkpoint of what was dropped",
         firstKeptEntryId: input.firstKeptEntryId,
         tokensBefore: input.tokensBefore ?? 0,
+        ...(input.countedBodyTokens === undefined && input.fixedPrefixTokens === undefined
+            ? {}
+            : {
+                  details: {
+                      version: 1,
+                      countedBodyTokens: input.countedBodyTokens,
+                      fixedPrefixTokens: input.fixedPrefixTokens,
+                  },
+              }),
+        ...(input.summaryTokens === undefined
+            ? {}
+            : { usage: countedUsage(0, input.summaryTokens) }),
     };
 }
 
@@ -210,6 +284,73 @@ export function modelChangeMarker(
         provider: input.provider ?? "anthropic",
         modelId: input.modelId ?? "other-model",
     };
+}
+
+/**
+ * A thinking-level change: the third row that changes what token counts mean. It replaces no body and reclaims no
+ * span, but the compatible branches render `enable_thinking` and the level into the templated preamble, so the
+ * prompt a later reply was charged for is not the one an earlier reply was charged for.
+ */
+export function thinkingLevelMarker(
+    id: string,
+    input: { at: string; thinkingLevel?: string },
+): SessionEntry {
+    return {
+        type: "thinking_level_change",
+        id,
+        parentId: null,
+        timestamp: input.at,
+        thinkingLevel: input.thinkingLevel ?? "low",
+    };
+}
+
+/**
+ * A two-row branch with a fold in the middle, whose every number is a provider count you can read off the table.
+ *
+ * ```
+ * 0 u0   user                                      below the window
+ * 1 a1   assistant  prompt 1,000  total 1,200  00:00:01   the fold keeps from here
+ * 2 f1   compaction firstKept=a1                00:00:02   the count boundary
+ * 3 a2   assistant  prompt 5,000  total 5,300  00:00:03
+ * 4 u3   user                                  00:00:04
+ * 5 a4   assistant  prompt 8,000  total 8,400  00:00:05
+ * ```
+ *
+ * Built for the cut walk: everything at or before `f1` is expired as a count, so a position under the fold is one
+ * the ledger can price and the count route cannot. The head solves to 4,800 (`a2`'s 5,000 less the 200 tokens of
+ * `a1`'s reply inside the window), `spanAt(f1)` is 5,000 and `spanAt(a1)` is 4,800, and the whole live context is
+ * 8,400 - `a4`'s own `totalTokens`. Nothing in those numbers is estimated, so a test can assert equalities rather
+ * than tolerances. The fold row is spliced rather than chained, because `messageChain` builds message rows only.
+ */
+export function postFoldBranch(): SessionEntry[] {
+    const before = messageChain([
+        { id: "u0", message: userMessage("open the module") },
+        {
+            id: "a1",
+            at: "2026-01-01T00:00:01.000Z",
+            message: assistantMessage({ text: "reading", usage: countedUsage(1_000, 200) }),
+        },
+    ]);
+    const fold = compactionMarker("f1", {
+        at: "2026-01-01T00:00:02.000Z",
+        firstKeptEntryId: "a1",
+        summary: "s".repeat(400),
+    });
+    const after = messageChain([
+        {
+            id: "a2",
+            at: "2026-01-01T00:00:03.000Z",
+            message: assistantMessage({ text: "editing", usage: countedUsage(5_000, 300) }),
+        },
+        { id: "u3", at: "2026-01-01T00:00:04.000Z", message: userMessage("keep going") },
+        {
+            id: "a4",
+            at: "2026-01-01T00:00:05.000Z",
+            message: assistantMessage({ text: "done", usage: countedUsage(8_000, 400) }),
+        },
+    ]);
+
+    return [...before, fold, ...after];
 }
 
 /**

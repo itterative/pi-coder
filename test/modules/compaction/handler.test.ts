@@ -353,12 +353,13 @@ describe("compaction stages", () => {
         expect(cap).toBeLessThan(65_536);
     });
 
-    it("gives both stages the same output cap, so no cap can truncate a checkpoint", async () => {
+    it("gives each stage the room its own request leaves, so no cap can truncate a checkpoint", async () => {
         // The rule this replaces was "a third of the final budget", where the final budget was itself derived from
         // pi's reserveTokens: 4,369 tokens on a route whose model reports 65,536. A cap can only ever bind, and the
         // recorded replies (2,821t for 9 events, 2,313t for the reduce) stopped well short of any of these numbers.
         // What the fraction protected - a generous intermediate becomes a competing summary - is now carried by the
         // instruction below and the report's checkpoint/summary ratio rather than by rationing the fatal direction.
+        // Equal here only because the stub's ceiling binds both asks; the next case is the one that separates them.
         const h = build({ responses: [segmentSummary, reducedSummary] });
         await h.compact();
 
@@ -366,6 +367,29 @@ describe("compaction stages", () => {
         expect(h.optionField(1, "maxTokens")).toBe(8_192);
         expect(h.trailingInstruction(0)).toContain("This is an intermediate pass");
         expect(h.requestText(1)).toContain("must be no longer than the checkpoint you were given");
+    });
+
+    it("sizes the reduce's cap from its own transcript, not from the span stage 1 re-sends", async () => {
+        // The live defect: one number served both stages, so a session approaching its window drove the reduce's
+        // ask down to `MIN_OUTPUT_TOKENS` while stage 1's body was the only thing that large. On a 200k route that
+        // produced a 1,024-token ask against an 8.7k request, answered with 1,024 reasoning tokens and no text at
+        // all - an empty summary, not a truncated one (run 01a07cec). A 240k-char parent prompt is the same shape
+        // at fixture scale: it starves stage 1's ask, and stage 2 never sends it.
+        const h = build({
+            responses: [segmentSummary, reducedSummary],
+            contextWindow: 80_000,
+            maxTokens: 65_536,
+            systemPrompt: "s".repeat(240_000),
+        });
+        await h.compact();
+
+        const segmentCap = h.optionField(0, "maxTokens") as number;
+        const reduceCap = h.optionField(1, "maxTokens") as number;
+        expect(segmentCap).toBeLessThan(65_536);
+        // The reduce sends one bounded blob and its own short prompt, so the window has the model's whole ceiling
+        // left over, and the min that decides it is the model's - not whatever room the span happened to leave.
+        expect(reduceCap).toBe(65_536);
+        expect(reduceCap).toBeGreaterThan(segmentCap);
     });
 
     it("lets stage 1 merge the previous checkpoint, so the reduce is not handed it twice", async () => {
@@ -559,6 +583,10 @@ describe("compaction stages", () => {
         // Passed through untouched, and correct to be: core's number sizes the whole live context, which a
         // different boundary does not change. Re-deriving it from the new span would understate the session.
         expect(payload?.tokensBefore).toBe(190_000);
+        // Nothing exactly counted this span, so nothing gets vouched for: absent, not zero, which is what lets a
+        // later fold tell "this span was never counted" apart from "it counted for nothing".
+        expect(payload?.details.countedBodyTokens).toBeUndefined();
+        expect(payload?.details.fixedPrefixTokens).toBeUndefined();
     });
 
     it("governs the gate with the kept reply's own count, when the transcript's shape disagrees", async () => {
@@ -575,6 +603,11 @@ describe("compaction stages", () => {
         expect(tooBig.calls).toHaveLength(1);
         expect(tooBig.calls[0].context.tools).toBeUndefined();
         expect(payload?.details.route).toBe("serialized");
+
+        // Stage 1 was skipped and this fold still discarded the same 199k span, so the numbers survive the skip:
+        // the fold that follows a rejection is the one whose first request has nothing else counted.
+        expect(payload?.details.countedBodyTokens).toBe(199_000);
+        expect(payload?.details.fixedPrefixTokens ?? 0).toBeGreaterThan(0);
 
         // The same fixture 9k smaller fits the same window with room to spare, so the line above was the count
         // deciding and not a floor that rejects every request this strategy could ever make.

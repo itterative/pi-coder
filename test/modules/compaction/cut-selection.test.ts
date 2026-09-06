@@ -8,10 +8,13 @@ import {
     type CutRejection,
 } from "../../../src/modules/compaction/cut";
 import { countBoundary } from "../../../src/modules/compaction/native-request";
+import { spanSizer } from "../../../src/modules/compaction/ledger";
+import { previousFoldWindowStart } from "../../../src/modules/compaction/span-session";
 import {
     assistantMessage,
     compactionMarker,
     messageChain,
+    postFoldBranch,
     toolResultMessage,
     userMessage,
 } from "../../helpers/compaction-doubles";
@@ -113,8 +116,13 @@ describe("span cut selection", () => {
             movedEarlier: false,
             movedRows: 0,
             reason: "proposed cut fits",
+            proposedRejection: null,
             tailTokens: 800,
             spanTokens: 20_600,
+            // The count route answered here, and says so: no sizer was passed, and the row at the cut carries a
+            // provider count of exactly this body.
+            spanBasis: "count",
+            liveTokensSource: undefined,
             rejections: {},
         });
     });
@@ -264,10 +272,12 @@ describe("boundary measurement", () => {
         expect(measureSpanAt(branch, index("a3"), boundary, 100)).toEqual({
             ok: true,
             tokens: 20_100,
+            basis: "count",
         });
         expect(measureSpanAt(branch, index("u6"), boundary, 100)).toEqual({
             ok: true,
             tokens: 20_600,
+            basis: "count",
         });
     });
 
@@ -282,6 +292,7 @@ describe("boundary measurement", () => {
         expect(measureSpanAt(branch, index("t1"), boundary, 0)).toEqual({
             ok: true,
             tokens: 1_200,
+            basis: "count",
         });
         // Cut at `u0`: nothing above it, so an empty span has no count to read.
         expect(measureSpanAt(branch, index("u0"), boundary, 0)).toEqual({
@@ -298,7 +309,147 @@ describe("boundary measurement", () => {
         ]);
 
         // `a3` was counted before that fold (00:00:06), `a7` after it (00:00:08): expired and live, stated apart.
-        expect(measureSpanAt(branch, 5, boundary, 0)).toEqual({ ok: false, why: "count-expired" });
-        expect(measureSpanAt(branch, 7, boundary, 0)).toEqual({ ok: true, tokens: 21_000 });
+        // The refusal is still the count route's, because no sizer was offered: C2 adds the second route, it does
+        // not quietly replace the first, and a position the session cannot vouch for stays unmeasurable.
+        expect(measureSpanAt(branch, 5, boundary, 0)).toEqual({
+            ok: false,
+            why: "count-expired",
+        });
+        expect(measureSpanAt(branch, 7, boundary, 0)).toEqual({
+            ok: true,
+            tokens: 21_000,
+            basis: "count",
+        });
+    });
+});
+
+/**
+ * What C2 opened: a position below a fold, where every stored count has expired, is now repairable - because the
+ * ledger's number is arithmetic over counts rather than a guess at one. `postFoldBranch`'s table is the fixture,
+ * and every expectation below is a provider number read straight off it.
+ */
+describe("measuring a boundary the counts cannot answer for", () => {
+    function sizerFor(branch: SessionEntry[]) {
+        return spanSizer(branch, {
+            windowStartId: previousFoldWindowStart(branch),
+            boundary: countBoundary(branch),
+        });
+    }
+
+    it("sizes a position whose only count a fold expired, and only when the sizer is offered", () => {
+        const branch = postFoldBranch();
+        const boundary = countBoundary(branch);
+        const sizer = sizerFor(branch);
+        const index = (id: string) => branch.findIndex((entry) => entry.id === id);
+
+        // `a1` was counted before the fold, so the count route has nothing: this is the refusal that, before C2,
+        // ended the walk's interest in the whole stretch below a fold.
+        expect(measureSpanAt(branch, index("a1"), boundary, 100)).toEqual({
+            ok: false,
+            why: "count-expired",
+        });
+
+        // Head alone (4,800) plus the instruction: a span that ends at the window's own first row carries no rows.
+        expect(measureSpanAt(branch, index("a1"), boundary, 100, sizer)).toEqual({
+            ok: true,
+            tokens: 4_900,
+            basis: "ledger",
+        });
+
+        // The fold row at index 2 carries no usage of its own, and the reply above it is expired - the shape pi's
+        // backwards scan over metadata rows can hand a caller. The ledger answers it at 4,800 + 200 = 5,000, which
+        // is exactly `a2`'s prompt: the two routes measured the same body and agree to the token.
+        expect(measureSpanAt(branch, index("f1"), boundary, 0)).toEqual({
+            ok: false,
+            why: "count-expired",
+        });
+        expect(measureSpanAt(branch, index("f1"), boundary, 0, sizer)).toEqual({
+            ok: true,
+            tokens: 5_000,
+            basis: "ledger",
+        });
+    });
+
+    it("refuses a cut below the window even though the ledger could price the rows", () => {
+        const branch = postFoldBranch();
+        const boundary = countBoundary(branch);
+        const sizer = sizerFor(branch);
+
+        // `stageOneSpanEntries` begins at the newest fold's `firstKeptEntryId`, so a boundary under `u0`... is not
+        // a smaller span, it is a body nobody can assemble. Expiry used to keep the walk out of here by accident;
+        // a route that can size expired positions has to be told the window's edge explicitly.
+        expect(sizer?.windowStartIndex).toBe(1);
+        expect(measureSpanAt(branch, 0, boundary, 100, sizer)).toEqual({
+            ok: false,
+            why: "outside-window",
+        });
+        // And the tally the walk records for it is the window's, not the count route's - the last route asked is
+        // the route that says no.
+        const decision = chooseSpanCut(
+            input({
+                branch,
+                proposedFirstKeptEntryId: "a1",
+                boundary,
+                liveTokens: 8_400,
+                keepRecentTokens: 4_000,
+                instructionTokens: 100,
+                sizer,
+            }),
+        );
+
+        expect(decision.rejections).toMatchObject({ "outside-span-window": 1 });
+    });
+
+    it("repairs post-fold where the count-only walk abstained, and says which route answered", () => {
+        const branch = postFoldBranch();
+        const boundary = countBoundary(branch);
+        const sizer = sizerFor(branch);
+        const shared = {
+            branch,
+            proposedFirstKeptEntryId: "a2",
+            boundary,
+            liveTokens: 8_400,
+            keepRecentTokens: 3_400,
+            contextWindow: 200_000,
+            outputBudgetTokens: 1_024,
+            instructionTokens: 100,
+        };
+
+        // Core's boundary keeps 3,300 of the 3,400 asked for, so the walk must go earlier - and everywhere earlier
+        // is below the fold. Without the sizer that is the end of it: the count route is blind to the whole
+        // stretch, and the run ships core's under-keeping cut.
+        const blind = chooseSpanCut({ ...shared, sizer: null });
+        expect(blind.movedEarlier).toBe(false);
+        expect(blind.rejections).toMatchObject({
+            "tail-under-keep-budget": 1,
+            "count-expired-at-fold-or-shape-change": 2,
+            "not-a-countable-boundary": 1,
+        });
+
+        // With it, the same branch repairs itself two rows back, on the ledger's number, and names both facts.
+        const repaired = chooseSpanCut({ ...shared, sizer });
+        expect(repaired).toMatchObject({
+            firstKeptEntryId: "a1",
+            movedEarlier: true,
+            movedRows: 2,
+            spanBasis: "ledger",
+            spanTokens: 4_900,
+            tailTokens: 3_500,
+            proposedRejection: "tail-under-keep-budget",
+            rejections: { "tail-under-keep-budget": 2 },
+        });
+        expect(repaired.reason).toBe(
+            "moved back 2 rows: core's boundary was tail-under-keep-budget",
+        );
+    });
+
+    it("sizes the whole live context where pi's own hybrid returns null", () => {
+        const branch = postFoldBranch();
+        const sizer = sizerFor(branch);
+
+        // 4,800 head + 200 (a1's reply) + 300 (a2's reply) + the 3,000 of rows between them + 400 (a4's reply):
+        // the ledger's live is `a4`'s own totalTokens, which is what the provider charged for that body.
+        expect(sizer?.live().tokens).toBe(8_400);
+        expect(sizer?.live().rows.estimated).toBe(0);
     });
 });

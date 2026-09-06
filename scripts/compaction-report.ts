@@ -53,6 +53,8 @@ function describeOptions() {
         "                      serialized (stage 2 answer), final (what was persisted), or all (default)",
         "  --min-chars <n>     accepted output below this many characters is flagged (default 300)",
         "  --inflate-factor <n>  flag a reduce this many times larger than its checkpoint (default 4)",
+        "  --ledger-estimate-skew <f>  band for the head ledger's number against the provider's count",
+        "                      of the same request, as a fraction (default 0.05)",
         "  --json              machine-readable runs and aggregates",
         "  --help              this message",
     ].join("\n");
@@ -75,6 +77,8 @@ function parseArgs(argv) {
         grep: undefined,
         minChars: 300,
         inflateFactor: 4,
+        // The shipped band, so the default lives in one place rather than being copied here.
+        ledgerEstimateSkew: DEFAULT_THRESHOLDS.ledgerEstimateSkew,
         json: false,
         help: false,
     };
@@ -116,6 +120,8 @@ function parseArgs(argv) {
             options.minChars = Number.parseInt(next(), 10);
         } else if (arg === "--inflate-factor") {
             options.inflateFactor = Number(next());
+        } else if (arg === "--ledger-estimate-skew") {
+            options.ledgerEstimateSkew = Number(next());
         } else {
             throw new Error(`unknown argument: ${arg}\n${USAGE}`);
         }
@@ -137,6 +143,9 @@ function parseArgs(argv) {
     }
     if (!Number.isFinite(options.inflateFactor) || options.inflateFactor < 1) {
         throw new Error("--inflate-factor must be 1 or greater");
+    }
+    if (!Number.isFinite(options.ledgerEstimateSkew) || options.ledgerEstimateSkew <= 0) {
+        throw new Error("--ledger-estimate-skew must be a positive fraction, e.g. 0.05");
     }
     if (options.since !== undefined) {
         parseDuration(options.since);
@@ -533,6 +542,27 @@ function addRun(group, run, example) {
     }
 }
 
+/**
+ * One row per stage-1 attempt that carries the walk's decision: the data behind the question the two boundary ids
+ * never answered, how often do we move core's cut, and for which of the six reasons.
+ *
+ * Its own function because the aggregator is already the densest routine in the file, and because the selection
+ * rule - stage 1 only, and only records that actually carry the fields - has to be stated once for the print, the
+ * aggregate, and the JSON.
+ */
+function collectCutDecisions(runs) {
+    const cuts = [];
+    for (const run of runs) {
+        for (const attempt of run.attempts) {
+            if (attempt.strategy === "native" && hasCutFields(attempt.fields ?? {})) {
+                cuts.push({ run, attempt });
+            }
+        }
+    }
+
+    return cuts;
+}
+
 function analyzeRuns(runs, thresholds) {
     const routes = new Map();
     const causes = new Map();
@@ -545,6 +575,7 @@ function analyzeRuns(runs, thresholds) {
     const suspects = [];
     const withUsage = [];
     const compression = [];
+    const ledger = [];
 
     for (const run of runs) {
         const routeGroup = bump(routes, run.route ?? "(no outcome record)", newGroup);
@@ -554,6 +585,12 @@ function analyzeRuns(runs, thresholds) {
         models.set(modelKey, number(models.get(modelKey)) + 1);
 
         for (const attempt of run.attempts) {
+            // Collected before the outcome branches below, because the derivation is recorded on every stage-1
+            // attempt - including a rejected or skipped one, whose missing provider count is exactly why it is
+            // counted separately in the LEDGER section rather than folded into a mean.
+            if (hasLedgerFields(attempt.fields)) {
+                ledger.push({ run, attempt, skew: ledgerSkew(attempt) });
+            }
             if (attempt.cause !== undefined) {
                 addRun(
                     bump(
@@ -607,12 +644,15 @@ function analyzeRuns(runs, thresholds) {
         addRun(bump(invariants, violation.key, newGroup), violation.run, violation.detail);
     }
 
+    const cuts = collectCutDecisions(runs);
+
     return {
         routes,
         causes,
         failures,
         flags,
         invariants,
+        cuts,
         parameters,
         divergences,
         decodeValues,
@@ -620,6 +660,10 @@ function analyzeRuns(runs, thresholds) {
         suspects,
         withUsage,
         compression,
+        ledger,
+        // Every aggregate section describes the whole file, including the runs `--suspect` or `--route` hid from
+        // the run blocks, so a ratio across runs needs the analyzed count rather than the selected one.
+        runCount: runs.length,
     };
 }
 
@@ -690,6 +734,8 @@ function invariantViolations(runs) {
     const out = [];
 
     for (const run of runs) {
+        out.push(...attemptInvariantViolations(run));
+
         const prefix = run.prefix;
         if (prefix === undefined) {
             continue;
@@ -764,6 +810,81 @@ function invariantViolations(runs) {
     }
 
     return out;
+}
+
+/**
+ * Cross-field checks on one attempt record.
+ *
+ * Kept apart from the prefix checks because they read a different record, and because the guarantee here is about
+ * the tier ladder rather than the cache: a tier is chosen from numbers the build computed, so naming the tier and
+ * omitting its numbers means one of the two was written by something that did not compute either. Older records
+ * carry neither field, which is absence, not a violation.
+ */
+function attemptInvariantViolations(run) {
+    const out = [];
+
+    for (const attempt of run.attempts) {
+        const fields = attempt.fields ?? {};
+        if (fields.estimateSource === "head-ledger" && !hasLedgerFields(fields)) {
+            out.push({
+                run,
+                key: "tier-without-ledger",
+                detail:
+                    `${attempt.strategy} chose estimateSource=head-ledger with no ledger fields on the record: ` +
+                    "a tier cannot be chosen without the numbers that produced it",
+            });
+        }
+        out.push(...cutInvariantViolations(run, attempt, fields));
+    }
+
+    return out;
+}
+
+/**
+ * The cut walk's own cross-field checks.
+ *
+ * `moved-without-cause` is the one that matters, and it is the fact a move used to be unattributable without: a
+ * boundary that moved earlier while nothing refused core's position means either the walk moved on a rule it does
+ * not record or the record lost the reason - and both are instrument bugs, not cache news. One direction only, on
+ * purpose: the converse ("a cause with no move") is the documented abstain path, where core's refused boundary
+ * ships because nothing earlier admissible existed - that is `refused-cut-shipped`, a suspect, not a violation.
+ * `tail-under-keep` is the quieter one: the walk's whole keep-budget rule is that a chosen boundary retains at
+ * least what the user asked for, so a chosen tail under the floor means the comparison and the record disagree
+ * about the same numbers.
+ */
+function cutInvariantViolations(run, attempt, fields) {
+    const out = [];
+    if (attempt.strategy !== "native" || !hasCutFields(fields)) {
+        return out;
+    }
+
+    const moved = number(fields.cutMovedRows) > 0;
+    if (moved && typeof fields.cutProposedRejection !== "string") {
+        out.push({
+            run,
+            key: "moved-without-cause",
+            detail: `${attempt.strategy} moved the cut ${String(fields.cutMovedRows)} rows with no proposedRejection`,
+        });
+    }
+    if (moved && number(fields.cutTailTokens) < number(fields.cutKeepRecentTokens)) {
+        out.push({
+            run,
+            key: "tail-under-keep",
+            detail: `chosen boundary retains ${tokens(fields.cutTailTokens)} of ${tokens(fields.cutKeepRecentTokens)} asked for`,
+        });
+    }
+
+    return out;
+}
+
+/**
+ * Whether this attempt carries the walk's decision at all.
+ *
+ * One predicate for the print, the invariant, and the aggregate: a record from before C2 and one where the walk
+ * abstained on an unresolvable cut both have no rejection to show, and neither is a zero.
+ */
+function hasCutFields(fields) {
+    return typeof fields?.cutMovedRows === "number";
 }
 
 /**
@@ -1059,12 +1180,41 @@ function flagRun(run, options) {
     }
 
     const skewAttempt = native ?? serialized;
+    out.push(...cutSuspects(native));
+
     const skew = estimateSkew(skewAttempt);
     const tolerance = estimateTolerance(skewAttempt, options);
     if (skew !== null && Math.abs(skew) > tolerance) {
         out.push({
             key: "estimate-skew",
             detail: estimateSkewDetail(skew, skewAttempt, tolerance),
+        });
+    }
+
+    out.push(...ledgerSuspects(run, options));
+
+    return out;
+}
+
+/**
+ * Every stage-1 attempt whose ledger number disagrees with the provider's count of that same request.
+ *
+ * Checked per attempt rather than on the run's chosen tier, because the field is recorded whether or not its
+ * number was used - that comparison is the only live accuracy measurement this derivation will ever get, and it
+ * has to survive the runs where an exact count answered instead. A record from before the fields existed, or one
+ * where the derivation declined, produces nothing: absence is no data, never a clean bill.
+ */
+function ledgerSuspects(run, options) {
+    const out = [];
+
+    for (const attempt of run.attempts) {
+        const skew = ledgerSkew(attempt);
+        if (skew === null || Math.abs(skew) <= options.ledgerEstimateSkew) {
+            continue;
+        }
+        out.push({
+            key: "ledger-skew",
+            detail: ledgerSkewDetail(skew, attempt, options.ledgerEstimateSkew),
         });
     }
 
@@ -1080,6 +1230,13 @@ function flagRun(run, options) {
  * session, 15% band), and a count of the exact body being sent has to be right about nothing at all, so any
  * disagreement there is a fact about the request rather than about a guess (5% band).
  *
+ * The head ledger earns the same 5% band as the exact tiers, and for a comparable reason: it is arithmetic over
+ * provider counts rather than a ratio applied to the content. Measured against three real stage-1 requests it
+ * came out 0.96% / 0.01% / 0.26% off - on the run where every count in the span had expired and the shipped
+ * tiers answered with whole-body chars/4 instead, that same request read as +8.8%. Unlike the exact tiers it is
+ * still a derivation, so `ledger-skew` says what a breach means and the `LEDGER` section prints how much of the
+ * number was estimated.
+ *
  * The retraction, because this file used to quote the wrong numbers: the +40% mean error attributed to chars/4
  * was mostly an artifact of estimating `JSON.stringify(storedMessage)`, which charges a tool result's `details`
  * - for a truncated `read`, a second full copy of the output - that no provider ever receives. Over the wire
@@ -1093,6 +1250,7 @@ const DEFAULT_THRESHOLDS = {
     estimateSkew: 0.5,
     anchoredEstimateSkew: 0.15,
     exactEstimateSkew: 0.05,
+    ledgerEstimateSkew: 0.05,
 };
 
 /**
@@ -1118,6 +1276,88 @@ function countedPromptTokens(attempt) {
     return total > 0 ? total : null;
 }
 
+/**
+ * One row per stage-1 attempt whose record carries the walk's decision, headed by the histogram that is the
+ * section's whole purpose: how often core's boundary is refused, and by which of the six conditions.
+ *
+ * A move is not automatically a repair. Three conditions are about our instruments - the row at the boundary
+ * carries no count, its count expired, the ledger refused to vouch for that much chars/4 - and only two are about
+ * the user's constraint or the window. Reading the causes apart is what the deferred "should the walk be allowed
+ * to size positions no provider counted" question turns on, and before these fields existed a moved cut could not
+ * be attributed at all except by replaying the arithmetic against the session file by hand.
+ */
+function renderCutRows(cuts, options) {
+    if (cuts.length === 0) {
+        return ["  no attempt carried the walk's decision fields"];
+    }
+
+    const causes = new Map();
+    let moved = 0;
+    for (const { attempt } of cuts) {
+        const fields = attempt.fields ?? {};
+        if (number(fields.cutMovedRows) > 0) {
+            moved += 1;
+        }
+
+        const cause =
+            typeof fields.cutProposedRejection === "string"
+                ? fields.cutProposedRejection
+                : "core's boundary accepted";
+        causes.set(cause, (causes.get(cause) ?? 0) + 1);
+    }
+
+    const out = [
+        `  attempts: ${String(cuts.length)} carried a decision  moved=${String(moved)}  ` +
+            `kept core's boundary=${String(cuts.length - moved)}`,
+        "  causes:",
+        ...[...causes.entries()]
+            .sort((left, right) => right[1] - left[1])
+            .map(([cause, count]) => `      ${String(count).padStart(3)}  ${cause}`),
+        "",
+    ];
+
+    for (const { run, attempt } of cuts.slice(-options.runs)) {
+        const fields = attempt.fields ?? {};
+        out.push(
+            `  ${clock(run.startedAt)} ${(run.route ?? "??").padEnd(12)} ` +
+                `moved=${cutMoveState(fields)}  ` +
+                `core=${dash(fields.cutProposedRejection)}  ` +
+                `tail=${tokens(fields.cutTailTokens)}/${tokens(fields.cutKeepRecentTokens)}  ` +
+                `span=${tokens(fields.cutSpanTokens)} basis=${dash(fields.cutSpanBasis)} ` +
+                `live=${dash(fields.cutLiveTokensSource)}` +
+                `${fields.cutRejections ? `  refused(${tally(fields.cutRejections)})` : ""}`,
+        );
+    }
+
+    return out;
+}
+
+/**
+ * Suspects about the boundary walk's outcome.
+ *
+ * `refused-cut-shipped` is not an instrument lying: the walk found core's boundary inadmissible and found nothing
+ * better, so the run ships a cut the repair explicitly refused to endorse. It earns a flag because the consequence
+ * is the one the ledger-backed walk exists to remove - too little retained history, or a request the window cannot
+ * take - and because INVARIANTS must not claim it: a cause with no move is legitimate, which is exactly why
+ * `moved-without-cause` is one-directional.
+ */
+function cutSuspects(native) {
+    const fields = native?.fields;
+    const refused = fields?.cutProposedRejection;
+    if (typeof refused !== "string" || number(fields.cutMovedRows) !== 0) {
+        return [];
+    }
+
+    const tallyText = fields.cutRejections ? tally(fields.cutRejections) : "no tally recorded";
+
+    return [
+        {
+            key: "refused-cut-shipped",
+            detail: `core's boundary was refused as ${refused} and shipped anyway: ${tallyText}`,
+        },
+    ];
+}
+
 /** How far this number is allowed to be wrong, which depends on how much of it was measured. */
 function estimateTolerance(attempt, options) {
     const source = attempt?.fields?.estimateSource;
@@ -1126,6 +1366,9 @@ function estimateTolerance(attempt, options) {
     }
     if (source === "usage-anchor") {
         return options.anchoredEstimateSkew;
+    }
+    if (source === "head-ledger") {
+        return options.ledgerEstimateSkew;
     }
 
     return options.estimateSkew;
@@ -1147,6 +1390,78 @@ function estimateSkew(attempt) {
     }
 
     return (estimated - counted) / counted;
+}
+
+/**
+ * Whether this attempt carries the ledger's numbers at all.
+ *
+ * One predicate for the print, the suspect, the aggregate, and the invariant, because all four have to answer
+ * "is there data here" the same way: a record from before the fields existed and one where the derivation
+ * declined look identical, and neither is a zero.
+ */
+function hasLedgerFields(fields) {
+    const ledger = fields?.ledger;
+
+    return ledger !== undefined && ledger !== null && typeof ledger === "object";
+}
+
+/**
+ * How far the head ledger's number is from the tokens the provider counted for that same request.
+ *
+ * This is the measurement the whole derivation exists to make: the ledger is recorded on a stage-1 attempt even
+ * when its number was not the one used, precisely so it can be compared with the provider's count of the request
+ * that did go out. Null when either side is missing - a declined derivation, or a stage that never got a reply -
+ * which is unknown, never zero.
+ */
+function ledgerSkew(attempt) {
+    const derived = attempt?.fields?.ledger?.tokens;
+    const counted = countedPromptTokens(attempt);
+    if (typeof derived !== "number" || counted === null) {
+        return null;
+    }
+
+    return (derived - counted) / counted;
+}
+
+/** How much of the ledger's own number is chars/4 rather than a count, as a share of that number. */
+function ledgerEstimatedShare(attempt) {
+    const ledger = attempt?.fields?.ledger;
+    const derived = ledger?.tokens;
+    const estimated = ledger?.estimatedTokens;
+    if (typeof derived !== "number" || derived <= 0 || typeof estimated !== "number") {
+        return null;
+    }
+
+    return estimated / derived;
+}
+
+/**
+ * The ledger's disagreement with a provider count, with the terms that could explain it.
+ *
+ * Unlike `estimate-skew`, no direction here is a clip: the number is arithmetic over counts, so a breach says the
+ * derivation and the endpoint disagree about the same bytes. Both candidate causes are named because the record
+ * cannot tell them apart, and the estimated share rides along because it is the one field that says how much of
+ * the number was ever measured at all.
+ */
+function ledgerSkewDetail(skew, attempt, tolerance) {
+    const ledger = attempt.fields.ledger;
+    const share = ledgerEstimatedShare(attempt);
+    const head =
+        typeof ledger.headSource === "string"
+            ? `head ${tokens(ledger.headTokens)} ${ledger.headSource}`
+            : `head ${tokens(ledger.headTokens)}`;
+    const direction =
+        skew > 0
+            ? "the derivation describes a larger request than the endpoint charged for it"
+            : "the derivation describes a smaller request than the endpoint charged for it";
+
+    return (
+        `ledger ${tokens(ledger.tokens)} (${head}, ${pct(share)} of it chars/4) vs ` +
+        `${tokens(countedPromptTokens(attempt))} counted for the same request, ` +
+        `band ${String(Math.round(tolerance * 100))}%: ${direction}, so either the head was solved from a reply ` +
+        "under a request shape that has since moved - a model, tool-set, or system-prompt change sits between - " +
+        "or the estimated share was too high to trust"
+    );
 }
 
 /** Both numbers, how the estimate was made, and which way they disagree: the directions mean different things. */
@@ -1189,6 +1504,9 @@ function estimateMethod(attempt) {
     }
     if (source === "usage-anchor") {
         return "anchored";
+    }
+    if (source === "head-ledger") {
+        return "head + counted rows";
     }
 
     return "chars/4";
@@ -1291,6 +1609,16 @@ function median(values) {
     return (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+/** The arithmetic mean, or null when there is nothing to average - never a silent 0. */
+function mean(values) {
+    const numbers = values.filter((value) => Number.isFinite(value));
+    if (numbers.length === 0) {
+        return null;
+    }
+
+    return numbers.reduce((sum, value) => sum + value, 0) / numbers.length;
+}
+
 function pct(value) {
     if (typeof value !== "number") {
         return "-";
@@ -1298,8 +1626,22 @@ function pct(value) {
     return `${(value * 100).toFixed(value >= 0.1 ? 0 : 1)}%`;
 }
 
+/**
+ * A percentage that says which side of the truth it landed on.
+ *
+ * `pct` renders a magnitude, and a skew is a signed quantity: +2% and -2% are the fit gate deciding too high
+ * versus too low. Same decimals as `pct` so the two read as one kind of number.
+ */
+function signedPct(value) {
+    if (typeof value !== "number") {
+        return "-";
+    }
+
+    return `${value < 0 ? "-" : "+"}${pct(Math.abs(value))}`;
+}
+
 /** The request-side numbers of one attempt, minus the keys that are always absent. */
-function fieldParts(fields, strategy) {
+function fieldParts(fields, strategy, skew) {
     const parts = [];
     const add = (label, value) => {
         if (value !== undefined && value !== null && value !== "") {
@@ -1321,15 +1663,24 @@ function fieldParts(fields, strategy) {
         add("cutMoved", cutMoveState(fields));
     }
     add("est", tokens(fields.estimatedTokens));
-    // A number without its method is how the old comparison got believed. Four states, because "this body had no
-    // count of its own", "the counts here expired", and "this record predates the field" are three different
-    // things to a reader.
+    // A number without its method is how the old comparison got believed. Five tiers plus `unrecorded`, because
+    // "this body had no count of its own", "the counts here expired", "a head was solved for instead", and "this
+    // record predates the field" are four different things to a reader.
     if (typeof fields.estimatedTokens === "number") {
         add("src", estimateSourceLabel(fields.estimateSource));
+    }
+    // The derivation's own error against the provider's count of the request that went out, printed beside the
+    // number it was compared with rather than only in the aggregate. Three states, in the file's existing
+    // idiom: nothing when the record carries no ledger object at all (the derivation declined, or this build
+    // predates it), `ledger=-` when it derived a number but no reply came back to compare it with, and the
+    // signed percent when both sides exist.
+    if (hasLedgerFields(fields)) {
+        add("ledger", signedPct(skew));
     }
     // Only printed when non-zero: an absent field and a rejected count are different statements, and the
     // report has already been misled by conflating them.
     add("stale", number(fields.staleAnchors) > 0 ? fields.staleAnchors : undefined);
+    add("corrected", number(fields.foldCorrected) > 0 ? fields.foldCorrected : undefined);
     add("rep", tokens(fields.reportedContextTokens));
     add("win", tokens(fields.contextWindow));
     add("maxTok", tokens(fields.maxTokens));
@@ -1361,8 +1712,61 @@ function cutMoveState(fields) {
     if (typeof chosen !== "string" || typeof proposed !== "string") {
         return "unrecorded";
     }
+    if (chosen === proposed) {
+        return "no";
+    }
 
-    return chosen === proposed ? "no" : `to:${chosen}`;
+    const rows = number(fields.cutMovedRows);
+
+    return rows > 0 ? `to:${chosen}/${String(rows)}r` : `to:${chosen}`;
+}
+
+/**
+ * What the boundary walk decided, as one detail string, or null when the record has nothing to say.
+ *
+ * Printed only where there is a fact worth reading: a run that moved the boundary, or one that wanted to and could
+ * not. "core's boundary fits" is the common case and it stays silent, so the line never competes for attention
+ * with the numbers that decide a run.
+ */
+function cutWalkDetail(fields, strategy) {
+    if (strategy !== "native" || !hasCutFields(fields)) {
+        return null;
+    }
+
+    const bits = [];
+    if (typeof fields.cutProposedRejection === "string") {
+        bits.push(`core=${fields.cutProposedRejection}`);
+    }
+    if (typeof fields.cutTailTokens === "number") {
+        bits.push(`tail=${tokens(fields.cutTailTokens)}/${tokens(fields.cutKeepRecentTokens)}`);
+    }
+    if (typeof fields.cutSpanTokens === "number") {
+        bits.push(`span=${tokens(fields.cutSpanTokens)}`);
+    }
+    if (typeof fields.cutSpanBasis === "string") {
+        bits.push(`basis=${fields.cutSpanBasis}`);
+    }
+    if (typeof fields.cutLiveTokensSource === "string") {
+        bits.push(`live=${fields.cutLiveTokensSource}`);
+    }
+    if (fields.cutRejections !== undefined && fields.cutRejections !== null) {
+        bits.push(`refused(${tally(fields.cutRejections)})`);
+    }
+    if (bits.length === 0) {
+        return null;
+    }
+
+    return bits.join(" ");
+}
+
+/** `{"count-expired-at-fold-or-shape-change": 6}` to `6count-expired/…`, shortest key first. */
+function tally(rejections) {
+    // Busiest condition first: the tally is read as "what stopped us", and the order it arrived in is an
+    // accident of the walk's loop.
+    return Object.entries(rejections)
+        .toSorted((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+        .map(([why, count]) => `${String(count)}${why}`)
+        .join("/");
 }
 
 function estimateSourceLabel(value) {
@@ -1374,6 +1778,9 @@ function estimateSourceLabel(value) {
     }
     if (value === "usage-anchor") {
         return "anchor";
+    }
+    if (value === "head-ledger") {
+        return "ledger";
     }
     if (value === "chars4") {
         return "chars4";
@@ -1475,9 +1882,16 @@ function renderRunBlock(run, flags, options) {
             `    ${attempt.strategy.padEnd(11)} ${String(attempt.outcome).padEnd(8)} +${seconds(attempt.gapMs).padStart(6)}  ${cost}`,
         );
 
-        const parts = fieldParts(attempt.fields, attempt.strategy);
+        const parts = fieldParts(attempt.fields, attempt.strategy, ledgerSkew(attempt));
         if (parts.length > 0) {
             lines.push(`                  ${parts.join(" ")}`);
+        }
+        // The walk's decision on its own line, and only where there is one to report: which condition refused
+        // core's boundary, how much history the chosen boundary keeps against what the user asked for, and which
+        // instrument measured each side. A run that kept core's cut without refusing anything prints nothing.
+        const walk = cutWalkDetail(attempt.fields ?? {}, attempt.strategy);
+        if (walk !== null) {
+            lines.push(`                  cut:      ${walk}`);
         }
         if (attempt.detail !== undefined && attempt.detail !== "") {
             lines.push(`                  detail: ${quote(attempt.detail, 130)}`);
@@ -1694,6 +2108,34 @@ function renderReport(runs, analysis, stats, options) {
     );
     out.push(...renderCompressionRows(analysis.compression, options));
 
+    // Printed only when at least one attempt carried the fields: a trace written before the derivation existed, or
+    // one whose runs all declined it, must not grow an empty section that reads as a measurement of nothing.
+    if (analysis.ledger.length > 0) {
+        out.push(
+            "",
+            "LEDGER",
+            "  what the head derivation said each request cost, against what the provider counted for that same",
+            "  request · est = the chars/4 share of the ledger's own number, i.e. how much of it was measured",
+            "  rather than guessed · skew is signed: + means the derivation over-sized the request",
+            "",
+            ...renderLedgerRows(analysis.ledger, analysis.runCount, options),
+        );
+    }
+
+    // Printed only when at least one attempt carried the fields: a trace written before the walk reported its
+    // decision must not grow an empty section that reads as a measurement of nothing.
+    if (analysis.cuts.length > 0) {
+        out.push(
+            "",
+            "CUT",
+            "  what the boundary walk decided, per stage-1 attempt · core= is the condition that refused core's",
+            "  own cut and therefore caused any move · tail/keep is retained history against the user's floor ·",
+            "  basis/live name which instrument measured each side of that subtraction",
+            "",
+            ...renderCutRows(analysis.cuts, options),
+        );
+    }
+
     return out.join("\n");
 }
 
@@ -1747,6 +2189,77 @@ function renderCompressionRows(rows, options) {
                 `ratio=${(ratio === null ? "-" : `${ratio.toFixed(1)}x`).padStart(6)} ` +
                 `before=${tokens(row.run.final?.fields.tokensBefore)} summarized=${dash(row.run.final?.fields.summarizedMessages)} ` +
                 `dropped=${dash(row.run.final?.fields.droppedBlocks)}`,
+        );
+    }
+
+    return out;
+}
+
+/**
+ * What the head derivation was worth across the runs that carried one.
+ *
+ * One object feeds both the text section and `--json`, so the two surfaces cannot tell different stories about the
+ * same rows. Every field is null-or-value rather than a defaulting 0: a trace file whose runs all declined the
+ * derivation, or all skipped before a reply, has no accuracy to report, and `0%` would claim one.
+ */
+function ledgerSummary(rows, band) {
+    const comparable = rows.filter((row) => typeof row.skew === "number");
+    const worst = pickWorstSkew(comparable);
+
+    return {
+        runs: new Set(rows.map((row) => row.run.id)).size,
+        attempts: rows.length,
+        comparable: comparable.length,
+        band,
+        meanAbsSkew: mean(comparable.map((row) => Math.abs(row.skew))),
+        worstSkew: worst === null ? null : worst.skew,
+        worstRun: worst === null ? null : worst.run.id,
+        worstAt: worst === null ? undefined : worst.run.startedAt,
+        overBand: comparable.filter((row) => Math.abs(row.skew) > band).length,
+        meanEstimatedShare: mean(rows.map((row) => ledgerEstimatedShare(row.attempt))),
+    };
+}
+
+/** The row furthest from zero, or null when no row can be compared at all. */
+function pickWorstSkew(rows) {
+    let worst = null;
+
+    for (const row of rows) {
+        if (worst === null || Math.abs(row.skew) > Math.abs(worst.skew)) {
+            worst = row;
+        }
+    }
+
+    return worst;
+}
+
+function renderLedgerRows(rows, totalRuns, options) {
+    const summary = ledgerSummary(rows, options.ledgerEstimateSkew);
+    const worst =
+        summary.worstSkew === null
+            ? ""
+            : ` at ${clock(summary.worstAt)} ${shortId(summary.worstRun)}`;
+
+    const out = [
+        `  runs:     ${String(summary.runs)} of ${String(totalRuns)} carried a ledger number  ` +
+            `comparable=${String(summary.comparable)} to a provider count`,
+        `  skew:     mean=${pct(summary.meanAbsSkew)}  worst=${signedPct(summary.worstSkew)}${worst}  ` +
+            `over band=${String(summary.overBand)}/${String(summary.comparable)} ` +
+            `(band ${String(Math.round(summary.band * 100))}%)`,
+        `  est:      mean share of the ledger's own number that is chars/4=${pct(summary.meanEstimatedShare)}`,
+        "",
+    ];
+
+    for (const row of rows.slice(-options.runs)) {
+        const fields = row.attempt.fields.ledger;
+        out.push(
+            `  ${clock(row.run.startedAt)} ${(row.run.route ?? "??").padEnd(12)} ` +
+                `${row.attempt.strategy.padEnd(11)} ledger=${tokens(fields.tokens).padStart(7)} ` +
+                `counted=${tokens(countedPromptTokens(row.attempt)).padStart(7)} ` +
+                `skew=${signedPct(row.skew).padStart(6)} est=${pct(ledgerEstimatedShare(row.attempt)).padStart(5)} ` +
+                `head=${tokens(fields.headTokens)} from:${dash(fields.headSource)} ` +
+                `rows=${tokens(fields.rowsCounted)} counted/${tokens(fields.rowsEstimated)} estimated` +
+                `${fields.rowsCheckpoints > 0 ? ` (incl ${tokens(fields.rowsCheckpoints)} checkpoints)` : ""}`,
         );
     }
 
@@ -1867,7 +2380,12 @@ function toPlainRun(run, flags) {
             detail: attempt.detail,
             gapMs: attempt.gapMs,
             usage: attempt.usage,
+            // The record's own `ledger` object arrives with this spread, under the record's own field names
+            // (`tokens`, `estimatedTokens`, `headTokens`, ...), which is what lets a reader join a report value
+            // back to the trace line without translating keys. `ledgerSkew` is the one number the report computes
+            // rather than reads, and it is added only where there is a ledger to compute it from.
             ...attempt.fields,
+            ...(hasLedgerFields(attempt.fields) ? { ledgerSkew: ledgerSkew(attempt) } : {}),
         })),
         texts: Object.fromEntries(run.texts),
         flags,
@@ -1912,6 +2430,7 @@ function main() {
         ...DEFAULT_THRESHOLDS,
         minChars: options.minChars,
         inflateFactor: options.inflateFactor,
+        ledgerEstimateSkew: options.ledgerEstimateSkew,
     };
     const analysis = analyzeRuns(allRuns, thresholds);
     const runs = selectRuns(allRuns, analysis, options);
@@ -1937,7 +2456,42 @@ function main() {
                     thresholds: {
                         minChars: options.minChars,
                         inflateFactor: options.inflateFactor,
+                        ledgerEstimateSkew: thresholds.ledgerEstimateSkew,
                     },
+                    // Null rather than an empty object when no record carries the fields, so "this file predates
+                    // the derivation" cannot be read as "the derivation is accurate to 0%".
+                    ledger:
+                        analysis.ledger.length === 0
+                            ? null
+                            : ledgerSummary(analysis.ledger, thresholds.ledgerEstimateSkew),
+                    // Same rule as `ledger`: null when no record carries the walk's decision, and the causes keyed
+                    // by the record's own rejection names so a reader can join them back to `cutProposedRejection`.
+                    cut:
+                        analysis.cuts.length === 0
+                            ? null
+                            : {
+                                  attempts: analysis.cuts.length,
+                                  moved: analysis.cuts.filter(
+                                      ({ attempt }) => number(attempt.fields?.cutMovedRows) > 0,
+                                  ).length,
+                                  causes: Object.fromEntries(
+                                      [
+                                          ...analysis.cuts
+                                              .map(
+                                                  ({ attempt }) =>
+                                                      attempt.fields?.cutProposedRejection,
+                                              )
+                                              .filter((cause) => typeof cause === "string")
+                                              .reduce((tally, cause) => {
+                                                  return tally.set(
+                                                      cause,
+                                                      (tally.get(cause) ?? 0) + 1,
+                                                  );
+                                              }, new Map())
+                                              .entries(),
+                                      ].map(([cause, count]) => [cause, count]),
+                                  ),
+                              },
                     runs: runs.map((run) => toPlainRun(run, flagsByRun.get(run) ?? [])),
                     aggregates: {
                         routes: counts(analysis.routes),

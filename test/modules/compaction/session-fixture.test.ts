@@ -1,15 +1,11 @@
-import path from "node:path";
-
 import {
     buildContextEntries,
     buildSessionContext,
     convertToLlm,
     SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { PI_CODER_EXTENSION_DIR } from "../../../src/common/constants";
 import { messageLadder } from "../../../src/modules/compaction/chain";
 import {
     buildSpanSession,
@@ -18,6 +14,11 @@ import {
     spanContextEntries,
     stageOneSpanEntries,
 } from "../../../src/modules/compaction/span-session";
+import type {
+    CompactionAttemptFields,
+    CompactionTraceRecord,
+} from "../../../src/modules/compaction/trace";
+import { fixturePath, openTraceLog, sessionIdOf } from "../../helpers/compaction-trace";
 
 /**
  * A real llama.cpp session.
@@ -31,21 +32,10 @@ import {
  * config happens to use is not a fact about pi's on-disk shape, and pinning it would tie a golden value to one
  * person's config file. Everything else is raw - real entry ids, real timestamps, real message text.
  */
-const FIXTURE = path.join(
-    PI_CODER_EXTENSION_DIR,
-    "test",
-    "fixtures",
-    "session",
-    "llamacpp-post-compaction.jsonl",
-);
+const FIXTURE = fixturePath("session", "llamacpp-post-compaction.jsonl");
 
 /** The trace fixture is the same run's verdict, so the two artifacts must agree with each other. */
-const TRACE_FIXTURE = path.join(
-    PI_CODER_EXTENSION_DIR,
-    "test",
-    "fixtures",
-    "compaction-trace.healthy.jsonl",
-);
+const TRACE_FIXTURE = fixturePath("compaction-trace.healthy.jsonl");
 
 /** Ids as pi wrote them: short entry ids, the compaction that ran, and the retained-tail boundary it chose. */
 const FIRST_KEPT = "3162e48e";
@@ -80,16 +70,27 @@ function replay() {
     return { manager, branch, cut, span, messages, head: ladder.get(ladder.size) ?? "" };
 }
 
-function traceAttempt(strategy: string): Record<string, unknown> {
-    const line = readFileSync(TRACE_FIXTURE, "utf8")
-        .split("\n")
-        .filter((text) => text.trim() !== "")
-        .map((text) => JSON.parse(text) as { stage: string; strategy?: string; attempt?: unknown })
-        .find((record) => record.stage === "attempt" && record.strategy === strategy);
+/**
+ * One stage's attempt record, read through the log its recorder wrote and scoped to the session this fixture
+ * replays. Throws rather than returning `undefined`: a missing record means the pair no longer describes one run,
+ * which is a fixture defect, and a silent `undefined` would let the caller assert nothing at all.
+ */
+function traceAttempt(strategy: string): CompactionAttemptFields {
+    const session = sessionIdOf(FIXTURE);
+    const record = openTraceLog(TRACE_FIXTURE)
+        .read({ where: (row) => row.session === session })
+        .find(
+            (row): row is CompactionTraceRecord =>
+                row.stage === "attempt" && row.strategy === strategy,
+        );
+    const attempt = record?.attempt;
+    if (attempt === undefined) {
+        throw new Error(
+            `no ${strategy} attempt record in the trace fixture for session ${session}`,
+        );
+    }
 
-    expect(line?.attempt, `no ${strategy} attempt record in the trace fixture`).toBeDefined();
-
-    return line?.attempt as Record<string, unknown>;
+    return attempt;
 }
 
 /**
@@ -101,13 +102,7 @@ function traceAttempt(strategy: string): Record<string, unknown> {
  * so the body stopped being a prefix of what the provider had cached at exactly its second message - the
  * `first=messages[2]` the recorded trace carries, reproduced here rather than inferred from it.
  */
-const HOSTED = path.join(
-    PI_CODER_EXTENSION_DIR,
-    "test",
-    "fixtures",
-    "session",
-    "hosted-three-folds.jsonl",
-);
+const HOSTED = fixturePath("session", "hosted-three-folds.jsonl");
 /** Fold three's retained-tail boundary, fold two's own entry, and fold two's boundary. */
 const HOSTED_CUT = "934f4af4";
 const HOSTED_NEWER_SUMMARY = "bfbcc08f";
@@ -259,13 +254,7 @@ describe("hosted three-fold fixture", () => {
  * tail, so the newest checkpoint row sits AFTER this fold's cut and the window slice misses it, while pi's live
  * body still begins with that checkpoint. Untrimmed and unedited: real ids, real provider counts.
  */
-const CUT_BEFORE = path.join(
-    PI_CODER_EXTENSION_DIR,
-    "test",
-    "fixtures",
-    "session",
-    "hosted-cut-before-checkpoint.jsonl",
-);
+const CUT_BEFORE = fixturePath("session", "hosted-cut-before-checkpoint.jsonl");
 /** The second fold's own row, which did not exist while its stage-1 request was in flight. */
 const CUT_BEFORE_RESULT = "8d61f3d7";
 const CUT_BEFORE_CUT = "406f434b";

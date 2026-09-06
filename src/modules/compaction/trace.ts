@@ -7,8 +7,10 @@ import type { MessageSample } from "./chain";
 import { COMPACTION_TRACE_PATH } from "../../common/constants";
 import { createJsonlRecordLog, type RecordLog } from "../../common/record-log";
 import { isAgentTraceEnabled, PROCESS_INSTANCE } from "../../common/trace";
+import type { CutRejection, MeasureBasis } from "./cut";
 import type { CompactionConfig } from "./config";
 import type { SummarizationFailureCause } from "./failure";
+import type { MeasuredBody } from "./ledger";
 import type { SummarizationStrategy } from "./summarize";
 import type { EstimateSource, SummarizationReason } from "./types";
 
@@ -62,6 +64,33 @@ export interface CompactionTraceUsage {
     totalTokens: number;
 }
 
+/**
+ * What the head ledger made of this same request, recorded whether or not its number was the one used.
+ *
+ * Recorded always, because the point of the fields is to measure the derivation against the provider's own count
+ * of the request that actually went out - which is only possible on the runs where another tier won. `tokens` is
+ * the number to compare with `usage.input + cacheRead + cacheWrite`; the rest says how much of it was measured,
+ * so a skew can be attributed to the head, the rows, or an unbracketed stretch rather than argued about.
+ */
+export interface CompactionLedgerFields {
+    /** Head + rows + the appended instruction: what this request should have cost. */
+    tokens: number;
+    /** How much of `tokens` is chars/4 rather than counted, across the head, the rows and the instruction. */
+    estimatedTokens: number;
+    /** The head no row owns: system prompt, tool definitions, and the newest checkpoint. */
+    headTokens: number;
+    /** Which reply the head was solved from - the session's first, or the first after a fold. */
+    headSource: "first-reply" | "after-fold";
+    /** How much of the range the head was solved from was chars/4, which is the head's whole error. */
+    headEstimatedTokens: number;
+    /** Rows covered by a difference of two provider counts. */
+    rowsCounted: number;
+    /** Rows no pair of counts bracketed. Includes `rowsCheckpoints`. */
+    rowsEstimated: number;
+    /** Of `rowsEstimated`, what checkpoints riding inside the window cost. */
+    rowsCheckpoints: number;
+}
+
 /** The request-side numbers for one attempt. */
 export interface CompactionAttemptFields {
     provider: string;
@@ -91,6 +120,11 @@ export interface CompactionAttemptFields {
      */
     staleAnchors?: number;
     /**
+     * How many folds' own counted numbers rescued an anchor that `staleAnchors` rejected, so the tier's number came
+     * from arithmetic over provider counts rather than from chars/4.
+     */
+    foldCorrected?: number;
+    /**
      * `ctx.getContextUsage().tokens`: provider usage up to the last reply plus a chars/4 estimate of what
      * followed it, measured over the whole live context - a hybrid, and larger than any truncated request by the
      * retained tail. What the fit gate falls back to, never its first choice.
@@ -118,10 +152,44 @@ export interface CompactionAttemptFields {
      * and a merely long one carry the same numbers.
      */
     cutFound?: boolean;
+    /**
+     * Stage 1 only: rows the walk moved back from core's boundary. Zero means it kept core's choice, which is why
+     * absence has to stay reserved for "this record predates the field".
+     */
+    cutMovedRows?: number;
+    /**
+     * Stage 1 only: the condition that refused core's own boundary, and therefore the cause of any move. Present
+     * exactly when `cutMovedRows` is non-zero - a cut moved for no reason is the invariant the report checks.
+     */
+    cutProposedRejection?: CutRejection;
+    /** Stage 1 only: per-condition tallies, so a run that could not be repaired says what stopped it. */
+    cutRejections?: Partial<Record<CutRejection, number>>;
+    /**
+     * Stage 1 only: retained history at the chosen boundary, and the floor it was weighed against
+     * (`preparation.settings.keepRecentTokens`). A tail without its budget is a number nobody can read.
+     */
+    cutTailTokens?: number;
+    cutKeepRecentTokens?: number;
+    /** Stage 1 only: the chosen span's size, and which route measured it: a count of that body, or arithmetic. */
+    cutSpanTokens?: number;
+    cutSpanBasis?: MeasureBasis;
+    /**
+     * Stage 1 only: which instrument sized the whole live context this tail was subtracted from. `ledger` means
+     * both sides of that subtraction are head-plus-rows; `context-usage` means the tail mixes a provider's count
+     * of a body that no longer ends where the span does.
+     */
+    cutLiveTokensSource?: "ledger" | "context-usage";
     /** Stage 2 only: how much of stage 1's checkpoint it was handed. */
     segmentSummaryChars?: number;
     customInstructions?: string;
     previousSummaryChars?: number;
+    /**
+     * Stage 1 only: the head ledger's size for this same body, present whenever the session could derive one -
+     * including when `estimateSource` says another tier answered. Absent means the derivation declined (no
+     * counted reply under the current head, a cut naming no row, or too much of the body unbracketed), and a
+     * record from before the fields existed looks the same, which is why nothing infers a cause from absence.
+     */
+    ledger?: CompactionLedgerFields;
 }
 
 export interface CompactionAttemptResult {
@@ -422,6 +490,30 @@ export function createCompactionTraceRecorder(
         outcome(outcome, detail) {
             write({ ...base, stage: "outcome", outcome, detail });
         },
+    };
+}
+
+/**
+ * The ledger's numbers as recorded, or nothing when the session could not derive one.
+ *
+ * Lives beside the type it fills for the reason `usageFields` lives beside `CompactionTraceUsage`: a record's
+ * shape and the projection that produces it drift apart silently, and a second surface naming the same quantity
+ * differently is how an ambiguity gets reintroduced.
+ */
+export function ledgerFields(body: MeasuredBody | null): CompactionLedgerFields | undefined {
+    if (body === null) {
+        return undefined;
+    }
+
+    return {
+        tokens: body.tokens,
+        estimatedTokens: body.estimatedTokens,
+        headTokens: body.head.tokens,
+        headSource: body.head.source,
+        headEstimatedTokens: body.head.estimatedTokens,
+        rowsCounted: body.rows.counted,
+        rowsEstimated: body.rows.estimated,
+        rowsCheckpoints: body.rows.checkpoints,
     };
 }
 

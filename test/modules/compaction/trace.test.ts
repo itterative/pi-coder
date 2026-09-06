@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -6,10 +6,13 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CompactionTraceRecord } from "../../../src/modules/compaction/trace";
+import type { ContextMessage } from "../../../src/modules/compaction/types";
 import {
     createCompactionHarness,
     type CompactionHarnessInput,
+    assistantMessage,
     messageChain,
+    postFoldBranch,
     sampleKept,
     failedResponse,
     summaryResponse,
@@ -17,7 +20,8 @@ import {
     truncatedResponse,
     userMessage,
 } from "../../helpers/compaction-doubles";
-import { zeroUsage } from "../../helpers/agent-doubles";
+import { openTraceLog, type TraceRecord } from "../../helpers/compaction-trace";
+import { countedUsage, zeroUsage } from "../../helpers/agent-doubles";
 import { stubModel } from "../../helpers/pi-stub";
 
 const TRACE_FILE = "compaction-trace.jsonl";
@@ -32,27 +36,18 @@ function readRecords(filePath: string): CompactionTraceRecord[] {
 
 function readChainRowsSplit(filePath: string): {
     runs: CompactionTraceRecord[];
-    chain: Record<string, unknown>[];
+    chain: TraceRecord[];
 } {
-    const runs: CompactionTraceRecord[] = [];
-    const chain: Record<string, unknown>[] = [];
+    // Through the log the recorder writes, so a rotated segment and a torn final line behave here as they do in
+    // `scripts/compaction-report.ts` instead of throwing a test away.
+    const all = openTraceLog(filePath).read();
 
-    for (const line of readFileSync(filePath, "utf8").split("\n")) {
-        if (line.trim() === "") {
-            continue;
-        }
-
-        const record = JSON.parse(line) as Record<string, unknown>;
-        const stage = String(record.stage ?? "");
-        if (stage.startsWith("chain_")) {
-            chain.push(record);
-            continue;
-        }
-
-        runs.push(record as unknown as CompactionTraceRecord);
-    }
-
-    return { runs, chain };
+    return {
+        runs: all.filter(
+            (record): record is CompactionTraceRecord => !record.stage.startsWith("chain_"),
+        ),
+        chain: all.filter((record) => record.stage.startsWith("chain_")),
+    };
 }
 
 describe("compaction trace", () => {
@@ -85,8 +80,12 @@ describe("compaction trace", () => {
         contextWindow?: number;
         systemPrompt?: string;
         branch?: SessionEntry[];
+        /** The retained tail, when a test needs a counted reply in it: the harness names its first row `kept-1`. */
+        kept?: ContextMessage[];
         providerPayload?: unknown;
         preparation?: CompactionHarnessInput["preparation"];
+        /** What `getContextUsage()` answers - `tokens: null` is the post-fold case the ledger exists for. */
+        contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
     }) {
         if (input.config) {
             const configPath = path.join(root, "compaction-config.json");
@@ -97,12 +96,14 @@ describe("compaction trace", () => {
             cwd: root,
             responses: input.responses,
             branch: input.branch,
+            kept: input.kept,
             providerPayload: input.providerPayload,
             systemPrompt: input.systemPrompt,
             model: input.contextWindow
                 ? stubModel({ contextWindow: input.contextWindow })
                 : undefined,
             preparation: input.preparation,
+            contextUsage: input.contextUsage,
         });
     }
 
@@ -184,6 +185,38 @@ describe("compaction trace", () => {
         expect(byStage.get("outcome")?.outcome).toBe("two-stage");
     });
 
+    it("records the ledger's size for the same request beside the tier that answered", async () => {
+        // A counted reply at the cut, so `exact-cut` wins - and the ledger is recorded anyway. The only way to
+        // learn how accurate the derivation is live is to compare it against the provider's count of the request
+        // that actually went out, and on a run where another tier answered, that count is the only ground truth.
+        const harness = build({
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+                async () => summaryResponse("## Goal\n\nmerged\n\n## Progress\n\n- [x] merged"),
+            ],
+            kept: [
+                assistantMessage({ text: "the kept reply", usage: countedUsage(20_000, 100) }),
+                assistantMessage({ text: "acknowledged" }),
+            ],
+        });
+        await harness.compact();
+
+        const attempt = readRecords(tracePath).find(
+            (record) => record.stage === "attempt" && record.strategy === "native",
+        );
+        const ledger = attempt?.attempt?.ledger;
+
+        expect(attempt?.attempt?.estimateSource).toBe("exact-cut");
+        expect(ledger?.headSource).toBe("first-reply");
+        // Where the head's own anchor *is* the cut entry, the range subtracted to solve the head is the same range
+        // charged back as rows, so the two numbers must be equal - not close. A disagreement here is the
+        // composition dropping or double-charging a row, which no estimate error can explain.
+        expect(ledger?.tokens).toBe(attempt?.attempt?.estimatedTokens);
+        expect(ledger?.headTokens).toBeGreaterThan(0);
+        expect((ledger?.rowsCounted ?? 0) + (ledger?.rowsEstimated ?? 0)).toBeGreaterThan(0);
+        expect(ledger?.estimatedTokens).toBeGreaterThan(0);
+    });
+
     it("records the numbers that decided the strategy, including the cache evidence", async () => {
         const harness = build({
             responses: [
@@ -208,6 +241,10 @@ describe("compaction trace", () => {
             estimateSource: "chars4",
         });
         expect(attempt?.attempt?.estimatedTokens).toBeGreaterThan(0);
+        // No reply in this branch was ever counted, so there is no head to solve and the ledger declines rather
+        // than recording a zero: an absent field means "no derivation", and a present `tokens: 0` would mean
+        // "this request is free".
+        expect(attempt?.attempt?.ledger).toBeUndefined();
         // The usage on the accepted attempt is how a cache hit is read out of this file.
         expect(attempt?.usage).toMatchObject({
             input: 0,
@@ -805,5 +842,123 @@ describe("compaction trace", () => {
         });
         await harness.compact();
         expect(statSync(tracePath).mode & 0o777).toBe(0o600);
+    });
+
+    describe("recording the cut walk's decision", () => {
+        /**
+         * The stage-1 attempt's fields from one compaction.
+         *
+         * Read from the file rather than from a return value because that is the whole point of these cases: the
+         * boundary walk's decision is not otherwise observable anywhere, and a move that cannot be attributed to a
+         * condition spent this session being explained by hand from the session file.
+         */
+        async function nativeFields(
+            harness: Awaited<ReturnType<typeof build>>,
+        ): Promise<Record<string, unknown>> {
+            await harness.compact();
+            const attempt = readRecords(tracePath).find(
+                (record) => record.stage === "attempt" && record.strategy === "native",
+            );
+
+            return (attempt as { attempt?: Record<string, unknown> }).attempt ?? {};
+        }
+
+        const checkpoint = async () =>
+            summaryResponse("## Goal\n\ncheckpoint\n\n## Progress\n\n- [x] checkpoint");
+
+        it("records which condition refused core's boundary, and which instrument sized each side", async () => {
+            // The post-fold branch with the shipped keep budget: 8,400 tokens of live context cannot retain 20,000,
+            // so every position fails the keep check and the walk must abstain - which is the case that used to say
+            // nothing beyond two equal ids. It also proves the ledger answered at all of them: the tally has no
+            // `count-expired` in it, because the route that refuses an expired count was never the last one asked.
+            const fields = await nativeFields(
+                build({
+                    responses: [checkpoint],
+                    branch: postFoldBranch(),
+                    contextUsage: { tokens: null, contextWindow: 200_000, percent: null },
+                    preparation: { firstKeptEntryId: "a2" },
+                }),
+            );
+
+            // `getContextUsage()` answered null, and the walk still had a live size: the C2 half of the story.
+            expect(fields.cutLiveTokensSource).toBe("ledger");
+            expect(fields.cutMovedRows).toBe(0);
+            expect(fields.cutProposedRejection).toBe("tail-under-keep-budget");
+            expect(fields.cutKeepRecentTokens).toBe(20_000);
+            expect(fields.cutRejections).toMatchObject({
+                "tail-under-keep-budget": 3,
+                "outside-span-window": 1,
+            });
+            // An abstaining walk reports no chosen span and no basis - absent, not zero, the same rule every other
+            // number in this file follows.
+            expect(fields.cutSpanTokens).toBeUndefined();
+            expect(fields.cutSpanBasis).toBeUndefined();
+            expect(fields.cutTailTokens).toBeUndefined();
+        });
+
+        it("still refuses to move when neither the ledger nor pi can size the live context", async () => {
+            // A branch with no counted reply at all: `headAt` cannot solve a head, `getContextUsage()` says null, and
+            // the walk has no business choosing a boundary it cannot weigh against the keep budget. C2 widened what
+            // can be sized; this is the case where nothing can, and it has to stay visible as its own reason.
+            const fields = await nativeFields(
+                build({
+                    responses: [checkpoint],
+                    branch: messageChain([
+                        { id: "u1", message: userMessage("no reply has ever landed") },
+                        { id: "u2", message: userMessage("and none will before this compaction") },
+                    ]),
+                    contextUsage: { tokens: null, contextWindow: 200_000, percent: null },
+                    preparation: { firstKeptEntryId: "u2" },
+                }),
+            );
+
+            expect(fields.cutLiveTokensSource).toBeUndefined();
+            expect(fields.cutMovedRows).toBe(0);
+            expect(fields.cutProposedRejection).toBe("unmeasurable-live-context");
+            expect(fields.cutRejections).toEqual({ "unmeasurable-live-context": 1 });
+        });
+
+        it("keeps every stage-1 record silent when the walk kept core's cut without being refused", async () => {
+            // The common case must stay quiet in the record too: a rejection map nobody filled in is recorded as
+            // absent rather than as `{}`, and no cause is named when nothing refused - otherwise "the walk abstained"
+            // and "the walk had nothing to say" look alike, which is the confusion these fields exist to end.
+            const fields = await nativeFields(
+                build({
+                    responses: [checkpoint],
+                    branch: messageChain([
+                        {
+                            id: "a1",
+                            at: "2026-01-01T00:00:01.000Z",
+                            message: assistantMessage({
+                                text: "answered",
+                                usage: countedUsage(1_000, 200),
+                            }),
+                        },
+                        { id: "u2", message: userMessage("then asked again") },
+                        {
+                            id: "a2",
+                            at: "2026-01-01T00:00:04.000Z",
+                            message: assistantMessage({
+                                text: "again",
+                                usage: countedUsage(5_000, 300),
+                            }),
+                        },
+                    ]),
+                    contextUsage: { tokens: 5_300, contextWindow: 200_000, percent: 3 },
+                    preparation: {
+                        firstKeptEntryId: "u2",
+                        settings: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 100 },
+                    },
+                }),
+            );
+
+            expect(fields.cutLiveTokensSource).toBe("ledger");
+            expect(fields.cutMovedRows).toBe(0);
+            expect(fields.cutProposedRejection).toBeUndefined();
+            expect(fields.cutRejections).toBeUndefined();
+            // Chosen on the count route, and it says so: `u2` at the cut measures the span from the reply above it.
+            expect(fields.cutSpanBasis).toBe("count");
+            expect(fields.cutTailTokens).toBe(5_300 - (fields.cutSpanTokens as number));
+        });
     });
 });

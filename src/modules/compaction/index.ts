@@ -41,7 +41,12 @@ import {
     type ChainObservation,
     type ChainShape,
 } from "./chain";
-import { segmentSummaryInstruction, serializedSummarizationRequest } from "./prompt";
+import {
+    SERIALIZATION_SYSTEM_PROMPT,
+    segmentSummaryInstruction,
+    serializedSummarizationRequest,
+} from "./prompt";
+import { spanBodyTokens, spanSizer } from "./ledger";
 import type { PrefixDivergence } from "./trace";
 import {
     serializeConversationMinimal,
@@ -54,7 +59,12 @@ import {
     computeFileLists,
     formatFileLists,
 } from "./sections";
-import { buildSpanSession, skippedEntryCount, stageOneSpanEntries } from "./span-session";
+import {
+    buildSpanSession,
+    previousFoldWindowStart,
+    skippedEntryCount,
+    stageOneSpanEntries,
+} from "./span-session";
 import { type SummarizationFailureCause, causeRationale, isTerminalCause } from "./failure";
 import {
     summarizeNatively,
@@ -66,6 +76,7 @@ import {
     type CompactionPrefixFields,
     compactionTraceTarget,
     createCompactionTraceRecorder,
+    ledgerFields,
     type CompactionTraceOutcome,
     type CompactionTraceRecorder,
 } from "./trace";
@@ -104,6 +115,15 @@ export type CompactionRoute = "two-stage" | "native" | "serialized";
  */
 interface PiCoderCompactionDetails {
     version: 1;
+    /**
+     * The boundary reply's own prompt count, and the fixed prefix inside it.
+     *
+     * Present only when the span was exactly counted. Their difference is what this fold took out of the live
+     * context, and `correctedSpanFromNewest` reads both to turn a count this fold expired back into a usable one
+     * on the first request after the fold - the window where nothing else is counted.
+     */
+    countedBodyTokens?: number;
+    fixedPrefixTokens?: number;
     route: CompactionRoute;
     provider: string;
     model: string;
@@ -119,9 +139,11 @@ interface StageContext {
     preparation: CompactionPreparation;
     customInstructions?: string;
     config: CompactionConfig;
-    /** The output cap both stages send: what this request can afford to answer with. */
-    maxTokens: number;
-    /** Smaller budget for the intermediate: a stage-1 output the reduce has to re-summarize is wasted work. */
+    /**
+     * The output reserve the cut walk has to leave beside a candidate span: stage 1's budget evaluated against
+     * core's *proposed* body. Not a request cap - each stage sizes its own ask from the body it actually sends.
+     */
+    cutOutputReserveTokens: number;
     signal: AbortSignal;
     trace: CompactionTraceRecorder;
     /**
@@ -142,14 +164,26 @@ interface StageContext {
  * no provider failure to name — and the cascade treats an absent cause as not terminal, since there is nothing
  * it learned that says the next rung would fail too.
  */
-type StageResult =
+type StageResult = {
+    /**
+     * What a provider counted for the body this fold sized from, and the fixed prefix inside it.
+     *
+     * Both, because a fold removes only the span while the count covers the whole request: the reader subtracts
+     * one from the other, and the subtraction belongs where a reader can audit it rather than inside a field
+     * name. Present whatever the stage then did - a fit-gate skip and a rejected reply still discard the same
+     * material, and the fold after this one wants these numbers most when this one was forced short.
+     */
+    countedBodyTokens?: number;
+    fixedPrefixTokens?: number;
+} & (
     | { ok: true; text: string; usage?: Usage; retries: number }
     | {
           ok: false;
           detail: string;
           cause?: SummarizationFailureCause;
           retries: number;
-      };
+      }
+);
 
 /**
  * The session's thinking level, or undefined when it cannot be read.
@@ -184,7 +218,12 @@ const MIN_OUTPUT_TOKENS = 1024;
 const SUMMARIZATION_MARGIN_TOKENS = 1024;
 
 /**
- * The room one summarization reply may take - the same cap for both stages.
+ * The room one summarization reply may take, for the request that is about to go out.
+ *
+ * Every caller passes **that request's own body**. One number shared between the two stages was the defect this
+ * sentence replaces: stage 1 re-sends the span, while the reduce sends a blob this module serialized and bounds
+ * itself, so charging stage 2 with the span left it asking for whatever room a nearly-full window happened to
+ * have - see `stageTwoRequest` for what that cost.
  *
  * This replaces two numbers derived from pi's `reserveTokens` (`0.8 * reserve`, then a third of it for stage 1),
  * which capped a live 94-event checkpoint at 4,369 tokens on a route whose model reports 65,536: the reply hit the
@@ -212,6 +251,46 @@ export function summarizationBudgetTokens(input: {
     }
 
     return Math.min(modelMaxTokens, room);
+}
+
+/**
+ * Stage 2's request, and the cap that follows from it.
+ *
+ * The reduce sends one message whose size this module controls (`serializedMaxTokens`) plus its own short system
+ * prompt, and no tools at all. Deriving its cap from stage 1's request instead floored the ask exactly when
+ * compaction matters: the first fill of a 200k window gave it 5,188 tokens against a 10,408-token request, the
+ * second floored it at `MIN_OUTPUT_TOKENS`, and that reply came back `length` with 1,024 output tokens and *no
+ * text* - a thinking model spends a cap that small before it starts writing, so the failure is an empty summary
+ * rather than a truncated one (2026-09-07, runs `01a07cc3` and `01a07cec`). A binding cap costs a section; a
+ * floored cap costs the whole reply.
+ */
+function stageTwoRequest(input: {
+    model: Model<Api>;
+    transcript: SerializedConversation;
+    segmentText?: string;
+    previousSummary?: string;
+    customInstructions?: string;
+}): { requestText: string; maxTokens: number } {
+    const requestText = serializedSummarizationRequest({
+        conversationText: input.transcript.text,
+        segmentSummary: input.segmentText,
+        previousSummary: input.previousSummary,
+        customInstructions: input.customInstructions,
+    });
+    const requestTokens =
+        estimateTextTokens(requestText) + estimateTextTokens(SERIALIZATION_SYSTEM_PROMPT);
+
+    return {
+        requestText,
+        maxTokens: Math.max(
+            MIN_OUTPUT_TOKENS,
+            summarizationBudgetTokens({
+                modelMaxTokens: input.model.maxTokens,
+                contextWindow: input.model.contextWindow,
+                requestTokens,
+            }),
+        ),
+    };
 }
 
 function notify(ctx: ExtensionContext, message: string, level: "info" | "warning" = "info"): void {
@@ -638,6 +717,11 @@ function attemptFields(
 function spanMessages(input: StageContext): {
     messages: Message[];
     entries: SessionEntry[];
+    /**
+     * The branch in pi's own file order, which is what the head ledger walks: the window above is a slice of it,
+     * and a head is solved from fold rows and counted replies that sit outside the slice.
+     */
+    branch: SessionEntry[];
     /** The entry at the chosen boundary, whose own request measured exactly this span. */
     keptEntry: SessionEntry | undefined;
     /** Newest fold or shape change: counts from at or before it describe a body that no longer exists. */
@@ -662,6 +746,7 @@ function spanMessages(input: StageContext): {
     return {
         messages,
         entries: span.entries,
+        branch,
         keptEntry: entries.find((entry) => entry.id === cut.firstKeptEntryId),
         boundary: countBoundary(branch),
         fields: {
@@ -671,6 +756,19 @@ function spanMessages(input: StageContext): {
             // Where the span ends, which is core's id unless the repair found that boundary unsendable.
             chosenFirstKeptEntryId: cut.firstKeptEntryId,
             proposedFirstKeptEntryId: preparation.firstKeptEntryId,
+            // The walk's own decision, and not merely its outcome: which condition refused core's boundary, how
+            // far back the repair went, what it left as retained history, and which instrument answered. Two ids
+            // cannot separate "core's cut was unmeasurable" from "core's cut kept too little", and a run that
+            // could not be repaired could not say what stopped it - which is how a moved cut spent a session
+            // being explained by hand from the session file.
+            cutMovedRows: cut.movedRows,
+            cutProposedRejection: cut.proposedRejection ?? undefined,
+            cutRejections: Object.keys(cut.rejections).length > 0 ? cut.rejections : undefined,
+            cutTailTokens: cut.tailTokens ?? undefined,
+            cutKeepRecentTokens: preparation.settings.keepRecentTokens,
+            cutSpanTokens: cut.spanTokens ?? undefined,
+            cutSpanBasis: cut.spanBasis ?? undefined,
+            cutLiveTokensSource: cut.liveTokensSource,
         },
     };
 }
@@ -689,14 +787,47 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
         timestamp: Date.now(),
     });
     const reportedContextTokens = ctx.getContextUsage()?.tokens ?? null;
+    const extraTokens = estimateTextTokens(instruction);
+    // A row stage 1 could not copy makes our span narrower than the stored rows imply, so every number built
+    // from those rows over-sizes the request - the kept reply's own count and a head solved from it alike, since
+    // a head anchored on that reply reproduces exactly the count the first tier is disqualified from using. One
+    // guard for both, refused for one reason, and `skippedEntries` records it.
+    const copiedCleanly = span.fields.skippedEntries === 0;
+    // The head ledger sizes this same body from the branch and the window stage 1 actually copies. It is recorded
+    // whether or not it wins the tier, because the only way to learn how accurate it is live is to compare it with
+    // the provider's count of the request that went out - and on a run where another tier answered, that count is
+    // the only ground truth there is.
+    const ledger = copiedCleanly
+        ? spanBodyTokens(span.branch, {
+              windowStartId: previousFoldWindowStart(span.branch),
+              cutId: cut.firstKeptEntryId,
+              extraTokens,
+              boundary: span.boundary,
+          })
+        : null;
     // The exact-cut tier is only exact if our span really was that reply's body, so an entry stage 1 could not
     // copy rules it out - which `skippedEntries` already records as the reason.
     const counted = countSpanTokens({
         spanEntries: span.entries,
-        keptEntry: span.fields.skippedEntries === 0 ? span.keptEntry : undefined,
+        keptEntry: copiedCleanly ? span.keptEntry : undefined,
         boundary: span.boundary,
-        extraTokens: estimateTextTokens(instruction),
+        extraTokens,
+        ledger,
     });
+    // Only an exactly-counted span is worth persisting: it is the one tier where the number is a provider's count
+    // rather than a ratio. The instruction estimate `countSpanTokens` folds in comes back out, since no provider
+    // ever counted it, leaving the boundary reply's own prompt count - the whole request, fixed prefix included.
+    const countedSpan =
+        counted.source === "exact-cut"
+            ? {
+                  countedBodyTokens: counted.tokens - estimateTextTokens(input.instruction),
+                  // The same two numbers the request is charged with, measured against the prompt and tools
+                  // actually on this wire rather than a caller's recomputation of them.
+                  fixedPrefixTokens:
+                      estimateTextTokens(ctx.getSystemPrompt()) +
+                      estimateTextTokens(JSON.stringify(tools) ?? ""),
+              }
+            : {};
     // This stage's own request, not the walk's proposal: when the session carries a count of this body, an
     // estimate of it is the wrong input for a cap.
     const requestTokens = fitRequirementTokens({
@@ -717,7 +848,9 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
         estimatedTokens: counted.tokens ?? estimateRequestTokens(context),
         estimateSource: counted.tokens === null ? "chars4" : counted.source,
         staleAnchors: counted.staleAnchors > 0 ? counted.staleAnchors : undefined,
+        foldCorrected: counted.foldCorrected > 0 ? counted.foldCorrected : undefined,
         reportedContextTokens: reportedContextTokens ?? undefined,
+        ledger: ledgerFields(ledger),
         toolCount: tools.length,
         messageCount: span.messages.length,
         customInstructions: input.customInstructions,
@@ -738,7 +871,7 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
                 ? "segment context plus instruction does not fit the window"
                 : "no earlier boundary fits either; segment context plus instruction does not fit";
         trace.attempt("native", fields, { outcome: "skipped", detail, retries: 0 });
-        return { ok: false, detail, retries: 0 };
+        return { ...countedSpan, ok: false, detail, retries: 0 };
     }
 
     const attempt = await summarizeNatively(
@@ -769,7 +902,13 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
             cause: attempt.cause,
             retries: attempt.retries,
         });
-        return { ok: false, detail, cause: attempt.cause, retries: attempt.retries };
+        return {
+            ...countedSpan,
+            ok: false,
+            detail,
+            cause: attempt.cause,
+            retries: attempt.retries,
+        };
     }
 
     trace.attempt("native", fields, {
@@ -779,7 +918,13 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
         retries: attempt.retries,
     });
     trace.modelResponse("native", attempt.text, attempt.usage);
-    return { ok: true, text: attempt.text, usage: attempt.usage, retries: attempt.retries };
+    return {
+        ...countedSpan,
+        ok: true,
+        text: attempt.text,
+        usage: attempt.usage,
+        retries: attempt.retries,
+    };
 }
 
 /**
@@ -806,6 +951,32 @@ function reduceFields(
     });
 }
 
+/**
+ * The whole live context, sized by whichever instrument can vouch for it.
+ *
+ * The ledger first: it puts `tail = live - span` on one basis, head and rows arithmetic on both sides, and it
+ * answers where pi's own hybrid returns null - which is right after a fold, the window the walk used to abstain
+ * in unconditionally. `getContextUsage()` is the fallback rather than the rival: it is a provider count through
+ * the last reply plus chars/4 for everything after it, so a tail taken against it mixes two instruments, and
+ * `liveTokensSource` exists to keep that visible in the record.
+ */
+function liveContextSize(
+    sizer: ReturnType<typeof spanSizer>,
+    ctx: ExtensionContext,
+): { tokens: number | null; source: "ledger" | "context-usage" | undefined } {
+    const sized = sizer?.live() ?? null;
+    if (sized !== null) {
+        return { tokens: sized.tokens, source: "ledger" };
+    }
+
+    const reported = ctx.getContextUsage()?.tokens ?? null;
+    if (reported !== null) {
+        return { tokens: reported, source: "context-usage" };
+    }
+
+    return { tokens: null, source: undefined };
+}
+
 /** Stage 2: one bounded text-only call that reconciles the transcript with stage 1's checkpoint. */
 async function runReduceStage(
     input: StageContext,
@@ -813,11 +984,12 @@ async function runReduceStage(
     transcript: SerializedConversation,
     segment: StageResult | undefined,
 ): Promise<StageResult> {
-    const { ctx, preparation, maxTokens, signal, trace } = input;
+    const { ctx, preparation, signal, trace } = input;
     const segmentText = segment?.ok ? segment.text : undefined;
-    const requestText = serializedSummarizationRequest({
-        conversationText: transcript.text,
-        segmentSummary: segmentText,
+    const { requestText, maxTokens } = stageTwoRequest({
+        model,
+        transcript,
+        segmentText,
         previousSummary: preparation.previousSummary,
         customInstructions: input.customInstructions,
     });
@@ -962,7 +1134,7 @@ async function compactWithPiCoder(
         customInstructions: event.customInstructions,
     });
     // Core's proposed span, which the walk can only shorten: the conservative side of the two-stage split, and a
-    // budget needs an order of magnitude rather than a count.
+    // reserve needs an order of magnitude rather than a count.
     const proposedSpan = summarizedSpan(preparation);
     const instructionTokens = estimateTextTokens(instruction);
     // Charged the way the gate charges it: fixed prefix, span, instruction.
@@ -976,25 +1148,37 @@ async function compactWithPiCoder(
         requestTokens: proposedRequest,
     });
     // Floored here rather than in the budget, so a degenerate window is a clean skip and not a zero-token ask.
-    const maxTokens = Math.max(MIN_OUTPUT_TOKENS, proposedBudget);
+    const cutOutputReserveTokens = Math.max(MIN_OUTPUT_TOKENS, proposedBudget);
     // Where to cut, decided before the transcript is built: the repair moves the boundary earlier when core's
     // choice would make a request the window cannot take, and the two budgets it weighs are stage 1's output and
     // the instruction it appends, both of which exist at this point.
     const branch = ctx.sessionManager.getBranch();
+    const boundary = countBoundary(branch);
+    // One walk, every candidate: the cut walk asks for a size at each boundary it considers, and a per-position
+    // `spanBodyTokens` call would rescan the window each time. The sizing tier below still uses
+    // `spanBodyTokens`, because that route carries the instruction inside its body and its refusals are pinned
+    // against provider counts; `ledger.test.ts` proves the two agree position by position.
+    const sizer = spanSizer(branch, {
+        windowStartId: previousFoldWindowStart(branch),
+        boundary,
+    });
+    const live = liveContextSize(sizer, ctx);
     const cut = chooseSpanCut({
         branch,
         proposedFirstKeptEntryId: preparation.firstKeptEntryId,
-        boundary: countBoundary(branch),
-        liveTokens: ctx.getContextUsage()?.tokens ?? null,
+        boundary,
+        liveTokens: live.tokens,
+        liveTokensSource: live.source,
         keepRecentTokens: preparation.settings.keepRecentTokens,
         contextWindow: model.contextWindow,
-        outputBudgetTokens: maxTokens,
+        outputBudgetTokens: cutOutputReserveTokens,
         instructionTokens,
+        sizer,
     });
-    // Stage 2's material stays core's span; the walk only narrows what stage 1 re-reads. Note the one-way
-    // dependency this implies: the chosen span's own message count is not knowable until the stage is built, and
-    // the stage needs a budget, so the budget is sized from the *proposed* span. The walk only ever moves the
-    // boundary earlier, so that count is an upper bound on the span and this budget is the conservative one.
+    // Stage 2's material stays core's span; the walk only narrows what stage 1 re-reads. The one-way dependency
+    // this implies is the walk's: it has to weigh a reserve before any stage exists, so the number it weighs comes
+    // from the *proposed* span, which the walk only ever shrinks - the conservative direction. Neither stage sends
+    // it: stage 1 recomputes its own cap from the counted request, and the reduce from the transcript it was given.
     const span = summarizedSpan(preparation);
     const transcript = serializeConversationMinimal(span, serializerOptions(config));
     const stage: StageContext = {
@@ -1003,7 +1187,7 @@ async function compactWithPiCoder(
         preparation,
         customInstructions: event.customInstructions,
         config,
-        maxTokens,
+        cutOutputReserveTokens,
         signal: event.signal,
         trace,
         instruction,
@@ -1042,9 +1226,16 @@ async function compactWithPiCoder(
         // about.
         const aborted = stopped === "aborted";
         failures.push(`segment: ${stopped}`);
+        // The numbers the reduce would have sent, had the cascade reached it: its own body, never stage 1's reserve.
+        const unattempted = stageTwoRequest({
+            model,
+            transcript,
+            previousSummary: preparation.previousSummary,
+            customInstructions: event.customInstructions,
+        });
         trace.attempt(
             "serialized",
-            reduceFields(model, maxTokens, transcript, undefined, {
+            reduceFields(model, unattempted.maxTokens, transcript, undefined, {
                 customInstructions: event.customInstructions,
                 previousSummaryChars: preparation.previousSummary?.length ?? 0,
             }),
@@ -1118,6 +1309,10 @@ async function compactWithPiCoder(
             provider: model.provider,
             model: model.id,
             droppedBlocks: transcript.droppedBlocks,
+            // Absent, not zero, when the span was never exactly counted: a later fold must be able to tell "no
+            // number" from "a number that happened to be zero".
+            countedBodyTokens: segment.countedBodyTokens,
+            fixedPrefixTokens: segment.fixedPrefixTokens,
         },
         cut,
         stage.tokensBefore,

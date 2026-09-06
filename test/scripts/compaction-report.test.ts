@@ -18,16 +18,24 @@ import {
     type BundledScript,
     type BundledScriptResult,
 } from "../helpers/script-bundle";
+import {
+    fixturePath,
+    nativeAttempts,
+    openTraceLog,
+    providerPromptTokens,
+} from "../helpers/compaction-trace";
 import type { SummarizationStrategy } from "../../src/modules/compaction/summarize";
 import {
     createCompactionTraceRecorder,
     type CompactionAttemptFields,
     type CompactionAttemptResult,
     type CompactionFinalFields,
+    type CompactionLedgerFields,
     type CompactionPrefixFields,
     type CompactionTraceRecorder,
     type CompactionTraceTarget,
 } from "../../src/modules/compaction/trace";
+import type { EstimateSource } from "../../src/modules/compaction/types";
 
 const SCRIPT = path.join(PI_CODER_EXTENSION_DIR, "scripts", "compaction-report.ts");
 
@@ -55,6 +63,24 @@ interface ReportAttempt {
     messageCount?: number;
     segmentSummaryChars?: number;
     droppedBlocks?: number;
+    estimatedTokens?: number;
+    estimateSource?: EstimateSource;
+    /** The record's own nested object, under the record's own field names. */
+    ledger?: CompactionLedgerFields;
+    /** The one number the report computes rather than reads, and only where a ledger exists to compute it from. */
+    ledgerSkew?: number | null;
+}
+
+interface ReportLedgerSummary {
+    runs: number;
+    attempts: number;
+    comparable: number;
+    band: number;
+    meanAbsSkew: number | null;
+    worstSkew: number | null;
+    worstRun: string | null;
+    overBand: number;
+    meanEstimatedShare: number | null;
 }
 
 interface ReportPrefix {
@@ -111,11 +137,15 @@ interface ReportJson {
     chainRows: number;
     instances: string[];
     suspects: number;
+    thresholds: { ledgerEstimateSkew: number };
+    ledger: ReportLedgerSummary | null;
+    cut: { attempts: number; moved: number; causes: Record<string, number> } | null;
     runs: ReportRun[];
     aggregates: {
         routes: Record<string, number>;
         failures: Record<string, number>;
         flags: Record<string, number>;
+        invariants: Record<string, number>;
         causes: Record<string, number>;
         parameters: Record<string, number>;
         divergences: Record<string, number>;
@@ -308,6 +338,49 @@ function runWithPrefix(session: string, fields: Partial<CompactionPrefixFields>)
     trace.modelResponse("native", summary);
     trace.final("native", summary, finalFields());
     trace.outcome("native");
+}
+
+/**
+ * A native run whose stage-1 request the provider charged `counted` tokens for.
+ *
+ * 2000 fresh plus a cache read is what makes the sum the provider's count of *this* request rather than pi's count
+ * of the whole live context, which the base fields set apart at 48k - the pair the tier tests lean on.
+ */
+function writeNativeRun(
+    session: string,
+    fields: Partial<CompactionAttemptFields>,
+    counted = 32_000,
+): void {
+    const trace = recorder(session);
+    const summary = checkpoint("## Goal", 4000);
+    trace.prefix(healthyPrefix());
+    trace.attempt(
+        "native",
+        nativeFields(fields),
+        accepted({ usage: usage(2000, 1500, counted - 2000), stopReason: "stop" }),
+    );
+    trace.modelResponse("native", summary);
+    trace.final("native", summary, finalFields());
+    trace.outcome("native");
+}
+
+/**
+ * The ledger's breakdown for one request, coherent by construction: `tokens` is the head plus the rows, counted
+ * and estimated, and `estimatedTokens` is the chars/4 part of it. Every skew a test asserts is therefore readable
+ * off the two numbers it names.
+ */
+function ledgerFields(overrides: Partial<CompactionLedgerFields> = {}): CompactionLedgerFields {
+    return {
+        tokens: 32_500,
+        estimatedTokens: 100,
+        headTokens: 9379,
+        headSource: "after-fold",
+        headEstimatedTokens: 96,
+        rowsCounted: 23_021,
+        rowsEstimated: 100,
+        rowsCheckpoints: 0,
+        ...overrides,
+    };
 }
 
 /**
@@ -668,6 +741,256 @@ describe("compaction-report script", () => {
         expect(flagDetail(report, "sess-anchor-band", "estimate-skew")).toContain("band 15%");
     });
 
+    it("prints the ledger's own error beside the estimate it was measured against", () => {
+        // The provider charged 32,000 for the request; the derivation said 32,500, so the run line owes the reader
+        // +1.6%. It must be the difference against *that* count and not against pi's whole-context number (48,000
+        // on these base fields), which is the exact confusion `estimate-skew` was repaired for.
+        writeNativeRun("sess-ledger-print", {
+            estimateSource: "head-ledger",
+            estimatedTokens: 32_500,
+            ledger: ledgerFields(),
+        });
+
+        const text = runText(["--session", "sess-ledger-print"]).stdout;
+        expect(text).toContain("est=32.5k src=ledger ledger=+1.6%");
+        expect(text).not.toContain("ledger=-32");
+
+        // The two operands, read back off the records the production recorder wrote rather than restated here.
+        const [record] = nativeAttempts(openTraceLog(logPath).read());
+        const ledger = record?.attempt?.ledger;
+        if (record === undefined || ledger === undefined) {
+            throw new Error("the recorder wrote no stage-1 attempt carrying ledger fields");
+        }
+        expect(providerPromptTokens(record)).toBe(32_000);
+        expect(ledger.tokens).toBe(32_500);
+    });
+
+    it("holds the head-ledger tier to its own band, and lets the knob move it", () => {
+        // 38,400 against a 32,000-token request is 20%: inside what chars/4 is allowed, and far outside what a
+        // derivation over provider counts earned (0.96% / 0.01% / 0.26% on the three real stage-1 requests).
+        writeNativeRun("sess-ledger-tier", {
+            estimateSource: "head-ledger",
+            estimatedTokens: 38_400,
+            ledger: ledgerFields({ tokens: 38_400 }),
+        });
+        writeNativeRun("sess-heuristic-tier", {
+            estimateSource: "chars4",
+            estimatedTokens: 38_400,
+        });
+
+        const report = parseReport();
+        expect(flagKeys(report, "sess-ledger-tier")).toContain("estimate-skew");
+        expect(flagKeys(report, "sess-heuristic-tier")).toEqual([]);
+        expect(flagDetail(report, "sess-ledger-tier", "estimate-skew")).toContain(
+            "(head + counted rows)",
+        );
+        expect(flagDetail(report, "sess-ledger-tier", "estimate-skew")).toContain("band 5%");
+        expect(runText(["--session", "sess-ledger-tier"]).stdout).toContain("src=ledger");
+
+        // Widening the band past 20% leaves the tier silent, which is how the band is a knob and not a verdict.
+        expect(
+            parseReport(["--ledger-estimate-skew", "0.5"]).runs.find(
+                (run) => run.session === "sess-ledger-tier",
+            )?.flags,
+        ).toEqual([]);
+        expect(runScript(["--ledger-estimate-skew", "0"]).status).toBe(2);
+        expect(runScript(["--ledger-estimate-skew", "nonsense"]).status).toBe(2);
+    });
+
+    it("flags only the runs where the derivation disagrees with the provider's count", () => {
+        // Inside the band: 33,500 against 32,000 is +4.7%, and the estimate the tier actually answered with is a
+        // different (smaller) number, so no flag of either kind fires.
+        writeNativeRun("sess-ledger-close", {
+            estimateSource: "head-ledger",
+            estimatedTokens: 32_600,
+            ledger: ledgerFields({ tokens: 33_500 }),
+        });
+        // Outside it: the derivation said 34,000 for a request charged 32,000, while the tier that answered said
+        // 32,600 - so `estimate-skew` stays off and `ledger-skew` fires. The two compare different numbers, and
+        // the record has to be able to say so independently of which one got used.
+        writeNativeRun("sess-ledger-far", {
+            estimateSource: "head-ledger",
+            estimatedTokens: 32_600,
+            ledger: ledgerFields({ tokens: 34_000, estimatedTokens: 400 }),
+        });
+        // Recorded whether or not it won: on a run the heuristic priced, the ledger's own skew is still measured.
+        writeNativeRun("sess-ledger-unused", {
+            estimateSource: "chars4",
+            estimatedTokens: 43_000,
+            ledger: ledgerFields({ tokens: 34_000 }),
+        });
+
+        const report = parseReport();
+        expect(flagKeys(report, "sess-ledger-close")).toEqual([]);
+        expect(flagKeys(report, "sess-ledger-far")).toContain("ledger-skew");
+        expect(flagKeys(report, "sess-ledger-far")).not.toContain("estimate-skew");
+        expect(flagKeys(report, "sess-ledger-unused")).toContain("ledger-skew");
+        expect(report.aggregates.flags["ledger-skew"]).toBe(2);
+
+        const detail = flagDetail(report, "sess-ledger-far", "ledger-skew");
+        expect(detail).toContain("ledger 34.0k");
+        expect(detail).toContain("head 9379 after-fold");
+        expect(detail).toContain("1.2% of it chars/4");
+        expect(detail).toContain("vs 32.0k counted for the same request, band 5%");
+        expect(detail).toContain("larger request than the endpoint charged");
+        expect(detail).toContain("request shape that has since moved");
+        expect(runText(["--session", "sess-ledger-far"]).stdout).toContain("! ledger-skew:");
+    });
+
+    it("says a ledger number was derived but never charged, instead of guessing a skew", () => {
+        // A stage the fit gate skipped has no usage: the derivation exists, the ground truth does not, and the
+        // line must show that pair rather than a zero that reads as a perfect prediction.
+        const trace = recorder("sess-ledger-nousage");
+        trace.prefix(healthyPrefix());
+        trace.attempt(
+            "native",
+            nativeFields({
+                estimateSource: "head-ledger",
+                estimatedTokens: 32_500,
+                ledger: ledgerFields(),
+            }),
+            { outcome: "skipped", detail: "segment does not fit the context window" },
+        );
+        trace.outcome("core-default", "both stages failed");
+
+        const report = parseReport();
+        expect(flagKeys(report, "sess-ledger-nousage")).not.toContain("ledger-skew");
+        const text = runText(["--session", "sess-ledger-nousage"]).stdout;
+        expect(text).toContain("no usage");
+        expect(text).toContain("ledger=-");
+        // The aggregate counts the attempt as carrying a number and as having nothing to compare it with.
+        expect(report.ledger).toMatchObject({ runs: 1, comparable: 0, overBand: 0 });
+        expect(runText().stdout).toContain("comparable=0 to a provider count");
+    });
+
+    it("aggregates the derivation's accuracy over the runs that carried one", () => {
+        // One 4,000-token request per run so the aggregate spans both directions and one breach: +0.9%, -3.1%,
+        // +12.5% against 32,000 counted, plus a run that derived nothing at all.
+        writeNativeRun("sess-ledger-tight", {
+            estimateSource: "head-ledger",
+            estimatedTokens: 32_300,
+            ledger: ledgerFields({ tokens: 32_300, rowsCounted: 22_821 }),
+        });
+        writeNativeRun("sess-ledger-under", {
+            estimateSource: "head-ledger",
+            estimatedTokens: 31_000,
+            ledger: ledgerFields({ tokens: 31_000, estimatedTokens: 200, rowsCounted: 21_521 }),
+        });
+        writeNativeRun("sess-ledger-over", {
+            estimateSource: "head-ledger",
+            estimatedTokens: 36_000,
+            ledger: ledgerFields({
+                tokens: 36_000,
+                estimatedTokens: 1000,
+                rowsCounted: 25_121,
+                rowsEstimated: 1000,
+                rowsCheckpoints: 1557,
+            }),
+        });
+        writeNativeRun("sess-ledger-none", {});
+
+        const text = runText(["--runs", "0"]).stdout;
+        expect(text).toContain("LEDGER");
+        expect(text).toContain("3 of 4 carried a ledger number");
+        expect(text).toContain("comparable=3 to a provider count");
+        expect(text).toContain("mean=5.5%");
+        expect(text).toContain("worst=+13%");
+        expect(text).toContain("over band=1/3 (band 5%)");
+        expect(text).toContain("that is chars/4=1.2%");
+        expect(text).toContain("from:after-fold");
+        expect(text).toContain("counted/1000 estimated (incl 1557 checkpoints)");
+
+        // Aggregates describe the file, not the selection: `--suspect` hides the three clean runs from the run
+        // blocks and leaves the ratio over all four of them alone, because the rows were counted across all of
+        // them. The denominator used to come off the selected list and printed "3 of 2" here.
+        const narrowed = runText(["--suspect", "--runs", "0"]).stdout;
+        expect(narrowed).toContain("3 of 4 carried a ledger number");
+        // ...while only the flagged run is still rendered above: one run block header, four ledger rows.
+        expect(narrowed.match(/^ {2}\d\d:\d\d:\d\d {2}/gm)).toHaveLength(1);
+
+        const report = parseReport();
+        const over = report.runs.find((run) => run.session === "sess-ledger-over");
+        expect(report.ledger).toMatchObject({
+            runs: 3,
+            attempts: 3,
+            comparable: 3,
+            overBand: 1,
+            band: 0.05,
+            worstRun: over?.id,
+        });
+        expect(report.ledger?.meanAbsSkew).toBeCloseTo(0.0552, 4);
+        expect(report.ledger?.worstSkew).toBeCloseTo(0.125, 6);
+        expect(report.ledger?.meanEstimatedShare).toBeCloseTo(0.0124, 4);
+    });
+
+    it("refuses a tier that names the ledger without its numbers", () => {
+        // `head-ledger` is chosen *from* those numbers, so a record naming the tier while carrying none means the
+        // writer and the tier agree on nothing - a bug in the instrument, not a sizing finding.
+        writeNativeRun("sess-ledger-lied", {
+            estimateSource: "head-ledger",
+            estimatedTokens: 32_500,
+            ledger: undefined,
+        });
+        // The honest pairing: the tier was not the ledger's, but the numbers were still recorded.
+        writeNativeRun("sess-ledger-honest", {
+            estimateSource: "chars4",
+            estimatedTokens: 32_500,
+            ledger: ledgerFields(),
+        });
+
+        const report = parseReport();
+        expect(report.aggregates.invariants).toEqual({ "tier-without-ledger": 1 });
+        expect(flagKeys(report, "sess-ledger-lied")).toEqual([]);
+        expect(flagKeys(report, "sess-ledger-honest")).toEqual([]);
+
+        const text = runText(["--runs", "0"]).stdout;
+        expect(text).toContain("INVARIANTS (1 distinct");
+        expect(text).toContain("tier-without-ledger");
+        expect(text).toContain("a tier cannot be chosen without the numbers that produced it");
+    });
+
+    it("carries the ledger through --json under the record's own field names", () => {
+        writeNativeRun("sess-ledger-json", {
+            estimateSource: "head-ledger",
+            estimatedTokens: 32_500,
+            ledger: ledgerFields(),
+        });
+        writeNativeRun("sess-ledger-plain", {});
+
+        const report = parseReport();
+        const attempt = report.runs.find((run) => run.session === "sess-ledger-json")?.attempts[0];
+        // Same keys, same values as the trace record: a reader joins a report number to the line it came from
+        // without translating either side.
+        expect(attempt?.ledger).toEqual(ledgerFields());
+        expect(Object.keys(attempt?.ledger ?? {}).sort()).toEqual(
+            [
+                "estimatedTokens",
+                "headEstimatedTokens",
+                "headSource",
+                "headTokens",
+                "rowsCheckpoints",
+                "rowsCounted",
+                "rowsEstimated",
+                "tokens",
+            ].sort(),
+        );
+        expect(attempt?.ledgerSkew).toBeCloseTo(0.015625, 6);
+        expect(report.thresholds.ledgerEstimateSkew).toBe(0.05);
+
+        // No ledger object means no derived skew either: the absence has to stay visible in the machine output.
+        const plain = report.runs.find((run) => run.session === "sess-ledger-plain")?.attempts[0];
+        expect(plain?.ledger).toBeUndefined();
+        expect(plain?.ledgerSkew).toBeUndefined();
+    });
+
+    it("reports no ledger data at all for a trace that derived none", () => {
+        writeNativeRun("sess-ledger-absent", {});
+
+        const report = parseReport();
+        expect(report.ledger).toBeNull();
+        expect(runText(["--runs", "0"]).stdout).not.toContain("LEDGER");
+    });
+
     it("separates an absent reference from an unusable one", () => {
         // Before the hash ladder, both of these were written as `prefixUsable: false` with a zero match count,
         // which made a cold process look like a broken rebuild.
@@ -941,6 +1264,149 @@ describe("compaction-report script", () => {
         const text = runText([]).stdout;
         expect(text).toContain("INVARIANTS");
         expect(text).toContain("none-with-branch");
+    });
+
+    it("prints what the boundary walk decided, and aggregates the causes", () => {
+        const trace = recorder("sess-cut-decision");
+        trace.attempt(
+            "native",
+            nativeFields({
+                chosenFirstKeptEntryId: "2267e3bd0000",
+                proposedFirstKeptEntryId: "2ea0911c0000",
+                cutMovedRows: 3,
+                cutProposedRejection: "tail-under-keep-budget",
+                cutRejections: {
+                    "tail-under-keep-budget": 2,
+                    "count-expired-at-fold-or-shape-change": 4,
+                },
+                cutTailTokens: 20_752,
+                cutKeepRecentTokens: 20_000,
+                cutSpanTokens: 178_261,
+                cutSpanBasis: "ledger",
+                cutLiveTokensSource: "ledger",
+            }),
+            accepted({ usage: usage(2000, 1500, 30000) }),
+        );
+        const summary = checkpoint("## Goal", 4000);
+        trace.modelResponse("native", summary);
+        trace.final("native", summary, finalFields());
+        trace.outcome("native");
+
+        const text = runText(["--session", "sess-cut-decision"]).stdout;
+        // The main line carries the magnitude; the `cut:` line carries the explanation two ids never gave.
+        expect(text).toContain("cutMoved=to:2267e3bd0000/3r");
+        expect(text).toContain(
+            "core=tail-under-keep-budget tail=20.8k/20.0k span=178k basis=ledger live=ledger " +
+                "refused(4count-expired-at-fold-or-shape-change/2tail-under-keep-budget)",
+        );
+        expect(text).toContain("\nCUT\n");
+        expect(text).toContain("attempts: 1 carried a decision  moved=1  kept core's boundary=0");
+        expect(text).toContain("1  tail-under-keep-budget");
+        // A repaired run is not a suspect: the walk moving is the mechanism working.
+        expect(
+            flagKeys(parseReport(["--session", "sess-cut-decision"]), "sess-cut-decision"),
+        ).not.toContain("refused-cut-shipped");
+
+        // Under the record's own field names, so a report value joins back to the trace line without translation.
+        const report = parseReport(["--session", "sess-cut-decision"]);
+        expect(report.cut).toMatchObject({
+            attempts: 1,
+            moved: 1,
+            causes: { "tail-under-keep-budget": 1 },
+        });
+        expect(report.runs[0].attempts[0]).toMatchObject({
+            cutSpanBasis: "ledger",
+            cutLiveTokensSource: "ledger",
+            cutKeepRecentTokens: 20_000,
+        });
+    });
+
+    it("flags a refused boundary that shipped anyway, which is the abstain path and not a contradiction", () => {
+        const trace = recorder("sess-cut-abstained");
+        trace.attempt(
+            "native",
+            nativeFields({
+                chosenFirstKeptEntryId: "2ea0911c0000",
+                proposedFirstKeptEntryId: "2ea0911c0000",
+                cutMovedRows: 0,
+                cutProposedRejection: "outside-span-window",
+                cutRejections: { "outside-span-window": 1, "tail-under-keep-budget": 3 },
+                cutKeepRecentTokens: 20_000,
+            }),
+            accepted({ usage: usage(2000, 1500, 30000) }),
+        );
+        trace.final("native", checkpoint("## Goal", 4000), finalFields());
+        trace.outcome("native");
+
+        const report = parseReport(["--session", "sess-cut-abstained"]);
+        expect(flagKeys(report, "sess-cut-abstained")).toContain("refused-cut-shipped");
+        expect(flagDetail(report, "sess-cut-abstained", "refused-cut-shipped")).toContain(
+            "refused as outside-span-window",
+        );
+        // The tally rides along, so the abstain says what stopped the repair rather than only that it did.
+        expect(flagDetail(report, "sess-cut-abstained", "refused-cut-shipped")).toContain(
+            "3tail-under-keep-budget",
+        );
+    });
+
+    it("treats a move with no recorded cause as a broken instrument", () => {
+        // `chooseSpanCut` cannot produce this: leaving core's position requires refusing it. So the pairing is an
+        // invariant, and it is one-directional - the converse case above is legitimate behavior.
+        const trace = recorder("sess-cut-lying");
+        trace.attempt(
+            "native",
+            nativeFields({
+                chosenFirstKeptEntryId: "111122220000",
+                proposedFirstKeptEntryId: "2ea0911c0000",
+                cutMovedRows: 4,
+                cutSpanTokens: 30_000,
+                cutTailTokens: 21_000,
+                cutKeepRecentTokens: 20_000,
+            }),
+            accepted({ usage: usage(2000, 1500, 30000) }),
+        );
+        trace.final("native", checkpoint("## Goal", 4000), finalFields());
+        trace.outcome("native");
+
+        expect(runText(["--session", "sess-cut-lying"]).stdout).toContain("moved-without-cause");
+    });
+
+    it("treats a chosen tail under the user's floor as a broken instrument", () => {
+        // The walk's keep rule is what the record claims it satisfied; a tail under the floor means the comparison
+        // and the record disagree about the same subtraction.
+        const trace = recorder("sess-cut-tail");
+        trace.attempt(
+            "native",
+            nativeFields({
+                chosenFirstKeptEntryId: "111122220000",
+                proposedFirstKeptEntryId: "2ea0911c0000",
+                cutMovedRows: 1,
+                cutProposedRejection: "span-does-not-fit",
+                cutSpanTokens: 30_000,
+                cutTailTokens: 12_000,
+                cutKeepRecentTokens: 20_000,
+            }),
+            accepted({ usage: usage(2000, 1500, 30000) }),
+        );
+        trace.final("native", checkpoint("## Goal", 4000), finalFields());
+        trace.outcome("native");
+
+        expect(runText(["--session", "sess-cut-tail"]).stdout).toContain("tail-under-keep");
+    });
+
+    it("grows no cut output for a record that predates the walk's fields", () => {
+        // Most of a real trace file is this shape, and an absent field must not read as a zero, a refusal, or an
+        // empty section measuring nothing.
+        const trace = recorder("sess-cut-predates");
+        trace.attempt("native", nativeFields(), accepted({ usage: usage(2000, 1500, 30000) }));
+        trace.final("native", checkpoint("## Goal", 4000), finalFields());
+        trace.outcome("native");
+
+        const text = runText(["--session", "sess-cut-predates"]).stdout;
+        expect(text).toContain("cutMoved=unrecorded");
+        expect(text).not.toContain("\nCUT\n");
+        expect(text).not.toContain("cut:");
+        expect(parseReport(["--session", "sess-cut-predates"]).cut).toBeNull();
     });
 
     it("prints what the record cannot answer, apart from what it suspects", () => {
@@ -1442,5 +1908,103 @@ describe("compaction-report against recorded live runs", () => {
         expect(text).toContain("INVARIANTS (0 distinct");
         expect(text).toContain("PREFIX PARAMETERS (0 distinct");
         expect(text).toContain("PREFIX DECODE VALUES (0 distinct");
+    });
+
+    it("grows no ledger output for a capture written before the fields existed", () => {
+        // All three fixtures predate `attempt.ledger`, and every one of them carries stage-1 attempts with real
+        // usage - so this is the case the absent-data rule exists for. A rotated or older trace file reads as "no
+        // data": no suspect, no section, no derived value, and no invariant claiming the tier lied.
+        const fixtures = [
+            "compaction-trace.healthy.jsonl",
+            "compaction-trace.hosted-three-folds.jsonl",
+            "compaction-trace.hosted-head-ledger.jsonl",
+        ];
+
+        for (const fixture of fixtures) {
+            const file = fixturePath(fixture);
+            const text = runText(["--path", file, "--runs", "0"]).stdout;
+            expect(text, fixture).not.toContain("ledger=");
+            expect(text, fixture).not.toContain("src=ledger");
+            // The fixture summaries carry `## Tool Ledger`, so only the upper-case section name is the report's.
+            expect(text, fixture).not.toContain("LEDGER");
+            expect(text, fixture).toContain("INVARIANTS (0 distinct");
+
+            const report = parseReport(["--path", file]);
+            expect(report.ledger, fixture).toBeNull();
+            for (const run of report.runs) {
+                expect(
+                    run.flags.map((flag) => flag.key),
+                    run.id,
+                ).not.toContain("ledger-skew");
+                for (const attempt of run.attempts) {
+                    expect(attempt.ledger).toBeUndefined();
+                    expect(attempt.ledgerSkew).toBeUndefined();
+                }
+            }
+
+            // The record side, through the same reader the report uses: the attempts are really there and really
+            // carry nothing, so the silence above is tolerance rather than a filter that dropped every run.
+            const attempts = nativeAttempts(openTraceLog(file).read());
+            expect(attempts.length, fixture).toBeGreaterThan(0);
+            // There *was* ground truth to compare against on these runs, which is what makes the report's silence
+            // a statement about the missing field rather than about a run that never reached a provider.
+            expect(
+                attempts.some((attempt) => providerPromptTokens(attempt) !== null),
+                fixture,
+            ).toBe(true);
+            for (const attempt of attempts) {
+                expect(attempt.attempt?.ledger).toBeUndefined();
+            }
+        }
+    });
+
+    it("reads the derivation's live accuracy off the capture that recorded it", () => {
+        // `hosted-live-ledger` is the one fixture written by a build that had the fields, so this pins the
+        // report's ledger output against a real record instead of a synthetic one. Its numbers are what the
+        // *recording* build computed - before the closing bracket landed - which is why the worst skew here is
+        // +1.3% while `ledger.test.ts` re-derives the same request to +0.005%. A fixture is a historical record:
+        // reading it faithfully means not quietly re-measuring it.
+        const file = fixturePath("compaction-trace.hosted-live-ledger.jsonl");
+        const text = runText(["--path", file, "--runs", "0"]).stdout;
+
+        // Two of the three runs were sized by the tier itself, and all three carry the derivation beside
+        // whichever tier answered - including the `exact-cut` run, where it is pure shadow.
+        expect(text).toContain("src=exact ledger=+0.2%");
+        expect(text).toContain("src=ledger ledger=+0.0% stale=13");
+        expect(text).toContain("src=ledger ledger=+1.3% stale=3");
+
+        expect(text).toContain(
+            "runs:     3 of 3 carried a ledger number  comparable=3 to a provider count",
+        );
+        expect(text).toContain("mean=0.5%");
+        expect(text).toContain("worst=+1.3%");
+        expect(text).toContain("over band=0/3 (band 5%)");
+        // The head decomposition, including the older checkpoint riding inline that no count of this body
+        // describes - the one term here that stays a guess.
+        expect(text).toContain("head=7634 from:first-reply");
+        expect(text).toContain("head=8646 from:after-fold");
+        expect(text).toContain("(incl 890 checkpoints)");
+
+        const report = parseReport(["--path", file]);
+        expect(report.ledger).toMatchObject({
+            runs: 3,
+            attempts: 3,
+            comparable: 3,
+            band: 0.05,
+            overBand: 0,
+        });
+        expect(Math.abs(report.ledger?.worstSkew ?? 0)).toBeGreaterThan(0.013);
+        expect(report.ledger?.meanEstimatedShare).not.toBeNull();
+
+        // Every run inside the band, so a healthy derivation stays silent: the suspect exists for the run where
+        // the head was solved under a shape that has since moved, not for these.
+        for (const run of report.runs) {
+            expect(
+                run.flags.map((flag) => flag.key),
+                run.id,
+            ).not.toContain("ledger-skew");
+        }
+        expect(report.aggregates.flags["ledger-skew"] ?? 0).toBe(0);
+        expect(report.aggregates.invariants["tier-without-ledger"] ?? 0).toBe(0);
     });
 });

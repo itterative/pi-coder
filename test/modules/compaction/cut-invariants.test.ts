@@ -1,14 +1,19 @@
 import { convertToLlm, findCutPoint, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
+import { chooseSpanCut } from "../../../src/modules/compaction/cut";
+import { spanSizer } from "../../../src/modules/compaction/ledger";
 import {
+    countBoundary,
     countSpanTokens,
     estimateAnchoredSpanTokens,
     estimateRequestTokens,
     nativeRequestFits,
 } from "../../../src/modules/compaction/native-request";
+import { previousFoldWindowStart } from "../../../src/modules/compaction/span-session";
 import {
     assistantMessage,
+    compactionMarker,
     messageChain,
     toolResultMessage,
     userMessage,
@@ -126,6 +131,21 @@ function wellFormedMessages(next: () => number): ContextMessage[] {
 }
 
 /** True when a tool result appears before the assistant row that made its call. */
+/** Every ordering of a small alphabet - six for three rows, which is all a shape claim needs. */
+function* orderings<T>(items: readonly T[]): Generator<T[]> {
+    if (items.length <= 1) {
+        yield [...items];
+        return;
+    }
+
+    for (let index = 0; index < items.length; index += 1) {
+        const rest = [...items.slice(0, index), ...items.slice(index + 1)];
+        for (const tail of orderings(rest)) {
+            yield [items[index], ...tail];
+        }
+    }
+}
+
 function firstResultPrecedesCall(messages: ContextMessage[]): boolean {
     const made = new Set<string>();
     for (const message of messages) {
@@ -519,6 +539,91 @@ describe("cut invariants (fuzz)", () => {
                 // bigger number, and a random generator makes that common.
                 expect(anchored, `seed ${String(seed)} cut ${String(cut)}`).toBeGreaterThanOrEqual(
                     newestUsableTotal(span),
+                );
+            }
+        }
+    });
+    it("the walk never chooses a boundary under the window, and always names what refused core's", () => {
+        // The two cross-field claims C2 puts on the repair path. First, the window: `stageOneSpanEntries` builds
+        // from the newest fold's `firstKeptEntryId`, so a chosen cut under it is not a smaller span but a body
+        // nobody can assemble - the guard replaced an incidental one (expired counts used to keep the walk out
+        // of that stretch by accident), and a guard that only holds on the fixtures is not a guard.
+        //
+        // Second, the cause: a move means core's own position was refused by some condition, and a refusal
+        // recorded without a move means the walk saw it and stayed put anyway. Both directions are the report's
+        // `moved-without-cause` / `cause-without-move` invariants, checked here over generated branches so a
+        // future condition added to the walk cannot silently break the pairing.
+        const check = (branch: SessionEntry[], label: string) => {
+            const windowStartId = previousFoldWindowStart(branch);
+            const sizer = spanSizer(branch, {
+                windowStartId,
+                boundary: countBoundary(branch),
+            });
+            const windowStart = sizer?.windowStartIndex ?? 0;
+
+            for (let proposed = 1; proposed < branch.length; proposed += 1) {
+                for (const keep of [0, 500, 20_000]) {
+                    const decision = chooseSpanCut({
+                        branch,
+                        proposedFirstKeptEntryId: branch[proposed].id,
+                        boundary: countBoundary(branch),
+                        liveTokens: sizer?.live().tokens ?? null,
+                        keepRecentTokens: keep,
+                        contextWindow: 200_000,
+                        outputBudgetTokens: 1_024,
+                        instructionTokens: 100,
+                        sizer,
+                    });
+                    const at = `${label} proposed ${String(proposed)} keep ${String(keep)}`;
+
+                    expect(decision.movedEarlier === decision.movedRows > 0, at).toBe(true);
+                    // One direction, because the converse is the abstain path: core's boundary refused, nothing
+                    // better admissible, and the run ships the refusal anyway. That pairing is `refused-cut-shipped`
+                    // in the report - a suspect about the outcome, not a contradiction in the record.
+                    if (decision.movedEarlier) {
+                        expect(decision.proposedRejection, at).not.toBeNull();
+                    }
+                    // An admissible boundary is inside the window and carries a measured span: no basis, no
+                    // number, and the walk has chosen something it cannot size.
+                    if (decision.spanTokens !== null) {
+                        expect(
+                            branch.findIndex((entry) => entry.id === decision.firstKeptEntryId),
+                            at,
+                        ).toBeGreaterThanOrEqual(windowStart);
+                        expect(decision.spanBasis, at).not.toBeNull();
+                        // The span carries the instruction, so the tail is the live size minus the whole thing:
+                        // asserting the arithmetic rather than a constant is what keeps this honest when the
+                        // instruction's own estimate moves.
+                        expect(decision.tailTokens, at).toBe(
+                            (sizer?.live().tokens ?? 0) - decision.spanTokens,
+                        );
+                    }
+                }
+            }
+        };
+
+        for (const seed of SEEDS) {
+            check(toTimedEntries(wellFormedMessages(rng(seed))), `seed ${String(seed)}`);
+        }
+
+        // Exhaustive over the short branches too, with a fold spliced at every position: a generated branch with
+        // no fold in it cannot reach the window guard at all, and the whole point of the guard is the fold.
+        const alphabet: ContextMessage[] = [
+            userMessage("u"),
+            assistantMessage({ text: "a", usage: countedUsage(1_000, 100) }),
+            assistantMessage({ text: "b", usage: countedUsage(4_000, 200) }),
+        ];
+        for (const shape of orderings(alphabet)) {
+            const entries = toTimedEntries(shape);
+            check(entries, "no fold");
+            for (let splice = 0; splice < entries.length; splice += 1) {
+                const fold = compactionMarker("f", {
+                    at: entries[splice].timestamp,
+                    firstKeptEntryId: entries[splice].id,
+                });
+                check(
+                    [...entries.slice(0, splice), fold, ...entries.slice(splice)],
+                    `fold at ${String(splice)}`,
                 );
             }
         }

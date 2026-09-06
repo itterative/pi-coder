@@ -1,8 +1,9 @@
 {
     // Typechecks the test tree, which tsconfig.json excludes. Run with `npm run typecheck:tests`.
     // Extends the production config so the target, strictness, and module resolution stay identical:
-    // a test that relies on a runtime API the project's target does not promise (Array.prototype
-    // .findLast is ES2023, this project compiles for ES2022) fails here and passes in Vitest.
+    // a test that imports a name src no longer exports, or leans on a runtime API the project's
+    // target does not promise, fails here and passes in Vitest. The target is ES2024, so the
+    // ES2023 array methods (findLast, toSorted, ...) are available in src and in tests alike.
     "extends": "./tsconfig.json",
     "compilerOptions": {
         "noEmit": true,

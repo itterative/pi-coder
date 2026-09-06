@@ -1,14 +1,10 @@
-import path from "node:path";
-
 import {
     SessionManager,
     buildContextEntries as piBuildContextEntries,
     type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { PI_CODER_EXTENSION_DIR } from "../../../src/common/constants";
 import {
     countBoundary,
     countSpanTokens,
@@ -16,6 +12,13 @@ import {
     promptAndTotalTokens,
 } from "../../../src/modules/compaction/native-request";
 import { spanContextEntries } from "../../../src/modules/compaction/span-session";
+import {
+    fixturePath,
+    nativeAttempts,
+    openTraceLog,
+    providerPromptTokens,
+    sessionIdOf,
+} from "../../helpers/compaction-trace";
 
 /**
  * Three chained compactions, recorded from one live session - and the fold guard measured against them.
@@ -30,20 +33,9 @@ import { spanContextEntries } from "../../../src/modules/compaction/span-session
  * Provider and model strings are kept raw, as in the paired fixtures: this file is read, never replayed, so no
  * test depends on a machine's provider config, and rewriting the strings would hide which route reported what.
  */
-const SESSION_FIXTURE = path.join(
-    PI_CODER_EXTENSION_DIR,
-    "test",
-    "fixtures",
-    "session",
-    "hosted-three-folds.jsonl",
-);
+const SESSION_FIXTURE = fixturePath("session", "hosted-three-folds.jsonl");
 
-const TRACE_FIXTURE = path.join(
-    PI_CODER_EXTENSION_DIR,
-    "test",
-    "fixtures",
-    "compaction-trace.hosted-three-folds.jsonl",
-);
+const TRACE_FIXTURE = fixturePath("compaction-trace.hosted-three-folds.jsonl");
 
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
 
@@ -62,51 +54,32 @@ interface RecordedAttempt {
 }
 
 /**
- * Trace records are JSON, which knows nothing about their shape, so the coercion lives here rather than in a
- * cast: a field the fixture does not carry reads as `undefined`, which is how "predates the field" and "the build
- * wrote a different value" stay distinguishable in the assertions below.
+ * The stage-1 attempts this fixture's session recorded, read through the log the recorder writes and scoped to
+ * the session the paired file names.
+ *
+ * A field the fixture does not carry reads as `undefined` off the record's own type, which is how "predates the
+ * field" and "the build wrote a different value" stay distinguishable in the assertions below - the reason this
+ * used to coerce every field out of a `Record<string, unknown>` parsed by hand.
  */
-function optString(value: unknown): string | undefined {
-    return typeof value === "string" ? value : undefined;
-}
-
-function optNumber(value: unknown): number | undefined {
-    return typeof value === "number" ? value : undefined;
-}
-
-function optBoolean(value: unknown): boolean | undefined {
-    return typeof value === "boolean" ? value : undefined;
-}
-
 function traceAttempts(): RecordedAttempt[] {
-    const records = readFileSync(TRACE_FIXTURE, "utf8")
-        .split("\n")
-        .filter((line) => line.trim() !== "")
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .filter((record) => record.stage === "attempt" && record.strategy === "native");
-
-    return records.map((record) => {
-        const attempt = (record.attempt ?? {}) as Record<string, unknown>;
-        const usage = (record.usage ?? {}) as Record<string, unknown>;
-        const parts = [usage.input, usage.cacheRead, usage.cacheWrite].filter(
-            (value): value is number => typeof value === "number",
-        );
-
-        return {
-            ts: String(record.ts),
-            outcome: String(record.outcome),
-            stopReason: optString(record.stopReason),
-            estimatedTokens: optNumber(attempt.estimatedTokens),
-            estimateSource: optString(attempt.estimateSource),
-            staleAnchors: optNumber(attempt.staleAnchors),
-            providerPromptTokens:
-                parts.length > 0 ? parts.reduce((sum, value) => sum + value, 0) : null,
-            chosenFirstKeptEntryId: optString(attempt.chosenFirstKeptEntryId),
-            proposedFirstKeptEntryId: optString(attempt.proposedFirstKeptEntryId),
-            cutFound: optBoolean(attempt.cutFound),
-            skippedEntries: optNumber(attempt.skippedEntries),
-        };
+    const session = sessionIdOf(SESSION_FIXTURE);
+    const records = openTraceLog(TRACE_FIXTURE).read({
+        where: (record) => record.session === session,
     });
+
+    return nativeAttempts(records).map((record) => ({
+        ts: record.ts,
+        outcome: String(record.outcome),
+        stopReason: record.stopReason,
+        estimatedTokens: record.attempt?.estimatedTokens,
+        estimateSource: record.attempt?.estimateSource,
+        staleAnchors: record.attempt?.staleAnchors,
+        providerPromptTokens: providerPromptTokens(record),
+        chosenFirstKeptEntryId: record.attempt?.chosenFirstKeptEntryId,
+        proposedFirstKeptEntryId: record.attempt?.proposedFirstKeptEntryId,
+        cutFound: record.attempt?.cutFound,
+        skippedEntries: record.attempt?.skippedEntries,
+    }));
 }
 
 /**

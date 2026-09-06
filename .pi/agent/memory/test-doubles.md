@@ -27,6 +27,8 @@ keep_updated: true
 | a two-member event bus that records emits | annotate `const events: EventBus = { emit, on }` | `} as any` around a mini bus |
 | a child extension wired the way production wires it | `test/tools/child-run-fixture.ts` → `buildChildRun`, `probeDefinition` | hand-built grant or option bag |
 | a compaction event, summarized span, or provider summary response | `test/helpers/compaction-doubles.ts` → `compactEvent`, `compactionPreparation`, `userMessage`/`assistantMessage`/`toolResultMessage`/`bashExecutionMessage`/`customMessage`/`compactionSummaryMessage`, `messageChain`, `fileOperations`, `summaryResponse`, `toolCallResponse` | hand-built `AgentMessage` literals, or a `SessionManager` transcript you then have to parse |
+| a **session entry** of a type that is not a message | `compaction-doubles.ts` → `messageEntry`, `compactionMarker`, `modelChangeMarker`, `customMessageEntry`, `customEntry` | a `{ type: "custom_message", ... } as SessionEntry` literal |
+| a recorded compaction trace (fixture or live) | `test/helpers/compaction-trace.ts` → `loadCapture`, `openTraceLog`, `sessionIdOf`, `fixturePath`, `nativeAttempts`, `chainRequests`, `prefixRecords`, `providerPromptTokens`, `requireAttemptForFold` | `readFileSync(trace).split("\n").map(JSON.parse)`, a local `interface TraceAttempt`, or an unfiltered read of a file holding several sessions |
 | driving a TUI component | `test/helpers.ts` → `KEY`, `mockTheme`, `press`, `type`, `paste`, `interact`, `renderText`, `snapshotText` | inline ANSI sequences, hand-rolled key strings |
 | temp dirs, SQLite, git repos for agent lifecycle | `test/tools/e2e/helpers.ts` → `createE2EPaths`, `withE2EMetadataDatabase`, `createScriptedChild`, `insertE2EAgentRun`, `createClaimedTaskWorkspace`, `initializeRepository` | ad-hoc `mkdtemp` plus open-by-hand |
 | a TypeScript script driven as a real CLI (argv, exit codes, stdout) | `test/helpers/script-bundle.ts` → `bundleScript(entry)` → `{ bundle, run, dispose }`; bundle once in `beforeAll`, `dispose()` in `afterAll` | spawning `node --import tsx <script>` per test call (~130ms each: node start plus the tsx loader; the bundle drops each spawn to ~30ms) |
@@ -77,6 +79,12 @@ One more blind spot worth knowing: `import type { X } from "..."` erases at runt
 New tests get no `any` in any spelling. Where a real signature cannot be implemented from test code, cast **to the real type** and state the reason in place: `undefined as never` for the unexported `ToolRenderContext`; `{ bold, ... } as ExtensionUIContext["theme"]` for a partial theme; `as SessionEntry[]` for a hand-built branch entry list; `as unknown as ManagerLike` to reach private state, following `src/`'s `_userMessage` note convention. A cast to `any` is never that fix, because it also erases every other field in scope.
 
 ## Known drift to fold back
+
+- **Entry types are not message types.** `customMessage(customType, text, display)` builds a *message* with
+  `role: "custom"`; `customMessageEntry(id, customType, content)` builds the *session entry* pi stores for
+  `appendCustomMessageEntry`, which `buildContextEntries` turns into that message. Sizing and span code reads
+  entries, so a suite that needs a marker row wants the entry double - and the assertion that makes the pair mean
+  something is that a `custom_message` entry costs tokens while the `customEntry` beside it costs nothing.
 
 - `test/tools/e2e/helpers.ts` defines its own `zeroUsage()`; `test/helpers/agent-doubles.ts` exports the same thing. Consolidate on the doubles module.
 - `createE2EContext(paths, overrides)` now returns `AgentStartContext` and deliberately carries **no** `ui` (the start context has no such member; the child reaches the parent UI through `parentContext`). `loadE2EPersistence` builds a real `ExtensionContext` via `stubSessionContext`.

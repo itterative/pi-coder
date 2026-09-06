@@ -1,8 +1,17 @@
-import type { Context, Message, Tool, Usage } from "@earendil-works/pi-ai";
+import type { Context, Message, Tool } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, SessionEntry, ToolInfo } from "@earendil-works/pi-coding-agent";
 
 import { estimateTextTokens } from "./text";
 import type { EstimateSource } from "./types";
+import type { MeasuredBody } from "./ledger";
+import {
+    estimateEntryTokens,
+    estimateWireMessages,
+    promptTokensOf,
+    rowPromptTokens,
+    rowTotalTokens,
+    totalTokensOf,
+} from "./usage";
 
 /**
  * Rebuilding the request pi is currently sending, so a summarization call can reuse it.
@@ -30,50 +39,11 @@ export function activeToolDefinitions(pi: ExtensionAPI): Tool[] {
 }
 
 /**
- * Enough of a message to charge for it, in whatever shape the transcript happened to keep it. Structural on
- * purpose: the session's `AgentMessage` union includes rows like `bashExecution` that have no `content` field at
- * all, and a projector typed as `Message` could not be handed them.
- */
-type ChargeableMessage = { role?: unknown; content?: unknown; toolCallId?: unknown };
-
-/**
- * The projection a provider actually receives: its role, its content, and the id that ties a tool result to
- * its call.
- *
- * A stored transcript row also carries harness bookkeeping the wire never sees - `details` (for a truncated
- * `read`, a *second full copy* of the output), `usage`, `timestamp`, `responseId`, `api`, `provider`, `model`,
- * `stopReason` - and `convertToLlm` keeps all of it, so stringifying a message as stored charges every byte at
- * chars/4. Measured on a recorded session: a tail the provider counted at 13,289 tokens charged 26,294 from
- * storage against 13,237 through this projection. pi's own per-message estimator walks content by role for the
- * same reason (`compaction.js:188-227`), which is why a stored-row estimate can exceed the provider's count of
- * a context that is a strict subset of it.
- */
-function wireShaped(message: ChargeableMessage): Record<string, unknown> {
-    const stored = message as Record<string, unknown>;
-    const shaped: Record<string, unknown> = {
-        role: stored["role"],
-        content: stored["content"],
-    };
-    if (Object.hasOwn(stored, "toolCallId")) {
-        shaped["tool_call_id"] = stored["toolCallId"];
-    }
-    return shaped;
-}
-
-/** chars/4 over each message's wire shape, summed - never over the stored row. */
-function estimateWireMessages(messages: ChargeableMessage[]): number {
-    let tokens = 0;
-    for (const message of messages) {
-        tokens += estimateTextTokens(JSON.stringify(wireShaped(message)) ?? "");
-    }
-    return tokens;
-}
-
-/**
  * chars/4 over the payload being assembled, charged as the payload will be sent.
  *
  * Deliberately *not* pi's heuristic, which this used to share: a whole-array `JSON.stringify` also charges the
- * harness fields `wireShaped` drops, and on a session that had read one large file that doubled the number.
+ * harness fields the wire projection drops (see `usage.ts`), and on a session that had read one large file that
+ * doubled the number.
  */
 export function estimateRequestTokens(context: Context): number {
     const system = context.systemPrompt ? estimateTextTokens(context.systemPrompt) : 0;
@@ -130,7 +100,7 @@ function anchoredSpanFromNewest(
             continue;
         }
 
-        const counted = contextTokensFromUsage(entry.message.usage, entry.message.stopReason);
+        const counted = totalTokensOf(entry.message.usage, entry.message.stopReason);
         if (counted === null) {
             continue;
         }
@@ -145,6 +115,17 @@ function anchoredSpanFromNewest(
 
 /** Entry types after which no stored token count describes the body a request would carry now. */
 const COUNT_BOUNDARY_TYPES = new Set(["compaction", "model_change", "thinking_level_change"]);
+
+/**
+ * Whether a row changes the basis token counts are taken on.
+ *
+ * Exported because `ledger.ts`'s range walk has to break its chain at exactly these rows and nowhere else: the
+ * set that expires a stored count and the set that invalidates a *difference of two stored counts* are the same
+ * quantity, and two definitions of it drift the moment someone adds a type to one.
+ */
+export function changesCountBasis(entry: SessionEntry): boolean {
+    return COUNT_BOUNDARY_TYPES.has(entry.type);
+}
 
 /** When an entry landed. An unparseable timestamp can only mean "no boundary here", never "infinitely old". */
 function entryTime(entry: SessionEntry): number {
@@ -170,7 +151,7 @@ function entryTime(entry: SessionEntry): number {
 export function countBoundary(entries: SessionEntry[]): number {
     let boundary = Number.NEGATIVE_INFINITY;
     for (const entry of entries) {
-        if (!COUNT_BOUNDARY_TYPES.has(entry.type)) {
+        if (!changesCountBasis(entry)) {
             continue;
         }
 
@@ -207,13 +188,7 @@ export function promptAndTotalTokens(entry: SessionEntry): {
         return { prompt: null, total: null };
     }
 
-    const usage = entry.message.usage;
-    const stopReason = entry.message.stopReason;
-
-    return {
-        prompt: promptTokensFromUsage(usage, stopReason),
-        total: contextTokensFromUsage(usage, stopReason),
-    };
+    return { prompt: rowPromptTokens(entry), total: rowTotalTokens(entry) };
 }
 
 export interface SpanCountInput {
@@ -229,13 +204,27 @@ export interface SpanCountInput {
     boundary?: number;
     /** chars/4 of the instruction we append, which no provider ever counted. */
     extraTokens: number;
+    /**
+     * The head ledger's size for this same body, from `spanBodyTokens`, when the session could derive one.
+     *
+     * Passed in rather than computed here because the ledger walks the file-order branch and needs the window
+     * `stageOneSpanEntries` chose, while this function is handed the window's entries and nothing else. Null and
+     * undefined both mean "no ledger number": `spanBodyTokens` declines a body it will not vouch for, and a
+     * caller without a branch has nothing to ask.
+     */
+    ledger?: MeasuredBody | null;
 }
 
 export type SpanCount =
     | {
           tokens: number;
-          source: Extract<EstimateSource, "exact-cut" | "exact-anchor" | "usage-anchor">;
+          source: Extract<
+              EstimateSource,
+              "exact-cut" | "exact-anchor" | "usage-anchor" | "head-ledger"
+          >;
           staleAnchors: number;
+          /** How many folds' own counted numbers turned a rejected anchor into this one. */
+          foldCorrected: number;
       }
     | {
           tokens: null;
@@ -247,15 +236,18 @@ export type SpanCount =
            * identically, and only the second one says a fold landed with no reply after it.
            */
           staleAnchors: number;
+          foldCorrected: 0;
       };
 
 /**
  * How big the span request is, by the best evidence the session itself carries.
  *
- * Two tiers, and the order is not a preference for precision for its own sake: the first needs no estimate of
- * this body at all, while the second still has to guess everything after its anchor. Neither is available in the
- * window right after a fold, before any post-fold reply has landed, and that is the heuristic's case - which is
- * also when the fit gate is most likely to be deciding whether stage 1 runs at all.
+ * The order is not a preference for precision for its own own sake: each tier needs less of this body guessed than
+ * the one below it. The first needs no estimate of the body at all, the second still guesses everything after its
+ * anchor, and the third has no anchor left to use - a fold expired every count in the span - so it solves instead
+ * for the head no row owns and brackets the rows between two counts. The two below that are the rescue tiers, and
+ * none of them is available in the window right after a fold before any post-fold reply has landed, which is the
+ * heuristic's case and also when the fit gate is most likely to be deciding whether stage 1 runs at all.
  */
 export function countSpanTokens(input: SpanCountInput): SpanCount {
     const boundary = input.boundary ?? Number.NEGATIVE_INFINITY;
@@ -265,7 +257,12 @@ export function countSpanTokens(input: SpanCountInput): SpanCount {
 
     const counted = exactCutTokens(input.keptEntry, boundary);
     if (counted !== null) {
-        return { tokens: counted + input.extraTokens, source: "exact-cut", staleAnchors };
+        return {
+            tokens: counted + input.extraTokens,
+            source: "exact-cut",
+            staleAnchors,
+            foldCorrected: 0,
+        };
     }
 
     const anchored = anchoredSpanFromNewest(input.spanEntries, input.extraTokens, boundary);
@@ -273,10 +270,165 @@ export function countSpanTokens(input: SpanCountInput): SpanCount {
         // An empty tail is not a small tail: with nothing left to charge, the anchor is the body.
         const source = anchored.tailTokens === 0 ? "exact-anchor" : "usage-anchor";
 
-        return { tokens: anchored.tokens, source, staleAnchors };
+        return { tokens: anchored.tokens, source, staleAnchors, foldCorrected: 0 };
     }
 
-    return { tokens: null, source: "none", staleAnchors };
+    const ledger = input.ledger;
+    if (ledger !== undefined && ledger !== null) {
+        // A head solved from a provider count, plus rows bracketed by two of them: the `usage-anchor` error
+        // profile without needing a live count inside the span, which is precisely what a fold expired.
+        // `spanBodyTokens` already declined the bodies too estimated to gate on, so this tier does not re-check.
+        return {
+            tokens: ledger.tokens,
+            source: "head-ledger",
+            staleAnchors,
+            foldCorrected: 0,
+        };
+    }
+
+    const corrected = correctedSpanFromNewest(input.spanEntries, input.extraTokens, boundary);
+    if (corrected !== null) {
+        // Labelled by what it costs rather than what it used to be: a counted body, counted arithmetic over it,
+        // and a chars/4 tail, which is the `usage-anchor` error profile with a better starting point.
+        return {
+            tokens: corrected.tokens,
+            source: "usage-anchor",
+            staleAnchors,
+            foldCorrected: corrected.folds,
+        };
+    }
+
+    return { tokens: null, source: "none", staleAnchors, foldCorrected: 0 };
+}
+
+/**
+ * The tokens a fold removed from the live context, and the summary that came back in their place.
+ *
+ * Nothing about a fold says "removed" directly: the persisted number is a provider's count of a whole request,
+ * which carries the system prompt and tool definitions the fold leaves alone. So the two persisted fields are
+ * subtracted here, where the reader can see both operands, and the summary comes from the fold's own `usage`.
+ */
+function countedFoldTokens(entry: SessionEntry): { removed: number; summary: number } | null {
+    if (entry.type !== "compaction") {
+        return null;
+    }
+
+    // Every operand or nothing: a request count without its prefix, a prefix without a count, or a summary whose
+    // output tokens are missing each turn the arithmetic into a guess with an equals sign in it.
+    const details = entry.details as
+        { countedBodyTokens?: unknown; fixedPrefixTokens?: unknown } | undefined;
+    const counted = details?.countedBodyTokens;
+    const prefix = details?.fixedPrefixTokens;
+    const summary = entry.usage?.output;
+    if (
+        typeof counted !== "number" ||
+        typeof prefix !== "number" ||
+        typeof summary !== "number" ||
+        counted <= 0 ||
+        prefix < 0 ||
+        summary <= 0
+    ) {
+        return null;
+    }
+
+    const removed = counted - prefix;
+    if (removed <= 0) {
+        return null;
+    }
+
+    return { removed, summary };
+}
+
+/**
+ * The folds in a tail whose own persisted counts vouch for them, plus the rows those counts have now paid for.
+ *
+ * `paidRows` exists so a summary is charged once: the fold's `usage.output` is a provider count of it, while the
+ * tail estimator would charge the same text at chars/4 with pi's `<summary>` wrapper on top. A fold row absent
+ * from the set is one nobody vouched for, and it stays in the estimate.
+ */
+function vouchedFolds(tail: readonly SessionEntry[]): {
+    folds: { removed: number; summary: number }[];
+    paidRows: Set<string>;
+} {
+    const folds: { removed: number; summary: number }[] = [];
+    const paidRows = new Set<string>();
+
+    for (const entry of tail) {
+        const tokens = countedFoldTokens(entry);
+        if (tokens === null) {
+            continue;
+        }
+
+        folds.push(tokens);
+        paidRows.add(entry.id);
+    }
+
+    return { folds, paidRows };
+}
+
+/**
+ * The same walk `anchoredSpanFromNewest` makes, allowing an anchor that predates a fold the span can account for.
+ *
+ * A stale count describes a body that no longer exists, so the first pass rejects it and the caller is left with
+ * chars/4 - which is precisely the window right after a fold, before any post-fold reply has landed, and the moment
+ * the fit gate decides whether stage 1 runs at all. A fold row that was exactly counted says what left the context
+ * (its counted request, net of the fixed prefix inside it) and what came back in its place (`usage.output`), both
+ * provider numbers, so the rejection becomes arithmetic.
+ *
+ * A summary reaches this number exactly once, and which route wins is a choice rather than an accident: a fold the
+ * persisted counts vouch for contributes `usage.output` and its row is then excluded from the chars/4 tail, while a
+ * fold they refuse - a row written before the fields existed - is charged as the text it now is, wrapper included.
+ * The estimator used to answer zero for every fold row, which made the exclusion unnecessary and silently
+ * under-charged the folds nobody had vouched for.
+ *
+ * Refuses rather than approximates: without an exactly-counted fold in range it answers null, and the tier stays
+ * `none` as it always was.
+ */
+function correctedSpanFromNewest(
+    entries: SessionEntry[],
+    extraTokens: number,
+    boundary: number,
+): { tokens: number; tailTokens: number; folds: number } | null {
+    if (boundary === Number.NEGATIVE_INFINITY) {
+        return null;
+    }
+
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const entry = entries[index];
+        if (entry.type !== "message" || entry.message.role !== "assistant") {
+            continue;
+        }
+
+        if (!contextIsStale(entry, boundary)) {
+            continue;
+        }
+
+        const counted = totalTokensOf(entry.message.usage, entry.message.stopReason);
+        if (counted === null) {
+            continue;
+        }
+
+        const tail = entries.slice(index + 1);
+        const vouched = vouchedFolds(tail);
+        if (vouched.folds.length === 0) {
+            continue;
+        }
+
+        const removed = vouched.folds.reduce((total, fold) => total + fold.removed, 0);
+        const added = vouched.folds.reduce((total, fold) => total + fold.summary, 0);
+        const base = counted - removed + added;
+        if (base <= 0) {
+            continue;
+        }
+
+        const tailTokens = estimateEntryTokens(
+            tail.filter((entry) => !vouched.paidRows.has(entry.id)),
+        );
+
+        return { tokens: base + tailTokens + extraTokens, tailTokens, folds: vouched.folds.length };
+    }
+
+    return null;
 }
 
 /**
@@ -298,21 +450,7 @@ function exactCutTokens(keptEntry: SessionEntry | undefined, boundary: number): 
         return null;
     }
 
-    return promptTokensFromUsage(keptEntry.message.usage, keptEntry.message.stopReason);
-}
-
-/** What the provider charged for one request's prompt, or null when the row recorded nothing usable. */
-function promptTokensFromUsage(
-    usage: Usage | undefined,
-    stopReason: string | undefined,
-): number | null {
-    if (usage === undefined || stopReason === "aborted" || stopReason === "error") {
-        return null;
-    }
-
-    const prompt = usage.input + usage.cacheRead + usage.cacheWrite;
-
-    return prompt > 0 ? prompt : null;
+    return promptTokensOf(keptEntry.message.usage, keptEntry.message.stopReason);
 }
 
 /** Assistant rows carrying a count that the boundary makes unusable. */
@@ -335,34 +473,6 @@ function countStaleAssistants(entries: SessionEntry[], boundary: number): number
     }
 
     return stale;
-}
-
-/**
- * Tokens in the context after that reply landed. An aborted or errored turn's usage is not a measurement of a
- * body that still exists, and a route that reported all zeros reported nothing, so both are skipped as anchors
- * rather than believed.
- */
-function contextTokensFromUsage(
-    usage: Usage | undefined,
-    stopReason: string | undefined,
-): number | null {
-    if (usage === undefined || stopReason === "aborted" || stopReason === "error") {
-        return null;
-    }
-
-    const total =
-        usage.totalTokens > 0
-            ? usage.totalTokens
-            : usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-
-    return total > 0 ? total : null;
-}
-
-/** chars/4 over the wire shape of the messages the anchor's count does not cover. */
-function estimateEntryTokens(entries: SessionEntry[]): number {
-    return estimateWireMessages(
-        entries.flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
-    );
 }
 
 export interface NativeContextInput {

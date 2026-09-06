@@ -1,6 +1,9 @@
 import type { Message } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+
+import { spanBodyTokens } from "../../../src/modules/compaction/ledger";
 import {
     countBoundary,
     countSpanTokens,
@@ -8,6 +11,7 @@ import {
     estimateRequestTokens,
     fitRequirementTokens,
 } from "../../../src/modules/compaction/native-request";
+import type { ContextMessage } from "../../../src/modules/compaction/types";
 import {
     assistantMessage,
     compactionMarker,
@@ -151,6 +155,7 @@ describe("compaction span sizing", () => {
             tokens: 20_497,
             source: "exact-anchor",
             staleAnchors: 0,
+            foldCorrected: 0,
         });
         expect(countSpanTokens({ spanEntries: withTail, extraTokens: 0 }).source).toBe(
             "usage-anchor",
@@ -303,7 +308,12 @@ describe("compaction span counting", () => {
 
         // prompt = input + cacheRead + cacheWrite = 32_000, plus the instruction. The reply's own 400 output
         // tokens are deliberately absent: they are not part of what stage 1 re-sends.
-        expect(counted).toEqual({ tokens: 32_050, source: "exact-cut", staleAnchors: 0 });
+        expect(counted).toEqual({
+            tokens: 32_050,
+            source: "exact-cut",
+            staleAnchors: 0,
+            foldCorrected: 0,
+        });
     });
 
     it("prefers the cut point's count over guessing from an anchor inside the span", () => {
@@ -414,5 +424,325 @@ describe("compaction span counting", () => {
         expect(countBoundary(span)).toBe(Number.NEGATIVE_INFINITY);
         // Without a boundary nothing is stale, and an untouched count is not reported as a rejected one.
         expect(countSpanTokens({ spanEntries: span, extraTokens: 0 }).staleAnchors).toBe(0);
+    });
+});
+
+describe("rescuing the counts a fold expired", () => {
+    /**
+     * A counted reply, then a fold that expired exactly that measurement.
+     *
+     * The rescue exists for this window: the fold has replaced a known number of tokens with a known number of
+     * others, and nothing newer has been counted, which is the state `countSpanTokens` otherwise answers `none`
+     * for - right after a fold, before any post-fold reply lands, when the fit gate is deciding whether stage 1
+     * runs at all. The fold row is excluded from the chars/4 tail because its counted summary is already added.
+     */
+    function anchoredThenFolded(
+        counted: { input: number; output: number },
+        fold: {
+            at: string;
+            countedBodyTokens?: number;
+            fixedPrefixTokens?: number;
+            summaryTokens?: number;
+        },
+    ) {
+        const entries = messageChain([
+            { id: "u1", message: userMessage("the ask") },
+            {
+                id: "a1",
+                message: assistantMessage({
+                    text: "the answer",
+                    usage: countedUsage(counted.input, counted.output),
+                }),
+            },
+        ]);
+
+        return [
+            ...entries,
+            compactionMarker("f1", {
+                at: fold.at,
+                firstKeptEntryId: "u1",
+                countedBodyTokens: fold.countedBodyTokens,
+                fixedPrefixTokens: fold.fixedPrefixTokens,
+                summaryTokens: fold.summaryTokens,
+            }),
+        ];
+    }
+
+    it("subtracts what the fold removed and adds what it put back", () => {
+        const entries = anchoredThenFolded(
+            { input: 20_000, output: 497 },
+            {
+                at: "1970-01-01T00:00:01.000Z",
+                countedBodyTokens: 20_000,
+                fixedPrefixTokens: 8_000,
+                summaryTokens: 2_000,
+            },
+        );
+
+        // 20_497 counted, minus the 12_000 the fold removed (20_000 counted request less the 8_000 prefix inside
+        // it, which the fold leaves standing), plus 2_000 of summary back in, nothing left to estimate.
+        expect(
+            countSpanTokens({
+                spanEntries: entries,
+                extraTokens: 0,
+                boundary: countBoundary(entries),
+            }),
+        ).toEqual({
+            tokens: 10_497,
+            source: "usage-anchor",
+            staleAnchors: 1,
+            foldCorrected: 1,
+        });
+    });
+
+    it("carries every fold between the anchor and the cut, not just the newest", () => {
+        const entries = [
+            ...messageChain([
+                { id: "u1", message: userMessage("the ask") },
+                {
+                    id: "a1",
+                    message: assistantMessage({
+                        text: "the answer",
+                        usage: countedUsage(20_000, 497),
+                    }),
+                },
+            ]),
+            compactionMarker("f1", {
+                at: "1970-01-01T00:00:01.000Z",
+                firstKeptEntryId: "u1",
+                countedBodyTokens: 20_000,
+                fixedPrefixTokens: 8_000,
+                summaryTokens: 2_000,
+            }),
+            compactionMarker("f2", {
+                at: "1970-01-01T00:00:02.000Z",
+                firstKeptEntryId: "u1",
+                countedBodyTokens: 5_000,
+                fixedPrefixTokens: 2_000,
+                summaryTokens: 1_500,
+            }),
+        ];
+
+        expect(
+            countSpanTokens({
+                spanEntries: entries,
+                extraTokens: 0,
+                boundary: countBoundary(entries),
+            }).tokens,
+        ).toBe(20_497 - 12_000 + 2_000 - 3_000 + 1_500);
+        expect(
+            countSpanTokens({
+                spanEntries: entries,
+                extraTokens: 0,
+                boundary: countBoundary(entries),
+            }).foldCorrected,
+        ).toBe(2);
+    });
+
+    it("refuses when the fold cannot vouch for both halves of the arithmetic", () => {
+        // Every row written before `spanTokens` existed, and every fold whose span was never exactly counted.
+        for (const fold of [
+            { at: "1970-01-01T00:00:01.000Z" },
+            { at: "1970-01-01T00:00:01.000Z", countedBodyTokens: 20_000 },
+            { at: "1970-01-01T00:00:01.000Z", fixedPrefixTokens: 8_000 },
+            { at: "1970-01-01T00:00:01.000Z", summaryTokens: 2_000 },
+            // Both operands present and equal: the fold claims it removed nothing, which cannot be true of a fold
+            // that summarized anything, so it is refused rather than read as a zero-cost correction.
+            {
+                at: "1970-01-01T00:00:01.000Z",
+                countedBodyTokens: 8_000,
+                fixedPrefixTokens: 8_000,
+                summaryTokens: 2_000,
+            },
+        ]) {
+            const entries = anchoredThenFolded({ input: 20_000, output: 497 }, fold);
+
+            expect(
+                countSpanTokens({
+                    spanEntries: entries,
+                    extraTokens: 0,
+                    boundary: countBoundary(entries),
+                }),
+            ).toEqual({ tokens: null, source: "none", staleAnchors: 1, foldCorrected: 0 });
+        }
+    });
+
+    it("refuses a correction that says the context shrank below zero", () => {
+        const entries = anchoredThenFolded(
+            { input: 4_000, output: 500 },
+            {
+                at: "1970-01-01T00:00:01.000Z",
+                countedBodyTokens: 20_000,
+                fixedPrefixTokens: 8_000,
+                summaryTokens: 2_000,
+            },
+        );
+
+        // A removal larger than the body that was counted means the two numbers describe different bodies, and a
+        // number that disagrees with its own arithmetic is worse than the heuristic it replaces.
+        expect(
+            countSpanTokens({
+                spanEntries: entries,
+                extraTokens: 0,
+                boundary: countBoundary(entries),
+            }),
+        ).toEqual({ tokens: null, source: "none", staleAnchors: 1, foldCorrected: 0 });
+    });
+
+    it("leaves a live anchor alone", () => {
+        const entries = messageChain([
+            { id: "u1", message: userMessage("the ask") },
+            {
+                id: "a1",
+                message: assistantMessage({ text: "the answer", usage: countedUsage(20_000, 497) }),
+            },
+        ]);
+
+        // No boundary at all: nothing expired, so nothing is rescued and the tier answers from the anchor directly.
+        expect(countSpanTokens({ spanEntries: entries, extraTokens: 0 })).toEqual({
+            tokens: 20_497,
+            source: "exact-anchor",
+            staleAnchors: 0,
+            foldCorrected: 0,
+        });
+    });
+});
+
+/**
+ * The head ledger as a tier: what it answers, and what outranks it.
+ *
+ * The shape it exists for is a cut that sits *below* the newest fold's row - the window the `hosted-head-ledger`
+ * capture recorded as `chars4` with 14 stale anchors and priced 8.8% high. Every count inside the span predates
+ * that fold, so no anchor tier can answer, while the fold's own first counted reply sits in the retained tail and
+ * solves the head. The ledger is handed in rather than computed here because it walks the file-order branch and
+ * the window `stageOneSpanEntries` chose, and this function is given neither.
+ */
+describe("the head ledger tier", () => {
+    /**
+     * A fold, a count below it that the fold expired, an uncounted cut, and the reply after the fold that solves
+     * the head. `fold` decides whether the persisted-fields rescue could also answer, which is what the ordering
+     * cases turn on.
+     */
+    function foldedWithATailReply(
+        fold: { countedBodyTokens?: number; fixedPrefixTokens?: number } = {},
+        extraRows: Array<{ id: string; message: ContextMessage; at?: string }> = [],
+    ) {
+        return [
+            ...messageChain([
+                { id: "u1", message: userMessage("the ask") },
+                {
+                    id: "a1",
+                    message: assistantMessage({
+                        text: "y".repeat(40),
+                        usage: countedUsage(20_000, 500),
+                    }),
+                },
+            ]),
+            compactionMarker("f1", {
+                at: "1970-01-01T00:00:01.000Z",
+                firstKeptEntryId: "u1",
+                summaryTokens: 800,
+                ...fold,
+            }),
+            ...messageChain([
+                { id: "u2", message: userMessage("and again"), at: "1970-01-01T00:00:02.000Z" },
+                ...extraRows,
+                {
+                    id: "u3",
+                    message: userMessage("the cut lands here"),
+                    at: "1970-01-01T00:00:02.000Z",
+                },
+                {
+                    id: "a2",
+                    message: assistantMessage({
+                        text: "w".repeat(40),
+                        usage: countedUsage(3_000, 100),
+                    }),
+                    at: "1970-01-01T00:00:03.000Z",
+                },
+            ]),
+        ];
+    }
+
+    /** The window stage 1 would copy: the previous fold's boundary up to the cut. */
+    function ledgerFor(entries: SessionEntry[], cutId: string) {
+        return spanBodyTokens(entries, { windowStartId: "u1", cutId, extraTokens: 0 });
+    }
+
+    it("answers when a fold expired every count in the span", () => {
+        const entries = foldedWithATailReply();
+        const boundary = countBoundary(entries);
+        const ledger = ledgerFor(entries, "u3");
+
+        expect(ledger).not.toBeNull();
+        expect(
+            countSpanTokens({ spanEntries: entries.slice(0, 4), boundary, extraTokens: 0, ledger }),
+        ).toEqual({
+            tokens: ledger?.tokens,
+            source: "head-ledger",
+            // The count the fold expired is still reported: the tier says where the number came from, not that
+            // nothing was rejected on the way to it.
+            staleAnchors: 1,
+            foldCorrected: 0,
+        });
+
+        // And without a ledger number the same span has nothing: this is the window that used to answer `none`
+        // and fall through to whole-body chars/4.
+        expect(
+            countSpanTokens({ spanEntries: entries.slice(0, 4), boundary, extraTokens: 0 }).source,
+        ).toBe("none");
+    });
+
+    it("outranks the persisted-fields rescue, which needs state the ledger does not", () => {
+        const entries = foldedWithATailReply({
+            countedBodyTokens: 20_000,
+            fixedPrefixTokens: 8_000,
+        });
+        const boundary = countBoundary(entries);
+        const spanEntries = entries.slice(0, 4);
+
+        // Both can answer this span. The ledger is a difference of provider counts over this session; the rescue
+        // reads two numbers a fold row persisted about a request it made, and only builds from this one write it.
+        const rescued = countSpanTokens({ spanEntries, boundary, extraTokens: 0 });
+        expect(rescued.source).toBe("usage-anchor");
+        expect(rescued.foldCorrected).toBe(1);
+
+        const withLedger = countSpanTokens({
+            spanEntries,
+            boundary,
+            extraTokens: 0,
+            ledger: ledgerFor(entries, "u3"),
+        });
+        expect(withLedger.source).toBe("head-ledger");
+        expect(withLedger.foldCorrected).toBe(0);
+    });
+
+    it("leaves a live anchor in the span alone, because that count is of this body", () => {
+        // A counted reply inside the window, after the fold: the anchored tier has a measurement of a prefix of
+        // the very body being sent, which beats a head solved from a reply in the retained tail.
+        const entries = foldedWithATailReply({}, [
+            {
+                id: "a1b",
+                message: assistantMessage({
+                    text: "v".repeat(40),
+                    usage: countedUsage(2_500, 60),
+                }),
+                at: "1970-01-01T00:00:02.000Z",
+            },
+        ]);
+        const boundary = countBoundary(entries);
+
+        const counted = countSpanTokens({
+            spanEntries: entries.slice(0, 5),
+            boundary,
+            extraTokens: 0,
+            ledger: ledgerFor(entries, "u3"),
+        });
+
+        // The anchor is the span's last row, so nothing follows it to guess at and the tier says so. Which anchor
+        // label it gets is not the point: a count of this body outranks a head solved from a reply that sits in
+        // the retained tail, and the ledger's number is not used.
+        expect(counted.source).toBe("exact-anchor");
+        expect(counted.tokens).toBe(2_500 + 60);
     });
 });

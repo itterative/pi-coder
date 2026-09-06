@@ -151,12 +151,13 @@ or argument named `constructor` otherwise yields a function where a character bu
 **Read it with `npm run compaction-report`** (`scripts/compaction-report.ts`, run under `node --import tsx` so it can share the record log), never by hand-rolling jq joins
 again: it groups records by run id and prints the prefix verdict, one line per stage attempt with its request
 numbers and `in/cached/out`, the persisted summary's size and cut point, then ROUTES / ATTEMPT FAILURES /
-SUSPECTS / PREFIX DIVERGENCES / COST AND CACHE / COMPRESSION aggregates. `--dump[=native|serialized|final|all]`
+SUSPECTS / PREFIX DIVERGENCES / COST AND CACHE / COMPRESSION / LEDGER aggregates. `--dump[=native|serialized|final|all]`
 prints stage text **verbatim** (the report body only previews it, because a checkpoint is markdown);
 `--suspect`, `--grep <text>`, `--session <prefix>`, `--route`, `--reason`, `--since`, `--runs 0` (all) and
 `--json` cover the rest. Its SUSPECTS flags encode the failure modes below as thresholds —
 `prefix-unusable`, `span-not-truncated`, `cut-not-found`, `degenerate-native-output`, `degenerate-final-summary`,
-`reduce-inflated`, `cache-read-zero`, `blocks-dropped`, `summary-truncated`, `fell-back`, `estimate-skew` — with prose in
+`reduce-inflated`, `cache-read-zero`, `blocks-dropped`, `summary-truncated`, `fell-back`, `estimate-skew`,
+`ledger-skew` — with prose in
 [docs/compaction-trace-report.md](../../../docs/compaction-trace-report.md). It reads rotated `.1` siblings and
 tolerates fields absent in records from older builds, because the file accumulates across checkout.
 
@@ -165,7 +166,12 @@ tolerates fields absent in records from older builds, because the file accumulat
   way to tell a truncated summary from a brief one), estimated tokens **with the method that produced them**
   (`estimateSource`), tool/message counts, stage 1's `copiedEntries`/`skippedEntries`/`cutFound`, stage 2's
   `serializedChars`/`segmentSummaryChars`. A `skipped` attempt has no `stopReason` or `usage`: the request never
-  went out.
+  went out. Stage 1 also carries **`ledger`** - the head ledger's size for the same body (`tokens`,
+  `estimatedTokens`, `headTokens`/`headSource`/`headEstimatedTokens`, `rowsCounted`/`rowsEstimated`/
+  `rowsCheckpoints`) - recorded **whether or not its tier answered**, because comparing it with the provider's own
+  count of the request that went out is the only live accuracy measurement available. Absent means the derivation
+  declined *or* the record predates the field, and nothing may infer which: a `tokens: 0` would read as "this
+  request is free", so a decline is recorded as no field at all.
 - `prefix` — the verdict from `chain.ts` against our `onPayload` body: which reference answered, how deep the
   agreement went, and the parameters only one side sent. Two rules survive from the body-to-body era: an extra
   body key is a **parameter**, never a prefix verdict, and an absent reference is **unknown**, never `false`.
@@ -449,6 +455,39 @@ that message. So hash a `{ role, content }` projection when a golden value must 
 
 ## Live fixtures
 
+**Read a trace fixture through `test/helpers/compaction-trace.ts`, never `readFileSync`.** `openTraceLog()` gives
+the reader `scripts/compaction-report.ts` uses (`createJsonlRecordLog` + `discoverGenerations`, `maxBytes: 0`), so
+segment naming, oldest-first ordering across rotations, torn-line tolerance and `v` normalization behave as they do
+in the report; `sessionIdOf()` asks a session file for its own id; `loadCapture({sessionFile, traceFile})` returns
+`{sessionId, manager, branch, records, foreignRecords}` with the records **filtered to that session**;
+`nativeAttempts`/`chainRequests`/`prefixRecords`/`providerPromptTokens`/`requireAttemptForFold` are the typed
+selectors. Two defects this ended: three suites hand-rolled `readFileSync().split("\n")` (a rotated fixture
+silently lost its oldest runs, a torn line threw instead of counting a gap), and the ledger's capture test read the
+**live** `.state/compaction-trace.jsonl` - five sessions in one file, no filter, machine-local absolute paths, so
+it was neither portable nor reproducible. `.state/` is never a test input: commit the pair.
+
+`test/fixtures/session/hosted-live-ledger.jsonl` + `test/fixtures/compaction-trace.hosted-live-ledger.jsonl` are
+the **live-tier pair** (2026-09-07): session `01a07b63`, 135 branch rows, three folds at rows 80/127/134, 55 trace
+records plus three foreign `chain_request` rows. It is the only fixture written by a build that had the tier, so it
+is the only one whose attempts carry real `ledger` fields - which is what `test/scripts/compaction-report.test.ts`
+pins the report's `ledger=` print, `LEDGER` aggregate and `--json` against instead of a synthetic record. It also
+holds the shapes the first pair does not: two runs sized by `head-ledger` rather than shadowed by it (`stale=13`
+and `stale=3`), a reply the user **cancelled** (`stopReason: "aborted"`, all-zero usage, refused as an anchor), a
+six-message window with an older checkpoint riding inline (890 estimated tokens), and a fold at the tip whose head
+is therefore unsolvable. Its recorded `ledger` numbers are the **pre-closing-bracket** build's, deliberately: the
+fixture is a historical record, and `ledger.test.ts` pins both sides of that change from it (recorded +1.31% at a
+25% estimated share, re-derived +0.005% at 14%).
+
+`test/fixtures/session/hosted-head-ledger.jsonl` + `test/fixtures/compaction-trace.hosted-head-ledger.jsonl` are
+the **head-ledger pair** (2026-09-07): session `01a078c2`, 216 branch rows, three folds, the first capture from
+the build carrying the `stageOneSpanEntries` ordering fix, and 85 trace records (3 runs, 63 chain rows). It exists
+to be the evidence for `ledger.ts` - see **The head ledger** for every number - and its trace fixture deliberately
+keeps **four `chain_request` rows of a second session** (`01a07721`, which carry no conversation content) so the
+session filter is a tested property of the pair: `loadCapture().foreignRecords` must be 4, and an unfiltered read
+of the same file must see more chain rows than a filtered one. A fixture with no foreign rows cannot show that the
+filter ran. `ledger.test.ts` opens with the gate that earns the rest (one shape, verified prefixes, clean cuts) and
+fails loudly rather than skipping when a capture cannot vouch for the arithmetic.
+
 `test/fixtures/session/hosted-three-folds.jsonl` + `test/fixtures/compaction-trace.hosted-three-folds.jsonl` are
 the **first multi-fold pair**, recorded 2026-09-06 from one live hosted session (309 rows, 3 folds at rows 128/137/294)
 whose runs the counting build itself produced (123 records: 4 runs, 102 chain rows). Provider and model strings stay
@@ -466,8 +505,10 @@ the two artifacts vouch for each other the way the llama.cpp pair does. What it 
   llama.cpp. Run 1 also served 49.2k of 49.7k from cache on a hosted route (`reuse=87%`).
 - **`stale=` coexists with success.** Fold 3 rejected 22 expired counts and still produced an exact number,
   because the boundary row was itself post-fold. The field counts rejections, never trouble.
-- **No live `cutMoved` yet.** All three folds used core's boundary, so the repair path is unit- and mutation-tested
-  but unexercised in the wild; forcing one needs a small-window route (the local 200k model), not the 1M hosted one.
+- **No `cutMoved` in *this* fixture, and that reading was taken too far.** These three folds used core's boundary,
+  which is why the note said the repair path was unexercised in the wild - but the trace had already recorded five
+  moves elsewhere the same evening, and it has seven now. See **The cut walk, in the wild (2026-09-07)**. The
+  small-window route the note said you needed to force one is real, though: two of the seven are the local 200k model.
 - **`first=messages[2]` was a real defect, and I had written it off.** This file called it a standing false alarm
   on second-and-later folds; that reading was wrong. The body sample added to the chain named it in the first
   session that diverged (`at messages[2] ours=user/4902c/e8332c11 pi=user/13368c/f7830572`): same role, present on
@@ -595,11 +636,26 @@ measurement of a body this module can rebuild, so a sizing change can fail again
   still outrank chars/4 because they are measurements, not because the guess was 40% blind. pi's own
   `estimateTokens` (`compaction.js:188-227`) walks content **by role** and never charged `details`, so `rep=` was
   never inflated — which makes **`est > rep` on one run a free tripwire** that the stored-row bug is back.
+- **The projection is now pi's own `convertToLlm`, and there is one copy of it (2026-09-07).** A hand-written
+  `{role, content}` projector is right for the three roles pi passes through and silently wrong for the four it
+  rewrites: a `custom_message` entry becomes a user message (`session-manager.js:177`) and was charged **0** -
+  measured 52 tokens for one 208-char `pi-memory` marker, and that module's memory-index marker runs to
+  kilobytes; a `bashExecution` becomes derived text ("Ran \`cmd\`" plus its output, and *nothing* when
+  `excludeFromContext`) and has no `content` field at all, so it was charged as empty; a `compaction` or
+  `branch_summary` gains pi's `<summary>` wrapper (~26 tokens). `usage.ts` now maps an entry to the message pi
+  would build and charges `convertToLlm`'s output through `wireShaped`, and `native-request.ts`'s private
+  duplicates of `wireShaped`/`estimateWireMessages`/`estimateEntryTokens`/`promptTokensFromUsage`/
+  `contextTokensFromUsage` are gone - the second copy is how the blind spot survived into the fold ledger. Its
+  count readers are typed by the fields they read (`Pick<Usage, "input" | "cacheRead" | "cacheWrite">`) so a trace
+  record's `usage`, which is not a pi-ai `Usage`, can be read by the same function instead of a test re-summing
+  it and forgetting the aborted/error refusals. `custom`, `label`, `session_info` and the two change rows still
+  cost nothing, correctly: `buildContextEntries` returns `[]` for them.
 - **Anchored sizing measured within ±1.1% on 11 real turns** (mean -0.2%) once the tail is charged as wire; the
   recorded span is 32.5k against the provider's 32,308.
 - **The exact-cut tier is the common case, not the lucky one.** `firstKeptEntryId` names the *kept* entry, so when
-  that entry is an assistant with usable usage, its prompt **is** the span: no estimation at all (fixture:
-  32,308, asserted as equality). Measured 3 of 3 real compactions in `.state/agent-sessions/**` cut on an
+  that entry is an assistant with usable usage, its prompt is the **fixed prefix plus the span** - no estimation of the body at all, but not a
+  span-only number either: `countedFoldTokens` subtracts `fixedPrefixTokens` before treating it as what a fold
+  removed (fixture: 32,308, asserted as equality). Measured 3 of 3 real compactions in `.state/agent-sessions/**` cut on an
   assistant with usable usage, for a structural reason: `findCutPoint` snaps forward to the first *valid* cut
   point at or after the entry that crossed the keep budget, and a `toolResult` is not valid
   (`compaction.js:227-240`) — so a mid-turn crossing lands on the assistant that consumed it. `skippedEntries > 0`
@@ -607,9 +663,10 @@ measurement of a body this module can rebuild, so a sizing change can fail again
 - **Retracted the same day:** the claim that pi's `keepRecentTokens` is a floor that can only overshoot. The
   forward snap can leave the retained tail **under** budget when the crossing entry is itself a huge `toolResult`
   swept into the summary. (This fixture did not hit it: live 53,771 − span 32,308 = tail 21,463.)
-- **Report bands are now three:** 5% `exact-cut` (a disagreement there means the request is *not* the body that
-  count describes — check `skippedEnt` and for a fold or model change inside the span), 15% `usage-anchor`, 50%
-  `chars4`. `src=` gained a fourth print state (`exact`) and `stale=` prints only when non-zero.
+- **Report bands are now four, over five tiers:** 5% `exact-cut` (a disagreement there means the request is *not*
+  the body that count describes — check `skippedEnt` and for a fold or model change inside the span), 5%
+  `head-ledger` (`--ledger-estimate-skew`, see **Wired as a sizing tier**), 15% `usage-anchor`, 50% `chars4`.
+  `src=` prints `exact` / `ledger` / `anchor` / `chars4` / `unrecorded`, and `stale=` prints only when non-zero.
 
 - **A cut's validity is about ids, not roles — found by fuzzing, not by reading pi.** Three shapes, and pi
   forbids only one: a tail starting with a `toolResult` orphans the call that went into the summary, a tail
@@ -642,12 +699,13 @@ resolvable → countable → not-expired-by-boundary → no-orphaned-tool-call �
 post-fold window where the counts are unavailable — moving a boundary while unable to evaluate the keep budget is
 how a repair becomes a regression.
 
-- **Measurement and admissibility are separate predicates.** `measureSpanAt` answers "what is this span's size, by
-  a count" (an assistant at the cut reads its `prompt`; a user turn at the reads the reply above it via
-  `totalTokens`; anything else is not countable), and `orphanedByPosition` answers "does the tail resolve" — one
-  backward pass maintaining the earliest call index among results below each position, because both conditions are
-  monotone in the earlier direction and that is the whole termination argument. Cutting *at* a tool result is
-  countable and inadmissible; conflating the two is how a size check would be trusted to catch a malformed request.
+- **Measurement and admissibility are separate predicates.** `measureSpanAt` answers "what is this span's size" by
+  two routes in order - the provider's count of that very body (an assistant at the cut reads its `prompt`; a user
+  turn at the cut reads the reply above it via `totalTokens`), and failing that the ledger's arithmetic over the
+  counts that bracket its rows - and `orphanedByPosition` answers "does the tail resolve": one backward pass
+  maintaining the earliest call index among results below each position, because both conditions are monotone in
+  the earlier direction and that is the whole termination argument. Cutting *at* a tool result is measurable and
+  inadmissible; conflating the two is how a size check would be trusted to catch a malformed request.
 - **Only earlier is what keeps the blast radius zero.** The tail grows, so `keepRecentTokens` holds by
   construction, and core's `messagesToSummarize` stays a **superset** of what is actually dropped — so the file
   ledger, `previousSummary`, and the split-turn wording remain sound without being recomputed. The cost of the
@@ -666,11 +724,298 @@ how a repair becomes a regression.
 
 **Still not built.** The `exact-anchor` *label* exists; `src=exact` and `src=exact-anchor` both get the 5% band.
 What remains deferred, on purpose: (a) a **later** cut, which would force owning the summarized set and
-`computeFileLists(preparation.fileOps)`; (b) the stored-count **rescue** — `details` on the `compaction` entry
-could carry `spanTokens`/`summaryTokens` so a stale count becomes correctable by
-`prompt_X − Σ(spanTokens_F − summaryTokens_F)` (uniform, since any row still in the body survived every fold that
-dropped rows before it), rather than merely rejected as it is today; forward-only, since old entries and
-`core-default` folds lack the fields.
+`computeFileLists(preparation.fileOps)`; (b) is **built** - see the stored-count rescue below.
+
+**The stored-count rescue (2026-09-06).** A `compaction` row persists `countedBodyTokens` and
+`fixedPrefixTokens` - and only when its own span was `exact-cut` counted - so `correctedSpanFromNewest` can answer
+the window right after a fold, where the first pass rejects every anchor and the caller would otherwise fall to
+chars/4: a stale count, minus what each fold in range removed (its counted request, net of the fixed prefix inside
+that count), plus each fold's `usage.output`, plus the usual chars/4 tail - labelled `usage-anchor`, with
+`foldCorrected=N` printed beside `stale=N`. Two decisions worth keeping:
+
+- **Two operands, not one derived number.** The first version persisted `counted.tokens - instruction` as
+  `spanTokens`, which quietly kept the fixed prefix inside it: a fold discards the span, the count covers prefix
+  plus span, so the subtraction removed the prefix a second time - 6-12k tokens on these runs - and the error ran
+  *toward* "it fits", the one direction the guard exists to refuse. Persisted operands can be audited at the
+  subtraction site; a field name cannot.
+- **Persisted whatever the stage then did.** A fit-gate skip and a rejected reply still discard the same span, and
+  the fold after a rejection is exactly the one whose successor has nothing else counted.
+
+Forward-only, as the deferred note predicted: rows written before this lack the fields, and the rescue refuses
+(`source: "none"`, `foldCorrected: 0`) rather than approximating - including when the two operands imply the fold
+removed nothing, and when the correction would drive the body below zero. **A summary is now charged once, by
+choice rather than by accident:** `vouchedFolds` returns the rows the persisted counts paid for and the tail
+estimate skips them, because `estimateEntryTokens` started charging fold rows (see **The head ledger** below) and
+the old "the estimator answers zero for a fold row" compensation silently became a double count. A fold nobody
+vouched for is still charged as the text it now is.
+
+## The head ledger: `P + K` is a difference of counts (2026-09-07)
+
+`src/modules/compaction/ledger.ts`. Every body pi sends is `[system prompt][tools][checkpoint(s)][rows...]`, and
+the first three are one quantity - a **head** - that is in every request and in no row. Taken separately `P` and
+`K` stay estimates (chars/4 of `systemChars`; a stage's `usage.output` for text the persisted summary then grew
+sections onto). Together they are a difference of provider counts, because the first reply counted under a head
+was charged for exactly `head + rows`:
+
+```
+head = input(A) - t(fk .. A)      A = first counted reply after the fold, fk = that fold's firstKeptEntryId
+```
+
+and `t()` is itself mostly counted: `input(next) - input(prev)` brackets everything between two replies on one
+basis, whatever kinds of row sit there. API: `measureEntries(entries, {headFoldId?})` -> `{tokens, counted,
+estimated, checkpoints, restarts}`, `headAt(branch, atIndex)` -> `BodyHead`, `bodyTokens(branch, {atIndex, from,
+to, extraTokens})`, `spanBodyTokens(branch, {windowStartId, cutId, extraTokens, boundary})` - the entry point a
+handler calls, which applies the refusals - and the delta view `foldNet`/`foldNets`/`correctAcrossFolds`.
+**Wired as the `head-ledger` sizing tier**; what landed, the two guards a failing test found, and the cut-walk
+work that has since landed are in **Wired as a sizing tier** and **Built 2026-09-07: the ledger-backed cut walk** below. It sits beside the persisted-fields rescue rather
+than replacing it, because the two cover different windows.
+
+Measured on `hosted-head-ledger` (three folds, hosted `qwen3.8-flash`, 216 branch rows), and pinned by
+`test/modules/compaction/ledger.test.ts`:
+
+- `P` from the session's first counted reply: **7,628 with 96 tokens estimated** (seven rows in front of it).
+  Heads after each fold: **9,379 / 8,746 / 10,056**. Not monotone, because a head carries *that* fold's
+  checkpoint and fold 2's summary is 3,888 chars against fold 1's 6,281 - a test that assumed monotone heads
+  would pass on a broken walk.
+- **Every counted reply's own provider count is reproduced exactly** - 62 of 63, the exception being the anchor the
+  bare head was solved from. Exact *by construction*, not by accuracy, and knowing which is the whole point: the
+  head subtracts a measured range from its anchor's count and the body adds a range starting in the same place, so
+  the one estimated term they share cancels, and since both ranges close on a counted entry neither has an
+  unbracketed end. What the equality pins is **symmetry** - the same fold-row restarts, the head's checkpoint
+  charged once, the closing bracket applied to both. Before the closing bracket this was an accuracy measurement
+  instead, and its numbers were mean **0.41%**, signed mean **-0.05%**, worst **7.29%** on the session's second
+  reply (91% of that range unbracketed, chars/4 under-charging two dense tool results by 724 tokens); do not quote
+  those as the module's accuracy now, and do not read the present exactness as perfection. **Accuracy is the
+  stage-1 request's question**, where the body sized is not the body the head was solved from.
+- **All three stage-1 requests decompose to 0.05% / 0.01% / 0.03%** as `head + window + instruction` (before the
+  closing bracket: 0.96% / 0.01% / 0.26%). The middle one is the reason the module exists: that run expired every
+  count in its span (`staleAnchors: 14`), so the shipped tiers fell back to whole-body chars/4 and recorded
+  `est=32738` against the provider's **30,086** (**+8.8%**), where head-plus-rows says 30,088. On the two
+  `exact-cut` runs the recorded number is a provider count of that very body - and the ledger now beats it anyway
+  (0.05% against 0.18%), because `exact-cut`'s whole error is the instruction estimate while the ledger's is only
+  the head's leading stretch plus that same instruction.
+- Nets: **-11,494 / -19,178 / -54,643**, each with **88-95 tokens estimated** (the gap between two counted
+  replies: the earlier reply's own `output`, which is counted, plus the rows behind it).
+- **The instruction is measurable and nothing records it.** For an `exact-cut` run, `attempt.usage` prompt minus
+  the cut entry's own prompt count isolates the appended instruction: **474 and 511 provider tokens**, against
+  chars/4 estimates of 512 and 561 (within 10%). That identity is the only way to see the instruction's real
+  cost, and the reason a cross-check that forgets the term is off by ~500 tokens per fold.
+
+Four rules that were each a bug before they were rules:
+
+- **Any row that changes the count basis restarts the chain and is charged as text only if it is a fold** - a
+  `model_change` or `thinking_level_change` produces no message, so it costs nothing and exists only to break the
+  bracket; the set is `changesCountBasis`, the same predicate `countBoundary` is built from, so the two cannot
+  drift. A fold is charged as the text it now is - except the head's own, which restarts and is
+  charged *nothing* (`headFoldId`). Dropping that row from the range instead is the bug it prevents: the walk then
+  differences across the basis change the row marks, which measured **-9,236 tokens of nonsense** on this capture
+  and put a stage-1 request 38% out. An older fold's row inside the same stretch *is* a row (pi hoists only the
+  newest summary and leaves older ones inline), and `MeasuredTokens.checkpoints` reports what those cost.
+- **`net` is "what the fold did to the body", not literally `checkpoint - span`.** A checkpoint riding inside the
+  retained stretch is in both bodies and cancels; one the new cut leaves behind does not. Fold 2 here kept fold
+  1's 1,557-token checkpoint and its net came out as exactly `K2 - t(removed)`.
+- **The reply bracketing a fold's start must postdate the previous fold's row.** Otherwise its count describes a
+  body the earlier fold has since rewritten, and `foldNets` - which sums every fold after a stale count - would
+  charge that fold's net twice. With no such reply the fold refuses (`null`); synthetic case pinned.
+- **A head is a property of a request shape.** The session records a `model_change` or `thinking_level_change`
+  (why `countBoundary` exists) but *not* the system prompt's text moving - pi's own base-versus-override flip
+  changes it by ~12k chars with no row at all. So the capture gate matters: one `systemChars`, one `toolsHash`,
+  one model across the session's chain rows, `prefixUsable` and `firstMismatchDepth: null` on every prefix
+  record, `cutFound` and `skippedEntries: 0` on every attempt.
+- **The entry just past a range closes its bracket** (`measureEntries`' `closing`, passed by `bodyTokens` and by
+  both head routes). A cut lands on the reply that consumed a tool result, so the rows in front of it are
+  uncounted and, open-ended, are a guess; when the cut entry itself carries a count on the same basis, one
+  difference covers them and the last counted reply together, and the cut entry's own reply is outside the range
+  so it is walked for chaining and never charged. A fold row between the two leaves the walk with no basis and the
+  bracket declines, which is what makes a **stale** count usable here: staleness disqualifies a count as the size
+  of a body, never as a difference against another count taken on the same basis - `measureEntries` was already
+  using stale counts as brackets inside a range, it just could not see past the range's end. Measured on the live
+  capture's six-message window: the trailing stretch went from 2,077 tokens of chars/4 to an exact 1,770, the
+  request's skew from **+1.31% to +0.005%**, and the estimated share from 25% to 14% - the chars/4 over-read was
+  the *entire* skew.
+
+Complementary to the persisted-fields rescue, not a replacement: the ledger needs a counted reply **after** the
+fold, so the window right after a fold - before anything has replied, which is when the fit gate decides whether
+stage 1 runs - is still `countedBodyTokens`/`fixedPrefixTokens` territory. The ledger's advantage is the other
+window: it needs no persisted state, so it also answers for fold rows written by older builds.
+
+**The first cross-check of this was wrong, not the ledger.** It compared `net` against `fold.usage.output -
+(stage-1 prompt - P_est)` and reported 5.5% and 11.5% disagreement, which read as a defect. Three real terms were
+missing from that route: the appended instruction (474/511), the difference between the reduce stage's model text
+and the summary that was persisted (+14/+167/-123 chars/4), and fold 2's riding checkpoint (1,557). Do not
+re-derive a fold's net from `usage.output` minus a span; compare two ledger routes, or a head against a provider
+count of the body it describes.
+
+### Wired as a sizing tier (2026-09-07); the cut walk took the same measurement the next hour
+
+`countSpanTokens` now has a fourth tier, `estimateSource: "head-ledger"`, ordered **after** `exact-cut` and the
+anchor tiers (a count of this body beats a head solved from a reply in the retained tail) and **before** the
+persisted-fields rescue (a difference of this session's own counts beats two numbers a fold row persisted about a
+request it made, and it works for rows written before those fields existed). `index.ts` composes it as
+`spanBodyTokens(span.branch, { windowStartId: previousFoldWindowStart(branch), cutId: cut.firstKeptEntryId,
+extraTokens, boundary: span.boundary })` and passes it in; `spanMessages` returns the branch for the purpose.
+It reaches the fit gate and the output budget through the same `counted.tokens` as every other tier.
+
+The shape it fires on is narrower than it looks, and worth knowing before wondering why a run has no `ledger`:
+the head's anchor reply must be *outside* the span, because a live count inside the span is the anchor tiers'
+business. That is exactly a cut sitting below the newest fold's row - the capture's second run, `staleAnchors: 14`,
+`chars4`, +8.8%.
+
+Two guards, each found by a test that failed for a reason worth keeping:
+
+- **`skippedEntries > 0` disqualifies the ledger too**, by the same guard that disqualifies `keptEntry`, and for
+  the same reason: a row stage 1 could not copy makes our span narrower than the stored rows imply, so every
+  number built from those rows over-sizes the request. The defect this closed was not hypothetical - when the
+  head's anchor *is* the cut entry, `head + rows` reproduces that entry's prompt count exactly (the range
+  subtracted to solve the head is the range charged back as rows), so the ledger handed back the very number
+  `exact-cut` was disqualified from using and the fit gate skipped stage 1 on a run `handler.test.ts` pins as
+  two-stage. One guard for both tiers, since they are refused for one reason.
+- **A head solved before a shape change is refused** (`boundary`, i.e. `countBoundary`): the anchor reply's count
+  describes a prompt and tool set that no longer exist. This is the session-visible half of the shape caveat
+  above; pi's own base-versus-override prompt flip stays invisible to it, which is what the chain rows are for.
+
+Plus a refusal on estimated share (`MAX_LEDGER_ESTIMATED_SHARE = 0.5`, `estimatedShare()`): the measured share on
+real requests is 1.8-27%, and the case that motivated the limit is the second reply of a session, 91% unbracketed
+and 7.29% **low** - the one direction a fit gate must not be wrong in. Declining costs nothing, because the tier
+below is what answered before.
+
+Pinned by: `native-sizing.test.ts` "the head ledger tier" (answers when a fold expired every count, outranks the
+rescue, leaves a live anchor alone), `ledger.test.ts` "what the ledger declines to size" (unknown cut, inverted
+window, nothing counted, estimated share, shape change) and the stage-1 request identity now running through
+`spanBodyTokens` over the branch *as it stood at request time*, `trace.test.ts` (the shadow record, and that a
+declined derivation records no field rather than a zero).
+
+**The report is the accuracy instrument, and it reads the shadow rather than the chosen tier.** A stage line prints
+`ledger=+1.0%` beside `est=`/`src=` (three states: nothing when the record carries no `ledger` object, `ledger=-`
+when a number was derived but no reply came back to compare it with, the signed percent otherwise); a `LEDGER`
+section aggregates runs/comparable, mean and worst signed skew naming the run, `over band=n/m`, and the mean
+chars/4 share, printed only when at least one attempt carried the fields; `ledger-skew` is the suspect (band
+`--ledger-estimate-skew`, default **0.05**, ranked between `usage-anchor`'s 15% and `chars4`'s 50% and earned by
+the 0.96%/0.01%/0.26% measurements); `tier-without-ledger` is a new INVARIANTS row, because naming the tier while
+omitting its numbers means one of the two was written by something that computed neither; and `--json` exposes all
+of it **under the record's own field names**. `ledger-skew` prose names both candidate causes rather than picking
+one, since the record cannot tell them apart: a head solved under a request shape that has since moved, or an
+estimated share too high to trust. Direction is not a clip here the way it is for `estimate-skew` - the number is
+arithmetic over counts, so a breach says the derivation and the endpoint disagree about the same bytes.
+Verified by injecting the capture's real three numbers: the section reads `mean=0.4% worst=+1.0% over band=0/3`,
+and all three committed fixtures predate the field and grow no ledger output at all.
+
+**First live runs (2026-09-07, three manual `/compact`s on one hosted session, now the `hosted-live-ledger`
+fixture).** The tier fired for real on the second and third: `stale=13` and `stale=3`, no count in the span
+surviving the fold, `src=ledger` against the provider's own `in + cached` at **+0.0%** and **+1.3%** as recorded -
+runs that would have read `src=chars4` before this change. The first run's `exact-cut` tier won and the ledger
+shadow agreed to **+0.2%**, so two routes to one body agreed live, one of them a count and one arithmetic over
+counts. Suspects 0, invariants 0 (`tier-without-ledger` silent on the runs that claimed the tier, so the fields
+were recorded), `parameters` empty, reuse 82%/75%/78%. **Those recorded numbers are the pre-closing-bracket
+build's**; re-derived with the bracket the same three requests come out **+0.045% / +0.004% / +0.005%** with
+estimated shares 3.0% / 2.3% / 14.0%, and `ledger.test.ts` pins both sides of that from the one fixture - the
+recorded fields as history, the recomputation as the present. The third run is the small-window shape: six
+messages summarized, a **cancelled** reply in the retained tail (`stopReason: "aborted"`, all-zero usage, refused
+as an anchor by every count reader, so the head was solved from the reply before it), and an older checkpoint
+riding inline as 890 estimated tokens - the one term in that body no count can reach.
+
+One measurement only this pairing could give: run 1's head was **7,634 `from:first-reply`** (the bare prefix) and
+run 2's **8,646 `from:after-fold`** (prefix plus the checkpoint run 1 wrote), with `sys=25975c` identical on all
+three - so their difference, **1,012 tokens, is what that checkpoint costs in the next body**, in provider terms,
+with no estimate in it. Stage 2's own `out=902`, which puts the harness-appended part (supplementary sections,
+file lists, pi's `<summary>` wrapper) at **110 tokens**; the second checkpoint derives the same way at **3,979**
+against `out=3740`, i.e. **+239**. That is the gap the capture showed statically as +14/+167/-123 chars/4, and it
+is why a cross-check built on `usage.output` as the checkpoint's size can never close. Run 3's fold wrote the tip
+and nothing replied after it, so its head is **unsolvable** - the refusal, live, and the window the persisted
+fields still own.
+
+Still unexercised live: a *large* window whose trailing stretch is big and unbracketed - the shape the closing
+bracket now mostly absorbs, but only when the cut entry carries a count on the same basis. Every request measured
+so far has had a counted assistant at its boundary, which is the well-conditioned case, so the share to watch
+remains the `LEDGER` section's `est=` column. What the local route added is the same accuracy from the other side
+of a fold: two stage-1 requests at **+0.0%** skew, 178,261 tokens with 670 estimated (0.4%) and 183,016 with none
+(0.3%), and heads 7,636 `from:first-reply` -> 9,168 `from:after-fold` with `sys=25,975c` identical - so a 5,312c
+checkpoint costs this tokenizer **1,532 provider tokens**, where chars/4 says 1,328 (15% low, against the hosted
+route's 4% low on the same arithmetic).
+
+**The cut walk, in the wild (2026-09-07).** 19 attempts from builds that record `chosenFirstKeptEntryId`, 7 of them
+moved core's boundary earlier - and the trace **cannot say why**: `reason`, `rejections`, `movedRows` and
+`tailTokens` are computed by `chooseSpanCut` and dropped by `attemptFields`, so the two ids are the whole record.
+The one run reconstructed by hand from its own session file moved for the **keep budget**, not for fit and not for
+countability: core's boundary `2ea0911c` is an assistant the provider counted at 184,588, so its span is 185,100 and
+`199,013 - 185,100 = 13,913 < keepRecentTokens 20,000`; the walk stepped back 3 rows to `2267e3bd`
+(177,749 + 512 = 178,261, tail 20,752) and cleared the floor by **752 tokens**. Two lessons, both from getting this
+wrong first: a smaller span *grows* the tail, so `tail-under-keep-budget` and `span-does-not-fit` are easier
+earlier and are as likely a cause as an uncountable boundary - "a move can only be a countability move" is
+backwards; and pi's own cut can land below the user's floor while its chars/4 accumulation says otherwise, which is
+the same estimator bias that inflates `proposedRequest`, arriving on the keep side this time. Persisting the
+walk's own decision fields is the cheap fix for the second one, and it is what making this deferral decidable
+requires.
+
+**Built 2026-09-07: the ledger-backed cut walk** - the scratchpad TODO's item `C2`, which this file cited as bare
+shorthand for a week before anyone defined it. What landed, and what it changed:
+
+- **`spanSizer(branch, {windowStartId, boundary})`** (`ledger.ts`) answers every prefix of stage 1's window from
+  **one** walk: the head is identical for every candidate (all of them describe the request about to be sent), so
+  it and its refusals are solved once, and an incremental `total(closing)` over the rows prices any position in
+  O(1). The alternative - calling `spanBodyTokens` per candidate - rescans the window at each one, quadratic on a
+  long branch and worst exactly in the repair path that walks furthest. `createMeasurementWalk` is now the single
+  implementation behind both routes, because two copies of this arithmetic is how this module's blind spots have
+  survived before.
+- **`measureSpanAt` has two routes and says which answered**: the provider's count of that body first (`basis:
+  "count"`, unchanged, and still preferred), then the ledger's (`basis: "ledger"`). So a position whose count a fold
+  expired, or whose row carries no usage at all, is now repairable - the whole point. Passing no sizer leaves the
+  old behavior exactly, which is why the counterfactual pair (same branch, `sizer: null` versus `sizer`) is a test
+  rather than a paragraph.
+- **`liveContextSize`** prefers the ledger's live and falls back to `ctx.getContextUsage().tokens`, recording which
+  in `cutLiveTokensSource`. This is the half that removes `unmeasurable-live-context` from the post-fold window:
+  pi's hybrid is null exactly when nothing has replied after the newest fold, and the ledger does not need a reply
+  after it, only a head.
+- **The window became an explicit predicate.** `outside-span-window` is a named rejection now. It used to hold by
+  accident - a count under the newest fold is expired, so no count-bearing position existed below
+  `previousFoldWindowStart` - and a route that prices expired positions has to be told where the span stops being
+  buildable. Note the redundancy that the mutation battery found: deleting `measureSpanAt`'s window check changes
+  nothing, because `SpanSizer.spanAt` refuses the same positions on its own. The sizer is the authority; the walk's
+  check exists to *name* the reason before any index is read, and it is written down so nobody deletes it as
+  untested dead code.
+- **Both sides of the keep-budget check are measured numbers**, and that is what the record admits: `tail/keep`
+  prints together, and `basis` plus `live` say which instrument produced each side. A tail is still computed as
+  `live - (body + instruction)`, so the instruction's chars/4 estimate biases the comparison toward moving earlier -
+  left alone deliberately, because earlier is the conservative direction and 512 tokens on a 20k floor is not worth
+  a second convention.
+- **What C2 did *not* change**: the harm it was gated on still has not happened - **0 of 28 native attempts in the
+  trace have ever been `skipped` by the fit gate**, and the 17:30 post-fold overflow repaired itself on the count
+  route (`stale=5` refused, `src=exact-cut`, `cutMoved=to:44acb954`) because the band between the fold and core's cut
+  held a live count. C2 is what makes the *next* shape - a fold with no fresh band above it - repairable instead of
+  abstaining. Expect `cutMoved=no` to get rarer and `basis=ledger` to appear on the line; both are the new path
+  being taken, and neither is a regression signal.
+
+- **A shape change inside a measured range was a silent hole until 2026-09-07.** `measureEntries` restarted its
+  chain at `compaction` rows only, so a `model_change` or `thinking_level_change` sitting *between* two bracketing
+  replies fell into `pending`, cost nothing, and left `last` set - which made `input(next) - input(prev)` a
+  difference of two tokenizers (or two templated preambles) and filed it under `counted`. The head's staleness
+  guard did not see it, because the head anchor can postdate the change while the range straddles it, and
+  `MAX_LEDGER_ESTIMATED_SHARE` cannot see it either, because such a range is almost entirely "counted". Fixed by
+  making the walk break at `changesCountBasis`; the test that kills the old rule uses a *larger* post-change count
+  (a plausible 3,150 rather than an obviously wrong negative), because a test that only fails on an absurd number
+  passes on a quiet one. This is the finding that C2's review produced, not a defect C2 introduced: widening the
+  range walk's customers is what put it in front of anyone.
+
+The walk's decision is finally in the record (`cutMovedRows`, `cutProposedRejection`, `cutRejections`,
+`cutTailTokens`, `cutKeepRecentTokens`, `cutSpanTokens`, `cutSpanBasis`, `cutLiveTokensSource`) and on the report as
+a `cut:` detail line plus a `CUT` histogram of causes - see [docs/compaction-trace-report.md](../../../docs/compaction-trace-report.md).
+Until those existed, a moved cut could not be attributed to a condition at all: three of the six rejection reasons
+are about our instruments and only two are about the user's floor or the window, and the two boundary ids cannot
+tell them apart. `moved-without-cause` is an INVARIANT and one-directional - a cause with no move is the legitimate
+abstain path, which the report flags as the suspect `refused-cut-shipped` instead.
+
+Pinned by: `cut-selection.test.ts`'s post-fold pair (same branch, `sizer: null` abstaining with
+`count-expired`/`not-a-countable` tallies versus `sizer` repairing to `a1` at 4,900 on `basis: "ledger"`, every
+number a provider count off the fixture's own table); `ledger.test.ts`'s position-by-position agreement between
+`spanSizer` and `spanBodyTokens` over the real capture (which is what makes the prefix walk's equivalence a
+measurement rather than a claim); `trace.test.ts` for the wiring - `cutLiveTokensSource: "ledger"` with
+`getContextUsage()` null, `unmeasurable-live-context` still named when neither instrument answers, and the chosen
+case's `tail === live - span` relation; `cut-invariants.test.ts` for the properties over the seeds and every
+ordering of a three-row alphabet with a fold spliced at each position. Mutation battery: dropping the sizer from
+the walk's input fails 1, ignoring it inside `measureSpanAt` fails 3, preferring it over a live count fails 1,
+deleting the report's `cut:` line fails 1 - and deleting `measureSpanAt`'s window check fails **nothing**, which is
+recorded above rather than deleted. Scope: 342 tests across `test/modules/compaction/` plus
+`test/scripts/compaction-report.test.ts` at the time this landed.
 
 ### The budgets behind the fit test, and one post-condition still missing
 
@@ -684,15 +1029,32 @@ stays dropped: it would rewrite the user's tail intent whenever they set a high 
 What the budget is now (`summarizationBudgetTokens` in `index.ts`, exported, pinned by
 `test/modules/compaction/budget.test.ts` plus handler cases):
 
-- **One number, both stages:** `max(1024, min(model.maxTokens, window - requestTokens - 1024))`, where
-  `requestTokens` is the **whole request as the fit gate charges it** - system prompt, tool schemas, span, appended
-  instruction. Against `~/.pi/agent/models-store.json`, `qwen3.8-flash` reports `maxTokens: 65,536`, so the cap went
-  from a constant 13,107 (4,369 for stage 1) to the model's own ceiling.
+- **Each stage pays for its own body:** `max(1024, min(model.maxTokens, window - requestTokens - 1024))`, where
+  `requestTokens` is the **whole request that stage is about to send** - for stage 1 the system prompt, tool
+  schemas, span and appended instruction (`runSegmentStage`, from its own counted request); for the reduce the
+  serialized blob plus `SERIALIZATION_SYSTEM_PROMPT`, and no tools (`stageTwoRequest`). The handler case "sizes the
+  reduce's cap from its own transcript" is the one that separates the two numbers; it dies if the reduce inherits
+  stage 1's again. Against `~/.pi/agent/models-store.json`, `qwen3.8-flash` reports `maxTokens: 65,536`, so the cap
+  went from a constant 13,107 (4,369 for stage 1) to the model's own ceiling.
+  **Sharing one number was a live defect until 2026-09-07:** `StageContext.maxTokens` came from chars/4 of *core's
+  proposed span* and was read by both the reduce and the walk, so the reduce's cap tracked how full the *session*
+  was rather than how big its *request* was - 5,188 tokens on the first fill of a 200k window (against a 10,408-token
+  request, answered at 3,249, 63% of the cap) and the 1,024 floor on the second fill (against 8,712). The field is
+  now `cutOutputReserveTokens` and only `chooseSpanCut` reads it, which is where it belongs: the walk has to weigh
+  a reserve before any stage exists, and the proposed span is its conservative side.
 - **A cap must never bind**, because a truncated checkpoint is discarded whole: recorded replies were 2,821t for 9
   events and 2,313t for the reduce, and the cap was never the reason the model stopped. The rival-draft property the
   old `1/3` protected (stage 2 once wrote *longer* than the 3,207-token checkpoint handed to it) is carried by the
   instruction ("must be no longer than the checkpoint you were given") and the report's checkpoint/summary ratio.
   Rationing the fatal direction was the bug; verbosity is only a cost.
+- **A floored cap is worse than a binding one, and it fails silently.** The 1,024-token ask above came back
+  `stopReason: "length"` with `output: 1024` and **no text at all**: a thinking model spends a budget that size
+  before it starts writing, so the rung failed as `content` / "summarization returned an empty summary" rather than
+  as a truncation, and `summary-truncated` never had a chance to speak. The cascade held - stage 1's checkpoint
+  persisted as route `native` (8,590c from a 5,957c document) and the session lost the merge, not the history - but
+  the reduce burned 47s and 8.7k fresh tokens to contribute nothing. Two consequences: the floor's own warning
+  ("a floored budget grants room the window lacks") applies on the output side too, and a `length` stop whose text
+  is empty is the signature of a starved budget, not of a verbose model.
 - **Why the subtracted term is the request and not the span:** the fixed prefix is large - the recorded system
   prompt alone is 25,694 characters, plus six tool schemas - so `window - span - instruction` overstates the room by
   thousands of tokens. A `* 0.9` multiplier briefly hid that; it was a haircut on the wrong quantity (2k on a tight
@@ -721,7 +1083,10 @@ Still not implemented, from the same design discussion: the **sanity post-condit
 `summarizationBudgetTokens` number, no longer a reserve-derived constant), flagged when false. Without it, a
 window too small to compact usefully produces a compaction that re-triggers immediately, and the trace shows a
 healthy run rather than an impossible configuration. On a 200k window the terms are ~33k against a 184k line, so
-this only bites on small windows - which is exactly when it is invisible until it hurts.
+this only bites on small windows - which is exactly when it is invisible until it hurts. **The invisible case is now
+observed** (2026-09-07 17:30, run `01a07cec`): the reduce's cap was the 1,024 floor on a 200k window, and the trace
+read as an accepted stage 1 plus a rejected stage 2 with no flag at all - suspects 0, invariants 0. The post-
+condition would have named that configuration before the request went out.
 
 ## `tool_choice` is not sent (2026-09-06)
 
@@ -1001,7 +1366,7 @@ Gap ledger, agreed 2026-09-05; each row says for itself whether it is still open
 ## Validation
 
 `test/modules/compaction/{serialize,sections,handler,trace,prefix-diff,span-session,summarize,prompt,chain,native-sizing,real-session-sizing,fold-chain,cut-shapes,cut-invariants,cut-selection,budget,session-fixture}.test.ts`
-plus `test/scripts/compaction-report.test.ts` — 261 cases, two reviewed file snapshots, no provider calls
+plus `test/scripts/compaction-report.test.ts` — 318 cases, two reviewed file snapshots, no provider calls
 (`createCompactionHarness()` in `test/helpers/compaction-doubles.ts` records the contexts and options a
 `stubModelRegistry` receives, and `evaluateSummarizationResponse` is pure so the accept/reject policy is testable
 directly). Stage-1 truncation is pinned by a 1.2M-char
@@ -1023,7 +1388,11 @@ branch of `fitRequirementTokens` fails both sizing tests and the handler case wh
 context does not. From the 2026-09-06 sizing pass: charging stored rows instead of the wire shape fails 3, dropping
 the `countBoundary` filter fails 3, disabling the exact-cut tier fails 5, widening the 5% band to 50% fails 1, and
 ignoring `skippedEntries` when offering the kept entry fails 1 — the last of which it did **not** do until a test
-was written for it, because the guard had no coverage at all when the mutation was first tried.
+was written for it, because the guard had no coverage at all when the mutation was first tried. From the
+2026-09-07 cap pass: handing the reduce stage 1's reserve back (the shipped behavior before the change) fails
+exactly one test - the 43 handler cases otherwise pass on a stub whose `model.maxTokens` is small enough to bind
+both asks, which is what made the shared number invisible for so long, so a cap test has to put the two bodies on
+opposite sides of the ceiling.
 **The fuzz caught itself being vacuous, which is the lesson worth keeping:** the first version survived three of
 four mutations (ignoring `countBoundary`, dropping the assistant-type check from the exact-cut tier, and losing
 the instruction term) because its boundary assertion only ran *when* the result was null, every probe passed

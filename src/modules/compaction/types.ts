@@ -35,6 +35,11 @@ export type SummarizationReason = SessionBeforeCompactEvent["reason"];
  * - `exact-anchor` - the newest count *inside* the span, with nothing after it left to charge: the whole-turn cut
  *   `[assistant] | [user]`, where the span ends on the counted reply itself.
  * - `usage-anchor` - the same count, plus chars/4 for whatever followed it.
+ * - `head-ledger` - no count inside the span survived, but the session could still solve for the head no row owns
+ *   (system prompt, tools, newest checkpoint) from the first reply counted under it, and bracket most of the rows
+ *   between two counts: `ledger.ts`. Measured within 1% on three real stage-1 requests, one of which every other
+ *   tier below answered as `chars4` and overshot by 8.8%. Declines rather than guesses when too much of the body
+ *   is unbracketed (`MAX_LEDGER_ESTIMATED_SHARE`).
  * - `chars4` - the heuristic over the whole body: the only number available right after a fold, before any
  *   post-fold reply exists.
  *
@@ -43,7 +48,8 @@ export type SummarizationReason = SessionBeforeCompactEvent["reason"];
  *
  * These have measurably different error rates, so a reader has to know which number they are being shown.
  */
-export type EstimateSource = "exact-cut" | "exact-anchor" | "usage-anchor" | "chars4";
+export type EstimateSource =
+    "exact-cut" | "exact-anchor" | "usage-anchor" | "head-ledger" | "chars4";
 
 export type ContextMessage = CompactionPreparation["messagesToSummarize"][number];
 
