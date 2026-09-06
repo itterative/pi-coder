@@ -44,10 +44,13 @@ in a session, and pi keeps thinking in the live context anyway (`hideThinkingBlo
    checkpoint it was given — merge and drop, never concatenate.
 3. **core default** — `undefined`.
 
-The fit gate is `nativeRequestFits`, which prefers **`ctx.getContextUsage().tokens`** (the provider's own
-count) and only falls back to the chars/4 body estimate; the heuristic measured 1.35x hot on a JSON-heavy
-session and 1.12x on a text one, and a hot estimate silently skips stage 1 on ~200k windows — exactly when
-compaction matters. The live count includes the retained tail, so it is conservative in the right direction.
+The fit gate is `nativeRequestFits`, and `fitRequirementTokens` decides what it measures against the window, best
+evidence first: the **span-anchored** count (a provider's own `usage.totalTokens` for a reply inside the span,
+plus chars/4 only for what followed it and for the appended instruction), then
+**`ctx.getContextUsage().tokens`**, then the whole-body chars/4 guess. The middle one is *not* the provider's
+count of the request — see **Requests are sized from the session's own counts** — it counts the retained tail
+stage 1 drops, and it is `null` right after a compaction, which is when compaction usually runs. A hot estimate
+alone used to skip stage 1 on ~200k windows; the anchor is what removed both that and the tail's inflation.
 
 `overflow` skips stage 1 (the span provably does not fit). Stage 1 failing alone → stage 2 with no segment.
 Stage 2 failing after stage 1 succeeded → **stage 1's text is persisted** (`route: "native"`). Nothing may
@@ -142,16 +145,17 @@ SUSPECTS / PREFIX DIVERGENCES / COST AND CACHE / COMPRESSION aggregates. `--dump
 prints stage text **verbatim** (the report body only previews it, because a checkpoint is markdown);
 `--suspect`, `--grep <text>`, `--session <prefix>`, `--route`, `--reason`, `--since`, `--runs 0` (all) and
 `--json` cover the rest. Its SUSPECTS flags encode the failure modes below as thresholds —
-`prefix-unusable`, `span-not-truncated`, `degenerate-native-output`, `degenerate-final-summary`,
+`prefix-unusable`, `span-not-truncated`, `cut-not-found`, `degenerate-native-output`, `degenerate-final-summary`,
 `reduce-inflated`, `cache-read-zero`, `blocks-dropped`, `summary-truncated`, `fell-back`, `estimate-skew` — with prose in
 [docs/compaction-trace-report.md](../../../docs/compaction-trace-report.md). It reads rotated `.1` siblings and
 tolerates fields absent in records from older builds, because the file accumulates across checkout.
 
 - `attempt` — per stage: `accepted`/`rejected`/`skipped`, detail, `usage` incl. **`cacheRead`** (the only way
   to tell whether the rebuilt prefix was served from cache), **`stopReason`** whenever a reply arrived (the only
-  way to tell a truncated summary from a brief one), estimated tokens, tool/message counts, stage 1's
-  `copiedEntries`/`skippedEntries`, stage 2's `serializedChars`/`segmentSummaryChars`. A `skipped` attempt has no
-  `stopReason` or `usage`: the request never went out.
+  way to tell a truncated summary from a brief one), estimated tokens **with the method that produced them**
+  (`estimateSource`), tool/message counts, stage 1's `copiedEntries`/`skippedEntries`/`cutFound`, stage 2's
+  `serializedChars`/`segmentSummaryChars`. A `skipped` attempt has no `stopReason` or `usage`: the request never
+  went out.
 - `prefix` — the verdict from `chain.ts` against our `onPayload` body: which reference answered, how deep the
   agreement went, and the parameters only one side sent. Two rules survive from the body-to-body era: an extra
   body key is a **parameter**, never a prefix verdict, and an absent reference is **unknown**, never `false`.
@@ -439,6 +443,40 @@ because a record was **absent** — that is what a rotated or trimmed log looks 
 second no longer lives in this fixture (it now contains every record type); it is carried by the synthetic cases
 at "separates an absent reference from an unusable one" and the old-build tolerance test.
 
+## Requests are sized from the session's own counts (2026-09-06)
+
+Every assistant entry carries the `usage` of the request that produced it — `input`, `output`, `cacheRead`,
+`cacheWrite`, `totalTokens` — and that request covered the **system prompt, the tool definitions and every message
+before it**. So the newest usable usage inside a span is an exact token count for a prefix of the body stage 1 is
+about to rebuild, and the system prompt needs no separate term because it is already inside that number. Only two
+things still require guessing: the entries after the anchor, and the instruction no reference ever sent. That is
+`estimateAnchoredSpanTokens` in `native-request.ts`, recorded as `estimatedTokens` with
+`estimateSource: "usage-anchor"` beside it.
+
+Measured against a recorded child session's own provider counts (14 turns): whole-body chars/4 ran **+39.6% mean
+error, +93% worst**; anchored ran **+2.0%**. That spread is why the report keeps two bands — 15% for an anchored
+estimate, 50% for the heuristic — and prints `src=anchor` / `src=chars4` / `src=unrecorded`, so a number never
+arrives without the accuracy it can support. One threshold for both would either bury the anchor or cry wolf on
+the heuristic.
+
+Three rules worth knowing before "fixing" this:
+
+- **An `aborted` or `error` reply, or an all-zero `usage`, is not an anchor.** It is not a measurement of a
+  context that still exists, so the walk keeps going backwards rather than believing the newest big number.
+- **`ctx.getContextUsage().tokens` is a hybrid, not the provider's count.** It is
+  `estimateContextTokens(messages)` — last assistant usage *plus* chars/4 for everything after it
+  (`compaction.js:148-153`), with images counted at 4800 chars each — and it returns `tokens: null` when the
+  newest compaction has no assistant reply after it (`agent-session.js:2556-2574`). Treat `rep=` as a ceiling for
+  the whole live context, never as the size of a request.
+- **Anchoring cannot help stage 2**, and this is not an oversight: stage 2 sends a text blob we serialize
+  ourselves, so no historical usage describes it. `packWithinBudget` therefore still decides which transcript
+  blocks survive on a chars/4 estimate — the reason gap 7's budget should come from the window rather than from a
+  number this crude.
+- **The anchor over-counts when it predates a fold.** An assistant kept from an older round carries a count of the
+  context *before* a later compaction folded material away, so its number exceeds what this span holds. The
+  20k-token keep makes that rare (the newest assistant below the cut is usually a turn from after the last
+  compaction), and the error is conservative — the estimate-band flag names it rather than the code guessing.
+
 ## `tool_choice` is not sent (2026-09-06)
 
 Stage 1 used to send `toolChoice: "none"` while keeping the parent's tool definitions, on the theory that the
@@ -572,9 +610,10 @@ What each number licenses us to believe:
   hardware: the fresh part is the instruction we append, which is the intended shape.
 - **`cached=0` on the reduce is expected and cheap**, not a regression: stage 2 is a different system prompt, no
   tools, one message, so it shares no prefix with anything. 4k tokens.
-- **`estimate-skew: -42%` is informational.** chars/4 under-estimated here and over-estimated by 21% on the
-  hosted provider, so it swings both ways; the fit gate used `rep=50.9k`, which is why the run went ahead. Keep
-  the flag as a report-only observation and do not "fix" the estimate by trusting it.
+- **`estimate-skew: -42%` meant nothing, and now cannot fire here.** That figure compared our estimate of the
+  request (29.5k) with pi's count for the whole live context (50.9k) - two different bodies once the span
+  truncates, which is why the same healthy pipeline printed -42% here and +21% on a hosted run. Against the
+  provider's count for the request it sized (3,854 + 23.9k = 27.8k) the estimate was 6% high, inside the noise.
 
 ## Failure inventory
 
@@ -663,10 +702,20 @@ Gap ledger, agreed 2026-09-05; each row says for itself whether it is still open
 
 4. **Children have no UI** (`print` mode), so every warning here reaches only the trace and the run
    diagnostics: a quota-starved child looks like a normal finish with a mediocre summary.
-5. **Silent-overflow providers** (pi's own doc names z.ai, MiMo, Ollama truncation) could accept a clipped
-   stage-1 input and produce a confident checkpoint of half a conversation. `estimatedTokens`,
-   `reportedContextTokens`, and `usage.input` are all logged now, which is what makes a mismatch check
-   possible later.
+5. **Silent-overflow providers could accept a clipped stage-1 input and produce a confident checkpoint of half a
+   conversation. CLOSED 2026-09-06 on the detection half.** The check the gap asked for is our estimate of a
+   request against the tokens the provider counted for **that same request** (`usage.input + cacheRead +
+   cacheWrite`); `estimatedTokens`, `reportedContextTokens` and `usage` were all logged, so no new field was
+   needed - what was missing was a comparison that held, and `estimate-skew` had been comparing the estimate with
+   pi's whole-context count instead. Repaired, the pair sits between -13% and +43% on every live run of this
+   pipeline, so the band is 50% either way and the detail names the direction: estimate far **above** the count is
+   the clip shape (the provider saw less than we sent) or chars/4 over-reading the content, and the record cannot
+   tell those apart, which the flag says out loud; estimate far **below** means the fit gate decided on a number
+   too small. The same pair is now much sharper on stage 1, because `estimatedTokens` anchors on a provider count
+   from inside the span where one exists (`estimateSource`): +2% mean error instead of +40%, which is why the
+   report keeps a 15% band for anchored estimates and 50% for the heuristic. What stays open is the *other* half
+   of the gap: a provider that clips without the token count moving is still invisible, because a clip that the
+   provider itself does not count is not a number we can receive.
 6. **A degenerate stage-1 answer is accepted. CLOSED 2026-09-05.** On a live run stage 1 answered 509k tokens
    of context with 35 tokens of *"I don't have any prior thinking to reproduce — this is the first turn of our
    conversation, so there is no previous internal reasoning that exists to be audited verbatim."* Non-empty,
@@ -689,19 +738,29 @@ Gap ledger, agreed 2026-09-05; each row says for itself whether it is still open
    independent knobs: fixing stage 1 does not raise the cap, and raising the cap does not fix stage 1. Watch
    `blocks-dropped` and `degenerate-native-output` separately in `npm run compaction-report -- --suspect`.
 
-8. **A missing cut point is invisible.** If `preparation.firstKeptEntryId` is not on the path,
-   `spanContextEntries` returns everything and stage 1 silently stops truncating — i.e. it goes back to full
-   price. A `cutFound` field on the stage-1 `attempt` record closes it.
+8. **A missing cut point is invisible. CLOSED 2026-09-06.** If `preparation.firstKeptEntryId` is not on the path,
+   `spanContextEntries` returned everything and stage 1 silently stopped truncating - full price, and a checkpoint
+   overlapping the messages that survive. `spanContextEntries` now returns `{ entries, cutFound }` and stage 1's
+   attempt record carries `cutFound`, because no other field can recover the fact: an uncut span and a merely long
+   one carry identical counts, and the prefix record's `truncated` compares our message count against a
+   *reference's* depth, so a shallow reference prints the same shape with nothing wrong. That made
+   `span-not-truncated` an inference, and the report now treats it as one - it stays quiet when `cutFound` says
+   the thing directly, the same one-fact-one-flag rule as `prefix-uncomparable` under the shape gate. The attempt
+   line prints `cut=found` / `cut=missing` / `cut=unrecorded` so a record written before the field cannot read as
+   a found cut.
 
 ## Validation
 
-`test/modules/compaction/{serialize,sections,handler,trace,prefix-diff,span-session,summarize,prompt,chain,session-fixture}.test.ts`
-plus `test/scripts/compaction-report.test.ts` — 111 cases, two reviewed file snapshots, no provider calls
+`test/modules/compaction/{serialize,sections,handler,trace,prefix-diff,span-session,summarize,prompt,chain,native-sizing,session-fixture}.test.ts`
+plus `test/scripts/compaction-report.test.ts` — 183 cases, two reviewed file snapshots, no provider calls
 (`createCompactionHarness()` in `test/helpers/compaction-doubles.ts` records the contexts and options a
 `stubModelRegistry` receives, and `evaluateSummarizationResponse` is pure so the accept/reject policy is testable
 directly). Stage-1 truncation is pinned by a 1.2M-char
 *retained-tail* fixture: if someone re-sends the live context, the fit gate skips stage 1 and that test fails.
 Mutation-verified: reverting the fit formula to `reserveTokens` fails the sizing test; deleting
-`trace.modelResponse(...)` fails two trace tests. Real provider behavior (no-tool-call instruction adherence, cache serving,
+`trace.modelResponse(...)` fails two trace tests; forcing `cutFound: true` in the stage-1 fields, or
+`cutMissing = false` in the report, each fails exactly one of the two new cut-point tests; disabling the anchored
+branch of `fitRequirementTokens` fails both sizing tests and the handler case where the span fits but the live
+context does not. Real provider behavior (no-tool-call instruction adherence, cache serving,
 `toolCall` refusals) and child execution stay manual — see `src/tools/agent/README.md` § "Changing child
 compaction".

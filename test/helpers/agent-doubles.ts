@@ -39,6 +39,28 @@ export function zeroUsage(): Usage {
     return cloneUsage(ZERO_USAGE);
 }
 
+/**
+ * A `Usage` carrying real counts, for a fixture that needs an anchor to be counted from.
+ *
+ * `totalTokens` is derived the way the providers derive it - prompt plus completion - because compaction's span
+ * sizing anchors on that field and treats an all-zero row as no measurement at all.
+ */
+export function countedUsage(input: number, output: number, cacheRead = 0, cacheWrite = 0): Usage {
+    const usage = zeroUsage();
+    usage.input = input;
+    usage.output = output;
+    usage.cacheRead = cacheRead;
+    usage.cacheWrite = cacheWrite;
+    usage.totalTokens = input + output + cacheRead + cacheWrite;
+    usage.cost.input = input;
+    usage.cost.output = output;
+    usage.cost.cacheRead = cacheRead;
+    usage.cost.cacheWrite = cacheWrite;
+    usage.cost.total = input + output + cacheRead + cacheWrite;
+
+    return usage;
+}
+
 export function partialRun(overrides: Partial<AgentRunSummary> = {}): AgentRunSummary {
     return {
         runId: "run-1",

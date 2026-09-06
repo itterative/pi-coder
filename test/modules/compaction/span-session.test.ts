@@ -58,25 +58,31 @@ describe("stage-1 span transcript", () => {
     it("truncates exactly where compaction will keep from", () => {
         const branch = buildBranch();
         const resolved = branch.manager.buildContextEntries();
-        const span = spanContextEntries(resolved, branch.tail);
+        const cut = spanContextEntries(resolved, branch.tail);
 
-        expect(span.map((entry) => entry.id)).toEqual(
+        expect(cut.cutFound).toBe(true);
+        expect(cut.entries.map((entry) => entry.id)).toEqual(
             resolved.slice(0, resolved.length - 2).map((entry) => entry.id),
         );
-        expect(span.some((entry) => entry.id === branch.tail)).toBe(false);
+        expect(cut.entries.some((entry) => entry.id === branch.tail)).toBe(false);
     });
 
-    it("returns everything when the kept id is not on this path", () => {
+    it("returns everything when the kept id is not on this path, and says so", () => {
         const branch = buildBranch();
         const resolved = branch.manager.buildContextEntries();
-        expect(spanContextEntries(resolved, "not-an-entry")).toEqual(resolved);
+        const uncut = spanContextEntries(resolved, "not-an-entry");
+
+        // The length cannot tell an uncut span from a merely long one, which is why the flag exists at all: a
+        // caller that only looked at `entries` would send the retained tail again and read it back as normal.
+        expect(uncut.cutFound).toBe(false);
+        expect(uncut.entries).toEqual(resolved);
     });
 
     it("rebuilds pi's resolved context minus the retained tail, previous checkpoint included", () => {
         const branch = buildBranch();
         const resolved = branch.manager.buildContextEntries();
-        const span = spanContextEntries(resolved, branch.tail);
-        const built = buildSpanSession(span, "/tmp");
+        const cut = spanContextEntries(resolved, branch.tail);
+        const built = buildSpanSession(cut.entries, "/tmp");
 
         const text = rendered(built.sessionManager.buildSessionContext().messages);
         expect(text).toContain("first request");
@@ -86,14 +92,14 @@ describe("stage-1 span transcript", () => {
         expect(text).toContain("run finished quietly");
         expect(text).not.toContain("the retained tail starts here");
         expect(text).not.toContain("and continues");
-        expect(built.copiedEntries).toBe(span.length);
+        expect(built.copiedEntries).toBe(cut.entries.length);
         expect(built.skippedEntries).toEqual({});
     });
 
     it("keeps the tool call and its result as real messages, not as text", () => {
         const branch = buildBranch();
-        const span = spanContextEntries(branch.manager.buildContextEntries(), branch.tail);
-        const messages = buildSpanSession(span, "/tmp").sessionManager.buildSessionContext()
+        const cut = spanContextEntries(branch.manager.buildContextEntries(), branch.tail);
+        const messages = buildSpanSession(cut.entries, "/tmp").sessionManager.buildSessionContext()
             .messages;
 
         const withCall = messages.find(

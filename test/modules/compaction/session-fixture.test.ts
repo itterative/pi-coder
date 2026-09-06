@@ -65,12 +65,12 @@ function replay() {
     // post-compaction view, which has already folded that history into a summary, so a faithful replay of a
     // recorded compaction has to slice the tree rather than the resolved context.
     const branch = manager.getBranch();
-    const truncated = spanContextEntries(branch, FIRST_KEPT);
-    const span = buildSpanSession(truncated, manager.getCwd());
+    const cut = spanContextEntries(branch, FIRST_KEPT);
+    const span = buildSpanSession(cut.entries, manager.getCwd());
     const messages = convertToLlm(span.sessionManager.buildSessionContext().messages);
     const ladder = messageLadder(requestShaped(messages));
 
-    return { manager, branch, truncated, span, messages, head: ladder.get(ladder.size) ?? "" };
+    return { manager, branch, cut, span, messages, head: ladder.get(ladder.size) ?? "" };
 }
 
 function traceAttempt(strategy: string): Record<string, unknown> {
@@ -111,7 +111,8 @@ describe("recorded session fixture", () => {
     it("rebuilds the exact span the live run sent", () => {
         const replayed = replay();
 
-        expect(replayed.truncated).toHaveLength(28);
+        expect(replayed.cut.cutFound).toBe(true);
+        expect(replayed.cut.entries).toHaveLength(28);
         expect(replayed.span.copiedEntries).toBe(28);
         // Nothing may be silently unrepresentable: a skipped entry narrows stage 1 without anyone noticing.
         expect(skippedEntryCount(replayed.span.skippedEntries)).toBe(0);

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompactionTraceRecord } from "../../../src/modules/compaction/trace";
 import {
     createCompactionHarness,
+    type CompactionHarnessInput,
     messageChain,
     sampleKept,
     failedResponse,
@@ -85,6 +86,7 @@ describe("compaction trace", () => {
         systemPrompt?: string;
         branch?: SessionEntry[];
         providerPayload?: unknown;
+        preparation?: CompactionHarnessInput["preparation"];
     }) {
         if (input.config) {
             const configPath = path.join(root, "compaction-config.json");
@@ -100,6 +102,7 @@ describe("compaction trace", () => {
             model: input.contextWindow
                 ? stubModel({ contextWindow: input.contextWindow })
                 : undefined,
+            preparation: input.preparation,
         });
     }
 
@@ -201,6 +204,8 @@ describe("compaction trace", () => {
             toolCount: 2,
             messageCount: 4,
             copiedEntries: 4,
+            cutFound: true,
+            estimateSource: "chars4",
         });
         expect(attempt?.attempt?.estimatedTokens).toBeGreaterThan(0);
         // The usage on the accepted attempt is how a cache hit is read out of this file.
@@ -219,6 +224,26 @@ describe("compaction trace", () => {
         expect(reduce?.attempt?.segmentSummaryChars).toBe(
             "## Goal\n\nstub\n\n## Progress\n\n- [x] stub".length,
         );
+    });
+
+    it("records a cut point that named no entry, which no length can recover", async () => {
+        const harness = build({
+            responses: [
+                async () => summaryResponse("## Goal\n\nstub\n\n## Progress\n\n- [x] stub"),
+            ],
+            preparation: { firstKeptEntryId: "not-on-this-branch" },
+        });
+        await harness.compact();
+
+        const records = readRecords(tracePath);
+        const attempts = records.filter((record) => record.stage === "attempt");
+        const native = attempts[0]?.attempt;
+        expect(native?.cutFound).toBe(false);
+        // An uncut span is a longer span: the tail pi is keeping went out again at full price, and the only
+        // other number that could have said so - the message count - looks like a busy session instead.
+        expect(native?.messageCount ?? 0).toBeGreaterThan(4);
+        // Stage 2 has no cut point of its own; it reads what pi handed it.
+        expect(attempts[1]?.attempt).not.toHaveProperty("cutFound");
     });
 
     it("records a rejected native attempt before the serialized one that saved it", async () => {

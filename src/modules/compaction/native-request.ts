@@ -1,5 +1,5 @@
-import type { Context, Message, Tool } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
+import type { Context, Message, Tool, Usage } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, SessionEntry, ToolInfo } from "@earendil-works/pi-coding-agent";
 
 import { estimateTextTokens } from "./text";
 
@@ -36,6 +36,77 @@ export function estimateRequestTokens(context: Context): number {
     return system + messages + tools;
 }
 
+/**
+ * Size the span request from what the provider already counted, using the heuristic only for what has no count.
+ *
+ * Every assistant entry carries the usage of the request that produced it, and that request covered the system
+ * prompt, the tool definitions and every message before it - so the newest usable usage inside the span *is* an
+ * exact token count for a prefix of the very body stage 1 is about to rebuild, and the reply's own tokens are in
+ * every later context, which is why `totalTokens` is the right anchor rather than the prompt half. From there
+ * only two things still need guessing: the entries after the anchor, and the instruction we append, which no
+ * reference ever sent. Measured against a recorded session's own provider counts, whole-body chars/4 runs +40%
+ * mean error (+93% worst) and this runs +2%.
+ *
+ * Returns null when the span holds no usable anchor - a fresh session, or one where every reply was aborted or
+ * reported no usage - and the caller then falls back to the heuristic.
+ *
+ * One known over-count, deliberately left conservative: if the newest anchor predates a fold that later removed
+ * material from the resolved view, its number includes tokens this span no longer carries. That needs an anchor
+ * from an older round than any turn since the last compaction, which the 20k-token keep makes rare, and the
+ * direction is the safe one - the report's estimate band names it when it happens.
+ */
+export function estimateAnchoredSpanTokens(
+    entries: SessionEntry[],
+    extraTokens: number,
+): number | null {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const entry = entries[index];
+        if (entry.type !== "message" || entry.message.role !== "assistant") {
+            continue;
+        }
+
+        const counted = contextTokensFromUsage(entry.message.usage, entry.message.stopReason);
+        if (counted === null) {
+            continue;
+        }
+
+        return counted + estimateEntryTokens(entries.slice(index + 1)) + extraTokens;
+    }
+
+    return null;
+}
+
+/**
+ * Tokens in the context after that reply landed. An aborted or errored turn's usage is not a measurement of a
+ * body that still exists, and a route that reported all zeros reported nothing, so both are skipped as anchors
+ * rather than believed.
+ */
+function contextTokensFromUsage(
+    usage: Usage | undefined,
+    stopReason: string | undefined,
+): number | null {
+    if (usage === undefined || stopReason === "aborted" || stopReason === "error") {
+        return null;
+    }
+
+    const total =
+        usage.totalTokens > 0
+            ? usage.totalTokens
+            : usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+
+    return total > 0 ? total : null;
+}
+
+/** chars/4 over the messages the anchor's count does not cover. */
+function estimateEntryTokens(entries: SessionEntry[]): number {
+    const messages = entries.flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+    if (messages.length === 0) {
+        return 0;
+    }
+
+    return estimateTextTokens(JSON.stringify(messages) ?? "");
+}
+
 export interface NativeContextInput {
     systemPrompt: string;
     tools: Tool[];
@@ -57,6 +128,38 @@ export function buildNativeContext(input: NativeContextInput): Context {
     };
 }
 
+export interface FitRequirementInput {
+    /** The anchored count of the body we are about to send, when the span had an anchor to count from. */
+    anchoredRequestTokens?: number | null;
+    /** `ctx.getContextUsage().tokens`: provider usage up to the last reply, plus an estimated tail after it. */
+    reportedContextTokens?: number | null;
+    /** The whole live context is a superset of the span, so counting it is conservative. */
+    context: Context;
+}
+
+/**
+ * How many prompt tokens to believe the request will cost, best evidence first.
+ *
+ * The anchored count describes the body we are sending, which is what the gate is about. `getContextUsage()`
+ * describes the whole live context - the retained tail stage 1 drops included - and is itself a hybrid: last
+ * assistant usage plus a chars/4 tail (`compaction.js:148-153`), and `tokens: null` right after a compaction
+ * until something has replied since, which is exactly when compaction runs. So it ranks second, not first, and
+ * the heuristic last.
+ */
+export function fitRequirementTokens(input: FitRequirementInput): number {
+    const anchored = input.anchoredRequestTokens;
+    if (typeof anchored === "number" && anchored > 0) {
+        return anchored;
+    }
+
+    const reported = input.reportedContextTokens;
+    if (typeof reported === "number" && reported > 0) {
+        return reported;
+    }
+
+    return estimateRequestTokens(input.context);
+}
+
 /**
  * Whether the native request can still be sent.
  *
@@ -73,17 +176,17 @@ export function nativeRequestFits(
     contextWindow: number,
     outputBudgetTokens: number,
     reportedContextTokens?: number | null,
+    anchoredRequestTokens?: number | null,
 ): boolean {
     if (contextWindow <= 0) {
         return false;
     }
-    // The provider's own count is ground truth and immune to how hot the chars/4 heuristic runs (measured at
-    // 1.35x on a JSON-heavy session and 1.12x on a text one, which is the difference between stage 1 running
-    // and quietly skipping itself on a 200k window). The live context includes the retained tail that stage 1
-    // drops, so treating it as the requirement is conservative in the direction that matters.
-    const needed =
-        reportedContextTokens && reportedContextTokens > 0
-            ? reportedContextTokens
-            : estimateRequestTokens(context);
+
+    const needed = fitRequirementTokens({
+        anchoredRequestTokens,
+        reportedContextTokens,
+        context,
+    });
+
     return needed < contextWindow - outputBudgetTokens;
 }

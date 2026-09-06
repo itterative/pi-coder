@@ -161,11 +161,22 @@ function nativeFields(overrides: Partial<CompactionAttemptFields> = {}): Compact
         model: "test-model",
         maxTokens: 13107,
         contextWindow: 200000,
-        estimatedTokens: 8000,
-        reportedContextTokens: 7800,
+        // `estimatedTokens` sizes the request this strategy built; `reportedContextTokens` is pi's count for the
+        // whole live context. They are different bodies once the span truncates, so the base carries both at the
+        // live relationship (a chars/4 estimate ~34% above what the provider counted for the same request, and a
+        // context larger than the request) rather than as the near-equal pair the old comparison wanted.
+        estimatedTokens: 43_000,
+        reportedContextTokens: 48_000,
         toolCount: 6,
         messageCount: 42,
         copiedEntries: 60,
+        // The heuristic path, which is what a span with no counted reply inside it produces. Anchored states
+        // spell `estimateSource: "usage-anchor"` out at their own call sites, because the two carry different
+        // tolerances and a fixture cannot be allowed to imply the tighter one by default.
+        estimateSource: "chars4",
+        // Only stage 1 has a cut point, and a current-build record always says whether it found one. The report
+        // reads `cut=` off the native attempt alone, so the stage-2 sites that reuse this base cannot leak it.
+        cutFound: true,
         previousSummaryChars: 0,
         ...overrides,
     };
@@ -235,7 +246,12 @@ function writeHealthyRun(session: string): void {
     trace.modelResponse("native", summary);
     trace.attempt(
         "serialized",
-        nativeFields({ toolCount: 0, messageCount: 1, segmentSummaryChars: summary.length }),
+        nativeFields({
+            toolCount: 0,
+            messageCount: 1,
+            estimatedTokens: 2_000,
+            segmentSummaryChars: summary.length,
+        }),
         accepted({ usage: usage(1500, 1200) }),
     );
     trace.modelResponse("serialized", summary);
@@ -397,7 +413,11 @@ describe("compaction-report script", () => {
         expect(keys).toContain("reduce-inflated");
         expect(keys).toContain("cache-read-zero");
         expect(keys).toContain("blocks-dropped");
-        expect(keys).toContain("estimate-skew");
+        // Not estimate-skew, which this state used to assert. The 08:55 run it replays estimated 644k against a
+        // provider count of 509k for the same request - 26%, ordinary tokenizer error - and the flag only fired
+        // because it was comparing that estimate against pi's count for the *whole* context (533k), two different
+        // bodies. A repaired comparison says what the live run was: a refused checkpoint, not a mis-sized request.
+        expect(keys).not.toContain("estimate-skew");
         // The prefix itself was fine, so the cost flag must not be misread as an alignment failure.
         expect(keys).not.toContain("prefix-unusable");
         expect(parseReport().aggregates.flags["degenerate-native-output"]).toBe(1);
@@ -406,6 +426,156 @@ describe("compaction-report script", () => {
         expect(text.stdout).toContain("stage 1 accepted with 45 chars");
         expect(text.stdout).toContain("45 checkpoint chars -> 8291 final chars");
         expect(text.stdout).toContain("702 transcript blocks left out");
+    });
+
+    it("names a cut point that named nothing, and lets the inference keep quiet", () => {
+        const trace = recorder("sess-uncut");
+        const summary = checkpoint("## Goal", 4000);
+        // An uncut span is also a span no shorter than its reference, which is the shape `span-not-truncated`
+        // reads as "the whole context went out again". Both describe this run; only one of them is a fact rather
+        // than an inference from a depth comparison.
+        trace.prefix(healthyPrefix({ truncated: false }));
+        trace.attempt(
+            "native",
+            nativeFields({ cutFound: false, messageCount: 84 }),
+            accepted({ usage: usage(2000, 1500, 30000) }),
+        );
+        trace.modelResponse("native", summary);
+        trace.final("native", summary, finalFields());
+        trace.outcome("native");
+
+        const keys = flagKeys(parseReport(), "sess-uncut");
+        expect(keys).toContain("cut-not-found");
+        expect(keys).not.toContain("span-not-truncated");
+        expect(flagDetail(parseReport(), "sess-uncut", "cut-not-found")).toContain(
+            "read all 84 messages",
+        );
+        expect(runText(["--session", "sess-uncut"]).stdout).toContain("cut=missing");
+    });
+
+    it("keeps a record that predates the cut point distinct from one that found it", () => {
+        const trace = recorder("sess-oldcut");
+        const summary = checkpoint("## Goal", 4000);
+        trace.prefix(healthyPrefix());
+        trace.attempt(
+            "native",
+            nativeFields({ cutFound: undefined }),
+            accepted({ usage: usage(2000, 1500, 30000) }),
+        );
+        trace.modelResponse("native", summary);
+        trace.final("native", summary, finalFields());
+        trace.outcome("native");
+
+        expect(flagKeys(parseReport(), "sess-oldcut")).toEqual([]);
+        expect(runText(["--session", "sess-oldcut"]).stdout).toContain("cut=unrecorded");
+    });
+
+    it("says which way the estimate and the provider disagree about the same request", () => {
+        const clip = recorder("sess-clip");
+        clip.prefix(healthyPrefix());
+        // We described a 90k-token request and the provider counted 32k for it. Either the endpoint took less
+        // than we sent - the silent overflow pi's own docs attribute to z.ai, MiMo and Ollama - or chars/4 badly
+        // over-reads this content, and the flag has to say both because the record cannot tell them apart.
+        clip.attempt(
+            "native",
+            nativeFields({ estimatedTokens: 90_000 }),
+            accepted({ usage: usage(2000, 1500, 30000) }),
+        );
+        clip.modelResponse("native", checkpoint("## Goal", 4000));
+        clip.final("native", checkpoint("## Goal", 4000), finalFields());
+        clip.outcome("native");
+
+        const under = recorder("sess-under");
+        under.prefix(healthyPrefix());
+        // The other direction has a single meaning: the request was larger than the estimate said, so the fit
+        // gate decided on a number too small for what it sent.
+        under.attempt(
+            "native",
+            nativeFields({ estimatedTokens: 8_000 }),
+            accepted({ usage: usage(30_000, 1500, 170_000) }),
+        );
+        under.modelResponse("native", checkpoint("## Goal", 4000));
+        under.final("native", checkpoint("## Goal", 4000), finalFields());
+        under.outcome("native");
+
+        const report = parseReport();
+        expect(flagDetail(report, "sess-clip", "estimate-skew")).toContain(
+            "estimate 90.0k (chars/4) vs 32.0k counted for the same request",
+        );
+        expect(flagDetail(report, "sess-clip", "estimate-skew")).toContain("clipped the input");
+        expect(flagDetail(report, "sess-under", "estimate-skew")).toContain(
+            "estimate 8000 (chars/4) vs 200k counted for the same request",
+        );
+        expect(flagDetail(report, "sess-under", "estimate-skew")).toContain("under-counts");
+    });
+
+    it("names the method behind an estimate, including on a record that carried none", () => {
+        const anchored = recorder("sess-anchor");
+        anchored.prefix(healthyPrefix());
+        anchored.attempt(
+            "native",
+            nativeFields({ estimateSource: "usage-anchor", estimatedTokens: 32_500 }),
+            accepted({ usage: usage(2000, 1500, 30000) }),
+        );
+        anchored.modelResponse("native", checkpoint("## Goal", 4000));
+        anchored.final("native", checkpoint("## Goal", 4000), finalFields());
+        anchored.outcome("native");
+
+        const heuristic = recorder("sess-heuristic");
+        heuristic.prefix(healthyPrefix());
+        heuristic.attempt(
+            "native",
+            nativeFields({ estimatedTokens: 38_400 }),
+            accepted({ usage: usage(2000, 1500, 30000) }),
+        );
+        heuristic.modelResponse("native", checkpoint("## Goal", 4000));
+        heuristic.final("native", checkpoint("## Goal", 4000), finalFields());
+        heuristic.outcome("native");
+
+        const old = recorder("sess-oldest");
+        old.prefix(healthyPrefix());
+        old.attempt(
+            "native",
+            nativeFields({ estimateSource: undefined, estimatedTokens: 38_400 }),
+            accepted({ usage: usage(2000, 1500, 30000) }),
+        );
+        old.modelResponse("native", checkpoint("## Goal", 4000));
+        old.final("native", checkpoint("## Goal", 4000), finalFields());
+        old.outcome("native");
+
+        expect(runText(["--session", "sess-anchor"]).stdout).toContain("est=32.5k src=anchor");
+        expect(runText(["--session", "sess-heuristic"]).stdout).toContain("est=38.4k src=chars4");
+        expect(runText(["--session", "sess-oldest"]).stdout).toContain("src=unrecorded");
+    });
+
+    it("holds a span-anchored estimate to the band its own accuracy supports", () => {
+        // Both runs estimated 20% above the provider's count for the same request. That is noise for chars/4,
+        // which measures +40% mean error here, and a fact about an anchored count, which measures +2%. One
+        // threshold for both would either bury the anchor or cry wolf on the heuristic.
+        const state = (session: string, fields: Partial<CompactionAttemptFields>) => {
+            const trace = recorder(session);
+            trace.prefix(healthyPrefix());
+            trace.attempt(
+                "native",
+                nativeFields(fields),
+                accepted({ usage: usage(2000, 1500, 30000) }),
+            );
+            trace.modelResponse("native", checkpoint("## Goal", 4000));
+            trace.final("native", checkpoint("## Goal", 4000), finalFields());
+            trace.outcome("native");
+        };
+
+        state("sess-anchor-band", {
+            estimateSource: "usage-anchor",
+            estimatedTokens: 38_400,
+        });
+        state("sess-heuristic-band", { estimatedTokens: 38_400 });
+
+        const report = parseReport();
+        expect(flagKeys(report, "sess-anchor-band")).toContain("estimate-skew");
+        expect(flagKeys(report, "sess-heuristic-band")).toEqual([]);
+        expect(flagDetail(report, "sess-anchor-band", "estimate-skew")).toContain("(anchored)");
+        expect(flagDetail(report, "sess-anchor-band", "estimate-skew")).toContain("band 15%");
     });
 
     it("separates an absent reference from an unusable one", () => {

@@ -86,6 +86,12 @@ export interface AssistantFixture {
     thinking?: string;
     calls?: AssistantCallFixture[];
     stopReason?: AssistantMessage["stopReason"];
+    /**
+     * What the provider counted for the request that produced this reply. Stage 1 sizes its own request by
+     * anchoring on the newest such count inside the span, so a fixture that wants an anchor has to carry one -
+     * `zeroUsage()` deliberately means "no anchor available".
+     */
+    usage?: Usage;
 }
 
 export function assistantMessage(fixture: AssistantFixture, timestamp = 0): ContextMessage {
@@ -110,7 +116,7 @@ export function assistantMessage(fixture: AssistantFixture, timestamp = 0): Cont
         api: "anthropic-messages",
         provider: "anthropic",
         model: "stub-model",
-        usage: zeroUsage(),
+        usage: fixture.usage ?? zeroUsage(),
         stopReason: fixture.stopReason ?? "stop",
         timestamp,
     };

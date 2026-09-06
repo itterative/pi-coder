@@ -954,9 +954,18 @@ function flagRun(run, options) {
         });
     }
 
-    // Stage 1 truncates by design, so a non-truncated span means the cut point was never found and the whole
-    // live context went out again at full price.
-    if (prefix !== undefined && prefix.truncated === false) {
+    // Stage 1 truncates by design, so a span no shorter than the reference *may* mean the cut point was never
+    // found and the whole live context went out again at full price. It is only a proxy: the comparison runs
+    // against a reference's depth, so a shallower reference prints the same shape with nothing wrong. Where the
+    // direct fact is recorded it outranks the inference, and the proxy keeps quiet rather than naming the same
+    // money twice.
+    const cutMissing = native?.fields?.cutFound === false;
+    if (cutMissing) {
+        out.push({
+            key: "cut-not-found",
+            detail: `pi's firstKeptEntryId named no entry on this branch: stage 1 read all ${dash(native.fields.messageCount)} messages, including the tail that survives`,
+        });
+    } else if (prefix !== undefined && prefix.truncated === false) {
         out.push({
             key: "span-not-truncated",
             detail: `ours=${prefix.ourCount} parent=${prefix.parentCount}`,
@@ -1049,11 +1058,13 @@ function flagRun(run, options) {
         out.push({ key: "fell-back", detail });
     }
 
-    const skew = estimateSkew(native ?? serialized);
-    if (skew !== null && Math.abs(skew) > options.estimateSkew) {
+    const skewAttempt = native ?? serialized;
+    const skew = estimateSkew(skewAttempt);
+    const tolerance = estimateTolerance(skewAttempt, options);
+    if (skew !== null && Math.abs(skew) > tolerance) {
         out.push({
             key: "estimate-skew",
-            detail: `chars/4 estimate ${(skew * 100).toFixed(0)}% off the provider's own count`,
+            detail: estimateSkewDetail(skew, skewAttempt, tolerance),
         });
     }
 
@@ -1062,25 +1073,82 @@ function flagRun(run, options) {
 
 /**
  * Thresholds that are not exposed as flags: a run above 50k fresh tokens with no cache read is the shape of
- * "we paid for the whole span again", and a chars/4 estimate more than 15% off the provider's own count is
- * the point where the fit gate starts deciding on a number that does not describe the request.
+ * "we paid for the whole span again", and an estimate may disagree with the provider's count for the same request
+ * by up to 50% either way - whole-body chars/4 sits between -13% and +43% on live runs of this pipeline, so a
+ * tighter band would flag the estimator on every run instead of the request. A span-anchored estimate earns the
+ * tighter band it can support: measured +2% mean error against +40% for the heuristic on one recorded session,
+ * so a 15% disagreement there is a fact about the endpoint rather than about the guess.
  */
 const DEFAULT_THRESHOLDS = {
     minChars: 300,
     inflateFactor: 4,
     expensiveResendTokens: 50000,
-    estimateSkew: 0.15,
+    estimateSkew: 0.5,
+    anchoredEstimateSkew: 0.15,
 };
 
-/** Signed error of the chars/4 estimate against the provider-reported context size. */
-function estimateSkew(attempt) {
-    const estimated = attempt?.fields?.estimatedTokens;
-    const reported = attempt?.fields?.reportedContextTokens;
-    if (typeof estimated !== "number" || typeof reported !== "number" || reported === 0) {
+/**
+ * Tokens the provider counted for this request, or null when the record cannot say.
+ *
+ * OpenAI-compatible routes report cache reads separately from fresh input, so the request's prompt size is the
+ * sum of the three. A route reporting all of them as zero said nothing: unknown, never a measurement.
+ */
+function countedPromptTokens(attempt) {
+    const usage = attempt?.usage;
+    if (usage === undefined || usage === null) {
         return null;
     }
 
-    return (estimated - reported) / reported;
+    const parts = [usage.input, usage.cacheRead, usage.cacheWrite].filter(
+        (value) => typeof value === "number",
+    );
+    if (parts.length === 0) {
+        return null;
+    }
+
+    const total = parts.reduce((sum, value) => sum + value, 0);
+    return total > 0 ? total : null;
+}
+
+/** How far this estimate is allowed to be wrong, which depends on how it was produced. */
+function estimateTolerance(attempt, options) {
+    if (attempt?.fields?.estimateSource === "usage-anchor") {
+        return options.anchoredEstimateSkew;
+    }
+
+    return options.estimateSkew;
+}
+
+/**
+ * How far the estimate of a request is from the tokens the provider counted for that same request.
+ *
+ * The comparison used to run against pi's whole live-context count, which is a different body once the span is
+ * truncated: the same healthy pipeline printed -34% on one run and +21% on the next, and neither number described
+ * anything. Positive here means we described a larger request than the provider saw; negative means the fit gate
+ * decided on a number too small for what went out.
+ */
+function estimateSkew(attempt) {
+    const estimated = attempt?.fields?.estimatedTokens;
+    const counted = countedPromptTokens(attempt);
+    if (typeof estimated !== "number" || counted === null) {
+        return null;
+    }
+
+    return (estimated - counted) / counted;
+}
+
+/** Both numbers, how the estimate was made, and which way they disagree: the directions mean different things. */
+function estimateSkewDetail(skew, attempt, tolerance) {
+    const estimate = tokens(attempt?.fields?.estimatedTokens);
+    const counted = tokens(countedPromptTokens(attempt));
+    const method = attempt?.fields?.estimateSource === "usage-anchor" ? "anchored" : "chars/4";
+    const head = `estimate ${estimate} (${method}) vs ${counted} counted for the same request, band ${String(Math.round(tolerance * 100))}%`;
+
+    if (skew > 0) {
+        return `${head}: the endpoint may have clipped the input (the silent-overflow shape pi's docs attribute to z.ai, MiMo, Ollama), or the estimate over-reads this content`;
+    }
+
+    return `${head}: the estimate under-counts what went out, so the fit gate decided on a number too small`;
 }
 
 // -------------------------------------------------------------------- output
@@ -1188,7 +1256,7 @@ function pct(value) {
 }
 
 /** The request-side numbers of one attempt, minus the keys that are always absent. */
-function fieldParts(fields) {
+function fieldParts(fields, strategy) {
     const parts = [];
     const add = (label, value) => {
         if (value !== undefined && value !== null && value !== "") {
@@ -1200,7 +1268,17 @@ function fieldParts(fields) {
     add("sys", suffix(fields.systemChars, "c"));
     add("copied", fields.copiedEntries);
     add("skippedEnt", zeroToUndefined(fields.skippedEntries));
+    // Only stage 1 has a cut point, and a record that predates the field must not read as a found one, so all
+    // three states get a word.
+    if (strategy === "native") {
+        add("cut", cutState(fields.cutFound));
+    }
     add("est", tokens(fields.estimatedTokens));
+    // A number without its method is how the old comparison got believed. Three states, because "no anchor was
+    // available" and "this record predates the field" are different things to a reader.
+    if (typeof fields.estimatedTokens === "number") {
+        add("src", estimateSourceLabel(fields.estimateSource));
+    }
     add("rep", tokens(fields.reportedContextTokens));
     add("win", tokens(fields.contextWindow));
     add("maxTok", tokens(fields.maxTokens));
@@ -1212,6 +1290,27 @@ function fieldParts(fields) {
     add("focus", fields.customInstructions === undefined ? undefined : "yes");
 
     return parts;
+}
+
+/** The three states of stage 1's cut point, including the one that means "this record predates the field". */
+function cutState(value) {
+    if (value === true) {
+        return "found";
+    }
+    if (value === false) {
+        return "missing";
+    }
+    return "unrecorded";
+}
+
+function estimateSourceLabel(value) {
+    if (value === "usage-anchor") {
+        return "anchor";
+    }
+    if (value === "chars4") {
+        return "chars4";
+    }
+    return "unrecorded";
 }
 
 function suffix(value, unit) {
@@ -1308,7 +1407,7 @@ function renderRunBlock(run, flags, options) {
             `    ${attempt.strategy.padEnd(11)} ${String(attempt.outcome).padEnd(8)} +${seconds(attempt.gapMs).padStart(6)}  ${cost}`,
         );
 
-        const parts = fieldParts(attempt.fields);
+        const parts = fieldParts(attempt.fields, attempt.strategy);
         if (parts.length > 0) {
             lines.push(`                  ${parts.join(" ")}`);
         }

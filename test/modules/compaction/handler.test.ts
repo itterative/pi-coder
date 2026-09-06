@@ -8,6 +8,7 @@ import type { CompactionPreparation } from "../../../src/modules/compaction/type
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+    assistantMessage,
     createCompactionHarness,
     failedResponse,
     messageChain,
@@ -17,6 +18,7 @@ import {
     toolCallResponse,
     userMessage,
 } from "../../helpers/compaction-doubles";
+import { countedUsage } from "../../helpers/agent-doubles";
 import { stubModel } from "../../helpers/pi-stub";
 
 const SYSTEM_PROMPT = "the live system prompt";
@@ -331,6 +333,55 @@ describe("compaction stages", () => {
         });
         const payload = await overflowing.compact();
         expect(overflowing.calls).toHaveLength(1);
+        expect(payload?.details.route).toBe("serialized");
+    });
+
+    it("sends stage 1 when the span fits, even though the live context does not", async () => {
+        // The retained tail is the whole difference: `getContextUsage()` counts it and stage 1 drops it, so a
+        // gate that trusts only the live count can skip a request that would have fitted. Anchoring on the
+        // provider's count of a request *inside* the span is what tells the two situations apart.
+        const contextUsage = { tokens: 199_000, contextWindow: 200_000, percent: 100 };
+        const tail = userMessage("tail".repeat(300_000));
+        const countedSpan = messageChain([
+            { id: "u1", message: userMessage("the ask") },
+            {
+                id: "a1",
+                message: assistantMessage({
+                    text: "answered while the provider counted it",
+                    usage: countedUsage(6_000, 400, 14_000),
+                }),
+            },
+            { id: "kept-1", message: tail },
+        ]);
+        const uncountedSpan = messageChain([
+            { id: "u1", message: userMessage("the ask") },
+            // Zero usage is no anchor at all, which is what a record before this sizing looked like.
+            {
+                id: "a1",
+                message: assistantMessage({ text: "answered while the provider counted it" }),
+            },
+            { id: "kept-1", message: tail },
+        ]);
+
+        const anchored = build({
+            responses: [segmentSummary, reducedSummary],
+            branch: countedSpan,
+            contextUsage,
+        });
+        await anchored.compact();
+
+        expect(anchored.calls).toHaveLength(2);
+        // Stage 1 is the rung that attaches tools, so this is what identifies the first call as the native one.
+        expect(anchored.calls[0]?.context.tools).toHaveLength(2);
+
+        const withoutAnchor = build({
+            responses: [reducedSummary],
+            branch: uncountedSpan,
+            contextUsage,
+        });
+        const payload = await withoutAnchor.compact();
+
+        expect(withoutAnchor.calls).toHaveLength(1);
         expect(payload?.details.route).toBe("serialized");
     });
 

@@ -33,6 +33,18 @@ export interface SpanSession {
     skippedEntries: Record<string, number>;
 }
 
+/** The span stage 1 should read, plus whether the cut point was actually found. */
+export interface SpanCut {
+    entries: SessionEntry[];
+    /**
+     * False when `firstKeptEntryId` named no entry on this branch, so the slice came back as the whole
+     * transcript. Not derivable from the length: a long span and an uncut span look identical here, and the
+     * prefix record's `truncated` compares message counts against a *reference*, so it cannot tell the two
+     * apart either. This is the only place the fact exists.
+     */
+    cutFound: boolean;
+}
+
 /**
  * The context entries before the cut point.
  *
@@ -42,12 +54,12 @@ export interface SpanSession {
 export function spanContextEntries(
     contextEntries: SessionEntry[],
     firstKeptEntryId: string,
-): SessionEntry[] {
+): SpanCut {
     const cut = contextEntries.findIndex((entry) => entry.id === firstKeptEntryId);
     if (cut < 0) {
-        return contextEntries;
+        return { entries: contextEntries, cutFound: false };
     }
-    return contextEntries.slice(0, cut);
+    return { entries: contextEntries.slice(0, cut), cutFound: true };
 }
 
 export function buildSpanSession(entries: SessionEntry[], cwd: string): SpanSession {

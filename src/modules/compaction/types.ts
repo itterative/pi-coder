@@ -27,6 +27,12 @@ export type SummarizationReason = SessionBeforeCompactEvent["reason"];
  * One context message, including the roles pi keeps out of LLM requests (`bashExecution`, `custom`,
  * `compactionSummary`, `branchSummary`) as well as the plain `user`/`assistant`/`toolResult` trio.
  */
+/**
+ * Where a request-size number came from, which is how far it can be trusted: an exact provider count anchored
+ * inside the span being sent, or the chars/4 heuristic over the whole body.
+ */
+export type EstimateSource = "usage-anchor" | "chars4";
+
 export type ContextMessage = CompactionPreparation["messagesToSummarize"][number];
 
 /** The span pi is about to discard: the complete turns plus a split-turn prefix, if any. */

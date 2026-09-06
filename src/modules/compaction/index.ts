@@ -4,6 +4,7 @@ import type {
     ExtensionAPI,
     ExtensionContext,
     SessionBeforeCompactEvent,
+    SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 
@@ -18,6 +19,7 @@ import {
 import {
     activeToolDefinitions,
     buildNativeContext,
+    estimateAnchoredSpanTokens,
     estimateRequestTokens,
     nativeRequestFits,
 } from "./native-request";
@@ -574,20 +576,23 @@ function attemptFields(
 /** Entries the span covers, resolved by pi rather than by slicing converted messages by hand. */
 function spanMessages(input: StageContext): {
     messages: Message[];
+    entries: SessionEntry[];
     fields: Partial<CompactionAttemptFields>;
 } {
     const { ctx, preparation } = input;
-    const truncated = spanContextEntries(
+    const cut = spanContextEntries(
         ctx.sessionManager.buildContextEntries(),
         preparation.firstKeptEntryId,
     );
-    const span = buildSpanSession(truncated, ctx.cwd);
+    const span = buildSpanSession(cut.entries, ctx.cwd);
     const messages = convertToLlm(span.sessionManager.buildSessionContext().messages);
     return {
         messages,
+        entries: cut.entries,
         fields: {
             copiedEntries: span.copiedEntries,
             skippedEntries: skippedEntryCount(span.skippedEntries),
+            cutFound: cut.cutFound,
         },
     };
 }
@@ -597,29 +602,41 @@ async function runSegmentStage(input: StageContext, model: Model<Api>): Promise<
     const { pi, ctx, preparation, segmentTokens, signal, trace } = input;
     const span = spanMessages(input);
     const tools = activeToolDefinitions(pi);
+    const instruction = segmentSummaryInstruction({
+        preparation,
+        customInstructions: input.customInstructions,
+    });
     const context = buildNativeContext({
         systemPrompt: ctx.getSystemPrompt(),
         tools,
         messages: span.messages,
-        instruction: segmentSummaryInstruction({
-            preparation,
-            customInstructions: input.customInstructions,
-        }),
+        instruction,
         timestamp: Date.now(),
     });
     const reportedContextTokens = ctx.getContextUsage()?.tokens ?? null;
+    const anchored = estimateAnchoredSpanTokens(span.entries, estimateTextTokens(instruction));
     const fields = attemptFields(model, segmentTokens, {
-        estimatedTokens: estimateRequestTokens(context),
+        estimatedTokens: anchored ?? estimateRequestTokens(context),
+        estimateSource: anchored === null ? "chars4" : "usage-anchor",
         reportedContextTokens: reportedContextTokens ?? undefined,
         toolCount: tools.length,
         messageCount: span.messages.length,
         copiedEntries: span.fields.copiedEntries,
         skippedEntries: span.fields.skippedEntries,
+        cutFound: span.fields.cutFound,
         customInstructions: input.customInstructions,
         previousSummaryChars: preparation.previousSummary?.length ?? 0,
     });
 
-    if (!nativeRequestFits(context, model.contextWindow, segmentTokens, reportedContextTokens)) {
+    if (
+        !nativeRequestFits(
+            context,
+            model.contextWindow,
+            segmentTokens,
+            reportedContextTokens,
+            anchored,
+        )
+    ) {
         const detail = "segment context plus instruction does not fit the window";
         trace.attempt("native", fields, { outcome: "skipped", detail, retries: 0 });
         return { ok: false, detail, retries: 0 };
