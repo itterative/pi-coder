@@ -373,21 +373,31 @@ that message. So hash a `{ role, content }` projection when a golden value must 
 
 ## Live fixtures
 
-`test/fixtures/session/llamacpp-post-compaction.jsonl` is pi's own output: a 50-entry branch carrying a
-`compaction` mid-branch, with the `custom_message`, `model_change`, and `thinking_level_change` entries no
-hand-built branch in this suite has. `test/modules/compaction/session-fixture.test.ts` replays that tree through
-the span builder and pins what the live run recorded in the trace beside it (29 entries copied, 18 messages,
-nothing skipped), so the two fixtures vouch for each other and a change to slicing, copying, or message
-conversion trips a golden head hash. Slice the branch with `getBranch()`, never `buildContextEntries()`: the
-latter answers with pi's post-compaction view, which has already folded that history into a summary.
+`test/fixtures/session/llamacpp-post-compaction.jsonl` is pi's own output: a 51-entry branch carrying a
+`compaction` at its tip (`firstKeptEntryId: 3162e48e`), with the `custom_message`, `model_change`, and
+`thinking_level_change` entries no hand-built branch in this suite has.
+`test/modules/compaction/session-fixture.test.ts` replays that tree through the span builder and pins what the
+live run recorded in the trace beside it (28 entries copied, 17 messages, nothing skipped - and the replay's
+`messageCount`/`copiedEntries` must equal the captured `attempt`'s), so the two fixtures vouch for each other and
+a change to slicing, copying, or message conversion trips the golden head hash `2d54d1ca019d4841`. Slice the
+branch with `getBranch()`, never `buildContextEntries()`: the latter answers with pi's post-compaction view,
+which has already folded that history into a summary.
 
-`test/fixtures/compaction-trace.healthy.jsonl` — one real llama.cpp run, trimmed to the five records the verdict
-depends on (`prefix`, both `attempt`s, `final_summary`, `outcome`), deterministic session/record ids, timestamps re-based with offsets kept,
-checkpoint text replaced by a synthetic block of identical length. Used by `test/scripts/compaction-report.test.ts`
-to pin "what healthy looks like" (`usable=true`, `verifiedTo=19` at `comparableDepth=19` against
-`referenceDepth=33`, only `estimate-skew` flagged). Two lessons it encoded: keep `--json` field names equal to the
-record's own names, and never let a flag fire because a record was **absent** — that is what a rotated or trimmed
-log looks like, not an empty model answer.
+`test/fixtures/compaction-trace.healthy.jsonl` — one real llama.cpp run, **captured raw** (re-recorded
+2026-09-06 from a fresh session on the credited-reference build): 20 records, one run's `prefix`/`attempt`×2/
+`model_response`×2/`final_summary`/`outcome` plus 13 persisted chain rows, real `cwd`, real session id, real
+provider name normalized to `llamacpp` (the alias one machine's provider config uses is not a fact about pi's
+shape), and the two stage texts. The earlier fixture was a sanitized five-record extract with synthetic text; the raw capture replaced it
+because the chain rows and decode scalars are now part of what a healthy run must show, and because rebuilding
+stage text from records is behaviour worth pinning. Used by `test/scripts/compaction-report.test.ts` for "what
+healthy looks like": `usable=true`, `verifiedTo=18` at `comparableDepth=18` against `referenceDepth=31`,
+`parameters: []` — no key added, none dropped — **zero flags**, `referenceSource: observation`,
+`otherDisagreements: 0`, and `chainRows` counted outside the run total.
+
+Two lessons it still encodes: keep `--json` field names equal to the record's own names, and never let a flag fire
+because a record was **absent** — that is what a rotated or trimmed log looks like, not an empty model answer. The
+second no longer lives in this fixture (it now contains every record type); it is carried by the synthetic cases
+at "separates an absent reference from an unusable one" and the old-build tolerance test.
 
 ## `tool_choice` is not sent (2026-09-06)
 

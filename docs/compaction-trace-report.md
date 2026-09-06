@@ -161,10 +161,16 @@ of leaving the numbers to be compared by eye. They are thresholds, not verdicts 
 `test/scripts/compaction-report.test.ts` feeds the script records written by the **real** recorder, so the
 fixture cannot drift from the trace schema.
 
-It also pins one **real** run: `test/fixtures/compaction-trace.healthy.jsonl` is a llama.cpp compaction
-for the repository — provider renamed, `cwd` and session id replaced with deterministic stand-ins,
-timestamps re-based while keeping their millisecond offsets, and the checkpoint text swapped for a synthetic
-block of the same length. The `model_response` records are dropped entirely, which is what caught a flag that
-fired on absent data rather than an empty answer. The test asserts the verdict a healthy run must produce
-(`reference=chain`, all 19 span messages verified against a 33-message reference). Only the schema-drift case
-writes raw lines, deliberately.
+It also pins one **real** run: `test/fixtures/compaction-trace.healthy.jsonl` is a llama.cpp compaction for
+the repository, captured raw on 2026-09-06 — real `cwd`, session id, instance, persisted chain rows, and both
+`model_response` texts — with one normalization: the provider name is written as `llamacpp`, because the alias in
+a given machine's provider config says nothing about pi's shape. The fixture it replaced was a sanitized extract (deterministic ids,
+re-based timestamps, a synthetic checkpoint block, `model_response` dropped); the raw capture took its place
+because the fields worth pinning now include the chain rows and the decode scalars, and because rebuilding stage
+text from records is itself a behaviour to cover. The case the trimmed fixture stood for — a flag must not fire
+because a record was _absent_ — is carried by the synthetic tests instead.
+
+What the fixture asserts about a healthy run: `reference=chain`, `usable=true`, all 18 span depths verified
+against a 31-message reference, `parameters` **empty** (our body sent no key pi's turn requests lacked and
+dropped none they carried), zero flags, `referenceSource: observation`, `otherDisagreements: 0`, and 13 hash
+rows that belong to no run.

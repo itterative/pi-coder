@@ -18,6 +18,11 @@ import {
  * It exists because every other compaction test builds its branch out of `compaction-doubles.ts`, which is our
  * model of what pi writes. A hand-built branch cannot disagree with a hand-built branch, so this file is the
  * only thing here that can notice pi's real on-disk shape moving.
+ *
+ * Captured 2026-09-06 from a fresh session on the local llama.cpp server. Provider names are normalized to
+ * `llamacpp` in both fixtures, as they were in the pair these replaced: the alias a given machine's provider
+ * config happens to use is not a fact about pi's on-disk shape, and pinning it would tie a golden value to one
+ * person's config file. Everything else is raw - real entry ids, real timestamps, real message text.
  */
 const FIXTURE = path.join(
     PI_CODER_EXTENSION_DIR,
@@ -36,15 +41,15 @@ const TRACE_FIXTURE = path.join(
 );
 
 /** Ids as pi wrote them: short entry ids, the compaction that ran, and the retained-tail boundary it chose. */
-const FIRST_KEPT = "cb008170";
+const FIRST_KEPT = "3162e48e";
 
 /**
  * Strip the fields a provider never sees.
  *
  * `buildSpanSession` re-appends each entry into an in-memory manager, and pi stamps a `custom_message` entry
  * with `Date.now()` as it goes - so a rebuilt Context carries a fresh timestamp that the stored entry never
- * had. The wire format drops it, which is why the live chain still reported `verified=19/19`, but hashing the
- * Context objects directly would make any golden value vary between runs. An adapter that forwarded unknown
+ * had. The wire format drops it, which is why this run still verified its whole 18-message span, but hashing
+ * the Context objects directly would make any golden value vary between runs. An adapter that forwarded unknown
  * fields would turn this same difference into a prefix break, so the projection is named rather than hidden.
  */
 function requestShaped(messages: unknown[]): { role: string; content: unknown }[] {
@@ -85,18 +90,19 @@ describe("recorded session fixture", () => {
         const manager = SessionManager.open(FIXTURE);
         const branch = manager.getBranch();
 
-        expect(branch).toHaveLength(50);
+        expect(branch).toHaveLength(51);
         const compactions = branch.filter((entry) => entry.type === "compaction");
         expect(compactions).toHaveLength(1);
         expect(branch.some((entry) => entry.id === FIRST_KEPT)).toBe(true);
 
-        // The mix pi actually wrote, which no hand-built branch in this suite covers.
+        // The mix pi actually wrote, which no hand-built branch in this suite covers. Pinned exactly rather than
+        // as thresholds: this fixture is a snapshot of a real session, and a number moving means the shape moved.
         const kinds = new Map(branch.map((entry) => [entry.type, 0]));
         for (const entry of branch) {
             kinds.set(entry.type, (kinds.get(entry.type) ?? 0) + 1);
         }
-        expect(kinds.get("message")).toBeGreaterThan(30);
-        expect(kinds.get("custom")).toBeGreaterThan(10);
+        expect(kinds.get("message")).toBe(30);
+        expect(kinds.get("custom")).toBe(17);
         expect(kinds.has("custom_message")).toBe(true);
         expect(kinds.has("model_change")).toBe(true);
         expect(kinds.has("thinking_level_change")).toBe(true);
@@ -105,11 +111,11 @@ describe("recorded session fixture", () => {
     it("rebuilds the exact span the live run sent", () => {
         const replayed = replay();
 
-        expect(replayed.truncated).toHaveLength(29);
-        expect(replayed.span.copiedEntries).toBe(29);
+        expect(replayed.truncated).toHaveLength(28);
+        expect(replayed.span.copiedEntries).toBe(28);
         // Nothing may be silently unrepresentable: a skipped entry narrows stage 1 without anyone noticing.
         expect(skippedEntryCount(replayed.span.skippedEntries)).toBe(0);
-        expect(replayed.messages).toHaveLength(18);
+        expect(replayed.messages).toHaveLength(17);
         expect(replayed.messages.map((message) => message.role)).toEqual([
             "user",
             "user",
@@ -118,22 +124,21 @@ describe("recorded session fixture", () => {
             "toolResult",
             "assistant",
             "toolResult",
-            "assistant",
-            "toolResult",
-            "toolResult",
-            "assistant",
-            "toolResult",
-            "assistant",
             "toolResult",
             "assistant",
             "toolResult",
             "assistant",
             "user",
+            "assistant",
+            "toolResult",
+            "assistant",
+            "toolResult",
+            "toolResult",
         ]);
 
         // Tripwire for the rebuild itself: any change to span slicing, entry copying, or message conversion
         // moves this head, and the input is a real session rather than a model of one.
-        expect(replayed.head).toBe("9a5bf31b585c0bdc");
+        expect(replayed.head).toBe("2d54d1ca019d4841");
     });
 
     it("agrees with the trace fixture from the same run", () => {

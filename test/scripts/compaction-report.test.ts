@@ -60,6 +60,24 @@ interface ReportPrefix {
     referenceDepth?: number;
     observations?: number;
     verifiedThrough?: boolean;
+    parameters?: string[];
+    unknowns?: string[];
+    ourCount?: number;
+    ourSystemChars?: number;
+    parentSystemChars?: number;
+    /** Attribution: which reference the depths describe, and what the rest of them did. */
+    referenceSource?: string | null;
+    otherDisagreements?: number;
+    firstMismatchDepth?: number | null;
+    /** Decode values, paired. `parameters` cannot express that both sides sent a key and meant otherwise. */
+    ourEnableThinking?: boolean | null;
+    parentEnableThinking?: boolean | null;
+    ourReasoningEffort?: string | null;
+    parentReasoningEffort?: string | null;
+    ourImageBlocks?: number | null;
+    parentImageBlocks?: number | null;
+    ourMaxTokens?: number | null;
+    parentMaxTokens?: number | null;
 }
 
 interface ReportRun {
@@ -880,34 +898,55 @@ describe("compaction-report script", () => {
     });
 
     it("reads the captured llama.cpp run as a healthy compaction", () => {
+        // Re-recorded 2026-09-06 from a fresh session on the new build, against the local llama.cpp server
+        // (provider name normalized to `llamacpp`, as in the fixture this replaced). It is a stricter fixture
+        // than the one it
+        // replaced: no suspect fires, and it carries chain rows and stage text, so the persisted-chain path and
+        // the report's text reconstruction are both exercised against real bytes rather than synthetic ones.
         const result = script.run(["--path", HEALTHY_FIXTURE, "--json"]);
         expect(result.status, result.stderr).toBe(0);
         const report = JSON.parse(result.stdout) as ReportJson;
 
         expect(report.total).toBe(1);
+        // 20 records on disk, 1 run: the 13 hash rows belong to no compaction, and counting them as one would
+        // inflate every total the report prints.
+        expect(report.chainRows).toBe(13);
         const [run] = report.runs;
         expect(run.route).toBe("two-stage");
         expect(run.prefix?.reference).toBe("chain");
         expect(run.prefix?.usable).toBe(true);
-        // The claim this fixture exists to hold: all 19 span messages verified against the branch's ladder.
-        expect(run.prefix?.verifiedTo).toBe(19);
-        expect(run.prefix?.comparableDepth).toBe(19);
-        // pi's own deepest request on the branch carried 33 messages while the truncated span held 19, so this
-        // is truncation plus full verification: every depth the span reached agreed.
-        expect(run.prefix?.referenceDepth).toBe(33);
+        // The claim this fixture exists to hold: every one of the 18 span depths the ladder could reach agreed.
+        expect(run.prefix?.verifiedTo).toBe(18);
+        expect(run.prefix?.comparableDepth).toBe(18);
+        // pi's deepest request on the branch carried 31 messages while the truncated span held 18, so this is
+        // truncation plus full verification rather than a short-circuited comparison.
+        expect(run.prefix?.referenceDepth).toBe(31);
         expect(run.prefix?.verifiedThrough).toBe(true);
-        expect(run.prefix?.observations).toBe(13);
+        expect(run.prefix?.observations).toBe(12);
+        // Attribution: one credited observation, no disagreement filed anywhere else, nothing unanswerable.
+        expect(run.prefix?.referenceSource).toBe("observation");
+        expect(run.prefix?.otherDisagreements).toBe(0);
+        expect(run.prefix?.firstMismatchDepth).toBeNull();
+        expect(run.prefix?.unknowns).toEqual([]);
+        // Body parity, which is the whole point of the `tool_choice` and thinking-level work: our rebuild sent
+        // no key pi's turn requests lacked, and dropped none they had. The output cap still differs by design
+        // (4369 against pi's 128000), which is recorded rather than flagged.
+        expect(run.prefix?.parameters).toEqual([]);
+        expect(run.prefix?.ourSystemChars).toBe(25543);
+        expect(run.prefix?.parentSystemChars).toBe(25543);
         expect(run.cachedTokens).toBeGreaterThan(run.freshTokens);
-        expect(run.checkpointChars).toBe(5802);
-        expect(run.finalChars).toBe(5411);
-        // Only the estimate note survives: chars/4 was 42% under this provider's own count.
-        expect(run.flags.map((flag) => flag.key)).toEqual(["estimate-skew"]);
+        expect(run.checkpointChars).toBe(5817);
+        expect(run.finalChars).toBe(5333);
+        expect(run.flags.map((flag) => flag.key)).toEqual([]);
 
         const text = script.run(["--path", HEALTHY_FIXTURE, "--runs", "1"]);
-        expect(text.stdout).toContain("reference=chain  usable=true  verified=19/19");
-        expect(text.stdout).not.toContain("degenerate-native-output");
-        // The fixture carries no `model_response` records, so nothing reconstructs stage text.
-        expect(report.runs[0].texts ?? {}).not.toHaveProperty("native");
+        expect(text.stdout).toContain("reference=chain  usable=true  verified=18/18");
+        expect(text.stdout).toContain("13 hash rows");
+        expect(text.stdout).toContain("records:  7 in 1 run(s)");
+        expect(text.stdout).toContain("INVARIANTS (0 distinct");
+        // The fixture carries `model_response` records, so stage text is reconstructable rather than inferred.
+        expect(report.runs[0].texts).toHaveProperty("native");
+        expect(report.runs[0].texts).toHaveProperty("serialized");
     });
 
     it("rejects unusable arguments before reading the log", () => {
