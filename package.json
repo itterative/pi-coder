@@ -47,6 +47,7 @@
         "bench": "vitest bench",
         "permission-report": "node --import tsx scripts/permission-report.ts",
         "compaction-report": "node --import tsx scripts/compaction-report.ts",
+        "scratch": "node --import tsx scripts/scratch.ts",
         "typecheck": "tsc --noEmit",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",

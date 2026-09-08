@@ -8,6 +8,8 @@ category: workflow
 
 Run the full suite with `npm run test:run` and check types with `npm run typecheck` (or `npx tsc --noEmit`). The tests cover the consolidated TUI, memory, config, and sandbox modules.
 
+Scratch scripts: `npm run scratch -- <script> [args...]` bundles and runs one throwaway TS script from anywhere. Imports: `./x` for sibling files, `@pi-coder/...` for pi-coder source (src/, test/), `@earendil-works/...` for the pi package (left external), any package installed in the repo's `node_modules` (bundled via `nodePaths`), and a `node_modules` next to the script itself; `node:*` builtins. The child runs with `cwd` set to the script's own directory, so relative file paths (`readFileSync("./data.json")`) resolve next to the script, like relative imports do. The bundle lives in a temp dir under the OS temp dir (removed on exit, stale dirs swept); details in the doc comment of `scripts/scratch.ts`.
+
 ## Checklist before adding or changing a test
 
 - **Reuse a double before writing one.** See `test-doubles` for the catalog: `createPiStub`/`stubContext` for the `pi` surfaces, `agent-doubles` `partial*` for domain objects, `child-run-fixture` for a wired child extension, `test/helpers.ts` for TUI driving, `e2e/helpers.ts` for temp dirs/SQLite/git. A hand-built `const pi = { ... } as any` is the pattern that produced 28 duplicates and 199 `any` findings; the cleanup that removed them finished with the TUI/dialog cluster, so `no-explicit-any` is now zero repo-wide and any new hit is a regression rather than baseline noise.
