@@ -402,13 +402,15 @@ describe("AgentRunManager", () => {
         let promptStarted = false;
         let releasePrompt: (() => void) | undefined;
         let output = "";
+        const originalOutput = `Original result ${"x".repeat(20_000)}`;
+        const revisedOutput = `Revised result ${"x".repeat(20_000)}`;
         const continuationChild: ChildAgentHandle = {
             prompt: async () => {
                 promptStarted = true;
                 await new Promise<void>((resolve) => {
                     releasePrompt = resolve;
                 });
-                output = "Revised result";
+                output = revisedOutput;
             },
             abort: async () => {
                 releasePrompt?.();
@@ -420,7 +422,7 @@ describe("AgentRunManager", () => {
             getError: () => undefined,
             getUsage: () => usage(),
         };
-        const children = [new FakeChild([{ output: "Original result" }]), continuationChild];
+        const children = [new FakeChild([{ output: originalOutput }]), continuationChild];
         let index = 0;
         const manager = new AgentRunManager(async () => children[index++]!);
         const identity = { runId: "scout-1", runInstanceId: "instance-1" };
@@ -428,7 +430,7 @@ describe("AgentRunManager", () => {
         await manager.start("scout", "Investigate", context(), { background: true, identity });
         await flushBackground();
         const original = await manager.collect("scout-1");
-        expect(original.content).toBe("Original result");
+        expect(original.content).toBe(originalOutput);
         expect(original.details.collectSequence).toBe(1);
 
         const continuation = manager.startContinuation(
@@ -447,7 +449,7 @@ describe("AgentRunManager", () => {
         // The continuation must not be served from the previous incarnation's cached result.
         expect(manager.getCollectedOutcome("scout-1")).toBeUndefined();
         const revised = await manager.collect("scout-1");
-        expect(revised.content).toBe("Revised result");
+        expect(revised.content).toBe(revisedOutput);
         expect(revised.details.collectSequence).toBe(2);
         expect(manager.getCollectedOutcome("scout-1")).toEqual(revised);
     });
@@ -478,8 +480,9 @@ describe("AgentRunManager", () => {
             stopReason: "stop",
             timestamp: 4,
         });
+        const output = "x".repeat(20_000);
         const manager = managerWith(
-            new FakeChild([{ output: "Done", leafId: leaf }], session.getSessionFile()),
+            new FakeChild([{ output, leafId: leaf }], session.getSessionFile()),
         );
 
         await manager.start("scout", "Investigate", context(), { background: true });
@@ -487,8 +490,20 @@ describe("AgentRunManager", () => {
 
         const collected = await manager.collect("scout-1");
 
-        expect(collected.content).toBe("Done");
+        expect(collected.content).toBe(output);
         expect(collected.details.collectSequence).toBe(2);
+    });
+
+    it("keeps the full background output for collect instead of capping it", async () => {
+        const output = "x".repeat(40_000);
+        const manager = managerWith(new FakeChild([{ output }]));
+
+        await manager.start("scout", "Investigate", context(), { background: true });
+        await flushBackground();
+
+        const collected = await manager.collect("scout-1");
+
+        expect(collected.content).toBe(output);
     });
 
     it("assigns a durable human-readable title to each run", async () => {
@@ -1083,7 +1098,6 @@ describe("AgentRunManager", () => {
         const collected = await manager.collect("scout-1");
         expect(collected.content).toBe("First result");
         expect(collected.usage).toMatchObject({ input: 10, output: 2 });
-        expect(collected.details.collectSequence).toBe(1);
         const collectedAgain = await manager.collect("scout-1");
         expect(collectedAgain).toEqual(collected);
         expect(manager.getCollectedOutcome("scout-1")).toEqual(collected);

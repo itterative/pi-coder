@@ -18,6 +18,14 @@ import { safeExistingChildFile } from "./session-paths";
 
 const RUN_ID = /^[a-z][a-z0-9_-]{0,63}-\d+$/;
 
+/**
+ * Defensive ceiling for a persisted terminal response.
+ *
+ * Terminal content is stored in full so a restored background result can still spill it after a
+ * restart; this bound only stops a pathological write from bloating a snapshot.
+ */
+const MAX_TERMINAL_CONTENT_CHARS = 1_000_000;
+
 const RESTORABLE_STATUSES = new Set<PersistedAgentRun["status"]>([
     "starting",
     "running",
@@ -259,7 +267,7 @@ export function parseRecord(
         ...(typeof record.readOnlyReason === "string"
             ? { readOnlyReason: record.readOnlyReason.slice(0, 500) }
             : {}),
-        terminalContent: boundedString(record.terminalContent, 48_000),
+        terminalContent: boundedString(record.terminalContent, MAX_TERMINAL_CONTENT_CHARS),
         terminalError: boundedString(record.terminalError, 4_000),
         terminalIsError:
             typeof record.terminalIsError === "boolean" ? record.terminalIsError : undefined,

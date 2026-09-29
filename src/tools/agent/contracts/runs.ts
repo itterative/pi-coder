@@ -122,11 +122,12 @@ export interface AgentRunDetails {
     response?: string;
     output?: string;
     /**
-     * Sequence number of this collected response for its logical run.
+     * Sequence number of this delegated response for its logical run.
      *
-     * Derived from the child transcript's parent-prompt count when one exists, so it stays stable
-     * across restarts; in-memory children fall back to a per-session counter. Names the scratchpad
-     * spill file `<runId>-<n>.out`.
+     * Assigned when the response exceeds the parent-context budget. Derived from the child
+     * transcript's parent-prompt count when one exists, so it stays stable across restarts;
+     * in-memory children fall back to a per-session counter. Names the scratchpad spill file
+     * `<runId>-<n>.out`.
      */
     collectSequence?: number;
     question?: ParentQuestion;

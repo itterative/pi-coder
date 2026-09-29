@@ -12,7 +12,7 @@ import {
 } from "./runs/manager";
 import { isAgentTerminalStatus, type AgentWorkspaceCheckpointCallback } from "./contracts/runs";
 import { diagnosticText } from "./presentation/text";
-import { constrainCollectedResponse } from "./presentation/collect-output";
+import { constrainAgentResponse } from "./presentation/response-output";
 import { failedOutcome, listOutcome } from "./presentation/outcomes";
 import { getScratchpadPath } from "../../modules/scratchpad";
 import { unusedAgentContextWarning } from "./prompts/renderer";
@@ -110,6 +110,11 @@ export async function executeAgentAction(
             outcome.details.runId,
             outcome.details.workspaceResult.id,
         );
+    }
+    // Every delegated response is bounded for the parent context, foreground and collect alike; the
+    // full text goes to the scratchpad spill file. Lifecycle messages are already short.
+    if (outcome.hasResponse === true || params.action === "collect") {
+        return constrainAgentResponse(outcome, getScratchpadPath(ctx.sessionManager));
     }
     return outcome;
 }
@@ -392,11 +397,11 @@ function parentActionDeps(scope: ActionScope): ParentActionDeps {
  * Collects a retained background result and its workspace changes.
  *
  * The result must be prepared before `collect` consumes it, and a no-change lease is only released
- * afterwards, so a rejected collect can be retried while its lease stays protected. Oversized
- * responses are truncated and spilled to the parent scratchpad by `constrainCollectedResponse`.
+ * afterwards, so a rejected collect can be retried while its lease stays protected.
  *
  * A repeated collect returns the stored outcome for the run without re-preparing its workspace
- * result or touching the lease again.
+ * result or touching the lease again. The outcome then follows the same response bounding as any
+ * other delegated response in `executeAgentAction`.
  */
 async function dispatchCollect(
     request: Extract<AgentRequest, { action: "collect" }>,
@@ -405,7 +410,7 @@ async function dispatchCollect(
     const { ctx, lifecycle } = scope;
     const collected = lifecycle.manager.getCollectedOutcome(request.runId);
     if (collected) {
-        return constrainCollectedResponse(collected, getScratchpadPath(ctx.sessionManager));
+        return collected;
     }
 
     const pending = lifecycle.manager.status(request.runId);
@@ -427,7 +432,7 @@ async function dispatchCollect(
     }
     lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
     lifecycle.manager.storeCollectedOutcome(request.runId, outcome);
-    return constrainCollectedResponse(outcome, getScratchpadPath(ctx.sessionManager));
+    return outcome;
 }
 
 /**

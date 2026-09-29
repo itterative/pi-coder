@@ -136,6 +136,12 @@ export const MAX_TASK_CHARS = 16_000;
 export const MAX_TITLE_CHARS = 80;
 export const MAX_GUIDANCE_CHARS = 16_000;
 export const MAX_OUTPUT_CHARS = 32_000;
+/**
+ * Parent-context budget for one delegated response; larger responses are truncated and spilled to
+ * the parent scratchpad. Shared with the run manager so an oversized terminal outcome can carry the
+ * spill-file sequence before it is returned or collected.
+ */
+export const MAX_AGENT_RESPONSE_CHARS = 16_000;
 /** Overall budget for waiting out a lease another manager still holds. */
 export const CONTINUATION_LEASE_RECOVERY_TIMEOUT_MS = 35_000;
 /** Slack added to a busy lease's advertised reclaim time, so clock skew cannot lose a retry. */

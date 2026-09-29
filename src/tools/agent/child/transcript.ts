@@ -56,7 +56,7 @@ export function selectChildSessionLeaf(
 /**
  * Count the parent prompts recorded on a child transcript's exact branch.
  *
- * This names a collected response's scratchpad spill file: the count is stable across restarts,
+ * This names a delegated response's scratchpad spill file: the count is stable across restarts,
  * unlike an in-memory counter, and advances once per initial task, continuation, or resume prompt.
  * Raw entries are read rather than the resolved context, so compaction cannot hide earlier prompts.
  * Returns undefined when the transcript or leaf cannot be read, leaving the caller a fallback.

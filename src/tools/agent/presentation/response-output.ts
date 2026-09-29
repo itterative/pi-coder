@@ -2,17 +2,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { AgentRunOutcome } from "../contracts/runs";
+import { MAX_AGENT_RESPONSE_CHARS } from "../runs/run-state";
 
-/**
- * Maximum number of characters of a collected child response returned in the parent's context.
- *
- * Larger responses are truncated at the last complete line that fits and the full text is spilled
- * to the parent's scratchpad.
- */
-export const MAX_COLLECTED_RESPONSE_CHARS = 16_000;
-
-/** Directory under the parent scratchpad root that holds spilled collect responses. */
-export const COLLECTED_OUTPUT_DIRECTORY = "agents";
+/** Directory under the parent scratchpad root that holds spilled delegated responses. */
+export const RESPONSE_SPILL_DIRECTORY = "agents";
 
 /** Number of lines in `text`, counting a trailing newline as a terminator rather than a new line. */
 function countLines(text: string): number {
@@ -51,7 +44,7 @@ function completeLinePrefix(text: string, maxChars: number): string {
 }
 
 /**
- * Bound a collected response and spill the full text into the parent scratchpad.
+ * Bound a delegated response and spill the full text into the parent scratchpad.
  *
  * The complete response is written to `<scratchpad>/agents/<runId>-<collectSequence>.out` so the
  * parent can `read` it on demand and a continuation's later result cannot overwrite an earlier one.
@@ -59,19 +52,19 @@ function completeLinePrefix(text: string, maxChars: number): string {
  * returned unchanged when the response already fits, when no scratchpad exists, or when the spill
  * cannot be written: truncation must never lose output.
  */
-export async function constrainCollectedResponse(
+export async function constrainAgentResponse(
     outcome: AgentRunOutcome,
     scratchpadPath: string | undefined,
 ): Promise<AgentRunOutcome> {
     const full = outcome.content;
-    if (!scratchpadPath || full.length <= MAX_COLLECTED_RESPONSE_CHARS) {
+    if (!scratchpadPath || full.length <= MAX_AGENT_RESPONSE_CHARS) {
         return outcome;
     }
 
     const sequence = outcome.details.collectSequence ?? 1;
     const filePath = path.join(
         scratchpadPath,
-        COLLECTED_OUTPUT_DIRECTORY,
+        RESPONSE_SPILL_DIRECTORY,
         `${outcome.details.runId}-${sequence}.out`,
     );
     try {
@@ -81,7 +74,7 @@ export async function constrainCollectedResponse(
         return outcome;
     }
 
-    const kept = completeLinePrefix(full, MAX_COLLECTED_RESPONSE_CHARS);
+    const kept = completeLinePrefix(full, MAX_AGENT_RESPONSE_CHARS);
     return {
         ...outcome,
         content: `${kept}${truncationNote(filePath, kept, full)}`,

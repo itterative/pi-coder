@@ -36,8 +36,8 @@ import { cloneUsage, ZERO_USAGE } from "./usage";
 import {
     BACKGROUND_AGENT_WAIT_GUIDANCE,
     INTERRUPTED_RESUME_GUIDANCE,
+    MAX_AGENT_RESPONSE_CHARS,
     MAX_GUIDANCE_CHARS,
-    MAX_OUTPUT_CHARS,
     MAX_TASK_CHARS,
     type AgentRun,
     type AgentStartContext,
@@ -928,26 +928,33 @@ export class AgentRunManager {
         );
         this.record(run, "result.collected");
         await this.removeRun(run, "collected");
-        const collectSequence = this.collectSequenceFor(run);
-        this.collectedSequences.set(runId, collectSequence);
-        outcome.details.collectSequence = collectSequence;
+        const collectSequence =
+            run.terminalOutcome.details.collectSequence ??
+            (outcome.content.length > MAX_AGENT_RESPONSE_CHARS
+                ? this.nextCollectSequence(run)
+                : undefined);
+        if (collectSequence !== undefined) {
+            outcome.details.collectSequence = collectSequence;
+        }
         this.storeCollectedOutcome(runId, outcome);
         return outcome;
     }
 
     /**
-     * Resolve the sequence number that names a collected response's spill file.
+     * Advance the spill-file sequence for a run's next oversized response.
      *
-     * A durable child transcript is the source of truth: counting its parent prompts up to the exact
-     * terminal leaf is stable across restarts, where the in-memory counter resets and could overwrite
-     * a preserved spill file. In-memory children have no transcript to restore from, so the in-memory
-     * counter stays their fallback and is kept warm on every collect.
+     * A durable child transcript is the source of truth: its parent-prompt count is stable across
+     * restarts, where the in-memory counter resets. In-memory children have no transcript to restore
+     * from, so the counter stays their fallback. The counter is advanced even when the transcript
+     * supplied the number, so a later incarnation without one cannot reuse a sequence.
      */
-    private collectSequenceFor(run: AgentRun): number {
+    private nextCollectSequence(run: AgentRun): number {
         const fromTranscript = run.childSessionFile
             ? countParentPrompts(run.childSessionFile, run.childSessionLeafId)
             : undefined;
-        return fromTranscript ?? (this.collectedSequences.get(run.id) ?? 0) + 1;
+        const sequence = fromTranscript ?? (this.collectedSequences.get(run.id) ?? 0) + 1;
+        this.collectedSequences.set(run.id, sequence);
+        return sequence;
     }
 
     /** Look up a collected outcome that has not yet been evicted. */
@@ -1635,8 +1642,7 @@ export class AgentRunManager {
             return this.finishFailure(run, childError, progress);
         }
 
-        const rawOutput = handle.getFinalOutput().trim();
-        const output = truncate(rawOutput, MAX_OUTPUT_CHARS);
+        const output = handle.getFinalOutput().trim();
         if (!output) {
             this.record(run, "final_output.empty", {
                 progressChars: progress.output.length,
@@ -1652,8 +1658,8 @@ export class AgentRunManager {
             );
         }
         this.record(run, "final_output.selected", {
-            outputChars: rawOutput.length,
-            outputPreview: truncate(rawOutput.replace(/\s+/g, " "), 240),
+            outputChars: output.length,
+            outputPreview: truncate(output.replace(/\s+/g, " "), 240),
         });
         return this.finishTerminal(run, "completed", output, false, progress);
     }
@@ -1875,6 +1881,11 @@ export class AgentRunManager {
             status === "completed" && !isError,
         );
         run.terminalOutcome = outcome;
+        // A foreground response is returned directly rather than collected, so an oversized one must
+        // carry its spill-file sequence now; a later collect reuses the same number.
+        if (content.length > MAX_AGENT_RESPONSE_CHARS) {
+            outcome.details.collectSequence = this.nextCollectSequence(run);
+        }
         return outcome;
     }
 

@@ -20,7 +20,7 @@ import type {
 } from "../../src/tools/agent/contracts/workspaces";
 import { ZERO_USAGE } from "../../src/tools/agent/runs/usage";
 import type { AgentResumeOptions } from "../../src/tools/agent/runs/manager";
-import { MAX_COLLECTED_RESPONSE_CHARS } from "../../src/tools/agent/presentation/collect-output";
+import { MAX_AGENT_RESPONSE_CHARS } from "../../src/tools/agent/runs/run-state";
 import * as scratchpad from "../../src/modules/scratchpad";
 import * as workspaceCheckpoints from "../../src/tools/agent/workspaces/checkpoints";
 import * as workspaceFinalization from "../../src/tools/agent/workspaces/finalization";
@@ -363,7 +363,7 @@ describe("agent action dispatch", () => {
         },
     );
 
-    describe("collected response size cap", () => {
+    describe("delegated response size cap", () => {
         let scratchpadDir: string;
 
         beforeEach(async () => {
@@ -387,6 +387,11 @@ describe("agent action dispatch", () => {
 
             const filePath = path.join(scratchpadDir, "agents", "worker-1-2.out");
             await expect(readFile(filePath, "utf8")).resolves.toBe(full);
+            // The cache keeps the full text, so a repeated collect can spill it again.
+            expect(h.manager.storeCollectedOutcome).toHaveBeenCalledWith(
+                "worker-1",
+                expect.objectContaining({ content: full }),
+            );
             const [body] = outcome.content.split("\n\n[Output truncated");
             // Only complete lines are kept; the crossing line is left to the spill file.
             expect(body).toBe(kept);
@@ -397,15 +402,29 @@ describe("agent action dispatch", () => {
 
         it("falls back to a character cut when one oversized line has no boundary", async () => {
             const h = harness();
-            const full = "x".repeat(MAX_COLLECTED_RESPONSE_CHARS + 123);
+            const full = "x".repeat(MAX_AGENT_RESPONSE_CHARS + 123);
             h.pending.content = full;
 
             const outcome = await h.execute({ action: "collect", runId: "worker-1" });
 
             const filePath = path.join(scratchpadDir, "agents", "worker-1-1.out");
-            expect(outcome.content.startsWith(full.slice(0, MAX_COLLECTED_RESPONSE_CHARS))).toBe(
-                true,
+            expect(outcome.content.startsWith(full.slice(0, MAX_AGENT_RESPONSE_CHARS))).toBe(true);
+            expect(outcome.content).toContain(
+                `[Output truncated: showing part of its single line. Full response saved to ${filePath}]`,
             );
+        });
+
+        it("applies the same bound to an oversized foreground response", async () => {
+            const h = harness();
+            const full = "x".repeat(MAX_AGENT_RESPONSE_CHARS + 1);
+            h.pending.content = full;
+            h.pending.hasResponse = true;
+
+            const outcome = await h.execute(startParams());
+
+            const filePath = path.join(scratchpadDir, "agents", "worker-1-1.out");
+            await expect(readFile(filePath, "utf8")).resolves.toBe(full);
+            expect(outcome.content.startsWith(full.slice(0, MAX_AGENT_RESPONSE_CHARS))).toBe(true);
             expect(outcome.content).toContain(
                 `[Output truncated: showing part of its single line. Full response saved to ${filePath}]`,
             );
@@ -413,7 +432,7 @@ describe("agent action dispatch", () => {
 
         it("returns a response that fits without writing a spill file", async () => {
             const h = harness();
-            const content = "x".repeat(MAX_COLLECTED_RESPONSE_CHARS);
+            const content = "x".repeat(MAX_AGENT_RESPONSE_CHARS);
             h.pending.content = content;
 
             const outcome = await h.execute({ action: "collect", runId: "worker-1" });
@@ -427,7 +446,7 @@ describe("agent action dispatch", () => {
         it("keeps the full response when no scratchpad is available", async () => {
             vi.mocked(scratchpad.getScratchpadPath).mockReturnValue(undefined);
             const h = harness();
-            const full = "x".repeat(MAX_COLLECTED_RESPONSE_CHARS + 1);
+            const full = "x".repeat(MAX_AGENT_RESPONSE_CHARS + 1);
             h.pending.content = full;
 
             const outcome = await h.execute({ action: "collect", runId: "worker-1" });
@@ -440,7 +459,7 @@ describe("agent action dispatch", () => {
             await writeFile(blocker, "not a directory");
             vi.mocked(scratchpad.getScratchpadPath).mockReturnValue(blocker);
             const h = harness();
-            const full = "x".repeat(MAX_COLLECTED_RESPONSE_CHARS + 1);
+            const full = "x".repeat(MAX_AGENT_RESPONSE_CHARS + 1);
             h.pending.content = full;
 
             const outcome = await h.execute({ action: "collect", runId: "worker-1" });
