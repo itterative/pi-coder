@@ -42,6 +42,7 @@ export {
 } from "./extension";
 export { createChildModelRuntime, shouldCopyParentApiKey } from "./model-runtime";
 export {
+    countParentPrompts,
     materializePersistentSession,
     repairInterruptedToolCalls,
     selectChildSessionLeaf,

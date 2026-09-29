@@ -381,10 +381,11 @@ describe("agent action dispatch", () => {
             const kept = line.repeat(15);
             const full = `${kept}${"y".repeat(1_500)}`;
             h.pending.content = full;
+            h.pending.details.collectSequence = 2;
 
             const outcome = await h.execute({ action: "collect", runId: "worker-1" });
 
-            const filePath = path.join(scratchpadDir, "agents", "worker-1.out");
+            const filePath = path.join(scratchpadDir, "agents", "worker-1-2.out");
             await expect(readFile(filePath, "utf8")).resolves.toBe(full);
             const [body] = outcome.content.split("\n\n[Output truncated");
             // Only complete lines are kept; the crossing line is left to the spill file.
@@ -401,7 +402,7 @@ describe("agent action dispatch", () => {
 
             const outcome = await h.execute({ action: "collect", runId: "worker-1" });
 
-            const filePath = path.join(scratchpadDir, "agents", "worker-1.out");
+            const filePath = path.join(scratchpadDir, "agents", "worker-1-1.out");
             expect(outcome.content.startsWith(full.slice(0, MAX_COLLECTED_RESPONSE_CHARS))).toBe(
                 true,
             );
@@ -419,7 +420,7 @@ describe("agent action dispatch", () => {
 
             expect(outcome.content).toBe(content);
             await expect(
-                readFile(path.join(scratchpadDir, "agents", "worker-1.out"), "utf8"),
+                readFile(path.join(scratchpadDir, "agents", "worker-1-1.out"), "utf8"),
             ).rejects.toThrow();
         });
 

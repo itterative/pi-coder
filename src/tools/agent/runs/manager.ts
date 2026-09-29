@@ -31,6 +31,7 @@ import {
 } from "../contracts/runs";
 import type { AgentTraceData, AgentTraceSink } from "../contracts/trace";
 import { renderAgentTask } from "../prompts/renderer";
+import { countParentPrompts } from "../child/transcript";
 import { cloneUsage, ZERO_USAGE } from "./usage";
 import {
     BACKGROUND_AGENT_WAIT_GUIDANCE,
@@ -151,6 +152,14 @@ export class AgentRunManager {
      * the entry is evicted or the session shuts down.
      */
     private readonly collectedOutcomes = new Map<string, AgentRunOutcome>();
+    /**
+     * In-memory fallback sequence numbers for logical runs without a durable child transcript.
+     *
+     * Durable runs derive their sequence from the transcript's parent-prompt count instead, which is
+     * stable across restarts. This map still tracks every collect, so an in-memory child (no transcript
+     * to count) cannot reuse a sequence within the session.
+     */
+    private readonly collectedSequences = new Map<string, number>();
     private closing = false;
     private preservingShutdown = false;
     private readonly restoreAbortController = new AbortController();
@@ -919,8 +928,26 @@ export class AgentRunManager {
         );
         this.record(run, "result.collected");
         await this.removeRun(run, "collected");
+        const collectSequence = this.collectSequenceFor(run);
+        this.collectedSequences.set(runId, collectSequence);
+        outcome.details.collectSequence = collectSequence;
         this.storeCollectedOutcome(runId, outcome);
         return outcome;
+    }
+
+    /**
+     * Resolve the sequence number that names a collected response's spill file.
+     *
+     * A durable child transcript is the source of truth: counting its parent prompts up to the exact
+     * terminal leaf is stable across restarts, where the in-memory counter resets and could overwrite
+     * a preserved spill file. In-memory children have no transcript to restore from, so the in-memory
+     * counter stays their fallback and is kept warm on every collect.
+     */
+    private collectSequenceFor(run: AgentRun): number {
+        const fromTranscript = run.childSessionFile
+            ? countParentPrompts(run.childSessionFile, run.childSessionLeafId)
+            : undefined;
+        return fromTranscript ?? (this.collectedSequences.get(run.id) ?? 0) + 1;
     }
 
     /** Look up a collected outcome that has not yet been evicted. */
@@ -1036,6 +1063,9 @@ export class AgentRunManager {
             model: definition.model ?? "parent",
             background,
         });
+        // A new incarnation of a logical run (a continuation) supersedes the collected result cached
+        // for that ID; the per-run sequence is deliberately not reset, so spill files stay distinct.
+        this.collectedOutcomes.delete(id);
         return { definition, run };
     }
 
@@ -1279,6 +1309,7 @@ export class AgentRunManager {
         }
         // Collected outcomes are session state: a restarted or switched session must not recall them.
         this.collectedOutcomes.clear();
+        this.collectedSequences.clear();
     }
 
     /** Record the shutdown request, mark each run, and abort the child work already reachable. */

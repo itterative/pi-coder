@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import {
     AgentContinuationLeaseBusyError,
@@ -395,6 +396,99 @@ describe("AgentRunManager", () => {
         releasePrompt?.();
         await vi.waitFor(() => expect(manager.status("scout-1").details.status).toBe("completed"));
         expect((await manager.collect("scout-1")).content).toBe("Finished after continuing.");
+    });
+
+    it("keeps a continuation's collected output separate from the original", async () => {
+        let promptStarted = false;
+        let releasePrompt: (() => void) | undefined;
+        let output = "";
+        const continuationChild: ChildAgentHandle = {
+            prompt: async () => {
+                promptStarted = true;
+                await new Promise<void>((resolve) => {
+                    releasePrompt = resolve;
+                });
+                output = "Revised result";
+            },
+            abort: async () => {
+                releasePrompt?.();
+            },
+            dispose: () => {},
+            takeParentQuestion: () => undefined,
+            getProgress: () => ({ output, recentActivity: [] }),
+            getFinalOutput: () => output,
+            getError: () => undefined,
+            getUsage: () => usage(),
+        };
+        const children = [new FakeChild([{ output: "Original result" }]), continuationChild];
+        let index = 0;
+        const manager = new AgentRunManager(async () => children[index++]!);
+        const identity = { runId: "scout-1", runInstanceId: "instance-1" };
+
+        await manager.start("scout", "Investigate", context(), { background: true, identity });
+        await flushBackground();
+        const original = await manager.collect("scout-1");
+        expect(original.content).toBe("Original result");
+        expect(original.details.collectSequence).toBe(1);
+
+        const continuation = manager.startContinuation(
+            "scout",
+            "Investigate",
+            "Parent guidance:\nContinue",
+            context(),
+            { identity },
+        );
+        await vi.waitFor(() => expect(promptStarted).toBe(true));
+        manager.moveForegroundToBackground();
+        await continuation;
+        releasePrompt?.();
+        await vi.waitFor(() => expect(manager.status("scout-1").details.status).toBe("completed"));
+
+        // The continuation must not be served from the previous incarnation's cached result.
+        expect(manager.getCollectedOutcome("scout-1")).toBeUndefined();
+        const revised = await manager.collect("scout-1");
+        expect(revised.content).toBe("Revised result");
+        expect(revised.details.collectSequence).toBe(2);
+        expect(manager.getCollectedOutcome("scout-1")).toEqual(revised);
+    });
+
+    it("derives a collected sequence from the child transcript's parent prompts", async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-prompts-"));
+        tempDirs.push(directory);
+        const session = SessionManager.create(process.cwd(), directory);
+        session.appendMessage({ role: "user", content: "First task", timestamp: 1 });
+        session.appendMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "Working" }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage: usage(),
+            stopReason: "stop",
+            timestamp: 2,
+        });
+        session.appendMessage({ role: "user", content: "Guidance", timestamp: 3 });
+        const leaf = session.appendMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "Done" }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            usage: usage(),
+            stopReason: "stop",
+            timestamp: 4,
+        });
+        const manager = managerWith(
+            new FakeChild([{ output: "Done", leafId: leaf }], session.getSessionFile()),
+        );
+
+        await manager.start("scout", "Investigate", context(), { background: true });
+        await flushBackground();
+
+        const collected = await manager.collect("scout-1");
+
+        expect(collected.content).toBe("Done");
+        expect(collected.details.collectSequence).toBe(2);
     });
 
     it("assigns a durable human-readable title to each run", async () => {
@@ -989,6 +1083,7 @@ describe("AgentRunManager", () => {
         const collected = await manager.collect("scout-1");
         expect(collected.content).toBe("First result");
         expect(collected.usage).toMatchObject({ input: 10, output: 2 });
+        expect(collected.details.collectSequence).toBe(1);
         const collectedAgain = await manager.collect("scout-1");
         expect(collectedAgain).toEqual(collected);
         expect(manager.getCollectedOutcome("scout-1")).toEqual(collected);

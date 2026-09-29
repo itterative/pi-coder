@@ -121,6 +121,14 @@ export interface AgentRunDetails {
     /** Unwrapped action response retained for TUI rendering. */
     response?: string;
     output?: string;
+    /**
+     * Sequence number of this collected response for its logical run.
+     *
+     * Derived from the child transcript's parent-prompt count when one exists, so it stays stable
+     * across restarts; in-memory children fall back to a per-session counter. Names the scratchpad
+     * spill file `<runId>-<n>.out`.
+     */
+    collectSequence?: number;
     question?: ParentQuestion;
     recentActivity: string[];
     phase?: string;

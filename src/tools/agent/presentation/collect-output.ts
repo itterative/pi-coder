@@ -53,10 +53,11 @@ function completeLinePrefix(text: string, maxChars: number): string {
 /**
  * Bound a collected response and spill the full text into the parent scratchpad.
  *
- * The complete response is written to `<scratchpad>/agents/<runId>.out` so the parent can `read` it
- * on demand, while the parent context keeps only the complete lines that fit in the response
- * budget. The outcome is returned unchanged when the response already fits, when no scratchpad
- * exists, or when the spill cannot be written: truncation must never lose output.
+ * The complete response is written to `<scratchpad>/agents/<runId>-<collectSequence>.out` so the
+ * parent can `read` it on demand and a continuation's later result cannot overwrite an earlier one.
+ * The parent context keeps only the complete lines that fit in the response budget. The outcome is
+ * returned unchanged when the response already fits, when no scratchpad exists, or when the spill
+ * cannot be written: truncation must never lose output.
  */
 export async function constrainCollectedResponse(
     outcome: AgentRunOutcome,
@@ -67,10 +68,11 @@ export async function constrainCollectedResponse(
         return outcome;
     }
 
+    const sequence = outcome.details.collectSequence ?? 1;
     const filePath = path.join(
         scratchpadPath,
         COLLECTED_OUTPUT_DIRECTORY,
-        `${outcome.details.runId}.out`,
+        `${outcome.details.runId}-${sequence}.out`,
     );
     try {
         await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
