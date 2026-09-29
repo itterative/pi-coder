@@ -12,7 +12,9 @@ import {
 } from "./runs/manager";
 import { isAgentTerminalStatus, type AgentWorkspaceCheckpointCallback } from "./contracts/runs";
 import { diagnosticText } from "./presentation/text";
+import { constrainCollectedResponse } from "./presentation/collect-output";
 import { failedOutcome, listOutcome } from "./presentation/outcomes";
+import { getScratchpadPath } from "../../modules/scratchpad";
 import { unusedAgentContextWarning } from "./prompts/renderer";
 import { prepareIsolatedWorkspace, type WorkspaceReservation } from "./workspaces/setup";
 import { releaseAgentWorkspaceAfterNoChanges } from "./workspaces/results";
@@ -390,7 +392,8 @@ function parentActionDeps(scope: ActionScope): ParentActionDeps {
  * Collects a retained background result and its workspace changes.
  *
  * The result must be prepared before `collect` consumes it, and a no-change lease is only released
- * afterwards, so a rejected collect can be retried while its lease stays protected.
+ * afterwards, so a rejected collect can be retried while its lease stays protected. Oversized
+ * responses are truncated and spilled to the parent scratchpad by `constrainCollectedResponse`.
  */
 async function dispatchCollect(
     request: Extract<AgentRequest, { action: "collect" }>,
@@ -415,7 +418,7 @@ async function dispatchCollect(
         outcome.details.workspaceResult = workspaceResult;
     }
     lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
-    return outcome;
+    return constrainCollectedResponse(outcome, getScratchpadPath(ctx.sessionManager));
 }
 
 /**

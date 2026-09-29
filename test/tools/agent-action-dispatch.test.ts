@@ -1,4 +1,6 @@
 import path from "node:path";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -18,6 +20,8 @@ import type {
 } from "../../src/tools/agent/contracts/workspaces";
 import { ZERO_USAGE } from "../../src/tools/agent/runs/usage";
 import type { AgentResumeOptions } from "../../src/tools/agent/runs/manager";
+import { MAX_COLLECTED_RESPONSE_CHARS } from "../../src/tools/agent/presentation/collect-output";
+import * as scratchpad from "../../src/modules/scratchpad";
 import * as workspaceCheckpoints from "../../src/tools/agent/workspaces/checkpoints";
 import * as workspaceFinalization from "../../src/tools/agent/workspaces/finalization";
 import * as parentActions from "../../src/tools/agent/workspaces/parent-actions";
@@ -356,6 +360,91 @@ describe("agent action dispatch", () => {
             expect(h.manager.setWorkspaceResultId).toHaveBeenCalledWith("worker-1", result.id);
         },
     );
+
+    describe("collected response size cap", () => {
+        let scratchpadDir: string;
+
+        beforeEach(async () => {
+            scratchpadDir = await mkdtemp(path.join(os.tmpdir(), "pi-coder-collect-"));
+            vi.spyOn(scratchpad, "getScratchpadPath").mockReturnValue(scratchpadDir);
+        });
+
+        afterEach(async () => {
+            await rm(scratchpadDir, { recursive: true, force: true });
+        });
+
+        it("spills an oversized response to the parent scratchpad and notes the path", async () => {
+            const h = harness();
+            const line = `${"x".repeat(999)}\n`;
+            const kept = line.repeat(15);
+            const full = `${kept}${"y".repeat(1_500)}`;
+            h.pending.content = full;
+
+            const outcome = await h.execute({ action: "collect", runId: "worker-1" });
+
+            const filePath = path.join(scratchpadDir, "agents", "worker-1.out");
+            await expect(readFile(filePath, "utf8")).resolves.toBe(full);
+            const [body] = outcome.content.split("\n\n[Output truncated");
+            // Only complete lines are kept; the crossing line is left to the spill file.
+            expect(body).toBe(kept);
+            expect(outcome.content).toContain(
+                `[Output truncated: showing 15 lines out of 16. Full response saved to ${filePath}]`,
+            );
+        });
+
+        it("falls back to a character cut when one oversized line has no boundary", async () => {
+            const h = harness();
+            const full = "x".repeat(MAX_COLLECTED_RESPONSE_CHARS + 123);
+            h.pending.content = full;
+
+            const outcome = await h.execute({ action: "collect", runId: "worker-1" });
+
+            const filePath = path.join(scratchpadDir, "agents", "worker-1.out");
+            expect(outcome.content.startsWith(full.slice(0, MAX_COLLECTED_RESPONSE_CHARS))).toBe(
+                true,
+            );
+            expect(outcome.content).toContain(
+                `[Output truncated: showing part of its single line. Full response saved to ${filePath}]`,
+            );
+        });
+
+        it("returns a response that fits without writing a spill file", async () => {
+            const h = harness();
+            const content = "x".repeat(MAX_COLLECTED_RESPONSE_CHARS);
+            h.pending.content = content;
+
+            const outcome = await h.execute({ action: "collect", runId: "worker-1" });
+
+            expect(outcome.content).toBe(content);
+            await expect(
+                readFile(path.join(scratchpadDir, "agents", "worker-1.out"), "utf8"),
+            ).rejects.toThrow();
+        });
+
+        it("keeps the full response when no scratchpad is available", async () => {
+            vi.mocked(scratchpad.getScratchpadPath).mockReturnValue(undefined);
+            const h = harness();
+            const full = "x".repeat(MAX_COLLECTED_RESPONSE_CHARS + 1);
+            h.pending.content = full;
+
+            const outcome = await h.execute({ action: "collect", runId: "worker-1" });
+
+            expect(outcome.content).toBe(full);
+        });
+
+        it("keeps the full response when the spill cannot be written", async () => {
+            const blocker = path.join(scratchpadDir, "blocker");
+            await writeFile(blocker, "not a directory");
+            vi.mocked(scratchpad.getScratchpadPath).mockReturnValue(blocker);
+            const h = harness();
+            const full = "x".repeat(MAX_COLLECTED_RESPONSE_CHARS + 1);
+            h.pending.content = full;
+
+            const outcome = await h.execute({ action: "collect", runId: "worker-1" });
+
+            expect(outcome.content).toBe(full);
+        });
+    });
 
     it("releases the provisional lease when the workspace lease transfer fails", async () => {
         const h = harness();
