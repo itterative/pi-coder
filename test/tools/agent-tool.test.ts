@@ -1011,6 +1011,18 @@ describe("agent extension registration", () => {
         await expect(agentToolText(collected)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.background-collect.txt",
         );
+        const collectedAgain = await tool.execute(
+            "call-4",
+            { action: "collect", runId: "scout-1" },
+            undefined,
+            undefined,
+            ctx,
+        );
+        expect(agentToolText(collectedAgain)).toBe(agentToolText(collected));
+        expect(collectedAgain.details.response).toBe(collected.details.response);
+        await expect(agentToolText(collectedAgain)).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.background-collect.txt",
+        );
         const widgetLines = widgets.flatMap((lines) => lines ?? []).map((line) => line.trimEnd());
         await expect(widgetLines.join("\n")).toMatchFileSnapshot(
             "__snapshots__/agent-tool.tui.background-widget.txt",
@@ -1142,6 +1154,19 @@ describe("agent extension registration", () => {
         });
         expect(collected.details.workspaceResult).toEqual(result);
         await expect(agentToolText(collected)).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.agent.isolated-collect.txt",
+        );
+        const collectedAgain = await tool.execute(
+            "call-3",
+            { action: "collect", runId: "worker-1" },
+            undefined,
+            undefined,
+            ctx,
+        );
+        expect(collectedAgain.details.workspaceResult).toEqual(result);
+        // A repeated collect reuses the stored outcome and must not prepare another result.
+        expect(prepareResultSpy).toHaveBeenCalledOnce();
+        await expect(agentToolText(collectedAgain)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.isolated-collect.txt",
         );
         await handlers.session_shutdown[0]({}, ctx);

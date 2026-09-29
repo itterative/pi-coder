@@ -989,7 +989,10 @@ describe("AgentRunManager", () => {
         const collected = await manager.collect("scout-1");
         expect(collected.content).toBe("First result");
         expect(collected.usage).toMatchObject({ input: 10, output: 2 });
-        await expect(manager.collect("scout-1")).rejects.toThrow("Unknown or stale");
+        const collectedAgain = await manager.collect("scout-1");
+        expect(collectedAgain).toEqual(collected);
+        expect(manager.getCollectedOutcome("scout-1")).toEqual(collected);
+        expect(manager.listRuns().map((run) => run.runId)).toEqual(["scout-2"]);
 
         const status = manager.status("scout-2");
         expect(status.usage).toMatchObject({ input: 20, output: 4 });
@@ -1107,6 +1110,41 @@ describe("AgentRunManager", () => {
         expect(manager.listRuns().map((run) => run.runId)).toEqual(["scout-2", "scout-3"]);
         await expect(manager.collect("scout-1")).rejects.toThrow("Unknown or stale");
         expect(manager.activeCount).toBe(0);
+    });
+
+    it("evicts the oldest collected outcome once the reuse cache is full", async () => {
+        const children = [
+            new FakeChild([{ output: "First result" }]),
+            new FakeChild([{ output: "Second result" }]),
+        ];
+        let index = 0;
+        const manager = new AgentRunManager(async () => children[index++]!, 4, undefined, 1);
+
+        await manager.start("scout", "One", context(), { background: true });
+        await flushBackground();
+        await manager.collect("scout-1");
+
+        await manager.start("scout", "Two", context(), { background: true });
+        await flushBackground();
+        await manager.collect("scout-2");
+
+        expect(manager.getCollectedOutcome("scout-2")?.content).toBe("Second result");
+        expect(manager.getCollectedOutcome("scout-1")).toBeUndefined();
+        await expect(manager.collect("scout-1")).rejects.toThrow("Unknown or stale");
+    });
+
+    it("clears collected outcomes on shutdown", async () => {
+        const manager = managerWith(new FakeChild([{ output: "Result" }]));
+
+        await manager.start("scout", "One", context(), { background: true });
+        await flushBackground();
+        await manager.collect("scout-1");
+        expect(manager.getCollectedOutcome("scout-1")).toBeDefined();
+
+        await manager.shutdown();
+
+        expect(manager.getCollectedOutcome("scout-1")).toBeUndefined();
+        await expect(manager.collect("scout-1")).rejects.toThrow("Unknown or stale");
     });
 
     it("uses a fresh monotonic run ID after terminal cleanup", async () => {

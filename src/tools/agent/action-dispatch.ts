@@ -394,12 +394,20 @@ function parentActionDeps(scope: ActionScope): ParentActionDeps {
  * The result must be prepared before `collect` consumes it, and a no-change lease is only released
  * afterwards, so a rejected collect can be retried while its lease stays protected. Oversized
  * responses are truncated and spilled to the parent scratchpad by `constrainCollectedResponse`.
+ *
+ * A repeated collect returns the stored outcome for the run without re-preparing its workspace
+ * result or touching the lease again.
  */
 async function dispatchCollect(
     request: Extract<AgentRequest, { action: "collect" }>,
     scope: ActionScope,
 ): Promise<AgentRunOutcome> {
     const { ctx, lifecycle } = scope;
+    const collected = lifecycle.manager.getCollectedOutcome(request.runId);
+    if (collected) {
+        return constrainCollectedResponse(collected, getScratchpadPath(ctx.sessionManager));
+    }
+
     const pending = lifecycle.manager.status(request.runId);
     if (!isAgentTerminalStatus(pending.details.status)) {
         throw new AgentActionError(
@@ -418,6 +426,7 @@ async function dispatchCollect(
         outcome.details.workspaceResult = workspaceResult;
     }
     lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
+    lifecycle.manager.storeCollectedOutcome(request.runId, outcome);
     return constrainCollectedResponse(outcome, getScratchpadPath(ctx.sessionManager));
 }
 

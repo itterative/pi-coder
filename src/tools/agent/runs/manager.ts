@@ -144,6 +144,13 @@ export interface AgentResumeOptions {
  */
 export class AgentRunManager {
     private readonly registry = new AgentRunRegistry();
+    /**
+     * Collected outcomes kept addressable for repeated `collect` calls, oldest first.
+     *
+     * The run itself is removed by the first collect, so this is the only record of its result until
+     * the entry is evicted or the session shuts down.
+     */
+    private readonly collectedOutcomes = new Map<string, AgentRunOutcome>();
     private closing = false;
     private preservingShutdown = false;
     private readonly restoreAbortController = new AbortController();
@@ -879,12 +886,19 @@ export class AgentRunManager {
     }
 
     /**
-     * Return a retained terminal result and drop the run from memory.
+     * Return a retained terminal result, or a previously collected result again.
      *
      * Only terminal background runs are collectable: a still-active run has no complete result, and
-     * a foreground run already returned its outcome to the caller that started it.
+     * a foreground run already returned its outcome to the caller that started it. The first collect
+     * removes the run and stores its outcome for reuse; later calls return that stored outcome until
+     * the session ends or the retained-result budget evicts it.
      */
     async collect(runId: string): Promise<AgentRunOutcome> {
+        const cached = this.collectedOutcomes.get(runId);
+        if (cached) {
+            return copyCollectedOutcome(cached);
+        }
+
         const run = this.requireRun(runId);
         if (!run.background) {
             throw new AgentActionError(`Agent run ${runId} is not a background run.`);
@@ -905,7 +919,33 @@ export class AgentRunManager {
         );
         this.record(run, "result.collected");
         await this.removeRun(run, "collected");
+        this.storeCollectedOutcome(runId, outcome);
         return outcome;
+    }
+
+    /** Look up a collected outcome that has not yet been evicted. */
+    getCollectedOutcome(runId: string): AgentRunOutcome | undefined {
+        const outcome = this.collectedOutcomes.get(runId);
+        return outcome ? copyCollectedOutcome(outcome) : undefined;
+    }
+
+    /**
+     * Store the final parent-facing outcome of a collected run, refreshing its recency.
+     *
+     * The dispatcher calls this after linking a prepared workspace result, so a repeated collect
+     * returns the same enriched outcome without preparing the workspace again. Oldest entries are
+     * evicted once the collected cache exceeds the retained-result budget.
+     */
+    storeCollectedOutcome(runId: string, outcome: AgentRunOutcome): void {
+        this.collectedOutcomes.delete(runId);
+        this.collectedOutcomes.set(runId, copyCollectedOutcome(outcome));
+        while (this.collectedOutcomes.size > this.maxRetainedResults) {
+            const oldest = this.collectedOutcomes.keys().next().value;
+            if (oldest === undefined) {
+                return;
+            }
+            this.collectedOutcomes.delete(oldest);
+        }
     }
 
     /**
@@ -1237,6 +1277,8 @@ export class AgentRunManager {
         for (const run of runs) {
             await this.settleRunForShutdown(run);
         }
+        // Collected outcomes are session state: a restarted or switched session must not recall them.
+        this.collectedOutcomes.clear();
     }
 
     /** Record the shutdown request, mark each run, and abort the child work already reachable. */
@@ -2145,6 +2187,17 @@ export class AgentRunManager {
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Copy a collected outcome at the cache boundary.
+ *
+ * The parent tool layer rewrites `details` and `content` on the outcome it receives, so neither a
+ * stored response nor a handout may alias the other: without the copy, formatting one collected
+ * result would corrupt every later reuse of it.
+ */
+function copyCollectedOutcome(outcome: AgentRunOutcome): AgentRunOutcome {
+    return { ...outcome, details: { ...outcome.details } };
 }
 
 /**

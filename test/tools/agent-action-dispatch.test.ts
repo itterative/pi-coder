@@ -125,6 +125,8 @@ function harness(options: HarnessOptions = {}) {
         resume: vi.fn(async (_runId: string, _options?: AgentResumeOptions) => pending),
         cancel: vi.fn(async () => pending),
         collect: vi.fn(async () => pending),
+        getCollectedOutcome: vi.fn((): AgentRunOutcome | undefined => undefined),
+        storeCollectedOutcome: vi.fn(),
         setWorkspaceResultId: vi.fn(async () => {}),
         reserveRunIdentity: vi.fn(() => ({
             runId: "worker-1",
@@ -444,6 +446,38 @@ describe("agent action dispatch", () => {
 
             expect(outcome.content).toBe(full);
         });
+    });
+
+    it("stores a collected outcome so a repeated collect can reuse it", async () => {
+        const h = harness();
+        const prepared = workspaceResult();
+        vi.spyOn(workspaceFinalization, "prepareCollectedWorkspaceResult").mockResolvedValue(
+            prepared,
+        );
+
+        const outcome = await h.execute({ action: "collect", runId: "worker-1" });
+
+        expect(outcome.details.workspaceResult).toBe(prepared);
+        expect(h.manager.storeCollectedOutcome).toHaveBeenCalledWith("worker-1", outcome);
+    });
+
+    it("returns a stored outcome without collecting or preparing the workspace again", async () => {
+        const h = harness();
+        const stored: AgentRunOutcome = {
+            ...h.pending,
+            content: "Stored result",
+            details: { ...h.pending.details, workspaceResult: workspaceResult() },
+        };
+        vi.mocked(h.manager.getCollectedOutcome).mockReturnValue(stored);
+
+        const outcome = await h.execute({ action: "collect", runId: "worker-1" });
+
+        expect(outcome.content).toBe("Stored result");
+        expect(outcome.details.workspaceResult).toBe(stored.details.workspaceResult);
+        expect(h.manager.status).not.toHaveBeenCalled();
+        expect(h.manager.collect).not.toHaveBeenCalled();
+        expect(h.manager.storeCollectedOutcome).not.toHaveBeenCalled();
+        expect(workspaceFinalization.prepareCollectedWorkspaceResult).not.toHaveBeenCalled();
     });
 
     it("releases the provisional lease when the workspace lease transfer fails", async () => {
