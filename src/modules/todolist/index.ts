@@ -172,8 +172,12 @@ function applyTodoEdits(content: string, edits: TodoEdit[], filePath: string): s
 }
 
 function validationFailure(error: unknown): ToolCallEventResult {
-    const reason = error instanceof Error ? error.message : String(error);
-    return { block: true, reason };
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    return {
+        block: true,
+        reason: `TODO was restored to previous version.\nError: ${errorMessage}`,
+    };
 }
 
 async function initializeTodoFile(ctx: ExtensionContext): Promise<void> {
