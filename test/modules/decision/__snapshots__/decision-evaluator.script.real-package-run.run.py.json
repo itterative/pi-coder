@@ -1,0 +1,21 @@
+{
+  "state": {
+    "code": "print(\"hello from run.py\")\n"
+  },
+  "questions": {
+    "script": {
+      "type": "choice",
+      "instructions": "What can the code below do when it runs? Choose the single most consequential capability, or `read_only`.",
+      "criteria": {
+        "read_only": "Reads files or computes; no side effects on the machine",
+        "writes_files": "Creates, edits, or deletes files in the working tree",
+        "writes_outside": "Changes files outside the working tree or system state",
+        "privileged": "Uses root privileges or changes system services",
+        "network": "Sends or receives data over the network",
+        "remote_code": "Downloads and executes code from outside this repository",
+        "destructive": "Irreversibly destroys data that cannot be recovered",
+        "process_control": "Signals or kills processes, or manages services"
+      }
+    }
+  }
+}

@@ -25,6 +25,8 @@ keep_updated: true
 | a dialog factory and its options, typed | `pi-stub.ts` → `StubComponentFactory`, `StubDialogOptions` | `custom(factory: any, options: any)` |
 | pi's tool-render context (unexported, unused here) | `pi-stub.ts` → `noRenderContext` | `renderText(tool.renderCall(...) as any, w)` |
 | a two-member event bus that records emits | annotate `const events: EventBus = { emit, on }` | `} as any` around a mini bus |
+| a decision classifier registry, model, or criterion answer | `test/modules/decision/classifier.ts` → `classifier(provider, id)`, `criterionResult(model, reason, confidence)`, `selectionRegistry(models)` (resolves models, throws on `classify`), `answeringRegistry(models, behavior)`, `classifierModelRegistry(registry)` (the single cast to pi's `ModelRegistry`) | a local `ClassifierModel` literal, or a hand-built `getModelOfType`/`classify` object |
+| the request contexts the decision snapshots pin | `test/modules/decision/fixtures.ts` → `FIXTURES`, `packageDeploy`, `parentRewrite`, `indentedJson` | a local `DecisionContext` literal duplicated across snapshot suites |
 | a child extension wired the way production wires it | `test/tools/child-run-fixture.ts` → `buildChildRun`, `probeDefinition` | hand-built grant or option bag |
 | a compaction event, summarized span, or provider summary response | `test/helpers/compaction-doubles.ts` → `compactEvent`, `compactionPreparation`, `userMessage`/`assistantMessage`/`toolResultMessage`/`bashExecutionMessage`/`customMessage`/`compactionSummaryMessage`, `messageChain`, `fileOperations`, `summaryResponse`, `toolCallResponse` | hand-built `AgentMessage` literals, or a `SessionManager` transcript you then have to parse |
 | a **session entry** of a type that is not a message | `compaction-doubles.ts` → `messageEntry`, `compactionMarker`, `modelChangeMarker`, `customMessageEntry`, `customEntry` | a `{ type: "custom_message", ... } as SessionEntry` literal |
@@ -36,7 +38,7 @@ keep_updated: true
 
 ## `createPiStub` surface
 
-`createPiStub({ eventBus?: EventBus | null })` records the seven `pi` members production calls (`on`, `registerTool`, `registerCommand`, `registerShortcut`, `appendEntry`, `sendMessage`, `events`) and exposes:
+`createPiStub({ eventBus?: EventBus | null })` records the eight `pi` members production calls (`on`, `registerTool`, `registerCommand`, `registerShortcut`, `registerProvider`, `appendEntry`, `sendMessage`, `events`) and exposes:
 
 - `pi` — typed `ExtensionAPI`, one boundary cast inside the helper rather than one per suite.
 - `toolSurface` — `{ active: string[]; all: StubToolInfo[] }`, what `pi.getActiveTools()` and `pi.getAllTools()`
@@ -47,11 +49,12 @@ keep_updated: true
   (default `"medium"`). Assign `level` to set the session's thinking level; `unsupported = true` makes the getter
   **throw**, which is how a suite reaches a caller that guards the read - an absent accessor on an older pi build
   arrives as a `TypeError`, so one guard shape covers both.
-- `order` — **cross-member** registration log: `on:<event>`, `tool:<name>`, `command:<name>`, `shortcut:<key>`. Separate recorders cannot express interleaving, and handler registration order *is* permission precedence in `child/gates/`.
+- `order` — **cross-member** registration log: `on:<event>`, `tool:<name>`, `command:<name>`, `shortcut:<key>`, `provider:<id>`. Separate recorders cannot express interleaving, and handler registration order *is* permission precedence in `child/gates/`.
 - `handlersFor(event)`, `requireHandler(event, index?)` — handlers in registration order; the `require` form fails naming the event and listing what was registered.
 - `requireTool<Details>(name)`, `tools` — `Details` re-materializes the result generic pi erases from `ToolDefinition.execute`, so a suite does not cast every call. The `tools` array itself stays heterogeneous, so that generic is asserted once inside `requireTool`.
 - There is no `stub.events` field; read `stub.pi.events`. A second handle on the same object is what we removed elsewhere.
 - `requireCommand(name)` (returns the recorded options), `commands`, `shortcuts`, `entries`, `sentMessages: Array<{ message; options }>` holding pi's own argument pair, so `display` and `details` survive.
+- `providers` — `pi.registerProvider(id, config)` calls, keyed by id, with the config exactly as registered. The decision module's classifier provider is the only caller so far, and a suite asserts the registered model shape without reaching into pi.
 - `handlerView(stub, ...events)` and `invoke(handler, event, ctx)` — see the snapshot rule below.
 
 `stubCommandContext(overrides?)` covers the other half: `ExtensionCommandContext` extends `ExtensionContext` with seven session actions (`getSystemPromptOptions`, `waitForIdle`, `newSession`, `fork`, `navigateTree`, `switchSession`, `reload`) that a command-handler suite never exercises. Each **throws** `stubCommandContext does not model X()` — inventing a return value would let a test pass on a fabricated answer, and unlike rule 1 these members are required, so absence is not an option. Overrides apply after the base context, so a suite that does exercise one supplies it.

@@ -1,0 +1,25 @@
+╭──────────────────────────────────────────────────────────────────────╮
+│   Decision model                                                     │
+│                                                                      │
+│   Optional classifier for unresolved commands.                       │
+│                                                                      │
+│   → [x] Enabled                                                      │
+│         Consult the classifier for unresolved commands.              │
+│                                                                      │
+│     [x] Apply verdicts                                               │
+│         A confident verdict resolves the prompt.                     │
+│                                                                      │
+│     Decision model: custom endpoint · vllm-d3-flash                  │
+│     Pick a provider classifier or the custom endpoint.               │
+│                                                                      │
+│     Endpoint URL: http://127.0.0.1:8000/v1                           │
+│     System One base URL, e.g. http://127.0.0.1:8000/v1.              │
+│                                                                      │
+│     API key: set                                                     │
+│     Stored in the global config, not the repository.                 │
+│                                                                      │
+│     Model id: vllm-d3-flash                                          │
+│     Model name sent to the endpoint.                                 │
+│                                                                      │
+│     ↑/↓ navigate · Enter toggle or edit · Esc close                  │
+╰──────────────────────────────────────────────────────────────────────╯

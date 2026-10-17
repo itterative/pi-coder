@@ -1,4 +1,5 @@
 export { BashAst, BashCommand, BashStatement, parseBashAst } from "./bash";
+export { unwrapWrapperCommand } from "./command-wrappers";
 export type {
     BashAstNode,
     BashChainOperator,

@@ -24,6 +24,7 @@ import {
 } from "./presentation/sessions";
 import { confirm } from "../../tui/confirmation";
 import { numericInput, parsePositiveInteger } from "../../tui/numeric-input";
+import { decisionModelSetting, openDecisionModelSettings } from "../decision-settings";
 import {
     showAgentSessionBrowser,
     type AgentModelOption,
@@ -124,6 +125,7 @@ function buildSettings(cwd: string): AgentSetting[] {
                 "Allow the parent agent to consult the read-only senior advisor. Configure its model separately below.",
             enabled: isAdvisorEnabled(config),
         },
+        decisionModelSetting(cwd),
         ...BUILTIN_AGENT_NAMES.map((id) => ({
             id,
             label: settingLabel(id),
@@ -397,6 +399,10 @@ export function registerAgentBrowser(pi: ExtensionAPI, lifecycle: AgentLifecycle
                     ),
                 onMaxWorkspacesChange: (value) => {
                     agentConfig.setMaxWorkspacesPerRepo(value, ctx.cwd);
+                },
+                onDecisionModelOpen: async () => {
+                    await openDecisionModelSettings(pi, ctx);
+                    return buildSettings(ctx.cwd);
                 },
                 onToggleChange: (setting, enabled) => {
                     if (setting === "advisorEnabled") {

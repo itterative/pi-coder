@@ -15,6 +15,10 @@ import { matchesKey } from "@earendil-works/pi-tui";
 import { lookpath } from "lookpath";
 
 import sandboxConfig from "../../../common/config";
+import decisionConfig from "../../../modules/decision/config";
+import { decisionEnabled } from "../../../modules/decision/gate";
+import { decisionRunnerForAgent } from "../../../modules/decision/runner-rules";
+import { consultForGate } from "../../decision-model";
 import { scratchpadRoots } from "./roots";
 import { CHILD_CONFINEMENT } from "./policy";
 import { PERMISSION_PROMPT_CONFIRMATION_DELAY_MS } from "../../../common/constants";
@@ -37,7 +41,11 @@ import {
     unresolvedPermissionDetails,
     type ResolvePermissionDetails,
 } from "../../../modules/sandbox/resolve";
-import { logBashDecision, type BashDecisionInput } from "../../../modules/sandbox/decision-log";
+import {
+    logBashDecision,
+    type BashClassifierRecord,
+    type BashDecisionInput,
+} from "../../../modules/sandbox/decision-log";
 import { selectWithMessage, type SelectMessageItem } from "../../../tui/select-with-message";
 import { isFileAccessApproved } from "../../file-permissions";
 
@@ -430,6 +438,7 @@ export function registerCommandPermissionHooks(
             sandboxed: boolean,
             blocked: boolean,
             prompt?: BashDecisionInput["prompt"],
+            classifier?: BashClassifierRecord,
         ) => {
             const note = userNote(event.input as Record<string, unknown>);
             logBashDecision({
@@ -439,6 +448,7 @@ export function registerCommandPermissionHooks(
                 command: requestedCommand,
                 details,
                 ...(prompt === undefined ? {} : { prompt }),
+                ...(classifier === undefined ? {} : { classifier }),
                 decision,
                 sandboxed,
                 blocked,
@@ -494,7 +504,38 @@ export function registerCommandPermissionHooks(
                 reason: "Agent bash requires sandboxing, but bubblewrap is unavailable.",
             };
         }
-        const needsPrompt = permission === "ask";
+        const sandboxAvailable = sandboxEnabled && bwrap.length > 0;
+        let needsPrompt = permission === "ask";
+        let classifier: BashClassifierRecord | undefined;
+
+        // The model is asked about exactly the commands nothing else resolved, and only when the child
+        // surface is in `surfaces`. With `apply` off its verdict is recorded and the prompt still happens.
+        if (needsPrompt) {
+            const config = decisionConfig.load(ctx.cwd);
+
+            if (decisionEnabled(config, "child")) {
+                const consulted = await consultForGate({
+                    ctx,
+                    config,
+                    command: requestedCommand,
+                    sandboxAvailable,
+                    runner: decisionRunnerForAgent(options.agentName),
+                    isolation: options.isolated ? "worktree" : "checkout",
+                    // The registry is pi's process-wide one, and the parent is where the provider was registered.
+                    registry: options.parentContext.modelRegistry,
+                    label: `${options.agentName}'s command`,
+                    notify: (message, level) => options.parentContext.ui.notify(message, level),
+                });
+                classifier = consulted.record;
+
+                if (consulted.permission !== undefined) {
+                    permission = consulted.permission;
+                    sandboxedMode.value = permission === "allow:sandbox";
+                    needsPrompt = false;
+                }
+            }
+        }
+
         const canToggle = needsPrompt && sandboxEnabled && bwrap.length > 0;
         let result: {
             allowed: boolean;
@@ -522,7 +563,13 @@ export function registerCommandPermissionHooks(
             throw error;
         }
         if (result.message) (event.input as Record<string, unknown>)._userMessage = result.message;
-        logDecision(result.permission, sandboxedMode.value, !result.allowed, result.prompt);
+        logDecision(
+            result.permission,
+            sandboxedMode.value,
+            !result.allowed,
+            result.prompt,
+            classifier,
+        );
         if (!result.allowed) {
             release();
             return {

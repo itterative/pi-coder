@@ -7,6 +7,7 @@ import {
     type ExtensionCommandContext,
     type ExtensionContext,
     type ExtensionUIContext,
+    type ProviderConfig,
     type ToolDefinition,
     type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
@@ -142,6 +143,10 @@ export interface PiStub {
     readonly entries: Array<{ customType: string; data: unknown }>;
     /** One entry per call, holding pi's own argument pair rather than a narrowed projection. */
     readonly sentMessages: Array<{ message: SentMessage; options: unknown }>;
+    /** Provider registrations, `registerProvider`'s argument pair. */
+    readonly providers: Array<{ id: string; config: ProviderConfig }>;
+    /** Provider ids passed to `unregisterProvider`, in call order. */
+    readonly unregisteredProviders: string[];
     /**
      * The read-only tool surface `pi.getActiveTools()` and `pi.getAllTools()` answer from. Assign before
      * invoking a handler: `stub.toolSurface.active = ["bash", "read"]`, and the order is meaningful — a
@@ -179,6 +184,8 @@ export function createPiStub(options: { eventBus?: EventBus | null } = {}): PiSt
     const shortcuts: Array<{ key: ShortcutKey; options: ShortcutOptions }> = [];
     const entries: Array<{ customType: string; data: unknown }> = [];
     const sentMessages: Array<{ message: SentMessage; options: unknown }> = [];
+    const providers: Array<{ id: string; config: ProviderConfig }> = [];
+    const unregisteredProviders: string[] = [];
     const handlers = new Map<string, StubHandler[]>();
     const toolSurface: { active: string[]; all: StubToolInfo[] } = { active: [], all: [] };
     const thinkingSurface: { level: string; unsupported: boolean } = {
@@ -211,6 +218,14 @@ export function createPiStub(options: { eventBus?: EventBus | null } = {}): PiSt
                 order.push(`shortcut:${key}`);
                 shortcuts.push({ key, options: shortcutOptions });
             },
+            registerProvider(id: string, config: ProviderConfig) {
+                order.push(`provider:${id}`);
+                providers.push({ id, config });
+            },
+            unregisterProvider(id: string) {
+                order.push(`unregister:${id}`);
+                unregisteredProviders.push(id);
+            },
             appendEntry(customType: string, data?: unknown) {
                 entries.push({ customType, data });
             },
@@ -232,6 +247,8 @@ export function createPiStub(options: { eventBus?: EventBus | null } = {}): PiSt
         shortcuts,
         entries,
         sentMessages,
+        providers,
+        unregisteredProviders,
         toolSurface,
         thinkingSurface,
         handlersFor(event: string): StubHandler[] {
@@ -418,7 +435,18 @@ export interface StubDialog {
  * assert how many dialogs opened and drive them. Three suites had a private copy of this, including the
  * `focused = true` assignment the components require before they accept input.
  */
-export function stubUiWithDialogs(theme: ExtensionUIContext["theme"]): {
+export function stubClassifierRegistry(
+    models: readonly unknown[] = [],
+): ExtensionContext["modelRegistry"] {
+    return {
+        getAvailableOfType: async () => models,
+    } as unknown as ExtensionContext["modelRegistry"];
+}
+
+export function stubUiWithDialogs(
+    theme: ExtensionUIContext["theme"],
+    tui?: unknown,
+): {
     ui: ExtensionUIContext;
     dialogs: StubDialog[];
 } {
@@ -428,7 +456,7 @@ export function stubUiWithDialogs(theme: ExtensionUIContext["theme"]): {
         setWorkingVisible() {},
         custom(factory) {
             return new Promise<unknown>((resolve) => {
-                const component = factory(undefined, theme, undefined, resolve) as StubDialog;
+                const component = factory(tui as never, theme, undefined, resolve) as StubDialog;
                 component.focused = true;
                 dialogs.push(component);
             });

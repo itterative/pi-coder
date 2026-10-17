@@ -139,6 +139,7 @@ export function asWorkspaceListItems(
 }
 
 function settingListLabel(setting: AgentSetting): string {
+    if (setting.status !== undefined) return `${setting.label} · ${setting.status}`;
     if (setting.value !== undefined) return `${setting.label}: ${setting.value}`;
     if (setting.enabled === undefined)
         return `${setting.label}: ${setting.model ?? "Parent model"}`;

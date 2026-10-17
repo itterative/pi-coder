@@ -1,0 +1,16 @@
+╭──────────────────────────────────────────────────────────────────────╮
+│   Decision model                                                     │
+│                                                                      │
+│   Optional classifier for unresolved commands.                       │
+│                                                                      │
+│   → [ ] Enabled                                                      │
+│         Consult the classifier for unresolved commands.              │
+│                                                                      │
+│     [ ] Apply verdicts                                               │
+│         Dry run: verdicts are recorded, not applied.                 │
+│                                                                      │
+│     Decision model: not configured                                   │
+│     Pick a provider classifier or the custom endpoint.               │
+│                                                                      │
+│     ↑/↓ navigate · Enter toggle or edit · Esc close                  │
+╰──────────────────────────────────────────────────────────────────────╯

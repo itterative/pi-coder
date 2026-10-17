@@ -25,10 +25,14 @@ import {
 } from "../../modules/sandbox/resolve";
 import {
     logBashDecision,
+    type BashClassifierRecord,
     type BashDecisionInput,
     type PromptOutcome,
 } from "../../modules/sandbox/decision-log";
 import { suggestRule } from "../../modules/sandbox/suggestions";
+import decisionConfig from "../../modules/decision/config";
+import { decisionEnabled } from "../../modules/decision";
+import { consultForGate } from "../decision-model";
 import { selectWithMessage, type SelectMessageItem } from "../../tui/select-with-message";
 import {
     createPermissionState,
@@ -317,21 +321,34 @@ Pay attention to these notes as they provide context about the user's preference
             ctx.ui.notify(`pi-bash-sandbox: ${e}`, "warning");
         }
 
-        if (permission === "ask") {
-            const answered = await promptForPermission({
-                command: event.input.command,
-                unresolved,
-                permissionState,
-                sandboxEnabled,
-                ctx,
-                events: pi.events,
-            });
-            permission = answered.permission;
-            prompt = answered.prompt;
+        let classifier: BashClassifierRecord | undefined;
 
-            // Attach message to input for retrieval in tool_result
-            if (answered.note) {
-                (event.input as Record<string, unknown>)._userMessage = answered.note;
+        if (permission === "ask") {
+            const consulted = await consultForPrompt({
+                ctx,
+                command: event.input.command,
+                sandboxEnabled,
+            });
+            classifier = consulted.record;
+
+            if (consulted.permission === undefined) {
+                const answered = await promptForPermission({
+                    command: event.input.command,
+                    unresolved,
+                    permissionState,
+                    sandboxEnabled,
+                    ctx,
+                    events: pi.events,
+                });
+                permission = answered.permission;
+                prompt = answered.prompt;
+
+                // Attach message to input for retrieval in tool_result
+                if (answered.note) {
+                    (event.input as Record<string, unknown>)._userMessage = answered.note;
+                }
+            } else {
+                permission = consulted.permission;
             }
         }
 
@@ -392,6 +409,7 @@ Pay attention to these notes as they provide context about the user's preference
             decision: permission,
             sandboxed,
             blocked,
+            ...(classifier === undefined ? {} : { classifier }),
             ...(decisionNote === undefined ? {} : { note: decisionNote }),
         });
 
@@ -444,5 +462,37 @@ Pay attention to these notes as they provide context about the user's preference
         return {
             content: [{ type: "text", text: note }, ...event.content],
         };
+    });
+}
+
+interface ConsultedDecision {
+    permission?: Permission;
+    record?: BashClassifierRecord;
+}
+/**
+ * Ask the decision model about one unresolved command.
+ *
+ * Dry run by default: the verdict is recorded and the human is still asked. `apply` in the decision config is
+ * what lets a verdict answer the prompt instead; a `refuse` never does.
+ */
+async function consultForPrompt(options: {
+    ctx: ExtensionContext;
+    command: string;
+    sandboxEnabled: boolean;
+}): Promise<ConsultedDecision> {
+    // Read per prompt, from the session's directory rather than the process's: a project overlay belongs to
+    // the project the command runs in, and this also makes an edited file take effect without a reload.
+    const config = decisionConfig.load(options.ctx.cwd ?? process.cwd());
+    if (!decisionEnabled(config, "parent")) {
+        return {};
+    }
+
+    return consultForGate({
+        ctx: options.ctx,
+        config,
+        command: options.command,
+        sandboxAvailable: options.sandboxEnabled,
+        label: "this command",
+        notify: (message, level) => options.ctx.ui.notify(message, level),
     });
 }

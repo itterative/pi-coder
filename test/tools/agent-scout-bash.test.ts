@@ -3,10 +3,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+
+import type { ClassifierContext, ClassifierResult } from "@earendil-works/pi-ai";
+import { SessionManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
 import { resolveChildGrant } from "../../src/tools/agent/child/grant";
+import decisionConfig from "../../src/modules/decision/config";
+import { resetDecisionEvaluator } from "../../src/modules/decision/gate";
+import { DECISION_PROVIDER_ID } from "../../src/modules/decision/provider";
 import type { BashDecisionRecord } from "../../src/modules/sandbox/decision-log";
 import type { ChildAgentFactoryContext } from "../../src/tools/agent/contracts/runs";
 import type { AgentDefinition } from "../../src/tools/agent/definitions/types";
@@ -21,14 +27,28 @@ import {
     type SessionManagerLike,
     type StubHandler,
 } from "../helpers/pi-stub";
+import {
+    answeringRegistry,
+    classifier,
+    classifierModelRegistry,
+    criterionResult,
+    type Classifier,
+} from "../modules/decision/classifier";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+    decisionConfig.reset();
+    resetDecisionEvaluator();
     vi.unstubAllEnvs();
     for (const directory of tempDirs.splice(0)) {
         fs.rmSync(directory, { recursive: true, force: true });
     }
+});
+
+beforeEach(() => {
+    decisionConfig.reset();
+    resetDecisionEvaluator();
 });
 
 /** Records appended by the development decision log. */
@@ -55,6 +75,8 @@ function setup(
         sessionManager = stubSessionManager(),
         additionalPaths = [],
         safeBashCommands = [],
+        modelRegistry,
+        agentName = "scout",
     }: {
         safeBash?: boolean;
         commandRunner?: boolean;
@@ -64,6 +86,8 @@ function setup(
         sessionManager?: SessionManagerLike;
         additionalPaths?: string[];
         safeBashCommands?: string[];
+        modelRegistry?: ExtensionContext["modelRegistry"];
+        agentName?: string;
     } = {},
 ) {
     const stub = createPiStub();
@@ -78,13 +102,14 @@ function setup(
         hasUI: commandRunner,
         mode: commandRunner ? "tui" : "print",
         ...(commandRunner ? { ui } : {}),
+        ...(modelRegistry === undefined ? {} : { modelRegistry }),
     });
 
     // Grant resolution is the production path, so the knobs above become a definition plus a run
     // mode rather than a hand-assembled option bag. That keeps the assertions about what a given
     // capability set may do honest: they now exercise the resolution itself.
     const definition: AgentDefinition = {
-        name: "scout",
+        name: agentName,
         description: "Read-only reconnaissance",
         capabilities: commandRunner ? ["command-runner"] : safeBash ? ["safe-bash"] : [],
         systemPrompt: "",
@@ -117,6 +142,243 @@ function setup(
 
     return { handlers, ctx: { cwd, sessionManager }, tools: stub.tools, dialogs, sessionManager };
 }
+
+const DECISION_MODEL_ID = "test-classifier";
+const DECISION_MODEL = classifier(DECISION_PROVIDER_ID, DECISION_MODEL_ID);
+
+function decisionSection(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+        enabled: true,
+        provider: DECISION_PROVIDER_ID,
+        model: DECISION_MODEL_ID,
+        ...overrides,
+    };
+}
+
+/**
+ * Put a decision config in the child's working directory and enable the decision log at a temporary path.
+ *
+ * The project walk-up must be stubbed non-blank: `test/setup.ts` pins `DECISION_MODEL_CONFIG_PATH` to `""`,
+ * which means "no project file at all", so the temp workspace's file would never be found otherwise.
+ */
+function writeDecisionConfig(cwd: string, section: Record<string, unknown>): string {
+    const configDirectory = path.join(cwd, ".pi");
+    fs.mkdirSync(configDirectory, { recursive: true });
+    fs.writeFileSync(
+        path.join(configDirectory, "decision-model-config.json"),
+        JSON.stringify({ decisionModel: section }),
+    );
+
+    const logPath = path.join(cwd, "decisions.jsonl");
+    vi.stubEnv("DECISION_MODEL_CONFIG_PATH", path.join(cwd, "unused-fallback.json"));
+    vi.stubEnv("SANDBOX_DECISION_LOG", "1");
+    vi.stubEnv("SANDBOX_DECISION_LOG_PATH", logPath);
+    return logPath;
+}
+
+/** The child's own session: one user turn, so the classifier state carries it as the delegated task. */
+function sessionWithTask(cwd: string, task: string): SessionManager {
+    const sessions = path.join(cwd, "sessions");
+    fs.mkdirSync(sessions, { recursive: true });
+    const session = SessionManager.create(cwd, sessions);
+    session.appendMessage({ role: "user", content: task, timestamp: 1 });
+    return session;
+}
+
+interface ChildDecisionRun {
+    result: unknown;
+    classify: Mock<(model: Classifier, context: ClassifierContext) => Promise<ClassifierResult>>;
+    state: ClassifierContext["state"] | undefined;
+    records: BashDecisionRecord[];
+    dialogs: ReturnType<typeof stubUiWithDialogs>["dialogs"];
+}
+
+/**
+ * Drive one unresolved child command through the command gate with the model configured in the temp workspace.
+ *
+ * `answerPrompt` answers the dialog a prompt path opens; a case that expects no prompt leaves it false, so an
+ * unexpected dialog leaves `pending` unsettled and fails the test rather than passing silently.
+ */
+async function runChildDecision(options: {
+    section: Record<string, unknown>;
+    criterion?: string;
+    confidence?: number;
+    answerPrompt?: boolean;
+    agentName?: string;
+    isolated?: boolean;
+}): Promise<ChildDecisionRun> {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-"));
+    tempDirs.push(cwd);
+    const logPath = writeDecisionConfig(cwd, options.section);
+    const sessionManager = sessionWithTask(cwd, "run the delegated tests");
+
+    const classify = vi.fn(async (model: Classifier, _context: ClassifierContext) =>
+        criterionResult(model, options.criterion ?? "none", options.confidence ?? 1),
+    );
+    const runtime = setup(cwd, {
+        commandRunner: true,
+        background: false,
+        sessionManager,
+        modelRegistry: classifierModelRegistry(answeringRegistry([DECISION_MODEL], classify)),
+        ...(options.agentName === undefined ? {} : { agentName: options.agentName }),
+        ...(options.isolated === undefined ? {} : { isolated: options.isolated }),
+    });
+
+    const pending = runtime.handlers.tool_call[0]!(
+        {
+            toolName: "bash",
+            toolCallId: "bash-decision-1",
+            input: { command: "npm run test:run" },
+        },
+        runtime.ctx,
+    );
+
+    if (options.answerPrompt === true) {
+        await vi.waitFor(() => expect(runtime.dialogs).toHaveLength(1));
+        await new Promise((resolve) => setTimeout(resolve, 260));
+        runtime.dialogs[0].handleInput(KEY.enter);
+    }
+
+    const result = await pending;
+
+    return {
+        result,
+        classify,
+        state: classify.mock.calls[0]?.[1]?.state,
+        records: readDecisionLog(logPath),
+        dialogs: runtime.dialogs,
+    };
+}
+
+describe("child decision-model wiring", () => {
+    it("does not consult when only the parent surface is enabled", async () => {
+        const run = await runChildDecision({
+            section: decisionSection({ surfaces: ["parent"] }),
+            criterion: "privileged",
+            answerPrompt: true,
+        });
+
+        expect(run.classify).not.toHaveBeenCalled();
+        expect(run.dialogs).toHaveLength(1);
+        expect(run.result).toEqual({ block: false });
+
+        const [record] = run.records;
+        expect(record?.classifier).toBeUndefined();
+        expect(record?.prompt).toBeDefined();
+    });
+
+    it("records a dry-run verdict but still prompts when apply is off", async () => {
+        const run = await runChildDecision({
+            section: decisionSection({ apply: false, surfaces: ["parent", "child"] }),
+            criterion: "privileged",
+            confidence: 0.9,
+            answerPrompt: true,
+        });
+
+        expect(run.classify).toHaveBeenCalledTimes(1);
+        expect(run.dialogs).toHaveLength(1);
+
+        const [record] = run.records;
+        expect(record?.classifier).toMatchObject({
+            criterion: "privileged",
+            action: "sandbox",
+            outcome: "sandbox",
+            status: "applied",
+            applied: false,
+        });
+        expect(record?.prompt).toBeDefined();
+    });
+
+    it("applies a sandbox verdict without a prompt when apply is on", async () => {
+        const run = await runChildDecision({
+            section: decisionSection({ apply: true, surfaces: ["parent", "child"] }),
+            criterion: "privileged",
+            confidence: 0.9,
+        });
+
+        expect(run.classify).toHaveBeenCalledTimes(1);
+        expect(run.dialogs).toHaveLength(0);
+        expect(run.result).toEqual({ block: false });
+
+        const [record] = run.records;
+        expect(record?.classifier).toMatchObject({ applied: true, outcome: "sandbox" });
+        expect(record?.decision).toBe("allow:sandbox");
+        expect(record?.sandboxed).toBe(true);
+        expect(record?.prompt).toBeUndefined();
+    });
+
+    it("keeps a destructive verdict behind the prompt when apply is on", async () => {
+        const run = await runChildDecision({
+            section: decisionSection({ apply: true, surfaces: ["parent", "child"] }),
+            criterion: "destructive",
+            confidence: 0.9,
+            answerPrompt: true,
+        });
+
+        expect(run.classify).toHaveBeenCalledTimes(1);
+        expect(run.dialogs).toHaveLength(1);
+        expect(run.result).toEqual({ block: false });
+
+        const [record] = run.records;
+        expect(record?.classifier).toMatchObject({
+            criterion: "destructive",
+            action: "refuse",
+            outcome: "abstain",
+            applied: false,
+            reason: "refuse requires confirmation",
+        });
+        expect(record?.prompt).toBeDefined();
+    });
+
+    it("runs a confident none unsandboxed with no prompt", async () => {
+        const run = await runChildDecision({
+            section: decisionSection({ apply: true, surfaces: ["parent", "child"] }),
+            criterion: "none",
+            confidence: 0.9,
+        });
+
+        expect(run.classify).toHaveBeenCalledTimes(1);
+        expect(run.dialogs).toHaveLength(0);
+        expect(run.result).toEqual({ block: false });
+
+        const [record] = run.records;
+        expect(record?.classifier).toMatchObject({ applied: true, outcome: "host" });
+        expect(record?.decision).toBe("allow");
+        expect(record?.sandboxed).toBe(false);
+    });
+
+    it("sends the scout's read-only runner rules in the classifier state", async () => {
+        const run = await runChildDecision({
+            section: decisionSection({ apply: true, surfaces: ["parent", "child"] }),
+            criterion: "none",
+            confidence: 0.9,
+        });
+
+        expect(run.state).toMatchObject({
+            runner_rules: expect.arrayContaining([
+                "Runs as a delegated read-only child.",
+                "DON'T: create, change, or delete files.",
+            ]),
+        });
+    });
+
+    it("sends an isolated worker's mutate-in-worktree rules in the classifier state", async () => {
+        const run = await runChildDecision({
+            section: decisionSection({ apply: true, surfaces: ["parent", "child"] }),
+            criterion: "none",
+            confidence: 0.9,
+            agentName: "worker",
+            isolated: true,
+        });
+
+        expect(run.state).toMatchObject({
+            runner_rules: expect.arrayContaining([
+                "Runs as a delegated implementation child, in an isolated disposable git worktree.",
+                "DO: read, create, edit, and delete files in its own working copy.",
+            ]),
+        });
+    });
+});
 
 describe("child interaction tools", () => {
     it("registers both interaction tools for background children when allowed", () => {

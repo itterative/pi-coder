@@ -1,0 +1,19 @@
+╭──────────────────────────────────────────────────────────────────────╮
+│   Decision model                                                     │
+│                                                                      │
+│   Optional classifier for unresolved commands.                       │
+│                                                                      │
+│   → [x] Enabled                                                      │
+│         Consult the classifier for unresolved commands.              │
+│                                                                      │
+│     [ ] Apply verdicts                                               │
+│         Dry run: verdicts are recorded, not applied.                 │
+│                                                                      │
+│     Decision model: anthropic/classifier-1                           │
+│     Pick a provider classifier or the custom endpoint.               │
+│                                                                      │
+│     A project config overrides these values:                         │
+│     /repo/.pi/decision-model-config.json                             │
+│                                                                      │
+│     ↑/↓ navigate · Enter toggle or edit · Esc close                  │
+╰──────────────────────────────────────────────────────────────────────╯

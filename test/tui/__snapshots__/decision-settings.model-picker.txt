@@ -1,0 +1,13 @@
+╭──────────────────────────────────────────────────────────────╮
+│   Decision model                                             │
+│   Provider classifiers, or the custom endpoint.              │
+│                                                              │
+│     Custom endpoint…                                         │
+│     openai/classifier-x                                      │
+│       Classifier X                                           │
+│   → anthropic/classifier-1                                   │
+│                                                              │
+│     Type to search · ↑/↓ navigate · Enter select · Esc       │
+│   back                                                       │
+│                                                              │
+╰──────────────────────────────────────────────────────────────╯

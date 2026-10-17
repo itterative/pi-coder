@@ -7,7 +7,11 @@ import type {
 import type { BuiltinAgentName } from "../../tools/agent/config";
 
 export type AgentSettingId =
-    BuiltinAgentName | "advisorEnabled" | "notifyBusyWorkerChanges" | "maxWorkspacesPerRepo";
+    | BuiltinAgentName
+    | "advisorEnabled"
+    | "notifyBusyWorkerChanges"
+    | "maxWorkspacesPerRepo"
+    | "decisionModel";
 
 export interface AgentSetting {
     id: AgentSettingId;
@@ -16,6 +20,8 @@ export interface AgentSetting {
     model?: string;
     enabled?: boolean;
     value?: number;
+    /** State summary shown beside the label, for settings that are not toggles or model picks. */
+    status?: string;
 }
 
 export interface AgentModelOption {
@@ -77,6 +83,8 @@ export interface AgentSessionBrowserOptions extends AgentSessionBrowserData {
         currentValue: number,
     ) => number | undefined | Promise<number | undefined>;
     onMaxWorkspacesChange?: (value: number) => void | Promise<void>;
+    /** Opens the decision-model settings dialog; resolves with the refreshed settings rows. */
+    onDecisionModelOpen?: () => AgentSetting[] | void | Promise<AgentSetting[] | void>;
     onModelChangeError?: (error: unknown) => void;
     onInvalidate?: () => void;
 }

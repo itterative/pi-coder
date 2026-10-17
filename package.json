@@ -46,6 +46,7 @@
         "test:coverage": "vitest run --coverage",
         "bench": "vitest bench",
         "permission-report": "node --import tsx scripts/permission-report.ts",
+        "decision-report": "node --import tsx scripts/decision-report.ts",
         "compaction-report": "node --import tsx scripts/compaction-report.ts",
         "scratch": "node --import tsx scripts/scratch.ts",
         "typecheck": "tsc --noEmit",

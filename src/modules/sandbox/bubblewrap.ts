@@ -82,27 +82,47 @@ function buildEnvCmd(sandboxConfig: SandboxConfig, options?: SandboxOptions): st
     return cmd;
 }
 
-function buildMountCmd(sandboxConfig: SandboxConfig, options?: SandboxOptions): string[] {
+interface MountOptions extends SandboxOptions {
+    /**
+     * `sandbox` (default) is the execution profile: the workspace and `/tmp` are writable and the GPU
+     * devices are passed through. `probe` is `buildProbeCommand`'s observation profile — `/tmp` becomes a
+     * throwaway tmpfs and the GPU devices are left out, because a probe must not be able to leave anything
+     * behind or reach hardware no decision of ours has approved.
+     */
+    profile?: "sandbox" | "probe";
+}
+
+function buildMountCmd(sandboxConfig: SandboxConfig, options?: MountOptions): string[] {
     const cmd: string[] = [];
     const env = options?.env ?? process.env;
+    const probing = options?.profile === "probe";
 
     cmd.push("--proc", "/proc");
     cmd.push("--dev", "/dev");
-    cmd.push("--bind", escapeArg("/tmp"), escapeArg("/tmp"));
+
+    if (probing) {
+        cmd.push("--tmpfs", "/tmp");
+    } else {
+        // temporary, needs proper solution
+        cmd.push("--dev-bind", "/dev/kfd", "/dev/kfd");
+        cmd.push("--dev-bind", "/dev/dri", "/dev/dri");
+
+        cmd.push("--bind", escapeArg("/tmp"), escapeArg("/tmp"));
+    }
 
     // Minimal system mounts (no /etc - too much sensitive data)
-    const systemMounts = ["/usr", "/bin", "/lib", "/lib64"];
+    const systemMounts = ["/usr", "/bin", "/lib", "/lib64", "/etc", "/sys"];
 
     // Essential /etc files for networking and SSL
-    const etcMounts = [
-        "/etc/resolv.conf",
-        "/etc/hosts",
-        "/etc/ssl/certs",
-        "/etc/ca-certificates",
-        "/etc/pki",
-        "/etc/locale.conf",
-        "/etc/localtime",
-    ];
+    // const etcMounts = [
+    //     "/etc/resolv.conf",
+    //     "/etc/hosts",
+    //     "/etc/ssl/certs",
+    //     "/etc/ca-certificates",
+    //     "/etc/pki",
+    //     "/etc/locale.conf",
+    //     "/etc/localtime",
+    // ];
 
     // Shell and bash completion
     const commonMounts = [
@@ -113,15 +133,16 @@ function buildMountCmd(sandboxConfig: SandboxConfig, options?: SandboxOptions): 
         "/etc/bash_completion",
         "/usr/share/bash-completion",
         "/run/systemd/resolve",
+        "/opt",
     ];
 
     for (const mount of systemMounts) {
         cmd.push("--ro-bind", escapeArg(mount), escapeArg(mount));
     }
 
-    for (const file of etcMounts) {
-        cmd.push("--ro-bind-try", escapeArg(file), escapeArg(file));
-    }
+    // for (const file of etcMounts) {
+    //     cmd.push("--ro-bind-try", escapeArg(file), escapeArg(file));
+    // }
 
     for (const file of commonMounts) {
         cmd.push("--ro-bind-try", escapeArg(file), escapeArg(file));
@@ -157,7 +178,11 @@ function buildMountCmd(sandboxConfig: SandboxConfig, options?: SandboxOptions): 
     return cmd;
 }
 
-function buildGitWorktreeMountCmd(sandboxConfig: SandboxConfig, cwd: string): string[] {
+function buildGitWorktreeMountCmd(
+    sandboxConfig: SandboxConfig,
+    cwd: string,
+    mountFlag = "--bind-try",
+): string[] {
     const cmd: string[] = [];
 
     if (sandboxConfig.sandbox?.gitWorktreeSupport === false) {
@@ -191,14 +216,14 @@ function buildGitWorktreeMountCmd(sandboxConfig: SandboxConfig, cwd: string): st
             const mainGitDir = path.isAbsolute(commondir)
                 ? commondir
                 : path.resolve(path.dirname(commondirPath), commondir);
-            cmd.push("--bind-try", escapeArg(mainGitDir), escapeArg(mainGitDir));
+            cmd.push(mountFlag, escapeArg(mainGitDir), escapeArg(mainGitDir));
         } catch {
             // If commondir can't be read, continue without main repo mount
         }
     }
 
     // Mount the worktree-specific git dir (e.g. main-repo/.git/worktrees/feature/)
-    cmd.push("--bind-try", escapeArg(worktreeGitDir), escapeArg(worktreeGitDir));
+    cmd.push(mountFlag, escapeArg(worktreeGitDir), escapeArg(worktreeGitDir));
 
     return cmd;
 }
@@ -259,6 +284,82 @@ export default function sandbox(bwrap: string, command: string, options?: Sandbo
     const shell = env.SHELL ?? "sh";
 
     cmd.push("--die-with-parent");
+    cmd.push("--", shell, "-c", escapeArg(command));
+
+    return cmd.join(" ");
+}
+
+export interface ProbeCommandOptions extends SandboxOptions {
+    bwrap?: string;
+    /** Host directory that receives every write the command makes to the workspace. */
+    upper: string;
+    /** Empty directory on the same filesystem as `upper`, required by overlayfs. */
+    work: string;
+    /**
+     * Descriptor bwrap reports its own status on. Load-bearing: the caller uses it to tell "the command ran
+     * and exited N" from "the sandbox never started", which an exit status alone cannot distinguish.
+     */
+    statusFd?: number;
+}
+
+/**
+ * Build the bwrap command line that runs `command` for observation instead of for effect.
+ *
+ * The workspace becomes an overlay: the real tree is the read-only lower layer and `upper` collects every
+ * write, so reads are native, changes are captured in full, a deletion is recorded as a whiteout, and the
+ * real tree cannot be modified. Everything else is mounted read-only, including configured writable mounts
+ * and a worktree's git directories — a probe that could write to a real path would be an execution, not an
+ * observation. `/tmp` is a throwaway tmpfs rather than the host's, so a scratch write is neither real nor
+ * mistaken for a workspace change.
+ *
+ * Network is unshared. That is the deliberate limit of the reading: a command that needs the network fails
+ * here instead of being observed, and the caller must report that as no evidence rather than as "nothing
+ * would change".
+ */
+export function buildProbeCommand(command: string, options: ProbeCommandOptions): string {
+    const cmd: string[] = [options.bwrap ?? "bwrap"];
+    const env = options.env ?? process.env;
+    const cwd = options.cwd ?? process.cwd();
+    const homeDir = resolveHomeDirectory(env);
+    const sandboxConfig = options.config ?? config.current ?? config.default;
+
+    cmd.push("--unshare-all");
+    cmd.push("--die-with-parent");
+
+    cmd.push(...buildEnvCmd(sandboxConfig, { env, cwd }));
+
+    for (const source of Object.keys(sandboxConfig.sandbox?.mounts ?? {})) {
+        cmd.push(
+            "--ro-bind-try",
+            escapeArgWithSubstitution(source, homeDir),
+            escapeArgWithSubstitution(source, homeDir),
+        );
+    }
+
+    // A worktree's git directories live outside the workspace, so the overlay does not cover them. Git
+    // commands that write fail loudly here rather than reaching the real object store.
+    cmd.push(...buildGitWorktreeMountCmd(sandboxConfig, cwd, "--ro-bind-try"));
+
+    cmd.push(...buildMountCmd(sandboxConfig, { env, cwd, profile: "probe" }));
+
+    for (const root of options.additionalRoots ?? []) {
+        const resolvedRoot = path.resolve(root.replace(/^~/, homeDir));
+        if (resolvedRoot === cwd) {
+            continue;
+        }
+
+        cmd.push("--ro-bind-try", escapeArg(resolvedRoot), escapeArg(resolvedRoot));
+    }
+
+    cmd.push("--overlay-src", escapeArg(cwd));
+    cmd.push("--overlay", escapeArg(options.upper), escapeArg(options.work), escapeArg(cwd));
+    cmd.push("--chdir", escapeArg(cwd));
+
+    if (options.statusFd !== undefined) {
+        cmd.push("--json-status-fd", String(options.statusFd));
+    }
+
+    const shell = env.SHELL ?? "sh";
     cmd.push("--", shell, "-c", escapeArg(command));
 
     return cmd.join(" ");

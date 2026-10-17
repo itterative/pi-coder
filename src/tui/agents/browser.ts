@@ -551,6 +551,10 @@ export class AgentSessionBrowserComponent
             this.openMaxWorkspacesSetting(setting, options);
             return;
         }
+        if (setting.id === "decisionModel") {
+            this.openDecisionModelSetting(options);
+            return;
+        }
         const modelItems = (
             this.models ?? [{ label: "Parent model", description: "Use the current pi model" }]
         ).map((model) => ({ value: model, label: model.label }));
@@ -665,6 +669,22 @@ export class AgentSessionBrowserComponent
             applyValue(value);
         });
         selector.initialize(this.theme!);
+    }
+
+    private openDecisionModelSetting(options: AgentSessionBrowserOptions): void {
+        void Promise.resolve()
+            .then(() => options.onDecisionModelOpen?.())
+            .then((settings) => {
+                if (settings !== undefined) {
+                    this.replace(this.settings, settings);
+                }
+                this.rebuildItems();
+                this.invalidate();
+            })
+            .catch((error: unknown) => {
+                options.onModelChangeError?.(error);
+                this.invalidate();
+            });
     }
 
     private toggleSetting(setting: AgentSetting, options: AgentSessionBrowserOptions): void {

@@ -11,3 +11,9 @@ process.env.COMPACTION_TRACE ??= "0";
 // trace alone does not stop writes. Without this pin, any suite that fires before_provider_request without
 // redirecting COMPACTION_TRACE_PATH would read and append this checkout's real development trace.
 process.env.COMPACTION_CHAIN_TRACE ??= "0";
+
+// The decision-model config must never come from the developer's real ~/.pi or from a project file above a
+// temporary workspace: an endpoint left enabled in either would make permission suites call a live model.
+// Suites that exercise it point these at their own files, or set the section inside a temp project config.
+process.env.DECISION_MODEL_CONFIG_PATH_GLOBAL ??= "";
+process.env.DECISION_MODEL_CONFIG_PATH ??= "";

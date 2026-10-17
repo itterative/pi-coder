@@ -48,6 +48,8 @@ export interface BashDecisionRecord {
         /** rule the user chose to remember, when they accepted the suggestion */
         rule?: string;
     };
+    /** present only when the decision model was consulted */
+    classifier?: BashClassifierRecord;
     /** permission actually applied after any prompt */
     decision: Permission;
     sandboxed: boolean;
@@ -63,6 +65,93 @@ export interface BashDecisionRecord {
  */
 export type PromptOutcome = "yes" | "remember" | "no" | "dismissed";
 
+/** The script a consulted command was found to run, as recorded in the decision log. */
+export interface BashClassifierScriptRecord {
+    /** `package`, `file`, `inline`, or `binary`, as the resolver recognized the command. */
+    kind: string;
+    /** provenance of each resolved body, in the order sent: `package.json#name` or a repo-relative path */
+    sources?: string[];
+    /** total characters of the resolved bodies; absent when none was read */
+    chars?: number;
+    /** references the chase left unresolved, as `reason:source`; absent when it completed */
+    omitted?: string[];
+    /** one answer per classified body, in send order; absent when no body was classified individually */
+    answers?: BashClassifierScriptAnswerRecord[];
+}
+
+/**
+ * One body's own answer, when the command was classified form by form rather than as one payload.
+ *
+ * The top-level `criterion`/`confidence` is the fold's answer for the whole command; these are the inputs it
+ * read, so a row's score can be attributed to the script that produced it.
+ */
+export interface BashClassifierScriptAnswerRecord {
+    /** provenance of the body: `package.json#name` or a repo-relative path */
+    source: string;
+    /** criterion the model named for this body, when it answered */
+    criterion?: string;
+    /** action the criterion maps to, before the fold */
+    action?: string;
+    confidence?: number;
+    /** how this body's request ended: `answered`, `cached`, `error`, `timeout`, or an abstain form */
+    status: string;
+}
+
+/**
+ * The command form's own answer, before the capability fold.
+ *
+ * The record's top-level `criterion`/`action`/`confidence` is the fold, and a script capability can win it;
+ * this keeps the invocation judgment visible beside it, so mining can tell a dangerous command from a
+ * dangerous body.
+ */
+export interface BashClassifierCommandRecord {
+    /** criterion the model named for the command, when it answered */
+    criterion?: string;
+    /** action the criterion maps to, before the fold */
+    action?: string;
+    confidence?: number;
+    /** how the command's request ended: `answered`, `cached`, `error`, `timeout`, or an abstain form */
+    status: string;
+}
+
+/**
+ * The decision model's verdict on a command, when it was consulted.
+ *
+ * The model is asked about exactly the commands that reach this log as unresolved, so the two records join on
+ * the command text and the field answers what mining a permission log otherwise cannot: whether a model would
+ * have resolved the prompt, on what criterion, and with how much confidence. `applied` separates the two
+ * modes — recorded only (`apply` off) versus actually used instead of the prompt.
+ */
+export interface BashClassifierRecord {
+    /** strategy id, e.g. `veto` */
+    strategy: string;
+    /** provider and model the verdict came from; absent when the request never happened */
+    provider?: string;
+    model?: string;
+    /** criterion the model named, when it answered */
+    criterion?: string;
+    /** action the criterion maps to, before policy */
+    action?: string;
+    confidence?: number;
+    /** action the policy settled on: `host`, `sandbox`, `refuse`, or `abstain` */
+    outcome: string;
+    /** `applied`, `abstained`, `timeout`, or `error` */
+    status: string;
+    /** machine-readable reason from the policy or the request */
+    reason: string;
+    latencyMs: number;
+    /** the verdict replaced the prompt */
+    applied: boolean;
+    /** tokens the classifier reported, when it reported any */
+    tokens?: { input: number; output: number; total: number };
+    /** the verdict came from the evaluator's cache: no request was made and the tokens are zero */
+    cached?: boolean;
+    /** The command form's own answer, before the capability fold; absent when the model never answered. */
+    command?: BashClassifierCommandRecord;
+    /** The script form behind the command, when one was recognized; the bodies themselves are not logged */
+    script?: BashClassifierScriptRecord;
+}
+
 export interface BashDecisionInput {
     surface: "parent" | "child";
     agentName?: string;
@@ -70,6 +159,7 @@ export interface BashDecisionInput {
     command: string;
     details: ResolvePermissionDetails;
     prompt?: { outcome: PromptOutcome; suggestion?: string; rule?: string };
+    classifier?: BashClassifierRecord;
     decision: Permission;
     sandboxed: boolean;
     blocked: boolean;
@@ -133,6 +223,26 @@ function segmentRecords(segments: readonly BashDecisionSegment[]): BashDecisionS
     return segments.map((segment) => ({ ...segment }));
 }
 
+function classifierRecord(record: BashClassifierRecord): BashClassifierRecord {
+    return {
+        ...record,
+        ...(record.tokens === undefined ? {} : { tokens: { ...record.tokens } }),
+        ...(record.command === undefined ? {} : { command: { ...record.command } }),
+        ...(record.script === undefined ? {} : { script: cloneScriptRecord(record.script) }),
+    };
+}
+
+function cloneScriptRecord(script: BashClassifierScriptRecord): BashClassifierScriptRecord {
+    return {
+        ...script,
+        ...(script.sources === undefined ? {} : { sources: [...script.sources] }),
+        ...(script.omitted === undefined ? {} : { omitted: [...script.omitted] }),
+        ...(script.answers === undefined
+            ? {}
+            : { answers: script.answers.map((answer) => ({ ...answer })) }),
+    };
+}
+
 /**
  * Append one decision record. Never throws: a logging failure must not change
  * whether a command runs, so failures are swallowed silently by design.
@@ -170,6 +280,9 @@ export function logBashDecision(input: BashDecisionInput): void {
         decision: input.decision,
         sandboxed: input.sandboxed,
         blocked: input.blocked,
+        ...(input.classifier === undefined
+            ? {}
+            : { classifier: classifierRecord(input.classifier) }),
         ...(input.note === undefined ? {} : { note: input.note }),
     };
 
