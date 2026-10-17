@@ -41,6 +41,9 @@ function fakeHandle(): OverlayHandle & { focusCount: number } {
             return false;
         },
         setHidden() {},
+        getBounds() {
+            return undefined;
+        },
         hide() {
             focused = false;
         },
@@ -64,6 +67,7 @@ function fakeTerminal(): Terminal {
         clearScreen() {},
         setTitle() {},
         setProgress() {},
+        setProgramStatus() {},
     };
 }
 

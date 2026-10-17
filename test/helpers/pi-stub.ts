@@ -106,6 +106,7 @@ export function stubToolInfo(name: string, overrides: Partial<StubToolInfo> = {}
     return {
         name,
         description: `stub description for ${name}`,
+        exposure: "direct",
         // TypeBox schemas carry brand symbols no test can construct honestly; the value is only ever
         // forwarded into a provider request, where a suite asserts identity rather than contents.
         parameters: { type: "object", properties: {} } as unknown as ToolInfo["parameters"],

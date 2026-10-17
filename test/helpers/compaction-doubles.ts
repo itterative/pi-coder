@@ -1,4 +1,4 @@
-import type { Usage } from "@earendil-works/pi-ai";
+import type { JsonObject, Usage } from "@earendil-works/pi-ai";
 import type {
     Api,
     AssistantMessage,
@@ -78,7 +78,7 @@ export function userMessage(text: string, timestamp = 0): ContextMessage {
 export interface AssistantCallFixture {
     id: string;
     name: string;
-    arguments?: Record<string, unknown>;
+    arguments?: JsonObject;
 }
 
 export interface AssistantFixture {
@@ -132,7 +132,7 @@ export function toolResultMessage(input: {
      * Harness bookkeeping that never reaches the provider - pi stores a truncated `read`'s full output under
      * `details.truncation.content`. Sizing has to ignore it, so a fixture that wants to prove that carries it.
      */
-    details?: Record<string, unknown>;
+    details?: JsonObject;
 }): ContextMessage {
     return {
         role: "toolResult",

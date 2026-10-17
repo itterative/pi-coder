@@ -7,7 +7,7 @@
  */
 
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Container } from "@earendil-works/pi-tui";
+import type { Box, Container } from "@earendil-works/pi-tui";
 import { matchesKey } from "@earendil-works/pi-tui";
 import type { ItemPrefix, ListItem, ListViewRenderItemOptions, ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
@@ -41,7 +41,7 @@ export interface PagerOptions<T> {
     // Optional header content rendered after title
     headerContent?: (container: Container, theme: Theme) => void;
     // Optional footer content rendered before help text
-    footerContent?: (container: Container, theme: Theme, state: PagerState<T>) => void;
+    footerContent?: (container: Box, theme: Theme, state: PagerState<T>) => void;
     // Custom help text
     helpText?: string;
     // Optional fixed total frame height, evaluated on each render

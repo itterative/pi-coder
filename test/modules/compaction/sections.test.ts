@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { JsonObject } from "@earendil-works/pi-ai";
+
 import {
     analyzeSpan,
     buildSupplementarySections,
@@ -15,7 +17,7 @@ import {
 } from "../../helpers/compaction-doubles";
 import { snapshotText } from "../../helpers";
 
-function call(id: string, name: string, args: Record<string, unknown>): ContextMessage {
+function call(id: string, name: string, args: JsonObject): ContextMessage {
     return assistantMessage({ calls: [{ id, name, arguments: args }] });
 }
 

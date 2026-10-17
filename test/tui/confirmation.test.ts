@@ -28,6 +28,9 @@ function fakeHandle() {
             return false;
         },
         setHidden() {},
+        getBounds() {
+            return undefined;
+        },
         hide() {
             focused = false;
         },

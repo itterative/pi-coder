@@ -37,7 +37,7 @@ export interface MultiSelectOptions<T> {
     // Optional header content rendered after title
     headerContent?: (container: Container, theme: Theme) => void;
     // Optional footer content rendered before help text
-    footerContent?: (container: Container, theme: Theme, state: MultiSelectState<T>) => void;
+    footerContent?: (container: Box, theme: Theme, state: MultiSelectState<T>) => void;
     // Custom help text (defaults to standard navigation help)
     helpText?: string;
 }

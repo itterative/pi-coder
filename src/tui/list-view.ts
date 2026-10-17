@@ -89,8 +89,8 @@ export interface ListViewOptions<T, S extends ListViewState<T> = ListViewState<T
     headerContent?: (container: Container, theme: Theme) => void;
     // Whether to add a blank row between the title and header content (default: true)
     headerSpacing?: boolean;
-    // Optional footer content rendered before help text
-    footerContent?: (container: Container, theme: Theme, state: S) => void;
+    // Optional footer content rendered before help text (receives the padded content Box)
+    footerContent?: (container: Box, theme: Theme, state: S) => void;
     // Help text shown at the bottom
     helpText: string;
     // Hook to intercept keys before built-in handling. Return true to indicate

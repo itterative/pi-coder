@@ -125,6 +125,13 @@ holds two summaries, and carries a counterfactual: the same entries taken from t
 align. Order, not membership, is the invariant, so the assertions compare message identity at each position — the
 front slot holds *a* summary either way, which is why index alone proves nothing.
 
+**pi 1.1.0 change (2026-10-17).** `buildSessionProjection` now emits a summary message only for the `compaction`
+entry at index 0; a retained older compaction contributes no message, so the live body carries **one** summary
+(the newest) instead of one per fold. The non-idempotent hoist is unaffected — feeding the resolved list back still
+makes the *last* compaction take the front slot, and since only index 0 then contributes, the rebuilt body leads
+with the **older** summary. The fixture's `ours`/`live` summary count moved 2→1; the ordering, window, and
+counterfactual assertions all stayed. `session-fixture.test.ts` records the same in its comment.
+
 ## A rebuilt Context is not byte-stable (pi stamps `Date.now()`)
 
 `buildSpanSession()` re-appends each entry into an in-memory `SessionManager`, and pi gives a `custom_message`

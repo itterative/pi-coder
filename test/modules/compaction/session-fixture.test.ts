@@ -96,11 +96,12 @@ function traceAttempt(strategy: string): CompactionAttemptFields {
 /**
  * The third fold of a real hosted session - the case that broke stage 1's prefix cache.
  *
- * Two earlier summaries are inside this span window, and pi's resolved context orders them in a way that is
- * neither file order nor newest-first: the newest is hoisted to the front and the older one rides along inline.
- * Copying that already-hoisted list into a fresh session hoists a second time and promotes the *older* summary,
- * so the body stopped being a prefix of what the provider had cached at exactly its second message - the
- * `first=messages[2]` the recorded trace carries, reproduced here rather than inferred from it.
+ * Two folds sit inside this span window. pi 1.1 emits only the newest fold's summary - an earlier retained
+ * compaction contributes no message - but it still deposits the newest at the front of the resolved list and the
+ * older compaction further down. Copying that already-ordered list into a fresh session re-runs pi's hoist and
+ * promotes the *older* summary, so the body stopped being a prefix of what the provider had cached at exactly
+ * its second message - the `first=messages[2]` the recorded trace carries, reproduced here rather than inferred
+ * from it.
  */
 const HOSTED = fixturePath("session", "hosted-three-folds.jsonl");
 /** Fold three's retained-tail boundary, fold two's own entry, and fold two's boundary. */
@@ -201,8 +202,9 @@ describe("hosted three-fold fixture", () => {
     it("keeps every summary pi's live body carries, and none it dropped", () => {
         const { live, ours } = foldThreeReplay();
 
-        expect(summaryIndices(ours)).toHaveLength(2);
-        expect(summaryIndices(live)).toHaveLength(2);
+        // pi 1.1 emits only the newest fold's summary; an older retained compaction contributes no message.
+        expect(summaryIndices(live)).toHaveLength(1);
+        expect(summaryIndices(ours)).toEqual(summaryIndices(live));
     });
 
     it("sends stage 1's body in the order the provider already read it", () => {
@@ -212,11 +214,10 @@ describe("hosted three-fold fixture", () => {
         expect(alignment.detail).toContain("in live order");
         expect(alignment.ok).toBe(true);
 
-        // The specific shuffle: newest summary first, older one later, never the reverse.
-        const oursSummaries = summaryIndices(ours);
-        const liveSummaries = summaryIndices(live);
-        expect(oursSummaries[0]).toBe(liveSummaries[0]);
-        expect(oursSummaries[1]).toBeGreaterThan(oursSummaries[0] ?? 0);
+        // pi 1.1 emits a single summary - the newest fold's - so the shuffle shows up as identity, not as a
+        // second index: our rebuild must carry live's summary, and the older fold's must not win.
+        expect(summaryIndices(ours)).toEqual(summaryIndices(live));
+        expect(wireKey(ours)[0]).toBe(wireKey(live)[0]);
     });
 
     it("is the difference between a prefix and a shuffle, measured against the old source", () => {

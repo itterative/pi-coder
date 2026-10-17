@@ -7,7 +7,7 @@
  */
 
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKey, Text, type Component, type Container } from "@earendil-works/pi-tui";
+import { matchesKey, Text, type Box, type Component, type Container } from "@earendil-works/pi-tui";
 import type { ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
 import type { PagerItem } from "./pager";
@@ -37,7 +37,7 @@ export interface SelectOptions<T> {
     // Whether to add a blank row between the title and header content (default: true)
     headerSpacing?: boolean;
     // Optional footer content rendered before help text
-    footerContent?: (container: Container, theme: Theme, state: SelectState<T>) => void;
+    footerContent?: (container: Box, theme: Theme, state: SelectState<T>) => void;
     // Custom help text (defaults to standard navigation help)
     helpText?: string;
     // Allow printable input to filter items by label.

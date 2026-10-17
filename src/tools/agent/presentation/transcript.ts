@@ -267,6 +267,10 @@ function messageParts(
             // Tool calls provide the useful chronological trace without repeating
             // potentially large read/bash output already available elsewhere.
             return [];
+        case "system":
+            // System messages carry the base prompt and later prompt updates, not
+            // conversation; the transcript shows the conversation only.
+            return [];
         case "bashExecution":
             return [
                 {
