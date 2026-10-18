@@ -5,13 +5,19 @@ import type { Component } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import decisionConfig from "../../src/modules/decision/config";
-import { decisionModelSetting, openDecisionModelSettings } from "../../src/tools/decision-settings";
+import {
+    decisionModelSetting,
+    openDecisionModelSettings,
+    registerDecisionModelShortcut,
+} from "../../src/tools/decision-settings";
 import { asSettingsListItems } from "../../src/tui/agents/formatting";
 import { KEY, mockTheme, renderText, stubTui } from "../helpers";
 import {
     createPiStub,
     stubClassifierRegistry,
     stubCommandContext,
+    stubContext,
+    stubUi,
     stubUiWithDialogs,
 } from "../helpers/pi-stub";
 
@@ -158,5 +164,115 @@ describe("openDecisionModelSettings", () => {
         dialogs[0]!.handleInput(KEY.escape);
         await opening;
         expect(stub.unregisteredProviders).toEqual(["systemone"]);
+    });
+});
+
+describe("registerDecisionModelShortcut", () => {
+    function runToggle(cwd = workspace) {
+        const stub = createPiStub();
+        registerDecisionModelShortcut(stub.pi);
+        const shortcut = stub.shortcuts[0];
+        if (!shortcut) {
+            throw new Error("the auto-mode shortcut was not registered");
+        }
+
+        const notifications: Array<{ message: string; type?: string }> = [];
+        const ui = stubUi({
+            notify: (message, type) => {
+                notifications.push({ message, type });
+            },
+        });
+        shortcut.options.handler(stubContext({ cwd, ui }));
+
+        return { stub, shortcut, notifications };
+    }
+
+    it("registers alt+a and turns auto mode on with the endpoint", () => {
+        writeGlobalConfig({
+            decisionModel: {
+                enabled: false,
+                provider: "systemone",
+                baseUrl: "http://127.0.0.1:8000/v1",
+                model: "vllm-d3-flash",
+            },
+        });
+
+        const { stub, shortcut, notifications } = runToggle();
+
+        expect(shortcut.key).toBe("alt+a");
+        expect(shortcut.options.description).toBe("Toggle the bash tool's auto mode");
+        expect(readGlobalConfig().decisionModel).toMatchObject({ enabled: true });
+        expect(stub.providers.map((provider) => provider.id)).toEqual(["systemone"]);
+        expect(notifications).toEqual([
+            { message: "pi-coder: Bash tool auto mode on", type: "info" },
+        ]);
+    });
+
+    it("turns auto mode off and drops the endpoint registration", () => {
+        writeGlobalConfig({
+            decisionModel: {
+                enabled: true,
+                provider: "systemone",
+                baseUrl: "http://127.0.0.1:8000/v1",
+                model: "vllm-d3-flash",
+            },
+        });
+
+        const { stub, notifications } = runToggle();
+
+        expect(readGlobalConfig().decisionModel).toMatchObject({ enabled: false });
+        expect(stub.unregisteredProviders).toEqual(["systemone"]);
+        expect(stub.providers).toEqual([]);
+        expect(notifications).toEqual([
+            { message: "pi-coder: Bash tool auto mode off", type: "info" },
+        ]);
+    });
+
+    it("warns when a project config outranks the saved value", () => {
+        writeGlobalConfig({ decisionModel: { enabled: true } });
+        const projectPath = path.join(root, "project-override.json");
+        fs.writeFileSync(projectPath, JSON.stringify({ decisionModel: { enabled: true } }));
+        vi.stubEnv("DECISION_MODEL_CONFIG_PATH", projectPath);
+        decisionConfig.reset();
+
+        const { notifications } = runToggle();
+
+        expect(readGlobalConfig().decisionModel).toMatchObject({ enabled: false });
+        expect(notifications).toEqual([
+            {
+                message: `Decision model auto mode is overridden by ${projectPath}`,
+                type: "warning",
+            },
+        ]);
+    });
+
+    it("warns when enabling finds no classifier endpoint", () => {
+        writeGlobalConfig({ decisionModel: { enabled: false } });
+
+        const { stub, notifications } = runToggle();
+
+        expect(readGlobalConfig().decisionModel).toMatchObject({ enabled: true });
+        expect(stub.providers).toEqual([]);
+        expect(notifications).toEqual([
+            {
+                message:
+                    "Decision model auto mode on, but no classifier endpoint is configured (/agents → Settings)",
+                type: "warning",
+            },
+        ]);
+    });
+
+    it("warns instead of throwing when the global config path is disabled", () => {
+        vi.stubEnv("DECISION_MODEL_CONFIG_PATH_GLOBAL", "");
+
+        const { notifications } = runToggle();
+
+        expect(notifications).toEqual([
+            {
+                message:
+                    "Could not toggle the decision model: The global decision-model config path is disabled.",
+                type: "warning",
+            },
+        ]);
     });
 });

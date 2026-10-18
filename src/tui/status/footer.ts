@@ -123,13 +123,13 @@ export class PiCoderFooter implements Component {
 
         const segments: FooterLineSegment[] = [
             // Left: the agent summary is kept longest, then auto mode, TODO, and extension statuses.
-            { text: this.autoBadge(), side: "left", dropPriority: 4 },
+            { text: this.decisionBadge(), side: "left", dropPriority: 4 },
             {
                 text: formatAgentSummary(this.runs, this.hiddenCount, this.spinner.getFrame()),
                 side: "left",
                 dropPriority: 3,
             },
-            leftTip ?? { text: this.todoSegment(), side: "left", dropPriority: 5 },
+            leftTip ?? this.todoLineSegment(),
             { text: info.statuses, side: "left", dropPriority: 6 },
             // Right: the cluster reserves its width, so these only shed when it cannot fit alone.
             usage,
@@ -161,17 +161,20 @@ export class PiCoderFooter implements Component {
     }
 
     /**
-     * The decision model's badge: `» auto` while the classifier is enabled, with the shared spinner
-     * frame replacing the `»` while a check is in flight so the line shows when it is actively deciding.
+     * The decision model's badge: `» auto` (accent) while the classifier is enabled, `» manual` (dim)
+     * while it is off so the shortcut's state stays visible, and the shared spinner frame in place of the
+     * `»` while a check is in flight.
      */
-    private autoBadge(): string {
-        const checking = this.decisionChecking > 0;
-        if (!checking && decisionConfig.current.enabled !== true) {
-            return "";
+    private decisionBadge(): string {
+        if (this.decisionChecking > 0) {
+            return this.theme.fg("accent", `${this.spinner.getFrame()} auto`);
         }
 
-        const label = checking ? `${this.spinner.getFrame()} auto` : "» auto";
-        return this.theme.fg("accent", label);
+        if (decisionConfig.current.enabled === true) {
+            return this.theme.fg("accent", "» auto");
+        }
+
+        return this.theme.fg("dim", "» manual");
     }
 
     /**
@@ -194,18 +197,27 @@ export class PiCoderFooter implements Component {
     }
 
     /**
-     * TODO progress, muted once every item is complete (the final item still names what finished).
-     * While an agent is active the footer speaks for the agent instead and this yields the line.
+     * TODO progress as a left segment: muted once every item is complete (the final item still names what
+     * finished), and hidden while an agent is active because the footer speaks for the agent instead.
+     * `shrinkToFit` keeps the plan on the line beside the mode badge instead of dropping it, with the
+     * trimming ellipsis following the segment's own dim state.
      */
-    private todoSegment(): string {
-        if (!this.todo || hasActiveAgentRuns(this.runs)) return "";
+    private todoLineSegment(): FooterLineSegment {
+        if (!this.todo || hasActiveAgentRuns(this.runs)) {
+            return { text: "", side: "left", dropPriority: 5 };
+        }
 
         const progress = summarizeTodoList(this.todo);
         const text = formatTodoProgress(progress, MAX_TODO_CURRENT_CHARS);
-        if (!text) return "";
+        const complete = progress !== undefined && progress.completed === progress.total;
 
-        const done = progress !== undefined && progress.completed === progress.total;
-        return done ? this.theme.fg("dim", text) : text;
+        return {
+            text: complete ? this.theme.fg("dim", text) : text,
+            side: "left",
+            dropPriority: 5,
+            shrinkToFit: true,
+            ellipsis: complete ? this.theme.fg("dim", "…") : "…",
+        };
     }
 }
 

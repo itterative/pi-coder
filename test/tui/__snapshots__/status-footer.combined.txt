@@ -1,1 +1,1 @@
-⠋ worker-1 · 00:00 · Thinking                                                                                              0.5%/200k · stub-model · /tmp/project
+» manual · ⠋ worker-1 · 00:00 · Thinking                                                                                   0.5%/200k · stub-model · /tmp/project

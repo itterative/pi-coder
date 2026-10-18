@@ -10,6 +10,7 @@ import registerAskUserTool from "./tools/ask_user";
 import registerBashToolHook from "./tools/bash";
 import decisionConfig from "./modules/decision/config";
 import { registerDecisionProvider } from "./modules/decision/provider";
+import { registerDecisionModelShortcut } from "./tools/decision-settings";
 import registerReadToolHook from "./tools/read";
 import registerWriteToolHook from "./tools/write";
 import { registerStatusFooter } from "./tui/status";
@@ -20,6 +21,7 @@ export default function (pi: ExtensionAPI) {
     // Provider registration has to happen during the factory: pi queues it for startup, which is what lets
     // the classifier be resolved by the time the first permission prompt arrives.
     registerDecisionProvider(pi, decisionConfig.load(process.cwd()));
+    registerDecisionModelShortcut(pi);
     registerStatusFooter(pi);
     registerMemoryExtension(pi);
     registerScratchpadExtension(pi);

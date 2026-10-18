@@ -556,19 +556,19 @@ describe("TODO runtime extension", () => {
             getAvailableProviderCount: () => 1,
             onBranchChange: () => () => {},
         });
-        expect(renderText(footer, 80)).toContain("TODO 0/1 · Inspect the implementation");
+        expect(renderText(footer, 90)).toContain("TODO 0/1 · Inspect the implementation");
 
         fs.writeFileSync(todoPath, validDocument.replace("status: pending", "status: completed"));
         await handler("tool_result")({ toolName: "edit", isError: true }, ctx);
-        expect(renderText(footer, 80)).toContain("TODO 0/1 · Inspect the implementation");
+        expect(renderText(footer, 90)).toContain("TODO 0/1 · Inspect the implementation");
 
         fs.writeFileSync(todoPath, "---\nversion: 1\ntodos: invalid\n---\n");
         await handler("tool_result")({ toolName: "write" }, ctx);
-        expect(renderText(footer, 80)).toContain("TODO 0/1 · Inspect the implementation");
+        expect(renderText(footer, 90)).toContain("TODO 0/1 · Inspect the implementation");
 
         fs.unlinkSync(todoPath);
         await handler("tool_result")({ toolName: "bash" }, ctx);
-        expect(renderText(footer, 80)).not.toContain("TODO");
+        expect(renderText(footer, 90)).not.toContain("TODO");
         footer.dispose();
     });
 

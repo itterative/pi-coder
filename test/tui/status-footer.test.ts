@@ -364,9 +364,11 @@ describe("status footer", () => {
 
     it("shows the auto badge while the decision model is enabled", () => {
         vi.spyOn(decisionConfig, "current", "get").mockReturnValue({ enabled: true });
+        const fg = vi.spyOn(mockTheme, "fg");
         const footer = makeFooter(baseContext());
 
         expect(renderText(footer, 80)).toContain("» auto");
+        expect(fg).toHaveBeenCalledWith("accent", "» auto");
 
         footer.setDecisionChecking(1);
         const checkingLine = renderText(footer, 80);
@@ -378,10 +380,14 @@ describe("status footer", () => {
         footer.dispose();
     });
 
-    it("omits the auto badge while the decision model is disabled", () => {
+    it("shows a dim manual badge while the decision model is disabled", () => {
+        const fg = vi.spyOn(mockTheme, "fg");
         const footer = makeFooter(baseContext());
 
-        expect(renderText(footer, 80)).not.toContain("auto");
+        const line = renderText(footer, 80);
+        expect(line).toContain("» manual");
+        expect(line).not.toContain("auto");
+        expect(fg).toHaveBeenCalledWith("dim", "» manual");
         footer.dispose();
     });
 
@@ -396,6 +402,21 @@ describe("status footer", () => {
         await expect(snapshotText(renderText(footer, 140))).toMatchFileSnapshot(
             "./__snapshots__/status-footer.auto.txt",
         );
+        footer.dispose();
+    });
+
+    it("trims a completed TODO with a muted ellipsis", () => {
+        const fg = vi.spyOn(mockTheme, "fg");
+        const done: TodoList = {
+            ...todo,
+            items: todo.items.map((item) => ({ ...item, status: "completed" as const })),
+        };
+        const footer = makeFooter(baseContext(), footerData(), { todo: done });
+
+        const line = renderText(footer, 60);
+        expect(line).toContain("…");
+        // The trim follows the segment's own dim state, like the tip's ellipsis.
+        expect(fg).toHaveBeenCalledWith("dim", "…");
         footer.dispose();
     });
 
@@ -421,7 +442,7 @@ describe("status footer", () => {
         const footer = makeFooter(statusContext(), footerData({ branch: "main" }), { todo });
         footer.setTip("Say 'remember this' to keep it in project memory");
 
-        const line = renderText(footer, 140);
+        const line = renderText(footer, 142);
         await expect(snapshotText(line)).toMatchFileSnapshot(
             "./__snapshots__/status-footer.tip-left.txt",
         );

@@ -1,5 +1,5 @@
-                                                                                                                                                                       ?/0 · no-model · ~/Repos/pi-coder
-⠋ scout-1 · 00:00 · Thinking                                                                                                                                           ?/0 · no-model · ~/Repos/pi-coder
-⠋ scout-1 · 00:00 · Inspecting the run manager lifecycle.                                                                                                              ?/0 · no-model · ~/Repos/pi-coder
-✓ scout-1 · ready                                                                                                                                                      ?/0 · no-model · ~/Repos/pi-coder
-                                                                                                                                                                       ?/0 · no-model · ~/Repos/pi-coder
+» manual                                                                                                                                                               ?/0 · no-model · ~/Repos/pi-coder
+» manual · ⠋ scout-1 · 00:00 · Thinking                                                                                                                                ?/0 · no-model · ~/Repos/pi-coder
+» manual · ⠋ scout-1 · 00:00 · Inspecting the run manager lifecycle.                                                                                                   ?/0 · no-model · ~/Repos/pi-coder
+» manual · ✓ scout-1 · ready                                                                                                                                           ?/0 · no-model · ~/Repos/pi-coder
+» manual                                                                                                                                                               ?/0 · no-model · ~/Repos/pi-coder

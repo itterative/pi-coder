@@ -6,7 +6,11 @@
  * re-registers this extension's endpoint provider so a change takes effect without a reload.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type {
+    ExtensionAPI,
+    ExtensionCommandContext,
+    ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
 import decisionConfig, {
     findDecisionConfigLocations,
@@ -74,6 +78,59 @@ export async function openDecisionModelSettings(
             },
         },
         ctx,
+    );
+}
+
+/**
+ * Register the global shortcut that toggles the bash tool's auto mode.
+ *
+ * `enabled` is the field the footer's `» auto` badge mirrors and the one `/agents → Settings` labels
+ * "Enabled", so the shortcut flips exactly what the dialog does. The endpoint provider is re-synced in the
+ * same breath, because enabling a classifier this process never registered has to take effect without a
+ * reload, and disabling has to drop the registration the load-time config kept.
+ */
+export function registerDecisionModelShortcut(pi: ExtensionAPI): void {
+    pi.registerShortcut?.("alt+a", {
+        description: "Toggle the bash tool's auto mode",
+        handler: (ctx) => toggleDecisionAutoMode(pi, ctx),
+    });
+}
+
+/** Flip auto mode, persist it, and report the state the next gate consult will actually use. */
+function toggleDecisionAutoMode(pi: ExtensionAPI, ctx: ExtensionContext): void {
+    const enabled = decisionConfig.load(ctx.cwd).enabled !== true;
+
+    try {
+        saveDecisionConfig({ enabled });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(`Could not toggle the decision model: ${message}`, "warning");
+        return;
+    }
+
+    const config = decisionConfig.load(ctx.cwd);
+    const registered = syncDecisionProvider(pi, config);
+
+    // A project config file outranks the global one this shortcut writes, so name the override instead of
+    // reporting a state the next consult will not use.
+    if (config.enabled !== enabled) {
+        const project = findDecisionConfigLocations(ctx.cwd).project;
+        const source = project === undefined ? "a higher-priority config" : project;
+        ctx.ui.notify(`Decision model auto mode is overridden by ${source}`, "warning");
+        return;
+    }
+
+    if (enabled && !registered) {
+        ctx.ui.notify(
+            "Decision model auto mode on, but no classifier endpoint is configured (/agents → Settings)",
+            "warning",
+        );
+        return;
+    }
+
+    ctx.ui.notify(
+        enabled ? "pi-coder: Bash tool auto mode on" : "pi-coder: Bash tool auto mode off",
+        "info",
     );
 }
 
