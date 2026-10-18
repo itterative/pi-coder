@@ -7,13 +7,31 @@
  * footer that created it.
  */
 
-/** One-line help tips, shown in rotation. Keep them short and concrete; no trailing period. */
-const FOOTER_TIPS: readonly string[] = [
-    "/agents lists runs, workspaces, and settings",
-    "Blocked commands? Edit .pi/bash-sandbox-config.json",
-    "Ask for a scout to explore before I change code",
-    "Say 'remember this' to keep it in project memory",
-    "Tune the command classifier in /agents → Settings",
+import decisionConfig from "../../modules/decision/config";
+
+/** A one-line help tip. Keep them short and concrete; no trailing period. */
+export interface FooterTip {
+    /** The text shown after the `tip: ` prefix. */
+    text: string;
+    /** When set, the tip is only offered while this returns true. */
+    when?: () => boolean;
+    /** Lead with this tip at the first window where it is available, once per rotator. */
+    preferFirst?: boolean;
+}
+
+/** The tips shown in rotation. */
+const FOOTER_TIPS: readonly FooterTip[] = [
+    {
+        text: "alt+a toggles the Bash tool's auto mode",
+        // The shortcut is only news while the classifier is off: the badge already says "auto".
+        when: () => decisionConfig.current.enabled !== true,
+        preferFirst: true,
+    },
+    { text: "/agents lists runs, workspaces, and settings" },
+    { text: "Blocked commands? Edit .pi/bash-sandbox-config.json" },
+    { text: "Ask for a scout to explore before I change code" },
+    { text: "Say 'remember this' to keep it in project memory" },
+    { text: "Tune the command classifier in /agents → Settings" },
 ];
 
 const DEFAULT_TIP_FIRST_DELAY_MS = 20_000;
@@ -22,7 +40,7 @@ const DEFAULT_TIP_VISIBLE_MS = 10_000;
 
 export interface TipRotatorOptions {
     /** Tips to rotate through; defaults to `FOOTER_TIPS`. */
-    tips?: readonly string[];
+    tips?: readonly FooterTip[];
     /** Delay before the first tip; later tips follow at `intervalMs`. */
     firstDelayMs?: number;
     /** How long to wait between tips. */
@@ -39,18 +57,19 @@ export interface TipRotatorOptions {
  * the owner only has to re-render.
  */
 export class TipRotator {
-    private readonly tips: readonly string[];
+    private readonly tips: readonly FooterTip[];
     private readonly firstDelayMs: number;
     private readonly intervalMs: number;
     private readonly visibleMs: number;
     private readonly random: () => number;
-    private queue: string[] = [];
+    private readonly preferredShown = new Set<FooterTip>();
+    private queue: FooterTip[] = [];
     private nextTimer?: ReturnType<typeof setTimeout>;
     private hideTimer?: ReturnType<typeof setTimeout>;
     private disposed = false;
 
     constructor(
-        private readonly onChange: (tip: string | undefined) => void,
+        private readonly onChange: (tip: FooterTip | undefined) => void,
         options: TipRotatorOptions = {},
     ) {
         this.tips = options.tips ?? FOOTER_TIPS;
@@ -103,17 +122,55 @@ export class TipRotator {
         }, this.visibleMs);
     }
 
-    private takeTip(): string | undefined {
+    /**
+     * Pick the tip for this window: a `preferFirst` tip that is available and has not led yet jumps the
+     * queue once, then rotation continues through the shuffled remainder. Unavailable tips stay queued so
+     * they appear in their place once their condition holds, and a window with nothing available is
+     * skipped without consuming anything.
+     */
+    private takeTip(): FooterTip | undefined {
         if (this.queue.length === 0) {
             this.queue = shuffled(this.tips, this.random);
         }
 
-        return this.queue.pop();
+        return this.takePreferredTip() ?? this.takeRotatedTip();
+    }
+
+    private takePreferredTip(): FooterTip | undefined {
+        const preferred = this.tips.find(
+            (tip) =>
+                tip.preferFirst === true && !this.preferredShown.has(tip) && isTipAvailable(tip),
+        );
+        if (preferred === undefined) {
+            return undefined;
+        }
+
+        this.preferredShown.add(preferred);
+        const index = this.queue.indexOf(preferred);
+        if (index !== -1) {
+            this.queue.splice(index, 1);
+        }
+
+        return preferred;
+    }
+
+    private takeRotatedTip(): FooterTip | undefined {
+        const index = this.queue.findLastIndex((tip) => isTipAvailable(tip));
+        if (index === -1) {
+            return undefined;
+        }
+
+        return this.queue.splice(index, 1)[0];
     }
 }
 
+/** A tip with no `when` is always available; a false condition defers it to a later window. */
+function isTipAvailable(tip: FooterTip): boolean {
+    return tip.when?.() !== false;
+}
+
 /** Fisher-Yates over a copy, so the configured tip list keeps its order. */
-function shuffled(values: readonly string[], random: () => number): string[] {
+function shuffled(values: readonly FooterTip[], random: () => number): FooterTip[] {
     const items = [...values];
 
     for (let index = items.length - 1; index > 0; index -= 1) {

@@ -440,7 +440,7 @@ describe("status footer", () => {
 
     it("shows a help tip instead of the TODO while no agent is active", async () => {
         const footer = makeFooter(statusContext(), footerData({ branch: "main" }), { todo });
-        footer.setTip("Say 'remember this' to keep it in project memory");
+        footer.setTip({ text: "Say 'remember this' to keep it in project memory" });
 
         const line = renderText(footer, 142);
         await expect(snapshotText(line)).toMatchFileSnapshot(
@@ -468,7 +468,7 @@ describe("status footer", () => {
             runs: [run],
             todo,
         });
-        footer.setTip("/agents lists runs, workspaces, and settings");
+        footer.setTip({ text: "/agents lists runs, workspaces, and settings" });
 
         const line = renderText(footer, 140);
         await expect(snapshotText(line)).toMatchFileSnapshot(
@@ -491,7 +491,7 @@ describe("status footer", () => {
         vi.spyOn(decisionConfig, "current", "get").mockReturnValue({ enabled: true });
         const fg = vi.spyOn(mockTheme, "fg");
         const footer = makeFooter(statusContext(), footerData({ branch: "main" }));
-        footer.setTip("x".repeat(200));
+        footer.setTip({ text: "x".repeat(200) });
 
         const line = renderText(footer, 120);
         // The tip yields characters instead of vanishing, and the badge stays on the line.
@@ -513,7 +513,7 @@ describe("status footer", () => {
             startedAt: Date.now(),
         });
         const footer = makeFooter(baseContext(), footerData(), { runs: [run] });
-        footer.setTip("x".repeat(200));
+        footer.setTip({ text: "x".repeat(200) });
 
         const line = renderText(footer, 200);
         expect(line).not.toContain("x".repeat(60));
@@ -531,11 +531,33 @@ describe("status footer", () => {
             expect(renderText(footer, 120)).not.toContain("tip: ");
 
             vi.advanceTimersByTime(1);
-            expect(renderText(footer, 120)).toContain("tip: ");
+            // The alt+a tip is preferred, and the test environment keeps the classifier off.
+            expect(renderText(footer, 120)).toContain(
+                "tip: alt+a toggles the Bash tool's auto mode",
+            );
             footer.dispose();
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it("drops a conditional tip as soon as its condition stops holding", () => {
+        const current = vi.spyOn(decisionConfig, "current", "get").mockReturnValue({
+            enabled: false,
+        });
+        const footer = makeFooter(baseContext(), footerData());
+        footer.setTip({
+            text: "alt+a toggles the Bash tool's auto mode",
+            when: () => decisionConfig.current.enabled !== true,
+        });
+
+        expect(renderText(footer, 140)).toContain("tip: alt+a");
+
+        current.mockReturnValue({ enabled: true });
+        const line = renderText(footer, 140);
+        expect(line).not.toContain("tip: ");
+        expect(line).toContain("» auto");
+        footer.dispose();
     });
 });
 

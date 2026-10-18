@@ -28,7 +28,7 @@ import {
 import { Spinner } from "../spinner";
 import { formatAgentSummary, hasActiveAgentRuns } from "./agent-activity-format";
 import { formatTodoProgress, summarizeTodoList } from "./format";
-import { TipRotator } from "./tips";
+import { TipRotator, type FooterTip } from "./tips";
 import {
     UsageTotalsCache,
     footerInfoSegments,
@@ -52,7 +52,7 @@ export class PiCoderFooter implements Component {
     private runs: AgentRunSummary[];
     private hiddenCount: number;
     private todo: TodoList | undefined;
-    private tip: string | undefined;
+    private tip: FooterTip | undefined;
     private decisionChecking = 0;
     private disposed = false;
 
@@ -94,7 +94,7 @@ export class PiCoderFooter implements Component {
     }
 
     /** Set the visible help tip; the rotator calls this when a tip's window opens and closes. */
-    setTip(tip: string | undefined): void {
+    setTip(tip: FooterTip | undefined): void {
         this.tip = tip;
         this.tui.requestRender();
     }
@@ -113,8 +113,9 @@ export class PiCoderFooter implements Component {
         const agentActive = hasActiveAgentRuns(this.runs);
         // A tip takes whichever slot is free: the TODO's while the line is idle, the usage numbers'
         // while an agent is active.
-        const leftTip = this.tip && !agentActive ? this.tipSegment(this.tip, "left") : undefined;
-        const rightTip = this.tip && agentActive ? this.tipSegment(this.tip, "right") : undefined;
+        const tip = this.visibleTip();
+        const leftTip = tip && !agentActive ? this.tipSegment(tip, "left") : undefined;
+        const rightTip = tip && agentActive ? this.tipSegment(tip, "right") : undefined;
         const usage: FooterLineSegment = rightTip ?? {
             text: info.usage,
             side: "right",
@@ -183,8 +184,8 @@ export class PiCoderFooter implements Component {
      * the right cluster is capped so it cannot balloon the cluster that reserves width first; a left tip
      * takes whatever the cluster leaves it.
      */
-    private tipSegment(tip: string, side: "left" | "right"): FooterLineSegment {
-        const label = `tip: ${tip}`;
+    private tipSegment(tip: FooterTip, side: "left" | "right"): FooterLineSegment {
+        const label = `tip: ${tip.text}`;
         const capped = side === "right" ? truncateToWidth(label, MAX_RIGHT_TIP_CHARS, "…") : label;
 
         return {
@@ -194,6 +195,18 @@ export class PiCoderFooter implements Component {
             shrinkToFit: true,
             ellipsis: this.theme.fg("dim", "…"),
         };
+    }
+
+    /**
+     * The tip that may render right now: a conditioned tip drops out as soon as its state stops
+     * applying, without waiting for the rotator's window to close.
+     */
+    private visibleTip(): FooterTip | undefined {
+        if (this.tip?.when?.() === false) {
+            return undefined;
+        }
+
+        return this.tip;
     }
 
     /**

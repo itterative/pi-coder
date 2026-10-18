@@ -14,8 +14,9 @@ and their surface is in `surfaces`; `apply` is the single switch that lets a ver
 without it the model is consulted and recorded only. The global `alt+a` shortcut
 (`registerDecisionModelShortcut` in `src/tools/decision-settings.ts`) toggles `enabled` in the global file,
 re-syncs the endpoint provider so the change lands without a reload, and uses the footer's `» auto` /
-`» manual` badge as the state readout; it warns when a project config file outranks the saved value or when
-enabling finds no endpoint configured.
+`» manual` badge as the state readout (the footer's first help tip also advertises the shortcut while
+the model is off); it warns when a project config file outranks the saved value or when enabling finds
+no endpoint configured.
 
 Measured evidence and rejected alternatives: [decision-model/history.md](history.md) (not indexed). Read this
 memory first; go there only for the numbers behind a decision.

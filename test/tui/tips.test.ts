@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { TipRotator } from "../../src/tui/status/tips";
+import { TipRotator, type FooterTip } from "../../src/tui/status/tips";
 
 afterEach(() => {
     vi.useRealTimers();
@@ -8,10 +8,15 @@ afterEach(() => {
 
 function recording(): {
     seen: Array<string | undefined>;
-    onChange: (tip: string | undefined) => void;
+    onChange: (tip: FooterTip | undefined) => void;
 } {
     const seen: Array<string | undefined> = [];
-    return { seen, onChange: (tip) => seen.push(tip) };
+    return { seen, onChange: (tip) => seen.push(tip?.text) };
+}
+
+/** A tip list entry; `options` carries the `when` gate and the `preferFirst` flag. */
+function tip(text: string, options: Omit<FooterTip, "text"> = {}): FooterTip {
+    return { text, ...options };
 }
 
 describe("TipRotator", () => {
@@ -19,7 +24,7 @@ describe("TipRotator", () => {
         vi.useFakeTimers();
         const { seen, onChange } = recording();
         const rotator = new TipRotator(onChange, {
-            tips: ["first", "second"],
+            tips: [tip("first"), tip("second")],
             firstDelayMs: 1_000,
             intervalMs: 1_000,
             visibleMs: 400,
@@ -50,7 +55,7 @@ describe("TipRotator", () => {
         vi.useFakeTimers();
         const { seen, onChange } = recording();
         const rotator = new TipRotator(onChange, {
-            tips: ["a"],
+            tips: [tip("a")],
             firstDelayMs: 500,
             intervalMs: 1_000,
             visibleMs: 50,
@@ -69,7 +74,7 @@ describe("TipRotator", () => {
         vi.useFakeTimers();
         const { seen, onChange } = recording();
         const rotator = new TipRotator(onChange, {
-            tips: ["a", "b", "c"],
+            tips: [tip("a"), tip("b"), tip("c")],
             firstDelayMs: 100,
             intervalMs: 100,
             visibleMs: 50,
@@ -80,9 +85,9 @@ describe("TipRotator", () => {
         const shown: string[] = [];
         for (let cycle = 0; cycle < 3; cycle += 1) {
             vi.advanceTimersByTime(100);
-            const tip = seen.at(-1);
-            if (typeof tip === "string") {
-                shown.push(tip);
+            const text = seen.at(-1);
+            if (typeof text === "string") {
+                shown.push(text);
             }
             vi.advanceTimersByTime(50);
         }
@@ -96,7 +101,7 @@ describe("TipRotator", () => {
         vi.useFakeTimers();
         const { seen, onChange } = recording();
         const rotator = new TipRotator(onChange, {
-            tips: ["a"],
+            tips: [tip("a")],
             firstDelayMs: 100,
             intervalMs: 100,
             visibleMs: 50,
@@ -115,7 +120,7 @@ describe("TipRotator", () => {
         vi.useFakeTimers();
         const { seen, onChange } = recording();
         const rotator = new TipRotator(onChange, {
-            tips: ["a"],
+            tips: [tip("a")],
             firstDelayMs: 100,
             intervalMs: 100,
             visibleMs: 50,
@@ -125,6 +130,82 @@ describe("TipRotator", () => {
         rotator.start();
         vi.advanceTimersByTime(100);
         expect(seen).toEqual(["a"]);
+        rotator.dispose();
+    });
+
+    it("defers a conditioned tip until its condition holds", () => {
+        vi.useFakeTimers();
+        const { seen, onChange } = recording();
+        let open = false;
+        const rotator = new TipRotator(onChange, {
+            tips: [tip("gated", { when: () => open }), tip("always")],
+            firstDelayMs: 100,
+            intervalMs: 100,
+            visibleMs: 50,
+            random: () => 0,
+        });
+
+        rotator.start();
+        vi.advanceTimersByTime(100);
+        expect(seen).toEqual(["always"]);
+
+        // The gated tip is the only one left in the bag: its window is skipped, not consumed.
+        vi.advanceTimersByTime(200);
+        expect(seen).toEqual(["always", undefined]);
+
+        open = true;
+        vi.advanceTimersByTime(50);
+        expect(seen).toEqual(["always", undefined, "gated"]);
+        rotator.dispose();
+    });
+
+    it("lets a preferred tip jump the shuffled order", () => {
+        vi.useFakeTimers();
+        const { seen, onChange } = recording();
+        const rotator = new TipRotator(onChange, {
+            // The shuffle below would pop "first" without the preference.
+            tips: [tip("first"), tip("second"), tip("preferred", { preferFirst: true })],
+            firstDelayMs: 100,
+            intervalMs: 100,
+            visibleMs: 50,
+            random: () => 0,
+        });
+
+        rotator.start();
+        vi.advanceTimersByTime(100);
+        expect(seen).toEqual(["preferred"]);
+
+        vi.advanceTimersByTime(150);
+        expect(seen).toEqual(["preferred", undefined, "first"]);
+        rotator.dispose();
+    });
+
+    it("leads with a preferred tip at the first window where it is available", () => {
+        vi.useFakeTimers();
+        const { seen, onChange } = recording();
+        let open = false;
+        const preferred = tip("gated", { when: () => open, preferFirst: true });
+        const rotator = new TipRotator(onChange, {
+            tips: [preferred, tip("a"), tip("b")],
+            firstDelayMs: 100,
+            intervalMs: 100,
+            visibleMs: 50,
+            // An identity shuffle keeps the bag order predictable for the assertions.
+            random: () => 0.99,
+        });
+
+        rotator.start();
+        vi.advanceTimersByTime(100);
+        // The preferred tip is not available, so the bag's own order shows through.
+        expect(seen).toEqual(["b"]);
+
+        open = true;
+        vi.advanceTimersByTime(150);
+        expect(seen).toEqual(["b", undefined, "gated"]);
+
+        vi.advanceTimersByTime(150);
+        // Leading took it out of the bag, so rotation continues with the remaining tips.
+        expect(seen).toEqual(["b", undefined, "gated", undefined, "a"]);
         rotator.dispose();
     });
 });
