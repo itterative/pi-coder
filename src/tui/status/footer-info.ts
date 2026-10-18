@@ -116,6 +116,13 @@ export interface FooterLineSegment {
      * the right cluster alone cannot fit the line.
      */
     dropPriority: number;
+    /**
+     * When set, a cluster that cannot fit shortens this segment to the leftover width before dropping
+     * it, so transient content yields characters instead of disappearing.
+     */
+    shrinkToFit?: boolean;
+    /** Ellipsis for a layout trim, styled when the segment itself is styled. */
+    ellipsis?: string;
 }
 
 /**
@@ -141,12 +148,23 @@ function nonEmpty(
     return segments.filter((segment) => segment.side === side && segment.text.length > 0);
 }
 
+/** Below this many columns a shortened segment is dropped instead of squeezed into a stub. */
+const MIN_SHRINK_WIDTH = 16;
+
 /** Drop whole segments until the cluster fits, then truncate a lone oversized segment. */
 function fitCluster(segments: readonly FooterLineSegment[], width: number): FooterLineSegment[] {
     const parts = [...segments];
     while (parts.length > 1 && clusterWidth(parts) > width) {
         const index = highestDropPriority(parts);
         if (index === -1) break;
+
+        const segment = parts[index];
+        const shrunk = segment?.shrinkToFit ? shrinkToFit(parts, index, width) : undefined;
+        if (shrunk) {
+            parts.splice(index, 1, shrunk);
+            break;
+        }
+
         parts.splice(index, 1);
     }
 
@@ -154,10 +172,26 @@ function fitCluster(segments: readonly FooterLineSegment[], width: number): Foot
     if (!only) return [];
 
     if (clusterWidth(parts) > width) {
-        return [{ ...only, text: truncateToWidth(only.text, width, "…") }];
+        return [{ ...only, text: truncateToWidth(only.text, width, only.ellipsis ?? "…") }];
     }
 
     return parts;
+}
+
+/** A shrinkable segment truncated into what its siblings and their separators leave over. */
+function shrinkToFit(
+    parts: readonly FooterLineSegment[],
+    index: number,
+    width: number,
+): FooterLineSegment | undefined {
+    const segment = parts[index];
+    if (!segment) return undefined;
+
+    const others = parts.filter((_, position) => position !== index);
+    const budget = width - clusterWidth(others) - others.length * visibleWidth(SEGMENT_SEPARATOR);
+    if (budget < MIN_SHRINK_WIDTH) return undefined;
+
+    return { ...segment, text: truncateToWidth(segment.text, budget, segment.ellipsis ?? "…") };
 }
 
 function highestDropPriority(segments: readonly FooterLineSegment[]): number {

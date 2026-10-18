@@ -38,6 +38,7 @@ import { emitAgentStatus } from "../../src/tools/agent/observability/events";
 
 afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
 });
 
 const todo: TodoList = {
@@ -415,6 +416,106 @@ describe("status footer", () => {
         expect(renderText(footer, 80)).not.toContain("⠋");
         footer.dispose();
     });
+
+    it("shows a help tip instead of the TODO while no agent is active", async () => {
+        const footer = makeFooter(statusContext(), footerData({ branch: "main" }), { todo });
+        footer.setTip("Say 'remember this' to keep it in project memory");
+
+        const line = renderText(footer, 140);
+        await expect(snapshotText(line)).toMatchFileSnapshot(
+            "./__snapshots__/status-footer.tip-left.txt",
+        );
+        expect(line).toContain("tip: Say 'remember this' to keep it in project memory");
+        expect(line).not.toContain("TODO");
+        // The right cluster keeps its numbers in the left placement.
+        expect(line).toContain("120k tok");
+
+        footer.setTip(undefined);
+        expect(renderText(footer, 140)).toContain("TODO 1/4");
+        footer.dispose();
+    });
+
+    it("shows a help tip instead of the usage numbers while an agent is active", async () => {
+        const run = partialRun({
+            runId: "worker-1",
+            title: "Implement the feature",
+            task: "Implement the feature",
+            status: "running",
+            startedAt: Date.now(),
+        });
+        const footer = makeFooter(statusContext(), footerData({ branch: "main" }), {
+            runs: [run],
+            todo,
+        });
+        footer.setTip("/agents lists runs, workspaces, and settings");
+
+        const line = renderText(footer, 140);
+        await expect(snapshotText(line)).toMatchFileSnapshot(
+            "./__snapshots__/status-footer.tip-right.txt",
+        );
+        expect(line).toContain("tip: /agents lists runs, workspaces, and settings");
+        expect(line).not.toContain("tok");
+        expect(line).not.toContain("200k");
+        expect(line).toContain("worker-1");
+        expect(line).toContain("stub-model");
+
+        footer.setTip(undefined);
+        const restored = renderText(footer, 140);
+        expect(restored).toContain("120k tok");
+        expect(restored).toContain("45.0%/200k");
+        footer.dispose();
+    });
+
+    it("trims a long tip into the left's remaining width and keeps the badge", () => {
+        vi.spyOn(decisionConfig, "current", "get").mockReturnValue({ enabled: true });
+        const fg = vi.spyOn(mockTheme, "fg");
+        const footer = makeFooter(statusContext(), footerData({ branch: "main" }));
+        footer.setTip("x".repeat(200));
+
+        const line = renderText(footer, 120);
+        // The tip yields characters instead of vanishing, and the badge stays on the line.
+        expect(line).toContain("» auto");
+        expect(line).toContain("tip: ");
+        expect(line).toContain("…");
+        expect(line).not.toContain("x".repeat(60));
+        // The layout trim is styled like the tip, so the ellipsis is not left bright.
+        expect(fg).toHaveBeenCalledWith("dim", "…");
+        footer.dispose();
+    });
+
+    it("caps the right-placement tip so it cannot balloon the reserved cluster", () => {
+        const run = partialRun({
+            runId: "worker-1",
+            title: "Implement the feature",
+            task: "Implement the feature",
+            status: "running",
+            startedAt: Date.now(),
+        });
+        const footer = makeFooter(baseContext(), footerData(), { runs: [run] });
+        footer.setTip("x".repeat(200));
+
+        const line = renderText(footer, 200);
+        expect(line).not.toContain("x".repeat(60));
+        expect(line).toContain("…");
+        footer.dispose();
+    });
+
+    it("starts the tip rotation with the footer", () => {
+        vi.useFakeTimers();
+        try {
+            const footer = makeFooter(baseContext());
+            expect(renderText(footer, 120)).not.toContain("tip: ");
+
+            vi.advanceTimersByTime(19_999);
+            expect(renderText(footer, 120)).not.toContain("tip: ");
+
+            vi.advanceTimersByTime(1);
+            expect(renderText(footer, 120)).toContain("tip: ");
+            footer.dispose();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });
 
 describe("footer line formatting", () => {
@@ -422,8 +523,9 @@ describe("footer line formatting", () => {
         text: string,
         side: FooterLineSegment["side"],
         dropPriority = 0,
+        extras: Partial<FooterLineSegment> = {},
     ): FooterLineSegment {
-        return { text, side, dropPriority };
+        return { text, side, dropPriority, ...extras };
     }
 
     it("shortens a cwd under the home directory", () => {
@@ -499,6 +601,46 @@ describe("footer line formatting", () => {
         const truncated = layoutFooterLine([segment("a long first segment", "left")], 10);
         expect(truncated).toContain("…");
         expect(visibleWidth(truncated)).toBe(10);
+    });
+
+    it("shrinks a shrinkToFit segment instead of dropping it", () => {
+        const line = layoutFooterLine(
+            [
+                segment("auto", "left", 4),
+                segment("tip: a long help message", "left", 5, { shrinkToFit: true }),
+                segment("status", "left", 6),
+            ],
+            30,
+        );
+
+        // status drops first; the tip then shortens into what auto and its separator leave.
+        expect(line).toContain("auto · tip:");
+        expect(line).toContain("…");
+        expect(line).not.toContain("status");
+        expect(visibleWidth(line)).toBeLessThanOrEqual(30);
+    });
+
+    it("drops a shrinkToFit segment when only a stub would fit", () => {
+        const line = layoutFooterLine(
+            [
+                segment("auto", "left", 4),
+                segment("tip: everything", "left", 5, { shrinkToFit: true }),
+            ],
+            10,
+        );
+
+        expect(line).toBe("auto");
+    });
+
+    it("trims with the segment's own ellipsis style", () => {
+        const dimmed = "\x1b[2m…\x1b[0m";
+        const line = layoutFooterLine(
+            [segment("tip: a long dim message", "left", 0, { ellipsis: dimmed })],
+            12,
+        );
+
+        expect(line).toContain(dimmed);
+        expect(visibleWidth(line)).toBe(12);
     });
 });
 

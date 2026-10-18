@@ -5,7 +5,7 @@ import type {
     ReadonlyFooterDataProvider,
     Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import { truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 
 import decisionConfig from "../../modules/decision/config";
 import {
@@ -28,6 +28,7 @@ import {
 import { Spinner } from "../spinner";
 import { formatAgentSummary, hasActiveAgentRuns } from "./agent-activity-format";
 import { formatTodoProgress, summarizeTodoList } from "./format";
+import { TipRotator } from "./tips";
 import {
     UsageTotalsCache,
     footerInfoSegments,
@@ -36,6 +37,7 @@ import {
 } from "./footer-info";
 
 const MAX_TODO_CURRENT_CHARS = 40;
+const MAX_RIGHT_TIP_CHARS = 56;
 
 /**
  * The parent status footer: one compact line combining the decision model's auto-mode state, the visible
@@ -45,10 +47,12 @@ const MAX_TODO_CURRENT_CHARS = 40;
  */
 export class PiCoderFooter implements Component {
     private readonly spinner: Spinner;
+    private readonly tips: TipRotator;
     private readonly totals = new UsageTotalsCache();
     private runs: AgentRunSummary[];
     private hiddenCount: number;
     private todo: TodoList | undefined;
+    private tip: string | undefined;
     private decisionChecking = 0;
     private disposed = false;
 
@@ -63,10 +67,12 @@ export class PiCoderFooter implements Component {
         events?: EventBus,
     ) {
         this.spinner = new Spinner(tui, { events });
+        this.tips = new TipRotator((tip) => this.setTip(tip));
         this.runs = runs;
         this.hiddenCount = hiddenCount;
         this.todo = todo;
         this.updateSpinner();
+        this.tips.start();
     }
 
     setAgents(runs: AgentRunSummary[], hiddenCount = 0): void {
@@ -87,6 +93,12 @@ export class PiCoderFooter implements Component {
         this.tui.requestRender();
     }
 
+    /** Set the visible help tip; the rotator calls this when a tip's window opens and closes. */
+    setTip(tip: string | undefined): void {
+        this.tip = tip;
+        this.tui.requestRender();
+    }
+
     render(width: number): string[] {
         const info = footerInfoSegments(this.theme, {
             cwd: this.context.cwd,
@@ -98,6 +110,17 @@ export class PiCoderFooter implements Component {
             extensionStatuses: this.footerData.getExtensionStatuses(),
         });
 
+        const agentActive = hasActiveAgentRuns(this.runs);
+        // A tip takes whichever slot is free: the TODO's while the line is idle, the usage numbers'
+        // while an agent is active.
+        const leftTip = this.tip && !agentActive ? this.tipSegment(this.tip, "left") : undefined;
+        const rightTip = this.tip && agentActive ? this.tipSegment(this.tip, "right") : undefined;
+        const usage: FooterLineSegment = rightTip ?? {
+            text: info.usage,
+            side: "right",
+            dropPriority: 2,
+        };
+
         const segments: FooterLineSegment[] = [
             // Left: the agent summary is kept longest, then auto mode, TODO, and extension statuses.
             { text: this.autoBadge(), side: "left", dropPriority: 4 },
@@ -106,11 +129,11 @@ export class PiCoderFooter implements Component {
                 side: "left",
                 dropPriority: 3,
             },
-            { text: this.todoSegment(), side: "left", dropPriority: 5 },
+            leftTip ?? { text: this.todoSegment(), side: "left", dropPriority: 5 },
             { text: info.statuses, side: "left", dropPriority: 6 },
             // Right: the cluster reserves its width, so these only shed when it cannot fit alone.
-            { text: info.usage, side: "right", dropPriority: 2 },
-            { text: info.context, side: "right", dropPriority: 0 },
+            usage,
+            { text: rightTip ? "" : info.context, side: "right", dropPriority: 0 },
             { text: info.model, side: "right", dropPriority: 3 },
             { text: info.cwd, side: "right", dropPriority: 1 },
         ];
@@ -129,6 +152,7 @@ export class PiCoderFooter implements Component {
 
         this.disposed = true;
         this.spinner.dispose();
+        this.tips.dispose();
     }
 
     private updateSpinner(): void {
@@ -148,6 +172,25 @@ export class PiCoderFooter implements Component {
 
         const label = checking ? `${this.spinner.getFrame()} auto` : "» auto";
         return this.theme.fg("accent", label);
+    }
+
+    /**
+     * The current help tip as a dim `tip: …` segment. `shrinkToFit` lets the layout trim it into the
+     * space that remains instead of dropping it, and the styled ellipsis keeps that trim muted. A tip in
+     * the right cluster is capped so it cannot balloon the cluster that reserves width first; a left tip
+     * takes whatever the cluster leaves it.
+     */
+    private tipSegment(tip: string, side: "left" | "right"): FooterLineSegment {
+        const label = `tip: ${tip}`;
+        const capped = side === "right" ? truncateToWidth(label, MAX_RIGHT_TIP_CHARS, "…") : label;
+
+        return {
+            text: this.theme.fg("dim", capped),
+            side,
+            dropPriority: side === "right" ? 4 : 5,
+            shrinkToFit: true,
+            ellipsis: this.theme.fg("dim", "…"),
+        };
     }
 
     /**
