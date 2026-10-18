@@ -776,5 +776,5 @@ protocol above is the starting point.
    decision-log v2, tests. Independent of layer 2 and can run in parallel with it.
 4. **Bash tool wrapper (layer 2):** argv-based `bwrap` operations, `toolCallId` decision map, parity
    suite, child registration.
-5. **Children for the decision model**, then the status widget.
+5. **Children for the decision model**, then the status footer.
 6. Optional later: pooled sandbox backend behind the layer-2 seam.

@@ -15,7 +15,7 @@ export type {
 /** Shared pi event channel for delegated-agent runtime changes. */
 export const AGENT_EVENT_CHANNEL = "pi-coder:agent-event";
 
-/** Agent progress snapshot consumed by the parent status widget. */
+/** Agent progress snapshot consumed by the parent status footer. */
 export const AGENT_STATUS_EVENT = "pi-coder:agent-status";
 
 export interface AgentStatusEvent {

@@ -11,7 +11,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
-import { registerStatusWidget } from "../../src/tui/status";
+import { registerStatusFooter } from "../../src/tui/status";
 import registerAgentTool, { clearCompletedWorkspaceSetupRun } from "../../src/tools/agent";
 import { executeAgentAction } from "../../src/tools/agent/action-dispatch";
 import type { AgentLifecycle } from "../../src/tools/agent/lifecycle";
@@ -888,11 +888,10 @@ describe("agent extension registration", () => {
             reportProgress = context.onProgress;
             return child;
         });
-        const widgetPlacements: Array<string | undefined> = [];
-        let widgetComponent: Component | undefined;
+        let footerComponent: (Component & { dispose?(): void }) | undefined;
         const widgets: Array<string[] | undefined> = [];
         let lastWidgetState: string | undefined;
-        // deduplicate widget renders so microtask changes don't completely change the snapshot
+        // deduplicate footer renders so microtask changes don't completely change the snapshot
         const recordWidgetState = (lines: string[] | undefined): void => {
             const state = lines?.join("\n").trimEnd();
             if (state === lastWidgetState) {
@@ -901,22 +900,27 @@ describe("agent extension registration", () => {
             lastWidgetState = state;
             widgets.push(lines);
         };
-        // The status widget only ever calls `requestRender()` on the TUI it is handed.
+        // The status footer only ever calls `requestRender()` on the TUI it is handed.
         const widgetTui = {
             requestRender() {
-                if (widgetComponent) recordWidgetState(widgetComponent.render(200));
+                if (footerComponent) recordWidgetState(footerComponent.render(200));
             },
         } as TUI;
         const ui = stubUi({
-            setWidget(_id, value, options) {
-                if (typeof value === "function") {
-                    widgetComponent = value(widgetTui, mockTheme);
-                    recordWidgetState(widgetComponent.render(200));
+            setFooter(factory) {
+                if (typeof factory === "function") {
+                    footerComponent = factory(widgetTui, mockTheme, {
+                        getGitBranch: () => null,
+                        getExtensionStatuses: () => new Map<string, string>(),
+                        getAvailableProviderCount: () => 1,
+                        onBranchChange: () => () => {},
+                    });
+                    recordWidgetState(footerComponent.render(200));
                 } else {
-                    widgetComponent = undefined;
-                    recordWidgetState(value);
+                    footerComponent?.dispose?.();
+                    footerComponent = undefined;
+                    recordWidgetState(undefined);
                 }
-                if (value) widgetPlacements.push(options?.placement);
             },
         });
         const ctx = stubContext({
@@ -926,9 +930,14 @@ describe("agent extension registration", () => {
             isProjectTrusted: () => false,
             isIdle: () => false,
             ui,
+            sessionManager: stubSessionManager({
+                getSessionId: () => "session-1",
+                getLeafId: () => null,
+                getEntries: () => [],
+            }),
         });
-        registerStatusWidget(stub.pi);
-        // Built after both registrations: `session_start` keeps the widget handler last.
+        registerStatusFooter(stub.pi);
+        // Built after both registrations: `session_start` keeps the footer handler last.
         const handlers = handlerView(
             stub,
             "session_start",
@@ -1025,10 +1034,9 @@ describe("agent extension registration", () => {
         );
         const widgetLines = widgets.flatMap((lines) => lines ?? []).map((line) => line.trimEnd());
         await expect(widgetLines.join("\n")).toMatchFileSnapshot(
-            "__snapshots__/agent-tool.tui.background-widget.txt",
+            "__snapshots__/agent-tool.tui.background-footer.txt",
         );
-        expect(widgets[widgets.length - 1]).toBeUndefined();
-        expect(widgetPlacements).toContain("aboveEditor");
+        expect(widgets.at(-1)?.join("\n")).not.toContain("scout-1");
         expect(background).toBe(true);
         await handlers.session_shutdown[0]({}, ctx);
     });

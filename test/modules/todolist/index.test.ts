@@ -11,16 +11,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { stubContext, stubSessionManager, type SessionManagerLike } from "../../helpers/pi-stub";
 
-import { renderText } from "../../helpers";
+import { mockTheme, renderText } from "../../helpers";
 
 import registerTodoListExtension from "../../../src/modules/todolist";
 import { TODO_SNAPSHOT_TYPE } from "../../../src/modules/todolist/persistence";
 import registerScratchpadExtension, { getScratchpadPath } from "../../../src/modules/scratchpad";
-import {
-    PiCoderStatusWidget,
-    registerStatusWidget,
-    STATUS_WIDGET_ID,
-} from "../../../src/tui/status";
+import { registerStatusFooter } from "../../../src/tui/status";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
@@ -519,18 +515,23 @@ describe("TODO runtime extension", () => {
         expect(fs.readFileSync(todoPath, "utf8")).toContain("todos: invalid");
     });
 
-    it("refreshes and clears the parent widget around valid and invalid updates", async () => {
+    it("refreshes and clears the parent footer around valid and invalid updates", async () => {
         const { pi, handler } = harness();
-        registerStatusWidget(pi);
-        const registrations: Array<{ key: string; content: unknown }> = [];
-        const sessionManager = {};
+        registerStatusFooter(pi);
+        const registrations: unknown[] = [];
+        const sessionManager = {
+            getSessionId: () => "session-1",
+            getLeafId: () => null,
+            getSessionName: () => undefined,
+            getEntries: () => [],
+        };
         const ctx = {
             ...runtimeContext(sessionManager),
             mode: "tui",
             hasUI: true,
             ui: {
-                setWidget(key: string, content: unknown) {
-                    registrations.push({ key, content });
+                setFooter(factory: unknown) {
+                    registrations.push(factory);
                 },
             },
         } as unknown as ExtensionContext;
@@ -544,27 +545,31 @@ describe("TODO runtime extension", () => {
         fs.writeFileSync(todoPath, validDocument);
         await handler("tool_result")({ toolName: "write" }, ctx);
 
-        const widgetRegistration = [...registrations]
-            .reverse()
-            .find((entry) => entry.content !== undefined);
-        expect(widgetRegistration?.key).toBe(STATUS_WIDGET_ID);
-        const widget = (widgetRegistration?.content as (tui: unknown) => PiCoderStatusWidget)({
-            requestRender() {},
+        const factory = registrations.at(-1) as (
+            tui: unknown,
+            theme: unknown,
+            data: unknown,
+        ) => { render(width: number): string[]; invalidate(): void; dispose(): void };
+        const footer = factory({ requestRender() {} }, mockTheme, {
+            getGitBranch: () => null,
+            getExtensionStatuses: () => new Map<string, string>(),
+            getAvailableProviderCount: () => 1,
+            onBranchChange: () => () => {},
         });
-        expect(renderText(widget, 80)).toContain("TODO 0/1 · Inspect the implementation");
+        expect(renderText(footer, 80)).toContain("TODO 0/1 · Inspect the implementation");
 
         fs.writeFileSync(todoPath, validDocument.replace("status: pending", "status: completed"));
         await handler("tool_result")({ toolName: "edit", isError: true }, ctx);
-        expect(renderText(widget, 80)).toContain("TODO 0/1 · Inspect the implementation");
+        expect(renderText(footer, 80)).toContain("TODO 0/1 · Inspect the implementation");
 
         fs.writeFileSync(todoPath, "---\nversion: 1\ntodos: invalid\n---\n");
         await handler("tool_result")({ toolName: "write" }, ctx);
-        expect(renderText(widget, 80)).toContain("TODO 0/1 · Inspect the implementation");
+        expect(renderText(footer, 80)).toContain("TODO 0/1 · Inspect the implementation");
 
         fs.unlinkSync(todoPath);
         await handler("tool_result")({ toolName: "bash" }, ctx);
-        expect(registrations.at(-1)?.content).toBeUndefined();
-        widget.dispose();
+        expect(renderText(footer, 80)).not.toContain("TODO");
+        footer.dispose();
     });
 
     it("rejects a symlink at the managed TODO path", async () => {

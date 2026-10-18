@@ -744,7 +744,7 @@ writes one, and when one exists the dialog shows a warning line above the footer
   duplicates it (it produced a doubled "my bad, I have 1.3.0").
 - Design prose: [docs/bash-execution-redesign.md](../../../docs/bash-execution-redesign.md) Part C.
 - Next: read `classifier` in a permission-report section (the standalone `scripts/decision-report.ts` reads
-the log already), and the status widget. Both surfaces are wired through `src/tools/decision-model.ts`.
+the log already), and the status footer. Both surfaces are wired through `src/tools/decision-model.ts`.
 - Next (follow-up, not implemented): use the human's allow/deny answer from the decision log as feedback for
   later decisions; the log already carries it.
 

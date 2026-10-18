@@ -193,7 +193,7 @@ to `out_of_scope @ 0.0` → refuse → abstain, `applied: false`, and the human 
 
 ## Next
 
-- Read `classifier` in a permission-report section, and a status widget; both surfaces are already wired
+- Read `classifier` in a permission-report section, and a status footer; both surfaces are already wired
   through `src/tools/decision-model.ts`.
 - Use the human's allow/deny answer from the log as feedback for later decisions (the log carries it).
 - Pass a custom agent's real ladder into the decision context instead of the `agent` baseline.
