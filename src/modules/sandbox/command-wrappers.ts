@@ -15,8 +15,9 @@ import { BashCommand, type BashWordNode } from "./bash";
  *
  * - `timeout -c/--chdir` (moves the confinement cwd), `--profile` (writes a file), `--group`,
  *   combined short options, and `--` (its operand rules are not modeled here).
- * - `nohup` writes `nohup.out`, and `env`, `time`, `nice`, `stdbuf`, and `xargs` each need their own
- *   option grammar before they can be trusted to add nothing.
+ * - `nohup` writes `nohup.out`, and `env`, `nice`, `stdbuf`, and `xargs` each need their own option
+ *   grammar before they can be trusted to add nothing. `time` is modeled as the shell keyword it is —
+ *   `time [-p]` — which is the only form the shell runs as `time`; `/usr/bin/time` is a different name.
  * - A wrapper around a directory builtin (`cd`, `pushd`, `popd`) leaves the calling shell where it
  *   was, so unwrapping it would advance modeled directory state that never moved.
  * - A wrapper preceded by environment assignments stays unwrapped as a whole segment. Dropping the
@@ -85,7 +86,28 @@ export function recognizeWrapperPrefix(tokens: readonly string[]): WrapperPrefix
     if (tokens[0] === "timeout") {
         return recognizeTimeoutPrefix(tokens);
     }
+
+    if (tokens[0] === "time") {
+        return recognizeTimePrefix(tokens);
+    }
+
     return undefined;
+}
+
+/**
+ * `time [-p] COMMAND [ARG]…`
+ *
+ * The shell keyword, not `/usr/bin/time` (a different command name with its own options). The keyword takes
+ * only `-p`, so any other token after `time` starts the command word and is left where it is; a wrapper with
+ * no command, or one wrapping a directory builtin, stays opaque like `timeout`'s.
+ */
+function recognizeTimePrefix(tokens: readonly string[]): WrapperPrefix | undefined {
+    const start = tokens[1] === "-p" ? 2 : 1;
+    if (tokens[start] === undefined || DIRECTORY_BUILTINS.has(tokens[start])) {
+        return undefined;
+    }
+
+    return { start };
 }
 
 /** `timeout [OPTION]… DURATION COMMAND [ARG]…` */

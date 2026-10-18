@@ -2493,8 +2493,13 @@ describe("getCwdConfinementPermission", () => {
                 expected: Heuristic.UNSAFE,
             },
             {
-                desc: "time is not a known command",
+                desc: "time wraps its inner command rather than staying unknown",
                 command: "time cat file.txt",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "time does not launder an unsafe inner command",
+                command: "time cat /etc/passwd",
                 expected: Heuristic.UNSAFE,
             },
         ]);

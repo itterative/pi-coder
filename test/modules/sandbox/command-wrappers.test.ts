@@ -42,6 +42,9 @@ describe("recognizeWrapperPrefix", () => {
         ["timeout -k 5 900 npm test", 4],
         ["timeout --kill-after=5s --signal=TERM 900 npm test", 4],
         ["timeout -v -s KILL 10 npm test", 5],
+        ["time npm test", 1],
+        ["time -p npm test", 2],
+        ["time timeout 900 npm test", 1],
     ])("unwraps %s", (command, start) => {
         expect(recognizeWrapperPrefix(command.split(" "))).toEqual({ start });
     });
@@ -63,6 +66,10 @@ describe("recognizeWrapperPrefix", () => {
         "nice 5 npm test",
         "nohup npm test",
         "env FOO=1 npm test",
+        "time",
+        "time -p",
+        "time cd /tmp",
+        "time -p pushd /tmp",
     ])("refuses to unwrap %s", (command) => {
         expect(recognizeWrapperPrefix(command.split(" "))).toBeUndefined();
     });
@@ -104,6 +111,37 @@ describe("unwrapWrapperCommand", () => {
         const unwrapped = unwrapWrapperCommand(singleCommand("timeout 5 ls 2> errors.log"));
 
         expect(unwrapped?.redirections.map((node) => node.target?.value)).toEqual(["errors.log"]);
+    });
+});
+
+describe("time resolution through the sandbox", () => {
+    it("confines a command wrapped in the shell keyword", () => {
+        expect(permission("time -p ls -1 src")).toBe("allow:sandbox");
+        expect(permission("time git status --short")).toBe("allow:sandbox");
+    });
+
+    it("keeps an outside path uncovered and matches inner-name rules", () => {
+        expect(permission("time cat /etc/passwd")).toBe("ask");
+        expect(permission("time -p npm run test:run", { "npm run test:run": "allow" })).toBe(
+            "allow",
+        );
+    });
+
+    it("suggests the wrapped command and still honors a wrapper-naming rule", () => {
+        expect(suggestion("time -p npm run test:run")).toBe("npm run test:run");
+        expect(
+            permission("time -p npm run test:run", {
+                "npm run test:run": "allow",
+                "time *": "deny",
+            }),
+        ).toBe("deny");
+    });
+
+    it("unwraps a chain of modeled wrappers", () => {
+        const command = "time -p timeout 5 npm run test:run";
+
+        expect(permission(command, { "npm run test:run": "allow:sandbox" })).toBe("allow:sandbox");
+        expect(suggestion(command)).toBe("npm run test:run");
     });
 });
 

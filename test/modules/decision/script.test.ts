@@ -426,6 +426,19 @@ describe("file script runs", () => {
         ).toMatchObject({ kind: "file", artifacts: [{ text: "echo hi" }] });
     });
 
+    it("resolves a script behind a transparent `time` wrapper", () => {
+        expect(
+            resolve("time -p python3 scripts/run.py --flag", { files: { [script]: "print(1)" } }),
+        ).toEqual({
+            kind: "file",
+            artifacts: [{ source: "scripts/run.py", path: script, text: "print(1)" }],
+        });
+        expect(resolve("time python3 -c 'print(1)'", { files: {} })).toEqual({
+            kind: "inline",
+            artifacts: [],
+        });
+    });
+
     it("reads every literal path argument, so a flag value does not hide the script", () => {
         expect(
             resolve("node --import tsx scripts/run.ts", {
