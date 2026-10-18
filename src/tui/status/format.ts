@@ -6,8 +6,8 @@ function truncateText(text: string, maxLength: number): string {
 }
 
 /**
- * The compact TODO segment. `maxCurrent` additionally caps the current item for one-line use;
- * omitted, the progress title keeps the parser's own 72-character bound.
+ * The compact TODO segment. `maxCurrent` additionally caps the current (or, once the list is done, the
+ * final) item for one-line use; omitted, the progress title keeps the parser's own 72-character bound.
  */
 export function formatTodoProgress(
     progress: TodoProgress | undefined,
@@ -15,12 +15,10 @@ export function formatTodoProgress(
 ): string {
     if (!progress || progress.total <= 0) return "";
 
-    const current =
-        progress.current && maxCurrent !== undefined
-            ? truncateText(progress.current, maxCurrent)
-            : progress.current;
-    return current
-        ? `TODO ${progress.completed}/${progress.total} · ${current}`
+    const detail = progress.current ?? progress.last;
+    const title = detail && maxCurrent !== undefined ? truncateText(detail, maxCurrent) : detail;
+    return title
+        ? `TODO ${progress.completed}/${progress.total} · ${title}`
         : `TODO ${progress.completed}/${progress.total}`;
 }
 

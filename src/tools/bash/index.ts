@@ -328,6 +328,7 @@ Pay attention to these notes as they provide context about the user's preference
                 ctx,
                 command: event.input.command,
                 sandboxEnabled,
+                events: pi.events,
             });
             classifier = consulted.record;
 
@@ -479,6 +480,7 @@ async function consultForPrompt(options: {
     ctx: ExtensionContext;
     command: string;
     sandboxEnabled: boolean;
+    events?: EventBus;
 }): Promise<ConsultedDecision> {
     // Read per prompt, from the session's directory rather than the process's: a project overlay belongs to
     // the project the command runs in, and this also makes an edited file take effect without a reload.
@@ -493,6 +495,7 @@ async function consultForPrompt(options: {
         command: options.command,
         sandboxAvailable: options.sandboxEnabled,
         label: "this command",
+        events: options.events,
         notify: (message, level) => options.ctx.ui.notify(message, level),
     });
 }

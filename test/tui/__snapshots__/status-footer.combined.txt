@@ -1,1 +1,1 @@
-⠋ worker-1 · 00:00 · Thinking · TODO 1/4 · Implement the feature with careful vali…                                        0.5%/200k · stub-model · /tmp/project
+⠋ worker-1 · 00:00 · Thinking                                                                                              0.5%/200k · stub-model · /tmp/project

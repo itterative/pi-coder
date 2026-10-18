@@ -9,7 +9,7 @@ import {
     type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { mockTheme, renderText, snapshotText, stubTui } from "../helpers";
 import { countedUsage, partialRun } from "../helpers/agent-doubles";
@@ -22,6 +22,8 @@ import {
 } from "../helpers/pi-stub";
 import type { TodoList } from "../../src/modules/todolist/parser";
 import { emitTodoStatus } from "../../src/modules/todolist/events";
+import decisionConfig from "../../src/modules/decision/config";
+import { emitDecisionStatus } from "../../src/modules/decision/events";
 import type { AgentRunSummary } from "../../src/tools/agent/contracts/runs";
 import { PiCoderFooter, registerStatusFooter } from "../../src/tui/status";
 import {
@@ -33,6 +35,10 @@ import {
     type FooterSessionSource,
 } from "../../src/tui/status/footer-info";
 import { emitAgentStatus } from "../../src/tools/agent/observability/events";
+
+afterEach(() => {
+    vi.restoreAllMocks();
+});
 
 const todo: TodoList = {
     path: "/tmp/TODO.md",
@@ -259,9 +265,14 @@ describe("status footer", () => {
         await expect(snapshotText(rendered)).toMatchFileSnapshot(
             "./__snapshots__/status-footer.combined.txt",
         );
-        expect(rendered.indexOf("worker-1")).toBeLessThan(rendered.indexOf("TODO 1/4"));
-        expect(rendered).toContain("TODO 1/4");
+        expect(rendered).toContain("worker-1");
+        // An active agent owns the line, so TODO progress yields to it.
+        expect(rendered).not.toContain("TODO 1/4");
         expect(rendered).not.toContain("\n");
+
+        // Once the run is terminal, the plan comes back.
+        emitAgentStatus(events, [{ ...run, status: "completed", updatedAt: run.updatedAt + 1 }], 0);
+        expect(renderText(footer, 160)).toContain("TODO 1/4");
 
         emitAgentStatus(events, [], 0);
         emitTodoStatus(events, undefined);
@@ -307,6 +318,101 @@ describe("status footer", () => {
         footer.setTodo({ ...todo, items: todo.items.slice(0, 2) });
 
         expect(renderText(footer, 80)).toContain("TODO 1/2");
+        footer.dispose();
+    });
+
+    it("mutes a completed TODO list and still names the last item", () => {
+        const done: TodoList = {
+            ...todo,
+            items: todo.items.map((item) => ({ ...item, status: "completed" as const })),
+        };
+        const fg = vi.spyOn(mockTheme, "fg");
+        const footer = new PiCoderFooter(
+            stubTui(),
+            mockTheme,
+            footerData(),
+            baseContext(),
+            [],
+            0,
+            done,
+        );
+
+        const line = renderText(footer, 80);
+        expect(line).toContain("TODO 4/4 · Release the change");
+        expect(fg).toHaveBeenCalledWith("dim", expect.stringContaining("TODO 4/4"));
+        footer.dispose();
+    });
+
+    it("hides TODO progress while an agent is active and restores it when it settles", () => {
+        const footer = makeFooter(baseContext(), footerData(), { todo });
+        const active = partialRun({
+            runId: "worker-1",
+            title: "Implement the feature",
+            task: "Implement the feature",
+            status: "waiting_for_permission",
+            startedAt: Date.now(),
+        });
+
+        footer.setAgents([active]);
+        expect(renderText(footer, 160)).not.toContain("TODO");
+
+        footer.setAgents([{ ...active, status: "completed" }]);
+        expect(renderText(footer, 160)).toContain("TODO 1/4");
+        footer.dispose();
+    });
+
+    it("shows the auto badge while the decision model is enabled", () => {
+        vi.spyOn(decisionConfig, "current", "get").mockReturnValue({ enabled: true });
+        const footer = makeFooter(baseContext());
+
+        expect(renderText(footer, 80)).toContain("» auto");
+
+        footer.setDecisionChecking(1);
+        const checkingLine = renderText(footer, 80);
+        expect(checkingLine).toContain("⠋ auto");
+        // One marker at a time: the spinner replaces the arrows while a check runs.
+        expect(checkingLine).not.toContain("»");
+        footer.setDecisionChecking(0);
+        expect(renderText(footer, 80)).not.toContain("⠋");
+        footer.dispose();
+    });
+
+    it("omits the auto badge while the decision model is disabled", () => {
+        const footer = makeFooter(baseContext());
+
+        expect(renderText(footer, 80)).not.toContain("auto");
+        footer.dispose();
+    });
+
+    it("renders auto mode beside a completed plan", async () => {
+        vi.spyOn(decisionConfig, "current", "get").mockReturnValue({ enabled: true });
+        const done: TodoList = {
+            ...todo,
+            items: todo.items.map((item) => ({ ...item, status: "completed" as const })),
+        };
+        const footer = makeFooter(statusContext(), footerData({ branch: "main" }), { todo: done });
+
+        await expect(snapshotText(renderText(footer, 140))).toMatchFileSnapshot(
+            "./__snapshots__/status-footer.auto.txt",
+        );
+        footer.dispose();
+    });
+
+    it("feeds decision-check events into the auto badge", () => {
+        vi.spyOn(decisionConfig, "current", "get").mockReturnValue({ enabled: true });
+        const { ui, calls } = recordingUi();
+        const context = baseContext({ mode: "tui", hasUI: true, ui });
+        const { events, trigger } = registerForContext();
+
+        trigger("session_start", context);
+        const footer = instantiate(calls[0]);
+
+        emitDecisionStatus(events, 1);
+        expect(renderText(footer, 80)).toContain("⠋ auto");
+        expect(renderText(footer, 80)).not.toContain("»");
+
+        emitDecisionStatus(events, 0);
+        expect(renderText(footer, 80)).not.toContain("⠋");
         footer.dispose();
     });
 });

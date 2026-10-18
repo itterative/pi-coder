@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import {
     consultDecisionContext,
@@ -11,6 +11,7 @@ import type {
     DecisionVerdict,
     ScriptRun,
 } from "../modules/decision";
+import { emitDecisionStatus } from "../modules/decision/events";
 import { DEFAULT_DECISION_STRATEGY } from "../modules/decision/strategies";
 import type {
     BashClassifierCommandRecord,
@@ -156,6 +157,13 @@ export interface GateConsultOptions extends DecisionContextShape {
     /** The asking surface's UI, for the notification a resolution produces. */
     notify: (message: string, level: "info") => void;
     /**
+     * Where in-flight check notifications go, when the caller has a bus.
+     *
+     * Both gates pass the parent process's bus, so the parent footer can animate its auto badge for a
+     * child's check as well as its own.
+     */
+    events?: EventBus;
+    /**
      * The registry the classifier resolves from (default `ctx.modelRegistry`).
      *
      * A child gate passes its parent's: pi's registry is process-wide, and the parent is where the
@@ -171,37 +179,48 @@ export interface GateConsultedDecision {
     record: BashClassifierRecord;
 }
 
+/** Consults in flight across both gates; the shared evaluator can serve several concurrently. */
+let checksInFlight = 0;
+
 /**
  * Consult the model for one gate, and translate the verdict into what the gate needs.
  *
  * Never rejects: the verdict abstains when the endpoint fails, and the prompt path stays intact.
  */
 export async function consultForGate(options: GateConsultOptions): Promise<GateConsultedDecision> {
-    const consulted = await consultDecisionContext({
-        ctx: options.ctx,
-        config: options.config,
-        command: options.command,
-        sandboxAvailable: options.sandboxAvailable,
-        ...(options.runner === undefined ? {} : { runner: options.runner }),
-        ...(options.isolation === undefined ? {} : { isolation: options.isolation }),
-        ...(options.registry === undefined ? {} : { registry: options.registry }),
-    });
-    const permission = appliedPermission(options.config, consulted.verdict);
+    checksInFlight += 1;
+    emitDecisionStatus(options.events, checksInFlight);
 
-    if (permission !== undefined) {
-        options.notify(
-            `pi-bash-sandbox: decision model resolved ${options.label}: ${consulted.verdict.action ?? "abstain"} (${consulted.verdict.criterion ?? consulted.verdict.status}) - ${permission}`,
-            "info",
-        );
+    try {
+        const consulted = await consultDecisionContext({
+            ctx: options.ctx,
+            config: options.config,
+            command: options.command,
+            sandboxAvailable: options.sandboxAvailable,
+            ...(options.runner === undefined ? {} : { runner: options.runner }),
+            ...(options.isolation === undefined ? {} : { isolation: options.isolation }),
+            ...(options.registry === undefined ? {} : { registry: options.registry }),
+        });
+        const permission = appliedPermission(options.config, consulted.verdict);
+
+        if (permission !== undefined) {
+            options.notify(
+                `pi-bash-sandbox: decision model resolved ${options.label}: ${consulted.verdict.action ?? "abstain"} (${consulted.verdict.criterion ?? consulted.verdict.status}) - ${permission}`,
+                "info",
+            );
+        }
+
+        return {
+            ...(permission === undefined ? {} : { permission }),
+            record: classifierRecord(
+                consulted.verdict,
+                options.config,
+                permission !== undefined,
+                consulted.context?.script,
+            ),
+        };
+    } finally {
+        checksInFlight = Math.max(0, checksInFlight - 1);
+        emitDecisionStatus(options.events, checksInFlight);
     }
-
-    return {
-        ...(permission === undefined ? {} : { permission }),
-        record: classifierRecord(
-            consulted.verdict,
-            options.config,
-            permission !== undefined,
-            consulted.context?.script,
-        ),
-    };
 }

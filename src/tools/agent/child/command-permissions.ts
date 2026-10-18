@@ -524,6 +524,8 @@ export function registerCommandPermissionHooks(
                     // The registry is pi's process-wide one, and the parent is where the provider was registered.
                     registry: options.parentContext.modelRegistry,
                     label: `${options.agentName}'s command`,
+                    // The parent's bus, so the parent footer animates for a child's check too.
+                    events: options.events,
                     notify: (message, level) => options.parentContext.ui.notify(message, level),
                 });
                 classifier = consulted.record;

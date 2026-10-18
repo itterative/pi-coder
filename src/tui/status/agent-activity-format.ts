@@ -48,6 +48,11 @@ function isRunning(run: AgentRunSummary): boolean {
     return run.status === "starting" || run.status === "running";
 }
 
+/** Whether any visible run is still active — running, starting, or waiting on a human or the parent. */
+export function hasActiveAgentRuns(runs: readonly AgentRunSummary[]): boolean {
+    return runs.some((run) => isWaiting(run) || isRunning(run));
+}
+
 function formatWaitingSummary(runs: readonly AgentRunSummary[]): string | undefined {
     const run = mostRecent(runs);
     if (!run) return undefined;

@@ -156,7 +156,7 @@ to `out_of_scope @ 0.0` → refuse → abstain, `applied: false`, and the human 
 | `scope.ts` | the deterministic capability × runner-rung gate |
 | `script.ts` / `script-classification.ts` | body resolution and the capability verdict |
 | `strategies/` | `types.ts`, `veto.ts` (default), `history.ts`, `classification.ts` (criteria + table), `index.ts` |
-| `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify) |
+| `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify + the `pi-coder:decision-status` check count the footer animates) |
 | `tools/bash/index.ts` | parent hook: consult on `ask`, record, prompt unless `apply` resolves it |
 | `tools/agent/child/command-permissions.ts` | child hook: consult with the child's own session, runner/isolation, and the parent's registry |
 
@@ -165,6 +165,14 @@ to `out_of_scope @ 0.0` → refuse → abstain, `applied: false`, and the human 
   why `src/index.ts` registers the provider.
 - The classifier log field is described in the `bash-decision-log` memory; `scripts/decision-report.ts`
   (`npm run decision-report`) reads it back, including the script bodies sent ("FILES SENT").
+
+## Status surface
+
+`consultForGate` wraps every consult (both gates) in a process-wide in-flight count and emits
+`pi-coder:decision-status` `{ checking }` on the bus the caller passes — the parent's, which the child gate
+receives through its extension options, so a child's check animates the parent footer too. The parent footer
+shows `» auto` while the model is enabled, with the spinner frame replacing the marker while the count is
+nonzero.
 
 ## Settled findings — do not retry
 
@@ -193,7 +201,7 @@ to `out_of_scope @ 0.0` → refuse → abstain, `applied: false`, and the human 
 
 ## Next
 
-- Read `classifier` in a permission-report section, and a status footer; both surfaces are already wired
-  through `src/tools/decision-model.ts`.
+- Read `classifier` in a permission-report section; the parent status footer now shows `auto` and animates
+  while a check is in flight (the `pi-coder:decision-status` event).
 - Use the human's allow/deny answer from the log as feedback for later decisions (the log carries it).
 - Pass a custom agent's real ladder into the decision context instead of the `agent` baseline.

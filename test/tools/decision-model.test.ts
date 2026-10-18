@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ClassifierContext } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createEventBus, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import {
     SCRIPT_QUESTION,
@@ -14,6 +14,7 @@ import {
     type DecisionVerdict,
 } from "../../src/modules/decision";
 import { decisionEnabled, resetDecisionEvaluator } from "../../src/modules/decision/gate";
+import { DECISION_STATUS_EVENT, isDecisionStatusEvent } from "../../src/modules/decision/events";
 import { DECISION_PROVIDER_ID } from "../../src/modules/decision/provider";
 import { DEFAULT_DECISION_STRATEGY } from "../../src/modules/decision/strategies";
 import {
@@ -364,6 +365,29 @@ describe("consultForGate", () => {
 
         expect(classify).toHaveBeenCalledTimes(1);
         expect(consulted.permission).toBe("allow:sandbox");
+    });
+
+    it("announces each in-flight check on the caller's bus", async () => {
+        const registry = answeringRegistry([MODEL], async (model) =>
+            criterionResult(model, "privileged", 0.9),
+        );
+        const events = createEventBus();
+        const statuses: number[] = [];
+        events.on(DECISION_STATUS_EVENT, (data) => {
+            if (isDecisionStatusEvent(data)) statuses.push(data.checking);
+        });
+
+        await consultForGate({
+            ctx: consultContext(registry),
+            config: modelConfig(),
+            command: "sudo apt update",
+            sandboxAvailable: true,
+            label: "this command",
+            notify: () => {},
+            events,
+        });
+
+        expect(statuses).toEqual([1, 0]);
     });
 
     it("serves a second identical consult from the cache, with zero tokens", async () => {

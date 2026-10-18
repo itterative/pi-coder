@@ -7,6 +7,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
+import decisionConfig from "../../modules/decision/config";
+import {
+    DECISION_STATUS_EVENT,
+    type DecisionStatusEvent,
+    isDecisionStatusEvent,
+} from "../../modules/decision/events";
 import type { TodoList } from "../../modules/todolist/parser";
 import {
     TODO_STATUS_EVENT,
@@ -20,7 +26,7 @@ import {
     isAgentStatusEvent,
 } from "../../tools/agent/observability/events";
 import { Spinner } from "../spinner";
-import { formatAgentSummary } from "./agent-activity-format";
+import { formatAgentSummary, hasActiveAgentRuns } from "./agent-activity-format";
 import { formatTodoProgress, summarizeTodoList } from "./format";
 import {
     UsageTotalsCache,
@@ -32,9 +38,10 @@ import {
 const MAX_TODO_CURRENT_CHARS = 40;
 
 /**
- * The parent status footer: one compact line combining the visible agent runs and TODO progress
- * with cwd/branch, context usage, and the model. Registered for the whole session through
- * `ctx.ui.setFooter()`, replacing the above-editor status widget.
+ * The parent status footer: one compact line combining the decision model's auto-mode state, the visible
+ * agent runs, and TODO progress on the left, with usage totals, context usage, the model, and the
+ * cwd/branch on the right. Registered for the whole session through `ctx.ui.setFooter()`, replacing the
+ * above-editor status widget.
  */
 export class PiCoderFooter implements Component {
     private readonly spinner: Spinner;
@@ -42,6 +49,7 @@ export class PiCoderFooter implements Component {
     private runs: AgentRunSummary[];
     private hiddenCount: number;
     private todo: TodoList | undefined;
+    private decisionChecking = 0;
     private disposed = false;
 
     constructor(
@@ -73,6 +81,12 @@ export class PiCoderFooter implements Component {
         this.tui.requestRender();
     }
 
+    setDecisionChecking(checking: number): void {
+        this.decisionChecking = checking;
+        this.updateSpinner();
+        this.tui.requestRender();
+    }
+
     render(width: number): string[] {
         const info = footerInfoSegments(this.theme, {
             cwd: this.context.cwd,
@@ -85,19 +99,14 @@ export class PiCoderFooter implements Component {
         });
 
         const segments: FooterLineSegment[] = [
-            // Left: the agent summary is kept longest, then TODO, then extension statuses.
+            // Left: the agent summary is kept longest, then auto mode, TODO, and extension statuses.
+            { text: this.autoBadge(), side: "left", dropPriority: 4 },
             {
                 text: formatAgentSummary(this.runs, this.hiddenCount, this.spinner.getFrame()),
                 side: "left",
-                dropPriority: 4,
+                dropPriority: 3,
             },
-            {
-                text: this.todo
-                    ? formatTodoProgress(summarizeTodoList(this.todo), MAX_TODO_CURRENT_CHARS)
-                    : "",
-                side: "left",
-                dropPriority: 5,
-            },
+            { text: this.todoSegment(), side: "left", dropPriority: 5 },
             { text: info.statuses, side: "left", dropPriority: 6 },
             // Right: the cluster reserves its width, so these only shed when it cannot fit alone.
             { text: info.usage, side: "right", dropPriority: 2 },
@@ -123,7 +132,37 @@ export class PiCoderFooter implements Component {
     }
 
     private updateSpinner(): void {
-        this.spinner.setActive(this.runs.some((run) => run.status === "running"));
+        const agentRunning = this.runs.some((run) => run.status === "running");
+        this.spinner.setActive(agentRunning || this.decisionChecking > 0);
+    }
+
+    /**
+     * The decision model's badge: `» auto` while the classifier is enabled, with the shared spinner
+     * frame replacing the `»` while a check is in flight so the line shows when it is actively deciding.
+     */
+    private autoBadge(): string {
+        const checking = this.decisionChecking > 0;
+        if (!checking && decisionConfig.current.enabled !== true) {
+            return "";
+        }
+
+        const label = checking ? `${this.spinner.getFrame()} auto` : "» auto";
+        return this.theme.fg("accent", label);
+    }
+
+    /**
+     * TODO progress, muted once every item is complete (the final item still names what finished).
+     * While an agent is active the footer speaks for the agent instead and this yields the line.
+     */
+    private todoSegment(): string {
+        if (!this.todo || hasActiveAgentRuns(this.runs)) return "";
+
+        const progress = summarizeTodoList(this.todo);
+        const text = formatTodoProgress(progress, MAX_TODO_CURRENT_CHARS);
+        if (!text) return "";
+
+        const done = progress !== undefined && progress.completed === progress.total;
+        return done ? this.theme.fg("dim", text) : text;
     }
 }
 
@@ -133,6 +172,7 @@ interface StatusFooterState {
     runs: AgentRunSummary[];
     hiddenCount: number;
     todo?: TodoList;
+    decisionChecking: number;
     registered: boolean;
     component?: PiCoderFooter;
 }
@@ -147,6 +187,7 @@ function stateFor(events: EventBus): StatusFooterState {
         events,
         runs: [],
         hiddenCount: 0,
+        decisionChecking: 0,
         registered: false,
     };
     footerStates.set(events, state);
@@ -163,6 +204,7 @@ function clearState(state: StatusFooterState, ctx?: ExtensionContext): void {
     state.runs = [];
     state.hiddenCount = 0;
     state.todo = undefined;
+    state.decisionChecking = 0;
     state.registered = false;
     state.component = undefined;
 }
@@ -200,6 +242,11 @@ function applyTodoEvent(state: StatusFooterState, event: TodoStatusEvent): void 
     state.component?.setTodo(state.todo);
 }
 
+function applyDecisionEvent(state: StatusFooterState, event: DecisionStatusEvent): void {
+    state.decisionChecking = event.checking;
+    state.component?.setDecisionChecking(event.checking);
+}
+
 /** Register the single parent status footer and its domain-event listeners. */
 export function registerStatusFooter(pi: ExtensionAPI): void {
     const events = pi.events;
@@ -211,6 +258,9 @@ export function registerStatusFooter(pi: ExtensionAPI): void {
     });
     events.on(TODO_STATUS_EVENT, (data) => {
         if (isTodoStatusEvent(data)) applyTodoEvent(state, data);
+    });
+    events.on(DECISION_STATUS_EVENT, (data) => {
+        if (isDecisionStatusEvent(data)) applyDecisionEvent(state, data);
     });
 
     pi.on("session_start", (_event, ctx) => {
