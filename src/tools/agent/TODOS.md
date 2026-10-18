@@ -10,6 +10,10 @@
   * if we do the second, we might want to extend the heuristics a bit to
     give more details on why certain bash commands are not allowed
 
+* same checkout worker notifications work, but it's a weird ux
+  * basically, should have something in the tui to show this
+  * or maybe disable it?
+
 * sometimes (isolated) workers get stuck
   * applies to more types of workers, also setup ones seem to get stuck
   * seems to always happen during an (pre-)approved command
