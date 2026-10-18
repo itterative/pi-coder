@@ -7,6 +7,7 @@ vendor/
 package-lock.json
 
 .pi/agent/memory
+.pi/local
 src/**/*.md
 test/**/*.md
 __snapshots__/
