@@ -2,6 +2,8 @@
 
 Status: investigation plus implementation passes. The continuation/session flow, original-model selection, lifecycle discovery, early divergent-history rejection, non-isolated read-only continuation, and stable run identity are implemented; broader recovery coverage remains open.
 
+> **Update (2026-10-18):** the divergence policy described below was later relaxed. Finalization now reconciles a stale recorded base (recorded base → current parent `HEAD` → merge base) and warns the parent instead of refusing; apply relies on Git's `apply --check` and no longer requires the recorded base to remain a parent ancestor (a clean parent is still required, with a commit/stash instruction); and a terminal same-checkout `worker` continues without a prior collect. Isolated continuation still requires the worktree `HEAD` to match the latest checkpoint. See `docs/agent-workspaces.md` and the `agents/workspaces` memory for the current contract.
+
 This note records the findings and remaining work so the `revise` workflow can be fixed across multiple sessions. Do not modify `src/tools/agent/TODOS.md`; it is user-managed.
 
 ## Scope
@@ -75,7 +77,7 @@ The historical workspace state associated with the TODO confirms the condition:
 
 The earlier result `16dff4f` was based on `2a25160`. The worktree was subsequently rebased onto a different history, leaving the persisted workspace base stale. This explains the observed error exactly.
 
-The guard is correct as a safety policy. The current `revise` path now performs this ancestry check before run identity reservation or child startup, rejects divergence, and preserves the existing result and lease. It does not silently normalize or accept divergent worktrees.
+The guard is correct as a safety policy for the historical behavior described here. It was later replaced by base reconciliation at finalization and a Git-patch-check apply gate; continuation still rejects a worktree whose `HEAD` differs from its latest checkpoint.
 
 ### 3. A failed revision could strand the workspace lease (partially resolved)
 
@@ -201,9 +203,9 @@ Also add a focused prompt-rendering assertion so the escaped-newline regression 
 
 The stable public/physical identity removes the lease handoff window: continuation and result finalization run while the existing lease remains held. Failure coverage should continue to verify that the prior prepared result and lease remain recoverable, and that another worker cannot claim the workspace during revision.
 
-### Phase 4: Decide divergent-history policy — chosen
+### Phase 4: Decide divergent-history policy — chosen (later superseded)
 
-The implementation chooses **fail early and preserve state**. `revise` checks the current worktree HEAD against the recorded base before starting a child or transferring the lease. A divergent worktree is rejected with an explicit reconciliation/reset message, while the existing result and lease remain intact. The alternatives considered were:
+The implementation chose **fail early and preserve state** at the time: `revise` checked the current worktree HEAD against the recorded base before starting a child or transferring the lease, and a divergent worktree was rejected with an explicit reconciliation/reset message. The later relaxation described at the top of this note keeps the worktree-HEAD check but reconciles a stale recorded base during finalization instead. The alternatives considered were:
 
 1. **Fail early and preserve state:** preflight the workspace ancestry before lease transfer and tell the parent to reset/reconcile explicitly.
 2. **Normalize before revision:** explicitly rebase/reset the workspace and update persisted base/result metadata only through a safe, user-visible operation.
@@ -230,7 +232,7 @@ The issue is not one isolated rendering or parameter bug. Before the first imple
 
 ```text
 rebased/divergent worktree
-  -> ancestry guard fails during revised result preparation
+  -> finalization reconciles the recorded base (or apply's patch check decides)
   -> the stable run identity remains associated with the existing lease
   -> the prior prepared result remains available until a revised result is finalized
   -> revise remains recoverable through the same run ID

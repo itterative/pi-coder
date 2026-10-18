@@ -914,6 +914,46 @@ describe("AgentRunManager", () => {
         }
     });
 
+    it("retires a retained terminal run so its identity can be revived", async () => {
+        const children = [
+            new FakeChild([{ output: "Finished" }]),
+            new FakeChild([{ output: "Continued" }]),
+        ];
+        const manager = new AgentRunManager(async () => children.shift()!);
+        const pending = manager.start("scout", "Investigate", context(), { background: true });
+        await flushBackground();
+        await pending;
+
+        expect(manager.getRunStatus("scout-1")).toBe("completed");
+
+        await manager.discardRetainedTerminalRun("scout-1");
+
+        expect(manager.getRunStatus("scout-1")).toBeUndefined();
+        await expect(manager.collect("scout-1")).rejects.toThrow("Unknown or stale");
+
+        const continued = await manager.startContinuation(
+            "scout",
+            "Investigate",
+            "Continue",
+            context(),
+            { identity: { runId: "scout-1", runInstanceId: "scout-1" } },
+        );
+        expect(continued.details.runId).toBe("scout-1");
+        expect(continued.details.status).toBe("completed");
+    });
+
+    it("leaves an active run alone when retiring a terminal identity", async () => {
+        const manager = managerWith(new FakeChild([{ waitForAbort: true }]));
+        const pending = manager.start("scout", "Investigate", context());
+        await flushBackground();
+
+        await manager.discardRetainedTerminalRun("scout-1");
+
+        expect(manager.getRunStatus("scout-1")).toBe("running");
+        await manager.cancel("scout-1");
+        await pending;
+    });
+
     it("interrupts an active run when continuation ownership is lost", async () => {
         const child = new FakeChild([{ waitForAbort: true }]);
         let onLost: (() => void) | undefined;

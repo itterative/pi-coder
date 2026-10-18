@@ -37,7 +37,7 @@ This checklist is for a separate validation agent/operator. It tests the current
    git log -1 --oneline
    ```
 
-   The starting status must be empty before apply/reset tests. Keep the fixture repository available until all results have been recorded.
+   The starting status must be empty before apply/reset tests. Keep the fixture repository available until all results have been recorded. A dirty parent no longer blocks starting isolated work; section J records what the worktree does and does not see.
 4. Use the built-in `worker` and `isolation: "worktree"` for isolated tasks. Use `start` with `background=true` for scenarios that require later collection. Foreground `start` returns its terminal result directly and must not be followed by `collect`. Example background tool calls:
 
    ```text
@@ -108,12 +108,11 @@ Expected: retain preserves the result for later review and does not apply it.
 
 Use a fresh changed result with a clean parent checkout. The parent may contain unrelated commits made after the result base.
 
-1. Confirm the parent is clean and record its current revision. If it has advanced since the result base, verify the result base is still an ancestor:
+1. Confirm the parent is clean (commit or stash any own work first) and record its current revision. The result base does not have to remain an ancestor: Git's patch check decides whether a later parent revision conflicts.
 
    ```bash
    git status --short
    git rev-parse HEAD
-   git merge-base --is-ancestor <result-base-revision> HEAD
    ```
 
 2. In workspace details, press `a` and confirm with `y` or `Enter`.
@@ -135,13 +134,14 @@ Use a fresh changed result for each failure case. The result must remain prepare
 
 1. After collecting the worker result, create an unrelated uncommitted change in the parent.
 2. Try `a` and confirm.
-3. Verify apply fails with a clean-checkout error.
+3. Verify apply fails with an error that tells the parent to commit or stash its own work first.
 4. Verify the unrelated parent change is intact and the workspace/result remain available for explicit recovery.
+5. Commit or stash the parent change, retry `a`, and verify the worker result now applies.
 
 ### E2. Unrelated parent revision drift
 
 1. After collecting the worker result, make and commit an unrelated parent change.
-2. Verify the parent remains clean and the result base is an ancestor of the parent revision.
+2. Verify the parent remains clean.
 3. Try `a` and confirm.
 4. Verify apply succeeds, preserves the unrelated parent commit, leaves the worker change uncommitted in the parent, and records the current parent revision.
 
@@ -159,7 +159,7 @@ Use a fresh changed result for each failure case. The result must remain prepare
 3. Verify apply fails because the worker tree is dirty or its HEAD changed.
 4. Verify the parent remains unchanged and the lease/result are not silently released.
 
-Expected: dirty-parent and conflict failures are non-destructive; unrelated clean parent descendants apply successfully.
+Expected: dirty-parent and conflict failures are non-destructive and explain how to recover; unrelated clean parent descendants apply successfully.
 
 ## F. Reset for reuse
 
@@ -228,6 +228,35 @@ Optional higher-coverage test.
 4. Reset or discard one workspace explicitly, then verify a later isolated worker can create or reuse capacity.
 
 Expected: the limit is three workspaces per repository by default (or the configured value), and capacity is never resolved through automatic deletion or reset.
+
+## J. Reconciled base after the worker moved its own worktree
+
+Reproduces the stale-base case: the recorded workspace base belongs to a history that no longer backs the parent checkout, and the child moves its worktree onto the current parent history.
+
+1. Prepare an available workspace, then move the parent fixture onto an unrelated history (`git checkout --orphan reconciled && git commit`) so the recorded base is not an ancestor of the new parent `HEAD`. Start an isolated worker whose task first runs `git switch --detach <current-parent-head>` inside the worktree and then creates `reconciled-base-marker.txt`.
+2. Approve only the expected commands and write.
+3. After the terminal notification, collect the run.
+4. Verify:
+   - collection succeeds instead of reporting that the worker revision is not based on the workspace base;
+   - the returned metadata warns that the worktree no longer descended from its recorded base;
+   - the inspection shows the worker's own changed file and the reconciled base revision.
+5. With a clean parent, apply and verify the marker file appears and no unrelated files change.
+
+Expected: a moved worktree never deadlocks collection; the reconciled base and the Git patch check protect the apply.
+
+## K. Same-checkout worker continuation
+
+1. Start a background `worker` without `isolation` and a task that changes one file, then wait for its terminal notification.
+2. Continue it directly without collecting first:
+
+   ```text
+   agent(action="continue", runId="<run-id>", guidance="Also update the header comment.")
+   ```
+
+3. Verify the continuation reopens the same child session in the parent checkout, the run keeps the same ID, and the retained previous result is no longer offered for collection.
+4. Collect the continuation result and verify the file changes are present in the parent checkout.
+
+Expected: a terminal same-checkout worker resumes in place, and collecting first is not required.
 
 ## Results report
 

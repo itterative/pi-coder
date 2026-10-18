@@ -427,6 +427,30 @@ async function resetReusableWorkspace(
     return revision;
 }
 
+/**
+ * Choose the base revision a prepared result should be diffed from.
+ *
+ * A child can move its own worktree (for example, syncing to the parent HEAD), which leaves the
+ * recorded base stale. Collection must still produce an inspectable result, so prefer the recorded
+ * base, then the current parent HEAD, then the common ancestor as a last resort.
+ */
+async function resolveResultBaseRevision(
+    workspace: AgentWorkspace,
+    recordedBase: string,
+    workerHead: string,
+): Promise<string> {
+    if (await hasAncestor(workspace.worktreePath, recordedBase, workerHead)) {
+        return recordedBase;
+    }
+    const parentHead = await git(workspace.repositoryRoot, ["rev-parse", "HEAD"]);
+    if (await hasAncestor(workspace.worktreePath, parentHead, workerHead)) {
+        return parentHead;
+    }
+    return await git(workspace.worktreePath, ["merge-base", recordedBase, workerHead]).catch(
+        () => recordedBase,
+    );
+}
+
 /** Finalize the isolated worker tree for an explicit apply request. */
 export interface PrepareAgentWorkspaceApplicationOptions extends AgentWorkspaceLeaseOptions {
     baseRevision?: string;
@@ -436,7 +460,7 @@ export async function prepareAgentWorkspaceApplication(
     workspace: AgentWorkspace,
     options: PrepareAgentWorkspaceApplicationOptions,
 ): Promise<AgentWorkspaceResult> {
-    const { leaseRunId, leaseRunInstanceId, baseRevision: requestedBaseRevision } = options;
+    const { leaseRunId, leaseRunInstanceId, baseRevision: requestedBase } = options;
     const { database, workspace: current } = await workspaceForLease(workspace.id, options);
     let durableRef: string | undefined;
     try {
@@ -444,7 +468,7 @@ export async function prepareAgentWorkspaceApplication(
             throw new Error(`Workspace ${workspace.id} does not have a task lease.`);
         if (current.baseRevision !== workspace.baseRevision)
             throw new Error(`Workspace ${workspace.id} base revision changed while it was leased.`);
-        const baseRevision = requestedBaseRevision ?? current.baseRevision;
+        const requestedBaseRevision = requestedBase ?? current.baseRevision;
         const state = await inspectAgentWorkspaceGitState(current);
         if (state.kind !== "available")
             throw new Error(state.error ?? "Workspace Git state is unavailable.");
@@ -458,11 +482,13 @@ export async function prepareAgentWorkspaceApplication(
             ]);
         }
         const workerHead = await git(current.worktreePath, ["rev-parse", "HEAD"]);
-        if (!(await hasAncestor(current.worktreePath, baseRevision, workerHead))) {
-            throw new Error(
-                `Worker revision ${workerHead} is not based on workspace base ${baseRevision}.`,
-            );
-        }
+        const baseRevision = await resolveResultBaseRevision(
+            current,
+            requestedBaseRevision,
+            workerHead,
+        );
+        const baseAdjustedFrom =
+            baseRevision === requestedBaseRevision ? undefined : requestedBaseRevision;
         const commitsOutput = await git(current.worktreePath, [
             "rev-list",
             "--reverse",
@@ -470,7 +496,7 @@ export async function prepareAgentWorkspaceApplication(
         ]);
         const commits = commitsOutput ? commitsOutput.split("\n").filter(Boolean) : [];
         const resultId = randomUUID();
-        if (workerHead !== current.baseRevision || commits.length > 0) {
+        if (workerHead !== baseRevision || commits.length > 0) {
             durableRef = `${RESULT_REF_PREFIX}/${current.id}/${resultId}`;
             await git(current.worktreePath, ["update-ref", durableRef, workerHead]);
         }
@@ -486,6 +512,7 @@ export async function prepareAgentWorkspaceApplication(
             commitRange: `${baseRevision}..${workerHead}`,
             commits,
             ...(durableRef ? { durableRef } : {}),
+            ...(baseAdjustedFrom ? { baseAdjustedFrom } : {}),
             preparedAt: Date.now(),
             status: "prepared",
         };
@@ -558,11 +585,6 @@ export async function applyAgentWorkspaceApplication(
             );
         }
         const parentRevision = await git(current.repositoryRoot, ["rev-parse", "HEAD"]);
-        if (!(await hasAncestor(current.repositoryRoot, result.baseRevision, parentRevision))) {
-            throw new Error(
-                `Parent checkout at ${parentRevision} no longer contains workspace base ${result.baseRevision}.`,
-            );
-        }
         const parentStatus = await git(current.repositoryRoot, [
             "status",
             "--porcelain=v1",
@@ -570,7 +592,7 @@ export async function applyAgentWorkspaceApplication(
         ]);
         if (parentStatus)
             throw new Error(
-                "Parent checkout has uncommitted changes; apply requires a clean checkout.",
+                "Parent checkout has uncommitted changes. Commit or stash your own work first (it stays recoverable), then retry apply; the prepared worker result remains available.",
             );
         return await withWorkspaceResultPatch(current, result, async (patch, patchPath) => {
             if (patch) {

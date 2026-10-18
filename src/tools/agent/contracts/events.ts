@@ -31,7 +31,13 @@ export type AgentRunEvent = (
           runId: string;
           status: AgentRunStatus;
           reason:
-              "collected" | "pruned" | "shutdown" | "terminal" | "canceled" | "restored_terminal";
+              | "collected"
+              | "pruned"
+              | "shutdown"
+              | "terminal"
+              | "canceled"
+              | "continued"
+              | "restored_terminal";
           workspaceId?: string;
       }
 ) & {

@@ -28,6 +28,7 @@ import { executeParentWorkspaceAction } from "./workspaces/parent-actions";
 import {
     prepareCollectedWorkspaceResult,
     prepareForegroundWorkspaceResult,
+    workspaceBaseAdjustmentWarning,
 } from "./workspaces/finalization";
 import agentConfig, { maxWorkspacesPerRepo } from "./config";
 import type { AgentLifecycle } from "./lifecycle";
@@ -221,7 +222,14 @@ async function dispatchStart(
     });
     transaction.started = true;
 
-    return finishStartOutcome(outcome, request, scope, contextWarning, discovered);
+    return finishStartOutcome(
+        outcome,
+        request,
+        scope,
+        contextWarning,
+        transaction.reservation?.parentCheckoutDirty === true,
+        discovered,
+    );
 }
 
 /** Resolve the requested definition, or explain to the parent why it cannot run. */
@@ -320,6 +328,7 @@ async function finishStartOutcome(
     request: Extract<AgentRequest, { action: "start" }>,
     scope: ActionScope,
     contextWarning: string | undefined,
+    parentCheckoutDirty: boolean,
     discovered: DiscoveredAgents,
 ): Promise<AgentRunOutcome> {
     const { ctx, lifecycle } = scope;
@@ -329,12 +338,18 @@ async function finishStartOutcome(
     }
     lifecycle.clearCompletedWorkspaceSetup(ctx, result.details);
     result.details.discoveryDiagnostics = discovered.diagnostics.map(diagnosticText);
-    if (!contextWarning) {
+    const warnings = [
+        contextWarning,
+        parentCheckoutDirty
+            ? "The parent checkout has uncommitted changes; the isolated worktree was based on committed HEAD and does not include them. Applying its result may conflict."
+            : undefined,
+    ].filter((warning): warning is string => warning !== undefined);
+    if (warnings.length === 0) {
         return result;
     }
     return {
         ...result,
-        additionalMetadata: [...(result.additionalMetadata ?? []), contextWarning],
+        additionalMetadata: [...(result.additionalMetadata ?? []), ...warnings],
     };
 }
 
@@ -429,6 +444,10 @@ async function dispatchCollect(
     if (workspaceResult) {
         await releaseLeaseForNoChanges(workspaceResult, scope);
         outcome.details.workspaceResult = workspaceResult;
+        const warning = workspaceBaseAdjustmentWarning(workspaceResult);
+        if (warning) {
+            outcome.additionalMetadata = [...(outcome.additionalMetadata ?? []), warning];
+        }
     }
     lifecycle.clearCompletedWorkspaceSetup(ctx, outcome.details);
     lifecycle.manager.storeCollectedOutcome(request.runId, outcome);

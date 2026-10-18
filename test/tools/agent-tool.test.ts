@@ -1369,6 +1369,7 @@ describe("agent extension registration", () => {
         const manager = {
             flushPersistence: vi.fn(async () => {}),
             getPersistedRun: vi.fn((): AgentRunCatalogRecord | undefined => record),
+            discardRetainedTerminalRun: vi.fn(async () => {}),
             reserveRunIdentity: vi.fn(() => ({
                 runId: "reviewer-1",
                 runInstanceId: "reviewer-instance-1",
@@ -1498,6 +1499,176 @@ describe("agent extension registration", () => {
         );
     });
 
+    it("continues a terminal same-checkout worker in its original checkout", async () => {
+        const childSessionFile = "/tmp/worker-child.jsonl";
+        const definition: AgentDefinition = TEST_WORKER_DEFINITION;
+        const record: AgentRunCatalogRecord = {
+            ownerSessionId: "parent-session",
+            runId: "worker-1",
+            runInstanceId: "worker-instance-1",
+            parentCwd: process.cwd(),
+            executionCwd: process.cwd(),
+            title: "Implement fix",
+            agent: "worker",
+            agentSource: "builtin",
+            definitionSnapshot: definition,
+            task: "Implement the change",
+            status: "completed",
+            background: true,
+            mutating: true,
+            childSessionFile,
+            childSessionLeafId: "leaf-1",
+            startedAt: 4,
+            updatedAt: 5,
+            usageSnapshot: ZERO_USAGE,
+        };
+        const continuationOutcome: AgentRunOutcome = {
+            content: "The continuation finished.",
+            details: {
+                runId: "worker-1",
+                runInstanceId: "worker-instance-1",
+                title: "Implement fix revision",
+                agent: "worker",
+                status: "completed",
+                background: false,
+                task: "Implement the change",
+                recentActivity: [],
+                usage: ZERO_USAGE,
+                startedAt: 6,
+                updatedAt: 7,
+            },
+            usage: ZERO_USAGE,
+            isError: false,
+        };
+        const manager = {
+            flushPersistence: vi.fn(async () => {}),
+            getPersistedRun: vi.fn((): AgentRunCatalogRecord | undefined => record),
+            discardRetainedTerminalRun: vi.fn(async () => {}),
+            reserveRunIdentity: vi.fn(() => ({
+                runId: "worker-1",
+                runInstanceId: "worker-instance-1",
+            })),
+            startContinuation: vi.fn(async (): Promise<AgentRunOutcome> => continuationOutcome),
+        };
+        const ctx = stubContext({
+            cwd: process.cwd(),
+            isProjectTrusted: () => true,
+            sessionManager: stubSessionManager({ getSessionId: () => "parent-session" }),
+            ui: stubUi(),
+        });
+        const progress = vi.fn();
+        const onBackgroundUpdate = vi.fn();
+        const events: AgentEventSink = { emit: () => {} };
+        const discover = vi.fn((): ReturnType<AgentLifecycle["discover"]> => ({
+            agents: [definition],
+            diagnostics: [],
+        }));
+        vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record]);
+
+        const result = await executeParentWorkspaceAction(
+            { action: "continue", runId: "worker-1", guidance: "Apply feedback" },
+            {
+                ctx,
+                manager: manager as unknown as AgentRunManager,
+                signal: undefined,
+                progress,
+                events,
+                onBackgroundUpdate,
+                discover,
+            },
+        );
+
+        expect(result).toBe(continuationOutcome);
+        expect(manager.discardRetainedTerminalRun).toHaveBeenCalledWith("worker-1");
+        expect(manager.reserveRunIdentity).toHaveBeenCalledWith(
+            definition,
+            "Implement the change",
+            expect.objectContaining({
+                cwd: process.cwd(),
+                parentCwd: process.cwd(),
+                childSessionFile,
+                childSessionLeafId: "leaf-1",
+            }),
+            "worker-1",
+            "worker-instance-1",
+        );
+        expect(manager.startContinuation).toHaveBeenCalledWith(
+            definition,
+            "Implement the change",
+            "Apply feedback",
+            expect.objectContaining({
+                cwd: process.cwd(),
+                parentCwd: process.cwd(),
+                childSessionFile,
+                childSessionLeafId: "leaf-1",
+            }),
+            expect.objectContaining({
+                signal: undefined,
+                onProgress: progress,
+                onBackgroundUpdate,
+                title: "Implement fix revision",
+                identity: { runId: "worker-1", runInstanceId: "worker-instance-1" },
+            }),
+        );
+    });
+
+    it("refuses a persisted mutation capability the current worker definition no longer grants", async () => {
+        const record: AgentRunCatalogRecord = {
+            ownerSessionId: "parent-session",
+            runId: "worker-1",
+            runInstanceId: "worker-instance-1",
+            parentCwd: process.cwd(),
+            executionCwd: process.cwd(),
+            title: "Implement fix",
+            agent: "worker",
+            agentSource: "builtin",
+            definitionSnapshot: TEST_WORKER_DEFINITION,
+            task: "Implement the change",
+            status: "removed",
+            background: true,
+            mutating: true,
+            childSessionFile: "/tmp/worker-child.jsonl",
+            childSessionLeafId: "leaf-1",
+            startedAt: 4,
+            updatedAt: 5,
+            usageSnapshot: ZERO_USAGE,
+        };
+        const manager = {
+            flushPersistence: vi.fn(async () => {}),
+            getPersistedRun: vi.fn((): AgentRunCatalogRecord | undefined => record),
+            discardRetainedTerminalRun: vi.fn(async () => {}),
+            reserveRunIdentity: vi.fn(),
+            startContinuation: vi.fn(),
+        };
+        const ctx = stubContext({
+            cwd: process.cwd(),
+            isProjectTrusted: () => true,
+            sessionManager: stubSessionManager({ getSessionId: () => "parent-session" }),
+            ui: stubUi(),
+        });
+        const discover = vi.fn((): ReturnType<AgentLifecycle["discover"]> => ({
+            agents: [{ ...TEST_WORKER_DEFINITION, capabilities: ["read"] }],
+            diagnostics: [],
+        }));
+        vi.spyOn(runCatalog, "listAgentRunCatalog").mockResolvedValue([record]);
+
+        await expect(
+            executeParentWorkspaceAction(
+                { action: "continue", runId: "worker-1", guidance: "Apply feedback" },
+                {
+                    ctx,
+                    manager: manager as unknown as AgentRunManager,
+                    signal: undefined,
+                    progress: vi.fn(),
+                    events: { emit: () => {} },
+                    discover,
+                },
+            ),
+        ).rejects.toThrow("unauthorized persisted mutation capability");
+        expect(manager.discardRetainedTerminalRun).not.toHaveBeenCalled();
+        expect(manager.startContinuation).not.toHaveBeenCalled();
+    });
+
     it("does not fall back to catalog-only runs when branch persistence is active", async () => {
         const fixture = revisionActionFixture();
         configureRevisionAction(fixture);
@@ -1510,11 +1681,10 @@ describe("agent extension registration", () => {
         expect(fixture.manager.startContinuation).not.toHaveBeenCalled();
     });
 
-    it("rejects a divergent workspace before starting a revision", async () => {
+    it("rejects a workspace whose current revision differs from its checkpoint", async () => {
         const fixture = revisionActionFixture();
         const transferSpy = configureRevisionAction(fixture);
         vi.mocked(workspaceGit.git).mockResolvedValue("divergent-head");
-        vi.mocked(workspaceGit.hasAncestor).mockResolvedValue(false);
 
         await expect(executeRevisionAction(fixture)).rejects.toThrow(
             "Cannot continue workspace workspace-1",
@@ -1522,6 +1692,18 @@ describe("agent extension registration", () => {
         expect(fixture.manager.reserveRunIdentity).not.toHaveBeenCalled();
         expect(fixture.manager.startContinuation).not.toHaveBeenCalled();
         expect(transferSpy).not.toHaveBeenCalled();
+    });
+
+    it("continues a workspace whose checkpoint base is stale", async () => {
+        const fixture = revisionActionFixture();
+        configureRevisionAction(fixture);
+        vi.mocked(workspaceGit.hasAncestor).mockResolvedValue(false);
+        vi.spyOn(workspaceFinalization, "prepareForegroundWorkspaceResult").mockResolvedValue(
+            fixture.continuationOutcome,
+        );
+
+        await expect(executeRevisionAction(fixture)).resolves.toBe(fixture.continuationOutcome);
+        expect(fixture.manager.startContinuation).toHaveBeenCalled();
     });
 
     it("fails clearly when an isolated result has no persisted definition snapshot", async () => {

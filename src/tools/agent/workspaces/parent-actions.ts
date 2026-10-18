@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { agentCanEdit, discoverAgents } from "../definitions/discovery";
+import type { AgentDefinition } from "../definitions/types";
 import type { AgentRequest } from "../definitions/validate";
 import { emitAgentEvent } from "../observability/events";
 import type { AgentEventSink } from "../contracts/events";
@@ -29,7 +30,7 @@ import {
     getAgentWorkspaceResult,
     getAgentWorkspaceResultById,
 } from "./store";
-import { git, hasAncestor } from "./git";
+import { git } from "./git";
 
 type ParentCatalogRecord = AgentRunCatalogRecord;
 
@@ -173,6 +174,35 @@ interface ContinuationWorkspace {
     checkpoint: NonNullable<Awaited<ReturnType<typeof latestAgentWorkspaceCheckpoint>>>;
 }
 
+/**
+ * Refuse to revive a persisted edit-capable definition unless current discovery still grants that
+ * authority to the builtin worker.
+ *
+ * The persisted snapshot keeps the conversation contract, but it cannot preserve an authority the
+ * current definitions no longer hold.
+ */
+function requireAuthorizedContinuationDefinition(
+    record: ParentCatalogRecord,
+    definition: AgentDefinition,
+    discovered: ReturnType<typeof discoverAgents>,
+    runId: string,
+): void {
+    if (!agentCanEdit(definition)) {
+        return;
+    }
+    const currentDefinition = discovered.agents.find((agent) => agent.name === record.agent);
+    if (
+        currentDefinition?.name === "worker" &&
+        currentDefinition.source === "builtin" &&
+        agentCanEdit(currentDefinition)
+    ) {
+        return;
+    }
+    throw new AgentActionError(
+        `Run ${runId} has an unauthorized persisted mutation capability; it cannot be continued.`,
+    );
+}
+
 async function acquireContinuationWorkspace(
     record: ParentCatalogRecord,
     workspace: AgentWorkspace,
@@ -271,17 +301,6 @@ async function acquireContinuationWorkspace(
         }
     }
     await restoreAgentWorkspaceCheckpoint(acquired, checkpoint);
-    if (
-        !(await hasAncestor(
-            acquired.worktreePath,
-            checkpoint.baseRevision,
-            checkpoint.headRevision,
-        ))
-    ) {
-        throw new AgentActionError(
-            `Cannot continue workspace ${acquired.id}: checkpoint ${checkpoint.id} is not based on workspace base ${checkpoint.baseRevision}.`,
-        );
-    }
     return { workspace: acquired, checkpoint };
 }
 
@@ -296,8 +315,12 @@ export interface ExecuteParentWorkspaceActionOptions {
     discover?: (ctx: ExtensionContext) => ReturnType<typeof discoverAgents>;
 }
 
-// Non-mutating runs have no workspace lease to transfer. Reuse the public
-// run ID so a revision remains the same agent in the parent UI.
+// A run without an isolated workspace has no workspace lease to transfer, so its continuation
+// simply reuses the public run ID to keep one agent in the parent UI.
+//
+// Workers are included: a same-checkout worker continues directly in the parent checkout, and the
+// parent owns any conflicts that follow. A retained terminal result is superseded by the revived
+// identity rather than requiring an explicit collect first.
 async function continueNonIsolatedRun(
     record: ParentCatalogRecord,
     params: Extract<AgentRequest, { action: "continue" }>,
@@ -310,31 +333,14 @@ async function continueNonIsolatedRun(
         discover = (context) => discoverAgents(context.cwd, context.isProjectTrusted()),
     }: ExecuteParentWorkspaceActionOptions,
 ): Promise<AgentRunOutcome> {
-    if (record.status !== "removed") {
-        throw new AgentActionError(
-            `Run ${params.runId} must be collected before it can be continued.`,
-        );
-    }
     const guidance = params.guidance?.trim();
     if (!guidance) {
-        throw new AgentActionError(
-            `Collected agent run ${params.runId} requires continuation guidance.`,
-        );
-    }
-    if (record.mutating) {
-        throw new AgentActionError(
-            `Run ${params.runId} is mutation-capable but has no isolated workspace; it cannot be continued safely.`,
-        );
+        throw new AgentActionError(`Agent run ${params.runId} requires continuation guidance.`);
     }
     const definition = record.definitionSnapshot;
     if (!definition) {
         throw new AgentActionError(
             `Run ${params.runId} has no persisted agent definition snapshot; it cannot be continued. Start a new run instead.`,
-        );
-    }
-    if (agentCanEdit(definition)) {
-        throw new AgentActionError(
-            `Run ${params.runId} has an unauthorized persisted mutation capability; it cannot be continued.`,
         );
     }
     if (!record.childSessionFile) {
@@ -344,6 +350,10 @@ async function continueNonIsolatedRun(
     }
 
     const discovered = discover(ctx);
+    requireAuthorizedContinuationDefinition(record, definition, discovered, params.runId);
+    // A retained terminal result is superseded by this continuation, so retire it before the
+    // revived run identity is registered again.
+    await manager.discardRetainedTerminalRun(params.runId);
     const revisionContext = {
         cwd: record.executionCwd ?? record.parentCwd ?? ctx.cwd,
         parentCwd: ctx.cwd,
@@ -487,18 +497,7 @@ export async function executeParentWorkspaceAction(
                 `Run ${params.runId} has no persisted agent definition snapshot; it cannot be continued. Start a new run instead.`,
             );
         }
-        const currentDefinition = discovered.agents.find((agent) => agent.name === record.agent);
-        if (
-            agentCanEdit(definition) &&
-            (!currentDefinition ||
-                !agentCanEdit(currentDefinition) ||
-                currentDefinition.name !== "worker" ||
-                currentDefinition.source !== "builtin")
-        ) {
-            throw new AgentActionError(
-                `Run ${params.runId} has an unauthorized persisted mutation capability; it cannot be continued.`,
-            );
-        }
+        requireAuthorizedContinuationDefinition(record, definition, discovered, params.runId);
         if (!record.childSessionFile) {
             throw new AgentActionError(
                 `Run ${params.runId} has no persisted child session to continue.`,

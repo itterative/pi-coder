@@ -300,6 +300,21 @@ export class AgentRunManager {
         return true;
     }
 
+    /**
+     * Drop a retained terminal run whose logical identity is about to be revived.
+     *
+     * A continuation reuses the public run ID and supersedes the prior terminal result, so the
+     * retained outcome must be retired first; otherwise `createRun` would reject the duplicate
+     * identity. Runs that are unknown or still active are left to their normal lifecycle.
+     */
+    async discardRetainedTerminalRun(runId: string): Promise<void> {
+        const run = this.registry.find(runId);
+        if (!run || !isAgentTerminalStatus(run.status)) {
+            return;
+        }
+        await this.removeRun(run, "continued");
+    }
+
     /** Whether any non-terminal mutation-capable run is active. */
     get hasActiveMutatingRun(): boolean {
         return [...this.registry.all()].some(
@@ -2101,6 +2116,7 @@ export class AgentRunManager {
             | "shutdown"
             | "terminal"
             | "canceled"
+            | "continued"
             | "restored_terminal" = "terminal",
         persistRemoval = true,
     ): Promise<void> {

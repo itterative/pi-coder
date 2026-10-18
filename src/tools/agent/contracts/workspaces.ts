@@ -45,6 +45,11 @@ export interface AgentWorkspaceResult {
     status: WorkspaceResultStatus;
     parentRevision?: string;
     appliedAt?: number;
+    /**
+     * Recorded base replaced during finalization because the worktree no longer descended from it.
+     * Runtime-only diagnostic: it is not persisted, so it is present only on the prepared result.
+     */
+    baseAdjustedFrom?: string;
 }
 
 export interface AgentWorkspaceGitState {

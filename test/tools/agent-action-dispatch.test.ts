@@ -363,6 +363,20 @@ describe("agent action dispatch", () => {
         },
     );
 
+    it("warns when a collected result was prepared against a reconciled base", async () => {
+        const h = harness({ pendingStatus: "completed" });
+        const result = workspaceResult({ baseAdjustedFrom: "stale-base" });
+        vi.spyOn(workspaceFinalization, "prepareCollectedWorkspaceResult").mockResolvedValue(
+            result,
+        );
+
+        const outcome = await h.execute({ action: "collect", runId: "worker-1" });
+
+        expect(outcome.additionalMetadata).toEqual([
+            expect.stringContaining("no longer descended from its recorded base stale-base"),
+        ]);
+    });
+
     describe("delegated response size cap", () => {
         let scratchpadDir: string;
 
@@ -537,6 +551,20 @@ describe("agent action dispatch", () => {
         // A failed rollback is swallowed so it cannot mask the original startup failure.
         expect(workspaceStore.releaseAgentWorkspaceLease).not.toHaveBeenCalled();
         expect(outcome.content).toContain("manager startup failed");
+    });
+
+    it("warns when an isolated start runs from a dirty parent checkout", async () => {
+        const h = harness();
+        vi.spyOn(workspaceSetup, "prepareIsolatedWorkspace").mockResolvedValue({
+            ...RESERVATION,
+            parentCheckoutDirty: true,
+        });
+
+        const outcome = await h.execute(startParams({ isolation: "worktree", background: true }));
+
+        expect(outcome.additionalMetadata).toEqual([
+            expect.stringContaining("parent checkout has uncommitted changes"),
+        ]);
     });
 });
 

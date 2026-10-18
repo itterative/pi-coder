@@ -21,21 +21,23 @@ The intended allocation order is: genuinely free compatible slots first, then sa
 
 A checkpoint ref protects Git-visible state, not ignored files, running processes, or external environment state. Workspace setup compatibility must therefore be checked when restoring a checkpoint.
 
-### Deferred design gap: parent working-tree changes
+### Parent working-tree changes
 
-The initial shared-slot implementation remains conservative about the parent working tree. Applying a worker result currently requires a clean parent and leaves the applied changes uncommitted. A later worker based only on parent `HEAD` cannot see those changes. New isolated work is therefore currently rejected while the parent checkout is dirty. The broader design gap remains to be revisited after gaining more operational experience; possible future solutions include snapshotting/materializing the parent working tree or changing apply semantics.
+Isolated work is based on the parent's committed `HEAD`, never on uncommitted parent changes. Starting an isolated worker from a dirty checkout is allowed, and the start result warns the parent that those changes are not visible in the worktree. Applying a worker result still requires a clean checkout: the parent must commit or stash its own work first (temporarily is fine; nothing is lost), then retry the apply, which leaves the applied worker changes uncommitted. The parent owns any conflict that Git reports.
+
+The broader design gap remains for materializing a parent working-tree snapshot into the worktree so a worker can see intentional uncommitted changes; until then, worktree tasks should expect to see only committed state.
 
 ## Workspace lifecycle
 
 1. **Setup** — select or create one of up to three persistent worktrees per repository (the limit is configurable in `/agents` Settings).
 2. **Lease** — claim the worktree for a parent session and delegated run.
 3. **Execution** — the isolated worker reads and changes only its worktree.
-4. **Finalization** — collection commits remaining changes, creates a private result ref, and records a prepared result.
+4. **Finalization** — collection commits remaining changes, creates a private result ref, and records a prepared result. If the child moved its own worktree so the recorded base no longer describes its history, collection reconciles the base (current parent `HEAD`, then the merge base) instead of refusing, and the parent result carries a warning.
 5. **Disposition** — the parent explicitly inspects, applies, retains, continues, resets, or discards the result.
 
 No-change results create no durable ref and release the workspace for reuse. Changed results remain outside the parent checkout and retain their immutable result refs until disposition, but an inactive physical slot may be explicitly recycled for another logical worker after its checkpoint/result is durable. The `/agents` Workspaces tab also offers a manual create item; selecting it closes the browser and opens the setup prompt before creating the new slot. Recycling resets the physical worktree to the current parent `HEAD` and transfers its lease without deleting the older worker's checkpoints or results. Workspaces are never silently merged, applied, or deleted; scheduler recycling is the deliberate reset/rebase operation used to reuse a protected inactive slot.
 
-Applying uses the complete base-to-worker tree diff without creating a parent commit. The parent must be clean, still contain the recorded base revision, and pass Git patch checks. Application records an `applying` result state before changing the parent; a later apply request reconciles whether the patch was applied, was not applied, or left an uncertain checkout. Preflight failures leave the parent, result, and lease intact, while uncertain application state remains protected for explicit recovery.
+Applying uses the complete base-to-worker tree diff without creating a parent commit. The parent must be clean (the error tells the parent to commit or stash first) and the patch must pass Git's `apply --check` against the current checkout. The recorded workspace base does not have to be an ancestor of the current parent revision; Git's patch check is the conflict gate. Application records an `applying` result state before changing the parent; a later apply request reconciles whether the patch was applied, was not applied, or left an uncertain checkout. Preflight failures leave the parent, result, and lease intact, while uncertain application state remains protected for explicit recovery.
 
 ## Lease invariants
 
@@ -47,7 +49,7 @@ Applying uses the complete base-to-worker tree diff without creating a parent co
 
 ## Continue
 
-For isolated workers, `continue` is available for a prepared changed result whose task lease is still owned by the current parent session. It is not normally available after `retain`, `apply`, `discard`, or no-change release. Collected non-mutating runs such as `reviewer` can be continued without a workspace; continuation is restricted to the exact parent session and active parent-tree branch.
+For isolated workers, `continue` is available for a prepared changed result whose task lease is still owned by the current parent session. It is not normally available after `retain`, `apply`, `discard`, or no-change release. Any terminal run without a workspace can be continued without a prior `collect` — including the same-checkout `worker` and command-capable agents such as `reviewer` — and reviving the run replaces its retained result. Continuation is restricted to the exact parent session and active parent-tree branch.
 
 A revision keeps the same public agent identity:
 
@@ -57,19 +59,11 @@ A revision keeps the same public agent identity:
 
 Revision does not invalidate a result because its definition fingerprint or capabilities changed after the original run. It uses the complete definition snapshot persisted with the run; the child session remains authoritative for the conversation and recorded model. The current definition is informational only, while a missing or malformed persisted snapshot fails clearly because the original execution contract cannot be reconstructed.
 
-### Divergent-history policy
+### Worktree-mismatch policy
 
-Before starting the child, pi-coder reads the worktree `HEAD` and verifies that the recorded workspace `baseRevision` is an ancestor. This protects the existing result and the normal base-to-worker diff model when a worktree has been rebased, force-reset, or otherwise moved to unrelated history.
+Before starting the child, pi-coder reads the worktree `HEAD` and requires it to match the latest checkpoint exactly. A worktree with extra commits is not reset underneath the child: the continuation fails early and preserves the existing result and lease. The checkpoint's recorded base is metadata for the diff model, not a resumption gate, so a stale base no longer blocks a continuation.
 
-The chosen policy is **fail early and preserve state**:
-
-- no child is started;
-- no new lease is transferred;
-- no workspace or result metadata is changed;
-- the existing prepared result and lease remain available;
-- the user must explicitly reconcile or reset the workspace before trying again.
-
-Pi-coder does not silently update `baseRevision`, rebase the worktree, discard the old result, or accept an ambiguous divergent diff.
+Pi-coder does not silently update `baseRevision`, rebase the worktree, discard the old result, or accept an ambiguous divergent diff mid-continuation.
 
 ### Continue flow
 
@@ -89,10 +83,10 @@ Pi-coder does not silently update `baseRevision`, rebase the worktree, discard t
                                  │ valid
                                  v
                  ┌────────────────────────────────┐
-                 │ Read worktree HEAD and verify  │
-                 │ baseRevision is its ancestor   │
+                 │ Read worktree HEAD and require │
+                 │ it to match the checkpoint     │
                  └───────────────┬────────────────┘
-                    divergent    │ descendant
+                    divergent    │ matching
                        v          v
               [Reject before   ┌──────────────────────────────┐
                child/transfer; │ Retain existing run identity │

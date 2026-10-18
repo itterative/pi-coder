@@ -207,6 +207,8 @@ export interface WorkspaceReservation {
     ownerSessionId: string;
     provisionalLeaseRunId: string;
     provisionalLeaseRunInstanceId: string;
+    /** Whether the parent checkout had uncommitted changes when the worktree was reserved. */
+    parentCheckoutDirty?: boolean;
 }
 
 export type ManualWorkspaceCreationOptions = Omit<PrepareIsolatedWorkspaceOptions, "manager">;
@@ -454,15 +456,11 @@ export async function prepareIsolatedWorkspace(
         throw new AgentActionError("A same-checkout mutation-capable worker is already active.");
     }
 
-    // TODO(workspace-sharing): replace this conservative guard with a parent
-    // working-tree snapshot/materialization strategy so isolated work can see
-    // intentional uncommitted parent changes.
+    // Isolated work is based on committed HEAD, so intentional uncommitted parent changes are not
+    // visible in the worktree. The start result warns the parent, which owns any conflict that
+    // applying the result later produces.
     const parentStatus = await git(cwd, ["status", "--porcelain=v1", "--untracked-files=all"]);
-    if (parentStatus) {
-        throw new AgentActionError(
-            "Cannot start an isolated worker while the parent checkout has uncommitted changes.",
-        );
-    }
+    const parentCheckoutDirty = parentStatus.length > 0;
 
     const ownerSessionId = ctx.sessionManager.getSessionId();
     const provisionalLeaseRunId = `workspace-provision-${randomUUID()}`;
@@ -471,6 +469,13 @@ export async function prepareIsolatedWorkspace(
         ...(workspacesDir ? { workspacesDir } : {}),
         ...(maxWorkspaces !== undefined ? { maxWorkspaces } : {}),
     };
+    const reservationFor = (workspace: AgentWorkspace): WorkspaceReservation => ({
+        workspace,
+        ownerSessionId,
+        provisionalLeaseRunId,
+        provisionalLeaseRunInstanceId,
+        ...(parentCheckoutDirty ? { parentCheckoutDirty: true } : {}),
+    });
     const released = await reconcileNoChangeAgentWorkspaceLeases(cwd, workspaceOptions);
     if (released > 0) {
         emitAgentEvent(
@@ -500,7 +505,7 @@ export async function prepareIsolatedWorkspace(
             },
             { sink: events, cwd: ctx.cwd },
         );
-        return { workspace, ownerSessionId, provisionalLeaseRunId, provisionalLeaseRunInstanceId };
+        return reservationFor(workspace);
     }
 
     const recyclable = await findRecyclableAgentWorkspace(cwd, manager, workspacesDir);
@@ -523,12 +528,7 @@ export async function prepareIsolatedWorkspace(
             },
             { sink: events, cwd: ctx.cwd },
         );
-        return {
-            workspace: recycled,
-            ownerSessionId,
-            provisionalLeaseRunId,
-            provisionalLeaseRunInstanceId,
-        };
+        return reservationFor(recycled);
     }
 
     const existing = await findUnpreparedAgentWorkspace(cwd, workspaceOptions);
@@ -597,7 +597,9 @@ export async function prepareIsolatedWorkspace(
         );
     }
 
-    const workspace = existing ?? (await createAgentWorkspace(cwd, workspaceOptions));
+    const workspace =
+        existing ??
+        (await createAgentWorkspace(cwd, { ...workspaceOptions, skipParentDirtyCheck: true }));
     if (!existing) {
         emitAgentEvent(
             {
@@ -653,12 +655,7 @@ export async function prepareIsolatedWorkspace(
                 { sink: events, cwd: ctx.cwd },
             );
         }
-        return {
-            workspace: claimed,
-            ownerSessionId,
-            provisionalLeaseRunId,
-            provisionalLeaseRunInstanceId,
-        };
+        return reservationFor(claimed);
     } catch (error) {
         try {
             await releaseAgentWorkspaceLease(workspace.id, {

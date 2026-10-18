@@ -52,6 +52,19 @@ function isTerminalAgentStatus(status: AgentRunDetails["status"]): boolean {
     );
 }
 
+/**
+ * Explain a reconciled base to the parent when finalization had to replace the recorded one.
+ *
+ * The warning is deliberately non-blocking: the result is prepared and inspectable, and apply still
+ * validates the patch against the current checkout.
+ */
+export function workspaceBaseAdjustmentWarning(result: AgentWorkspaceResult): string | undefined {
+    if (!result.baseAdjustedFrom) {
+        return undefined;
+    }
+    return `The isolated worktree no longer descended from its recorded base ${result.baseAdjustedFrom}; the result was prepared against ${result.baseRevision} instead. Inspect the diff before applying.`;
+}
+
 /** Finalize a foreground isolated run because it has no later collect action. */
 export async function prepareForegroundWorkspaceResult(
     outcome: AgentRunOutcome,
@@ -92,5 +105,9 @@ export async function prepareForegroundWorkspaceResult(
         );
     }
     outcome.details.workspaceResult = workspaceResult;
+    const warning = workspaceBaseAdjustmentWarning(workspaceResult);
+    if (warning) {
+        outcome.additionalMetadata = [...(outcome.additionalMetadata ?? []), warning];
+    }
     return outcome;
 }
