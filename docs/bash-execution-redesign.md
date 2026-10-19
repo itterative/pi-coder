@@ -636,7 +636,8 @@ notifies through `ctx.ui.notify`, so a silent allow/deny is still visible.
   "timeoutMs": 2000,
   "cooldownMs": 30000,
   "minConfidence": 0.8,
-  "surfaces": ["parent"]
+  "surfaces": ["parent"],
+  "fileSurfaces": []
 }
 ```
 
@@ -665,6 +666,10 @@ notifies through `ctx.ui.notify`, so a silent allow/deny is still visible.
   the model for children is the highest-value case (it converts "uncovered without a prompt" into a
   decision) and the highest-risk, so it is opt-in. The child gate can only produce `allow`/`allow:sandbox`;
   a `refuse` still reaches whatever prompt path the run has.
+- `fileSurfaces`: the same two ids, naming the **file** gates instead of the Bash ones, and empty by
+  default. Two lists rather than one because the subjects differ in kind: a command verdict has a sandbox to
+  fall back on and a path verdict has none, so a config that enabled the model for commands does not thereby
+  claim anything about reads and writes outside the working tree. See `docs/file-access-gates.md`.
 - The existing `audit` config section (`provider`/`model`, currently display-only) should be renamed or
   folded into `decisionModel`; `/bash-sandbox-config` grows a section for it.
 - The `/agents` Settings tab edits the common fields without touching the file by hand: the `Decision model`

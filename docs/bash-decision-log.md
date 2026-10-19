@@ -1,9 +1,15 @@
-# Bash permission decision log
+# Permission decision log
 
 Every bash permission decision is appended to a development log so approval
 patterns can be mined offline and turned into heuristics or curated rules. The
 writer is `src/modules/sandbox/decision-log.ts`; the reader is
 `scripts/permission-report.ts`.
+
+The same file also carries the **file-access** records — every direct `read`/`write`/`edit` that left the
+trusted roots and reached the decision model or a human — written by `logFileAccessDecision()` from
+`src/tools/file-permissions.ts`. They are a separate shape keyed by `gate: "file"` and are described in
+their own section below; `scripts/permission-report.ts` skips them, because its grouping is a command-shape
+grouping. See `docs/file-access-gates.md` for what the file gates decide.
 
 ## What is recorded
 
@@ -27,6 +33,16 @@ One JSON object per line, written by both bash gates — the parent hook
 Writing is best-effort: `logBashDecision()` swallows every failure so a logging
 problem can never change whether a command runs. Records are structured data
 produced by the resolver itself — nothing is inferred from shell text afterwards.
+
+File-access records (`gate: "file"`) share the file, the rotation, and the best-effort writer, and carry:
+`surface` and `agent`, `cwd`, `operation` (`read` or `write`), the resolved `path`, the `folder` a human's
+"always allow" would have covered, the `reasons` the confinement check reported, `resolvedBy`
+(`classifier`, `prompt`, or `unavailable` — which of the three settled it), `prompt.outcome`, the same
+`classifier` block, `decision` (`allow` or `deny`), `blocked`, and the user's `note`. There is no `command`,
+no `resolution` object, and no `sandboxed` field: a direct path access does not run under bwrap, so nothing
+about it is sandboxed, and a verdict can only approve the access or leave it to the human. Only accesses that
+left every trusted root are recorded; an inside-cwd read says nothing about the permission system and there
+are thousands of them per session.
 
 Not recorded: the read-only child confinement gate
 (`src/tools/agent/child/gates/confinement.ts`), which classifies commands without

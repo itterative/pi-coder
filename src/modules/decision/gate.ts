@@ -11,6 +11,8 @@ import type {
     DecisionModelConfig,
     DecisionSurface,
     DecisionVerdict,
+    FileAccessDecisionContext,
+    FileDecisionSubject,
 } from "./types";
 
 /**
@@ -24,6 +26,9 @@ import type {
 /** Surfaces allowed to consult the model when the config does not name any. */
 export const DEFAULT_SURFACES: readonly DecisionSurface[] = ["parent"];
 
+/** File surfaces allowed to consult the model when `fileSurfaces` is absent: none. */
+const DEFAULT_FILE_SURFACES: readonly DecisionSurface[] = [];
+
 let cachedEvaluator: { key: string; evaluator: DecisionEvaluator } | undefined;
 
 /** Whether this surface may consult the model at all. */
@@ -33,6 +38,24 @@ export function decisionEnabled(config: DecisionModelConfig, surface: DecisionSu
     }
 
     return (config.surfaces ?? DEFAULT_SURFACES).includes(surface);
+}
+
+/**
+ * Whether this file-access surface may consult the model.
+ *
+ * Its own predicate over its own list, because the two subjects decide different things and the file one has
+ * no sandbox to fall back on: `surfaces` names the Bash gates and `fileSurfaces` the read/write gates, so an
+ * existing config keeps exactly the meaning it was written with.
+ */
+export function fileDecisionEnabled(
+    config: DecisionModelConfig,
+    surface: DecisionSurface,
+): boolean {
+    if (config.enabled !== true) {
+        return false;
+    }
+
+    return (config.fileSurfaces ?? DEFAULT_FILE_SURFACES).includes(surface);
 }
 
 /**
@@ -52,6 +75,31 @@ export const APPLIED_PERMISSIONS = {
 export interface DecisionContextShape {
     runner?: DecisionRunner;
     isolation?: DecisionIsolation;
+}
+
+/**
+ * The file-access subject for one direct read or write, with the session half beside it.
+ *
+ * `path` is the gate's own resolved target, so what the classifier judges is the path the tool will open.
+ * Only `request` is taken from the session and not `recent`: the measured arm that added the recent window
+ * resolved no more approved accesses and cost 40 more tokens, and a path's judgment is about the request the
+ * access serves rather than the turns around it.
+ */
+export function fileDecisionContextFor(
+    ctx: ExtensionContext,
+    file: FileDecisionSubject,
+    shape: DecisionContextShape = {},
+): FileAccessDecisionContext {
+    const cwd = ctx.cwd ?? process.cwd();
+    const session = decisionSessionContext(ctx.sessionManager.getBranch());
+
+    return {
+        file,
+        cwd,
+        runner: shape.runner ?? "parent",
+        isolation: shape.isolation ?? "checkout",
+        ...(session.request === undefined ? {} : { request: session.request }),
+    };
 }
 
 /** The classifier context for one unresolved command, taken from the active branch. */
@@ -86,36 +134,27 @@ export function decisionContextFor(
  * command. Reusing it across a config change would keep a cooldown earned under other settings, so the key
  * carries the settings: a changed config (or a sandbox that became unavailable) starts fresh.
  */
-function evaluatorFor(options: ConsultOptions): DecisionEvaluator {
-    const key = JSON.stringify([options.config, options.sandboxAvailable]);
+function evaluatorFor(seed: EvaluatorSeed): DecisionEvaluator {
+    const key = JSON.stringify([seed.config, seed.sandboxAvailable]);
     if (cachedEvaluator?.key === key) {
         return cachedEvaluator.evaluator;
     }
 
     const evaluator = new DecisionEvaluator({
-        registry: options.registry ?? options.ctx.modelRegistry,
-        config: options.config,
-        sandboxAvailable: options.sandboxAvailable,
+        registry: seed.registry ?? seed.ctx.modelRegistry,
+        config: seed.config,
+        sandboxAvailable: seed.sandboxAvailable,
     });
     cachedEvaluator = { key, evaluator };
     return evaluator;
 }
 
-/** Drop the shared evaluator and its verdict and rejection caches, so tests do not inherit a cooldown or a cached answer earned by another. */
-export function resetDecisionEvaluator(): void {
-    cachedEvaluator = undefined;
-}
-
-export interface ConsultOptions {
+/** What it takes to get the shared evaluator: the settings it is keyed by and where the model resolves from. */
+export interface EvaluatorSeed {
     ctx: ExtensionContext;
     config: DecisionModelConfig;
-    command: string;
     /** Whether sandboxed execution is available right now; `sandbox` abstains without it. */
     sandboxAvailable: boolean;
-    /** Who is running the command, when that is not the parent (default `parent`). */
-    runner?: DecisionRunner;
-    /** Where a mutating runner's working copy is (default `checkout`). */
-    isolation?: DecisionIsolation;
     /**
      * The registry the classifier resolves from (default `ctx.modelRegistry`).
      *
@@ -123,6 +162,19 @@ export interface ConsultOptions {
      * provider was registered.
      */
     registry?: ClassifierRegistry;
+}
+
+/** Drop the shared evaluator and its verdict and rejection caches, so tests do not inherit a cooldown or a cached answer earned by another. */
+export function resetDecisionEvaluator(): void {
+    cachedEvaluator = undefined;
+}
+
+export interface ConsultOptions extends EvaluatorSeed {
+    command: string;
+    /** Who is running the command, when that is not the parent (default `parent`). */
+    runner?: DecisionRunner;
+    /** Where a mutating runner's working copy is (default `checkout`). */
+    isolation?: DecisionIsolation;
 }
 
 /**
@@ -135,6 +187,54 @@ export interface ConsultOptions {
 export async function consultDecisionModel(options: ConsultOptions): Promise<DecisionVerdict> {
     const consulted = await consultDecisionContext(options);
     return consulted.verdict;
+}
+
+/**
+ * Judge one direct file access.
+ *
+ * The same never-reject contract as `consultDecisionModel`, and the same evaluator machinery: caches,
+ * cooldown, timeout, and one policy. `sandboxAvailable` is reported as absent rather than looked up, because
+ * a file access has no sandboxed form — the subject's table maps every withheld criterion to `refuse`, so
+ * nothing can ask for a sandbox, and passing `false` means a future row that *did* map to `sandbox` would
+ * abstain to the human instead of pretending the access was contained.
+ */
+export async function consultFileAccessDecision(
+    options: FileConsultOptions,
+): Promise<DecisionVerdict> {
+    try {
+        const context = fileDecisionContextFor(options.ctx, options.file, {
+            runner: options.runner,
+            isolation: options.isolation,
+        });
+        const evaluator = evaluatorFor({
+            ctx: options.ctx,
+            config: options.config,
+            sandboxAvailable: false,
+            ...(options.registry === undefined ? {} : { registry: options.registry }),
+        });
+        return await evaluator.evaluateFileAccess(context);
+    } catch (error) {
+        return {
+            outcome: "abstain",
+            status: "error",
+            reason: `decision model failed: ${messageOf(error)}`,
+            answers: {},
+            latencyMs: 0,
+        };
+    }
+}
+
+export interface FileConsultOptions {
+    ctx: ExtensionContext;
+    config: DecisionModelConfig;
+    /** The access, already resolved by the gate that is asking. */
+    file: FileDecisionSubject;
+    /** Who is asking, when that is not the parent (default `parent`). */
+    runner?: DecisionRunner;
+    /** Where a mutating runner's working copy is (default `checkout`). */
+    isolation?: DecisionIsolation;
+    /** The registry the classifier resolves from (default `ctx.modelRegistry`). */
+    registry?: ClassifierRegistry;
 }
 
 /** What one consult observed: the verdict, and the context it judged when one could be built. */

@@ -2,13 +2,17 @@ import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent
 
 import {
     consultDecisionContext,
+    consultFileAccessDecision,
+    fileDecisionEnabled,
     APPLIED_PERMISSIONS,
     type DecisionContextShape,
 } from "../modules/decision/gate";
 import type {
     ClassifierRegistry,
     DecisionModelConfig,
+    DecisionSurface,
     DecisionVerdict,
+    FileDecisionOperation,
     ScriptRun,
 } from "../modules/decision";
 import { emitDecisionStatus } from "../modules/decision/events";
@@ -41,6 +45,23 @@ export function appliedPermission(
     }
 
     return APPLIED_PERMISSIONS[verdict.outcome];
+}
+
+/**
+ * The permission a file verdict resolves to, when `apply` licenses it.
+ *
+ * Narrower than the command mapping on purpose: a direct path access has one useful outcome — let it through —
+ * and `allow:sandbox` means nothing to a tool call that does not run under bwrap. A verdict that ever named
+ * `sandbox` therefore resolves to nothing here and the human is asked, which is the honest reading of "I do
+ * not know how to contain this".
+ */
+export function appliedFilePermission(
+    config: DecisionModelConfig,
+    verdict: DecisionVerdict,
+): Permission | undefined {
+    const permission = appliedPermission(config, verdict);
+
+    return permission === "allow" ? permission : undefined;
 }
 
 /** The log record for a verdict, identical whichever gate asked. */
@@ -176,6 +197,94 @@ export interface GateConsultedDecision {
     /** Present only when `apply` let the verdict resolve the prompt. */
     permission?: Permission;
     /** What the decision log records; present whenever the model was consulted. */
+    record: BashClassifierRecord;
+}
+
+/** What one file-access consult produced, in the shape the read/write gates use. */
+export interface FileAccessConsultOptions extends DecisionContextShape {
+    /** Where the session half of the context comes from: the asking surface's own session. */
+    ctx: ExtensionContext;
+    config: DecisionModelConfig;
+    /** Which file surface is asking: `parent` or `child`. */
+    surface: DecisionSurface;
+    operation: FileDecisionOperation;
+    /** The gate's own resolved target, so the verdict is about the path that will be opened. */
+    path: string;
+    /** What the resolved access is called in the notification, e.g. `that read`. */
+    label: string;
+    /** The asking surface's UI, for the notification a resolution produces. */
+    notify: (message: string, level: "info") => void;
+    /**
+     * Where in-flight check notifications go, when the caller has a bus.
+     *
+     * Both gates pass the parent process's bus, so the parent footer can animate its auto badge for a
+     * child's check as well as its own.
+     */
+    events?: EventBus;
+    /**
+     * The registry the classifier resolves from (default `ctx.modelRegistry`).
+     *
+     * A child gate passes its parent's: pi's registry is process-wide, and the parent is where the
+     * configured provider was registered.
+     */
+    registry?: ClassifierRegistry;
+}
+
+/**
+ * Consult the model about one direct file access, and translate the verdict into what the gate needs.
+ *
+ * The sibling of {@link consultForGate} rather than a flag on it: the two subjects ask different questions and
+ * only the Bash one can be contained by a sandbox, so the file path maps a verdict through
+ * {@link appliedFilePermission} and reports through the same in-flight counter the footer animates.
+ *
+ * `undefined` means the surface is not enabled, which is the gate's cue to ask the human exactly as it does
+ * when the model has nothing to say; the disabled check lives here so every caller gets the same rule. Never
+ * rejects: a withheld, failed, or unconfigured verdict leaves `permission` unset.
+ */
+export async function consultFileAccessForGate(
+    options: FileAccessConsultOptions,
+): Promise<FileAccessConsultResult | undefined> {
+    if (!fileDecisionEnabled(options.config, options.surface)) {
+        return undefined;
+    }
+
+    checksInFlight += 1;
+    emitDecisionStatus(options.events, checksInFlight);
+
+    try {
+        const verdict = await consultFileAccessDecision({
+            ctx: options.ctx,
+            config: options.config,
+            file: { operation: options.operation, path: options.path },
+            ...(options.runner === undefined ? {} : { runner: options.runner }),
+            ...(options.isolation === undefined ? {} : { isolation: options.isolation }),
+            ...(options.registry === undefined ? {} : { registry: options.registry }),
+        });
+        const permission = appliedFilePermission(options.config, verdict);
+
+        if (permission !== undefined) {
+            options.notify(
+                `pi-file-sandbox: decision model resolved ${options.label}: ` +
+                    `${verdict.criterion ?? verdict.status} ` +
+                    `(${verdict.confidence?.toFixed(2) ?? "no confidence"}) - ${permission}`,
+                "info",
+            );
+        }
+
+        return {
+            ...(permission === undefined ? {} : { permission }),
+            record: classifierRecord(verdict, options.config, permission !== undefined),
+        };
+    } finally {
+        checksInFlight = Math.max(0, checksInFlight - 1);
+        emitDecisionStatus(options.events, checksInFlight);
+    }
+}
+
+/** What a consulted file access produced: the permission when `apply` licensed it, and the log record. */
+export interface FileAccessConsultResult {
+    /** Present only when `apply` let the verdict approve the access. */
+    permission?: Permission;
     record: BashClassifierRecord;
 }
 

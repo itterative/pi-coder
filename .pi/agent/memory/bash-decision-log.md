@@ -1,16 +1,26 @@
 ---
 name: bash-decision-log
-description: Bash permission decision log — what is recorded, where, and how it is mined for heuristic or rule candidates.
+description: Permission decision log — bash decisions and direct file-access decisions in one JSONL; what is recorded, where, and how each is mined for heuristic or rule candidates.
 category: workflow
 ---
 
-# Bash permission decision log
+# Permission decision log
 
-Development tooling: every bash permission decision is appended to a durable JSONL log so approval patterns can be mined offline and turned into heuristics or curated rules. Writer `src/modules/sandbox/decision-log.ts`, reader `scripts/permission-report.ts` (`npm run permission-report`), prose in [docs/bash-decision-log.md](../../../docs/bash-decision-log.md).
+Development tooling: every bash permission decision is appended to a durable JSONL log so approval patterns can be mined offline and turned into heuristics or curated rules. Direct file-access decisions that left every trusted root are appended to the same file, in their own shape. Writer `src/modules/sandbox/decision-log.ts`, reader `scripts/permission-report.ts` (`npm run permission-report`, bash records only), prose in [docs/bash-decision-log.md](../../../docs/bash-decision-log.md) and [docs/file-access-gates.md](../../../docs/file-access-gates.md).
 
 ## Recording
 
 - Written at the two `resolvePermissionDetails()` call sites only: the parent hook (`src/tools/bash/index.ts`) and the delegated command gate (`src/tools/agent/child/command-permissions.ts`). The `resolution` field is what the resolver itself decided, so a consumer never re-derives policy answers from shell text; `prompt`, `decision`, `sandboxed`, and `blocked` are layered on top. `blocked` distinguishes an approval that could not run (no bwrap) from one that ran.
+- **File-access records share the file.** `logFileAccessDecision()` appends a different shape, marked
+  `gate: "file"`, from `src/tools/file-permissions.ts` for every direct access that left every trusted root:
+  `operation`, resolved `path`, `folder`, the `reasons` the confinement check reported, and `resolvedBy`
+  (`classifier` | `prompt` | `unavailable`) beside the same `classifier`/`prompt`/`decision`/`blocked`/`note`
+  fields. It carries no `command`, no `resolution` object, and no `sandboxed`: a path access does not run under
+  bwrap. Only accesses that reached the model or a human are recorded — an inside-cwd read says nothing about
+  the permission system and there are thousands per session. Bash records now write `gate: "bash"`, and a record
+  with no `gate` is an older Bash one. `scripts/permission-report.ts` skips file records explicitly (its
+  grouping is a command-shape grouping); mine them with `jq -c 'select(.gate=="file")'`. Design and measurements
+  in `docs/file-access-gates.md`.
 - Not recorded: the read-only child confinement gate (`src/tools/agent/child/gates/confinement.ts`), which classifies below the `command` rung without the resolver and never prompts, nor file-access or agent-gate approvals. The decision model is consulted on either gate's surface when `surfaces` enables it, so the `classifier` field appears on parent and child records alike: `{strategy, provider, model, criterion, action, confidence, outcome, status, reason, latencyMs, applied, tokens}` plus optional fields (`cached`, `command`, `script`), absent when the model is disabled or the surface is not enabled. `cached: true` means every request the consult needed was answered from cache or the size-rejection memo: none was made, `tokens` are zero, and the policy still ran (a command with bodies needs one body request per script plus the command, so a mix shows per body as `script.answers[].status`). `script` summarizes the scripts the command runs: `{kind: "package"|"file"|"inline"|"binary", sources?, chars?, omitted?, answers?}` — `sources` names each body's provenance in send order (`package.json#name` for a chased script line, a cwd-relative path for a file body), `chars` is the total characters of those bodies, `omitted` carries `reason:source` markers (`cycle:`/`depth:`) when the chase stopped early, and `answers` carries one `{source, criterion, action, confidence, status}` per classified body. A body's `criterion` is a **capability** (`read_only`, `writes_files`, `writes_outside`, `privileged`, `network`, `remote_code`, `destructive`, `process_control`), not a command reason — the body is classified as a property of its code, the command as an invocation, and the record's top-level `criterion`/`confidence` is the fold over the command answer and those capability answers. `command` carries the command form's own `{criterion, action, confidence, status}` before the fold, so the invocation judgment stays visible when a capability wins the top level — and a `host` fold is gated by that command confidence, since capabilities withhold but never grant. The bodies themselves are never logged. Both gates build it with the shared `classifierRecord` in `src/tools/decision-model.ts`. `status: "applied"` with `applied: false` means the policy would have resolved the prompt but `apply` is off (dry run).
 - Each record carries the per-segment breakdown from `resolvePermissionDetails()`: `source` (`policy`/`heuristic`/`unresolved`), the matched rule `pattern` (`null` when the `**` default decided), `permission` when resolved, `coveredBy` (`segment`/`whole-line` for a rule match, otherwise `null`), and unwrapped `tokens` — the same single unwrap transform suggestions use, so a logged segment and a remembered rule name the same command.
 - Writing is best-effort: `logBashDecision()` swallows every failure, because a logging problem must never change whether a command runs. One `appendFileSync` line per decision, file mode `0600`.

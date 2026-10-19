@@ -131,13 +131,15 @@ function strategyField(value: unknown): DecisionStrategyId | undefined {
     return value as DecisionStrategyId;
 }
 
+const VALID_SURFACES: readonly DecisionSurface[] = ["parent", "child"];
+
 function surfacesField(value: unknown): readonly DecisionSurface[] | undefined {
     if (!Array.isArray(value)) {
         return undefined;
     }
 
-    return value.filter(
-        (surface): surface is DecisionSurface => surface === "parent" || surface === "child",
+    return value.filter((surface): surface is DecisionSurface =>
+        VALID_SURFACES.includes(surface as DecisionSurface),
     );
 }
 
@@ -173,6 +175,7 @@ function readDecisionModelConfig(data: unknown): DecisionModelConfig | undefined
         contextWindow: positiveNumber(raw.contextWindow),
         minConfidence: ratioField(raw.minConfidence),
         surfaces: surfacesField(raw.surfaces),
+        fileSurfaces: surfacesField(raw.fileSurfaces),
     };
 }
 
@@ -206,6 +209,7 @@ function mergeDecisionConfigs(
         contextWindow: override.contextWindow ?? base.contextWindow,
         minConfidence: override.minConfidence ?? base.minConfidence,
         surfaces: override.surfaces ?? base.surfaces,
+        fileSurfaces: override.fileSurfaces ?? base.fileSurfaces,
     };
 }
 

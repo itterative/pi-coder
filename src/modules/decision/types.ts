@@ -50,17 +50,40 @@ export type ScriptCapability =
     | "destructive"
     | "process_control";
 
-/** A criterion a classified form can name: a command reason, or a script's capability. */
-export type DecisionCriterion = DecisionReason | ScriptCapability;
+/**
+ * What kind of file a path names, as the file-access classifier answers it.
+ *
+ * `code`, `data`, and `settings` are the material a coding session touches as its normal work; `personal`,
+ * `secret`, and `system` are the kinds it has no ordinary reason to touch. Judged from the location and name
+ * alone — the file's content is never sent, because a classifier that read the file to decide whether it was
+ * sensitive would leak the thing it is gating.
+ */
+export type FileDecisionKind = "code" | "data" | "settings" | "personal" | "secret" | "system";
 
-/** Which subject a classified form answers about: the invocation, one body of code it runs, or the runner's authority over those bodies. */
-export type DecisionFormSubject = "command" | "script" | "scope";
+/** Whether the runner's request reaches the file. `tangential` and `unrelated` withhold. */
+export type FileDecisionPurpose = "asked_for" | "routine" | "tangential" | "unrelated";
+
+/** A criterion a classified form can name: a command reason, a script's capability, or a file-access label. */
+export type DecisionCriterion =
+    DecisionReason | ScriptCapability | FileDecisionKind | FileDecisionPurpose;
+
+/** Which subject a classified form answers about: the invocation, one body of code it runs, the runner's authority over those bodies, or one direct file access. */
+export type DecisionFormSubject = "command" | "script" | "scope" | "file";
 
 /** What the caller should do: apply a recommended action, or fall through to the human prompt. */
 export type DecisionOutcome = DecisionAction | "abstain";
 
 /** How the model request itself ended, for the decision log. */
 export type DecisionStatus = "applied" | "abstained" | "error" | "timeout";
+
+/**
+ * What the decision log records as the way a verdict was reached: a command strategy id, or the file-access
+ * subject's own label.
+ *
+ * `"file-access"` is not selectable through `decisionModel.strategy`: it names a subject, not a way of asking
+ * about a command, and `resolveStrategy` will not accept it.
+ */
+export type DecisionVerdictStrategy = DecisionStrategyId | "file-access";
 
 /** How one form's classifier request ended, for the decision log. */
 export type DecisionFormStatus =
@@ -83,6 +106,22 @@ export type DecisionContextShape = "command_cwd" | "request_context";
 
 /** Which permission surfaces may consult the model. */
 export type DecisionSurface = "parent" | "child";
+
+/** The file operation a direct access performs, in the vocabulary the decision module judges. */
+export type FileDecisionOperation = "read" | "write";
+
+/**
+ * One direct file access outside the roots the gates already trust.
+ *
+ * `path` is absolute and canonical: the gate resolves and symlinks-checks the target before asking, so the
+ * classifier judges the same path the tool will open. It is not a subject that can be judged without a
+ * request — with the `request` field dropped, the measured arm granted 7 of the 8 accesses the user refused.
+ */
+export interface FileDecisionSubject {
+    operation: FileDecisionOperation;
+    /** Absolute path, after the gate's own resolution. */
+    path: string;
+}
 
 /**
  * The second-opinion ("veto") request.
@@ -138,8 +177,19 @@ export interface DecisionModelConfig {
     cooldownMs?: number;
     /** Minimum confidence for a `host` verdict to resolve a prompt (default 0.8). */
     minConfidence?: number;
-    /** Surfaces that may consult the model (default `["parent"]`). */
+    /**
+     * Surfaces that may let a verdict resolve a **Bash** prompt (default `["parent"]`).
+     */
     surfaces?: readonly DecisionSurface[];
+    /**
+     * Surfaces that may let a verdict resolve a **file-access** prompt (default: none).
+     *
+     * A second list rather than one shared list, because turning the model on for commands is not the same
+     * claim about files: a command verdict can be contained by the sandbox and a path verdict cannot, and the
+     * subject is judged with a different vocabulary. An existing config that reads
+     * `surfaces: ["parent", "child"]` therefore keeps exactly its old meaning.
+     */
+    fileSurfaces?: readonly DecisionSurface[];
     /** Second-opinion veto for low-confidence `host` answers. */
     veto?: DecisionVetoConfig;
 }
@@ -225,7 +275,8 @@ export interface ScriptRun {
  *
  * The caller gathers these facts once and every strategy decides which of them reach the model — that is the
  * lever `veto` and `history` differ on. `runner` and `isolation` select the runner rules, and default to
- * `parent`/`checkout`.
+ * `parent`/`checkout`. `command` and `file` mark which subject is being judged; the script fields are
+ * command-only and are absent for a file consult.
  */
 export interface DecisionContext {
     /** The unresolved command, exact text. */
@@ -271,6 +322,24 @@ export interface DecisionContext {
      * carries both `script` and these is a caller error; production sets one or the other.
      */
     scriptProfiles?: readonly ScriptCapabilitySummary[];
+}
+
+/**
+ * The facts a file-access consult may draw on.
+ *
+ * A separate shape rather than more optional fields on `DecisionContext`, because the two subjects share
+ * almost nothing: a command consult resolves script bodies, reads the working tree, and folds a capability
+ * against the runner's rung, and none of that is meaningful about a path. What they share is the session half
+ * — the request and the rules the runner is judged by — and `classifierRecord`/policy on the way out.
+ */
+export interface FileAccessDecisionContext {
+    file: FileDecisionSubject;
+    cwd: string;
+    /** Selects the file-access runner rules. Defaults to `parent`/`checkout`. */
+    runner?: DecisionRunner;
+    isolation?: DecisionIsolation;
+    /** The request the access serves: the user's own message, or the delegated task for a child. */
+    request?: string;
 }
 
 /** One uncommitted path in the runner's working tree, as `git status` reports it. */
@@ -334,8 +403,22 @@ export interface DecisionVerdict {
     veto?: DecisionVetoAnswer;
     /** The criterion the strategy read out of the answer; what the decision log records. */
     criterion?: DecisionCriterion;
-    /** Which strategy produced this verdict. */
-    strategy?: DecisionStrategyId;
+    /**
+     * Which subject produced this verdict.
+     *
+     * `command` is the invocation-and-context consult the strategies describe; `file` is one direct file
+     * access, judged by `file-access.ts` instead. The decision log records the second one under its own
+     * strategy id, because naming a command strategy on a path verdict would be a lie about which question was
+     * asked.
+     */
+    subject?: DecisionFormSubject;
+    /**
+     * Which strategy or subject produced this verdict, as the decision log records it.
+     *
+     * A command verdict names the command strategy; a file verdict names its subject, because no command
+     * strategy was asked and a row that claimed one would be a false record of the measurement.
+     */
+    strategy?: DecisionVerdictStrategy;
     /** Raw answers by question id, for offline analysis. */
     answers: Record<string, ClassifierAnswer>;
     /** The per-form answers the fold combined, in send order. Absent when the model was never consulted. */

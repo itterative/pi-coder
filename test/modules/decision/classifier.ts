@@ -8,6 +8,9 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import {
+    FILE_KIND_QUESTION,
+    FILE_LOSS_QUESTION,
+    FILE_PURPOSE_QUESTION,
     SCRIPT_QUESTION,
     VETO_QUESTION,
     type ClassifierRegistry,
@@ -66,6 +69,57 @@ export function scriptResult(
     confidence: number,
 ): ClassifierResult {
     return result(model, { [SCRIPT_QUESTION]: choiceAnswer(capability, confidence) });
+}
+
+/** What a file-access answer pair says, in the shape a case reads as one line. */
+export interface FileAccessAnswer {
+    /** The kind label, e.g. `code`. */
+    kind: string;
+    /** The purpose label, e.g. `routine`. */
+    purpose: string;
+    /** The kind answer's confidence, which is the axis `policy.ts` gates a grant by (default 0.9). */
+    confidence?: number;
+    /** The purpose answer's confidence. Thin by nature on this subject, so it is only worth pinning to. */
+    purposeConfidence?: number;
+    /**
+     * The probability a write destroys unasked content. Absent means the loss question was not asked, which
+     * is what a read's request looks like — so a case that sets it here is claiming the write arm ran.
+     */
+    loss?: number;
+}
+
+/**
+ * A successful answer to the file-access subject: the kind and purpose choices, plus the write's loss bool.
+ *
+ * Built as one result because the subject asks all of its questions in one request; a test that wanted them
+ * separated would be testing a request shape the module never sends.
+ */
+export function fileAccessResult(model: Classifier, answer: FileAccessAnswer): ClassifierResult {
+    const answers: Record<string, ClassifierAnswer> = {
+        [FILE_KIND_QUESTION]: choiceAnswer(answer.kind, answer.confidence ?? 0.9),
+        [FILE_PURPOSE_QUESTION]: choiceAnswer(answer.purpose, answer.purposeConfidence ?? 0.24),
+    };
+
+    if (answer.loss !== undefined) {
+        answers[FILE_LOSS_QUESTION] = { type: "bool", probability: answer.loss };
+    }
+
+    return result(model, answers);
+}
+
+/** The same result with the raw answers exposed, for a case that needs to assert on the request's labels. */
+export function fileAccessAnswerOf(result: ClassifierResult): FileAccessAnswer {
+    const kind = result.answers[FILE_KIND_QUESTION];
+    const purpose = result.answers[FILE_PURPOSE_QUESTION];
+    const loss = result.answers[FILE_LOSS_QUESTION];
+
+    return {
+        kind: kind?.type === "choice" ? kind.choice : "?",
+        purpose: purpose?.type === "choice" ? purpose.choice : "?",
+        confidence: kind?.type === "choice" ? kind.confidence : 0,
+        purposeConfidence: purpose?.type === "choice" ? purpose.confidence : 0,
+        loss: loss?.type === "bool" ? loss.probability : undefined,
+    };
 }
 
 /** A registry that resolves models but never classifies; for testing model selection. */

@@ -77,6 +77,11 @@ export function resolveChildGrant(
     const definition = context.definition;
     const authority = agentAuthority(definition);
     const tools = capabilityTools(definition);
+    // The definition's own roots, and nothing else. The roots the *user* declared (`files.readRoots`, the
+    // mounts, the running pi package) are added at the check sites in `gates/runtime.ts`, not here: this list
+    // is also the child's declared capability, quoted into its prompt and passed as its session option, and an
+    // install path that differs per machine does not belong in either. Confinement widens; the declaration
+    // stays exactly what the definition said.
     const readRoots = capabilityReadRoots(definition);
     const safeBashCommands = definition.safeBashCommands ?? [];
     const hasScratchpad = hasAgentCapability(definition, "scratchpad");

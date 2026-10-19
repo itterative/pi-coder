@@ -1,6 +1,7 @@
 import sandboxConfig from "../../common/config";
 import { BASH_DECISION_LOG_PATH } from "../../common/constants";
 import { createJsonlRecordLog, type RecordLog } from "../../common/record-log";
+import type { UnsafeReason } from "./heuristics";
 import type { Permission } from "./permissions";
 import type { BashDecisionSegment, ResolvePermissionDetails, SegmentSource } from "./resolve";
 
@@ -24,6 +25,13 @@ const DISABLED_VALUES = new Set(["0", "false", "no", "off"]);
 
 export interface BashDecisionRecord {
     v: typeof RECORD_VERSION;
+    /**
+     * Always `"bash"` on a record this version writes.
+     *
+     * Both permission gates append to one file, so the discriminator is what tells a reader which shape it is
+     * looking at; records written before the file gates existed carry no `gate` and are Bash ones.
+     */
+    gate?: "bash";
     /** ISO timestamp of the decision */
     ts: string;
     /** which bash permission gate produced it */
@@ -166,6 +174,72 @@ export interface BashDecisionInput {
     note?: string;
 }
 
+/**
+ * One direct file access that left every trusted root: what the gate resolved, whether the model spoke, and
+ * what the human said.
+ *
+ * The file analogue of {@link BashDecisionRecord}, for the same reason: the approvals are the evidence and
+ * nothing else in the repo records them. Only accesses that reached a prompt or a verdict are logged — an
+ * inside-cwd read says nothing about the permission system and there are thousands of them per session.
+ *
+ * `command` is deliberately absent, which is also what keeps `scripts/permission-report.ts` (a Bash miner)
+ * from reading these rows: it skips any record without a command string.
+ */
+export interface FileAccessDecisionRecord {
+    v: typeof RECORD_VERSION;
+    /** Always `"file"`, so one JSONL can carry both gates without guessing. */
+    gate: "file";
+    ts: string;
+    surface: "parent" | "child";
+    /** delegated agent name, when {@link surface} is `"child"` */
+    agent?: string;
+    cwd: string;
+    operation: "read" | "write";
+    /** the target the tool will open, after the gate's own resolution */
+    path: string;
+    /** the folder a human's "always allow" would have covered */
+    folder: string;
+    /** why the path was not already trusted, as the heuristic's reason codes */
+    reasons: UnsafeReason[];
+    /** how the access came to be allowed or blocked, named apart from the Bash record's `resolution` object */
+    resolvedBy: FileDecisionResolution;
+    /** present only when a human was asked */
+    prompt?: { outcome: PromptOutcome };
+    /** present only when the decision model was consulted */
+    classifier?: BashClassifierRecord;
+    /** the outcome actually applied */
+    decision: "allow" | "deny";
+    /** the access did not happen */
+    blocked: boolean;
+    /** note the user attached while approving or denying */
+    note?: string;
+}
+
+/**
+ * How a file access came to be resolved.
+ *
+ * `classifier` means a verdict replaced the prompt, `prompt` that a human answered it, and `unavailable` that
+ * nothing could be asked (a surface with no UI). Which of the three happened is the whole measurement: it says
+ * how often the model resolves a prompt, and how often the human still has to.
+ */
+export type FileDecisionResolution = "classifier" | "prompt" | "unavailable";
+
+export interface FileAccessDecisionInput {
+    surface: "parent" | "child";
+    agentName?: string;
+    cwd: string;
+    operation: "read" | "write";
+    path: string;
+    folder: string;
+    reasons: UnsafeReason[];
+    resolvedBy: FileDecisionResolution;
+    prompt?: { outcome: PromptOutcome };
+    classifier?: BashClassifierRecord;
+    decision: "allow" | "deny";
+    blocked: boolean;
+    note?: string;
+}
+
 interface DecisionLogConfig {
     enabled: boolean;
     filePath: string;
@@ -200,10 +274,15 @@ export function getDecisionLogConfig(): DecisionLogConfig {
 
 /**
  * One log per target, so append and rotation health accumulates across a session instead of per decision.
+ *
+ * Both gates write here: the Bash records and the file-access records share rotation, size accounting, and the
+ * reader that walks generations oldest first. `gate` tells them apart, and a Bash record is one without it.
  */
-const decisionLogs = new Map<string, RecordLog<BashDecisionRecord>>();
+const decisionLogs = new Map<string, RecordLog<BashDecisionRecord | FileAccessDecisionRecord>>();
 
-function decisionLog(config: DecisionLogConfig): RecordLog<BashDecisionRecord> {
+function decisionLog(
+    config: DecisionLogConfig,
+): RecordLog<BashDecisionRecord | FileAccessDecisionRecord> {
     const key = `${config.filePath}|${String(config.maxBytes)}|${String(config.generations)}`;
     const existing = decisionLogs.get(key);
     if (existing !== undefined) {
@@ -223,7 +302,13 @@ function segmentRecords(segments: readonly BashDecisionSegment[]): BashDecisionS
     return segments.map((segment) => ({ ...segment }));
 }
 
-function classifierRecord(record: BashClassifierRecord): BashClassifierRecord {
+/**
+ * A detached copy of a classifier record.
+ *
+ * Both writers take the object the gate just built, and the log line must be a snapshot rather than a live
+ * reference the caller can still mutate.
+ */
+function classifierSnapshot(record: BashClassifierRecord): BashClassifierRecord {
     return {
         ...record,
         ...(record.tokens === undefined ? {} : { tokens: { ...record.tokens } }),
@@ -255,6 +340,7 @@ export function logBashDecision(input: BashDecisionInput): void {
 
     const record: BashDecisionRecord = {
         v: RECORD_VERSION,
+        gate: "bash",
         ts: new Date().toISOString(),
         surface: input.surface,
         ...(input.agentName === undefined ? {} : { agent: input.agentName }),
@@ -282,7 +368,43 @@ export function logBashDecision(input: BashDecisionInput): void {
         blocked: input.blocked,
         ...(input.classifier === undefined
             ? {}
-            : { classifier: classifierRecord(input.classifier) }),
+            : { classifier: classifierSnapshot(input.classifier) }),
+        ...(input.note === undefined ? {} : { note: input.note }),
+    };
+
+    decisionLog(config).append(record);
+}
+
+/**
+ * Append one file-access decision.
+ *
+ * Never throws, for the same reason the Bash writer does not: a logging problem must not change whether an
+ * access is allowed. Shares the writer, so rotation and health accumulate across both gates.
+ */
+export function logFileAccessDecision(input: FileAccessDecisionInput): void {
+    const config = getDecisionLogConfig();
+    if (!config.enabled) {
+        return;
+    }
+
+    const record: FileAccessDecisionRecord = {
+        v: RECORD_VERSION,
+        gate: "file",
+        ts: new Date().toISOString(),
+        surface: input.surface,
+        ...(input.agentName === undefined ? {} : { agent: input.agentName }),
+        cwd: input.cwd,
+        operation: input.operation,
+        path: input.path,
+        folder: input.folder,
+        reasons: [...input.reasons],
+        resolvedBy: input.resolvedBy,
+        ...(input.prompt === undefined ? {} : { prompt: { outcome: input.prompt.outcome } }),
+        decision: input.decision,
+        blocked: input.blocked,
+        ...(input.classifier === undefined
+            ? {}
+            : { classifier: classifierSnapshot(input.classifier) }),
         ...(input.note === undefined ? {} : { note: input.note }),
     };
 

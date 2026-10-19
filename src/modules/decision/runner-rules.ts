@@ -97,6 +97,71 @@ export function runnerRulesFor(
     }
 }
 
+/**
+ * The same authority facts phrased for a *path*, for the file-access subject.
+ *
+ * A separate set rather than a reuse of `runnerRulesFor`, because those rules are written about a working
+ * tree, and a classifier shown "DO: read, create, edit, and delete files in the user's working tree" reads an
+ * outside path as outside the rules. Measured on 111 real outside-cwd accesses, that phrasing resolved 63 of
+ * the 102 the user approved and left every private path alone; stating that other projects, installed
+ * packages, and the user's own tool settings are ordinary material took it to 72 with no additional wrong
+ * grant, and the two DON'T lines are what keeps a wallet blob or an OS unit out of the grant set. They are
+ * about authority over *which files*, never about workflow, which is the category these premises measured
+ * safe in.
+ */
+export function runnerRulesForFileAccess(
+    runner: DecisionRunner,
+    isolation: DecisionIsolation = "checkout",
+): readonly string[] {
+    switch (runner) {
+        case "parent":
+            return [
+                "Runs the user's own session in the user's working tree.",
+                "DO: read, create, edit, and delete files in the user's working tree.",
+                "DO: read source, documentation, and configuration of other projects, installed packages, and the user's own tool settings, when the work needs them.",
+                "DO: write throwaway scripts and notes outside the working tree when the task needs them.",
+                "DON'T: read the user's private documents, credentials, or keys.",
+                "DON'T: change OS or service files.",
+            ];
+
+        case "scout":
+        case "advisor":
+            return [
+                "Runs as a delegated read-only child.",
+                "DO: read files, including documentation, installed packages, and other projects, when the task needs them.",
+                "DON'T: create, change, or delete any file.",
+                "DON'T: read the user's private documents, credentials, or keys.",
+            ];
+
+        case "reviewer":
+            return [
+                "Runs as a delegated review child with the parent's read access.",
+                "DO: read files, including documentation, installed packages, and other projects, when the review needs them.",
+                "DON'T: create, change, or delete any file.",
+                "DON'T: read the user's private documents, credentials, or keys.",
+            ];
+
+        case "worker":
+            return [
+                isolation === "worktree"
+                    ? "Runs as a delegated implementation child, in an isolated disposable git worktree."
+                    : "Runs as a delegated implementation child, in the user's working tree.",
+                "DO: read, create, edit, and delete files in its own working copy.",
+                "DO: read source, documentation, and configuration of other projects, installed packages, and the user's own tool settings, when the task needs them.",
+                "DON'T: change files outside its own working copy.",
+                "DON'T: read the user's private documents, credentials, or keys.",
+            ];
+
+        case "agent":
+            return [
+                "Runs as a delegated child of the parent session, in its own working copy.",
+                "DO: read files, including documentation and other projects, when the task needs them.",
+                "DON'T: change files outside its own working copy.",
+                "DON'T: read the user's private documents, credentials, or keys.",
+            ];
+    }
+}
+
 /** Map a child's agent name to a decision runner. Unknown/custom agents use the `agent` baseline. */
 export function decisionRunnerForAgent(agentName: string | undefined): DecisionRunner {
     switch (agentName) {

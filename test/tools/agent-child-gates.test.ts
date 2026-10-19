@@ -13,6 +13,7 @@ import type { AgentDefinition } from "../../src/tools/agent/definitions/types";
 import type { ChildProgress } from "../../src/tools/agent/contracts/runs";
 import { stubContext } from "../helpers/pi-stub";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import sandboxConfig from "../../src/common/config";
 import { createChildGateRuntime } from "../../src/tools/agent/child/gates";
 import { buildChildRun, probeDefinition, type ChildRunMode } from "./child-run-fixture";
 
@@ -193,6 +194,32 @@ describe("gate runtime services", () => {
 
         runtime.reportPermissionPending(false, "Working");
         expect(fixture.tracker.progress.permissionPending).toBe(false);
+    });
+
+    it("widens a child's reads by the declared roots and not by its writes", async () => {
+        const { fixture, runtime } = runtimeFor(BUILTIN_SCOUT);
+        const readable = path.join(fixture.cwd, "declared-read");
+        const writable = path.join(fixture.cwd, "declared-write");
+        fs.mkdirSync(path.join(fixture.cwd, ".pi"), { recursive: true });
+        fs.mkdirSync(readable, { recursive: true });
+        fs.mkdirSync(writable, { recursive: true });
+        fs.writeFileSync(path.join(readable, "notes.md"), "# notes\n");
+        fs.writeFileSync(
+            path.join(fixture.cwd, ".pi", "bash-sandbox-config.json"),
+            JSON.stringify({
+                sandbox: { mounts: {} },
+                permissions: {},
+                files: { readRoots: [readable], writeRoots: [writable], honorPiPackage: false },
+            }),
+        );
+        sandboxConfig.load(fixture.cwd);
+
+        // The read root is part of the child's reach: a scout told to read a directory the user declared must
+        // not be stopped by a gate the parent does not have.
+        expect(runtime.readRoots(stubContext({ cwd: fixture.cwd }))).toContain(readable);
+        // The write root is not: a child's writable surface comes from its definition, and `additionalPaths`
+        // stays read-only however the parent's config is written.
+        expect(runtime.readRoots(stubContext({ cwd: fixture.cwd }))).not.toContain(writable);
     });
 
     it("validates reported Bash output paths before treating them as read roots", () => {

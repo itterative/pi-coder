@@ -1,6 +1,6 @@
 ---
 name: decision-model
-description: Optional classifier for unresolved bash commands (src/modules/decision) — the shipped veto-wording strategy, script-subject capabilities, the deterministic scope gate, state/policy/caches, and the settled findings not to retry. Measurement history in decision-model/history.md.
+description: Optional classifier for unresolved bash commands and unresolved file accesses (src/modules/decision) — the shipped veto-wording strategy, script-subject capabilities, the file-access subject, the deterministic scope gate, state/policy/caches, and the settled findings not to retry. Measurement history in decision-model/history.md.
 category: architecture
 ---
 
@@ -130,6 +130,43 @@ folded to `sandbox`, `applied: true`, no prompt — a silent sandbox. After the 
 to `out_of_scope @ 0.0` → refuse → abstain, `applied: false`, and the human was prompted (approved →
 `allow:sandbox`).
 
+## The file-access subject (`file-access.ts`)
+
+The second thing the module judges: one direct `read`/`write`/`edit` that no root resolved. It is a **subject**,
+not a command strategy, because the command vocabulary does not transfer (see Settled findings). One request
+carries up to three questions, and the rules for reading them are asymmetric on purpose:
+
+- `kind` — what the file is, from its location and name alone (`code`/`data`/`settings` grant;
+  `personal`/`secret`/`system` withhold). **Its confidence is the axis `minConfidence` gates**, because it is
+  the calibrated one (`code` at 0.93 median).
+- `purpose` — whether the request reaches the file. Read as a **label, never as a number**: its probability is
+  spread across four criteria and sits near 0.24 even when correct, so a floor on it collapses the subject to 2
+  of 102 approved accesses. A write needs `asked_for`; a read also accepts `routine`.
+- `loss` — asked only for a write, and it withholds at `P ≥ 0.5` (measured dangers 0.70/0.71, ordinary writes
+  ≤ 0.20).
+
+Grant means `host`, which for this subject means *let this one access through*: there is no sandboxed form of a
+path, so `appliedFilePermission` accepts `allow` and nothing else, and a `refuse` still never applies by itself.
+Four invariants are what makes the numbers trustworthy, and none is negotiable without a measurement:
+
+- Only a path whose **single** unresolved reason is `OUTSIDE_CWD` is ever asked about. Sensitive names, symlink
+  escapes, and dynamic targets belong to the confinement checks, which a classifier cannot overwrite.
+- **Authority stays in code.** `fileScopeAnswer` refuses a write below the `mutate` rung with no request, and
+  it folds like any other form.
+- A grant approves **one call**, never the folder, and a session folder approval is checked first: a person's
+  standing decision outranks a model opinion about the same path.
+- **Content is never sent.** The state is `{operation, path, cwd, request, runner_rules}` — no transcript, no
+  working-tree status, no command. `request` is load-bearing (dropping it turned 0 wrong grants into 7 of 8),
+  which is also why `fileAccessCacheKey` carries it while the command key does not.
+
+The premises are phrased for paths by `runnerRulesForFileAccess`, because the command phrasing ("read, create,
+edit, and delete files in the user's working tree") reads every outside path as unauthorised. Surfaces are
+configured apart (`fileSurfaces`), and the log records `strategy: "file-access"` because naming a command
+strategy on a path verdict would misreport which question was asked. The design, the measured coverage of the
+deterministic layer that sits in front of it, and the numbers live in `docs/file-access-gates.md`; the corpus
+and harness live in `.pi/local/decision-models/` (`extract_file_cases.py`, `probe_file_access.py`,
+`analyze_file_access.py`, `probe_file_curated.py`, `probe_file_access_live.ts`, `file-access-report.md`).
+
 ## Config and settings
 
 - Layering: global `~/.pi/decision-model-config.json` (holds the token), project
@@ -139,7 +176,8 @@ to `out_of_scope @ 0.0` → refuse → abstain, `applied: false`, and the human 
   value otherwise falls through to the config rather than clearing it.
 - Config keys: `enabled`, `apply`, `baseUrl`, `apiKey`, `provider` (default `systemone`), `model`,
   `contextWindow` (32768), `strategy`, `timeoutMs` (5000), `cooldownMs` (30000), `minConfidence` (0.8),
-  `surfaces` (default `["parent"]`). The old `autoHost`/`autoRefuse`/`applySurfaces` keys are ignored.
+  `surfaces` (default `["parent"]`), and `fileSurfaces` (default none), which names the read/write gates rather
+  than the Bash ones. The old `autoHost`/`autoRefuse`/`applySurfaces` keys are ignored.
 - The strategy id comes out of a file, so both the config and `resolveStrategy` use `Object.hasOwn`;
   `toString` would otherwise return a prototype function.
 - Settings dialog (Settings tab): writes the **global** file only, merges into the existing document so
@@ -164,6 +202,9 @@ to `out_of_scope @ 0.0` → refuse → abstain, `applied: false`, and the human 
 | `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify + the `pi-coder:decision-status` check count the footer animates) |
 | `tools/bash/index.ts` | parent hook: consult on `ask`, record, prompt unless `apply` resolves it |
 | `tools/agent/child/command-permissions.ts` | child hook: consult with the child's own session, runner/isolation, and the parent's registry |
+| `decision/file-access.ts` | the file subject: its questions, the grant sets, the rung check in code, and `file-access` as the logged strategy |
+| `sandbox/file-roots.ts` | the layer in front of it: which roots make a prompt unnecessary at all (see `docs/file-access-gates.md`) |
+| `tools/file-permissions.ts` | both file gates: consult only an `OUTSIDE_CWD`-only access, grant one call and never the folder, log whichever resolved it |
 
 - The endpoint is a System One classifier, which pi already implements; `models.json` cannot express a
   classifier (its entries have no type and a classifier needs a discriminant plus an implementation), which is
@@ -181,6 +222,14 @@ nonzero.
 
 ## Settled findings — do not retry
 
+- **The command vocabulary does not judge a path.** Asked the veto question over 111 real outside-cwd accesses,
+  the model answered `none` for 105-110 of them and would have resolved 7 of the 8 the user refused; one bool
+  "must the user be asked?" is uncalibrated (its mass sits at 0.2-0.4 whatever the label). The file judgment is
+  `kind` × `purpose` × `loss`; do not retarget the command wording at a path.
+- **The model does not police authority on this subject either.** Shown a scout's own rules it named a write
+  into another repository `asked_for` at 0.985. `fileScopeAnswer` is what refuses it, without a request.
+- **A confidence floor is the wrong knob for the purpose answer.** Its labels are thin-spread by construction,
+  so gate the kind axis by `minConfidence` and read purpose and loss as a label and a threshold.
 - **No project instructions in the state.** AGENTS.md flips workflow-shaped commands to `refuse`
   (`prettier --write` 6/7, file-editing heredocs 16/28); a safety-only summary is behaviourally neutral, but
   raw or summarised project prose is out for good.

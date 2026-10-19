@@ -1,4 +1,5 @@
 import registerFileToolHook from "../../../file-permissions";
+import { decisionRunnerForAgent } from "../../../../modules/decision";
 import { CHILD_CONFINEMENT } from "../policy";
 import type { ChildGate } from "./gate";
 
@@ -19,7 +20,7 @@ export const FILE_ACCESS_GATE: ChildGate = {
     applies: (runtime) => runtime.options.authority === "mutate",
     install(runtime) {
         const { options, parentContext, bashOutputs, runLabel } = runtime;
-        const { agentName, additionalPaths = [] } = options;
+        const { agentName, additionalPaths = [], isolated = false, events } = options;
         const permissionState = runtime.permissionState;
         // A worker only prompts for outside-cwd access when it actually shares the parent's approval
         // state, and that state exists for exactly the same-checkout case (see `runtime.permissionState`).
@@ -37,6 +38,18 @@ export const FILE_ACCESS_GATE: ChildGate = {
             childAccess: true,
             confinement: CHILD_CONFINEMENT,
             permissionPending: runtime.reportPermissionPending,
+            // The child consults with its own runner and isolation, the parent's registry (pi's registry is
+            // process-wide and the provider was registered there), and the parent's bus, so a worker's check
+            // animates the parent footer exactly like its command check does. Same contract as the command
+            // gate; keeping the two identical is what stops one surface quietly losing the model.
+            decision: {
+                surface: "child" as const,
+                runner: decisionRunnerForAgent(agentName),
+                isolation: isolated ? ("worktree" as const) : ("checkout" as const),
+                registry: parentContext.modelRegistry,
+                ...(events === undefined ? {} : { events }),
+            },
+            agentName,
         };
 
         registerFileToolHook(runtime.pi, "read", {

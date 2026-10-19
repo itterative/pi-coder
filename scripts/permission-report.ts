@@ -175,6 +175,12 @@ function loadRecords(options) {
             skipped += 1;
             continue;
         }
+        // File-access decisions share this log and carry no `command`, so the check above already excludes
+        // them; the explicit skip keeps that from breaking silently if a file record ever gains one.
+        if (record.gate === "file") {
+            skipped += 1;
+            continue;
+        }
 
         if (options.surface !== undefined && record.surface !== options.surface) {
             continue;

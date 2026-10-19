@@ -5,6 +5,7 @@ import path from "node:path";
 
 import type { ExtensionUIContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 
+import sandboxConfig from "../../src/common/config";
 import { ALLOWED_FILE_ENTRY_TYPE } from "../../src/common/audit";
 import { getUserMemoryDirectory } from "../../src/common/constants";
 import registerScratchpadExtension, { getScratchpadPath } from "../../src/modules/scratchpad";
@@ -340,4 +341,104 @@ describe("file permission session entries", () => {
             });
         },
     );
+});
+
+describe("declared file access roots", () => {
+    let temporary: string[] = [];
+
+    /**
+     * One workspace with a config that declares a read root and a write root, and the two outside files.
+     *
+     * `honorPiPackage: false` keeps the running pi package out of the read list, so a case that expects a
+     * prompt is really testing the declared lists and not wherever pi happens to be installed.
+     */
+    function workspace(options: { childAccess?: boolean } = {}) {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-roots-cwd-"));
+        const declared = fs.mkdtempSync(path.join(os.tmpdir(), "pi-file-roots-declared-"));
+        temporary.push(cwd, declared);
+        fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+        // Both declared roots have to exist: the confinement check pairs each lexical root with its own
+        // realpath, so a root that is only a planned path canonicalizes to nothing and the access falls back to
+        // a prompt instead of being recognised as declared.
+        fs.mkdirSync(path.join(declared, "readable"), { recursive: true });
+        fs.mkdirSync(path.join(declared, "writable"), { recursive: true });
+        fs.writeFileSync(
+            path.join(cwd, ".pi", "bash-sandbox-config.json"),
+            JSON.stringify({
+                sandbox: { enabled: true, mounts: { [declared]: "readwrite" } },
+                permissions: {},
+                files: {
+                    readRoots: [path.join(declared, "readable")],
+                    writeRoots: [path.join(declared, "writable")],
+                    honorPiPackage: false,
+                },
+            }),
+        );
+        sandboxConfig.load(cwd);
+
+        const stub = createPiStub();
+        registerFileToolHook(stub.pi, "write", {
+            ...(options.childAccess ? { childAccess: true, state: createPermissionState() } : {}),
+        });
+        return { cwd, stub, declared };
+    }
+
+    afterEach(() => {
+        for (const directory of temporary.splice(0)) {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+
+    it("lets a parent write inside a declared write root without a prompt", async () => {
+        const { cwd, stub, declared } = workspace();
+        const ctx = stubContext({ cwd, hasUI: false, sessionManager: stubSessionManager() });
+
+        const result = await invoke(
+            stub.requireHandler("tool_call"),
+            {
+                toolName: "write",
+                input: { path: path.join(declared, "writable", "report.md") },
+            },
+            ctx,
+        );
+
+        expect(result).toEqual({ block: false });
+    });
+
+    it("keeps a declared mount out of the write list while honouring the explicit one", async () => {
+        // The mount says a sandboxed command may write there; that is not a grant for `edit`. The explicit
+        // list is, so the two differ by exactly one config key and the case pins which is which.
+        const { cwd, stub, declared } = workspace();
+        fs.mkdirSync(path.join(declared, "mount-only"), { recursive: true });
+        const ctx = stubContext({ cwd, hasUI: false, sessionManager: stubSessionManager() });
+
+        await expect(
+            invoke(
+                stub.requireHandler("tool_call"),
+                {
+                    toolName: "write",
+                    input: { path: path.join(declared, "mount-only", "notes.md") },
+                },
+                ctx,
+            ),
+        ).resolves.toMatchObject({ block: true });
+    });
+
+    it("does not give a child the parent's declared write roots", async () => {
+        const { cwd, stub, declared } = workspace({ childAccess: true });
+        const ctx = stubContext({ cwd, hasUI: false, sessionManager: stubSessionManager() });
+
+        // A worker's writable surface comes from its definition; borrowing the parent's host grants would
+        // turn a statement about the user's own session into a child capability.
+        await expect(
+            invoke(
+                stub.requireHandler("tool_call"),
+                {
+                    toolName: "write",
+                    input: { path: path.join(declared, "writable", "notes.md") },
+                },
+                ctx,
+            ),
+        ).resolves.toMatchObject({ block: true });
+    });
 });

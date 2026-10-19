@@ -1,5 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import sandboxConfig from "../../../../common/config";
+import { fileRootsForOperation } from "../../../../modules/sandbox/file-roots";
 import {
     getPermissionState,
     type PermissionState,
@@ -107,6 +109,11 @@ export function createChildGateRuntime(input: {
             ...additionalPaths,
             ...scratchpadRoots(ctx),
             ...bashOutputs.active(),
+            // The roots the user declared for direct file access. A read-only child has no prompt to fall back
+            // on, so this check *is* its reach: without them a scout told to read pi's docs is blocked at a
+            // gate the parent never trips. Reads only — `fileRootsForOperation("read")` — because widening a
+            // child's writes is the definition's job, not the mount list's.
+            ...fileRootsForOperation(sandboxConfig.current, "read"),
         ],
         reportPermissionPending,
     };

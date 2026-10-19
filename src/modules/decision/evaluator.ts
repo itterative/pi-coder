@@ -8,11 +8,18 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import { resolveClassifier, type ClassifierRegistry } from "./model";
+import {
+    FILE_ACCESS_STRATEGY,
+    buildFileAccessState,
+    fileAccessAnswerFrom,
+    fileAccessRequest,
+    fileScopeAnswer,
+} from "./file-access";
 import { decideWithPolicy, foldAnswers, type FoldableAnswer } from "./policy";
 import { scopeAnswer } from "./scope";
 import { scriptContentHash } from "./script";
 import { isScriptCapability, scriptAnswerFrom, scriptRequest } from "./script-classification";
-import { resolveStrategy, type DecisionStrategyId } from "./strategies";
+import { DEFAULT_DECISION_STRATEGY, resolveStrategy, type DecisionStrategyId } from "./strategies";
 import type {
     DecisionContext,
     DecisionFormAnswer,
@@ -21,6 +28,7 @@ import type {
     DecisionModelConfig,
     DecisionStatus,
     DecisionVerdict,
+    FileAccessDecisionContext,
     ScriptArtifact,
     ScriptCapabilitySummary,
     ScriptRun,
@@ -96,17 +104,21 @@ export interface DecisionEvaluatorOptions {
 }
 
 /**
- * Consult a classifier about unresolved commands.
+ * Consult a classifier about unresolved commands, or about one unresolved file access.
  *
- * Two subjects, two requests, one authority, one deterministic gate. A script body is classified as a
- * property of its code: the request carries the body alone and the answer cache keys on its content hash, so
- * the same bytes share one verdict across commands, runners, and sessions. The command is then classified as
- * an invocation, with the bodies' capability summaries beside the runner's rules, so scope is judged where it
- * belongs. On top of both, `scopeAnswer` applies the authority ladder in code: a capability the runner's rung
- * does not cover becomes an `out_of_scope` refusal without a request. `foldAnswers` turns the command answer,
- * every script answer, and that scope answer into one action — any dangerous answer withholds authority, and
- * `host` needs the command answer confident at `minConfidence` — and `policy.ts` stays the only place an
- * answer becomes authority.
+ * Two subjects, one evaluator. A script body is classified as a property of its code: the request carries the
+ * body alone and the answer cache keys on its content hash, so the same bytes share one verdict across
+ * commands, runners, and sessions. The command is then classified as an invocation, with the bodies'
+ * capability summaries beside the runner's rules, so scope is judged where it belongs. On top of both,
+ * `scopeAnswer` applies the authority ladder in code: a capability the runner's rung does not cover becomes an
+ * `out_of_scope` refusal without a request. `foldAnswers` turns the command answer, every script answer, and
+ * that scope answer into one action — any dangerous answer withholds authority, and `host` needs the command
+ * answer confident at `minConfidence` — and `policy.ts` stays the only place an answer becomes authority.
+ *
+ * A file access is one form instead of the command's several: no body to chase, no tree to read, and no
+ * capability to fold against a rung beyond the read/write split in `fileScopeAnswer`. It shares the caches,
+ * the cooldown, the request budget, and the policy with the command path because none of that is about the
+ * subject; what differs is the state and the questions, which `file-access.ts` owns.
  *
  * Script bodies run in waves of {@link MAX_CONCURRENT_FORMS}, preserving their order; the command runs after
  * them because its state carries their summaries. One instance owns the cooldown and both caches, so a
@@ -203,6 +215,50 @@ export class DecisionEvaluator {
         return this.verdictFromForms(strategy.id, model, outcomes, this.now() - started);
     }
 
+    /**
+     * Judge one direct file access outside the roots the gate already trusts.
+     *
+     * One form, plus the deterministic read/write rung: a runner below the rung is refused without a request,
+     * because the measurement says the classifier does not police authority — shown a scout's own rules it
+     * called a write into another repository ordinary. The scope answer folds like any other, and policy
+     * applies `minConfidence` to the kind answer's confidence, which is the axis that carries a calibrated
+     * number. A `refuse` never applies by itself, so every withheld access still reaches the human.
+     */
+    async evaluateFileAccess(context: FileAccessDecisionContext): Promise<DecisionVerdict> {
+        const { config } = this.options;
+
+        if (config.enabled !== true) {
+            return abstain("model disabled");
+        }
+
+        const model = resolveClassifier(this.options.registry, config);
+        if (model === undefined) {
+            return abstain("no classifier model available");
+        }
+
+        const started = this.now();
+        const runner = context.runner ?? "parent";
+        const scope = fileScopeAnswer(context.file.operation, runner);
+        if (scope !== undefined) {
+            return this.verdictFromForms(
+                undefined,
+                model,
+                [fileScopeOutcome(scope)],
+                this.now() - started,
+            );
+        }
+
+        const outcome = await this.classifyForm(model, {
+            subject: "file",
+            source: undefined,
+            cacheKey: fileAccessCacheKey(context, model),
+            request: () => fileAccessRequest(buildFileAccessState(context)),
+            readAnswer: (answers) => fileAccessAnswerFrom(answers, context.file.operation),
+        });
+
+        return this.verdictFromForms(undefined, model, [outcome], this.now() - started);
+    }
+
     /** Classify one body as code: the body alone, keyed on its content. */
     private classifyScript(artifact: ScriptArtifact, model: Classifier): Promise<FormOutcome> {
         return this.classifyForm(model, {
@@ -287,14 +343,19 @@ export class DecisionEvaluator {
      * No form answering is the sticky case: the verdict abstains whatever the others said, because an unread
      * form is a body the command would run unchecked. The reason names the failing form, so the log and the
      * prompt can say which form the model never got to.
+     *
+     * `strategyId` is absent for the file subject, which has no command strategy: the record then names the
+     * subject instead, so a logged row cannot claim a question that was never asked.
      */
     private verdictFromForms(
-        strategyId: DecisionStrategyId,
+        strategyId: DecisionStrategyId | undefined,
         model: Classifier,
         outcomes: readonly FormOutcome[],
         latencyMs: number,
     ): DecisionVerdict {
         const forms = outcomes.map(formAnswer);
+        const subject = subjectOf(outcomes);
+        const strategy = strategyFor(strategyId, subject);
         const unanswered = outcomes.find((outcome) => outcome.answer === undefined);
         if (unanswered !== undefined) {
             return {
@@ -305,7 +366,8 @@ export class DecisionEvaluator {
                 forms,
                 latencyMs,
                 model: modelRef(model),
-                strategy: strategyId,
+                strategy,
+                ...(subject === undefined ? {} : { subject }),
                 ...(unanswered.usage === undefined ? {} : { usage: unanswered.usage }),
                 ...(outcomes.every((outcome) => outcome.cached) ? { cached: true } : {}),
             };
@@ -323,13 +385,16 @@ export class DecisionEvaluator {
                 forms,
                 latencyMs,
                 model: modelRef(model),
-                strategy: strategyId,
+                strategy,
+                ...(subject === undefined ? {} : { subject }),
             };
         }
 
         // A capability answer says what the code can do, not whether the invocation may run, so it can
         // withhold but never grant: when the fold is `host`, the command answer is what policy gates and what
-        // the verdict names. One unsure capability no longer drags a confident command behind the floor.
+        // the verdict names. One unsure capability no longer drags a confident command behind the floor. A
+        // file access has no command form, so its single answer is what policy reads — and that answer's
+        // confidence is already the kind axis's, which is the calibrated one.
         const command = outcomes.find((outcome) => outcome.subject === "command");
         const decided =
             command?.answer !== undefined && folded.answer.action === "host"
@@ -350,7 +415,8 @@ export class DecisionEvaluator {
             action: decided.action,
             criterion: decided.reason,
             confidence: decided.confidence,
-            strategy: strategyId,
+            strategy,
+            ...(subject === undefined ? {} : { subject }),
             answers: outcomes[folded.index]?.answers ?? {},
             forms,
             latencyMs,
@@ -506,6 +572,70 @@ function failureStatus(outcome: FormOutcome): DecisionStatus {
 /** Name the form a reason came from, so a multi-body command's log says which body failed. */
 function withSource(reason: string, source: string | undefined): string {
     return source === undefined ? reason : `${reason} (${source})`;
+}
+
+/**
+ * The subject a verdict came from: `file` when a file form was judged, `command` for the command path's own
+ * forms, and `undefined` when nothing was. The decision log records a file verdict under the subject's label
+ * rather than a command strategy id that was never asked.
+ */
+function subjectOf(outcomes: readonly FormOutcome[]): DecisionFormSubject | undefined {
+    if (outcomes.some((outcome) => outcome.subject === "file")) {
+        return "file";
+    }
+
+    if (outcomes.length === 0) {
+        return undefined;
+    }
+
+    return "command";
+}
+
+/** What the log records as the strategy: the command's own id, or the file subject's label. */
+function strategyFor(
+    strategyId: DecisionStrategyId | undefined,
+    subject: DecisionFormSubject | undefined,
+): DecisionStrategyId | typeof FILE_ACCESS_STRATEGY {
+    if (subject === "file") {
+        return FILE_ACCESS_STRATEGY;
+    }
+
+    return strategyId ?? DEFAULT_DECISION_STRATEGY;
+}
+
+/** The deterministic form for a file access the runner's rung does not cover. */
+function fileScopeOutcome(answer: FoldableAnswer): FormOutcome {
+    return {
+        subject: "file",
+        source: undefined,
+        answer,
+        answers: {},
+        status: "answered",
+        reason: undefined,
+        cached: true,
+        usage: zeroUsage(),
+    };
+}
+
+/**
+ * A file access's cache identity: the path, the operation, who is asking, and the request it serves.
+ *
+ * The request is in the key on purpose, unlike the command key that leaves it out. A command's verdict is
+ * about what the invocation does and the measured request text barely moved it; a path's verdict *is* the
+ * judgment of whether the request reaches it, so reusing an answer earned under another request would hand a
+ * later, unrelated turn the earlier turn's approval.
+ */
+function fileAccessCacheKey(context: FileAccessDecisionContext, model: Classifier): string {
+    return JSON.stringify([
+        "file",
+        model.provider,
+        model.id,
+        context.file.operation,
+        context.file.path,
+        context.runner ?? "parent",
+        context.isolation ?? "checkout",
+        context.request?.trim() ?? "",
+    ]);
 }
 
 /** Sum what every request in one consult reported; `undefined` when none reported usage. */

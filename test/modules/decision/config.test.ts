@@ -31,6 +31,7 @@ const CONFIG_FIELDS = [
     "contextWindow",
     "minConfidence",
     "surfaces",
+    "fileSurfaces",
 ] as const;
 
 function expectUnconfigured(config: DecisionModelConfig): void {
@@ -214,6 +215,18 @@ describe("decision config field validation", () => {
         writeProjectConfig({ decisionModel: { surfaces: ["parent", 7, "child", "nope"] } });
 
         expect(loadDecisionConfig(workspace).surfaces).toEqual(["parent", "child"]);
+    });
+
+    it("keeps the file list separate from the Bash list", () => {
+        // One shared list would make `["parent", "child"]` mean "resolve file prompts too", which is a wider
+        // claim than the config was written to make: a command verdict can be contained by the sandbox and a
+        // path verdict cannot.
+        writeProjectConfig({ decisionModel: { surfaces: ["parent", "child"] } });
+
+        expect(loadDecisionConfig(workspace).fileSurfaces).toBeUndefined();
+
+        writeProjectConfig({ decisionModel: { fileSurfaces: ["child", "elsewhere"] } });
+        expect(loadDecisionConfig(workspace).fileSurfaces).toEqual(["child"]);
     });
 
     it("ignores removed fields instead of reviving them", () => {

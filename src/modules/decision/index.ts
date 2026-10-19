@@ -13,12 +13,17 @@ export {
 export {
     consultDecisionContext,
     consultDecisionModel,
+    consultFileAccessDecision,
     decisionContextFor,
     decisionEnabled,
+    fileDecisionContextFor,
+    fileDecisionEnabled,
     resetDecisionEvaluator,
     DEFAULT_SURFACES,
     type ConsultOptions,
     type DecisionConsultation,
+    type EvaluatorSeed,
+    type FileConsultOptions,
 } from "./gate";
 export {
     DECISION_CLASSIFIER_API,
@@ -84,6 +89,23 @@ export {
     scriptRequest,
 } from "./script-classification";
 export { scopeAnswer } from "./scope";
+export {
+    FILE_ACCESS_STRATEGY,
+    FILE_KIND_CRITERIA,
+    FILE_KIND_INSTRUCTION,
+    FILE_KIND_QUESTION,
+    FILE_LOSS_INSTRUCTION,
+    FILE_LOSS_QUESTION,
+    FILE_LOSS_THRESHOLD,
+    FILE_PURPOSE_CRITERIA,
+    FILE_PURPOSE_INSTRUCTION,
+    FILE_PURPOSE_QUESTION,
+    buildFileAccessState,
+    fileAccessAnswerFrom,
+    fileAccessRequest,
+    fileAccessWithinAuthority,
+    fileScopeAnswer,
+} from "./file-access";
 export { MAX_WORKSPACE_CHANGES, parseGitStatus, workspaceStatusFor } from "./workspace";
 export {
     ACTION_TABLE,
@@ -108,6 +130,7 @@ export {
     RUNNER_AUTHORITY,
     decisionRunnerForAgent,
     runnerRulesFor,
+    runnerRulesForFileAccess,
     type DecisionIsolation,
     type DecisionRunner,
 } from "./runner-rules";
@@ -119,6 +142,11 @@ export type {
     DecisionFormAnswer,
     DecisionFormStatus,
     DecisionFormSubject,
+    FileAccessDecisionContext,
+    FileDecisionKind,
+    FileDecisionOperation,
+    FileDecisionPurpose,
+    FileDecisionSubject,
     DecisionModelConfig,
     DecisionOutcome,
     DecisionQuestionSet,

@@ -13,8 +13,11 @@ import {
 } from "../../../src/modules/decision";
 import {
     consultDecisionModel,
+    consultFileAccessDecision,
     decisionContextFor,
     decisionEnabled,
+    fileDecisionContextFor,
+    fileDecisionEnabled,
     resetDecisionEvaluator,
 } from "../../../src/modules/decision/gate";
 import { DECISION_PROVIDER_ID } from "../../../src/modules/decision/provider";
@@ -25,6 +28,8 @@ import {
     classifier,
     classifierModelRegistry,
     criterionResult,
+    fileAccessResult,
+    selectionRegistry,
 } from "./classifier";
 
 /**
@@ -100,6 +105,126 @@ describe("decisionEnabled", () => {
         expect(decisionEnabled({ enabled: true, surfaces: ["child"] }, "parent")).toBe(false);
         expect(decisionEnabled({ enabled: true, surfaces: ["child"] }, "child")).toBe(true);
         expect(decisionEnabled({ enabled: true, surfaces: [] }, "parent")).toBe(false);
+    });
+});
+
+describe("fileDecisionEnabled", () => {
+    it("is off until the file list names the surface", () => {
+        // A config that enables the Bash surfaces must not widen the file gates by association: the two
+        // subjects answer different questions and only one of them has a sandbox to fall back on.
+        const enabled = { enabled: true, surfaces: ["parent", "child"] } as DecisionModelConfig;
+        expect(fileDecisionEnabled(enabled, "parent")).toBe(false);
+        expect(fileDecisionEnabled({ ...enabled, fileSurfaces: ["parent"] }, "parent")).toBe(true);
+        expect(fileDecisionEnabled({ ...enabled, fileSurfaces: ["parent"] }, "child")).toBe(false);
+    });
+
+    it("stays off for a disabled model whatever the lists say", () => {
+        expect(
+            fileDecisionEnabled(
+                { enabled: false, fileSurfaces: ["parent", "child"] } as DecisionModelConfig,
+                "parent",
+            ),
+        ).toBe(false);
+    });
+});
+
+describe("fileDecisionContextFor", () => {
+    it("carries the access, the request it serves, and the runner's shape", () => {
+        const built = fileDecisionContextFor(contextWithBranch(), {
+            operation: "read",
+            path: "/home/user/notes.md",
+        });
+
+        expect(built).toEqual({
+            file: { operation: "read", path: "/home/user/notes.md" },
+            cwd: "/repo",
+            runner: "parent",
+            isolation: "checkout",
+            request: "now run the tests",
+        });
+    });
+
+    it("keeps the transcript and the working tree out of a file consult", () => {
+        // The command state carries `recent` and `workspace_status`; the file state deliberately carries
+        // neither. Recent items resolved no more approved accesses in the measurement and cost 40 tokens, and
+        // an outside path is not in the tree the status list describes.
+        const built = fileDecisionContextFor(contextWithBranch(), {
+            operation: "write",
+            path: "/home/user/notes.md",
+        });
+
+        expect(built).not.toHaveProperty("recent");
+        expect(built).not.toHaveProperty("workspace");
+        expect(built.file.operation).toBe("write");
+    });
+});
+
+describe("consultFileAccessDecision", () => {
+    it("never rejects: a session it cannot read comes back as an abstain", async () => {
+        const broken = stubContext({
+            cwd: "/repo",
+            sessionManager: stubSessionManager({
+                getBranch: () => {
+                    throw new Error("session unreadable");
+                },
+            }),
+            modelRegistry: classifierModelRegistry(selectionRegistry([MODEL])),
+        });
+
+        await expect(
+            consultFileAccessDecision({
+                ctx: broken,
+                config: modelConfig(),
+                file: { operation: "read", path: "/x/y.md" },
+            }),
+        ).resolves.toMatchObject({ outcome: "abstain", status: "error" });
+    });
+
+    it("withholds an access the runner's rung forbids without asking", async () => {
+        const classify = vi.fn(async (model: typeof MODEL) =>
+            fileAccessResult(model, { kind: "code", purpose: "asked_for" }),
+        );
+        const registry = answeringRegistry([MODEL], classify);
+
+        const verdict = await consultFileAccessDecision({
+            ctx: consultContext(registry),
+            config: modelConfig(),
+            file: { operation: "write", path: "/home/user/elsewhere/repo/src/app.ts" },
+            runner: "scout",
+        });
+
+        // The classifier is not asked, because it does not police authority: shown a scout's own rules it
+        // called exactly this write ordinary in the measurement, and the rung is what keeps it refused.
+        expect(classify).not.toHaveBeenCalled();
+        expect(verdict).toMatchObject({
+            outcome: "abstain",
+            subject: "file",
+            strategy: "file-access",
+            criterion: "out_of_scope",
+        });
+    });
+
+    it("grants a read the answers carry, and reports the subject rather than a command strategy", async () => {
+        const classify = vi.fn(async (model: typeof MODEL) =>
+            fileAccessResult(model, { kind: "code", purpose: "routine", confidence: 0.93 }),
+        );
+        const registry = answeringRegistry([MODEL], classify);
+
+        const verdict = await consultFileAccessDecision({
+            ctx: consultContext(registry),
+            config: modelConfig({ apply: true }),
+            file: { operation: "read", path: "/home/user/project/docs/readme.md" },
+        });
+
+        expect(verdict).toMatchObject({
+            outcome: "host",
+            status: "applied",
+            subject: "file",
+            strategy: "file-access",
+            criterion: "routine",
+            confidence: 0.93,
+        });
+        expect(classify).toHaveBeenCalledTimes(1);
     });
 });
 

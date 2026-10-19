@@ -8,8 +8,11 @@ import { BASH_DECISION_LOG_PATH, PI_CODER_STATE_DIR } from "../../../src/common/
 import {
     getDecisionLogConfig,
     logBashDecision,
+    logFileAccessDecision,
     type BashDecisionRecord,
+    type FileAccessDecisionRecord,
 } from "../../../src/modules/sandbox/decision-log";
+import { UnsafeReason } from "../../../src/modules/sandbox/heuristics";
 import {
     resolvePermissionDetails,
     unresolvedPermissionDetails,
@@ -42,6 +45,12 @@ function useConfig(decisionLog: Record<string, unknown> | undefined): void {
 }
 
 function readRecords(): BashDecisionRecord[] {
+    return (readAllRecords() as unknown[]).filter(
+        (record) => (record as { gate?: string }).gate !== "file",
+    ) as BashDecisionRecord[];
+}
+
+function readAllRecords(): (BashDecisionRecord | FileAccessDecisionRecord)[] {
     if (!fs.existsSync(logPath)) {
         return [];
     }
@@ -50,7 +59,7 @@ function readRecords(): BashDecisionRecord[] {
         .readFileSync(logPath, "utf8")
         .split("\n")
         .filter((line) => line.trim() !== "")
-        .map((line) => JSON.parse(line) as BashDecisionRecord);
+        .map((line) => JSON.parse(line) as BashDecisionRecord | FileAccessDecisionRecord);
 }
 
 beforeEach(() => {
@@ -322,5 +331,104 @@ describe("logBashDecision", () => {
                 blocked: false,
             }),
         ).not.toThrow();
+    });
+});
+
+describe("logFileAccessDecision", () => {
+    it("records a resolved outside read with the reasons that made it unresolved", () => {
+        logFileAccessDecision({
+            surface: "parent",
+            cwd,
+            operation: "read",
+            path: "/home/user/.nvm/versions/node/v24/pi/docs/tui.md",
+            folder: "/home/user/.nvm/versions/node/v24/pi/docs",
+            reasons: [UnsafeReason.OUTSIDE_CWD],
+            resolvedBy: "classifier",
+            decision: "allow",
+            blocked: false,
+            classifier: {
+                strategy: "file-access",
+                criterion: "routine",
+                outcome: "host",
+                status: "applied",
+                reason: "model chose host above threshold",
+                latencyMs: 421,
+                applied: true,
+            },
+        });
+
+        const [record] = readAllRecords() as FileAccessDecisionRecord[];
+        expect(record).toMatchObject({
+            gate: "file",
+            surface: "parent",
+            operation: "read",
+            folder: "/home/user/.nvm/versions/node/v24/pi/docs",
+            reasons: ["OUTSIDE_CWD"],
+            resolvedBy: "classifier",
+            decision: "allow",
+            classifier: { strategy: "file-access", criterion: "routine", applied: true },
+        });
+        // The Bash miner reads `command` as its group key; a file record must not carry one, which is what
+        // keeps the two gates in one file without confusing the report.
+        expect(record).not.toHaveProperty("command");
+        expect(readRecords()).toHaveLength(0);
+    });
+
+    it("names the agent whose prompt it recorded", () => {
+        logFileAccessDecision({
+            surface: "child",
+            agentName: "worker",
+            cwd,
+            operation: "write",
+            path: "/home/user/other/src/app.ts",
+            folder: "/home/user/other/src",
+            reasons: [UnsafeReason.OUTSIDE_CWD],
+            resolvedBy: "prompt",
+            prompt: { outcome: "no" },
+            decision: "deny",
+            blocked: true,
+            note: "do not touch that repo",
+        });
+
+        const [record] = readAllRecords() as FileAccessDecisionRecord[];
+        expect(record).toMatchObject({
+            surface: "child",
+            agent: "worker",
+            resolvedBy: "prompt",
+            prompt: { outcome: "no" },
+            blocked: true,
+            note: "do not touch that repo",
+        });
+    });
+
+    it("shares the Bash log's rotation and its disabled switch", () => {
+        logFileAccessDecision({
+            surface: "parent",
+            cwd,
+            operation: "read",
+            path: "/home/user/x.md",
+            folder: "/home/user",
+            reasons: [UnsafeReason.OUTSIDE_CWD],
+            resolvedBy: "prompt",
+            prompt: { outcome: "yes" },
+            decision: "allow",
+            blocked: false,
+        });
+        vi.stubEnv("SANDBOX_DECISION_LOG", "off");
+
+        logFileAccessDecision({
+            surface: "parent",
+            cwd,
+            operation: "read",
+            path: "/home/user/y.md",
+            folder: "/home/user",
+            reasons: [UnsafeReason.OUTSIDE_CWD],
+            resolvedBy: "prompt",
+            prompt: { outcome: "yes" },
+            decision: "allow",
+            blocked: false,
+        });
+
+        expect(readAllRecords()).toHaveLength(1);
     });
 });

@@ -8,6 +8,27 @@ category: architecture
 
 The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`. Direct read/write path checks are implemented in `src/modules/sandbox/heuristics/` and used by `src/tools/file-permissions.ts`; callers still import through the public `src/modules/sandbox/heuristics/index.ts` facade (formerly a single file). path checks classify read access as `SAFE_READONLY`, write access as `SAFE_EDIT`, and rejected access as `UNSAFE`. Runtime-managed temporary scratchpads are supplied as additional cwd-confinement roots; scratchpad filenames bypass sensitive-name filtering, but canonical/symlink containment remains enforced. That bypass is a deliberate policy, not the "unset means exempt" default: the parent bash gate passes `sensitiveAdditionalRoots` explicitly for the scratchpad **and** the user-memory directory, because the agent gets leeway in its own scratchpad and is meant to read and write user memories (writes mostly belong to the parent). Child gates exempt only their scratchpad roots.
 
+## Direct file access roots
+
+`src/modules/sandbox/file-roots.ts` is the single place that turns the user's declarations into the roots
+`src/tools/file-permissions.ts` trusts beyond the cwd and the scratchpad: `files.readRoots` / `files.writeRoots`,
+the `sandbox.mounts` sources when `files.honorMounts` is set (default **false**), and the running pi package for
+reads unless `files.honorPiPackage` says otherwise (default true, because the harness instructs agents to read
+pi's docs and examples). Two asymmetries are the whole design and must not be "tidied" into symmetry:
+
+- **A declared root is not a sensitive-name exemption.** Roots go in as `additionalRoots`; only the runtime
+  scratchpad is passed as `sensitiveAdditionalRoots`, so a `.env`, `.git`, key, or credential path under a
+  declared root still reaches the human.
+- **Mounts widen reads, never writes, and only when opted in.** A `readwrite` mount states what a *sandboxed
+  command* may write, behind an approval and inside a containment; a direct tool write is neither. Honouring the
+  mode for writes would let `edit` rewrite the user's own memory and settings files under `~/.pi: readwrite`
+  without a prompt, and `~/.config/gh: readonly` — mounted read-only so `gh` works — holds a token in a file no
+  name filter catches.
+
+A read-only child gets the same read roots through `createChildGateRuntime`'s `readRoots`, because below the
+`command` rung the confinement check *is* its reach and there is no prompt for anyone to answer; its writable
+surface still comes only from its definition. See `docs/file-access-gates.md`.
+
 ## Resolution order
 
 - `resolvePermissionDetails()` first checks the whole parsed line against explicit patterns; a whole-line match wins.

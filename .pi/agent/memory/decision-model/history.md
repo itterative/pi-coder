@@ -841,3 +841,73 @@ The curated dangers mostly probe as `failed` or `timeout` (the safe direction), 
 `curl -sL ... | bash` reports exit 0 with no changes because the pipeline swallows curl's failure, and
 `pip install requests` reports exit 0 because the requirement is already satisfied. Both are commands whose
 real risk is off the filesystem. If this reading is ever shown to a model, the scope line is not optional.
+
+---
+
+# Part 3 — The file-access subject (measured 2026-10-19)
+
+Harness in `.pi/local/decision-models/`: `extract_file_cases.py` → `file-cases.jsonl`, `probe_file_access.py`
+(+ `file-cache.jsonl`), `analyze_file_access.py`, `probe_file_curated.py`, `probe_file_access_live.ts`, and the
+write-up `file-access-report.md`. The extractor keeps only accesses that reach a prompt today: outside the
+session cwd, outside the runtime roots, not sensitive by name, and not inside a folder already approved in that
+session; labels come from the session (102 approved, 8 refused, 101 read / 10 write over 90 days). Plus 16
+hand-labelled cases (9 private paths the human must keep, 7 ordinary ones), because no real refusal in the
+corpus was about secrecy — they were all "nothing I asked for touches that".
+
+## Arms, and what each one bought
+
+Grant = the gate would resolve the prompt itself; ~350-425 input tokens and 300-560 ms per request.
+
+| arm | approved resolved | refused wrongly granted | curated leaks |
+| --- | --- | --- | --- |
+| veto wording retargeted at a file | 72/102 at floor 0.6 | **7/8** | — |
+| one bool "must the user be asked?" | 89/102 | 7/8 | 0 |
+| `kind` alone (what the file is) | 90/102 | 7/8 | 0 |
+| `purpose` alone (does the request reach it) | 63/102 label-only, 2/102 at floor 0.5 | 0/8 | 0 |
+| **composite `kind` × `purpose` (× `loss` for writes)** | **72-73/102** | **0/8** | **0/9** |
+
+Read three things off that table before touching the subject again:
+
+1. **The command criteria have no purchase on a path.** `none` for 105-110 of 111, including the paths the user
+   refused. Asking "is there any reason not to read this?" is unanswerable; asking what the file *is* and
+   whether the request reaches it is not.
+2. **Confidence means something different on each axis.** Kind confidences are usable (`code` median 0.93) and
+   purpose confidences are not (median 0.21-0.24 across four labels, and *higher* — 0.49-0.52 — on the refused
+   cases, because the model is surest when it says `unrelated`). So `minConfidence` gates the kind answer and
+   the purpose answer is read as a label. Applying the shipped floor to purpose collapses the subject from 72
+   to 2 of 102; that is the number to quote if anyone proposes unifying them.
+3. **The request is load-bearing here and nearly inert for commands.** With `request` dropped from the same
+   composite state, resolution held at 64/102 but 7 of the 8 refused accesses were granted. Hence
+   `fileAccessCacheKey` carries the request while `answerCacheKey` deliberately does not.
+
+Write-specific: `loss` (bool) separates the dangerous writes cleanly — `~/.ssh/config` 0.698 and an nginx unit
+0.705 against 0.012-0.20 for the ordinary ones — and it is the only axis that catches a write the request
+*did* name but should not destroy. The read-phrased `routine` criterion named every real write case
+`unrelated`, which is why writes resolve at 2/10; that is a wording artifact kept deliberately, and re-wording
+it is an experiment against `file-cases.jsonl`, not a string swap.
+
+## The deterministic layer in front of it, measured on the same corpus
+
+`getFileAccessRoots` (`src/modules/sandbox/file-roots.ts`): the running pi package as a read root (on by
+default) covered 51 of the 111 — the class the user actually complained about, at zero latency and zero risk.
+Honouring `sandbox.mounts` would have covered 60 (54%), and it is **off by default**: the mount list is a
+bubblewrap view, and `~/.config/gh: readonly` holds a token in a file the sensitive-name filter does not
+recognise. Mounts also never grant a write — the invariant that `test/tools/file-permissions.test.ts` "allows
+parent reads from user memories but not writes" caught while it was being tried.
+
+## Subagent arms
+
+Same composite asked under each child's `runner_rules`: a worker (checkout or worktree) allowed the doc read
+and withheld the write into another repo; a **scout was granted that write** (`asked_for` at 0.985 live). That
+single row is why `fileScopeAnswer` exists — read needs `inspect`, write needs `mutate`, computed from
+`RUNNER_AUTHORITY` before any request, folding as a `refuse`/`out_of_scope` form at confidence 0 exactly like
+the command scope gate. The model judges what a path is and whether the work reaches it; it does not decide who
+is allowed to touch it.
+
+## Live re-check
+
+`npm run scratch -- .pi/local/decision-models/probe_file_access_live.ts` runs the shipped request, reader, and
+policy against the configured endpoint over ten cases (docs, dist types, sibling repo, unrelated repo, AWS
+credentials, wallet blob, unasked notes overwrite, own config write, temp write, scout write): 10/10 as
+labelled at `minConfidence` 0.6, criteria `routine` 0.917 / `code`+`unrelated` 0.997 / `secret` 0.986 /
+`personal` 0.857 / `asked_for` 0.784.

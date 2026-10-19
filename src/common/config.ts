@@ -55,6 +55,71 @@ export interface SandboxConfigHeuristics {
     cwdConfinement?: SandboxConfigCwdConfinement;
 }
 
+/**
+ * Roots for the direct file tools (`read`/`grep`/`find`/`ls` and `write`/`edit`).
+ *
+ * These paths may be touched without a prompt, beyond the working directory and the runtime-owned scratchpad.
+ * They are *not* sensitive-name exemptions: `.env`, `.git`, key, and credential paths under a declared root
+ * still reach the human, because a root says "this tree is the agent's working material" and not "nothing
+ * here is private". See `src/modules/sandbox/file-roots.ts`.
+ */
+export interface SandboxConfigFiles {
+    /** Extra readable roots. `~/…` is expanded by the confinement checks, like `sandbox.mounts`. */
+    readRoots?: string[];
+    /**
+     * Extra writable roots. The only way to widen a write beyond the working directory and the scratchpad: a
+     * mount never does it, because a mount describes what a *sandboxed command* may write, and a direct tool
+     * write has neither the sandbox nor the approval of that command behind it.
+     */
+    writeRoots?: string[];
+    /**
+     * Treat every `sandbox.mounts` entry as a readable root (default false).
+     *
+     * Opt-in because a mount list is a bubblewrap view, not a statement about what may be read into a model's
+     * context: `~/.config/gh: readonly` exists so `gh` works in a sandbox, and it holds a token in a file no
+     * name filter catches. When enabled, a `readwrite` mount additionally becomes a writable root.
+     */
+    honorMounts?: boolean;
+    /** The running pi package's own directory is readable without a prompt (default true). */
+    honorPiPackage?: boolean;
+}
+
+/** Both lists concatenate rather than replace, so a project file can add roots the global one declares. */
+function mergeStringLists(
+    base: string[] | undefined,
+    override: string[] | undefined,
+): string[] | undefined {
+    if (base === undefined) {
+        return override;
+    }
+
+    if (override === undefined) {
+        return base;
+    }
+
+    return [...base, ...override];
+}
+
+function mergeFiles(
+    base: SandboxConfigFiles | undefined,
+    override: SandboxConfigFiles | undefined,
+): SandboxConfigFiles | undefined {
+    if (!base) {
+        return override;
+    }
+
+    if (!override) {
+        return base;
+    }
+
+    return {
+        readRoots: mergeStringLists(base.readRoots, override.readRoots),
+        writeRoots: mergeStringLists(base.writeRoots, override.writeRoots),
+        honorMounts: override.honorMounts ?? base.honorMounts,
+        honorPiPackage: override.honorPiPackage ?? base.honorPiPackage,
+    };
+}
+
 export interface SandboxConfig {
     sandbox: {
         enabled?: boolean; // master switch for bubblewrap sandboxing (default: true)
@@ -68,6 +133,7 @@ export interface SandboxConfig {
     audit?: SandboxConfigAudit;
     decisionLog?: SandboxConfigDecisionLog;
     heuristics?: SandboxConfigHeuristics;
+    files?: SandboxConfigFiles;
 }
 
 function tryLoad(path: string): SandboxConfig | null {
@@ -92,6 +158,14 @@ function tryLoad(path: string): SandboxConfig | null {
                 gitWorktreeSupport: data.sandbox?.gitWorktreeSupport,
             },
             permissions: data.permissions ?? {},
+            files: data.files
+                ? {
+                      readRoots: data.files.readRoots,
+                      writeRoots: data.files.writeRoots,
+                      honorMounts: data.files.honorMounts,
+                      honorPiPackage: data.files.honorPiPackage,
+                  }
+                : undefined,
             audit: data.audit
                 ? {
                       provider: data.audit.provider,
@@ -269,6 +343,7 @@ function mergeConfigs(global: SandboxConfig | null, project: SandboxConfig | nul
                 project.sandbox.gitWorktreeSupport ?? base.sandbox.gitWorktreeSupport,
         },
         permissions: mergeRecordsOrDefault(base.permissions, project.permissions, {}),
+        files: mergeFiles(base.files, project.files),
         audit: project.audit ?? base.audit,
         decisionLog: project.decisionLog ?? base.decisionLog,
         heuristics: mergeHeuristics(base.heuristics, project.heuristics),
@@ -322,6 +397,7 @@ function defaultConfig(): SandboxConfig {
             inheritEnv: {},
         },
         permissions: {},
+        files: { readRoots: [], writeRoots: [] },
     };
 }
 

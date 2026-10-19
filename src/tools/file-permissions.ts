@@ -4,6 +4,7 @@ import path from "node:path";
 import {
     isReadToolResult,
     isWriteToolResult,
+    type EventBus,
     type ExtensionAPI,
     type ExtensionContext,
     type ReadToolInput,
@@ -19,14 +20,30 @@ import {
     getPermissionState,
     type PermissionState,
 } from "../modules/sandbox/permission-state";
+import { fileRootsForOperation } from "../modules/sandbox/file-roots";
 import { ALLOWED_FILE_ENTRY_TYPE, type AllowedFileEntry } from "../common/audit";
 import {
     getPathConfinementAssessment,
-    getPathConfinementPermission,
     isPathWithinDirectory,
     isSafeHeuristic,
     UnsafeReason,
+    type HeuristicAssessment,
+    type PathConfinementOptions,
 } from "../modules/sandbox/heuristics";
+import {
+    decisionConfig,
+    type ClassifierRegistry,
+    type DecisionIsolation,
+    type DecisionRunner,
+    type DecisionSurface,
+} from "../modules/decision";
+import { consultFileAccessForGate } from "./decision-model";
+import {
+    logFileAccessDecision,
+    type BashClassifierRecord,
+    type FileDecisionResolution,
+    type PromptOutcome,
+} from "../modules/sandbox/decision-log";
 import {
     selectWithMessage,
     type SelectMessageItem,
@@ -104,14 +121,20 @@ export function getApprovedFileFolder(
     return undefined;
 }
 
-function sessionFolderFor(filePath: string, cwd: string): string {
-    // File tools operate on files, so the containing directory is the narrowest
-    // useful scope for the "always allow" choice.
+/** The target as the tool will open it: `~` expanded, relative parts resolved against the cwd. */
+function resolveTargetPath(filePath: string, cwd: string): string {
     const expanded =
         filePath === "~" || filePath.startsWith("~/")
             ? resolveHomeDirectory() + filePath.slice(1)
             : filePath;
-    const resolved = path.resolve(cwd, expanded);
+
+    return path.resolve(cwd, expanded);
+}
+
+function sessionFolderFor(filePath: string, cwd: string): string {
+    // File tools operate on files, so the containing directory is the narrowest
+    // useful scope for the "always allow" choice.
+    const resolved = resolveTargetPath(filePath, cwd);
 
     try {
         if (fs.statSync(resolved).isDirectory()) {
@@ -122,6 +145,19 @@ function sessionFolderFor(filePath: string, cwd: string): string {
     }
 
     return path.dirname(resolved);
+}
+
+/**
+ * Whether the only thing wrong with this access is that the path sits outside every trusted root.
+ *
+ * That is the one question the decision model is allowed to answer. A sensitive name, a symlink escape, or a
+ * dynamic target is a different kind of "no" — the confinement checks that produced those reasons are the
+ * guarantees the file gates exist to keep, and a classifier cannot trade one for fewer prompts. The same test
+ * is what the child branch already uses to choose block-versus-prompt, so the two gates cannot disagree about
+ * when the model gets a vote.
+ */
+function isOutsideEveryRoot(assessment: HeuristicAssessment): boolean {
+    return assessment.reasons.length === 1 && assessment.reasons[0] === UnsafeReason.OUTSIDE_CWD;
 }
 
 // Optional note the permission dialog attaches to event.input when the user
@@ -178,9 +214,33 @@ async function promptForFileAccess(
 }
 
 /**
- * Guard one of pi's built-in file tools. Paths inside cwd are granted by the
- * same confinement policy used by the bash heuristic. Other paths require an
- * explicit one-shot or session-scoped approval.
+ * How this surface asks the decision model about an access that left every trusted root.
+ *
+ * Absent wiring means the gate never consults: the model is an optional second opinion on a prompt, not a
+ * third gate, and a hook installed without it cannot reach the endpoint even when the user's config enables
+ * the surface.
+ */
+export interface FileDecisionWiring {
+    /** Which surface is asking: `parent` for the user's own session, `child` for a delegated runner. */
+    surface: DecisionSurface;
+    /** Who is asking, when that is not the parent. */
+    runner?: DecisionRunner;
+    /** Where a mutating runner's working copy is. */
+    isolation?: DecisionIsolation;
+    /** The registry the classifier resolves from; a child passes its parent's. */
+    registry?: ClassifierRegistry;
+    /** The bus the parent footer listens to, so a child's check animates the parent's badge too. */
+    events?: EventBus;
+}
+
+/**
+ * Guard one of pi's built-in file tools.
+ *
+ * Paths inside a trusted root pass: the working directory, the runtime scratchpad, the roots the user
+ * declared in `files`/`sandbox.mounts`, the extra roots this hook was given, and the folders a human already
+ * approved. Anything else asks the decision model when this surface is wired for it, and then asks the human —
+ * in that order, and never the other way, because a session approval is a person's standing decision and
+ * outranks a model's opinion about the same path.
  */
 export interface FilePermissionHookOptions {
     /** Permission state shared with the parent runtime for non-isolated children. */
@@ -201,6 +261,27 @@ export interface FilePermissionHookOptions {
     permissionPending?: (pending: boolean, activity: string) => void;
     /** Optional run-labelled title for child permission dialogs. */
     promptTitle?: string | (() => string);
+    /** Decision-model wiring for this surface; absent means the gate never consults. */
+    decision?: FileDecisionWiring;
+    /** Agent name recorded on the decision log line for a child surface. */
+    agentName?: string;
+}
+
+/** One access that left every trusted root, with everything the log line needs to say what happened. */
+interface OutsideRootAccess {
+    operation: FileOperation;
+    cwd: string;
+    /** The path as the tool asked for it, which is what the dialog shows. */
+    requestedPath: string;
+    /** The target as the tool will open it: expanded and resolved, which is what the model judges. */
+    path: string;
+    /** The folder a human's "always allow" would have covered. */
+    folder: string;
+    reasons: UnsafeReason[];
+    /** Session approval state, threaded through so the prompt path uses the same state the gate checked. */
+    state: PermissionState;
+    /** Set once the model has been consulted, so whichever path the access takes records the same verdict. */
+    classifier?: BashClassifierRecord;
 }
 
 export default function registerFileToolHook(
@@ -222,17 +303,9 @@ export default function registerFileToolHook(
     });
 
     pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult> => {
-        let isReadLike: boolean;
-        if (operation === "read") {
-            isReadLike =
-                event.toolName === "read" ||
-                event.toolName === "grep" ||
-                event.toolName === "find" ||
-                event.toolName === "ls";
-        } else {
-            isReadLike = event.toolName === "write" || event.toolName === "edit";
+        if (!isGuardedTool(event.toolName, operation)) {
+            return { block: false };
         }
-        if (!isReadLike) return { block: false };
 
         const input = event.input as ReadToolInput | WriteToolInput;
         const filePath = input.path?.trim() || ".";
@@ -242,42 +315,39 @@ export default function registerFileToolHook(
             options.confinement ?? sandboxConfig.current?.heuristics?.cwdConfinement;
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
         const scratchpadRoots = scratchpadPath ? [scratchpadPath] : [];
+        // A child borrows the parent's *read* declarations and none of its write ones: its writable surface is
+        // what its definition granted, and `files.writeRoots` is a statement about the user's own session. The
+        // read hook is unchanged here because `additionalReadRoots` already carries the child's declared roots.
+        const declaredRoots =
+            operation === "write" && options.childAccess
+                ? []
+                : fileRootsForOperation(sandboxConfig.current, operation);
         const additionalRoots = [
             ...scratchpadRoots,
+            ...declaredRoots,
             ...(operation === "read" ? (options.additionalReadRoots?.(ctx) ?? []) : []),
         ];
 
-        if (
-            isSafeHeuristic(
-                getPathConfinementPermission(filePath, {
-                    cwd,
-                    config: confinement,
-                    access: operation,
-                    additionalRoots,
-                    sensitiveAdditionalRoots: scratchpadRoots,
-                }),
-            )
-        ) {
+        const pathOptions: PathConfinementOptions = {
+            cwd,
+            config: confinement,
+            access: operation,
+            additionalRoots,
+            // Stated rather than left to the "unset means exempt" default: the agent gets leeway inside its
+            // own scratchpad, while a declared host root keeps sensitive-name filtering.
+            sensitiveAdditionalRoots: scratchpadRoots,
+        };
+
+        const assessment = getPathConfinementAssessment(filePath, pathOptions);
+        if (isSafeHeuristic(assessment.classification)) {
             return { block: false };
         }
 
-        if (options.childAccess) {
-            const assessment = getPathConfinementAssessment(filePath, {
-                cwd,
-                config: confinement,
-                access: operation,
-                additionalRoots,
-                sensitiveAdditionalRoots: scratchpadRoots,
-            });
-            if (
-                assessment.reasons.length !== 1 ||
-                assessment.reasons[0] !== UnsafeReason.OUTSIDE_CWD
-            ) {
-                return {
-                    block: true,
-                    reason: `Child ${operation} access blocked: path is outside the working directory or is sensitive.`,
-                };
-            }
+        if (options.childAccess && !isOutsideEveryRoot(assessment)) {
+            return {
+                block: true,
+                reason: `Child ${operation} access blocked: path is outside the working directory or is sensitive.`,
+            };
         }
 
         const approvedFolder = getApprovedFileFolder(filePath, cwd, {
@@ -290,55 +360,24 @@ export default function registerFileToolHook(
             return { block: false };
         }
 
-        const folder = sessionFolderFor(filePath, cwd);
-        options.permissionPending?.(true, `Waiting for permission to ${operation} ${filePath}`);
-        let result: SelectWithMessageResult<PromptChoice> | undefined;
-        try {
-            result = await promptForFileAccess(
-                operation,
-                filePath,
-                folder,
-                options.promptContext ?? ctx,
-                ctx.signal,
-                pi.events,
-                options.promptTitle,
-            );
-        } finally {
-            options.permissionPending?.(false, "Working");
-        }
-        const choice = result?.value;
-
-        if (result?.message) {
-            (event.input as Record<string, unknown>)._userMessage = result.message;
-        }
-
-        if (choice?.kind === "remember") {
-            approvedToolCalls.add(event);
-            state.fileFolders[operation].add(choice.folder);
-            if (options.persistSession !== false) {
-                pi.appendEntry<AllowedFileEntry>(ALLOWED_FILE_ENTRY_TYPE, {
-                    operation,
-                    folder: choice.folder,
-                });
-            }
-            (options.promptContext ?? ctx).ui.notify(
-                `pi-${operation}-sandbox: session folder allowed: "${choice.folder}" (this session only)`,
-                "info",
-            );
-            return { block: false };
-        }
-
-        if (choice?.kind === "yes") {
-            approvedToolCalls.add(event);
-            return { block: false };
-        }
-
-        const mode = ctx.hasUI ? "user" : "non-interactive mode";
-        const baseReason = `File ${operation} blocked by ${mode}; path is outside the allowed working directory.`;
-        return {
-            block: true,
-            reason: result?.message ? `${baseReason} User message: ${result.message}` : baseReason,
+        const access: OutsideRootAccess = {
+            operation,
+            cwd,
+            requestedPath: filePath,
+            path: resolveTargetPath(filePath, cwd),
+            folder: sessionFolderFor(filePath, cwd),
+            reasons: assessment.reasons,
+            state,
         };
+
+        if (options.decision !== undefined && isOutsideEveryRoot(assessment)) {
+            const allowed = await consultModel(access, event, ctx, options);
+            if (allowed) {
+                return { block: false };
+            }
+        }
+
+        return askUser(pi, access, event, ctx, options);
     });
 
     // Preserve an optional note from the permission dialog in the tool result,
@@ -359,6 +398,214 @@ export default function registerFileToolHook(
             content: [{ type: "text", text: note }, ...event.content],
         };
     });
+}
+
+/** The tools each file gate claims: reads cover pi's four read-only path tools, writes the two mutators. */
+function isGuardedTool(toolName: string, operation: FileOperation): boolean {
+    if (operation === "read") {
+        return (
+            toolName === "read" || toolName === "grep" || toolName === "find" || toolName === "ls"
+        );
+    }
+
+    return toolName === "write" || toolName === "edit";
+}
+
+/**
+ * Ask the model about one access outside every root, and return whether it licensed the access.
+ *
+ * A grant approves this one call — never the folder, which stays a human's standing decision — and writes its
+ * own log line. A withheld verdict is not discarded: it stays on `access` so the log line the prompt path
+ * writes carries what the model said and why the human was asked anyway.
+ */
+async function consultModel(
+    access: OutsideRootAccess,
+    event: object,
+    ctx: ExtensionContext,
+    options: FilePermissionHookOptions,
+): Promise<boolean> {
+    const wiring = options.decision;
+    if (wiring === undefined) {
+        return false;
+    }
+
+    const config = decisionConfig.load(ctx.cwd);
+    const notifyContext = options.promptContext ?? ctx;
+    const consulted = await consultFileAccessForGate({
+        ctx,
+        config,
+        surface: wiring.surface,
+        operation: access.operation,
+        path: access.path,
+        label: `that ${access.operation}`,
+        notify: (message, level) => notifyContext.ui.notify(message, level),
+        ...(wiring.runner === undefined ? {} : { runner: wiring.runner }),
+        ...(wiring.isolation === undefined ? {} : { isolation: wiring.isolation }),
+        ...(wiring.registry === undefined ? {} : { registry: wiring.registry }),
+        ...(wiring.events === undefined ? {} : { events: wiring.events }),
+    });
+
+    if (consulted === undefined) {
+        return false;
+    }
+
+    access.classifier = consulted.record;
+
+    if (consulted.permission !== "allow") {
+        return false;
+    }
+
+    approvedToolCalls.add(event);
+    logFileAccessDecision({
+        surface: surfaceForLog(wiring.surface),
+        ...(options.agentName === undefined ? {} : { agentName: options.agentName }),
+        cwd: access.cwd,
+        operation: access.operation,
+        path: access.path,
+        folder: access.folder,
+        reasons: access.reasons,
+        resolvedBy: "classifier",
+        decision: "allow",
+        blocked: false,
+        ...(consulted.record === undefined ? {} : { classifier: consulted.record }),
+    });
+
+    return true;
+}
+
+/**
+ * Ask the human, apply the answer, and record the decision.
+ *
+ * The approval semantics are the ones this hook has always had; what the model changed is only that some
+ * accesses never get here.
+ */
+async function askUser(
+    pi: ExtensionAPI,
+    access: OutsideRootAccess,
+    event: { input?: unknown },
+    ctx: ExtensionContext,
+    options: FilePermissionHookOptions,
+): Promise<ToolCallEventResult> {
+    const uiContext = options.promptContext ?? ctx;
+    const input = event.input as ReadToolInput | WriteToolInput;
+    let result: SelectWithMessageResult<PromptChoice> | undefined;
+
+    options.permissionPending?.(
+        true,
+        `Waiting for permission to ${access.operation} ${access.requestedPath}`,
+    );
+    try {
+        result = await promptForFileAccess(
+            access.operation,
+            access.requestedPath,
+            access.folder,
+            uiContext,
+            ctx.signal,
+            pi.events,
+            options.promptTitle,
+        );
+    } finally {
+        options.permissionPending?.(false, "Working");
+    }
+
+    const choice = result?.value;
+    if (result?.message && input) {
+        (input as Record<string, unknown>)._userMessage = result.message;
+    }
+
+    const resolution: FileDecisionResolution = result === undefined ? "unavailable" : "prompt";
+    const outcome = promptOutcome(result, choice);
+    const note = result?.message;
+
+    if (choice?.kind === "remember") {
+        rememberSessionFolder(access, pi, ctx, options, choice.folder);
+        logPrompted(access, options, resolution, outcome, "allow", false, note);
+        approvedToolCalls.add(event);
+        return { block: false };
+    }
+
+    if (choice?.kind === "yes") {
+        logPrompted(access, options, resolution, outcome, "allow", false, note);
+        approvedToolCalls.add(event);
+        return { block: false };
+    }
+
+    const mode = ctx.hasUI ? "user" : "non-interactive mode";
+    const baseReason = `File ${access.operation} blocked by ${mode}; path is outside the allowed working directory.`;
+    logPrompted(access, options, resolution, outcome, "deny", true, note);
+
+    return {
+        block: true,
+        reason: note ? `${baseReason} User message: ${note}` : baseReason,
+    };
+}
+
+function promptOutcome(
+    result: SelectWithMessageResult<PromptChoice> | undefined,
+    choice: PromptChoice | undefined,
+): PromptOutcome | undefined {
+    if (result === undefined) {
+        return undefined;
+    }
+
+    if (choice === undefined) {
+        return "dismissed";
+    }
+
+    return choice.kind;
+}
+
+function logPrompted(
+    access: OutsideRootAccess,
+    options: FilePermissionHookOptions,
+    resolution: FileDecisionResolution,
+    outcome: PromptOutcome | undefined,
+    decision: "allow" | "deny",
+    blocked: boolean,
+    note: string | undefined,
+): void {
+    logFileAccessDecision({
+        surface: surfaceForLog(options.decision?.surface),
+        ...(options.agentName === undefined ? {} : { agentName: options.agentName }),
+        cwd: access.cwd,
+        operation: access.operation,
+        path: access.path,
+        folder: access.folder,
+        reasons: access.reasons,
+        resolvedBy: resolution,
+        ...(outcome === undefined ? {} : { prompt: { outcome } }),
+        ...(access.classifier === undefined ? {} : { classifier: access.classifier }),
+        decision,
+        blocked,
+        ...(note === undefined ? {} : { note }),
+    });
+}
+
+function rememberSessionFolder(
+    access: OutsideRootAccess,
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    options: FilePermissionHookOptions,
+    folder: string,
+): void {
+    access.state.fileFolders[access.operation].add(folder);
+    if (options.persistSession !== false) {
+        pi.appendEntry<AllowedFileEntry>(ALLOWED_FILE_ENTRY_TYPE, {
+            operation: access.operation,
+            folder,
+        });
+    }
+
+    const uiContext = options.promptContext ?? ctx;
+    uiContext.ui.notify(
+        `pi-${access.operation}-sandbox: session folder allowed: "${folder}" (this session only)`,
+        "info",
+    );
+}
+
+/** The log's surface: the wiring names the runner, and the log has one field for it. */
+function surfaceForLog(surface: DecisionSurface | undefined): "parent" | "child" {
+    return surface === "child" ? "child" : "parent";
 }
 
 export type { FileOperation };

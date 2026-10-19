@@ -17,3 +17,10 @@ process.env.COMPACTION_CHAIN_TRACE ??= "0";
 // Suites that exercise it point these at their own files, or set the section inside a temp project config.
 process.env.DECISION_MODEL_CONFIG_PATH_GLOBAL ??= "";
 process.env.DECISION_MODEL_CONFIG_PATH ??= "";
+
+// The sandbox config is deliberately NOT pinned here, even though `sandboxConfig.current` resolves it lazily
+// from the process cwd and a suite can therefore see this machine's ~/.pi file. Pinning it changes what
+// `mergeConfigs` starts from, and the no-global-config default defines `inheritEnv: {}` — which is what makes
+// `--clearenv` appear — so a blanket pin quietly redefines the sandbox's environment policy for every suite.
+// Tests that depend on roots, mounts, or env behaviour pass their own config object or write their own project
+// file; `test/modules/sandbox/file-roots.test.ts` is the example.
