@@ -344,7 +344,7 @@ describe("file permission session entries", () => {
 });
 
 describe("declared file access roots", () => {
-    let temporary: string[] = [];
+    const temporary: string[] = [];
 
     /**
      * One workspace with a config that declares a read root and a write root, and the two outside files.

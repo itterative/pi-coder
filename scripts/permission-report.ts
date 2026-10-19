@@ -169,15 +169,22 @@ function loadRecords(options) {
         options.since === undefined ? undefined : Date.now() - parseDuration(options.since);
     const records = [];
     let skipped = 0;
+    let fileRows = 0;
 
     for (const record of log.read({ since: cutoff })) {
-        if (record === null || typeof record !== "object" || typeof record.command !== "string") {
+        if (record === null || typeof record !== "object") {
             skipped += 1;
             continue;
         }
-        // File-access decisions share this log and carry no `command`, so the check above already excludes
-        // them; the explicit skip keeps that from breaking silently if a file record ever gains one.
+        // File-access decisions share this log and carry no `command`. They have to be named before the command
+        // check, or they are counted as unreadable input: an exclusion that says "foreign" for a population the
+        // repo writes itself is how a miner's blind spot gets mistaken for a corrupt log.
         if (record.gate === "file") {
+            fileRows += 1;
+            continue;
+        }
+
+        if (typeof record.command !== "string") {
             skipped += 1;
             continue;
         }
@@ -192,7 +199,7 @@ function loadRecords(options) {
         records.push(record);
     }
 
-    return { records, files, skipped, malformed: log.stats().malformed };
+    return { records, files, skipped, fileRows, malformed: log.stats().malformed };
 }
 
 // --------------------------------------------------------------- aggregation
@@ -473,8 +480,11 @@ function renderReport(records, stats, options) {
     const out = [];
     out.push(`bash permission decision report`);
     out.push(`  files:   ${stats.files.join(", ")}`);
+    // The file gates write to the same log, so their rows are an expected exclusion rather than foreign
+    // noise; a row that is neither belongs in the unreadable count instead.
     out.push(
         `  records: ${records.length}` +
+            `${stats.fileRows > 0 ? ` (${stats.fileRows} file-access rows skipped)` : ""}` +
             `${stats.skipped > 0 ? ` (${stats.skipped} foreign skipped)` : ""}` +
             `${stats.malformed > 0 ? ` (${stats.malformed} unreadable)` : ""}`,
     );
@@ -560,12 +570,14 @@ function main() {
     let records;
     let files;
     let skipped;
+    let fileRows;
     let malformed;
     try {
         const loaded = loadRecords(options);
         records = loaded.records;
         files = loaded.files;
         skipped = loaded.skipped;
+        fileRows = loaded.fileRows;
         malformed = loaded.malformed;
     } catch (error) {
         process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -617,7 +629,7 @@ function main() {
     }
 
     process.stdout.write(
-        `${renderReport(records, { files, skipped, malformed, analysis }, options)}\n`,
+        `${renderReport(records, { files, skipped, fileRows, malformed, analysis }, options)}\n`,
     );
 }
 

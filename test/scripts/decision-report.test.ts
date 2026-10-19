@@ -8,10 +8,13 @@ import { PI_CODER_EXTENSION_DIR } from "../../src/common/constants";
 import { createJsonlRecordLog } from "../../src/common/record-log";
 import {
     logBashDecision,
+    logFileAccessDecision,
     type BashClassifierRecord,
     type BashDecisionInput,
     type BashDecisionRecord,
+    type FileAccessDecisionInput,
 } from "../../src/modules/sandbox/decision-log";
+import { UnsafeReason } from "../../src/modules/sandbox/heuristics";
 import { unresolvedPermissionDetails } from "../../src/modules/sandbox/resolve";
 import {
     bundleScript,
@@ -24,8 +27,15 @@ const SCRIPT = path.join(PI_CODER_EXTENSION_DIR, "scripts", "decision-report.ts"
 /** The flattened per-row shape the script emits under `rows`. */
 interface ReportRow {
     ts: string;
+    /** which gate wrote the record: a file access carries no command at all */
+    gate: "bash" | "file";
     surface: string;
-    command: string;
+    /** absent on a file-access row, whose target is `path` with `operation` */
+    command?: string;
+    operation?: "read" | "write";
+    path?: string;
+    /** the folder a human's "always allow" would have covered */
+    folder?: string;
     strategy: string;
     provider?: string;
     model?: string;
@@ -41,7 +51,8 @@ interface ReportRow {
     /** `record.prompt?.outcome`, absent when no human was asked. */
     human?: string;
     decision: string;
-    sandboxed: boolean;
+    /** a Bash-only mode: a file access is neither sandboxed nor run direct */
+    sandboxed?: boolean;
 }
 
 interface ReportJson {
@@ -52,6 +63,9 @@ interface ReportJson {
     applied: number;
     abstained: number;
     failed: number;
+    bySubject: Record<string, number>;
+    /** the file gates on their own, kept apart because they are judged on different criteria */
+    file: { consulted: number; resolved: number; meanConfidence: number };
     byAction: Record<string, number>;
     byCriterion: Record<string, number>;
     byOutcome: Record<string, number>;
@@ -79,6 +93,8 @@ let logPath: string;
 const temporaryDirectories: string[] = [];
 
 type RecordOverrides = Partial<Omit<BashDecisionInput, "command" | "cwd" | "details">>;
+
+type AccessOverrides = Partial<Omit<FileAccessDecisionInput, "cwd">>;
 
 /** Write through the production writer, so a fixture cannot drift from the record schema. */
 function record(command: string, overrides: RecordOverrides = {}): void {
@@ -197,6 +213,36 @@ function requireRow(report: ReportJson, command: string): ReportRow {
     const row = report.rows.find((candidate) => candidate.command === command);
     if (row === undefined) {
         throw new Error(`no report row for command: ${command}`);
+    }
+
+    return row;
+}
+
+/**
+ * One direct file access outside every trusted root, through the production writer.
+ *
+ * Both gates append to the same file, so the mixed log is the real input shape and not a hypothetical.
+ */
+function access(overrides: AccessOverrides = {}): void {
+    logFileAccessDecision({
+        surface: "parent",
+        cwd: workspace,
+        operation: "read",
+        path: "/home/user/.pi/agent/settings.json",
+        folder: "/home/user/.pi/agent",
+        reasons: [UnsafeReason.OUTSIDE_CWD],
+        resolvedBy: "classifier",
+        decision: "allow",
+        blocked: false,
+        classifier: verdict({ strategy: "file-access", criterion: "asked_for", confidence: 0.72 }),
+        ...overrides,
+    });
+}
+
+function requireFileRow(report: ReportJson, filePath: string): ReportRow {
+    const row = report.rows.find((candidate) => candidate.path === filePath);
+    if (row === undefined) {
+        throw new Error(`no report row for path: ${filePath}`);
     }
 
     return row;
@@ -342,7 +388,7 @@ describe("decision-report script", () => {
         expect(text.stdout).toContain("ABSTAINED — THE HUMAN DECIDED (1)");
         expect(text.stdout).not.toContain("FAILED — NO VERDICT");
         expect(text.stdout.indexOf("bravo task")).toBeLessThan(text.stdout.indexOf("alpha task"));
-        expect(text.stdout).toContain("2 of 3 consulted commands were resolved without a prompt.");
+        expect(text.stdout).toContain("2 of 3 consulted accesses were resolved without a prompt.");
 
         const limited = runText(["--limit", "1"]);
         expect(limited.stdout).toContain("RESOLVED BY THE MODEL (2, newest 1)");
@@ -367,7 +413,7 @@ describe("decision-report script", () => {
         const text = runText();
         expect(text.stdout).toContain("FAILED — NO VERDICT (1)");
         expect(text.stdout).toMatch(/timeout\s+300ms request timed out/);
-        expect(text.stdout).toContain("0 of 1 consulted commands were resolved without a prompt.");
+        expect(text.stdout).toContain("0 of 1 consulted accesses were resolved without a prompt.");
     });
 
     it("filters by --applied, --prompted, and --criterion", () => {
@@ -395,7 +441,7 @@ describe("decision-report script", () => {
         expect(none.stdout).toMatch(/decision model: 0 consulted of 4 records in 1 file/);
         expect(none.stdout).toMatch(/criteria named\s+-/);
         expect(none.stdout).not.toContain("human on those rows");
-        expect(none.stdout).toContain("0 of 0 consulted commands were resolved without a prompt.");
+        expect(none.stdout).toContain("0 of 0 consulted accesses were resolved without a prompt.");
     });
 
     it("drops records older than --since and rejects an unreadable window", () => {
@@ -516,5 +562,117 @@ describe("decision-report script", () => {
         expect(report.malformed).toBe(1);
         expect(report.total).toBe(1);
         expect(report.consulted).toBe(1);
+    });
+});
+
+describe("decision-report script with both gates in one log", () => {
+    it("reports a file-access row as an access instead of a missing command", () => {
+        // The regression this whole block exists for: the reader took `record.command` from every row, so the
+        // first `gate: "file"` line the production writer ever emitted killed the report with
+        // `Cannot read properties of undefined (reading 'replace')`.
+        record("git status", { classifier: verdict() });
+        access();
+
+        const text = runText().stdout;
+        expect(text).toContain("subjects                bash 1, file 1");
+        expect(text).toContain("read /home/user/.pi/agent/settings.json");
+        expect(text).toContain("file accesses           1 consults, mean 72%, resolved 1");
+        expect(text).not.toContain("undefined");
+
+        const report = runJson();
+        const row = requireFileRow(report, "/home/user/.pi/agent/settings.json");
+        expect(row).toMatchObject({
+            gate: "file",
+            operation: "read",
+            folder: "/home/user/.pi/agent",
+            strategy: "file-access",
+            criterion: "asked_for",
+        });
+        // Each gate's rows carry only their own fields, so a consumer never has to guess what a blank means.
+        expect(row).not.toHaveProperty("command");
+        expect(row).not.toHaveProperty("sandboxed");
+        expect(requireRow(report, "git status").gate).toBe("bash");
+    });
+
+    it("slices one gate with --subject and rejects any other name", () => {
+        record("git status", { classifier: verdict() });
+        access();
+        access({
+            path: "/home/user/.ssh/config",
+            folder: "/home/user/.ssh",
+            operation: "write",
+        });
+
+        expect(runJson(["--subject", "file"]).consulted).toBe(2);
+        expect(runJson(["--subject", "bash"]).consulted).toBe(1);
+        expect(runText(["--subject", "file"]).stdout).toContain("subject filter: file");
+
+        const rejected = runScript(["--subject", "commands"]);
+        expect(rejected.status).toBe(1);
+        expect(rejected.stderr).toContain("--subject wants `bash` or `file`");
+    });
+
+    it("keeps the command-shaped aggregates on the command rows", () => {
+        // A file access has no script body. Counting it in the with/without-body pair would read as a collapse
+        // in the body population every time someone opened a file outside the repo.
+        record("npm run deploy", {
+            classifier: verdict({
+                script: {
+                    kind: "package",
+                    sources: ["package.json#deploy", "scripts/deploy.js"],
+                    chars: 140,
+                },
+            }),
+        });
+        access();
+        access({ path: "/home/user/docs/tui.md", folder: "/home/user/docs" });
+        access({ path: "/home/user/notes.md", folder: "/home/user" });
+
+        const report = runJson();
+        expect(report.bySubject).toEqual({ bash: 1, file: 3 });
+        expect(report.file).toMatchObject({ consulted: 3, resolved: 3 });
+        // One consult carried the body, and three file rows did not: the per-file count staying at 1 is the
+        // assertion, not the source name.
+        expect(report.scriptFiles).toEqual([
+            expect.objectContaining({ source: "scripts/deploy.js", consults: 1 }),
+        ]);
+
+        const text = runText().stdout;
+        expect(text).toContain("with a script body      1 consults");
+        expect(text).toContain("without a body          0 consults");
+    });
+
+    it("counts a sandbox decision only where sandboxing exists", () => {
+        // The abstained section prints `sandbox` or `direct` from a Bash-only field. Reading `undefined` as
+        // `direct` would make every still-asked read look like a command run outside the bubble.
+        record("rm -rf build", {
+            prompt: { outcome: "yes" },
+            decision: "allow:sandbox",
+            sandboxed: true,
+            classifier: verdict({ applied: false, outcome: "abstain", status: "abstained" }),
+        });
+        access({
+            prompt: { outcome: "yes" },
+            resolvedBy: "prompt",
+            classifier: verdict({
+                strategy: "file-access",
+                criterion: "unrelated",
+                applied: false,
+                outcome: "abstain",
+                status: "abstained",
+            }),
+        });
+
+        const report = runJson();
+        expect(report.abstained).toBe(2);
+        expect(report.humanSandboxed).toBe(1);
+        expect(report.humanDecision).toEqual({ "allow:sandbox": 1, allow: 1 });
+
+        const lines = runText().stdout.split("\n");
+        const sectionStart = lines.findIndex((line) => line.startsWith("ABSTAINED"));
+        const section = lines.slice(sectionStart).filter((line) => line.includes(" model "));
+
+        expect(section).toHaveLength(2);
+        expect(section.filter((line) => line.includes("sandbox"))).toHaveLength(1);
     });
 });

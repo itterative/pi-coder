@@ -182,8 +182,8 @@ export interface BashDecisionInput {
  * nothing else in the repo records them. Only accesses that reached a prompt or a verdict are logged — an
  * inside-cwd read says nothing about the permission system and there are thousands of them per session.
  *
- * `command` is deliberately absent, which is also what keeps `scripts/permission-report.ts` (a Bash miner)
- * from reading these rows: it skips any record without a command string.
+ * `command` is deliberately absent, which is also why `scripts/permission-report.ts` (a Bash miner) skips these
+ * rows on `gate` rather than on a missing field it would have to guess at.
  */
 export interface FileAccessDecisionRecord {
     v: typeof RECORD_VERSION;
@@ -223,6 +223,17 @@ export interface FileAccessDecisionRecord {
  * how often the model resolves a prompt, and how often the human still has to.
  */
 export type FileDecisionResolution = "classifier" | "prompt" | "unavailable";
+
+/**
+ * One line of the decision log, from either gate.
+ *
+ * Readers narrow on `gate`, and a Bash record is the one that carries no `gate` at all: the file gates arrived
+ * later, so every earlier line in every retained generation is a command.
+ */
+export type DecisionLogRecord = BashDecisionRecord | FileAccessDecisionRecord;
+
+/** Which gate wrote a record, counting the pre-`gate` lines as Bash. */
+export type DecisionSubject = "bash" | "file";
 
 export interface FileAccessDecisionInput {
     surface: "parent" | "child";

@@ -3,10 +3,16 @@
  * Read the decision model's verdicts out of the bash permission decision log written by
  * `src/modules/sandbox/decision-log.ts`.
  *
- * Every record with a `classifier` field is a command that no rule and no heuristic resolved, which is exactly
+ * Every record with a `classifier` field is an access that no rule and no heuristic resolved, which is exactly
  * the population the model is asked about. The report answers the questions that decide `apply` and
  * `minConfidence`: what the model said, whether it was allowed to act on it, and what the human did when it was
  * not.
+ *
+ * One log carries two gates: Bash commands (`gate` absent or `"bash"`) and direct file accesses outside every
+ * trusted root (`gate: "file"`). The command-shaped sections — script bodies and per-file scores — read only the
+ * Bash rows, because a file access has no script facts and would silently dilute them. Everything else, including
+ * the rows and the criteria histogram, covers both, since "did the verdict resolve it" means the same thing for
+ * either. Use `--subject` to look at one gate alone.
  *
  * Usage:
  *   npm run decision-report -- [options]
@@ -15,7 +21,9 @@
  *                      .state/bash-log.jsonl; every retained generation is read, oldest first)
  *   --since <dur>      only records newer than this age, e.g. 90m, 24h, 7d
  *   --criterion <id>   only records whose model verdict named this criterion (none, destructive,
- *                      privileged, exfiltration, remote_code, loses_content, out_of_scope)
+ *                      privileged, exfiltration, remote_code, loses_content, out_of_scope, asked_for,
+ *                      routine, unrelated)
+ *   --subject <gate>   only records from one gate: `bash` or `file`
  *   --applied          only records where the verdict resolved the prompt
  *   --prompted         only records where a human was still asked
  *   --limit <n>        rows per section (default 25, newest kept)
@@ -25,11 +33,16 @@
  * Text sections print newest first.
  */
 
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createJsonlRecordLog, discoverGenerations } from "../src/common/record-log";
-import type { BashClassifierRecord, BashDecisionRecord } from "../src/modules/sandbox/decision-log";
+import type {
+    BashClassifierRecord,
+    DecisionLogRecord,
+    DecisionSubject,
+} from "../src/modules/sandbox/decision-log";
 
 // ---------------------------------------------------------------- arg parsing
 
@@ -42,6 +55,7 @@ function describeOptions(): string {
         "  --criterion <id>   only this criterion (none, destructive, privileged, ...)",
         "  --applied          only verdicts that resolved the prompt",
         "  --prompted         only records where a human was asked",
+        "  --subject <gate>     only this gate's records (bash, file)",
         "  --script           only consults with a script fact (body or kind)",
         "  --limit <n>        rows per section (default 25)",
         "  --json             machine-readable aggregates",
@@ -49,10 +63,11 @@ function describeOptions(): string {
     ].join("\n");
 }
 
-interface Options {
+export interface Options {
     path: string | undefined;
     since: string | undefined;
     criterion: string | undefined;
+    subject: DecisionSubject | undefined;
     applied: boolean;
     prompted: boolean;
     script: boolean;
@@ -61,11 +76,12 @@ interface Options {
     help: boolean;
 }
 
-function parseArgs(argv: string[]): Options {
+export function parseArgs(argv: string[]): Options {
     const options: Options = {
         path: undefined,
         since: undefined,
         criterion: undefined,
+        subject: undefined,
         applied: false,
         prompted: false,
         script: false,
@@ -97,6 +113,8 @@ function parseArgs(argv: string[]): Options {
             options.since = next();
         } else if (arg === "--criterion") {
             options.criterion = next();
+        } else if (arg === "--subject") {
+            options.subject = parseSubject(next());
         } else if (arg === "--limit") {
             const value = Number.parseInt(next() ?? "", 10);
             if (Number.isFinite(value) && value > 0) {
@@ -110,6 +128,18 @@ function parseArgs(argv: string[]): Options {
     return options;
 }
 
+/** The gate names as options; a Bash record is the one that carries no `gate`, so `bash` is not a typo for "absent". */
+function parseSubject(value: string | undefined): DecisionSubject {
+    if (value === "bash" || value === "file") {
+        return value;
+    }
+
+    throw new Error(`--subject wants \`bash\` or \`file\`, got: ${value ?? "(nothing)"}`);
+}
+
+/** `--since` units, keyed by the letter the pattern captures. */
+const DURATION_UNITS: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
+
 /** `90m`, `24h`, `7d`, `30s`, `2w` to milliseconds. */
 function parseDuration(value: string): number {
     const match = /^(\d+)\s*([smhdw])$/iu.exec(value.trim());
@@ -117,7 +147,11 @@ function parseDuration(value: string): number {
         throw new Error(`could not read duration: ${value} (expected e.g. 90m, 24h, 7d)`);
     }
 
-    const unitSeconds = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 }[match[2].toLowerCase()];
+    const unitSeconds = DURATION_UNITS[match[2].toLowerCase()];
+    if (unitSeconds === undefined) {
+        throw new Error(`could not read duration unit: ${match[2]}`);
+    }
+
     return Number.parseInt(match[1], 10) * unitSeconds * 1000;
 }
 
@@ -140,21 +174,33 @@ function defaultLogPath(): string {
     return path.join(fileURLToPath(new URL("..", import.meta.url)), ".state", "bash-log.jsonl");
 }
 
-interface ConsultedRecord {
-    record: BashDecisionRecord;
+export interface ConsultedRecord {
+    record: DecisionLogRecord;
     classifier: BashClassifierRecord;
+    /** which gate wrote the record, and therefore which aggregates it belongs to */
+    subject: DecisionSubject;
+    /** what the row is about: the command text, or the operation and path */
+    target: string;
 }
 
-interface LoadResult {
+export interface LoadResult {
     consulted: ConsultedRecord[];
     total: number;
     files: string[];
     malformed: number;
 }
 
-function loadRecords(options: Options): LoadResult {
+function subjectOf(record: DecisionLogRecord): DecisionSubject {
+    return record.gate === "file" ? "file" : "bash";
+}
+
+function targetOf(record: DecisionLogRecord): string {
+    return record.gate === "file" ? `${record.operation} ${record.path}` : record.command;
+}
+
+export function loadRecords(options: Options): LoadResult {
     const filePath = options.path ?? defaultLogPath();
-    const log = createJsonlRecordLog<BashDecisionRecord>({
+    const log = createJsonlRecordLog<DecisionLogRecord>({
         filePath,
         // Reporting is not a reason to roll the file being reported on.
         maxBytes: 0,
@@ -188,6 +234,9 @@ function loadRecords(options: Options): LoadResult {
         if (options.criterion !== undefined && classifier.criterion !== options.criterion) {
             continue;
         }
+        if (options.subject !== undefined && subjectOf(record) !== options.subject) {
+            continue;
+        }
         if (options.applied && classifier.applied !== true) {
             continue;
         }
@@ -198,7 +247,12 @@ function loadRecords(options: Options): LoadResult {
             continue;
         }
 
-        consulted.push({ record, classifier });
+        consulted.push({
+            record,
+            classifier,
+            subject: subjectOf(record),
+            target: targetOf(record),
+        });
     }
 
     return { consulted, total, files, malformed: log.stats().malformed };
@@ -264,11 +318,15 @@ interface BodySummary {
     meanConfidence: number;
 }
 
-interface Summary {
+export interface Summary {
     consulted: number;
     applied: number;
     abstained: number;
     failed: number;
+    /** consults per gate, so a file-access spike cannot read as a Bash one */
+    bySubject: Record<string, number>;
+    /** the file gates alone: they are judged on different criteria and have no script facts at all */
+    file: BodySummary;
     byAction: Record<string, number>;
     byCriterion: Record<string, number>;
     byOutcome: Record<string, number>;
@@ -288,7 +346,7 @@ interface Summary {
     outputTokens: number;
 }
 
-function summarize(consulted: readonly ConsultedRecord[]): Summary {
+export function summarize(consulted: readonly ConsultedRecord[]): Summary {
     const applied = consulted.filter(({ classifier }) => classifier.applied === true);
     const failed = consulted.filter(({ classifier }) => isFailed(classifier.status));
     const abstained = consulted.filter(
@@ -298,10 +356,13 @@ function summarize(consulted: readonly ConsultedRecord[]): Summary {
     const tokens = consulted.map(({ classifier }) => classifier.tokens);
     const prompted = abstained.filter(({ record }) => record.prompt !== undefined);
     // A script *fact* is not a body: `binary` and `inline` carry the kind only, and add nothing to the state.
-    const withBody = consulted.filter(
+    // File accesses carry none at all, so the body pair counts Bash rows only — mixing them would read as a
+    // drop in "with a script body" every time someone reads a file outside the repo.
+    const commands = consulted.filter(({ subject }) => subject === "bash");
+    const withBody = commands.filter(
         ({ classifier }) => (classifier.script?.sources?.length ?? 0) > 0,
     );
-    const withoutBody = consulted.filter(
+    const withoutBody = commands.filter(
         ({ classifier }) => (classifier.script?.sources?.length ?? 0) === 0,
     );
     const bodySizes = withBody.map(({ classifier }) => classifier.script?.chars).filter(isNumber);
@@ -314,6 +375,8 @@ function summarize(consulted: readonly ConsultedRecord[]): Summary {
         applied: applied.length,
         abstained: abstained.length,
         failed: failed.length,
+        bySubject: tally(consulted.map(({ subject }) => subject)),
+        file: bodySummary(consulted.filter(({ subject }) => subject === "file")),
         byAction: tally(consulted.map(({ classifier }) => classifier.action ?? "(no answer)")),
         byCriterion: tally(
             consulted.map(({ classifier }) => classifier.criterion ?? "(no answer)"),
@@ -324,11 +387,13 @@ function summarize(consulted: readonly ConsultedRecord[]): Summary {
                 record.prompt === undefined ? "(unasked)" : record.decision,
             ),
         ),
-        humanSandboxed: prompted.filter(({ record }) => record.sandboxed).length,
+        // Sandboxing is a Bash outcome; a file access has no such mode and must not read as "direct".
+        humanSandboxed: prompted.filter(({ record }) => record.gate !== "file" && record.sandboxed)
+            .length,
         withBody: bodySummary(withBody),
         withoutBody: bodySummary(withoutBody),
         byScriptKind: tally(
-            consulted
+            commands
                 .map(({ classifier }) => classifier.script?.kind ?? "")
                 .filter((kind) => kind !== ""),
         ),
@@ -363,7 +428,7 @@ interface ScriptFileSummary {
 function scriptFiles(consulted: readonly ConsultedRecord[]): ScriptFileSummary[] {
     const bySource = new Map<string, ScriptFileSummary>();
 
-    for (const { record, classifier } of consulted.toReversed()) {
+    for (const { classifier, record, target } of consulted.toReversed()) {
         for (const entry of scriptConfidences(classifier)) {
             // `package.json#deploy` names a script entry, not a file; this section is about files.
             if (!entry.source.includes("/") || entry.source.includes("#")) {
@@ -375,7 +440,7 @@ function scriptFiles(consulted: readonly ConsultedRecord[]): ScriptFileSummary[]
                 consults: 0,
                 confidences: [],
                 newestTs: record.ts,
-                newestCommand: record.command,
+                newestCommand: target,
             };
 
             existing.consults += 1;
@@ -451,7 +516,19 @@ function isNumber(value: unknown): value is number {
 
 // --------------------------------------------------------------------- output
 
-function renderText(result: LoadResult, options: Options): string {
+/** The abstained row, which is the only section whose shape differs by gate: a file access is never sandboxed. */
+function abstainedRow(entry: ConsultedRecord): string {
+    const { classifier, record } = entry;
+    const mode = record.gate === "file" ? "  -   " : record.sandboxed ? "sandbox" : "direct ";
+
+    return (
+        `  ${(classifier.criterion ?? "-").padEnd(13)} ${percent(classifier.confidence)} ` +
+        `model ${(classifier.action ?? "-").padEnd(8)} human ${record.decision.padEnd(14)} ` +
+        `${mode} ${record.prompt?.outcome ?? "-"} ${bodyTag(classifier)}`
+    );
+}
+
+export function renderText(result: LoadResult, options: Options): string {
     const { consulted } = result;
     const summary = summarize(consulted);
     const lines: string[] = [];
@@ -470,11 +547,15 @@ function renderText(result: LoadResult, options: Options): string {
     if (options.criterion !== undefined) {
         lines.push(`  criterion filter: ${options.criterion}`);
     }
+    if (options.subject !== undefined) {
+        lines.push(`  subject filter: ${options.subject}`);
+    }
     lines.push("");
 
     lines.push(`  resolved by the model   ${summary.applied}`);
     lines.push(`  abstained               ${summary.abstained}   the human was still asked`);
     lines.push(`  failed                  ${summary.failed}   error or timeout, then cooldown`);
+    lines.push(`  subjects                ${histogram(summary.bySubject)}`);
     lines.push(`  criteria named          ${histogram(summary.byCriterion)}`);
     lines.push(`  action                  ${histogram(summary.byAction)}`);
     lines.push(`  outcome                 ${histogram(summary.byOutcome)}`);
@@ -494,6 +575,12 @@ function renderText(result: LoadResult, options: Options): string {
         lines.push(`  script kinds            ${histogram(summary.byScriptKind)}`);
         lines.push(
             `  body size               ${summary.bodyChars} chars sent, max ${summary.maxBodyChars}`,
+        );
+    }
+    if (summary.file.consulted > 0) {
+        lines.push(
+            `  file accesses           ${summary.file.consulted} consults, mean ` +
+                `${summary.file.meanConfidence}%, resolved ${summary.file.resolved}`,
         );
     }
     if (summary.abstained > 0) {
@@ -516,21 +603,13 @@ function renderText(result: LoadResult, options: Options): string {
         applied,
         options.limit,
         ({ classifier }) =>
-            `  ${classifier.strategy.padEnd(8)} ${(classifier.criterion ?? "-").padEnd(13)} ` +
+            `  ${classifier.strategy.padEnd(12)} ${(classifier.criterion ?? "-").padEnd(13)} ` +
             `${percent(classifier.confidence)} ${(classifier.action ?? "-").padEnd(8)} ` +
             `${String(classifier.latencyMs).padStart(4)}ms ${bodyTag(classifier)}`,
     );
 
-    pushSection(
-        lines,
-        "ABSTAINED — THE HUMAN DECIDED",
-        abstained,
-        options.limit,
-        ({ classifier, record }) =>
-            `  ${(classifier.criterion ?? "-").padEnd(13)} ${percent(classifier.confidence)} ` +
-            `model ${(classifier.action ?? "-").padEnd(8)} human ${record.decision.padEnd(14)} ` +
-            `${record.sandboxed ? "sandbox" : "direct "} ${record.prompt?.outcome ?? "-"} ` +
-            bodyTag(classifier),
+    pushSection(lines, "ABSTAINED — THE HUMAN DECIDED", abstained, options.limit, (entry) =>
+        abstainedRow(entry),
     );
 
     pushSection(
@@ -554,7 +633,7 @@ function renderText(result: LoadResult, options: Options): string {
     }
 
     lines.push(
-        `${summary.applied} of ${summary.consulted} consulted commands were resolved without a prompt.`,
+        `${summary.applied} of ${summary.consulted} consulted accesses were resolved without a prompt.`,
     );
 
     return lines.join("\n");
@@ -574,12 +653,12 @@ function pushSection(
     lines.push(`${title} (${rows.length}${rows.length > limit ? `, newest ${limit}` : ""})`);
     for (const entry of rows.slice(0, limit)) {
         lines.push(`${format(entry)}  ${clock(entry.record.ts)}`);
-        lines.push(`      ${oneLine(entry.record.command)}`);
+        lines.push(`      ${oneLine(entry.target)}`);
     }
     lines.push("");
 }
 
-function renderJson(result: LoadResult): string {
+export function renderJson(result: LoadResult): string {
     const summary = summarize(result.consulted);
 
     return `${JSON.stringify(
@@ -588,12 +667,16 @@ function renderJson(result: LoadResult): string {
             scriptFiles: scriptFiles(result.consulted),
             total: result.total,
             malformed: result.malformed,
-            consulted: result.consulted.length,
             ...summary,
-            rows: result.consulted.map(({ record, classifier }) => ({
+            consulted: result.consulted.length,
+            rows: result.consulted.map(({ record, classifier, subject, target }) => ({
                 ts: record.ts,
+                gate: subject,
                 surface: record.surface,
-                command: record.command,
+                command: record.gate === "file" ? undefined : target,
+                operation: record.gate === "file" ? record.operation : undefined,
+                path: record.gate === "file" ? record.path : undefined,
+                folder: record.gate === "file" ? record.folder : undefined,
                 strategy: classifier.strategy,
                 provider: classifier.provider,
                 model: classifier.model,
@@ -609,7 +692,7 @@ function renderJson(result: LoadResult): string {
                 script: classifier.script,
                 human: record.prompt?.outcome,
                 decision: record.decision,
-                sandboxed: record.sandboxed,
+                sandboxed: record.gate === "file" ? undefined : record.sandboxed,
             })),
         },
         null,
@@ -632,9 +715,33 @@ function main(): void {
     );
 }
 
-try {
-    main();
-} catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
+/**
+ * Whether this file is the program being run, rather than a module a test imported.
+ *
+ * The parts are exported so `test/scripts/decision-report.test.ts` can feed a mixed log through them: a reader
+ * that assumed every record was a command used to throw only when a real log happened to contain a file-access
+ * row, which is the one thing a unit test of the gate cannot catch. Compared by `realpath`, because a guard that
+ * never matches fails silently — the script would exit 0 having printed nothing, which reads as an empty log
+ * rather than as a broken check.
+ */
+function isDirectRun(): boolean {
+    const invoked = process.argv[1];
+    if (invoked === undefined) {
+        return false;
+    }
+
+    try {
+        return fs.realpathSync(invoked) === fs.realpathSync(fileURLToPath(import.meta.url));
+    } catch {
+        return false;
+    }
+}
+
+if (isDirectRun()) {
+    try {
+        main();
+    } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 1;
+    }
 }
