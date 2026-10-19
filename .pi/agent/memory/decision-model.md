@@ -95,9 +95,15 @@ routine rewrites refused.
 A child below the `command` rung has no prompt to fall back on, so `safe-bash` was the whole policy. When
 `surfaces` includes `child`, an allowlist failure now gets a model second opinion under three deterministic
 conditions: the assessment's reasons are only `UNKNOWN_COMMAND`/`COMMAND_NOT_ALLOWED` (a confinement failure is
-not consultable), the relaxed assessment — each bare executable admitted as a generic, path-checked command —
-is `SAFE_READONLY` (literal paths still confined; a single simple command's quoted inline operand is exempted
-from the generic scan, because it is code and the AST vouches for it), and the config enables the surface. `sandboxAvailable` is
+not consultable), `classifyRelaxedConfinement` returns `safe` or `readable`, and the config enables the
+surface. `safe` is the relaxed assessment — each bare executable admitted as a generic, path-checked command —
+passing with literal paths confined. `readable` is a single code subject read from disk (`resolveScriptRun`
+artifacts, each artifact path confined) whose only remaining failures are dynamic paths: the code/file operand
+and every flag/env word are literal, and the unmodeled words are data positionals — file subjects may take
+them, inline subjects may not, because `node -e CODE --require $X` still parses options after the code
+(verified locally). Chains, `timeout` wrappers, and `cd` prefixes are unwrapped for the single-subject check,
+and the subject is re-assessed with the code operand and dynamic data positionals replaced by placeholders so
+literal paths beside them are still checked. `sandboxAvailable` is
 false because this path has no bwrap execution, so `sandbox` abstains; every failure or abstain blocks. A
 verdict may proceed only when policy applies `host` above `minConfidence`, and a recognized script whose body
 was never judged (a `binary` run, a dynamically assembled inline operand) is held even then — an unread body
@@ -223,7 +229,7 @@ and harness live in `.pi/local/decision-models/` (`extract_file_cases.py`, `prob
 | `tools/bash/index.ts` | parent hook: consult on `ask`, record, prompt unless `apply` resolves it |
 | `tools/agent/child/command-permissions.ts` | child hook: consult with the child's own session, runner/isolation, and the parent's registry |
 | `tools/agent/child/safe-bash.ts` | read-only assessment; the relaxed (generic-spec) re-check `isRelaxedConfinementSafe` |
-| `tools/agent/child/safe-bash-decision.ts` | read-only consult: allowlist-only reasons, relaxed confinement, no sandbox, held unjudged bodies, `readOnlyGate` record |
+| `tools/agent/child/safe-bash-decision.ts` | read-only consult: allowlist-only reasons, `classifyRelaxedConfinement` (`safe`/`readable`), no sandbox, held unjudged bodies, `readOnlyGate` record |
 | `decision/file-access.ts` | the file subject: its questions, the grant sets, the rung check in code, and `file-access` as the logged strategy |
 | `sandbox/file-roots.ts` | the layer in front of it: which roots make a prompt unnecessary at all (see `docs/file-access-gates.md`) |
 | `tools/file-permissions.ts` | both file gates: consult only an `OUTSIDE_CWD`-only access, grant one call and never the folder, log whichever resolved it |

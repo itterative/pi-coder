@@ -11,8 +11,8 @@ import { consultForGate } from "../../decision-model";
 import type { AgentAuthority } from "../definitions/types";
 import type { ChildGateRuntime } from "./gates/runtime";
 import {
+    classifyRelaxedConfinement,
     isModelConsultableAssessment,
-    isRelaxedConfinementSafe,
     type SafeBashOptions,
 } from "./safe-bash";
 
@@ -36,8 +36,9 @@ export interface SafeBashConsultOptions {
  * 1. the only reasons are allowlist ones — a confinement failure (outside cwd, sensitive path, symlink
  *    escape, dynamic path, dangerous environment, parse failure) belongs to the heuristic and a classifier
  *    cannot overwrite it;
- * 2. the relaxed assessment (the unknown executable admitted as a generic, path-checked command) is
- *    `SAFE_READONLY`, so every literal path the command names is still inside the child's roots;
+ * 2. the relaxed assessment (the unknown executable admitted as a generic, path-checked command) either
+ *    passes, or fails only on dynamic paths while the command's one code subject was read and every
+ *    unmodeled word is data (`classifyRelaxedConfinement`);
  * 3. the child surface is enabled in the decision config, and `apply` is what lets a verdict act.
  *
  * The model verdict then faces one more read-only rule: a recognized script whose body was never judged (a
@@ -60,13 +61,14 @@ export function createSafeBashConsult(
             return false;
         }
 
-        if (!isRelaxedConfinementSafe(command, ctx.cwd ?? runtime.cwd, roots)) {
-            onTrace?.("safe_bash.model_skipped", { reason: "confinement" });
+        const config = decisionConfig.load(ctx.cwd ?? runtime.cwd);
+        if (!decisionEnabled(config, "child")) {
             return false;
         }
 
-        const config = decisionConfig.load(ctx.cwd ?? runtime.cwd);
-        if (!decisionEnabled(config, "child")) {
+        const confinement = classifyRelaxedConfinement(command, ctx.cwd ?? runtime.cwd, roots);
+        if (confinement === "unsafe") {
+            onTrace?.("safe_bash.model_skipped", { reason: "confinement" });
             return false;
         }
 

@@ -953,3 +953,23 @@ python3 -c 'import json; print(json.dumps({"ok": True}))'
 node -e 'console.log({a: 1})'
 python3 -c 'print("a" * 3)'
 ```
+
+### Follow-up: readable-subject widening (2026-10-19; tests only so far)
+
+The first cut blocked every dynamic failure outside one simple inline command. Widened so the deterministic
+layer consults wherever the code subject is readable but something around it is not modelable
+(`isConsultableSubjectConfinement`):
+
+- chains, `timeout` wrappers, and `cd` prefixes are unwrapped for the single-subject check, and the subject is
+  re-assessed with the code operand and dynamic data positionals replaced by placeholders, so literal paths
+  beside them are still checked;
+- a file subject may take dynamic data arguments (`python3 run.py $DYN`, `node run.py --require $DYN`); an
+  inline subject may not, because `node -e CODE --require $X` still parses options after the code (verified
+  locally), and a dynamic `--require` value loads code;
+- a second unknown segment, an unread operand (`python3 -c "$(cat x)"`), a dynamic flag or environment word,
+  and a non-heredoc redirection all keep the deterministic block.
+
+Live re-check (scout, 2026-10-19 12:49): `python3 -c '…{"ok": True}…' && cat package.json` ran and logged
+`readOnlyGate` + host + `applied` (inline `read_only` @ 0.958); `python3 -c "$(cat package.json)"` and
+`node -e 'main()' $DYN` both blocked with no consult record, as intended. The dynamic-data file-subject shape
+(`python3 run.py $DYN`) is covered by integration tests only.

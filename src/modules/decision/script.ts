@@ -615,7 +615,7 @@ function literalCdTarget(command: BashCommand): BashWordNode | undefined {
 }
 
 /** A word whose value is the text itself: no variables, globs, braces, tildes, or substitutions to expand. */
-function isLiteralWord(word: BashWordNode): boolean {
+export function isLiteralWord(word: BashWordNode): boolean {
     if (word.substitutions.length > 0) {
         return false;
     }

@@ -530,6 +530,55 @@ describe("read-only child decision consult", () => {
         });
     });
 
+    it("consults one readable subject reached through a chain", async () => {
+        const run = await runReadOnlyDecision({
+            command: `python3 -c 'import json; print(json.dumps({"ok": True}))' && cat package.json`,
+        });
+
+        expect(run.result).toBeUndefined();
+        expect(run.classify).toHaveBeenCalledTimes(2);
+
+        const [record] = run.records;
+        expect(record?.decision).toBe("allow");
+        expect(record?.classifier).toMatchObject({
+            applied: true,
+            outcome: "host",
+            script: { kind: "inline" },
+        });
+    });
+
+    it("consults a read file subject that takes dynamic data arguments", async () => {
+        const run = await runReadOnlyDecision({
+            command: "python3 run.py $DYN",
+            files: { "run.py": "print(1)\n" },
+        });
+
+        expect(run.result).toBeUndefined();
+        expect(run.classify).toHaveBeenCalledTimes(2);
+
+        const [record] = run.records;
+        expect(record?.decision).toBe("allow");
+        expect(record?.classifier).toMatchObject({
+            applied: true,
+            outcome: "host",
+            script: {
+                kind: "file",
+                answers: [{ source: "run.py", criterion: "read_only", action: "host" }],
+            },
+        });
+    });
+
+    it("keeps a dynamic code-loading flag deterministic without consulting", async () => {
+        const run = await runReadOnlyDecision({
+            command: "node --require $DYN run.py",
+            files: { "run.py": "main()\n" },
+        });
+
+        expect(run.result).toMatchObject({ block: true });
+        expect(run.classify).not.toHaveBeenCalled();
+        expect(run.records).toHaveLength(0);
+    });
+
     it("records a dry-run verdict and still blocks when apply is off", async () => {
         const run = await runReadOnlyDecision({
             command: "python3 -c 'print(1)'",

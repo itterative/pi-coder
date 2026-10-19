@@ -2,17 +2,26 @@ import {
     describeUnsafeReason,
     getBashCommandConfinementAssessment,
     getCwdConfinementAssessment,
+    getPathConfinementPermission,
     Heuristic,
+    KNOWN_COMMANDS,
     UnsafeReason,
     type HeuristicAssessment,
 } from "../../../modules/sandbox/heuristics";
 import {
     BashCommand,
     parseBashAst,
+    unwrapWrapperCommand,
     type BashAst,
     type BashWordNode,
 } from "../../../modules/sandbox";
-import { inlineCodeOperand } from "../../../modules/decision/script";
+import {
+    inlineCodeOperand,
+    isLiteralWord,
+    readScriptFile,
+    resolveScriptRun,
+    scriptFileIdentity,
+} from "../../../modules/decision/script";
 import type { ChildAgentFactoryContext } from "../contracts/runs";
 import { getSafeBashRuntimeBlock } from "./safe-bash-rules";
 import { CHILD_CONFINEMENT } from "./policy";
@@ -69,22 +78,27 @@ export function isModelConsultableAssessment(assessment: HeuristicAssessment): b
     );
 }
 
+/** How far the deterministic layer lets one unsafe command reach the decision consult. */
+export type RelaxedConfinement = "safe" | "readable" | "unsafe";
+
 /**
- * Re-assess an unknown command with the allowlist relaxed, so its literal paths are still checked.
+ * Classify what the relaxed (generic-spec) confinement view says about a command.
  *
- * The strict assessment short-circuits at `UNKNOWN_COMMAND`, before any path is looked at; admitting the bare
- * executable as a generic path-checked command (`python3 *`) makes the evaluator check every positional against
- * the same roots, sensitive patterns, symlink resolution, and dynamic-expansion rules as a curated command.
- * The command still has to end up `SAFE_READONLY`; a write this layer can see stays blocked.
+ * The strict pass has already reduced the failure to the curated-allowlist axis; this pass admits every bare
+ * executable as a generic path-checked command, so literal paths are still checked against the child's roots.
+ * `safe` means that view passed outright. `readable` means it failed only on dynamic paths while the
+ * command's one code subject was still read from disk and every unmodeled word is data — the shape
+ * `isConsultableSubjectConfinement` accepts, where a capability verdict is meaningful and the deterministic
+ * block would be a false negative. `unsafe` means the deterministic block stands.
  */
-export function isRelaxedConfinementSafe(
+export function classifyRelaxedConfinement(
     command: string,
     cwd: string,
     options: SafeBashOptions = {},
-): boolean {
+): RelaxedConfinement {
     const patterns = executablePatterns(command);
     if (patterns.length === 0) {
-        return false;
+        return "unsafe";
     }
 
     const relaxed = getSafeBashAssessment(command, cwd, {
@@ -92,66 +106,182 @@ export function isRelaxedConfinementSafe(
         safeBashCommands: [...(options.safeBashCommands ?? []), ...patterns],
     });
     if (relaxed.classification === Heuristic.SAFE_READONLY) {
-        return true;
+        return "safe";
+    }
+    if (relaxed.classification !== Heuristic.UNSAFE) {
+        // A write form (`SAFE_EDIT`), even with no reason attached: the read-only gate only relaxes reads.
+        return "unsafe";
+    }
+    if (
+        relaxed.reasons.length === 0 ||
+        !relaxed.reasons.every((reason) => reason === UnsafeReason.DYNAMIC_PATH)
+    ) {
+        return "unsafe";
     }
 
-    return isSingleInlineCommandSafe(command, cwd, options, patterns);
-}
-
-/**
- * The fallback for one inline interpreter command whose quoted code reads as a dynamic path.
- *
- * The generic spec scans parsed arguments for shell syntax and has no AST provenance, so `print({"a": 1})`
- * inside a single-quoted operand looks like brace expansion. That argument is code, not a path: the resolver
- * already vouched for it as a literal word (`inlineCodeOperand`), so it is replaced by a path-neutral
- * placeholder and the same parsed-command evaluator checks everything else with AST provenance. Only a single
- * simple command qualifies; a chain, a pipe, a wrapper, or a `cd` prefix keeps the full-line answer, so no
- * directory state or operator semantics are guessed at here.
- */
-function isSingleInlineCommandSafe(
-    command: string,
-    cwd: string,
-    options: SafeBashOptions,
-    patterns: readonly string[],
-): boolean {
     let ast: BashAst;
     try {
         ast = parseBashAst(command);
     } catch {
-        return false;
-    }
-    if (ast.commands.length !== 1) {
-        return false;
+        return "unsafe";
     }
 
-    const parsed = ast.commands[0];
-    if (parsed === undefined) {
-        return false;
-    }
-    const operand = inlineCodeOperand(parsed);
-    if (operand === undefined) {
-        return false;
-    }
-
-    const assessment = getBashCommandConfinementAssessment(withReplacedWord(parsed, operand), {
-        cwd,
-        config: CHILD_CONFINEMENT,
-        additionalRoots: options.additionalRoots,
-        sensitiveAdditionalRoots: options.sensitiveAdditionalRoots,
-        customSafeBashCommands: [...(options.safeBashCommands ?? []), ...patterns],
-    });
-    return assessment.classification === Heuristic.SAFE_READONLY;
+    return isConsultableSubjectConfinement(ast, cwd, options, patterns) ? "readable" : "unsafe";
 }
 
-/** The same parsed command with one word's value replaced, for the confinement view. */
-function withReplacedWord(command: BashCommand, from: BashWordNode): BashCommand {
-    const replacement: BashWordNode = { ...from, value: "inline-code" };
+/** Whether the deterministic layer lets this command reach the consult (a `safe` or `readable` verdict). */
+export function isRelaxedConfinementSafe(
+    command: string,
+    cwd: string,
+    options: SafeBashOptions = {},
+): boolean {
+    return classifyRelaxedConfinement(command, cwd, options) !== "unsafe";
+}
+
+/**
+ * Whether one command whose only remaining failures are dynamic paths is still a consultable subject.
+ *
+ * The generic spec has no AST provenance, so quoted punctuation inside an inline operand and dynamic data
+ * arguments both surface as `DYNAMIC_PATH`. This accepts exactly the shapes where that does not matter:
+ *
+ * - exactly one top-level command is unknown to the curated registry — the one subject the resolver and the
+ *   evaluator can classify. A second unknown segment would run code nobody reads.
+ * - the subject's code body was read (`resolveScriptRun` returned artifacts) and every file it came from is
+ *   confined to the child's roots. An unread body must not gain authority through the invocation answer.
+ * - the code/file operand is literal, and every flag and environment assignment is literal. For an inline
+ *   subject no later positional may be dynamic either: `node -e CODE --require $X` still parses options after
+ *   the code (verified locally). A file subject may take dynamic data arguments, because option parsing stops
+ *   at the script path (`node script.js --require $X`).
+ * - the subject owns no redirection except a heredoc, so no dynamic redirect target is waved through.
+ * - with the code operand and every dynamic data positional replaced by placeholders, the parsed-command
+ *   evaluator still calls the subject `SAFE_READONLY` with AST provenance; the full-line pass short-circuits
+ *   at the first dynamic reason, so a literal outside path beside the code operand would otherwise slip by.
+ */
+function isConsultableSubjectConfinement(
+    ast: BashAst,
+    cwd: string,
+    options: SafeBashOptions,
+    patterns: readonly string[],
+): boolean {
+    const entries = ast.commands.map((parsed) => ({
+        parsed,
+        subject: unwrapWrapperCommand(parsed) ?? parsed,
+    }));
+    const subjects = entries.filter(({ subject }) => {
+        const name = subject.command;
+        return name !== undefined && !Object.hasOwn(KNOWN_COMMANDS, name);
+    });
+    if (subjects.length !== 1) {
+        return false;
+    }
+
+    const [entry] = subjects;
+    if (entry === undefined) {
+        return false;
+    }
+
+    for (const { parsed, subject } of entries) {
+        if (subject.environment.some(({ word }) => !isLiteralWord(word))) {
+            return false;
+        }
+        if (subject.flagWords.some((word) => !isLiteralWord(word))) {
+            return false;
+        }
+        if (parsed !== entry.parsed && subject.words.some((word) => !isLiteralWord(word))) {
+            return false;
+        }
+    }
+
+    const subject = entry.subject;
+    if (subject.redirections.some((part) => part.heredoc === undefined)) {
+        return false;
+    }
+
+    const run = resolveScriptRun(ast.input, {
+        cwd,
+        readFile: readScriptFile,
+        statFile: scriptFileIdentity,
+    });
+    if (run === undefined || run.artifacts.length === 0) {
+        return false;
+    }
+
+    const positionals = subject.positionalWords;
+    const first = positionals[0];
+    if (first === undefined || !isLiteralWord(first)) {
+        return false;
+    }
+    if (run.kind === "inline" && positionals.slice(1).some((word) => !isLiteralWord(word))) {
+        return false;
+    }
+    if (run.kind === "package" && subject.words.some((word) => !isLiteralWord(word))) {
+        return false;
+    }
+
+    // The rest of the subject is still checked with AST provenance: the code operand and every dynamic data
+    // positional become path-neutral placeholders. The full-line pass short-circuits at the first dynamic
+    // reason, so a literal outside path beside the code operand would otherwise slip by.
+    const replaced = new Set<BashWordNode>();
+    const code = inlineCodeOperand(subject);
+    if (code !== undefined) {
+        replaced.add(code);
+    }
+    if (run.kind === "file" || run.kind === "package") {
+        for (const word of positionals.slice(1)) {
+            if (!isLiteralWord(word)) {
+                replaced.add(word);
+            }
+        }
+    }
+
+    const assessment = getBashCommandConfinementAssessment(
+        withReplacedWords(entry.parsed, replaced),
+        {
+            cwd,
+            config: CHILD_CONFINEMENT,
+            additionalRoots: options.additionalRoots,
+            sensitiveAdditionalRoots: options.sensitiveAdditionalRoots,
+            customSafeBashCommands: [...(options.safeBashCommands ?? []), ...patterns],
+        },
+    );
+    if (assessment.classification !== Heuristic.SAFE_READONLY) {
+        return false;
+    }
+
+    return run.artifacts.every(
+        (artifact) =>
+            artifact.path === undefined ||
+            getPathConfinementPermission(artifact.path, {
+                cwd,
+                config: CHILD_CONFINEMENT,
+                access: "read",
+                additionalRoots: options.additionalRoots,
+                sensitiveAdditionalRoots: options.sensitiveAdditionalRoots,
+            }) === Heuristic.SAFE_READONLY,
+    );
+}
+
+/** The same parsed command with the given words replaced by a path-neutral placeholder. */
+function withReplacedWords(command: BashCommand, words: ReadonlySet<BashWordNode>): BashCommand {
+    if (words.size === 0) {
+        return command;
+    }
+
+    const replacements = new Map<BashWordNode, BashWordNode>();
+    const replace = (word: BashWordNode): BashWordNode => {
+        let replacement = replacements.get(word);
+        if (replacement === undefined) {
+            replacement = { ...word, value: "data" };
+            replacements.set(word, replacement);
+        }
+        return replacement;
+    };
 
     return new BashCommand({
         ...command.node,
-        words: command.node.words.map((word) => (word === from ? replacement : word)),
+        words: command.node.words.map((word) => (words.has(word) ? replace(word) : word)),
         parts: command.node.parts.map((part) =>
-            part.type === "word" && part === from ? replacement : part,
+            part.type === "word" && words.has(part) ? replace(part) : part,
         ),
     });
 }
@@ -159,12 +289,17 @@ function withReplacedWord(command: BashCommand, from: BashWordNode): BashCommand
 /** The exact and wildcard safe-bash patterns for every bare executable named in the line. */
 function executablePatterns(command: string): string[] {
     const names = new Set<string>();
+    const add = (name: string | undefined): void => {
+        if (name !== undefined && /^[A-Za-z0-9._+-]+$/.test(name)) {
+            names.add(name);
+        }
+    };
     const visit = (ast: BashAst): void => {
         for (const parsed of ast.commands) {
-            const name = parsed.command;
-            if (name !== undefined && /^[A-Za-z0-9._+-]+$/.test(name)) {
-                names.add(name);
-            }
+            add(parsed.command);
+            // A transparent wrapper (`timeout 5 …`) is resolved to its inner command before the registry
+            // lookup, so the inner executable is the one that needs a pattern.
+            add(unwrapWrapperCommand(parsed)?.command);
             for (const word of parsed.words) {
                 for (const substitution of word.substitutions) {
                     try {

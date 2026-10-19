@@ -10,6 +10,7 @@ import {
     type HeuristicAssessment,
 } from "../../src/modules/sandbox/heuristics";
 import {
+    classifyRelaxedConfinement,
     isModelConsultableAssessment,
     isRelaxedConfinementSafe,
 } from "../../src/tools/agent/child/safe-bash";
@@ -81,9 +82,43 @@ describe("safe-bash decision consult boundary", () => {
         );
         // Only the literal operand is exempted; a dynamic operand has no code to vouch for.
         expect(isRelaxedConfinementSafe(`python3 -c "$(cat run.py)"`, cwd)).toBe(false);
-        // A chain keeps the full-line answer, because no directory state is guessed across commands.
+    });
+
+    it("reads one subject through chains, wrappers, and a cd prefix", () => {
+        const cwd = makeWorkspace();
+        fs.writeFileSync(path.join(cwd, "run.py"), "print(1)\n");
+        fs.mkdirSync(path.join(cwd, "sub"));
+
+        expect(isRelaxedConfinementSafe(`python3 -c 'print({"a": 1})' && cat run.py`, cwd)).toBe(
+            true,
+        );
+        expect(isRelaxedConfinementSafe(`timeout 5 python3 -c 'print({"a": 1})'`, cwd)).toBe(true);
+        expect(isRelaxedConfinementSafe(`cd sub && python3 -c 'print({"a": 1})'`, cwd)).toBe(true);
+
+        // The code/file operand itself must still resolve inside the roots.
+        expect(isRelaxedConfinementSafe("cd sub && python3 /etc/hostname", cwd)).toBe(false);
+        // A second unknown segment would run code nobody reads.
         expect(
-            isRelaxedConfinementSafe(`python3 -c 'print({"a": 1})' && cat run.py`, cwd),
+            isRelaxedConfinementSafe(`python3 -c 'print({"a": 1})' && node -e 'main()'`, cwd),
         ).toBe(false);
+    });
+
+    it("allows dynamic data arguments only on a read file subject", () => {
+        const cwd = makeWorkspace();
+        fs.writeFileSync(path.join(cwd, "run.py"), "print(1)\n");
+
+        expect(isRelaxedConfinementSafe("python3 run.py $DYN", cwd)).toBe(true);
+        expect(classifyRelaxedConfinement("python3 run.py $DYN", cwd)).toBe("readable");
+        expect(isRelaxedConfinementSafe("node run.py --require $DYN", cwd)).toBe(true);
+
+        // Inline code keeps parsing options after it (`node -e CODE --require $X`), so no dynamic
+        // positional there; a dynamic flag value or a dynamic non-subject word stays blocked.
+        expect(isRelaxedConfinementSafe("node -e 'main()' $DYN", cwd)).toBe(false);
+        expect(isRelaxedConfinementSafe("node --require $DYN run.py", cwd)).toBe(false);
+        expect(isRelaxedConfinementSafe("cat $DYN && python3 -c 'print(1)'", cwd)).toBe(false);
+        // No body was read at all.
+        expect(isRelaxedConfinementSafe("awk 'NR==1' $DYN", cwd)).toBe(false);
+        // A code operand cannot be dynamic, so its body is never read.
+        expect(isRelaxedConfinementSafe('python3 "$SCRIPT"', cwd)).toBe(false);
     });
 });
