@@ -14,6 +14,14 @@ import {
 } from "../helpers/pi-stub";
 
 /**
+ * A record this test's writer produced: every Bash row here goes through the resolver, so `resolution` is
+ * present even though the schema allows a resolver-less read-only-gate row.
+ */
+type ResolvedDecisionRecord = BashDecisionRecord & {
+    resolution: NonNullable<BashDecisionRecord["resolution"]>;
+};
+
+/**
  * The parent bash gate must leave exactly one durable record per command, with
  * enough structure to mine later: what the resolver decided, whether a human was
  * asked, and what was finally applied.
@@ -23,7 +31,7 @@ const temporaryDirectories: string[] = [];
 let workspace: string;
 let logPath: string;
 
-function readRecords(): BashDecisionRecord[] {
+function readRecords(): ResolvedDecisionRecord[] {
     if (!fs.existsSync(logPath)) {
         return [];
     }
@@ -32,13 +40,13 @@ function readRecords(): BashDecisionRecord[] {
         .readFileSync(logPath, "utf8")
         .split("\n")
         .filter((line) => line.trim() !== "")
-        .map((line) => JSON.parse(line) as BashDecisionRecord);
+        .map((line) => JSON.parse(line) as ResolvedDecisionRecord);
 }
 
 async function runHookCommand(
     command: string,
     ui = stubUi(),
-): Promise<{ block: boolean; reason?: string; records: BashDecisionRecord[] }> {
+): Promise<{ block: boolean; reason?: string; records: ResolvedDecisionRecord[] }> {
     const stub = createPiStub();
     registerBashToolHook(stub.pi);
     const handlers = handlerView(stub, "session_start", "tool_call");

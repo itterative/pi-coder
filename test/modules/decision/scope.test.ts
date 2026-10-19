@@ -60,6 +60,16 @@ describe("decision scope gate", () => {
         expect(scopeAnswer(profiles("network"), "agent")?.reason).toBe("out_of_scope");
     });
 
+    it("uses the declared authority rung when the runner name would overstate it", () => {
+        // A custom read-only child is `agent` by name (command rung); its declared `inspect` rung still
+        // refuses a write.
+        expect(scopeAnswer(profiles("writes_files"), "agent", "inspect")?.reason).toBe(
+            "out_of_scope",
+        );
+        expect(scopeAnswer(profiles("writes_files"), "agent", "command")).toBeUndefined();
+        expect(scopeAnswer(profiles("network"), "parent", "inspect")?.reason).toBe("out_of_scope");
+    });
+
     it("has no answer when there are no bodies", () => {
         expect(scopeAnswer([], "scout")).toBeUndefined();
     });

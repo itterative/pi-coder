@@ -1,9 +1,6 @@
 import type { FoldableAnswer } from "./policy";
 import { RUNNER_AUTHORITY, type DecisionRunner } from "./runner-rules";
-import type { ScriptCapability, ScriptCapabilitySummary } from "./types";
-
-/** The authority rungs a capability can require, lowest first. */
-type DecisionAuthority = "inspect" | "command" | "mutate";
+import type { DecisionAuthority, ScriptCapability, ScriptCapabilitySummary } from "./types";
 
 const AUTHORITY_ORDER: Record<DecisionAuthority, number> = {
     inspect: 0,
@@ -44,15 +41,18 @@ const REQUIRED_AUTHORITY: Record<ScriptCapability, DecisionAuthority> = {
  *
  * The rung comes from `RUNNER_AUTHORITY`, which mirrors the delegated-agent ladder. A custom agent maps to
  * the `agent` baseline (command rung), so a custom mutating definition is treated conservatively — prompted
- * rather than trusted; passing its real ladder into the decision context is the follow-up.
+ * rather than trusted; a caller that knows the child's declared rung passes it as `authority` and the
+ * name-only mapping is not consulted.
  */
 export function scopeAnswer(
     profiles: readonly ScriptCapabilitySummary[],
     runner: DecisionRunner,
+    authority?: DecisionAuthority,
 ): FoldableAnswer | undefined {
-    const authority = AUTHORITY_ORDER[RUNNER_AUTHORITY[runner]];
+    const rung = authority ?? RUNNER_AUTHORITY[runner];
+    const allowed = AUTHORITY_ORDER[rung];
     const forbidden = profiles.find(
-        (profile) => AUTHORITY_ORDER[REQUIRED_AUTHORITY[profile.capability]] > authority,
+        (profile) => AUTHORITY_ORDER[REQUIRED_AUTHORITY[profile.capability]] > allowed,
     );
     if (forbidden === undefined) {
         return undefined;

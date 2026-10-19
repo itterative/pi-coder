@@ -174,6 +174,19 @@ describe("nested package scripts", () => {
         expect(run?.omissions).toBeUndefined();
     });
 
+    it("collects an inline body a package script line runs", () => {
+        const files = {
+            [PACKAGE]: JSON.stringify({ scripts: { check: "node -e 'main()'" } }),
+        };
+
+        const run = resolve("npm run check", { files });
+
+        expect(run?.artifacts).toEqual([
+            packageLine("check", "node -e 'main()'"),
+            { source: "inline:node -e", text: "main()" },
+        ]);
+    });
+
     it("walks a chain breadth-first, in the order references appear", () => {
         const files = {
             [PACKAGE]: JSON.stringify({
@@ -435,7 +448,7 @@ describe("file script runs", () => {
         });
         expect(resolve("time python3 -c 'print(1)'", { files: {} })).toEqual({
             kind: "inline",
-            artifacts: [],
+            artifacts: [{ source: "inline:python3 -c", text: "print(1)" }],
         });
     });
 
@@ -569,14 +582,24 @@ describe("file script runs", () => {
 });
 
 describe("inline script runs", () => {
-    it("recognizes the eval flags and gives back the kind only", () => {
-        for (const command of [
-            "python3 -c 'print(1)'",
-            "node -e 'main()'",
-            "node --eval 'main()'",
-        ]) {
-            expect(resolve(command)).toEqual({ kind: "inline", artifacts: [] });
-        }
+    it("carries the literal eval code as a body", () => {
+        expect(resolve("python3 -c 'print(1)'")).toEqual({
+            kind: "inline",
+            artifacts: [{ source: "inline:python3 -c", text: "print(1)" }],
+        });
+        expect(resolve("node -e 'main()'")).toEqual({
+            kind: "inline",
+            artifacts: [{ source: "inline:node -e", text: "main()" }],
+        });
+        expect(resolve("node --eval 'main()'")).toEqual({
+            kind: "inline",
+            artifacts: [{ source: "inline:node --eval", text: "main()" }],
+        });
+    });
+
+    it("carries no body for a dynamically assembled operand", () => {
+        expect(resolve(`python3 -c "$(cat code.py)"`)).toEqual({ kind: "inline", artifacts: [] });
+        expect(resolve('node -e "$SNIPPET"')).toEqual({ kind: "inline", artifacts: [] });
     });
 
     it("does not read a `-c` that is an argument to the script", () => {
@@ -585,8 +608,14 @@ describe("inline script runs", () => {
 
     it("recognizes a heredoc feeding an interpreter", () => {
         const command = "python3 - <<'PY'\nprint(1)\nPY";
-        expect(resolve(command)).toEqual({ kind: "inline", artifacts: [] });
-        expect(resolve("bash <<'EOF'\necho hi\nEOF")).toEqual({ kind: "inline", artifacts: [] });
+        expect(resolve(command)).toEqual({
+            kind: "inline",
+            artifacts: [{ source: "inline:heredoc", text: "print(1)" }],
+        });
+        expect(resolve("bash <<'EOF'\necho hi\nEOF")).toEqual({
+            kind: "inline",
+            artifacts: [{ source: "inline:heredoc", text: "echo hi" }],
+        });
     });
 
     it("does not treat a heredoc to a non-interpreter as script code", () => {

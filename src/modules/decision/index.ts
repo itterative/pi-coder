@@ -136,6 +136,7 @@ export {
 } from "./runner-rules";
 export type {
     DecisionAction,
+    DecisionAuthority,
     DecisionContext,
     DecisionContextShape,
     DecisionCriterion,

@@ -911,3 +911,45 @@ policy against the configured endpoint over ten cases (docs, dist types, sibling
 credentials, wallet blob, unasked notes overwrite, own config write, temp write, scout write): 10/10 as
 labelled at `minConfidence` 0.6, criteria `routine` 0.917 / `code`+`unrelated` 0.997 / `secret` 0.986 /
 `personal` 0.857 / `asked_for` 0.784.
+
+## Read-only child consult and inline bodies (implemented 2026-10-19; live-checked same day)
+
+Two gaps closed in one change, neither measured against the endpoint yet:
+
+- **Inline bodies.** `resolveScriptRun` used to return `inline` with no artifacts, so `-c`/`--eval`/heredoc code
+  carried no capability and bypassed the scope gate; the inline text reached the model only inside the command
+  string under the invocation question. Literal operands and heredoc bodies are now `ScriptArtifact`s
+  (`inline:<interpreter> <flag>` / `inline:heredoc`), classified by the same `scriptRequest` and folded by the
+  scope gate like a file body. A dynamically assembled operand still carries the kind only, because sending the
+  unexpanded word would be a verdict about the wrong text. The command form still carries the raw code in its
+  `command` field (duplication accepted for now; redacting it is the next lever if tokens or the batch limit bite).
+- **Read-only gate consult.** A `safe-bash` command whose only heuristic failure is the curated allowlist
+  (`UNKNOWN_COMMAND`/`COMMAND_NOT_ALLOWED`) is re-assessed with each bare executable admitted as a generic
+  path-checked command; if that relaxed assessment is `SAFE_READONLY`, the model is consulted (surface `child`,
+  `sandboxAvailable: false`, the child's declared `authority` for the scope gate). Only an applied `host` above
+  `minConfidence` proceeds; `sandbox`, `refuse`, abstain, error, and cooldown block, and a recognized script
+  whose body was never judged (`binary`, dynamic inline) is held even on an applied `host`. Confinement
+  failures and known-command flag/mode failures stay deterministic and never reach the model. The record is
+  written with `readOnlyGate: true` and no `resolution`; `permission-report` has a READ-ONLY CHILD GATE section.
+
+The remaining known holes for a read-only runner are commands with no recognized script (`docker …`) and `-c`
+operands assembled at runtime; both are judged only at the invocation level, as for every runner.
+
+### Live re-check (2026-10-19, `readOnlyGate` records)
+
+First attempt blocked before the consult: the generic path fallback (`hasDynamicShellExpansion`) has no AST
+provenance, so quoted braces and `*` inside the inline operand read as `DYNAMIC_PATH` — dicts, f-strings,
+multiplication, node object literals, i.e. ordinary one-liners. Fixed by `isSingleInlineCommandSafe`
+(`safe-bash.ts`): for a single simple command the AST-vouched literal operand (`inlineCodeOperand` from
+`script.ts`) is replaced by a path-neutral placeholder, and the same parsed-command evaluator
+(`getBashCommandConfinementAssessment`) re-checks the rest with provenance. Chains, pipes, wrappers, and `cd`
+prefixes keep the full-line answer; an extra outside positional or a dynamic operand stays blocked.
+
+After reload, three scout commands all ran and logged `readOnlyGate` + host + `applied`, bodies `read_only` at
+0.958 / 0.983 / 0.973, ~300 ms each:
+
+```
+python3 -c 'import json; print(json.dumps({"ok": True}))'
+node -e 'console.log({a: 1})'
+python3 -c 'print("a" * 3)'
+```

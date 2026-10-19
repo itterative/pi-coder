@@ -375,6 +375,7 @@ function analyze(records, options) {
     const promptedDenied = new Map();
     const heuristicGrants = new Map();
     const unasked = new Map();
+    const readOnlyGate = new Map();
     const ruleHits = new Map();
 
     for (const record of records) {
@@ -384,6 +385,15 @@ function analyze(records, options) {
             const target = isApproved(record) ? promptedApproved : promptedDenied;
             for (const key of keys) {
                 addRecord(bump(target, key, newGroup), record);
+            }
+            continue;
+        }
+
+        // The read-only child gate never runs the resolver and never prompts, so its rows carry no
+        // `resolution`; they still belong in their own section rather than being dropped.
+        if (record.readOnlyGate === true) {
+            for (const key of keys) {
+                addRecord(bump(readOnlyGate, key, newGroup), record);
             }
             continue;
         }
@@ -407,7 +417,7 @@ function analyze(records, options) {
         }
     }
 
-    return { promptedApproved, promptedDenied, heuristicGrants, unasked, ruleHits };
+    return { promptedApproved, promptedDenied, heuristicGrants, unasked, readOnlyGate, ruleHits };
 }
 
 // -------------------------------------------------------------------- output
@@ -523,6 +533,14 @@ function renderReport(records, stats, options) {
     );
     out.push(
         renderGroupSection(
+            "READ-ONLY CHILD GATE",
+            "  safe-bash calls sent to the decision model — allowed, denied, or a dry-run verdict",
+            stats.analysis.readOnlyGate,
+            options,
+        ),
+    );
+    out.push(
+        renderGroupSection(
             "UNCOVERED WITHOUT A PROMPT",
             "  blocked because no human could be asked — usually a headless child needing a rule",
             stats.analysis.unasked,
@@ -619,6 +637,7 @@ function main() {
                     promptedDenied: toPlain(analysis.promptedDenied),
                     heuristicGrants: toPlain(analysis.heuristicGrants),
                     unasked: toPlain(analysis.unasked),
+                    readOnlyGate: toPlain(analysis.readOnlyGate),
                     ruleHits: Object.fromEntries(analysis.ruleHits),
                 },
                 null,

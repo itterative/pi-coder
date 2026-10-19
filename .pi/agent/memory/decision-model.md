@@ -9,9 +9,11 @@ category: architecture
 Optional classifier consulted when the rule/heuristic pipeline leaves a command `ask` (`src/modules/decision/`).
 Registered with pi as a classifier provider — System One at `POST {baseUrl}/systemone` through
 `ctx.modelRegistry.classify()` with pi's `typesafe-system-one` api — so this repo holds no HTTP client and pi
-keeps credential resolution, usage, and cancellation. Both permission gates consult it when `enabled` is true
-and their surface is in `surfaces`; `apply` is the single switch that lets a verdict resolve a prompt, and
-without it the model is consulted and recorded only. The global `alt+a` shortcut
+keeps credential resolution, usage, and cancellation. All three bash decision points consult it when `enabled`
+is true and their surface is in `surfaces`: the parent hook, the delegated command gate, and the read-only
+child gate (`safe-bash-decision.ts`) for commands whose only heuristic failure is the curated allowlist. `apply`
+is the single switch that lets a verdict resolve a prompt, and without it the model is consulted and recorded
+only. The global `alt+a` shortcut
 (`registerDecisionModelShortcut` in `src/tools/decision-settings.ts`) toggles `enabled` in the global file,
 re-syncs the endpoint provider so the change lands without a reload, and uses the footer's `» auto` /
 `» manual` badge as the state readout (the footer's first help tip also advertises the shortcut while
@@ -88,14 +90,31 @@ routine rewrites refused.
 - `host` needs `minConfidence`, default **0.8**; it is the one direction that grants authority.
 - `APPLIED_PERMISSIONS`: `host → allow`, `sandbox → allow:sandbox`, `refuse → deny`.
 
+## Read-only child consult (`safe-bash-decision.ts`)
+
+A child below the `command` rung has no prompt to fall back on, so `safe-bash` was the whole policy. When
+`surfaces` includes `child`, an allowlist failure now gets a model second opinion under three deterministic
+conditions: the assessment's reasons are only `UNKNOWN_COMMAND`/`COMMAND_NOT_ALLOWED` (a confinement failure is
+not consultable), the relaxed assessment — each bare executable admitted as a generic, path-checked command —
+is `SAFE_READONLY` (literal paths still confined; a single simple command's quoted inline operand is exempted
+from the generic scan, because it is code and the AST vouches for it), and the config enables the surface. `sandboxAvailable` is
+false because this path has no bwrap execution, so `sandbox` abstains; every failure or abstain blocks. A
+verdict may proceed only when policy applies `host` above `minConfidence`, and a recognized script whose body
+was never judged (a `binary` run, a dynamically assembled inline operand) is held even then — an unread body
+must not gain authority through the invocation answer. The consult passes the child's declared `authority`, so
+a custom read-only definition is scope-checked at `inspect` rather than the `agent` name's command baseline.
+The record carries `readOnlyGate: true` and no `resolution`; `npm run permission-report` lists those rows in a
+READ-ONLY CHILD GATE section.
+
 ## Script subject (`script.ts`, `script-classification.ts`)
 
 - `resolveScriptRun` walks indirection rather than the first line: a package script line is parsed with the
   same `parseBashAst` + wrapper unwrap as the top-level command, nested package invocations are chased
   transitively (depth cap 5, visited-set cycle guard), and each local file an interpreter invokes is read.
-  Kinds: `package` and `file` carry bodies; `inline` (`-c`/`-e`/`--eval`, heredoc) and `binary` (npx family,
-  `uv run`/`uvx`, interpreter `-m`) contribute no body — the code is already in the command or not in the repo.
-  Omissions (`cycle:`/`depth:`) are recorded, never shortened silently.
+  Kinds: `package` and `file` carry bodies; `inline` (`-c`/`-e`/`--eval`, heredoc) carries the literal code as
+  a body too (`inline:<interpreter> <flag>` / `inline:heredoc`), while a dynamically assembled operand and
+  `binary` (npx family, `uv run`/`uvx`, interpreter `-m`) contribute none. Omissions (`cycle:`/`depth:`) are
+  recorded, never shortened silently.
 - A script verdict is a **property of the code**, not the invocation: `scriptRequest(body)` sends `{code}`
   alone under one `script` choice with capability criteria, cached by `sha256(body)` — a rename or touch hits,
   any byte edit misses.
@@ -122,8 +141,9 @@ Capability × `RUNNER_AUTHORITY` rung decided in code, composed as another fold 
 `writes_files` = command (a reviewer's own builds); `writes_outside`, `network`, `privileged`, `remote_code`,
 `destructive`, `process_control` = mutate. A capability above the rung yields
 `{action: refuse, reason: out_of_scope, confidence: 0}` with no request, and confidence 0 lets a named danger
-outrank the scope label on ties. Custom agents map to the `agent` baseline (command rung), so a custom mutating
-definition is prompted rather than trusted; passing its real ladder into the context is the follow-up.
+outrank the scope label on ties. Custom agents map to the `agent` baseline (command rung); a consult that knows
+the child's declared rung passes it as `DecisionContext.authority`, so a custom read-only definition is still
+scope-checked at `inspect`. The look-up is a mirror of `AGENT_AUTHORITY_LADDER`, kept in step by hand.
 
 Live evidence (reviewer child, `npm run scratch`, 2026-10-18): the pre-gate record was `writes_outside @ 0.447`
 folded to `sandbox`, `applied: true`, no prompt — a silent sandbox. After the gate the same cached bodies folded
@@ -202,6 +222,8 @@ and harness live in `.pi/local/decision-models/` (`extract_file_cases.py`, `prob
 | `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify + the `pi-coder:decision-status` check count the footer animates) |
 | `tools/bash/index.ts` | parent hook: consult on `ask`, record, prompt unless `apply` resolves it |
 | `tools/agent/child/command-permissions.ts` | child hook: consult with the child's own session, runner/isolation, and the parent's registry |
+| `tools/agent/child/safe-bash.ts` | read-only assessment; the relaxed (generic-spec) re-check `isRelaxedConfinementSafe` |
+| `tools/agent/child/safe-bash-decision.ts` | read-only consult: allowlist-only reasons, relaxed confinement, no sandbox, held unjudged bodies, `readOnlyGate` record |
 | `decision/file-access.ts` | the file subject: its questions, the grant sets, the rung check in code, and `file-access` as the logged strategy |
 | `sandbox/file-roots.ts` | the layer in front of it: which roots make a prompt unnecessary at all (see `docs/file-access-gates.md`) |
 | `tools/file-permissions.ts` | both file gates: consult only an `OUTSIDE_CWD`-only access, grant one call and never the folder, log whichever resolved it |
@@ -214,7 +236,7 @@ and harness live in `.pi/local/decision-models/` (`extract_file_cases.py`, `prob
 
 ## Status surface
 
-`consultForGate` wraps every consult (both gates) in a process-wide in-flight count and emits
+`consultForGate` wraps every consult (all three gates) in a process-wide in-flight count and emits
 `pi-coder:decision-status` `{ checking }` on the bus the caller passes — the parent's, which the child gate
 receives through its extension options, so a child's check animates the parent footer too. The parent footer
 shows `» auto` while the model is enabled, with the spinner frame replacing the marker while the count is

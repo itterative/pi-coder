@@ -41,13 +41,20 @@ export interface BashDecisionRecord {
     cwd: string;
     /** command exactly as requested, before any sandbox wrapping */
     command: string;
-    /** resolver outcome before any human was consulted */
-    resolution: {
+    /**
+     * Resolver outcome before any human was consulted.
+     *
+     * Absent on a record from the read-only child gate, which classifies below the `command` rung and never
+     * runs the resolver; `readOnlyGate` marks those rows instead.
+     */
+    resolution?: {
         permission: Permission;
         source: SegmentSource;
         pattern: string | null;
         segments: BashDecisionSegment[];
     };
+    /** set by the read-only child gate, whose allow/block never came from the resolver */
+    readOnlyGate?: true;
     /** present only when a human was asked */
     prompt?: {
         outcome: PromptOutcome;
@@ -165,7 +172,10 @@ export interface BashDecisionInput {
     agentName?: string;
     cwd: string;
     command: string;
-    details: ResolvePermissionDetails;
+    /** Absent on a read-only-gate record, which classifies without the resolver. */
+    details?: ResolvePermissionDetails;
+    /** Marks a record the read-only child gate wrote; the resolver's `details` are then absent. */
+    readOnlyGate?: boolean;
     prompt?: { outcome: PromptOutcome; suggestion?: string; rule?: string };
     classifier?: BashClassifierRecord;
     decision: Permission;
@@ -357,12 +367,17 @@ export function logBashDecision(input: BashDecisionInput): void {
         ...(input.agentName === undefined ? {} : { agent: input.agentName }),
         cwd: input.cwd,
         command: input.command,
-        resolution: {
-            permission: input.details.permission,
-            source: input.details.source,
-            pattern: input.details.pattern,
-            segments: segmentRecords(input.details.segments),
-        },
+        ...(input.details === undefined
+            ? {}
+            : {
+                  resolution: {
+                      permission: input.details.permission,
+                      source: input.details.source,
+                      pattern: input.details.pattern,
+                      segments: segmentRecords(input.details.segments),
+                  },
+              }),
+        ...(input.readOnlyGate === true ? { readOnlyGate: true } : {}),
         ...(input.prompt === undefined
             ? {}
             : {

@@ -203,9 +203,9 @@ export interface DecisionRecentMessage {
 /**
  * Which form of script run a command is.
  *
- * `package` and `file` have a body on disk and are the only two the state carries; `inline` puts the code in
- * the command itself, so the state gains nothing, and `binary` runs code from outside the repository, where
- * there is no body to read.
+ * `package` and `file` have a body on disk; `inline` carries the literal code from the command itself; `binary`
+ * runs code from outside the repository, where there is no body to read. All but `binary` can carry artifacts,
+ * and the kind alone tells the log when no body was available.
  */
 export type ScriptKind = "package" | "file" | "inline" | "binary";
 
@@ -230,7 +230,10 @@ export interface ScriptFileIdentity {
  * trimmed into something the model would judge as a different script.
  */
 export interface ScriptArtifact {
-    /** `package.json#deploy` for a script line; the repo-relative path for a file body. */
+    /**
+     * `package.json#deploy` for a script line, the repo-relative path for a file body, or `inline:<interpreter>
+     * <flag>` / `inline:heredoc` for code taken from the command itself.
+     */
     source: string;
     /** Absolute path the text was read from. */
     path?: string;
@@ -271,6 +274,14 @@ export interface ScriptRun {
 }
 
 /**
+ * The authority rungs a capability can require, lowest first.
+ *
+ * A subset of the delegated-agent ladder: a child with only the `read` rung has no Bash tool, so no decision
+ * subject is ever judged below `inspect`.
+ */
+export type DecisionAuthority = "inspect" | "command" | "mutate";
+
+/**
  * Everything a strategy may draw on when it shapes the classifier state.
  *
  * The caller gathers these facts once and every strategy decides which of them reach the model — that is the
@@ -287,6 +298,14 @@ export interface DecisionContext {
      * can judge a routine action against the authority the runner actually has. Defaults to `parent`.
      */
     runner?: DecisionRunner;
+    /**
+     * The runner's real authority rung, when the caller knows it and the runner name would overstate it.
+     *
+     * A custom read-only child maps to the `agent` baseline (command rung) by name, so a consult passes its
+     * declared rung instead and the scope gate refuses a capability above it. Absent means the rung follows
+     * `runner`.
+     */
+    authority?: DecisionAuthority;
     /** Where a mutating runner's working copy is, when it is a child. Defaults to `checkout`. */
     isolation?: DecisionIsolation;
     /** The request the command serves: the delegated task for a child, the current user request for the parent. */

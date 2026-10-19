@@ -520,7 +520,9 @@ answer's** confidence — one unsure capability no longer drags a confident comm
 rung it needs (`read_only` = inspect, `writes_files` = command, everything else = mutate) and turns a
 capability the runner's own rung does not cover into an `out_of_scope` refusal — no request, confidence 0, so a
 named danger outranks the label when both refuse. That is what keeps a reviewer from running `writes_outside`
-code when the command classification alone came back lenient. A body with
+code when the command classification alone came back lenient. The rung normally follows the runner name; a
+caller that knows the child's declared rung (a read-only child's `inspect`) passes it alongside the runner, so
+a custom definition is scope-checked at its real rung even though its name maps to the `agent` baseline. A body with
 no answer (error, timeout, size
 rejection, an unrecognized capability) abstains the whole verdict before the command is even asked: an unread
 script is one the command would run unchecked. Bodies are sent **whole** — no clipping and no budget guard —
@@ -529,9 +531,10 @@ different script. Recognition (`src/modules/decision/script.ts`, reusing the san
 `unwrapWrapperCommand`, and the same `timeout` unwrapping the permission pipeline uses) covers the `npm
 run`-family package scripts, interpreter file runs, and any command that is itself a literal path to a
 readable file (`./scripts/deploy.sh`); `inline` forms (`-c`/`-e`/`--eval`, a heredoc feeding an interpreter)
-add nothing because the code is already in the command, and `binary` forms (`npx`-family, `uv run`/`uvx`) add
-nothing because there is no body in the repository. The decision log still records both kinds, so a body that
-was unavailable is visible.
+carry the literal code as a body too — a capability is a property of the code, not the invocation — while a
+dynamically assembled operand (`-c "$(cat file)"`) and `binary` forms (`npx`-family, `uv run`/`uvx`) add
+nothing, because the bytes are not known here or not in the repository. The decision log still records both
+kinds, so a body that was unavailable is visible.
 
 The resolver does not stop at the first line. A package script line is itself shell text, so the chase parses
 it with the same machinery and follows every package-script invocation it finds (`npm run`, `run-script`, the

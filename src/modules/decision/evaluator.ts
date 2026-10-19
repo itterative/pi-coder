@@ -196,7 +196,7 @@ export class DecisionEvaluator {
         });
 
         const outcomes: FormOutcome[] = [commandOutcome, ...scriptOutcomes];
-        const scope = scopeAnswer(profiles, context.runner ?? "parent");
+        const scope = scopeAnswer(profiles, context.runner ?? "parent", context.authority);
         if (scope !== undefined) {
             // A deterministic form: no request and no model belief, but it folds like any other answer, so a
             // capability the runner's authority forbids withholds whatever the command classification said.

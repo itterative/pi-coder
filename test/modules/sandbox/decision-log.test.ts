@@ -18,6 +18,14 @@ import {
     unresolvedPermissionDetails,
 } from "../../../src/modules/sandbox/resolve";
 
+/**
+ * A record this test's writer produced: every Bash row here goes through the resolver, so `resolution` is
+ * present even though the schema allows a resolver-less read-only-gate row.
+ */
+type ResolvedDecisionRecord = BashDecisionRecord & {
+    resolution: NonNullable<BashDecisionRecord["resolution"]>;
+};
+
 const temporaryDirectories: string[] = [];
 
 function makeTemporaryDirectory(prefix: string): string {
@@ -44,10 +52,10 @@ function useConfig(decisionLog: Record<string, unknown> | undefined): void {
     sandboxConfig.load(cwd);
 }
 
-function readRecords(): BashDecisionRecord[] {
+function readRecords(): ResolvedDecisionRecord[] {
     return (readAllRecords() as unknown[]).filter(
         (record) => (record as { gate?: string }).gate !== "file",
-    ) as BashDecisionRecord[];
+    ) as ResolvedDecisionRecord[];
 }
 
 function readAllRecords(): (BashDecisionRecord | FileAccessDecisionRecord)[] {
@@ -230,6 +238,28 @@ describe("logBashDecision", () => {
         expect(record.resolution.source).toBe("unresolved");
         expect(record.resolution.segments).toEqual([]);
         expect(record.prompt).toEqual({ outcome: "dismissed" });
+    });
+
+    it("records a read-only-gate decision without a resolution", () => {
+        logBashDecision({
+            surface: "child",
+            agentName: "scout",
+            cwd,
+            command: "python3 -c 'print(1)'",
+            readOnlyGate: true,
+            decision: "deny",
+            sandboxed: false,
+            blocked: true,
+        });
+
+        const [record] = readAllRecords().filter(
+            (candidate): candidate is BashDecisionRecord => candidate.gate !== "file",
+        );
+        expect(record?.readOnlyGate).toBe(true);
+        expect(record?.resolution).toBeUndefined();
+        expect(record?.agent).toBe("scout");
+        expect(record?.command).toBe("python3 -c 'print(1)'");
+        expect(record?.blocked).toBe(true);
     });
 
     it("appends one line per decision", () => {

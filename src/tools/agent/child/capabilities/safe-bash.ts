@@ -7,6 +7,7 @@ import {
 
 import { hasAgentAuthority } from "../../definitions/types";
 import { guardSafeBashCommand, type SafeBashBlock } from "../safe-bash";
+import { createSafeBashConsult } from "../safe-bash-decision";
 import { scratchpadRoots } from "../roots";
 import type { ChildGateRuntime } from "../gates/runtime";
 
@@ -35,7 +36,8 @@ export const SAFE_BASH_UNIT = {
  *
  * Returns a promise when this capability governs the call. A promise is itself the "handled" signal for
  * the confinement gate, so an allowed command still stops the handler there, exactly as it did before
- * the branch was extracted.
+ * the branch was extracted. An allowlist block also gets the decision model's second opinion when the child
+ * surface is enabled; everything else — confinement, flags, parse failures — stays deterministic.
  */
 export function guardHeuristicBashCall(
     runtime: ChildGateRuntime,
@@ -50,12 +52,20 @@ export function guardHeuristicBashCall(
         return undefined;
     }
 
+    const command = event.input.command;
     const sensitiveRoots = scratchpadRoots(ctx);
-    return guardSafeBashCommand(event.input.command, ctx.cwd, {
-        safeBash: hasAgentAuthority(options.authority, "inspect"),
-        onTrace: options.onTrace,
+    const roots = {
         additionalRoots: [...(options.additionalPaths ?? []), ...sensitiveRoots],
         sensitiveAdditionalRoots: sensitiveRoots,
-        safeBashCommands: options.safeBashCommands,
+        ...(options.safeBashCommands === undefined
+            ? {}
+            : { safeBashCommands: options.safeBashCommands }),
+    };
+
+    return guardSafeBashCommand(command, ctx.cwd, {
+        ...roots,
+        safeBash: hasAgentAuthority(options.authority, "inspect"),
+        onTrace: options.onTrace,
+        allowUnsafeCommand: createSafeBashConsult({ runtime, ctx, command, roots }),
     });
 }

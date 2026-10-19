@@ -5,12 +5,13 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
-import type { ClassifierContext, ClassifierResult } from "@earendil-works/pi-ai";
+import type { ClassifierAnswer, ClassifierContext, ClassifierResult } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
 import { resolveChildGrant } from "../../src/tools/agent/child/grant";
 import decisionConfig from "../../src/modules/decision/config";
+import { SCRIPT_QUESTION, VETO_QUESTION } from "../../src/modules/decision";
 import { resetDecisionEvaluator } from "../../src/modules/decision/gate";
 import { DECISION_PROVIDER_ID } from "../../src/modules/decision/provider";
 import type { BashDecisionRecord } from "../../src/modules/sandbox/decision-log";
@@ -29,6 +30,7 @@ import {
 } from "../helpers/pi-stub";
 import {
     answeringRegistry,
+    choiceAnswer,
     classifier,
     classifierModelRegistry,
     criterionResult,
@@ -51,8 +53,16 @@ beforeEach(() => {
     resetDecisionEvaluator();
 });
 
+/**
+ * A record the resolver wrote: every Bash row this helper reads in the command-gate tests goes through the
+ * resolver, so `resolution` is present even though the schema allows a resolver-less read-only-gate row.
+ */
+type ResolvedDecisionRecord = BashDecisionRecord & {
+    resolution: NonNullable<BashDecisionRecord["resolution"]>;
+};
+
 /** Records appended by the development decision log. */
-function readDecisionLog(filePath: string): BashDecisionRecord[] {
+function readDecisionLog(filePath: string): ResolvedDecisionRecord[] {
     if (!fs.existsSync(filePath)) {
         return [];
     }
@@ -61,7 +71,7 @@ function readDecisionLog(filePath: string): BashDecisionRecord[] {
         .readFileSync(filePath, "utf8")
         .split("\n")
         .filter((line) => line.trim() !== "")
-        .map((line) => JSON.parse(line) as BashDecisionRecord);
+        .map((line) => JSON.parse(line) as ResolvedDecisionRecord);
 }
 
 function setup(
@@ -376,6 +386,204 @@ describe("child decision-model wiring", () => {
                 "Runs as a delegated implementation child, in an isolated disposable git worktree.",
                 "DO: read, create, edit, and delete files in its own working copy.",
             ]),
+        });
+    });
+});
+
+interface ReadOnlyDecisionRun {
+    result: unknown;
+    classify: Mock<(model: Classifier, context: ClassifierContext) => Promise<ClassifierResult>>;
+    records: BashDecisionRecord[];
+}
+
+/**
+ * Drive one read-only child command through `safe-bash` with the model configured in the temp workspace.
+ *
+ * The classifier answers whichever question the request carries, so an inline body's capability and the
+ * command's own veto can differ in one case. `commandRunner: false` is what puts the child below the
+ * `command` rung, where no prompt exists and the decision consult is the only path past the allowlist.
+ */
+async function runReadOnlyDecision(options: {
+    command: string;
+    scriptCapability?: string;
+    scriptConfidence?: number;
+    criterion?: string;
+    confidence?: number;
+    apply?: boolean;
+    surfaces?: string[];
+    agentName?: string;
+    files?: Record<string, string>;
+}): Promise<ReadOnlyDecisionRun> {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-readonly-"));
+    tempDirs.push(cwd);
+    for (const [name, contents] of Object.entries(options.files ?? {})) {
+        fs.writeFileSync(path.join(cwd, name), contents);
+    }
+
+    const logPath = writeDecisionConfig(
+        cwd,
+        decisionSection({
+            apply: options.apply ?? true,
+            surfaces: options.surfaces ?? ["child"],
+        }),
+    );
+    const sessionManager = sessionWithTask(cwd, "inspect the delegated task");
+
+    const classify = vi.fn(
+        async (model: Classifier, context: ClassifierContext): Promise<ClassifierResult> => {
+            const answers: Record<string, ClassifierAnswer> = {};
+            if (context.questions[SCRIPT_QUESTION] !== undefined) {
+                answers[SCRIPT_QUESTION] = choiceAnswer(
+                    options.scriptCapability ?? "read_only",
+                    options.scriptConfidence ?? 0.9,
+                );
+            }
+            if (context.questions[VETO_QUESTION] !== undefined) {
+                answers[VETO_QUESTION] = choiceAnswer(
+                    options.criterion ?? "none",
+                    options.confidence ?? 0.95,
+                );
+            }
+            return {
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                answers,
+                stopReason: "stop",
+                timestamp: 0,
+            };
+        },
+    );
+
+    const runtime = setup(cwd, {
+        commandRunner: false,
+        background: false,
+        sessionManager,
+        modelRegistry: classifierModelRegistry(answeringRegistry([DECISION_MODEL], classify)),
+        ...(options.agentName === undefined ? {} : { agentName: options.agentName }),
+    });
+
+    const result = await runtime.handlers.tool_call[0]!(
+        { toolName: "bash", toolCallId: "bash-readonly-1", input: { command: options.command } },
+        runtime.ctx,
+    );
+
+    return { result, classify, records: readDecisionLog(logPath) };
+}
+
+describe("read-only child decision consult", () => {
+    it("allows a literal inline read-only script the allowlist does not know", async () => {
+        const run = await runReadOnlyDecision({ command: "python3 -c 'print(1)'" });
+
+        expect(run.result).toBeUndefined();
+        expect(run.classify).toHaveBeenCalledTimes(2);
+
+        const [record] = run.records;
+        expect(record?.readOnlyGate).toBe(true);
+        expect(record?.resolution).toBeUndefined();
+        expect(record?.decision).toBe("allow");
+        expect(record?.blocked).toBe(false);
+        expect(record?.classifier).toMatchObject({
+            applied: true,
+            outcome: "host",
+            script: {
+                kind: "inline",
+                sources: ["inline:python3 -c"],
+                answers: [{ source: "inline:python3 -c", criterion: "read_only", action: "host" }],
+            },
+        });
+    });
+
+    it("allows inline code whose quoted punctuation reads as a dynamic path", async () => {
+        const run = await runReadOnlyDecision({
+            command: `python3 -c 'import json; print(json.dumps({"ok": True}))'`,
+        });
+
+        expect(run.result).toBeUndefined();
+        expect(run.classify).toHaveBeenCalledTimes(2);
+
+        const [record] = run.records;
+        expect(record?.decision).toBe("allow");
+        expect(record?.classifier).toMatchObject({
+            applied: true,
+            outcome: "host",
+            script: { kind: "inline", answers: [{ criterion: "read_only", action: "host" }] },
+        });
+    });
+
+    it("blocks an inline capability above the inspect rung", async () => {
+        const run = await runReadOnlyDecision({
+            command: "python3 -c 'import urllib.request'",
+            scriptCapability: "network",
+        });
+
+        expect(run.result).toMatchObject({ block: true });
+
+        const [record] = run.records;
+        expect(record?.decision).toBe("deny");
+        expect(record?.blocked).toBe(true);
+        expect(record?.classifier).toMatchObject({
+            applied: false,
+            criterion: "out_of_scope",
+            action: "refuse",
+            outcome: "abstain",
+        });
+    });
+
+    it("records a dry-run verdict and still blocks when apply is off", async () => {
+        const run = await runReadOnlyDecision({
+            command: "python3 -c 'print(1)'",
+            apply: false,
+        });
+
+        expect(run.result).toMatchObject({ block: true });
+        expect(run.classify).toHaveBeenCalledTimes(2);
+
+        const [record] = run.records;
+        expect(record?.classifier).toMatchObject({ applied: false, outcome: "host" });
+        expect(record?.blocked).toBe(true);
+    });
+
+    it("keeps an outside path deterministic without consulting", async () => {
+        const run = await runReadOnlyDecision({ command: "python3 /etc/hostname" });
+
+        expect(run.result).toMatchObject({ block: true });
+        expect(run.classify).not.toHaveBeenCalled();
+        expect(run.records).toHaveLength(0);
+    });
+
+    it("holds a module run whose body the model never read", async () => {
+        const run = await runReadOnlyDecision({
+            command: "python3 -m json.tool package.json",
+        });
+
+        expect(run.result).toMatchObject({ block: true });
+
+        const [record] = run.records;
+        expect(record?.classifier).toMatchObject({ applied: true, script: { kind: "binary" } });
+        expect(record?.decision).toBe("deny");
+        expect(record?.blocked).toBe(true);
+        expect(record?.note).toBe("read-only gate held a script body the model never judged");
+    });
+
+    it("uses a custom read-only child's declared rung, not the runner-name baseline", async () => {
+        const run = await runReadOnlyDecision({
+            command: "python3 run.py",
+            files: { "run.py": "open('x', 'w').write('y')" },
+            scriptCapability: "writes_files",
+            agentName: "tidy",
+        });
+
+        expect(run.result).toMatchObject({ block: true });
+
+        const [record] = run.records;
+        expect(record?.classifier).toMatchObject({
+            applied: false,
+            criterion: "out_of_scope",
+            action: "refuse",
+            script: {
+                answers: [{ source: "run.py", criterion: "writes_files", action: "host" }],
+            },
         });
     });
 });

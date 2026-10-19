@@ -7,6 +7,7 @@ import { workspaceStatusFor } from "./workspace";
 import type { ClassifierRegistry } from "./model";
 import type { DecisionIsolation, DecisionRunner } from "./runner-rules";
 import type {
+    DecisionAuthority,
     DecisionContext,
     DecisionModelConfig,
     DecisionSurface,
@@ -75,6 +76,11 @@ export const APPLIED_PERMISSIONS = {
 export interface DecisionContextShape {
     runner?: DecisionRunner;
     isolation?: DecisionIsolation;
+    /**
+     * The runner's real authority rung, when a name-only mapping would overstate it. Passed through to the
+     * scope gate; absent means the rung follows `runner`.
+     */
+    authority?: DecisionAuthority;
 }
 
 /**
@@ -122,6 +128,7 @@ export function decisionContextFor(
         cwd,
         runner: shape.runner ?? "parent",
         isolation: shape.isolation ?? "checkout",
+        ...(shape.authority === undefined ? {} : { authority: shape.authority }),
         ...(script === undefined ? {} : { script }),
         ...decisionSessionContext(ctx.sessionManager.getBranch()),
     };
@@ -175,6 +182,8 @@ export interface ConsultOptions extends EvaluatorSeed {
     runner?: DecisionRunner;
     /** Where a mutating runner's working copy is (default `checkout`). */
     isolation?: DecisionIsolation;
+    /** The runner's real authority rung, when the runner name would overstate it. */
+    authority?: DecisionAuthority;
 }
 
 /**
@@ -257,6 +266,7 @@ export async function consultDecisionContext(
         const built = decisionContextFor(options.ctx, options.command, {
             runner: options.runner,
             isolation: options.isolation,
+            ...(options.authority === undefined ? {} : { authority: options.authority }),
         });
         const workspace = await workspaceStatusFor(built.cwd);
         const context = workspace === undefined ? built : { ...built, workspace };

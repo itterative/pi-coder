@@ -20,8 +20,9 @@ import type { ScriptArtifact, ScriptFileIdentity, ScriptOmission, ScriptRun } fr
  * - **file**: a known interpreter followed by literal path arguments that exist and are readable, or a
  *   command that is itself a literal path to such a file (`node scripts/deploy.js`, `./scripts/deploy.sh`).
  *   The body is the whole file.
- * - **inline**: an interpreter with `-c`/`-e`/`--eval`, or a heredoc feeding one. The code is already in the
- *   command, so this carries the kind only.
+ * - **inline**: an interpreter with `-c`/`-e`/`--eval`, or a heredoc feeding one. The literal code is a body
+ *   like any other, so a capability verdict is a property of the code and not of the invocation; a dynamically
+ *   built operand (`-c "$(cat file)"`) carries the kind only, because its bytes are not known here.
  * - **binary**: `npx`-family runners and `uv run`/`uvx`, whose code lives outside the repository. Kind only:
  *   the decision log then shows that the body was unavailable.
  *
@@ -120,11 +121,11 @@ function runForProbe(probe: ScriptProbe, cwd: string, options: ScriptRunOptions)
         return packageRun(probe.name, cwd, options);
     }
 
-    if (probe.kind === "file") {
-        return { kind: "file", artifacts: probe.artifacts };
+    if (probe.kind === "file" || probe.kind === "inline") {
+        return { kind: probe.kind, artifacts: probe.artifacts };
     }
 
-    // Inline and binary forms have no body to chase; the kind alone tells the log the body was unavailable.
+    // A binary form has no body to chase; the kind alone tells the log the body was unavailable.
     return { kind: probe.kind, artifacts: [] };
 }
 
@@ -132,7 +133,7 @@ function runForProbe(probe: ScriptProbe, cwd: string, options: ScriptRunOptions)
 type ScriptProbe =
     | { kind: "package"; name: string }
     | { kind: "file"; artifacts: ScriptArtifact[] }
-    | { kind: "inline" }
+    | { kind: "inline"; artifacts: ScriptArtifact[] }
     | { kind: "binary" };
 
 /**
@@ -250,8 +251,8 @@ function packageRun(name: string, cwd: string, options: ScriptRunOptions): Scrip
 }
 
 /**
- * Walk one package's script lines transitively, collecting the line for each and every file body they
- * invoke.
+ * Walk one package's script lines transitively, collecting the line for each and every body (file or inline)
+ * they invoke.
  *
  * The queue is breadth-first, so "nested script lines in the order they appear" means the order the chase
  * reaches them: every reference of the original line before the references of its first nested line. File
@@ -267,7 +268,7 @@ function chasePackageScripts(
     const files: ScriptArtifact[] = [];
     const omissions: ScriptOmission[] = [];
     const visited = new Set<string>([first.name]);
-    const resolvedFiles = new Set<string>();
+    const resolvedBodies = new Set<string>();
     const queue: PendingScript[] = [first];
 
     while (queue.length > 0) {
@@ -304,7 +305,7 @@ function chasePackageScripts(
                 continue;
             }
 
-            collectFileArtifacts(probe, resolvedFiles, files);
+            collectArtifacts(probe, resolvedBodies, files);
         }
     }
 
@@ -388,7 +389,7 @@ function interpreterProbe(
     }
 
     if (hasInlineFlag(command) || command.redirections.some((part) => part.heredoc !== undefined)) {
-        return { kind: "inline" };
+        return { kind: "inline", artifacts: inlineArtifacts(command) };
     }
 
     const artifacts = fileArtifacts(command, cwd, options);
@@ -428,24 +429,26 @@ function pathFileProbe(
     return { kind: "file", artifacts: [artifact] };
 }
 
-/** Add the file bodies a probe resolved, skipping paths that were already collected. */
-function collectFileArtifacts(
+/** Add the bodies a probe resolved, skipping bodies that were already collected from an earlier line. */
+function collectArtifacts(
     probe: ScriptProbe,
-    resolvedFiles: Set<string>,
-    files: ScriptArtifact[],
+    resolved: Set<string>,
+    artifacts: ScriptArtifact[],
 ): void {
-    if (probe.kind !== "file") {
+    if (probe.kind !== "file" && probe.kind !== "inline") {
         return;
     }
 
     for (const artifact of probe.artifacts) {
-        // The same file invoked twice is one body in the state; the first resolution order wins.
-        if (artifact.path === undefined || resolvedFiles.has(artifact.path)) {
+        // The same file invoked twice is one body in the state; an inline body is keyed by its text because it
+        // has no path. The first resolution order wins.
+        const key = artifact.path ?? `${artifact.source}\u0000${artifact.text}`;
+        if (resolved.has(key)) {
             continue;
         }
 
-        resolvedFiles.add(artifact.path);
-        files.push(artifact);
+        resolved.add(key);
+        artifacts.push(artifact);
     }
 }
 
@@ -508,19 +511,84 @@ function fileArtifacts(
 
 /** `-c`/`-e`/`--eval` before the first operand; `bash script.sh -c` passes `-c` to the script, not bash. */
 function hasInlineFlag(command: BashCommand): boolean {
-    for (const word of command.words.slice(command.environment.length + 1)) {
+    return inlineFlagIndex(command) !== undefined;
+}
+
+/**
+ * The index of the first `-c`/`-e`/`--eval` word, or `undefined` when the code is not inline.
+ *
+ * The scan starts after the command word and stops at `--` or the first operand, so a later flag cannot make a
+ * file invocation look inline.
+ */
+function inlineFlagIndex(command: BashCommand): number | undefined {
+    for (let index = command.environment.length + 1; index < command.words.length; index++) {
+        const word = command.words[index];
+        if (word === undefined) {
+            return undefined;
+        }
         if (word.value === "--") {
-            return false;
+            return undefined;
         }
         if (INLINE_FLAGS.has(word.value)) {
-            return true;
+            return index;
         }
         if (!word.value.startsWith("-") || word.value === "-") {
-            return false;
+            return undefined;
         }
     }
 
-    return false;
+    return undefined;
+}
+
+/**
+ * The literal code an inline interpreter form carries: the operand of `-c`/`-e`/`--eval` when it is a literal
+ * word, and every heredoc body.
+ *
+ * The code is a property of the code, so it is classified exactly like a file body. A dynamically assembled
+ * operand (`-c "$(cat file)"`) yields no artifact: its bytes are not known here, and sending the unexpanded
+ * word would be a capability verdict about the wrong text.
+ */
+function inlineArtifacts(command: BashCommand): ScriptArtifact[] {
+    const artifacts: ScriptArtifact[] = [];
+    const operand = inlineCodeOperand(command);
+    if (operand !== undefined) {
+        const flagIndex = inlineFlagIndex(command);
+        const flag = flagIndex === undefined ? undefined : command.words[flagIndex];
+        artifacts.push({
+            source: `inline:${command.command ?? "?"} ${flag?.value ?? "-c"}`,
+            text: operand.value,
+        });
+    }
+
+    for (const part of command.redirections) {
+        const body = part.heredoc?.body;
+        if (body !== undefined && body !== "") {
+            artifacts.push({ source: "inline:heredoc", text: body });
+        }
+    }
+
+    return artifacts;
+}
+
+/**
+ * The literal inline code operand a command carries, or `undefined` when there is none.
+ *
+ * Exported for the read-only gate's confinement re-check, which must treat this argument as code rather than
+ * as a path. The check is the same one `inlineArtifacts` uses: `-c`/`-e`/`--eval` before the first operand,
+ * and a literal word after it.
+ */
+export function inlineCodeOperand(command: BashCommand): BashWordNode | undefined {
+    const flagIndex = inlineFlagIndex(command);
+    if (flagIndex === undefined) {
+        return undefined;
+    }
+
+    const operand = command.words[flagIndex + 1];
+    if (operand === undefined || !isLiteralWord(operand) || operand.value === "") {
+        return undefined;
+    }
+
+    return operand;
 }
 
 function isBinaryRunner(command: BashCommand): boolean {

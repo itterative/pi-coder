@@ -210,7 +210,7 @@ describe("decision state", () => {
         ]);
     });
 
-    it("adds no script fields for an inline or binary form", () => {
+    it("adds no script fields for a body-less inline or binary form", () => {
         for (const script of [
             { kind: "inline", artifacts: [] },
             { kind: "binary", artifacts: [] },
@@ -221,6 +221,22 @@ describe("decision state", () => {
             );
             expect(state).not.toHaveProperty("scripts");
         }
+    });
+
+    it("sends an inline body like any other script text", () => {
+        const state = buildState(
+            {
+                command: "python3 -c 'print(1)'",
+                cwd: "/repo",
+                script: {
+                    kind: "inline",
+                    artifacts: [{ source: "inline:python3 -c", text: "print(1)" }],
+                },
+            },
+            "request_context",
+        );
+
+        expect(state.scripts).toEqual(["print(1)"]);
     });
 
     it("adds no script field when a recognized form resolved no body", () => {

@@ -308,6 +308,7 @@ export async function consultForGate(options: GateConsultOptions): Promise<GateC
             sandboxAvailable: options.sandboxAvailable,
             ...(options.runner === undefined ? {} : { runner: options.runner }),
             ...(options.isolation === undefined ? {} : { isolation: options.isolation }),
+            ...(options.authority === undefined ? {} : { authority: options.authority }),
             ...(options.registry === undefined ? {} : { registry: options.registry }),
         });
         const permission = appliedPermission(options.config, consulted.verdict);

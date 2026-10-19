@@ -30,6 +30,7 @@ interface ReportJson {
     promptedDenied: Record<string, { count: number; notes: string[] }>;
     heuristicGrants: Record<string, { count: number }>;
     unasked: Record<string, { count: number; agents: string[] }>;
+    readOnlyGate: Record<string, { count: number; agents: string[] }>;
     ruleHits: Record<string, number>;
 }
 
@@ -155,6 +156,27 @@ describe("permission-report script", () => {
         expect(report.heuristicGrants["cat <file>"].count).toBe(1);
         expect(report.unasked["terraform plan"].count).toBe(1);
         expect(report.unasked["terraform plan"].agents).toEqual(["scout"]);
+    });
+
+    it("lists read-only-gate rows that never ran the resolver", () => {
+        logBashDecision({
+            surface: "child",
+            agentName: "scout",
+            cwd: workspace,
+            command: "python3 -c 'print(1)'",
+            readOnlyGate: true,
+            decision: "deny",
+            sandboxed: false,
+            blocked: true,
+        });
+
+        const report = runReport();
+        expect(report.total).toBe(1);
+        expect(report.blocked).toBe(1);
+        expect(Object.values(report.readOnlyGate)).toEqual([
+            expect.objectContaining({ count: 1, agents: ["scout"] }),
+        ]);
+        expect(report.unasked).toEqual({});
     });
 
     it("keeps every uncovered segment visible in one candidate row", () => {
