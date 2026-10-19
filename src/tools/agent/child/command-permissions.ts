@@ -18,7 +18,11 @@ import sandboxConfig from "../../../common/config";
 import decisionConfig from "../../../modules/decision/config";
 import { decisionEnabled } from "../../../modules/decision/gate";
 import { decisionRunnerForAgent } from "../../../modules/decision/runner-rules";
-import { consultForGate } from "../../decision-model";
+import {
+    attributedBashBlockReason,
+    consultForGate,
+    permissionAllowsCall,
+} from "../../decision-model";
 import { scratchpadRoots } from "./roots";
 import { CHILD_CONFINEMENT } from "./policy";
 import { PERMISSION_PROMPT_CONFIRMATION_DELAY_MS } from "../../../common/constants";
@@ -545,7 +549,9 @@ export function registerCommandPermissionHooks(
             message?: string;
             prompt?: BashDecisionInput["prompt"];
         } = {
-            allowed: permission !== "ask",
+            // Only an allow resolves the call: a `deny` the verdict brought is a block, not the absence of a
+            // prompt, so it must never read as "allowed" here.
+            allowed: permissionAllowsCall(permission),
             permission,
         };
         try {
@@ -574,9 +580,15 @@ export function registerCommandPermissionHooks(
         );
         if (!result.allowed) {
             release();
+            const attributed = attributedBashBlockReason({
+                subject: "Agent bash",
+                record: classifier,
+                humanAsked: options.parentContext.hasUI,
+            });
+
             return {
                 block: true,
-                reason: blockedReason("bash", event.input as Record<string, unknown>),
+                reason: attributed ?? blockedReason("bash", event.input as Record<string, unknown>),
             };
         }
         if (needsPrompt && canToggle) {

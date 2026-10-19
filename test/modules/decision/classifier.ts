@@ -7,6 +7,8 @@ import type {
     ClassifierResult,
 } from "@earendil-works/pi-ai";
 
+import type { BashClassifierRecord } from "../../../src/modules/sandbox/decision-log";
+
 import {
     FILE_KIND_QUESTION,
     FILE_LOSS_QUESTION,
@@ -119,6 +121,32 @@ export function fileAccessAnswerOf(result: ClassifierResult): FileAccessAnswer {
         confidence: kind?.type === "choice" ? kind.confidence : 0,
         purposeConfidence: purpose?.type === "choice" ? purpose.confidence : 0,
         loss: loss?.type === "bool" ? loss.probability : undefined,
+    };
+}
+
+/**
+ * A decision-log record, as a gate would write one after consulting the model.
+ *
+ * The gates render agent-facing text from this shape (`attributedBashBlockReason`, `readOnlyGateSentence`), so a test
+ * that pins a sentence needs a record rather than a verdict. Defaults describe an applied host verdict; each
+ * case states only the fields that make its sentence different.
+ */
+export function classifierRecord(
+    overrides: Partial<BashClassifierRecord> = {},
+): BashClassifierRecord {
+    return {
+        strategy: "veto",
+        provider: "test-provider",
+        model: "test-classifier",
+        criterion: "none",
+        action: "host",
+        confidence: 0.9,
+        outcome: "host",
+        status: "applied",
+        reason: "model chose host above threshold",
+        latencyMs: 12,
+        applied: true,
+        ...overrides,
     };
 }
 

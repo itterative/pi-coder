@@ -9,7 +9,29 @@ import type { AgentCapability, AgentDefinition } from "../../src/tools/agent/def
 import { resolveChildGrant, type ChildGrant } from "../../src/tools/agent/child/grant";
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
 import type { ChildProgressTracker } from "../../src/tools/agent/child/progress";
+import { DECISION_PROVIDER_ID } from "../../src/modules/decision/provider";
 import { createPiStub, type StubHandler } from "../helpers/pi-stub";
+import {
+    answeringRegistry,
+    classifier,
+    classifierModelRegistry,
+    criterionResult,
+} from "../modules/decision/classifier";
+
+/**
+ * A decision model wired into the child the way a configured session has one.
+ *
+ * The fixture writes a real project config and a registry that answers every classification with one
+ * criterion, so a gated call reaches the same `consultForGate` path production does - including the
+ * `child` surface, which the shipped default (`parent` only) deliberately leaves off.
+ */
+export interface ChildRunDecision {
+    /** Merged over the `decisionModel` section, for the case that needs `apply` off or another floor. */
+    readonly config?: Record<string, unknown>;
+    /** The criterion every request answers with; a script request would need its own labels. */
+    readonly criterion?: string;
+    readonly confidence?: number;
+}
 
 export interface ChildRunMode {
     readonly isolated?: boolean;
@@ -20,6 +42,8 @@ export interface ChildRunMode {
     readonly runTitle?: string;
     /** A parent with no session cannot share approvals, so a same-checkout worker prompts nothing. */
     readonly parentHasNoSession?: boolean;
+    /** Absent means no endpoint is configured at all, which is the unmodified production default. */
+    readonly decision?: ChildRunDecision;
 }
 
 interface ChildRunInstallation {
@@ -38,6 +62,10 @@ export interface ChildRunFixture {
     readonly grant: ChildGrant;
     readonly frames: ChildProgress[];
     readonly traces: string[];
+    /** What the parent UI was told, so a suite can pin the notification a verdict produced. */
+    readonly notifications: string[];
+    /** How many classifications the fixture's registry answered. */
+    classifyCalls(): number;
     install(): ChildRunInstallation;
 }
 
@@ -54,6 +82,34 @@ export function probeDefinition(
         source: "user",
         ...extra,
     };
+}
+
+const DECISION_MODEL_ID = "test-classifier";
+
+/**
+ * A project decision config that can actually act on the child surface.
+ *
+ * `surfaces` defaults to `parent` only and `apply` defaults off, so a fixture that wanted the model to decide
+ * would record verdicts and prompt anyway; each case overrides what it means to test.
+ */
+function writeDecisionConfig(cwd: string, decision: ChildRunDecision): void {
+    const directory = path.join(cwd, ".pi");
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(
+        path.join(directory, "decision-model-config.json"),
+        JSON.stringify({
+            decisionModel: {
+                enabled: true,
+                apply: true,
+                surfaces: ["parent", "child"],
+                baseUrl: "https://classifier.example",
+                provider: DECISION_PROVIDER_ID,
+                model: DECISION_MODEL_ID,
+                minConfidence: 0.8,
+                ...decision.config,
+            },
+        }),
+    );
 }
 
 /**
@@ -74,17 +130,44 @@ export function buildChildRun(
         defaultBashTimeoutSeconds,
         runTitle = "Probe title",
         parentHasNoSession = false,
+        decision,
     } = mode;
     // A real directory: the confinement checks resolve paths and stat them, so a fabricated path would
     // change which decisions the fixtures exercise.
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-child-run-"));
+
+    const notifications: string[] = [];
+    const decisionModel = classifier(DECISION_PROVIDER_ID, DECISION_MODEL_ID);
+    let classifications = 0;
+    if (decision !== undefined) {
+        writeDecisionConfig(cwd, decision);
+    }
 
     const parentContext = {
         cwd,
         hasUI: parentKind === "tui",
         mode: parentKind === "tui" ? "tui" : "print",
         sessionManager: parentHasNoSession ? undefined : { id: "parent-session" },
-        ui: { theme: { bold: (text: string) => text } },
+        ui: {
+            theme: { bold: (text: string) => text },
+            notify: (message: string) => {
+                notifications.push(message);
+            },
+        },
+        ...(decision === undefined
+            ? {}
+            : {
+                  modelRegistry: classifierModelRegistry(
+                      answeringRegistry([decisionModel], async (model) => {
+                          classifications += 1;
+                          return criterionResult(
+                              model,
+                              decision.criterion ?? "privileged",
+                              decision.confidence ?? 0.9,
+                          );
+                      }),
+                  ),
+              }),
     } as unknown as ExtensionContext;
 
     const context = {
@@ -129,6 +212,8 @@ export function buildChildRun(
         grant,
         frames,
         traces,
+        notifications,
+        classifyCalls: () => classifications,
         install() {
             const stub = createPiStub();
             registerChildExtension(tracker, parentContext, cwd, options)(stub.pi);

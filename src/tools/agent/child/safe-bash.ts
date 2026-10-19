@@ -38,6 +38,17 @@ export interface SafeBashOptions {
     safeBashCommands?: readonly string[];
 }
 
+/**
+ * What one second opinion decided: whether the call may proceed, and the sentence naming why it may not.
+ *
+ * `reason` is agent-facing text. It is present only when the model was actually consulted and did not clear
+ * the command, because a block that never reached the model has nothing of the model's to report.
+ */
+export interface SafeBashConsultResult {
+    allowed: boolean;
+    reason?: string;
+}
+
 /** Named options for guarding a delegated agent's bash command. */
 export interface SafeBashGuardOptions extends SafeBashOptions {
     safeBash: boolean;
@@ -45,14 +56,15 @@ export interface SafeBashGuardOptions extends SafeBashOptions {
     /**
      * A second opinion for a command the cwd heuristic does not allow, consulted before the block.
      *
-     * Returns true when the gate may proceed; `undefined` or false blocks exactly as before. The callback owns
-     * its own deterministic checks and decision-log record, because the blocker is the only place that knows
-     * whether a verdict was consulted at all.
+     * Returns whether the gate may proceed, plus the verdict's own sentence when it did not; `undefined` or
+     * `allowed: false` blocks exactly as before. The callback owns its own deterministic checks and
+     * decision-log record, because the blocker is the only place that knows whether a verdict was consulted
+     * at all.
      */
     allowUnsafeCommand?: (
         assessment: HeuristicAssessment,
         command: string,
-    ) => Promise<boolean> | undefined;
+    ) => Promise<SafeBashConsultResult | undefined>;
 }
 
 /**
@@ -353,6 +365,25 @@ export function isSafeBashAllowed(
 export const isScoutBashAllowed = isSafeBashAllowed;
 
 /**
+ * The read-only block sentence, with the verdict's own words when a verdict is what stopped the call.
+ *
+ * The deterministic reasons stay first: they are why the command needed judging at all. The model sentence
+ * then says the block was not a person's refusal, which a child below the `command` rung cannot infer — it
+ * has no prompt to remember.
+ */
+function readOnlyBlockReason(reasons: string, modelSentence: string | undefined): string {
+    const base =
+        `Read-only agent bash blocked: ${reasons}. ` +
+        `Commands must be cwd-confined and classified SAFE_READONLY.`;
+
+    if (modelSentence === undefined) {
+        return base;
+    }
+
+    return `${base} ${modelSentence}`;
+}
+
+/**
  * Applies the safe-bash capability gate. Syntax/path classification belongs to
  * the heuristic; tag-selected contextual checks live in safe-bash-rules.ts.
  */
@@ -376,11 +407,12 @@ export async function guardSafeBashCommand(
         sensitiveAdditionalRoots,
         safeBashCommands,
     });
-    const allowedByModel =
-        assessment.classification !== Heuristic.SAFE_READONLY &&
-        options.allowUnsafeCommand !== undefined &&
-        (await options.allowUnsafeCommand(assessment, command));
-    if (assessment.classification !== Heuristic.SAFE_READONLY && !allowedByModel) {
+    const consult =
+        assessment.classification === Heuristic.SAFE_READONLY ||
+        options.allowUnsafeCommand === undefined
+            ? undefined
+            : await options.allowUnsafeCommand(assessment, command);
+    if (assessment.classification !== Heuristic.SAFE_READONLY && consult?.allowed !== true) {
         const reasons = assessment.reasons
             .map((reason) => `${describeUnsafeReason(reason)} [${reason}]`)
             .join("; ");
@@ -390,7 +422,7 @@ export async function guardSafeBashCommand(
         });
         return {
             block: true,
-            reason: `Read-only agent bash blocked: ${reasons}. Commands must be cwd-confined and classified SAFE_READONLY.`,
+            reason: readOnlyBlockReason(reasons, consult?.reason),
         };
     }
 

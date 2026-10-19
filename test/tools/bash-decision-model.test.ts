@@ -79,6 +79,9 @@ async function runHookCommand(options: {
 }): Promise<HookResult> {
     writeDecisionFile(options.decision);
     decisionConfig.load(workspace);
+    // The command answer is cached per evaluator and the cache key does not carry `apply` or the confidence
+    // the mock answers with, so a second run of the same command must not inherit the first one's verdict.
+    resetDecisionEvaluator();
 
     const classify = vi.fn(async (model: typeof MODEL) => {
         return criterionResult(model, options.criterion ?? "privileged", options.confidence ?? 0.9);
@@ -270,5 +273,61 @@ describe("bash decision-model wiring", () => {
         expect(record?.decision).toBe("deny");
         expect(record?.blocked).toBe(true);
         expect(block).toBe(true);
+    });
+
+    /**
+     * The block reason the agent reads, per kind of no.
+     *
+     * Every case runs headless (`hasUI: false`), which is what makes the attribution observable: with an
+     * interface present a person answers, and "blocked by user" is simply true. The wording is model-facing
+     * text, so each case owns an inline snapshot that `-u` rewrites.
+     */
+    it("attributes a block to whoever actually resolved it", async () => {
+        const withheld = await runHookCommand({
+            command: unresolved,
+            decision: modelSection({ apply: true }),
+            criterion: "destructive",
+        });
+        expect(withheld.block).toBe(true);
+        expect(withheld.reason).toMatchInlineSnapshot(
+            `"Command execution blocked; the decision model judged it able to destroy data irreversibly (0.90), and only a person can approve a command it refuses. There was no user to ask."`,
+        );
+
+        const recordOnly = await runHookCommand({
+            command: unresolved,
+            decision: modelSection({ apply: false }),
+            criterion: "none",
+            confidence: 0.95,
+        });
+        expect(recordOnly.block).toBe(true);
+        expect(recordOnly.reason).toMatchInlineSnapshot(
+            `"Command execution blocked; the decision model judged it an ordinary command for this runner (0.95), and this session records verdicts without acting on them (record-only mode). There was no user to ask."`,
+        );
+
+        const unsure = await runHookCommand({
+            command: unresolved,
+            decision: modelSection({ apply: true }),
+            criterion: "none",
+            confidence: 0.4,
+        });
+        expect(unsure.block).toBe(true);
+        expect(unsure.reason).toMatchInlineSnapshot(
+            `"Command execution blocked; the decision model judged it an ordinary command for this runner (0.40), and it was not confident enough to let the command through. There was no user to ask."`,
+        );
+
+        // With no endpoint configured the model never spoke, and the human-shaped wording is the true one.
+        const unconsulted = await runHookCommand({ command: unresolved });
+        expect(unconsulted.block).toBe(true);
+        expect(unconsulted.reason).toMatchInlineSnapshot(`"Command execution blocked by user."`);
+
+        const granted = await runHookCommand({
+            command: unresolved,
+            decision: modelSection({ apply: true }),
+            criterion: "none",
+            confidence: 0.95,
+        });
+        expect(granted.block).toBe(false);
+        expect(granted.reason).toBeUndefined();
+        expect(granted.records.at(-1)?.decision).toBe("allow");
     });
 });

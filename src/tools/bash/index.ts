@@ -32,7 +32,7 @@ import {
 import { suggestRule } from "../../modules/sandbox/suggestions";
 import decisionConfig from "../../modules/decision/config";
 import { decisionEnabled } from "../../modules/decision";
-import { consultForGate } from "../decision-model";
+import { consultForGate, attributedBashBlockReason } from "../decision-model";
 import { selectWithMessage, type SelectMessageItem } from "../../tui/select-with-message";
 import {
     createPermissionState,
@@ -417,6 +417,16 @@ Pay attention to these notes as they provide context about the user's preference
         if (blocked) {
             if (blockReason !== undefined) {
                 return { block: true, reason: blockReason };
+            }
+
+            // A withheld verdict with no interface to ask through is not a user's "no", so say who stopped it.
+            const attributed = attributedBashBlockReason({
+                subject: "Command execution",
+                record: classifier,
+                humanAsked: ctx.hasUI,
+            });
+            if (attributed !== undefined) {
+                return { block: true, reason: attributed };
             }
 
             const baseReason = "Command execution blocked by user.";

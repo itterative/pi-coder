@@ -64,6 +64,184 @@ export function appliedFilePermission(
     return permission === "allow" ? permission : undefined;
 }
 
+/**
+ * Whether a resolved permission lets the call through.
+ *
+ * Spelled as the allow set rather than `permission !== "ask"`, because `deny` is a block and not the absence
+ * of a prompt: a gate that reads the inequality runs a command the verdict refused, unsandboxed.
+ */
+export function permissionAllowsCall(permission: Permission): boolean {
+    return permission === "allow" || permission === "allow:sandbox";
+}
+
+/**
+ * How confident the verdict was, spelled the same in every message and in the notification.
+ *
+ * An absent confidence is named rather than invented, because "(0.00)" would read as a model that believed
+ * the command was dangerous when it simply did not answer.
+ */
+function confidenceText(confidence: number | undefined): string {
+    return confidence === undefined ? "no confidence" : confidence.toFixed(2);
+}
+
+/**
+ * The criteria and capabilities in the runner's own terms.
+ *
+ * A runner is not told `loses_content`; it is told what `loses_content` means. The phrases follow the
+ * criteria the classifier is itself asked with (`questions.ts` and `script-classification.ts`) so the answer
+ * the model gave and the explanation the runner reads are one vocabulary, not two.
+ */
+const VERDICT_PLAIN: Record<string, string> = {
+    none: "an ordinary command for this runner",
+    destructive: "able to destroy data irreversibly",
+    privileged: "in need of root privileges or system changes",
+    exfiltration: "able to leak secrets or send data off the machine",
+    remote_code: "able to download and run code from outside this repository",
+    loses_content: "able to overwrite or remove file content without replacing it",
+    out_of_scope: "beyond what this runner is authorized to do",
+    read_only: "read-only",
+    writes_files: "able to change files in the working tree",
+    writes_outside: "able to change files outside the working tree",
+    network: "able to send or receive data over the network",
+    process_control: "able to signal or kill processes",
+};
+
+/**
+ * Why policy left the verdict unacted, in the runner's terms.
+ *
+ * Each phrase is written to follow `and`, because every surface composes one sentence out of the finding and
+ * this clause. Keyed by the reasons `policy.ts` and `gate.ts` produce, which are all a recorded verdict can
+ * carry; a reason this table does not know keeps its own text in parentheses, so the sentence stays readable
+ * and the cause stays findable.
+ */
+const VERDICT_CONSEQUENCE: Record<string, string> = {
+    "refuse requires confirmation": "only a person can approve a command it refuses",
+    "host below confidence threshold": "it was not confident enough to let the command through",
+    "sandbox unavailable": "it needed a sandbox that is not available here",
+    "no model answer": "it did not answer",
+};
+
+/** What the model made of the command: `judged it able to destroy data irreversibly (0.90)`. */
+function verdictFinding(record: BashClassifierRecord): string {
+    if (record.criterion === undefined) {
+        return `did not produce an answer (${record.status})`;
+    }
+
+    const plain = VERDICT_PLAIN[record.criterion] ?? record.criterion;
+
+    return `judged it ${plain} (${confidenceText(record.confidence)})`;
+}
+
+/**
+ * The finding and the reason it was not acted on, as one story.
+ *
+ * A request that produced no answer has nothing to explain afterwards, so the finding is the whole story;
+ * writing "did not produce an answer, and it did not answer" would state one fact twice.
+ */
+function verdictStory(record: BashClassifierRecord): string {
+    if (record.criterion === undefined) {
+        return verdictFinding(record);
+    }
+
+    return `${verdictFinding(record)}, and ${verdictConsequence(record)}`;
+}
+
+/** What followed from the finding: the policy's reason, or a record-only config, told to the runner. */
+function verdictConsequence(record: BashClassifierRecord): string {
+    if (isDryRunVerdict(record)) {
+        return "this session records verdicts without acting on them (record-only mode)";
+    }
+
+    const known = VERDICT_CONSEQUENCE[record.reason];
+    if (known !== undefined) {
+        return known;
+    }
+
+    return `the verdict was not acted on (${record.reason})`;
+}
+
+/**
+ * Whether a verdict cleared the command but was forbidden to act.
+ *
+ * `apply` off means exactly that: the gate recorded a verdict that would have resolved the prompt, asked the
+ * human anyway, and blocked because there was nobody to ask. Reading it as "the model did not clear it" would
+ * blame the model for the configuration.
+ */
+function isDryRunVerdict(record: BashClassifierRecord): boolean {
+    return record.applied !== true && record.outcome !== "abstain";
+}
+
+/**
+ * The block reason for a command, worded for whoever actually resolved it.
+ *
+ * Four different no's reach a Bash gate: a verdict that resolved the prompt to a deny (nobody was asked and
+ * the model is the authority - the shape a fully automatic mode would produce), a person who answered the
+ * prompt, a verdict that cleared the command while `apply` is off, and a withheld verdict with no interface
+ * to ask through. Only the first has an author worth naming, and the last two are the cases the plain
+ * "blocked by user" sentence gets false: the prompt never ran, so no human ever said no.
+ *
+ * `undefined` means the gate's own wording is already true - a person answered, or the model never spoke.
+ */
+export function attributedBashBlockReason(input: {
+    /** How the surface names its own subject, e.g. `Command execution` or `Agent bash`. */
+    subject: string;
+    /** The verdict recorded for this call, when the model was consulted. */
+    record: BashClassifierRecord | undefined;
+    /** Whether a person was actually asked, which is the surface's `hasUI`, not an outcome. */
+    humanAsked: boolean;
+}): string | undefined {
+    const { subject, record, humanAsked } = input;
+    if (record === undefined) {
+        return undefined;
+    }
+
+    if (record.applied === true) {
+        return `${subject} blocked by the decision model, which ${verdictFinding(record)}.`;
+    }
+
+    if (humanAsked) {
+        return undefined;
+    }
+
+    return (
+        `${subject} blocked; the decision model ${verdictStory(record)}. ` +
+        `There was no user to ask.`
+    );
+}
+
+/**
+ * Why a read-only child's command was blocked after the model was consulted.
+ *
+ * `withheld` is the verdict not clearing the command - whether it said no or was not allowed to act, which the
+ * consequence clause tells apart. `held` is the verdict saying yes to an invocation whose script body it never
+ * read, which the gate blocks anyway: an unread body must not gain authority through the command answer.
+ */
+export type ReadOnlyGateCause = "withheld" | "held";
+
+/**
+ * The sentence a read-only child reads when the consult did not clear its command.
+ *
+ * A child below the `command` rung has no prompt to fall back on, so the verdict is the whole decision; the
+ * deterministic allowlist reason alone reads as though no model was involved. Naming the verdict also says
+ * the block is not a person's refusal, which is what lets the child report it instead of retrying it.
+ */
+export function readOnlyGateSentence(
+    record: BashClassifierRecord,
+    cause: ReadOnlyGateCause,
+): string {
+    if (cause === "held") {
+        const kind = record.script?.kind ?? "unrecognized";
+
+        return (
+            `The decision model ${verdictFinding(record)} and cleared the command, but the command runs ` +
+            `a script the model never read (script kind ${kind}). ` +
+            `This agent has no prompt to ask through.`
+        );
+    }
+
+    return `The decision model ${verdictStory(record)}. This agent has no prompt to ask through.`;
+}
+
 /** The log record for a verdict, identical whichever gate asked. */
 export function classifierRecord(
     verdict: DecisionVerdict,

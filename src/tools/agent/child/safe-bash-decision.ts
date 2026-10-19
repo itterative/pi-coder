@@ -7,12 +7,13 @@ import type { DecisionAuthority } from "../../../modules/decision";
 import { logBashDecision } from "../../../modules/sandbox/decision-log";
 import type { BashClassifierRecord } from "../../../modules/sandbox/decision-log";
 import type { HeuristicAssessment } from "../../../modules/sandbox/heuristics";
-import { consultForGate } from "../../decision-model";
+import { consultForGate, readOnlyGateSentence } from "../../decision-model";
 import type { AgentAuthority } from "../definitions/types";
 import type { ChildGateRuntime } from "./gates/runtime";
 import {
     classifyRelaxedConfinement,
     isModelConsultableAssessment,
+    type SafeBashConsultResult,
     type SafeBashOptions,
 } from "./safe-bash";
 
@@ -46,30 +47,31 @@ export interface SafeBashConsultOptions {
  * the scope gate has no capability to fold and an unread body must not gain authority through the invocation
  * answer. Failures abstain, and an abstain blocks — the gate never widens authority on model trouble.
  *
- * Returns whether the call may proceed. The caller still applies the strict runtime rules (the fsmonitor
- * check) after this returns true.
+ * Returns whether the call may proceed, and the verdict's sentence when it does not, so the block the child
+ * reads names what stopped it. The caller still applies the strict runtime rules (the fsmonitor check) after
+ * a clear result.
  */
 export function createSafeBashConsult(
     options: SafeBashConsultOptions,
-): (assessment: HeuristicAssessment) => Promise<boolean> {
+): (assessment: HeuristicAssessment) => Promise<SafeBashConsultResult> {
     const { runtime, ctx, command, roots } = options;
     const { options: childOptions } = runtime;
     const { agentName, isolated, events, onTrace } = childOptions;
 
-    return async (assessment: HeuristicAssessment): Promise<boolean> => {
+    return async (assessment: HeuristicAssessment): Promise<SafeBashConsultResult> => {
         if (!isModelConsultableAssessment(assessment)) {
-            return false;
+            return { allowed: false };
         }
 
         const config = decisionConfig.load(ctx.cwd ?? runtime.cwd);
         if (!decisionEnabled(config, "child")) {
-            return false;
+            return { allowed: false };
         }
 
         const confinement = classifyRelaxedConfinement(command, ctx.cwd ?? runtime.cwd, roots);
         if (confinement === "unsafe") {
             onTrace?.("safe_bash.model_skipped", { reason: "confinement" });
-            return false;
+            return { allowed: false };
         }
 
         const consulted = await consultForGate({
@@ -87,18 +89,19 @@ export function createSafeBashConsult(
             ...(events === undefined ? {} : { events }),
         });
 
-        const allowed = consulted.permission === "allow";
-        const judged = allowed && capabilityCoversReadOnlyCommand(consulted.record);
+        const granted = consulted.permission === "allow";
+        const covered = capabilityCoversReadOnlyCommand(consulted.record);
+        const held = granted && !covered;
         recordConsult({
             runtime,
             command,
             record: consulted.record,
-            allowed,
-            held: allowed && !judged,
+            allowed: granted,
+            held,
         });
 
-        if (!judged) {
-            onTrace?.(allowed ? "safe_bash.model_held" : "safe_bash.model_withheld", {
+        if (!granted || held) {
+            onTrace?.(held ? "safe_bash.model_held" : "safe_bash.model_withheld", {
                 reason: consulted.record.reason,
                 ...(consulted.record.criterion === undefined
                     ? {}
@@ -107,7 +110,14 @@ export function createSafeBashConsult(
                     ? {}
                     : { action: consulted.record.action }),
             });
-            return false;
+
+            return {
+                allowed: false,
+                // `held` needs the grant to be standing (an unjudged body only matters once the command answer
+                // cleared it); everything else is the verdict not clearing the command, and whether it refused
+                // or was merely not allowed to act is in the record, which the sentence itself reads.
+                reason: readOnlyGateSentence(consulted.record, held ? "held" : "withheld"),
+            };
         }
 
         onTrace?.("safe_bash.model_allowed", {
@@ -118,7 +128,7 @@ export function createSafeBashConsult(
                 ? {}
                 : { confidence: consulted.record.confidence }),
         });
-        return true;
+        return { allowed: true };
     };
 }
 
