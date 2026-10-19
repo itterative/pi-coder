@@ -527,14 +527,23 @@ describe("status footer", () => {
             const footer = makeFooter(baseContext());
             expect(renderText(footer, 120)).not.toContain("tip: ");
 
-            vi.advanceTimersByTime(19_999);
-            expect(renderText(footer, 120)).not.toContain("tip: ");
-
+            // An idle line skips the initial wait: a fresh session gets its hint immediately.
             vi.advanceTimersByTime(1);
             // The alt+a tip is preferred, and the test environment keeps the classifier off.
             expect(renderText(footer, 120)).toContain(
                 "tip: alt+a toggles the Bash tool's auto mode",
             );
+
+            // Nothing else is on the line, so the tip stays past its visible window...
+            vi.advanceTimersByTime(10_000);
+            expect(renderText(footer, 120)).toContain(
+                "tip: alt+a toggles the Bash tool's auto mode",
+            );
+
+            // ...and the next window takes over from it rather than leaving a gap.
+            vi.advanceTimersByTime(90_000);
+            expect(renderText(footer, 120)).toContain("tip: ");
+            expect(renderText(footer, 120)).not.toContain("tip: alt+a");
             footer.dispose();
         } finally {
             vi.useRealTimers();
@@ -558,6 +567,56 @@ describe("status footer", () => {
         expect(line).not.toContain("tip: ");
         expect(line).toContain("» auto");
         footer.dispose();
+    });
+
+    it("keeps a tip on an idle line, and yields it when a run or TODO appears", () => {
+        vi.useFakeTimers();
+        try {
+            const footer = makeFooter(baseContext(), footerData());
+            // An idle line has nothing to interrupt, so the tip arrives without the initial wait.
+            vi.advanceTimersByTime(1);
+            vi.advanceTimersByTime(10_001);
+            expect(renderText(footer, 120)).toContain("tip: alt+a");
+
+            // A run claims the line, so the held tip goes with it.
+            footer.setAgents([partialRun()]);
+            expect(renderText(footer, 120)).not.toContain("tip: ");
+
+            // Idle again: the line picks another tip up rather than waiting for its window.
+            footer.setAgents([]);
+            expect(renderText(footer, 120)).toContain("tip: ");
+
+            // A held tip is the idle line's; a TODO takes its slot back at once.
+            vi.advanceTimersByTime(10_000);
+            footer.setTodo(todo);
+            const line = renderText(footer, 120);
+            expect(line).not.toContain("tip: ");
+            expect(line).toContain("TODO");
+            footer.dispose();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("still closes the tip window while a TODO is on the line", () => {
+        vi.useFakeTimers();
+        try {
+            const footer = makeFooter(baseContext(), footerData(), { todo });
+
+            // A busy line waits for its first tip...
+            vi.advanceTimersByTime(19_999);
+            expect(renderText(footer, 120)).not.toContain("tip: ");
+
+            vi.advanceTimersByTime(1);
+            expect(renderText(footer, 120)).toContain("tip: ");
+
+            // ...and clears it when the window ends.
+            vi.advanceTimersByTime(10_000);
+            expect(renderText(footer, 120)).not.toContain("tip: ");
+            footer.dispose();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });
 

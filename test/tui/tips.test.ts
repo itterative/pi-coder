@@ -51,7 +51,26 @@ describe("TipRotator", () => {
         rotator.dispose();
     });
 
-    it("waits for the first delay before the first tip", () => {
+    it("shows the first tip without the initial delay on an idle line", () => {
+        vi.useFakeTimers();
+        const { seen, onChange } = recording();
+        const rotator = new TipRotator(onChange, {
+            tips: [tip("a")],
+            firstDelayMs: 60_000,
+            intervalMs: 100,
+            visibleMs: 50,
+            isLineIdle: () => true,
+        });
+
+        rotator.start();
+        expect(seen).toEqual([]);
+
+        vi.advanceTimersByTime(0);
+        expect(seen).toEqual(["a"]);
+        rotator.dispose();
+    });
+
+    it("waits for an explicit first delay before the first tip", () => {
         vi.useFakeTimers();
         const { seen, onChange } = recording();
         const rotator = new TipRotator(onChange, {
@@ -156,6 +175,111 @@ describe("TipRotator", () => {
         open = true;
         vi.advanceTimersByTime(50);
         expect(seen).toEqual(["always", undefined, "gated"]);
+        rotator.dispose();
+    });
+
+    it("holds a tip past its window while idle, and releases it when the line fills up", () => {
+        vi.useFakeTimers();
+        const { seen, onChange } = recording();
+        let idle = true;
+        const rotator = new TipRotator(onChange, {
+            tips: [tip("a"), tip("b")],
+            intervalMs: 1_000,
+            visibleMs: 50,
+            random: () => 0,
+            isLineIdle: () => idle,
+        });
+
+        rotator.start();
+        vi.advanceTimersByTime(0);
+        expect(seen).toEqual(["a"]);
+
+        // The window ends, but an idle line keeps its tip...
+        vi.advanceTimersByTime(50);
+        expect(seen).toEqual(["a"]);
+
+        // ...and the next window replaces it rather than leaving a gap.
+        vi.advanceTimersByTime(1_000);
+        expect(seen).toEqual(["a", "b"]);
+
+        vi.advanceTimersByTime(50);
+        expect(seen).toEqual(["a", "b"]);
+
+        idle = false;
+        rotator.recheck();
+        expect(seen).toEqual(["a", "b", undefined]);
+        rotator.dispose();
+    });
+
+    it("picks a tip up when the line becomes idle while waiting", () => {
+        vi.useFakeTimers();
+        const { seen, onChange } = recording();
+        let idle = false;
+        const rotator = new TipRotator(onChange, {
+            tips: [tip("a")],
+            firstDelayMs: 60_000,
+            intervalMs: 1_000,
+            visibleMs: 50,
+            isLineIdle: () => idle,
+        });
+
+        rotator.start();
+        vi.advanceTimersByTime(5_000);
+        expect(seen).toEqual([]);
+
+        // The initial wait stops mattering the moment the line has nothing else to show.
+        idle = true;
+        rotator.recheck();
+        expect(seen).toEqual(["a"]);
+        rotator.dispose();
+    });
+
+    it("puts the initial delay back when the line fills up before the tip arrives", () => {
+        vi.useFakeTimers();
+        const { seen, onChange } = recording();
+        let idle = true;
+        const rotator = new TipRotator(onChange, {
+            tips: [tip("a")],
+            firstDelayMs: 500,
+            intervalMs: 1_000,
+            visibleMs: 50,
+            isLineIdle: () => idle,
+        });
+
+        rotator.start();
+        idle = false;
+        rotator.recheck();
+
+        vi.advanceTimersByTime(499);
+        expect(seen).toEqual([]);
+
+        vi.advanceTimersByTime(1);
+        expect(seen).toEqual(["a"]);
+        rotator.dispose();
+    });
+
+    it("yields an idle-line tip mid-window when the line fills up", () => {
+        vi.useFakeTimers();
+        const { seen, onChange } = recording();
+        let idle = true;
+        const rotator = new TipRotator(onChange, {
+            tips: [tip("a")],
+            intervalMs: 1_000,
+            visibleMs: 50,
+            isLineIdle: () => idle,
+        });
+
+        rotator.start();
+        vi.advanceTimersByTime(0);
+        expect(seen).toEqual(["a"]);
+
+        idle = false;
+        rotator.recheck();
+        expect(seen).toEqual(["a", undefined]);
+
+        // The cleared window does not fire its own hide a moment later.
+        vi.advanceTimersByTime(50);
+        expect(seen).toEqual(["a", undefined]);
         rotator.dispose();
     });
 

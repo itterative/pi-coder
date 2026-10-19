@@ -41,20 +41,26 @@ const DEFAULT_TIP_VISIBLE_MS = 10_000;
 export interface TipRotatorOptions {
     /** Tips to rotate through; defaults to `FOOTER_TIPS`. */
     tips?: readonly FooterTip[];
-    /** Delay before the first tip; later tips follow at `intervalMs`. */
+    /** Delay before the first tip on a busy line; skipped while `isLineIdle`. */
     firstDelayMs?: number;
     /** How long to wait between tips. */
     intervalMs?: number;
-    /** How long a tip stays visible. */
+    /** How long a tip stays visible before the next window replaces it. */
     visibleMs?: number;
     /** Random source for the shuffle order; tests inject a deterministic one. */
     random?: () => number;
+    /**
+     * True while the line has nothing else to show. An idle line has nothing to interrupt, so it skips
+     * the initial delay and keeps its tip up until the next window replaces it.
+     */
+    isLineIdle?: () => boolean;
 }
 
 /**
  * Shows one tip per interval for a short visible window, never repeating a tip until the whole list has
- * been shown. `onChange` fires with the tip when it appears and with `undefined` when it goes away, so
- * the owner only has to re-render.
+ * been shown. An idle line is the exception: its first tip arrives without the initial delay, and its
+ * tips stay up rather than blinking out after the window (see `isLineIdle`). `onChange` fires with the
+ * tip when it appears and with `undefined` when it goes away, so the owner only has to re-render.
  */
 export class TipRotator {
     private readonly tips: readonly FooterTip[];
@@ -62,9 +68,13 @@ export class TipRotator {
     private readonly intervalMs: number;
     private readonly visibleMs: number;
     private readonly random: () => number;
+    private readonly isLineIdle: () => boolean;
     private readonly preferredShown = new Set<FooterTip>();
     private queue: FooterTip[] = [];
+    private current: FooterTip | undefined;
+    private currentFromIdle = false;
     private nextTimer?: ReturnType<typeof setTimeout>;
+    private nextIsIdleSkip = false;
     private hideTimer?: ReturnType<typeof setTimeout>;
     private disposed = false;
 
@@ -77,13 +87,52 @@ export class TipRotator {
         this.intervalMs = options.intervalMs ?? DEFAULT_TIP_INTERVAL_MS;
         this.visibleMs = options.visibleMs ?? DEFAULT_TIP_VISIBLE_MS;
         this.random = options.random ?? Math.random;
+        this.isLineIdle = options.isLineIdle ?? (() => false);
     }
 
     /** Begin rotating. Idempotent: a started rotator ignores further `start` calls. */
     start(): void {
-        if (this.disposed || this.nextTimer || this.hideTimer) return;
+        if (this.disposed || this.nextTimer || this.hideTimer || this.current) return;
 
-        this.scheduleNext(this.firstDelayMs);
+        const idle = this.isLineIdle();
+        this.scheduleNext(idle ? 0 : this.firstDelayMs, idle);
+    }
+
+    /**
+     * Re-evaluate the line after its content changed: an idle line picks a tip up right away, and a tip
+     * that only stayed because the line was idle gives the space back.
+     */
+    recheck(): void {
+        if (this.disposed) return;
+
+        const idle = this.isLineIdle();
+
+        if (this.current === undefined) {
+            if (idle) {
+                this.showNow();
+                return;
+            }
+
+            if (this.nextIsIdleSkip) {
+                // The line filled up before the tip rushed for it could arrive: put the wait back.
+                this.cancelNextTimer();
+                this.scheduleNext(this.firstDelayMs);
+            }
+
+            return;
+        }
+
+        // `hideTimer` surviving means the tip is still inside its window; without it, the tip was held
+        // for the idle line. Either way, a tip that belongs to the idle line yields to content, while one
+        // shown over a busy line keeps the rest of its window.
+        if (!idle && (this.currentFromIdle || this.hideTimer === undefined)) {
+            this.clearTip();
+
+            // A held tip already has its next window scheduled; one cleared mid-window does not.
+            if (this.nextTimer === undefined) {
+                this.scheduleNext(this.intervalMs);
+            }
+        }
     }
 
     /** Stop rotating and drop any visible tip, without the change callback. */
@@ -93,18 +142,31 @@ export class TipRotator {
     }
 
     private cancelTimers(): void {
-        if (this.nextTimer) clearTimeout(this.nextTimer);
+        this.cancelNextTimer();
         if (this.hideTimer) clearTimeout(this.hideTimer);
 
-        this.nextTimer = undefined;
         this.hideTimer = undefined;
     }
 
-    private scheduleNext(delayMs: number): void {
+    private cancelNextTimer(): void {
+        if (this.nextTimer) clearTimeout(this.nextTimer);
+
+        this.nextTimer = undefined;
+    }
+
+    private scheduleNext(delayMs: number, idleSkip = false): void {
+        this.nextIsIdleSkip = idleSkip;
         this.nextTimer = setTimeout(() => {
             this.nextTimer = undefined;
+            this.nextIsIdleSkip = false;
             this.showNext();
         }, delayMs);
+    }
+
+    /** Show the next tip immediately instead of waiting out the scheduled delay. */
+    private showNow(): void {
+        this.cancelNextTimer();
+        this.showNext();
     }
 
     private showNext(): void {
@@ -114,12 +176,33 @@ export class TipRotator {
             return;
         }
 
+        this.current = tip;
+        this.currentFromIdle = this.isLineIdle();
         this.onChange(tip);
         this.hideTimer = setTimeout(() => {
             this.hideTimer = undefined;
-            this.onChange(undefined);
-            this.scheduleNext(this.intervalMs);
+            this.onWindowEnd();
         }, this.visibleMs);
+    }
+
+    private onWindowEnd(): void {
+        if (this.isLineIdle()) {
+            // Nothing else wants the line, so the tip stays until the next window replaces it.
+            this.scheduleNext(this.intervalMs);
+            return;
+        }
+
+        this.clearTip();
+        this.scheduleNext(this.intervalMs);
+    }
+
+    private clearTip(): void {
+        if (this.hideTimer) clearTimeout(this.hideTimer);
+
+        this.hideTimer = undefined;
+        this.current = undefined;
+        this.currentFromIdle = false;
+        this.onChange(undefined);
     }
 
     /**

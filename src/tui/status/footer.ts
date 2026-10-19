@@ -67,7 +67,9 @@ export class PiCoderFooter implements Component {
         events?: EventBus,
     ) {
         this.spinner = new Spinner(tui, { events });
-        this.tips = new TipRotator((tip) => this.setTip(tip));
+        this.tips = new TipRotator((tip) => this.setTip(tip), {
+            isLineIdle: () => this.isIdle(),
+        });
         this.runs = runs;
         this.hiddenCount = hiddenCount;
         this.todo = todo;
@@ -78,12 +80,14 @@ export class PiCoderFooter implements Component {
     setAgents(runs: AgentRunSummary[], hiddenCount = 0): void {
         this.runs = runs;
         this.hiddenCount = hiddenCount;
+        this.tips.recheck();
         this.updateSpinner();
         this.tui.requestRender();
     }
 
     setTodo(todo: TodoList | undefined): void {
         this.todo = todo;
+        this.tips.recheck();
         this.tui.requestRender();
     }
 
@@ -207,6 +211,15 @@ export class PiCoderFooter implements Component {
         }
 
         return this.tip;
+    }
+
+    /** True while the line has nothing of its own to show, so a tip may skip its wait and stay up. */
+    private isIdle(): boolean {
+        if (hasActiveAgentRuns(this.runs)) {
+            return false;
+        }
+
+        return this.todo === undefined || summarizeTodoList(this.todo) === undefined;
     }
 
     /**
