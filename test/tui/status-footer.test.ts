@@ -540,10 +540,17 @@ describe("status footer", () => {
                 "tip: alt+a toggles the Bash tool's auto mode",
             );
 
-            // ...and the next window takes over from it rather than leaving a gap.
-            vi.advanceTimersByTime(90_000);
-            expect(renderText(footer, 120)).toContain("tip: ");
-            expect(renderText(footer, 120)).not.toContain("tip: alt+a");
+            // ...and the next tip takes over from it sooner than on a busy line.
+            vi.advanceTimersByTime(30_000);
+            const second = renderText(footer, 120);
+            expect(second).toContain("tip: ");
+            expect(second).not.toContain("tip: alt+a");
+
+            // The line keeps rotating while it stays idle: the next swap brings a new tip.
+            vi.advanceTimersByTime(40_000);
+            const third = renderText(footer, 120);
+            expect(third).toContain("tip: ");
+            expect(third).not.toBe(second);
             footer.dispose();
         } finally {
             vi.useRealTimers();

@@ -185,6 +185,7 @@ describe("TipRotator", () => {
         const rotator = new TipRotator(onChange, {
             tips: [tip("a"), tip("b")],
             intervalMs: 1_000,
+            idleIntervalMs: 1_000,
             visibleMs: 50,
             random: () => 0,
             isLineIdle: () => idle,
@@ -208,6 +209,35 @@ describe("TipRotator", () => {
         idle = false;
         rotator.recheck();
         expect(seen).toEqual(["a", "b", undefined]);
+        rotator.dispose();
+    });
+
+    it("keeps cycling through every tip while the line stays idle", () => {
+        vi.useFakeTimers();
+        const { seen, onChange } = recording();
+        const rotator = new TipRotator(onChange, {
+            tips: [tip("a"), tip("b"), tip("c")],
+            intervalMs: 1_000,
+            idleIntervalMs: 1_000,
+            visibleMs: 50,
+            random: () => 0,
+            isLineIdle: () => true,
+        });
+
+        rotator.start();
+        vi.advanceTimersByTime(0);
+        expect(seen).toEqual(["a"]);
+
+        // A held tip is still replaced when the next window opens.
+        vi.advanceTimersByTime(1_050);
+        expect(seen).toEqual(["a", "c"]);
+
+        vi.advanceTimersByTime(1_050);
+        expect(seen).toEqual(["a", "c", "b"]);
+
+        // The bag refills instead of the last tip sticking forever.
+        vi.advanceTimersByTime(1_050);
+        expect(seen).toEqual(["a", "c", "b", "a"]);
         rotator.dispose();
     });
 

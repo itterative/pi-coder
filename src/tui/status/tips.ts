@@ -36,6 +36,7 @@ const FOOTER_TIPS: readonly FooterTip[] = [
 
 const DEFAULT_TIP_FIRST_DELAY_MS = 20_000;
 const DEFAULT_TIP_INTERVAL_MS = 90_000;
+const DEFAULT_TIP_IDLE_INTERVAL_MS = 30_000;
 const DEFAULT_TIP_VISIBLE_MS = 10_000;
 
 export interface TipRotatorOptions {
@@ -43,15 +44,17 @@ export interface TipRotatorOptions {
     tips?: readonly FooterTip[];
     /** Delay before the first tip on a busy line; skipped while `isLineIdle`. */
     firstDelayMs?: number;
-    /** How long to wait between tips. */
+    /** How long to wait between tips on a busy line. */
     intervalMs?: number;
+    /** How long an idle-line tip stays up before the next one replaces it. */
+    idleIntervalMs?: number;
     /** How long a tip stays visible before the next window replaces it. */
     visibleMs?: number;
     /** Random source for the shuffle order; tests inject a deterministic one. */
     random?: () => number;
     /**
      * True while the line has nothing else to show. An idle line has nothing to interrupt, so it skips
-     * the initial delay and keeps its tip up until the next window replaces it.
+     * the initial delay and keeps its tip up, swapping sooner until the line fills.
      */
     isLineIdle?: () => boolean;
 }
@@ -59,13 +62,15 @@ export interface TipRotatorOptions {
 /**
  * Shows one tip per interval for a short visible window, never repeating a tip until the whole list has
  * been shown. An idle line is the exception: its first tip arrives without the initial delay, and its
- * tips stay up rather than blinking out after the window (see `isLineIdle`). `onChange` fires with the
- * tip when it appears and with `undefined` when it goes away, so the owner only has to re-render.
+ * tips stay up rather than blinking out after the window, swapping on the shorter `idleIntervalMs`
+ * cadence (see `isLineIdle`). `onChange` fires with the tip when it appears and with `undefined` when it
+ * goes away, so the owner only has to re-render.
  */
 export class TipRotator {
     private readonly tips: readonly FooterTip[];
     private readonly firstDelayMs: number;
     private readonly intervalMs: number;
+    private readonly idleIntervalMs: number;
     private readonly visibleMs: number;
     private readonly random: () => number;
     private readonly isLineIdle: () => boolean;
@@ -85,6 +90,7 @@ export class TipRotator {
         this.tips = options.tips ?? FOOTER_TIPS;
         this.firstDelayMs = options.firstDelayMs ?? DEFAULT_TIP_FIRST_DELAY_MS;
         this.intervalMs = options.intervalMs ?? DEFAULT_TIP_INTERVAL_MS;
+        this.idleIntervalMs = options.idleIntervalMs ?? DEFAULT_TIP_IDLE_INTERVAL_MS;
         this.visibleMs = options.visibleMs ?? DEFAULT_TIP_VISIBLE_MS;
         this.random = options.random ?? Math.random;
         this.isLineIdle = options.isLineIdle ?? (() => false);
@@ -187,8 +193,9 @@ export class TipRotator {
 
     private onWindowEnd(): void {
         if (this.isLineIdle()) {
-            // Nothing else wants the line, so the tip stays until the next window replaces it.
-            this.scheduleNext(this.intervalMs);
+            // Nothing else wants the line, so the tip stays until the next one replaces it, sooner than on
+            // a busy line where the spacing has to protect the other segments.
+            this.scheduleNext(this.idleIntervalMs);
             return;
         }
 
