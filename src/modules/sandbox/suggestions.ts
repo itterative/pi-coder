@@ -14,17 +14,39 @@ import { parseBashAst } from "./bash";
  * Suggested rules are deliberately narrow: remembering `npx vitest *` is
  * safe even where `npx *` would be too broad (npx can run any package),
  * and a too-narrow rule merely means the next variant prompts again.
+ *
+ * Whether a file-like argument may be covered by the wildcard depends on the
+ * runner, not the spelling: `npx vitest test/a.test.ts` selects a test to run
+ * and `npx prettier src/a.ts` formats a file, while `npx tsx script.ts` executes
+ * the file's contents. The table therefore keyed the decision to the package
+ * identity (`CODE_EXECUTOR_PACKAGES` vs `DATA_TOOL_PACKAGES`) instead of the
+ * presence of a path, and an unrecognized package with a path keeps the path
+ * exact. That last case is what {@link SuggestionOutcome.widened} exists for:
+ * a decision-model consult may classify the arguments as data and choose the
+ * wider rule, while the pattern itself is still built here.
  */
+
+/** What one table row decided about a segment. */
+export interface SuggestionOutcome {
+    /** The rule the table offers on its own; null when the row declined. */
+    pattern: string | null;
+    /**
+     * A wider rule the decision model may choose instead when it classifies the
+     * segment's arguments as data. Present only when {@link pattern} pins a
+     * path-like argument of an unrecognized package runner.
+     */
+    widened?: string;
+}
 
 export interface SuggestionRule {
     /** literal token prefix the failing segment must start with */
     match: string[];
     /**
-     * Build the rule pattern from the segment tokens, or null when a token
+     * Build the rule outcome from the segment tokens, or null when a token
      * is not safe to reuse (the row is skipped and the next matching row
      * is tried, so a specific row can fall through to a broader one).
      */
-    suggest: (tokens: string[]) => string | null;
+    suggest: (tokens: string[]) => SuggestionOutcome | null;
 }
 
 // A token can be reused in a generated pattern only when it is plain
@@ -36,24 +58,31 @@ const SAFE_TOKEN = /^[A-Za-z0-9._\-/:@]+$/;
 
 // Row builders: scope on the token at idx (null when unsafe or missing),
 // or a fixed pattern with no scoping.
+const scopedPattern = (prefix: string, idx: number, tokens: string[]): string | null => {
+    const name = tokens[idx];
+    if (name === undefined || !SAFE_TOKEN.test(name)) return null;
+
+    // Keep an exact rule for the command that prompted. Add a wildcard
+    // only when the invocation already has arguments beyond the scoped
+    // command identity; wildcard arguments are one-or-more, not optional.
+    return `${prefix} ${name}${tokens.length > idx + 1 ? " *" : ""}`;
+};
+
 const scoped =
     (prefix: string, idx: number) =>
-    (tokens: string[]): string | null => {
-        const name = tokens[idx];
-        if (name === undefined || !SAFE_TOKEN.test(name)) return null;
+    (tokens: string[]): SuggestionOutcome | null => {
+        const pattern = scopedPattern(prefix, idx, tokens);
 
-        // Keep an exact rule for the command that prompted. Add a wildcard
-        // only when the invocation already has arguments beyond the scoped
-        // command identity; wildcard arguments are one-or-more, not optional.
-        return `${prefix} ${name}${tokens.length > idx + 1 ? " *" : ""}`;
+        return pattern === null ? null : { pattern };
     };
 
 const fixed =
-    (pattern: string) =>
-    (tokens: string[]): string => {
+    (pattern: string, baseTokens = 1) =>
+    (tokens: string[]): SuggestionOutcome => {
         // As with scoped rules, don't append an argument wildcard when the
-        // prompting invocation has no arguments.
-        return tokens.length > 1 ? pattern : pattern.replace(/ \*$/, "");
+        // prompting invocation has no arguments beyond the command name. A
+        // multi-token command name (`node --test`) counts as the base.
+        return { pattern: tokens.length > baseTokens ? pattern : pattern.replace(/ \*$/, "") };
     };
 
 /**
@@ -68,36 +97,143 @@ const fixed =
 const INLINE_SCRIPT_FLAG = /^(?:-[cep]|--(?:call|eval|print)(?:=|$))/;
 const FILE_ARGUMENT = /(?:^|\/)[^/]+\.(?:[cm]?[jt]sx?|json)$/i;
 
+/**
+ * Whether a token names a path rather than a value.
+ *
+ * The extension form is the original check; a slash also covers extension-less
+ * operands (`src/index`) and directory arguments. Leading `-` excludes flags
+ * and their `--flag=value` spellings.
+ */
+const looksLikePath = (token: string): boolean =>
+    !token.startsWith("-") && (FILE_ARGUMENT.test(token) || token.includes("/"));
+
+/**
+ * Packages whose file argument is the program that runs.
+ *
+ * For these, a path-like argument is pinned exactly: `npx tsx script.ts` must
+ * not become `npx tsx *`, which would let the remembered rule run any local
+ * script. The names mirror the interpreters in `modules/decision/script.ts`
+ * plus the watchers that wrap them; the list is duplicated rather than imported
+ * because the sandbox module must not depend on the decision module.
+ */
+const CODE_EXECUTOR_PACKAGES = new Set([
+    "bash",
+    "deno",
+    "jiti",
+    "node",
+    "nodemon",
+    "perl",
+    "php",
+    "python",
+    "python3",
+    "ruby",
+    "sh",
+    "ts-node",
+    "ts-node-dev",
+    "tsx",
+    "zsh",
+]);
+
+/**
+ * Packages whose positional paths are data: test files to select or run,
+ * sources to format, lint, or compile.
+ *
+ * A file-like argument after these is covered by the wildcard instead of
+ * pinning the rule to that path. The names repeat bare rows below on purpose:
+ * a row names an identity that is safe to remember bare, this set says the
+ * identity's paths are data, and a package can need the one without the other.
+ */
+const DATA_TOOL_PACKAGES = new Set([
+    "ava",
+    "biome",
+    "cypress",
+    "esbuild",
+    "eslint",
+    "jest",
+    "mocha",
+    "next",
+    "oxlint",
+    "playwright",
+    "prettier",
+    "rollup",
+    "stylelint",
+    "swc",
+    "tsc",
+    "typedoc",
+    "vite",
+    "vitest",
+    "webpack",
+]);
+
+/**
+ * The exact rule for a code executor: everything through the first path-like
+ * argument, wildcarding only later arguments. A second path-like argument keeps
+ * the whole invocation exact, because the wildcard could otherwise cover a
+ * second code path (`tsx --tsconfig tsconfig.json script.ts`).
+ */
+const exactCodeInvocation = (tokens: string[], packageIndex: number): string => {
+    const operand = tokens.findIndex(
+        (token, index) => index > packageIndex && looksLikePath(token),
+    );
+    if (operand === -1) {
+        return tokens.join(" ");
+    }
+
+    const laterPath = tokens.slice(operand + 1).some((token) => looksLikePath(token));
+    if (laterPath || operand + 1 === tokens.length) {
+        return tokens.join(" ");
+    }
+
+    return `${tokens.slice(0, operand + 1).join(" ")} *`;
+};
+
 const suggestPackageRunner = (
     prefix: string,
     packageIndex: number,
     tokens: string[],
-): string | null => {
+): SuggestionOutcome | null => {
     for (const token of tokens.slice(packageIndex)) {
         if (INLINE_SCRIPT_FLAG.test(token)) {
             return null;
         }
     }
 
-    // A file argument identifies the concrete script being run. Keep that
-    // path exact, while allowing additional arguments to vary.
-    if (FILE_ARGUMENT.test(tokens[packageIndex + 1] ?? "")) {
-        const scriptEnd = packageIndex + 2;
-        const scriptInvocation = tokens.slice(0, scriptEnd).join(" ");
-        return tokens.length > scriptEnd ? `${scriptInvocation} *` : scriptInvocation;
+    const packageName = tokens[packageIndex];
+    if (packageName !== undefined && CODE_EXECUTOR_PACKAGES.has(packageName)) {
+        return { pattern: exactCodeInvocation(tokens, packageIndex) };
+    }
+
+    // An unrecognized package with a path-like argument keeps the path exact:
+    // the table cannot know whether the package executes it (`jiti script.ts`)
+    // or only reads it (`vitest test/a.test.ts`), so it errs toward the narrow
+    // rule. The decision model may widen it when it classifies the arguments
+    // as data, which is what `widened` offers.
+    const pathArgument =
+        packageName !== undefined &&
+        !DATA_TOOL_PACKAGES.has(packageName) &&
+        tokens.some((token, index) => index > packageIndex && looksLikePath(token));
+    if (pathArgument) {
+        const widened = scopedPattern(prefix, packageIndex, tokens);
+
+        return {
+            pattern: tokens.join(" "),
+            ...(widened === null ? {} : { widened }),
+        };
     }
 
     return scoped(prefix, packageIndex)(tokens);
 };
 
-const suggestNpx = (tokens: string[]): string | null => suggestPackageRunner("npx", 1, tokens);
-const suggestBunx = (tokens: string[]): string | null => suggestPackageRunner("bunx", 1, tokens);
-const suggestPnpmDlx = (tokens: string[]): string | null =>
+const suggestNpx = (tokens: string[]): SuggestionOutcome | null =>
+    suggestPackageRunner("npx", 1, tokens);
+const suggestBunx = (tokens: string[]): SuggestionOutcome | null =>
+    suggestPackageRunner("bunx", 1, tokens);
+const suggestPnpmDlx = (tokens: string[]): SuggestionOutcome | null =>
     suggestPackageRunner("pnpm dlx", 2, tokens);
-const suggestYarnDlx = (tokens: string[]): string | null =>
+const suggestYarnDlx = (tokens: string[]): SuggestionOutcome | null =>
     suggestPackageRunner("yarn dlx", 2, tokens);
 
-const suggestPnpm = (tokens: string[]): string | null => {
+const suggestPnpm = (tokens: string[]): SuggestionOutcome | null => {
     if (tokens[1] === "dlx") {
         return null;
     }
@@ -105,7 +241,7 @@ const suggestPnpm = (tokens: string[]): string | null => {
     return scoped("pnpm", 1)(tokens);
 };
 
-const suggestYarn = (tokens: string[]): string | null => {
+const suggestYarn = (tokens: string[]): SuggestionOutcome | null => {
     if (tokens[1] === "dlx") {
         return null;
     }
@@ -147,6 +283,14 @@ const SUGGESTIONS: SuggestionRule[] = [
     { match: ["deno", "fmt"], suggest: scoped("deno", 1) },
     { match: ["deno", "lint"], suggest: scoped("deno", 1) },
     { match: ["cmake", "--build"], suggest: scoped("cmake", 1) },
+    { match: ["npm", "test"], suggest: scoped("npm", 1) },
+    { match: ["node", "--test"], suggest: fixed("node --test *", 2) },
+    { match: ["vitest"], suggest: fixed("vitest *") },
+    { match: ["jest"], suggest: fixed("jest *") },
+    { match: ["mocha"], suggest: fixed("mocha *") },
+    { match: ["ava"], suggest: fixed("ava *") },
+    { match: ["playwright"], suggest: fixed("playwright *") },
+    { match: ["cypress"], suggest: fixed("cypress *") },
     { match: ["make"], suggest: fixed("make *") }, // targets vary; no scoping
     { match: ["just"], suggest: fixed("just *") },
     { match: ["task"], suggest: fixed("task *") },
@@ -162,12 +306,55 @@ const SUGGESTIONS: SuggestionRule[] = [
 ];
 
 /**
+ * Whether a generated pattern is one line of safe tokens.
+ *
+ * Defense in depth: a malformed pattern in the permissions set would make
+ * getPermissions throw and disable ALL rule matching — including the user's own
+ * config rules.
+ */
+function isSafePattern(pattern: string): boolean {
+    try {
+        const parsed = parseBashAst(pattern);
+        if (parsed.statements.length !== 1) {
+            return false;
+        }
+        const statement = parsed.statements[0];
+        if (statement.parts.length !== 1 || statement.commands.length !== 1) {
+            return false;
+        }
+        const [command] = statement.commands;
+        if (command.redirections.length > 0) {
+            return false;
+        }
+        if (command.words.some((word) => word.value !== "*" && !SAFE_TOKEN.test(word.value))) {
+            return false;
+        }
+    } catch {
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * Suggest a rule pattern for a failing (tokenized) segment, or null when
  * no table row applies. The result is always a pattern that parses as a
  * single line of safe tokens.
  */
 export function suggestRule(tokens: string[]): string | null {
-    if (tokens.length === 0) return null;
+    return suggestRuleOutcome(tokens).pattern;
+}
+
+/**
+ * The suggested rule plus the wider alternative a decision model may choose.
+ *
+ * {@link SuggestionOutcome.widened} is populated only where the table pinned a
+ * path-like argument because the package runner was unrecognized; a model that
+ * classifies the invocation's arguments as data may switch to it. Both patterns
+ * are parsed here, so a caller never has to re-check what the model picks.
+ */
+export function suggestRuleOutcome(tokens: string[]): SuggestionOutcome {
+    if (tokens.length === 0) return { pattern: null };
 
     for (const rule of SUGGESTIONS) {
         if (rule.match.length > tokens.length) continue;
@@ -180,34 +367,21 @@ export function suggestRule(tokens: string[]): string | null {
         }
         if (!prefixOk) continue;
 
-        const pattern = rule.suggest(tokens);
-        if (pattern === null) continue;
-
-        // Defense in depth: the pattern must parse as one line of safe
-        // tokens. A malformed pattern in the permissions set would make
-        // getPermissions throw and disable ALL rule matching — including
-        // the user's own config rules.
-        try {
-            const parsed = parseBashAst(pattern);
-            if (parsed.statements.length !== 1) {
-                continue;
-            }
-            const statement = parsed.statements[0];
-            if (statement.parts.length !== 1 || statement.commands.length !== 1) {
-                continue;
-            }
-            const [command] = statement.commands;
-            if (command.redirections.length > 0) {
-                continue;
-            }
-            if (command.words.some((word) => word.value !== "*" && !SAFE_TOKEN.test(word.value))) {
-                continue;
-            }
-        } catch {
+        const outcome = rule.suggest(tokens);
+        if (outcome === null || outcome.pattern === null || !isSafePattern(outcome.pattern)) {
             continue;
         }
 
-        return pattern;
+        const widened =
+            outcome.widened !== undefined && isSafePattern(outcome.widened)
+                ? outcome.widened
+                : undefined;
+
+        return {
+            pattern: outcome.pattern,
+            ...(widened === undefined ? {} : { widened }),
+        };
     }
-    return null;
+
+    return { pattern: null };
 }

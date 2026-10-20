@@ -3,6 +3,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DecisionEvaluator } from "./evaluator";
 import { readScriptFile, resolveScriptRun, scriptFileIdentity } from "./script";
 import { decisionSessionContext } from "./session-context";
+import { SuggestionEvaluator, type SuggestionConsult } from "./suggestion";
 import { workspaceStatusFor } from "./workspace";
 import type { ClassifierRegistry } from "./model";
 import type { DecisionIsolation, DecisionRunner } from "./runner-rules";
@@ -156,6 +157,75 @@ function evaluatorFor(seed: EvaluatorSeed): DecisionEvaluator {
     return evaluator;
 }
 
+/**
+ * Whether this configuration allows the model to refine a session-rule suggestion.
+ *
+ * Not `decisionEnabled`: `surfaces` names the prompts a verdict may resolve, and a suggestion grants no
+ * authority — it is a second pattern the table already built. `suggestions: false` is the off switch.
+ */
+export function suggestionEnabled(config: DecisionModelConfig): boolean {
+    return config.enabled === true && config.suggestions !== false;
+}
+
+/** The evaluator's seed, without the sandbox fact the suggestion subject never reads. */
+export interface SuggestionEvaluatorSeed {
+    ctx: ExtensionContext;
+    config: DecisionModelConfig;
+    registry?: ClassifierRegistry;
+}
+
+let cachedSuggestionEvaluator: { key: string; evaluator: SuggestionEvaluator } | undefined;
+
+/** One suggestion evaluator per configuration: it owns a cooldown and a cache that must not span configs. */
+function suggestionEvaluatorFor(seed: SuggestionEvaluatorSeed): SuggestionEvaluator {
+    const key = JSON.stringify(seed.config);
+    if (cachedSuggestionEvaluator?.key === key) {
+        return cachedSuggestionEvaluator.evaluator;
+    }
+
+    const evaluator = new SuggestionEvaluator({
+        registry: seed.registry ?? seed.ctx.modelRegistry,
+        config: seed.config,
+    });
+    cachedSuggestionEvaluator = { key, evaluator };
+    return evaluator;
+}
+
+export interface SuggestionConsultOptions extends SuggestionEvaluatorSeed {
+    /** The single uncovered segment, as text. */
+    command: string;
+    /** Commands from this session that name the same tool, oldest first. */
+    recentCommands?: readonly string[];
+}
+
+/**
+ * Ask the model whether one uncovered segment's arguments are code or data.
+ *
+ * Never rejects, and never grants anything: a disabled, failed, or unreadable answer comes back without a
+ * role and the caller keeps the suggestion the table built. This is the second evaluator rather than more
+ * questions on the veto's request, so the veto state and wording — which were measured to ship as they are —
+ * stay byte-identical.
+ */
+export async function consultSuggestionRole(
+    options: SuggestionConsultOptions,
+): Promise<SuggestionConsult> {
+    if (!suggestionEnabled(options.config)) {
+        return { status: "disabled", latencyMs: 0 };
+    }
+
+    try {
+        return await suggestionEvaluatorFor(options).evaluate({
+            command: options.command,
+            cwd: options.ctx.cwd ?? process.cwd(),
+            ...(options.recentCommands === undefined
+                ? {}
+                : { recentCommands: options.recentCommands }),
+        });
+    } catch (error) {
+        return { status: "error", latencyMs: 0 };
+    }
+}
+
 /** What it takes to get the shared evaluator: the settings it is keyed by and where the model resolves from. */
 export interface EvaluatorSeed {
     ctx: ExtensionContext;
@@ -171,9 +241,10 @@ export interface EvaluatorSeed {
     registry?: ClassifierRegistry;
 }
 
-/** Drop the shared evaluator and its verdict and rejection caches, so tests do not inherit a cooldown or a cached answer earned by another. */
+/** Drop the shared evaluators and their caches, so tests do not inherit a cooldown or a cached answer earned by another. */
 export function resetDecisionEvaluator(): void {
     cachedEvaluator = undefined;
+    cachedSuggestionEvaluator = undefined;
 }
 
 export interface ConsultOptions extends EvaluatorSeed {

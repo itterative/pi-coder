@@ -14,16 +14,20 @@ export {
     consultDecisionContext,
     consultDecisionModel,
     consultFileAccessDecision,
+    consultSuggestionRole,
     decisionContextFor,
     decisionEnabled,
     fileDecisionContextFor,
     fileDecisionEnabled,
     resetDecisionEvaluator,
+    suggestionEnabled,
     DEFAULT_SURFACES,
     type ConsultOptions,
     type DecisionConsultation,
     type EvaluatorSeed,
     type FileConsultOptions,
+    type SuggestionConsultOptions,
+    type SuggestionEvaluatorSeed,
 } from "./gate";
 export {
     DECISION_CLASSIFIER_API,
@@ -38,6 +42,8 @@ export {
     ITEM_CHARS,
     RECENT_ITEM_COUNT,
     REQUEST_CHARS,
+    SUGGESTION_HISTORY_COUNT,
+    decisionSimilarCommands,
     type DecisionSessionContext,
 } from "./session-context";
 export { resolveClassifier, type ClassifierRegistry } from "./model";
@@ -89,6 +95,21 @@ export {
     scriptRequest,
 } from "./script-classification";
 export { scopeAnswer } from "./scope";
+export {
+    SUGGESTION_CRITERIA,
+    SUGGESTION_DATA_THRESHOLD,
+    SUGGESTION_INSTRUCTION,
+    SUGGESTION_QUESTION_ID,
+    SuggestionEvaluator,
+    buildSuggestionState,
+    suggestionRequest,
+    suggestionRoleFrom,
+    type SuggestionConsult,
+    type SuggestionContext,
+    type SuggestionEvaluatorOptions,
+    type SuggestionRole,
+    type SuggestionStatus,
+} from "./suggestion";
 export {
     FILE_ACCESS_STRATEGY,
     FILE_KIND_CRITERIA,

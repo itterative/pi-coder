@@ -58,8 +58,10 @@ export interface BashDecisionRecord {
     /** present only when a human was asked */
     prompt?: {
         outcome: PromptOutcome;
-        /** session rule offered by the suggestion table, when one existed */
+        /** session rule offered with the prompt, when one existed */
         suggestion?: string;
+        /** whether the table's rule was offered as-is, or the model chose the table's wider alternative */
+        suggestionSource?: "table" | "model";
         /** rule the user chose to remember, when they accepted the suggestion */
         rule?: string;
     };
@@ -176,7 +178,12 @@ export interface BashDecisionInput {
     details?: ResolvePermissionDetails;
     /** Marks a record the read-only child gate wrote; the resolver's `details` are then absent. */
     readOnlyGate?: boolean;
-    prompt?: { outcome: PromptOutcome; suggestion?: string; rule?: string };
+    prompt?: {
+        outcome: PromptOutcome;
+        suggestion?: string;
+        suggestionSource?: "table" | "model";
+        rule?: string;
+    };
     classifier?: BashClassifierRecord;
     decision: Permission;
     sandboxed: boolean;
@@ -386,6 +393,9 @@ export function logBashDecision(input: BashDecisionInput): void {
                       ...(input.prompt.suggestion === undefined
                           ? {}
                           : { suggestion: input.prompt.suggestion }),
+                      ...(input.prompt.suggestionSource === undefined
+                          ? {}
+                          : { suggestionSource: input.prompt.suggestionSource }),
                       ...(input.prompt.rule === undefined ? {} : { rule: input.prompt.rule }),
                   },
               }),

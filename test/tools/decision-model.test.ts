@@ -4,10 +4,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ClassifierContext } from "@earendil-works/pi-ai";
-import { createEventBus, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+    createEventBus,
+    type ExtensionContext,
+    type SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 
 import {
     SCRIPT_QUESTION,
+    SUGGESTION_QUESTION_ID,
     resetDecisionScriptCache,
     type ClassifierRegistry,
     type DecisionModelConfig,
@@ -21,6 +26,7 @@ import {
     appliedPermission,
     classifierRecord,
     consultForGate,
+    suggestRuleForPrompt,
 } from "../../src/tools/decision-model";
 import { countedUsage, zeroUsage } from "../helpers/agent-doubles";
 import { stubContext, stubSessionManager } from "../helpers/pi-stub";
@@ -30,6 +36,7 @@ import {
     classifierModelRegistry,
     criterionResult,
     scriptResult,
+    suggestionResult,
     type Classifier,
 } from "../modules/decision/classifier";
 
@@ -89,6 +96,153 @@ function consultContext(registry: ClassifierRegistry): ExtensionContext {
         modelRegistry: classifierModelRegistry(registry),
     });
 }
+
+/**
+ * The commands a suggestion consult should be able to see: the branch's bash tool calls, as production
+ * records them. Only the fields `decisionSimilarCommands` reads are populated.
+ */
+function branchWith(commands: readonly string[]): SessionEntry[] {
+    return commands.map(
+        (command, index) =>
+            ({
+                type: "message",
+                id: `entry-${index}`,
+                parentId: null,
+                timestamp: String(index + 1),
+                message: {
+                    role: "assistant",
+                    content: [
+                        {
+                            type: "toolCall",
+                            id: `call-${index}`,
+                            name: "bash",
+                            arguments: { command },
+                        },
+                    ],
+                    api: "test",
+                    provider: "test",
+                    model: "test",
+                    usage: zeroUsage(),
+                    stopReason: "stop",
+                    timestamp: index + 1,
+                },
+            }) as SessionEntry,
+    );
+}
+
+function suggestionContext(
+    registry: ClassifierRegistry,
+    commands: readonly string[] = [],
+): ExtensionContext {
+    return stubContext({
+        hasUI: true,
+        sessionManager: stubSessionManager({ getBranch: () => branchWith(commands) }),
+        modelRegistry: classifierModelRegistry(registry),
+    });
+}
+
+describe("suggestRuleForPrompt", () => {
+    it("returns no suggestion without a table row or for multiple uncovered segments", async () => {
+        const classify = vi.fn(async (model: Classifier) => suggestionResult(model, 0.1));
+        const registry = answeringRegistry([MODEL], classify);
+        const context = suggestionContext(registry);
+
+        await expect(
+            suggestRuleForPrompt({
+                ctx: context,
+                config: modelConfig(),
+                unresolved: [["kindly-untagged-tool", "--now"]],
+                consultModel: true,
+            }),
+        ).resolves.toBeNull();
+        await expect(
+            suggestRuleForPrompt({
+                ctx: context,
+                config: modelConfig(),
+                unresolved: [
+                    ["npx", "zorch", "script.ts"],
+                    ["tail", "-5"],
+                ],
+                consultModel: true,
+            }),
+        ).resolves.toBeNull();
+        expect(classify).not.toHaveBeenCalled();
+    });
+
+    it("keeps the narrow rule without consulting when asked not to", async () => {
+        const classify = vi.fn(async (model: Classifier) => suggestionResult(model, 0.1));
+        const registry = answeringRegistry([MODEL], classify);
+
+        const suggestion = await suggestRuleForPrompt({
+            ctx: suggestionContext(registry),
+            config: modelConfig({ suggestions: false }),
+            unresolved: [["npx", "zorch", "script.ts"]],
+            consultModel: true,
+        });
+
+        expect(suggestion).toEqual({ pattern: "npx zorch script.ts", source: "table" });
+        expect(classify).not.toHaveBeenCalled();
+    });
+
+    it("offers the table's wider rule when the model reads the arguments as data", async () => {
+        const classify = vi.fn(async (model: Classifier, context: ClassifierContext) =>
+            suggestionResult(model, 0.1),
+        );
+        const registry = answeringRegistry([MODEL], classify);
+
+        const suggestion = await suggestRuleForPrompt({
+            ctx: suggestionContext(registry, ["npx zorch run test/other.test.ts"]),
+            config: modelConfig(),
+            unresolved: [["npx", "zorch", "script.ts"]],
+            consultModel: true,
+        });
+
+        expect(suggestion).toEqual({ pattern: "npx zorch *", source: "model" });
+        expect(classify.mock.calls[0]?.[1]?.state).toMatchObject({
+            command: "npx zorch script.ts",
+            recent_commands: ["npx zorch run test/other.test.ts"],
+        });
+        // The segment's own state must not carry the question's id twice or drop it.
+        expect(classify.mock.calls[0]?.[1]?.questions).toHaveProperty(SUGGESTION_QUESTION_ID);
+    });
+
+    it("keeps the exact rule when the model reads the argument as code", async () => {
+        const registry = answeringRegistry([MODEL], async (model) => suggestionResult(model, 0.9));
+
+        const suggestion = await suggestRuleForPrompt({
+            ctx: suggestionContext(registry),
+            config: modelConfig(),
+            unresolved: [["npx", "zorch", "script.ts"]],
+            consultModel: true,
+        });
+
+        expect(suggestion).toEqual({ pattern: "npx zorch script.ts", source: "table" });
+    });
+
+    it("offers a known wildcard or code executor without a request", async () => {
+        const classify = vi.fn(async (model: Classifier) => suggestionResult(model, 0.1));
+        const registry = answeringRegistry([MODEL], classify);
+        const context = suggestionContext(registry);
+
+        await expect(
+            suggestRuleForPrompt({
+                ctx: context,
+                config: modelConfig(),
+                unresolved: [["npx", "vitest", "test/foo.test.ts"]],
+                consultModel: true,
+            }),
+        ).resolves.toEqual({ pattern: "npx vitest *", source: "table" });
+        await expect(
+            suggestRuleForPrompt({
+                ctx: context,
+                config: modelConfig(),
+                unresolved: [["npx", "tsx", "script.ts"]],
+                consultModel: true,
+            }),
+        ).resolves.toEqual({ pattern: "npx tsx script.ts", source: "table" });
+        expect(classify).not.toHaveBeenCalled();
+    });
+});
 
 describe("appliedPermission", () => {
     it("is undefined unless apply is exactly true", () => {

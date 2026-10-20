@@ -6,12 +6,13 @@ category: architecture
 
 # Decision model
 
-Optional classifier consulted when the rule/heuristic pipeline leaves a command `ask` (`src/modules/decision/`).
+Optional classifier consulted when the rule/heuristic pipeline leaves a command `ask` (`src/modules/decision/`), and for one advisory question when the permission prompt is choosing the width of a session-rule suggestion (see **Suggestion subject** below).
 Registered with pi as a classifier provider — System One at `POST {baseUrl}/systemone` through
 `ctx.modelRegistry.classify()` with pi's `typesafe-system-one` api — so this repo holds no HTTP client and pi
 keeps credential resolution, usage, and cancellation. All three bash decision points consult it when `enabled`
 is true and their surface is in `surfaces`: the parent hook, the delegated command gate, and the read-only
-child gate (`safe-bash-decision.ts`) for commands whose only heuristic failure is the curated allowlist. `apply`
+child gate (`safe-bash-decision.ts`) for commands whose only heuristic failure is the curated allowlist; the
+suggestion subject (`suggestion.ts`) is the one consult that does not judge a permission at all. `apply`
 is the single switch that lets a verdict resolve a prompt, and without it the model is consulted and recorded
 only. The global `alt+a` shortcut
 (`registerDecisionModelShortcut` in `src/tools/decision-settings.ts`) toggles `enabled` in the global file,
@@ -156,6 +157,16 @@ folded to `sandbox`, `applied: true`, no prompt — a silent sandbox. After the 
 to `out_of_scope @ 0.0` → refuse → abstain, `applied: false`, and the human was prompted (approved →
 `allow:sandbox`).
 
+## The suggestion subject (`suggestion.ts`)
+
+Not a permission question and never wired into a verdict: it exists because `src/modules/sandbox/suggestions.ts` cannot tell whether a path-like argument of an *unrecognized* package runner is data (`vitest test/a.ts`) or the program that runs (`tsx script.ts`), so it returns the exact rule plus a `widened` wildcard. The model answers one `bool` (`executes_code`, the measured wording in `SUGGESTION_INSTRUCTION`) and `suggestRuleForPrompt` in `tools/decision-model.ts` picks between the two table-built patterns; the model never generates a pattern. Measured on a 30-command battery the yes/no reached 29/30, while a direct "choose the pattern" question twice picked wildcards around executed code (`npx tsx *`, `npx tsx -e *`).
+
+- **Its own evaluator, deliberately.** `SuggestionEvaluator` is separate from `DecisionEvaluator`: it has its own bounded cache (keyed on model, segment text, and recent window) and its own 30 s cooldown, so a failed suggestion request cannot pause a verdict and the veto request stays byte-identical to the measured design. Live cost ~85 ms / ~225 input tokens; only asked when the table returned `widened`, a prompt will be shown (`ctx.hasUI`), and the veto consult did not error/timeout.
+- **Same-tool history is load-bearing.** The state is `{command, cwd, recent_commands}`; `decisionSimilarCommands` (in `session-context.ts`) keeps up to 3 earlier bash commands from the branch sharing the segment's first two words, clipped like other session items. One earlier `npx zorch run test/bar.test.ts` moved the role answer for `npx zorch run test/foo.test.ts` from 0.80 (code → exact) to 0.36 (data → `npx zorch *`); a mixed recent window left it at 0.61. This is the one place command history is measured *positive* — the veto's settled "no command history" finding was not retested and its request is untouched.
+- **Config:** `decisionModel.suggestions` (default true) is the off switch; `enabled: true` is required. It is not tied to `surfaces`, because a suggestion grants no authority. Both gates share `suggestRuleForPrompt`; the parent passes `consultModel: ctx.hasUI && veto did not fail`, the child passes the parent's registry and its own veto status.
+- The decision log records `prompt.suggestionSource` (`"table" | "model"`).
+- Tests: `test/modules/decision/suggestion.test.ts`, `test/modules/decision/session-context.test.ts`, `test/modules/sandbox/suggestions.test.ts`, the `suggestRuleForPrompt` block in `test/tools/decision-model.test.ts`, and the child-prompt case in `test/tools/agent-scout-bash.test.ts`.
+
 ## The file-access subject (`file-access.ts`)
 
 The second thing the module judges: one direct `read`/`write`/`edit` that no root resolved. It is a **subject**,
@@ -200,7 +211,8 @@ and harness live in `.pi/local/decision-models/` (`extract_file_cases.py`, `prob
   `DECISION_MODEL_CONFIG_PATH_GLOBAL` / `DECISION_MODEL_CONFIG_PATH` redirect the files; **set-but-blank means
   "no file"** (which is what `test/setup.ts` pins, so a suite can never reach a live endpoint). A blank env
   value otherwise falls through to the config rather than clearing it.
-- Config keys: `enabled`, `apply`, `baseUrl`, `apiKey`, `provider` (default `systemone`), `model`,
+- Config keys: `enabled`, `suggestions` (default true; model-refined session-rule suggestions), `apply`,
+  `baseUrl`, `apiKey`, `provider` (default `systemone`), `model`,
   `contextWindow` (32768), `strategy`, `timeoutMs` (5000), `cooldownMs` (30000), `minConfidence` (0.8),
   `surfaces` (default `["parent"]`), and `fileSurfaces` (default none), which names the read/write gates rather
   than the Bash ones. The old `autoHost`/`autoRefuse`/`applySurfaces` keys are ignored.
@@ -225,7 +237,8 @@ and harness live in `.pi/local/decision-models/` (`extract_file_cases.py`, `prob
 | `scope.ts` | the deterministic capability × runner-rung gate |
 | `script.ts` / `script-classification.ts` | body resolution and the capability verdict |
 | `strategies/` | `types.ts`, `veto.ts` (default), `history.ts`, `classification.ts` (criteria + table), `index.ts` |
-| `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify + the `pi-coder:decision-status` check count the footer animates), and the runner-facing block sentences (`attributedBashBlockReason`, `readOnlyGateSentence`, `permissionAllowsCall`) |
+| `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify + the `pi-coder:decision-status` check count the footer animates), the suggestion bridge (`suggestRuleForPrompt`, `consultSuggestionForPrompt`), and the runner-facing block sentences (`attributedBashBlockReason`, `readOnlyGateSentence`, `permissionAllowsCall`) |
+| `decision/suggestion.ts` | the suggestion subject: the `executes_code` bool, `buildSuggestionState`, `suggestionRoleFrom` (probability ≥ 0.5 → code), and the separate `SuggestionEvaluator` with its own cache/cooldown |
 | `tools/bash/index.ts` | parent hook: consult on `ask`, record, prompt unless `apply` resolves it |
 | `tools/agent/child/command-permissions.ts` | child hook: consult with the child's own session, runner/isolation, and the parent's registry |
 | `tools/agent/child/safe-bash.ts` | read-only assessment; the relaxed (generic-spec) re-check `isRelaxedConfinementSafe` |

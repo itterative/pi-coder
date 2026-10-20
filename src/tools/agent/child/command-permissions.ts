@@ -22,6 +22,7 @@ import {
     attributedBashBlockReason,
     consultForGate,
     permissionAllowsCall,
+    suggestRuleForPrompt,
 } from "../../decision-model";
 import { scratchpadRoots } from "./roots";
 import { CHILD_CONFINEMENT } from "./policy";
@@ -35,7 +36,6 @@ import {
     UnsafeReason,
 } from "../../../modules/sandbox/heuristics";
 import type { Permission } from "../../../modules/sandbox/permissions";
-import { suggestRule } from "../../../modules/sandbox/suggestions";
 import {
     createPermissionState,
     type PermissionState,
@@ -209,6 +209,7 @@ async function promptBash(
     permissionState: PermissionState,
     sandboxed: { value: boolean },
     canToggle: boolean,
+    consultModel: boolean,
 ): Promise<{
     allowed: boolean;
     permission: Permission;
@@ -217,15 +218,24 @@ async function promptBash(
 }> {
     if (!options.parentContext.hasUI) return { allowed: false, permission: "deny" };
 
-    const suggestion = unresolved.length === 1 ? suggestRule(unresolved[0]) : null;
-    const offered = suggestion === null ? {} : { suggestion };
+    const suggestion = await suggestRuleForPrompt({
+        ctx,
+        config: decisionConfig.load(ctx.cwd),
+        unresolved,
+        consultModel,
+        registry: options.parentContext.modelRegistry,
+    });
+    const offered =
+        suggestion === null
+            ? {}
+            : { suggestion: suggestion.pattern, suggestionSource: suggestion.source };
     const items: SelectMessageItem<PromptChoice | { kind: "remember"; saveRule: string }>[] = [
         { value: { kind: "yes" }, label: "Yes", description: "run once" },
     ];
-    if (suggestion) {
-        const boldPattern = options.parentContext.ui.theme.bold(suggestion);
+    if (suggestion !== null) {
+        const boldPattern = options.parentContext.ui.theme.bold(suggestion.pattern);
         items.push({
-            value: { kind: "remember", saveRule: suggestion },
+            value: { kind: "remember", saveRule: suggestion.pattern },
             label: `Yes, and allow ${boldPattern}`,
             description: "remember for this session",
         });
@@ -564,6 +574,7 @@ export function registerCommandPermissionHooks(
                     permissionState,
                     sandboxedMode,
                     canToggle,
+                    classifier?.status !== "error" && classifier?.status !== "timeout",
                 );
             }
         } catch (error) {

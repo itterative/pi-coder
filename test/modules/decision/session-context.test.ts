@@ -8,6 +8,8 @@ import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-age
 
 import {
     decisionSessionContext,
+    SUGGESTION_HISTORY_COUNT,
+    decisionSimilarCommands,
     ITEM_CHARS,
     RECENT_ITEM_COUNT,
     REQUEST_CHARS,
@@ -225,6 +227,76 @@ describe("decisionSessionContext", () => {
         expect(request).toHaveLength(REQUEST_CHARS);
         expect(request?.startsWith("start y")).toBe(true);
         expect(request?.endsWith("…")).toBe(true);
+    });
+
+    it("keeps only the earlier commands that name the same tool, newest last", () => {
+        const entries = branch([
+            userEntry("keep working", 1),
+            assistantEntry(
+                [
+                    {
+                        type: "toolCall",
+                        id: "call-1",
+                        name: "bash",
+                        arguments: { command: "npx zorch run test/a.test.ts" },
+                    },
+                ],
+                2,
+            ),
+            assistantEntry(
+                [
+                    {
+                        type: "toolCall",
+                        id: "call-2",
+                        name: "bash",
+                        arguments: { command: "npx vitest run test/b.test.ts" },
+                    },
+                ],
+                3,
+            ),
+            assistantEntry(
+                [
+                    {
+                        type: "toolCall",
+                        id: "call-3",
+                        name: "bash",
+                        arguments: { command: "FOO=bar npx zorch run test/c.test.ts" },
+                    },
+                ],
+                4,
+            ),
+        ]);
+
+        expect(decisionSimilarCommands(entries, ["npx", "zorch", "run", "test/x.test.ts"])).toEqual(
+            ["npx zorch run test/a.test.ts", "FOO=bar npx zorch run test/c.test.ts"],
+        );
+    });
+
+    it("caps the same-tool window at SUGGESTION_HISTORY_COUNT", () => {
+        const entries = branch(
+            [2, 3, 4, 5].map((timestamp) =>
+                assistantEntry(
+                    [
+                        {
+                            type: "toolCall",
+                            id: `call-${timestamp}`,
+                            name: "bash",
+                            arguments: { command: `npx zorch run test/${timestamp}.test.ts` },
+                        },
+                    ],
+                    timestamp,
+                ),
+            ),
+        );
+
+        const commands = decisionSimilarCommands(entries, ["npx", "zorch"]);
+
+        expect(commands).toHaveLength(SUGGESTION_HISTORY_COUNT);
+        expect(commands).toEqual([
+            "npx zorch run test/3.test.ts",
+            "npx zorch run test/4.test.ts",
+            "npx zorch run test/5.test.ts",
+        ]);
     });
 
     it("produces no item or request for messages with empty text", () => {

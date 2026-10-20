@@ -14,6 +14,7 @@ import {
     FILE_LOSS_QUESTION,
     FILE_PURPOSE_QUESTION,
     SCRIPT_QUESTION,
+    SUGGESTION_QUESTION_ID,
     VETO_QUESTION,
     type ClassifierRegistry,
 } from "../../../src/modules/decision";
@@ -71,6 +72,11 @@ export function scriptResult(
     confidence: number,
 ): ClassifierResult {
     return result(model, { [SCRIPT_QUESTION]: choiceAnswer(capability, confidence) });
+}
+
+/** A successful answer to the suggestion role question: the probability that an argument is executed code. */
+export function suggestionResult(model: Classifier, probability: number): ClassifierResult {
+    return result(model, { [SUGGESTION_QUESTION_ID]: { type: "bool", probability } });
 }
 
 /** What a file-access answer pair says, in the shape a case reads as one line. */

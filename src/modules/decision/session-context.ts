@@ -116,6 +116,64 @@ function itemsOf(message: { content: unknown }): DecisionRecentMessage[] {
  * whole current turn, which is exactly the context the probes measured with. Replaying the two logged
  * abstains, the kept items took `none` confidence from 0.48/0.51 to 0.64/0.64.
  */
+/** How many earlier same-tool commands the suggestion state carries. */
+export const SUGGESTION_HISTORY_COUNT = 3;
+
+/** The words of a command with leading environment assignments dropped, for the same-tool comparison. */
+function commandWords(command: string): string[] {
+    return command
+        .trim()
+        .split(/\s+/u)
+        .filter((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/u.test(word));
+}
+
+function sameInvocation(command: string, key: readonly string[]): boolean {
+    const words = commandWords(command);
+
+    return words.length >= key.length && key.every((word, index) => words[index] === word);
+}
+
+/**
+ * The commands in the branch that name the same tool as `tokens`, oldest first.
+ *
+ * A suggestion for an unrecognized package runner turns on what the session has already done with that tool:
+ * one earlier `npx zorch run test/bar.test.ts` moved the role answer from 0.80 (code) to 0.36 (data), while a
+ * mixed recent window left it at 0.61. The window is therefore filtered to the same leading tool and package
+ * (at most two words), clipped like every other state item, and capped at
+ * {@link SUGGESTION_HISTORY_COUNT}.
+ */
+export function decisionSimilarCommands(
+    entries: readonly SessionEntry[],
+    tokens: readonly string[],
+    limit = SUGGESTION_HISTORY_COUNT,
+): string[] {
+    const key = tokens.slice(0, 2);
+    if (key.length === 0) {
+        return [];
+    }
+
+    const matches: string[] = [];
+    for (const entry of entries) {
+        if (entry.type !== "message") {
+            continue;
+        }
+
+        const { message } = entry;
+        if (message.role !== "assistant" || !Array.isArray(message.content)) {
+            continue;
+        }
+
+        for (const part of message.content) {
+            const command = toolCallCommand(part);
+            if (command !== undefined && sameInvocation(command, key)) {
+                matches.push(clip(command, ITEM_CHARS));
+            }
+        }
+    }
+
+    return matches.slice(-limit);
+}
+
 export function decisionSessionContext(entries: readonly SessionEntry[]): DecisionSessionContext {
     const items: DecisionRecentMessage[] = [];
     let request: string | undefined;

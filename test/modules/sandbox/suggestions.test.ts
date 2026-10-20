@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { suggestRule } from "../../../src/modules/sandbox/suggestions";
+import { suggestRule, suggestRuleOutcome } from "../../../src/modules/sandbox/suggestions";
 
 const t = (s: string): string[] => s.split(" ");
 
@@ -7,8 +7,14 @@ describe("suggestRule: curated table", () => {
     describe("scoped rows (rule remembers the command identity)", () => {
         it.each([
             [[...t("npx vitest run")], "npx vitest *"],
+            [[...t("npx vitest test/foo.test.ts")], "npx vitest *"],
+            [[...t("npx jest test/foo.test.ts")], "npx jest *"],
+            [[...t("npx prettier src/foo.ts")], "npx prettier *"],
+            [[...t("npx eslint src/foo.ts")], "npx eslint *"],
+            [[...t("npx ts-node src/index.ts")], "npx ts-node src/index.ts"],
             [[...t("npx tsx script.ts")], "npx tsx script.ts"],
             [[...t("npx tsx script.ts --help")], "npx tsx script.ts *"],
+            [[...t("npx tsx watch src/index.ts")], "npx tsx watch src/index.ts"],
             [[...t("npx eslint")], "npx eslint"],
             [[...t("npm run build")], "npm run build"],
             [[...t("npm run test -- --watch")], "npm run test *"],
@@ -76,8 +82,55 @@ describe("suggestRule: curated table", () => {
             [[...t("tox -e py312")], "tox *"],
             [[...t("ruff check .")], "ruff *"],
             [[...t("pytest tests -x")], "pytest *"],
+            [[...t("vitest")], "vitest"],
+            [[...t("vitest run test/foo.test.ts")], "vitest *"],
+            [[...t("jest test/foo.test.ts")], "jest *"],
+            [[...t("playwright test")], "playwright *"],
+            [[...t("node --test")], "node --test"],
+            [[...t("node --test test/foo.test.js")], "node --test *"],
+            [[...t("npm test")], "npm test"],
+            [[...t("npm test -- --run")], "npm test *"],
         ])("suggests %s", (tokens, expected) => {
             expect(suggestRule(tokens)).toBe(expected);
+        });
+    });
+
+    describe("widening an unrecognized package runner", () => {
+        it("offers the exact path with the scoped wildcard beside it", () => {
+            expect(suggestRuleOutcome(t("npx zorch run test/foo.test.ts"))).toEqual({
+                pattern: "npx zorch run test/foo.test.ts",
+                widened: "npx zorch *",
+            });
+            expect(suggestRuleOutcome(t("npx zorch script.ts"))).toEqual({
+                pattern: "npx zorch script.ts",
+                widened: "npx zorch *",
+            });
+        });
+
+        it("does not widen a code executor or a known data tool", () => {
+            expect(suggestRuleOutcome(t("npx tsx script.ts"))).toEqual({
+                pattern: "npx tsx script.ts",
+            });
+            expect(suggestRuleOutcome(t("npx vitest test/foo.test.ts"))).toEqual({
+                pattern: "npx vitest *",
+            });
+        });
+
+        it("does not widen when the invocation has no path-like argument", () => {
+            expect(suggestRuleOutcome(t("npx zorch run"))).toEqual({ pattern: "npx zorch *" });
+        });
+
+        it("widens pnpm dlx and scoped packages too", () => {
+            expect(suggestRuleOutcome(t("pnpm dlx zorch script.ts")).widened).toBe(
+                "pnpm dlx zorch *",
+            );
+            expect(suggestRuleOutcome(t("npx @scope/zorch script.ts")).widened).toBe(
+                "npx @scope/zorch *",
+            );
+        });
+
+        it("refuses inline code before any widening", () => {
+            expect(suggestRuleOutcome(t("npx zorch -e console.log(1)"))).toEqual({ pattern: null });
         });
     });
 

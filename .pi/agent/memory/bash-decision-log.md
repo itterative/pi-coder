@@ -10,7 +10,10 @@ Development tooling: every bash permission decision is appended to a durable JSO
 
 ## Recording
 
-- Written at the parent hook (`src/tools/bash/index.ts`), the delegated command gate (`src/tools/agent/child/command-permissions.ts`), and the read-only gate's decision consult (`src/tools/agent/child/safe-bash-decision.ts`). The first two carry the resolver's `resolution`; the read-only one sets `readOnlyGate: true` and has no `resolution`, because it classifies below the `command` rung and never runs the resolver. `resolution` is what the resolver itself decided, so a consumer never re-derives policy answers from shell text; `prompt`, `decision`, `sandboxed`, and `blocked` are layered on top. `blocked` distinguishes an approval that could not run (no bwrap) from one that ran.
+- Written at the parent hook (`src/tools/bash/index.ts`), the delegated command gate (`src/tools/agent/child/command-permissions.ts`), and the read-only gate's decision consult (`src/tools/agent/child/safe-bash-decision.ts`). The first two carry the resolver's `resolution`; the read-only one sets `readOnlyGate: true` and has no `resolution`, because it classifies below the `command` rung and never runs the resolver. `resolution` is what the resolver itself decided, so a consumer never re-derives policy answers from shell text; `prompt`, `decision`, `sandboxed`, and `blocked` are layered on top. `blocked` distinguishes an approval that could not run (no bwrap) from one that ran. A `prompt` carries
+`{outcome, suggestion?, suggestionSource?, rule?}`: `suggestionSource` is `"table" | "model"` and says who
+chose the offered rule's width (the rule itself is always built by `suggestions.ts`; see the `session-rules`
+memory).
 - **File-access records share the file.** `logFileAccessDecision()` appends a different shape, marked
   `gate: "file"`, from `src/tools/file-permissions.ts` for every direct access that left every trusted root:
   `operation`, resolved `path`, `folder`, the `reasons` the confinement check reported, and `resolvedBy`

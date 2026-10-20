@@ -3,10 +3,14 @@ import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent
 import {
     consultDecisionContext,
     consultFileAccessDecision,
+    consultSuggestionRole,
     fileDecisionEnabled,
+    suggestionEnabled,
     APPLIED_PERMISSIONS,
     type DecisionContextShape,
 } from "../modules/decision/gate";
+import { suggestRuleOutcome } from "../modules/sandbox/suggestions";
+import { decisionSimilarCommands } from "../modules/decision";
 import type {
     ClassifierRegistry,
     DecisionModelConfig,
@@ -14,6 +18,7 @@ import type {
     DecisionVerdict,
     FileDecisionOperation,
     ScriptRun,
+    SuggestionRole,
 } from "../modules/decision";
 import { emitDecisionStatus } from "../modules/decision/events";
 import { DEFAULT_DECISION_STRATEGY } from "../modules/decision/strategies";
@@ -468,6 +473,98 @@ export interface FileAccessConsultResult {
 
 /** Consults in flight across both gates; the shared evaluator can serve several concurrently. */
 let checksInFlight = 0;
+
+/** A rule a permission prompt may remember, and what offered it. */
+export interface PromptRuleSuggestion {
+    pattern: string;
+    source: "table" | "model";
+}
+
+/**
+ * The session rule to offer with a permission prompt, or null when no row applies.
+ *
+ * The table's own rule is the default. When it pinned a path-like argument only because the package runner was
+ * unrecognized, the decision model may answer that the arguments are data, in which case the table's wider
+ * alternative is offered instead. The model never supplies a pattern — it chooses between two the table built
+ * — and any failure leaves the narrow one in place. Only one uncovered segment can carry a suggestion;
+ * multiple uncovered segments keep the plain dialog (manual patterns are the tool for those).
+ *
+ * `consultModel` is the caller's judgement that a request is worth sending: a prompt no one can answer needs
+ * no model-chosen width, and an endpoint that just failed will only fail again.
+ */
+export async function suggestRuleForPrompt(options: {
+    ctx: ExtensionContext;
+    config: DecisionModelConfig;
+    unresolved: readonly string[][];
+    /** Whether to ask the endpoint at all; false keeps the table's own suggestion. */
+    consultModel: boolean;
+    registry?: ClassifierRegistry;
+}): Promise<PromptRuleSuggestion | null> {
+    if (options.unresolved.length !== 1) {
+        return null;
+    }
+
+    const tokens = options.unresolved[0];
+    const outcome = suggestRuleOutcome(tokens);
+    if (outcome.pattern === null) {
+        return null;
+    }
+
+    const table: PromptRuleSuggestion = { pattern: outcome.pattern, source: "table" };
+    if (
+        outcome.widened === undefined ||
+        !options.consultModel ||
+        !suggestionEnabled(options.config)
+    ) {
+        return table;
+    }
+
+    const role = await consultSuggestionForPrompt({
+        ctx: options.ctx,
+        config: options.config,
+        tokens,
+        ...(options.registry === undefined ? {} : { registry: options.registry }),
+    });
+
+    return role === "data" ? { pattern: outcome.widened, source: "model" } : table;
+}
+
+export interface SuggestionForPromptOptions {
+    ctx: ExtensionContext;
+    config: DecisionModelConfig;
+    /** The single uncovered segment, tokenized. */
+    tokens: readonly string[];
+    registry?: ClassifierRegistry;
+}
+
+/**
+ * Ask whether an uncovered segment's arguments are code or data, for a caller deciding between two table
+ * patterns.
+ *
+ * The session half is the same-tool command window, which is what makes an unrecognized package's argument
+ * role answerable at all. `undefined` means no usable answer (disabled, failed, unreadable), and the caller
+ * keeps the pattern the table built. Never rejects.
+ */
+export async function consultSuggestionForPrompt(
+    options: SuggestionForPromptOptions,
+): Promise<SuggestionRole | undefined> {
+    if (!suggestionEnabled(options.config)) {
+        return undefined;
+    }
+
+    const consulted = await consultSuggestionRole({
+        ctx: options.ctx,
+        config: options.config,
+        command: options.tokens.join(" "),
+        recentCommands: decisionSimilarCommands(
+            options.ctx.sessionManager.getBranch(),
+            options.tokens,
+        ),
+        ...(options.registry === undefined ? {} : { registry: options.registry }),
+    });
+
+    return consulted.role;
+}
 
 /**
  * Consult the model for one gate, and translate the verdict into what the gate needs.

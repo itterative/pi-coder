@@ -629,6 +629,7 @@ notifies through `ctx.ui.notify`, so a silent allow/deny is still visible.
 ```json
 "decisionModel": {
   "enabled": true,
+  "suggestions": true,
   "apply": false,
   "baseUrl": "http://host:5001/v1",
   "apiKey": "…",
@@ -657,8 +658,11 @@ notifies through `ctx.ui.notify`, so a silent allow/deny is still visible.
   off the model is consulted and the verdict recorded while every unresolved command still reaches the
   human; with it on the verdict resolves the prompt. `refuse` never applies by itself (a wrong refusal
   blocks work a prompt would have surfaced) and `host` resolves only at confidence ≥ `minConfidence`
-  (default 0.8). The former `autoHost`, `autoRefuse`, and `applySurfaces` keys were removed and are ignored
-  by a file that still sets them.
+  (default 0.8). `suggestions` (default true) is the one advisory use: when the suggestion table offers a
+  narrow rule and a wider one for an unrecognized package runner, the model's `executes_code` answer picks
+  between them. It grants no authority and is not tied to `surfaces`; `false` keeps the table's own rule.
+  The former `autoHost`, `autoRefuse`, and `applySurfaces` keys were removed and are ignored by a file that
+  still sets them.
 - `provider` + `model` select the classifier through `ctx.modelRegistry` (`systemone` + the endpoint's model
   id for the registered one; a built-in classifier can be named instead). When `model` is omitted, the first
   classifier of the configured provider is used, or the first available one overall when `provider` is also

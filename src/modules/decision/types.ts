@@ -151,6 +151,15 @@ export interface DecisionModelConfig {
     /** Whether the gate may consult the model at all (default false). */
     enabled?: boolean;
     /**
+     * Whether the model may refine a session-rule suggestion (default true).
+     *
+     * One question on a request of its own, asked only when a prompt is about to offer a rule for a single
+     * uncovered segment and the suggestion table pinned a path-like argument of an unrecognized package
+     * runner. The answer picks between two patterns the table already built — it never generates one and
+     * never grants authority — which is why it is not tied to `surfaces`.
+     */
+    suggestions?: boolean;
+    /**
      * Whether a verdict may resolve a prompt (default false).
      *
      * The one toggle for the whole feature: off means the model is consulted and its verdict is logged while

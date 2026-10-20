@@ -29,10 +29,14 @@ import {
     type BashDecisionInput,
     type PromptOutcome,
 } from "../../modules/sandbox/decision-log";
-import { suggestRule } from "../../modules/sandbox/suggestions";
 import decisionConfig from "../../modules/decision/config";
 import { decisionEnabled } from "../../modules/decision";
-import { consultForGate, attributedBashBlockReason } from "../decision-model";
+import {
+    consultForGate,
+    suggestRuleForPrompt,
+    attributedBashBlockReason,
+    type PromptRuleSuggestion,
+} from "../decision-model";
 import { selectWithMessage, type SelectMessageItem } from "../../tui/select-with-message";
 import {
     createPermissionState,
@@ -70,23 +74,20 @@ interface PromptResult {
  * the answer into a permission plus the session-rule side effect.
  *
  * The returned `prompt` is what the decision log records: the outcome, the rule
- * the suggestion table offered, and the rule the user chose to remember.
+ * offered (and whether the table or the model chose its width), and the rule the
+ * user chose to remember.
  */
 async function promptForPermission(options: {
     command: string;
     unresolved: string[][];
+    suggestion: PromptRuleSuggestion | null;
     permissionState: PermissionState;
     sandboxEnabled: boolean;
     ctx: ExtensionContext;
     events?: EventBus;
 }): Promise<PromptResult> {
-    const { command, unresolved, permissionState, sandboxEnabled, ctx, events } = options;
+    const { command, suggestion, permissionState, sandboxEnabled, ctx, events } = options;
 
-    // Suggested session rule: only when exactly one segment is uncovered by
-    // rules/heuristics and the suggestion table has a row for it. Multiple
-    // uncovered segments keep the plain dialog (manual patterns are the tool
-    // for those).
-    const suggestion = unresolved.length === 1 ? suggestRule(unresolved[0]) : null;
     const items: SelectMessageItem<PromptChoice>[] = [
         {
             value: { kind: "yes" },
@@ -94,13 +95,13 @@ async function promptForPermission(options: {
             description: "run once",
         },
     ];
-    if (suggestion) {
+    if (suggestion !== null) {
         // theme.bold (not fg/accent): accent marks the selected item. Pre-baked
         // here — the dialog component is rebuilt per prompt, so the style can't
         // go stale.
-        const boldPattern = ctx.hasUI ? ctx.ui.theme.bold(suggestion) : suggestion;
+        const boldPattern = ctx.hasUI ? ctx.ui.theme.bold(suggestion.pattern) : suggestion.pattern;
         items.push({
-            value: { kind: "remember", saveRule: suggestion },
+            value: { kind: "remember", saveRule: suggestion.pattern },
             label: `Yes, and allow ${boldPattern}`,
             description: "remember for this session",
         });
@@ -151,7 +152,9 @@ async function promptForPermission(options: {
     const outcome: PromptOutcome = result ? result.value.kind : "dismissed";
     const prompt: PromptResult["prompt"] = {
         outcome,
-        ...(suggestion === null ? {} : { suggestion }),
+        ...(suggestion === null
+            ? {}
+            : { suggestion: suggestion.pattern, suggestionSource: suggestion.source }),
         ...(remembered === null ? {} : { rule: remembered }),
     };
 
@@ -333,9 +336,21 @@ Pay attention to these notes as they provide context about the user's preference
             classifier = consulted.record;
 
             if (consulted.permission === undefined) {
+                const suggestion = await suggestRuleForPrompt({
+                    ctx,
+                    config: decisionConfig.load(ctx.cwd ?? process.cwd()),
+                    unresolved,
+                    // A prompt with no interface is never shown, and a consult that just failed will fail
+                    // again; either way the table's own rule is the whole suggestion.
+                    consultModel:
+                        ctx.hasUI === true &&
+                        consulted.record?.status !== "error" &&
+                        consulted.record?.status !== "timeout",
+                });
                 const answered = await promptForPermission({
                     command: event.input.command,
                     unresolved,
+                    suggestion,
                     permissionState,
                     sandboxEnabled,
                     ctx,

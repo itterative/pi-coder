@@ -4,8 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { ClassifierContext } from "@earendil-works/pi-ai";
 
 import decisionConfig from "../../src/modules/decision/config";
+import { SUGGESTION_QUESTION_ID } from "../../src/modules/decision";
 import { resetDecisionEvaluator } from "../../src/modules/decision/gate";
 import { DECISION_PROVIDER_ID } from "../../src/modules/decision/provider";
 import type { BashDecisionRecord } from "../../src/modules/sandbox/decision-log";
@@ -16,6 +18,7 @@ import {
     classifier,
     classifierModelRegistry,
     criterionResult,
+    suggestionResult,
 } from "../modules/decision/classifier";
 
 /**
@@ -76,6 +79,8 @@ async function runHookCommand(options: {
     decision?: Record<string, unknown>;
     criterion?: string;
     confidence?: number;
+    /** The probability the suggestion question answers with, when the hook asks it. */
+    suggestion?: number;
 }): Promise<HookResult> {
     writeDecisionFile(options.decision);
     decisionConfig.load(workspace);
@@ -83,7 +88,11 @@ async function runHookCommand(options: {
     // the mock answers with, so a second run of the same command must not inherit the first one's verdict.
     resetDecisionEvaluator();
 
-    const classify = vi.fn(async (model: typeof MODEL) => {
+    const classify = vi.fn(async (model: typeof MODEL, context: ClassifierContext) => {
+        if (SUGGESTION_QUESTION_ID in context.questions) {
+            return suggestionResult(model, options.suggestion ?? 0.1);
+        }
+
         return criterionResult(model, options.criterion ?? "privileged", options.confidence ?? 0.9);
     });
     const notify = vi.fn();
@@ -329,5 +338,23 @@ describe("bash decision-model wiring", () => {
         expect(granted.block).toBe(false);
         expect(granted.reason).toBeUndefined();
         expect(granted.records.at(-1)?.decision).toBe("allow");
+    });
+});
+
+describe("rule suggestions without an interface", () => {
+    it("keeps the table's exact rule and does not ask the model", async () => {
+        const { records, classifyCalls } = await runHookCommand({
+            command: "npx zorch script.ts",
+            decision: modelSection({ apply: false }),
+            suggestion: 0.1,
+        });
+
+        // The veto consult only: a prompt with no interface will never show a suggestion.
+        expect(classifyCalls).toBe(1);
+        expect(records[0]?.prompt).toEqual({
+            outcome: "dismissed",
+            suggestion: "npx zorch script.ts",
+            suggestionSource: "table",
+        });
     });
 });

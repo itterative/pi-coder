@@ -11,7 +11,7 @@ import { SessionManager, type ExtensionContext } from "@earendil-works/pi-coding
 import { registerChildExtension } from "../../src/tools/agent/child/extension";
 import { resolveChildGrant } from "../../src/tools/agent/child/grant";
 import decisionConfig from "../../src/modules/decision/config";
-import { SCRIPT_QUESTION, VETO_QUESTION } from "../../src/modules/decision";
+import { SCRIPT_QUESTION, SUGGESTION_QUESTION_ID, VETO_QUESTION } from "../../src/modules/decision";
 import { resetDecisionEvaluator } from "../../src/modules/decision/gate";
 import { DECISION_PROVIDER_ID } from "../../src/modules/decision/provider";
 import type { BashDecisionRecord } from "../../src/modules/sandbox/decision-log";
@@ -34,6 +34,7 @@ import {
     classifier,
     classifierModelRegistry,
     criterionResult,
+    suggestionResult,
     type Classifier,
 } from "../modules/decision/classifier";
 
@@ -216,15 +217,23 @@ async function runChildDecision(options: {
     answerPrompt?: boolean;
     agentName?: string;
     isolated?: boolean;
+    /** The command the child gate is asked about (default `npm run test:run`). */
+    command?: string;
+    /** The probability the suggestion question answers with, when the hook asks it. */
+    suggestion?: number;
 }): Promise<ChildDecisionRun> {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-"));
     tempDirs.push(cwd);
     const logPath = writeDecisionConfig(cwd, options.section);
     const sessionManager = sessionWithTask(cwd, "run the delegated tests");
 
-    const classify = vi.fn(async (model: Classifier, _context: ClassifierContext) =>
-        criterionResult(model, options.criterion ?? "none", options.confidence ?? 1),
-    );
+    const classify = vi.fn(async (model: Classifier, context: ClassifierContext) => {
+        if (SUGGESTION_QUESTION_ID in context.questions) {
+            return suggestionResult(model, options.suggestion ?? 0.1);
+        }
+
+        return criterionResult(model, options.criterion ?? "none", options.confidence ?? 1);
+    });
     const runtime = setup(cwd, {
         commandRunner: true,
         background: false,
@@ -238,7 +247,7 @@ async function runChildDecision(options: {
         {
             toolName: "bash",
             toolCallId: "bash-decision-1",
-            input: { command: "npm run test:run" },
+            input: { command: options.command ?? "npm run test:run" },
         },
         runtime.ctx,
     );
@@ -297,6 +306,23 @@ describe("child decision-model wiring", () => {
             applied: false,
         });
         expect(record?.prompt).toBeDefined();
+    });
+
+    it("offers the table's wider rule when the model sees data for an unrecognized package", async () => {
+        const run = await runChildDecision({
+            section: decisionSection({ apply: false, surfaces: ["parent", "child"] }),
+            criterion: "privileged",
+            answerPrompt: true,
+            command: "npx zorch script.ts",
+            suggestion: 0.1,
+        });
+
+        // The veto answer plus the suggestion answer; the rule itself is still the table's `npx zorch *`.
+        expect(run.classify).toHaveBeenCalledTimes(2);
+        expect(run.records[0]?.prompt).toMatchObject({
+            suggestion: "npx zorch *",
+            suggestionSource: "model",
+        });
     });
 
     it("applies a sandbox verdict without a prompt when apply is on", async () => {
@@ -770,6 +796,7 @@ describe("child Bash permissions", () => {
         expect(record?.prompt).toEqual({
             outcome: "remember",
             suggestion: "npm run test:run",
+            suggestionSource: "table",
             rule: "npm run test:run",
         });
         expect(record?.blocked).toBe(false);
