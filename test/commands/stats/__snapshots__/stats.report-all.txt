@@ -1,0 +1,33 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│   pi usage · All time                                                        │
+│                                                                              │
+│       Mar Apr May Jun Jul Aug Sep Oct Nov  Dec Jan Feb Mar                   │
+│       ·················································█·▓                   │
+│   Mon ··················································█                    │
+│       ··················································▒                    │
+│   Wed ···················································                    │
+│       ··················································░                    │
+│   Fri ···················································                    │
+│       ···················································                    │
+│                                                                              │
+│       Less ░ ▒ ▓ █ More                                                      │
+│                                                                              │
+│   All time · Last 30 days · Last 7 days                                      │
+│                                                                              │
+│   Sessions: 4 (3 main · 1 child)      Longest session: 2h 0m                 │
+│   Messages: 50                        Tool calls: 10                         │
+│   Active days: 5/15                   Longest streak: 2 days                 │
+│   Current streak: 1 day               Most active day: Mar 1                 │
+│   Peak hour: 10:00–11:00              Favorite model: sonnet-4.5             │
+│   Fresh in/out: 718k / 201k           Cached tokens: 2.9M                    │
+│   Total cost: $7.02                   Child tokens: 1%                       │
+│                                                                              │
+│   Your longest session is ~2× longer than a yoga class                       │
+│                                                                              │
+│   ──────────────────────────────────────────────────────────────             │
+│                                                                              │
+│     Showing lines 1-24 of 52                                                 │
+│                                                                              │
+│     ↑/↓ scroll · r cycle range · Esc close                                   │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯

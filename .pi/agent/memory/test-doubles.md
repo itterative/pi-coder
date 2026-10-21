@@ -45,6 +45,8 @@ keep_updated: true
 - TypeScript script driven as a real CLI (argv, exit codes, stdout) → `test/helpers/script-bundle.ts` →
   `bundleScript(entry)`
 - template-string fixtures without indentation → `test/modules/memory/utils.ts` → `dedent`
+- `/stats` day/session fixtures → `test/commands/stats/fixtures.ts` → `makeDay`, `makeSession`, `usageTotals`,
+  `hourAt`, `localIso`
 
 ## Targeted references
 
