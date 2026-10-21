@@ -53,6 +53,34 @@ function assistantEntry(
     };
 }
 
+/** An assistant message that calls a tool, the live mid-run steer's precondition. */
+function assistantToolCallEntry(
+    text: string,
+    timestamp: number,
+    usage: ReturnType<typeof zeroUsage> = zeroUsage(),
+): AppendedMessage {
+    const content: AssistantMessage["content"] = [
+        { type: "text", text },
+        {
+            type: "toolCall",
+            id: `call-${timestamp}`,
+            name: "read",
+            arguments: { path: "src/a.ts" },
+        },
+    ];
+
+    return {
+        role: "assistant",
+        content,
+        api: "test",
+        provider: "test",
+        model: "test",
+        usage,
+        stopReason: "toolUse",
+        timestamp,
+    };
+}
+
 beforeEach(() => {
     vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "5");
     vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "30000");
@@ -133,7 +161,9 @@ describe("replay", () => {
 
         expect(result.turns.map((turn) => turn.schedule)).toEqual([
             "memory-read",
-            "memory-hygiene",
+            // No mutating work in the branch, so memory-hygiene is gated out and the rotation starts at
+            // delegation.
+            "delegation",
         ]);
     });
 
@@ -142,13 +172,13 @@ describe("replay", () => {
         const cwd = "/repo";
         const session = sessionAt(cwd);
         session.appendMessage(userEntry("first request", 1));
-        session.appendMessage(assistantEntry("done", 2, { ...zeroUsage(), input: 200 }));
+        session.appendMessage(assistantToolCallEntry("done", 2, { ...zeroUsage(), input: 200 }));
         session.appendMessage(userEntry("second request", 3));
 
         const result = replay(session.getBranch(), cwd);
 
-        expect(result.turns[1]?.midRun).toMatchObject([{ schedule: "memory-hygiene" }]);
-        expect(result.turns[1]?.midRun?.[0]?.reminderText).toContain("memory-audit");
+        expect(result.turns[1]?.midRun).toMatchObject([{ schedule: "delegation" }]);
+        expect(result.turns[1]?.midRun?.[0]?.reminderText).toContain("scout");
         // The baseline moved mid-run, so the user turn itself emits nothing.
         expect(result.turns[1]?.schedule).toBe("none");
     });
@@ -202,14 +232,14 @@ describe("selectTurns and rendering", () => {
         const cwd = "/repo";
         const session = sessionAt(cwd);
         session.appendMessage(userEntry("first", 1));
-        session.appendMessage(assistantEntry("done", 2, { ...zeroUsage(), input: 200 }));
+        session.appendMessage(assistantToolCallEntry("done", 2, { ...zeroUsage(), input: 200 }));
         session.appendMessage(userEntry("second", 3));
         const result = replay(session.getBranch(), cwd);
         const selected = selectTurns(result, parseArgs(["--turn", "2"]));
 
         const text = renderText(result, selected, parseArgs([]));
 
-        expect(text).toContain("mid-run: memory-hygiene");
+        expect(text).toContain("mid-run: delegation");
         expect(text).toContain("schedule: none");
     });
 

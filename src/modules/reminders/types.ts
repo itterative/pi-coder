@@ -6,6 +6,12 @@ export interface ReminderDefinition {
     text: string;
     /** One line stating when showing this reminder helps, used as the model's criterion. */
     guidance: string;
+    /**
+     * Kept in the catalog but filtered out of the rotation and the model's offer. `sandbox` is disabled
+     * until it can key on a real gated event (a block, prompt, or user note) instead of rotating
+     * context-free; the catalog entry stays so that switch is a one-line change.
+     */
+    disabled?: boolean;
 }
 
 export type ReminderId =

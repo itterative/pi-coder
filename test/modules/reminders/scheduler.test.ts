@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { MEMORY_READ_REMINDER, ROTATION_REMINDERS } from "../../../src/modules/reminders/catalog";
+import {
+    ACTIVE_ROTATION_REMINDERS,
+    MEMORY_READ_REMINDER,
+} from "../../../src/modules/reminders/catalog";
 import { ReminderScheduler } from "../../../src/modules/reminders/scheduler";
+import type { ReminderId } from "../../../src/modules/reminders/types";
 
 /**
  * The deterministic schedule: the memory reminder for a changed memory list, then a rotation on a turn
  * cadence or a context-growth threshold. A model choice may replace one turn's decision, and a deliberate
- * `none` suppresses the fallback for that turn only.
+ * `none` suppresses the fallback for that turn only. The activity gate narrows the rotation to the ids the
+ * module allows this turn.
  */
 
 function armed(options: { everyTurns: number; thresholdTokens: number }): ReminderScheduler {
@@ -45,19 +50,19 @@ describe("ReminderScheduler", () => {
         }
 
         // The sixth turn is five turns after the memory reminder.
-        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(ROTATION_REMINDERS[0]);
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(ACTIVE_ROTATION_REMINDERS[0]);
     });
 
-    it("cycles the catalog in order", () => {
+    it("cycles the active catalog in order", () => {
         const scheduler = armed({ everyTurns: 1, thresholdTokens: 0 });
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
-        for (const reminder of ROTATION_REMINDERS) {
+        for (const reminder of ACTIVE_ROTATION_REMINDERS) {
             expect(scheduler.decide({ maxContextTokens: 0 })).toBe(reminder);
         }
 
         // A full cycle wraps rather than stopping.
-        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(ROTATION_REMINDERS[0]);
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(ACTIVE_ROTATION_REMINDERS[0]);
     });
 
     it("fires the threshold trigger when turns alone would not", () => {
@@ -65,9 +70,9 @@ describe("ReminderScheduler", () => {
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
         expect(scheduler.decide({ maxContextTokens: 99 })).toBeUndefined();
-        expect(scheduler.decide({ maxContextTokens: 100 })).toBe(ROTATION_REMINDERS[0]);
+        expect(scheduler.decide({ maxContextTokens: 100 })).toBe(ACTIVE_ROTATION_REMINDERS[0]);
         expect(scheduler.decide({ maxContextTokens: 199 })).toBeUndefined();
-        expect(scheduler.decide({ maxContextTokens: 200 })).toBe(ROTATION_REMINDERS[1]);
+        expect(scheduler.decide({ maxContextTokens: 200 })).toBe(ACTIVE_ROTATION_REMINDERS[1]);
     });
 
     it("emits only the memory reminder when both triggers are disabled", () => {
@@ -83,12 +88,12 @@ describe("ReminderScheduler", () => {
         const scheduler = armed({ everyTurns: 1, thresholdTokens: 0 });
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
-        expect(scheduler.decide({ maxContextTokens: 0, modelChoice: "sandbox" })).toBe(
-            ROTATION_REMINDERS[1],
+        expect(scheduler.decide({ maxContextTokens: 0, modelChoice: "delegation" })).toBe(
+            ACTIVE_ROTATION_REMINDERS[1],
         );
 
         // A deterministic fallback continues after the model's pick instead of repeating it.
-        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(ROTATION_REMINDERS[2]);
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(ACTIVE_ROTATION_REMINDERS[2]);
     });
 
     it("treats a deliberate none as final for that turn", () => {
@@ -99,7 +104,51 @@ describe("ReminderScheduler", () => {
         // Due by turns (3 - 1 >= 2) but the model said no.
         expect(scheduler.decide({ maxContextTokens: 0, modelChoice: "none" })).toBeUndefined();
         // No answer this turn: the fallback runs again.
-        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(ROTATION_REMINDERS[0]);
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(ACTIVE_ROTATION_REMINDERS[0]);
+    });
+
+    it("skips a reminder the activity gate disallows", () => {
+        const scheduler = armed({ everyTurns: 1, thresholdTokens: 0 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+
+        // `memory-hygiene` is first in the rotation but not available, so the rotation moves to the next
+        // allowed id rather than stalling.
+        const available = new Set<ReminderId>(["delegation", "todo"]);
+        expect(scheduler.decide({ maxContextTokens: 0, available })).toBe(
+            ACTIVE_ROTATION_REMINDERS[1],
+        );
+        expect(scheduler.decide({ maxContextTokens: 0, available })).toBe(
+            ACTIVE_ROTATION_REMINDERS[2],
+        );
+    });
+
+    it("vetoes a model pick the activity gate disallows without falling back", () => {
+        const scheduler = armed({ everyTurns: 1, thresholdTokens: 0 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+
+        const available = new Set<ReminderId>(["delegation"]);
+        expect(
+            scheduler.decide({ maxContextTokens: 0, modelChoice: "memory-hygiene", available }),
+        ).toBeUndefined();
+    });
+
+    it("emits nothing from the rotation when every reminder is disallowed", () => {
+        const scheduler = armed({ everyTurns: 1, thresholdTokens: 100 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+
+        const available = new Set<ReminderId>();
+        expect(scheduler.decide({ maxContextTokens: 0, available })).toBeUndefined();
+        expect(scheduler.decideMidRun({ maxContextTokens: 100, available })).toBeUndefined();
+    });
+
+    it("reports a due mid-run threshold without deciding", () => {
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100 });
+
+        expect(scheduler.midRunDue(99)).toBe(false);
+        expect(scheduler.midRunDue(100)).toBe(true);
     });
 
     it("delivers the threshold mid-run even when no user turn has passed", () => {
@@ -107,7 +156,9 @@ describe("ReminderScheduler", () => {
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
         expect(scheduler.decideMidRun({ maxContextTokens: 99 })).toBeUndefined();
-        expect(scheduler.decideMidRun({ maxContextTokens: 100 })).toBe(ROTATION_REMINDERS[0]);
+        expect(scheduler.decideMidRun({ maxContextTokens: 100 })).toBe(
+            ACTIVE_ROTATION_REMINDERS[0],
+        );
         expect(scheduler.decideMidRun({ maxContextTokens: 199 })).toBeUndefined();
     });
 
@@ -115,11 +166,13 @@ describe("ReminderScheduler", () => {
         const scheduler = armed({ everyTurns: 2, thresholdTokens: 100 });
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
-        expect(scheduler.decideMidRun({ maxContextTokens: 100 })).toBe(ROTATION_REMINDERS[0]);
+        expect(scheduler.decideMidRun({ maxContextTokens: 100 })).toBe(
+            ACTIVE_ROTATION_REMINDERS[0],
+        );
 
         // The next user turn starts the cadence after the mid-run emission rather than repeating it.
         expect(scheduler.decide({ maxContextTokens: 100 })).toBeUndefined();
-        expect(scheduler.decide({ maxContextTokens: 100 })).toBe(ROTATION_REMINDERS[1]);
+        expect(scheduler.decide({ maxContextTokens: 100 })).toBe(ACTIVE_ROTATION_REMINDERS[1]);
     });
 
     it("never fires the turn-based rotation mid-run", () => {
@@ -134,7 +187,7 @@ describe("ReminderScheduler", () => {
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
         expect(scheduler.decide({ maxContextTokens: 0, modelChoice: undefined })).toBe(
-            ROTATION_REMINDERS[0],
+            ACTIVE_ROTATION_REMINDERS[0],
         );
     });
 });

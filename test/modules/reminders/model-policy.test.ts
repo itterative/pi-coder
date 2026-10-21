@@ -64,7 +64,7 @@ beforeEach(() => {
     mocks.load.mockReset();
     mocks.load.mockReturnValue({ enabled: true, reminders: true });
     mocks.consult.mockResolvedValue({
-        decision: { kind: "reminder", id: "sandbox" },
+        decision: { kind: "reminder", id: "delegation" },
         state: { phase: "implementing" },
         status: "answered",
         latencyMs: 1,
@@ -91,7 +91,7 @@ describe("decision-model reminder policy", () => {
 
         const result = await userTurn(stub);
 
-        expect(result?.message?.content).toContain("cwd-confinement");
+        expect(result?.message?.content).toContain("scout");
 
         const first = mocks.consult.mock.calls[0]?.[0] as {
             request?: string;
@@ -103,7 +103,7 @@ describe("decision-model reminder policy", () => {
         // The emission and the piggybacked labels are visible to the next consult.
         await userTurn(stub);
         const second = mocks.consult.mock.calls[1]?.[0] as { signals?: ReminderSignals };
-        expect(second.signals?.reminders_shown).toEqual([{ id: "sandbox", turns_ago: 1 }]);
+        expect(second.signals?.reminders_shown).toEqual([{ id: "delegation", turns_ago: 1 }]);
         expect(second.signals?.session).toMatchObject({ phase: "implementing" });
 
         // Labels persist once per real change, not once per turn.
@@ -126,6 +126,6 @@ describe("decision-model reminder policy", () => {
         expect(await userTurn(stub)).toBeUndefined();
 
         mocks.consult.mockResolvedValue({ status: "error", latencyMs: 1 });
-        expect((await userTurn(stub))?.message?.content).toContain("memory-audit");
+        expect((await userTurn(stub))?.message?.content).toContain("scout");
     });
 });

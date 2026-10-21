@@ -1,4 +1,4 @@
-import { MEMORY_READ_REMINDER, ROTATION_REMINDERS } from "./catalog";
+import { ACTIVE_ROTATION_REMINDERS, MEMORY_READ_REMINDER } from "./catalog";
 import type { ReminderDefinition, ReminderId } from "./types";
 
 /** What the model chose for this turn, or `undefined` when it was not asked or gave no readable answer. */
@@ -20,6 +20,12 @@ export interface DecideInput {
      * fallback still runs.
      */
     modelChoice?: ReminderModelChoice;
+    /**
+     * The rotation ids the module allows this turn, from the activity gate. When absent every active
+     * reminder is allowed. A model pick outside the set is vetoed with no fallback, so a gated id never
+     * reaches the agent; the deterministic rotation skips to the next allowed id.
+     */
+    available?: ReadonlySet<ReminderId>;
 }
 
 /** A read-only view of the scheduler, for debug entries and tests. */
@@ -53,12 +59,29 @@ export class ReminderScheduler {
      * count and the session reminder is tied to the memory list changing. The emission bookkeeping is the
      * same, so the next user turn starts a full cadence after it rather than repeating it.
      */
-    decideMidRun(input: { maxContextTokens: number }): ReminderDefinition | undefined {
+    decideMidRun(input: {
+        maxContextTokens: number;
+        available?: ReadonlySet<ReminderId>;
+    }): ReminderDefinition | undefined {
         if (!this.thresholdDue(input.maxContextTokens)) {
             return undefined;
         }
 
-        return this.emit(this.nextRotation(), input.maxContextTokens);
+        const reminder = this.nextAvailableRotation(input.available);
+        if (reminder === undefined) {
+            return undefined;
+        }
+
+        return this.emit(reminder, input.maxContextTokens);
+    }
+
+    /**
+     * Whether a mid-run threshold crossing is due, without deciding which reminder or emitting. Lets the
+     * caller skip the branch scan that builds the availability set on the many stream updates where nothing
+     * is due.
+     */
+    midRunDue(maxContextTokens: number): boolean {
+        return this.thresholdDue(maxContextTokens);
     }
 
     /**
@@ -88,12 +111,22 @@ export class ReminderScheduler {
                 return undefined;
             }
 
-            const chosen = ROTATION_REMINDERS.find((reminder) => reminder.id === input.modelChoice);
+            const chosen = ACTIVE_ROTATION_REMINDERS.find(
+                (reminder) => reminder.id === input.modelChoice,
+            );
             if (chosen !== undefined) {
                 // Leave the rotation pointer after the model's pick, so a deterministic fallback next turn
                 // does not immediately repeat it.
                 this.rotationIndex =
-                    (ROTATION_REMINDERS.indexOf(chosen) + 1) % ROTATION_REMINDERS.length;
+                    (ACTIVE_ROTATION_REMINDERS.indexOf(chosen) + 1) %
+                    ACTIVE_ROTATION_REMINDERS.length;
+
+                // The gate is the module's own invariant, so it overrides the model too: a gated pick emits
+                // nothing rather than falling back to a reminder the model did not ask for.
+                if (input.available !== undefined && !input.available.has(chosen.id)) {
+                    return undefined;
+                }
+
                 return this.emit(chosen, input.maxContextTokens);
             }
         }
@@ -102,7 +135,12 @@ export class ReminderScheduler {
             return undefined;
         }
 
-        return this.emit(this.nextRotation(), input.maxContextTokens);
+        const reminder = this.nextAvailableRotation(input.available);
+        if (reminder === undefined) {
+            return undefined;
+        }
+
+        return this.emit(reminder, input.maxContextTokens);
     }
 
     snapshot(): SchedulerSnapshot {
@@ -130,10 +168,31 @@ export class ReminderScheduler {
         return this.thresholdDue(maxContextTokens) || rotationDue;
     }
 
-    private nextRotation(): ReminderDefinition {
-        const reminder = ROTATION_REMINDERS[this.rotationIndex];
-        this.rotationIndex = (this.rotationIndex + 1) % ROTATION_REMINDERS.length;
-        return reminder;
+    /**
+     * The next rotation entry the gate allows, scanning forward from the pointer so one gated reminder does
+     * not stall the whole rotation. The pointer moves only past the id that is actually emitted, and stays
+     * put when nothing is allowed, so a gated reminder is retried once the activity changes.
+     */
+    private nextAvailableRotation(
+        available: ReadonlySet<ReminderId> | undefined,
+    ): ReminderDefinition | undefined {
+        const count = ACTIVE_ROTATION_REMINDERS.length;
+        for (let offset = 0; offset < count; offset += 1) {
+            const index = (this.rotationIndex + offset) % count;
+            const reminder = ACTIVE_ROTATION_REMINDERS[index];
+            if (reminder === undefined) {
+                continue;
+            }
+
+            if (available !== undefined && !available.has(reminder.id)) {
+                continue;
+            }
+
+            this.rotationIndex = (index + 1) % count;
+            return reminder;
+        }
+
+        return undefined;
     }
 
     private emit(reminder: ReminderDefinition, maxContextTokens: number): ReminderDefinition {

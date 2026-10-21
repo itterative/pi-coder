@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import registerRemindersExtension, { modelChoiceOf } from "../../../src/modules/reminders";
 import type { ReminderConsult } from "../../../src/modules/decision";
-import { ROTATION_REMINDERS } from "../../../src/modules/reminders/catalog";
+import { ACTIVE_ROTATION_REMINDERS } from "../../../src/modules/reminders/catalog";
 import { createPiStub, stubContext, stubSessionManager, type PiStub } from "../../helpers/pi-stub";
 
 /**
@@ -73,7 +73,9 @@ describe("reminder emission", () => {
 
         const rotated = await userTurn(stub);
 
-        expect(rotated?.message?.content).toContain("memory-audit");
+        // The branch has no mutating work, so memory-hygiene is gated out and the rotation starts at
+        // delegation.
+        expect(rotated?.message?.content).toContain("scout");
     });
 
     it("emits nothing when PI_CODER_REMINDER is false", async () => {
@@ -112,6 +114,15 @@ describe("reminder emission", () => {
         expect((await userTurn(stub))?.message?.content).toContain("memory_system");
 
         await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
+        // The run must continue to a next inference for a steer to have a destination, which a tool call
+        // guarantees. The empty branch gates out memory-hygiene, so the rotation lands on delegation.
+        await stub.requireHandler("message_update")(
+            {
+                message: { role: "assistant" },
+                assistantMessageEvent: { type: "toolcall_start" },
+            },
+            ctx,
+        );
         await stub.requireHandler("message_update")(
             {
                 message: { role: "assistant" },
@@ -125,14 +136,14 @@ describe("reminder emission", () => {
             customType: "pi-coder-reminder",
             display: false,
         });
-        expect(String(stub.sentMessages[0]?.message.content)).toContain("memory-audit");
+        expect(String(stub.sentMessages[0]?.message.content)).toContain("scout");
         expect(stub.sentMessages[0]?.options).toEqual({ deliverAs: "steer" });
 
         // The baseline moved, so the next user turn does not repeat it.
         expect(await userTurn(stub)).toBeUndefined();
     });
 
-    it("crosses the threshold at the assistant baseline too", async () => {
+    it("does not steer from the assistant baseline alone", async () => {
         vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
         vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
         const stub = harness();
@@ -146,8 +157,40 @@ describe("reminder emission", () => {
 
         await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
 
-        expect(stub.sentMessages).toHaveLength(1);
-        expect(String(stub.sentMessages[0]?.message.content)).toContain("memory-audit");
+        // The message has not called a tool yet, so it may be the run's last; nothing is queued.
+        expect(stub.sentMessages).toHaveLength(0);
+    });
+
+    it("does not steer on a text-only assistant message", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
+        const stub = harness();
+        await startSession(stub);
+        await userTurn(stub);
+
+        await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
+        await stub.requireHandler("message_update")(
+            {
+                message: { role: "assistant" },
+                assistantMessageEvent: { type: "text_delta", delta: "x".repeat(400) },
+            },
+            ctx,
+        );
+
+        expect(stub.sentMessages).toHaveLength(0);
+    });
+
+    it("skips memory-hygiene until mutating work has happened", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "1");
+        const stub = harness();
+        await startSession(stub);
+
+        expect((await userTurn(stub))?.message?.content).toContain("memory_system");
+
+        const next = await userTurn(stub);
+
+        expect(next?.message?.content).toContain("scout");
+        expect(next?.message?.content).not.toContain("memory-audit");
     });
 
     it("does not deliver mid-run when the threshold is off", async () => {
@@ -221,15 +264,16 @@ describe("modelChoiceOf", () => {
     }
 
     it("maps a chosen reminder id, none, and unreadable answers", () => {
-        expect(modelChoiceOf(consult({ kind: "reminder", id: "sandbox" }))).toBe("sandbox");
+        expect(modelChoiceOf(consult({ kind: "reminder", id: "delegation" }))).toBe("delegation");
         expect(modelChoiceOf(consult({ kind: "none" }))).toBe("none");
         expect(modelChoiceOf(consult(undefined))).toBeUndefined();
     });
 
-    it("ignores an id the module never offered", () => {
-        const offered = ROTATION_REMINDERS[0]?.id;
+    it("ignores a disabled id and an id the module never offered", () => {
+        const offered = ACTIVE_ROTATION_REMINDERS[0]?.id;
 
         expect(offered).toBeDefined();
+        expect(modelChoiceOf(consult({ kind: "reminder", id: "sandbox" }))).toBeUndefined();
         expect(modelChoiceOf(consult({ kind: "reminder", id: "not-a-reminder" }))).toBeUndefined();
     });
 });

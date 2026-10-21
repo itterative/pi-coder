@@ -44,6 +44,7 @@ import { buildReminderState } from "../src/modules/decision/reminder";
 import { decisionSessionContext } from "../src/modules/decision/session-context";
 import { ReminderScheduler } from "../src/modules/reminders/scheduler";
 import {
+    availableRotationIds,
     buildReminderSignals,
     reminderLabelsFromEntries,
 } from "../src/modules/reminders/session-signals";
@@ -183,6 +184,21 @@ function contextTokensOf(usage: MessageView["usage"]): number {
     return (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
 }
 
+/** Whether the assistant message called a tool, the condition the live mid-run steer requires. */
+function hasToolCall(content: unknown): boolean {
+    if (!Array.isArray(content)) {
+        return false;
+    }
+
+    return content.some((part) => {
+        return (
+            typeof part === "object" &&
+            part !== null &&
+            (part as { type?: unknown }).type === "toolCall"
+        );
+    });
+}
+
 /**
  * Simulate the session turn by turn, keeping the scheduler's own state so the shown-reminder map and the
  * rotation pointer are what the live module would have had.
@@ -214,16 +230,31 @@ export function replay(entries: readonly SessionEntry[], cwd: string): ReplayRes
         if (message.role === "assistant") {
             contextTokens = contextTokensOf(message.usage);
 
-            // The live module checks the threshold as assistant usage arrives and steers the reminder into
-            // the run; modelling it keeps the next user turn's schedule and shown map faithful.
-            const midRun = scheduler.decideMidRun({ maxContextTokens: contextTokens });
-            if (midRun !== undefined) {
-                shown.set(midRun.id, scheduler.snapshot().userTurns);
-                pendingMidRun.push({
-                    afterEntryId: String(entry.id),
-                    schedule: midRun.id,
-                    reminderText: midRun.text,
+            // The live module steers only once the streaming message has called a tool, and narrows the
+            // rotation by the activity gate. Both read the committed prefix, not the message itself, so the
+            // current assistant message never counts toward its own availability.
+            if (hasToolCall(message.content)) {
+                const prefix = entries.slice(0, index);
+                const signals = buildReminderSignals({
+                    entries: prefix,
+                    cwd,
+                    currentTurn: turns.length + 1,
+                    contextTokens,
+                    shown,
+                    labels: reminderLabelsFromEntries(prefix),
                 });
+                const midRun = scheduler.decideMidRun({
+                    maxContextTokens: contextTokens,
+                    available: availableRotationIds(signals),
+                });
+                if (midRun !== undefined) {
+                    shown.set(midRun.id, scheduler.snapshot().userTurns);
+                    pendingMidRun.push({
+                        afterEntryId: String(entry.id),
+                        schedule: midRun.id,
+                        reminderText: midRun.text,
+                    });
+                }
             }
             continue;
         }
@@ -251,7 +282,10 @@ export function replay(entries: readonly SessionEntry[], cwd: string): ReplayRes
             signals,
         });
 
-        const reminder = scheduler.decide({ maxContextTokens: contextTokens });
+        const reminder = scheduler.decide({
+            maxContextTokens: contextTokens,
+            available: availableRotationIds(signals),
+        });
         if (reminder !== undefined && reminder.id !== "memory-read") {
             shown.set(reminder.id, scheduler.snapshot().userTurns);
         }

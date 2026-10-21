@@ -8,22 +8,24 @@ keep_updated: true
 
 # Reminders
 
-`src/modules/reminders/` emits hidden pi-coder reminders as at most one custom message per user turn
-(`customType: "pi-coder-reminder"`, `display: false`, wrapped in `<pi_coder_reminder>`). The memory module no
-longer emits reminders; it owns the appendix and its snapshot lifecycle only.
+`src/modules/reminders/` emits hidden pi-coder reminders as at most one custom message at the start of a user
+turn, plus threshold-driven mid-run steers (`customType: "pi-coder-reminder"`, `display: false`, wrapped in
+`<pi_coder_reminder>`). The memory module owns the appendix and snapshot lifecycle.
 
 ## Files and schedule
 
-- `catalog.ts` — `MEMORY_READ_REMINDER` (session start, tree navigation, compaction) plus
-  `ROTATION_REMINDERS` (memory-hygiene, sandbox, delegation, todo, validation), each with `text` (shown to the
-  agent) and `guidance` (the criterion the decision model judges relevance by). Catalog texts stay
-  extension-generic: they may name pi-coder mechanics (`/memory-audit`, `.pi/bash-sandbox-config.json`) but
-  never one repository's commands. Repo-specific validation, formatting, and patch rules belong in that
-  project's instructions and memories, which the agent already has in its prompt.
+- `catalog.ts` — `MEMORY_READ_REMINDER` (session start, tree navigation, compaction) plus `ROTATION_REMINDERS`
+  (memory-hygiene, sandbox, delegation, todo, validation), each with `text` and `guidance`. A `disabled: true`
+  entry stays in the catalog but is filtered out of the rotation and the model's offer by
+  `ACTIVE_ROTATION_REMINDERS`; `sandbox` is disabled until it keys on a real gated event rather than rotating
+  context-free. Catalog texts stay extension-generic: they may name pi-coder mechanics but never one
+  repository's commands, which live in that project's instructions and memories.
 - `scheduler.ts` — pure `ReminderScheduler`: the session reminder first; otherwise rotation due after
   `everyTurns` user turns since the last emission or `thresholdTokens` new context tokens, whichever comes
   first. A model answer naming an offered id is chosen and advances the rotation past it; a deliberate `none`
-  suppresses the fallback for that turn; a missing answer leaves the deterministic triggers in charge.
+  suppresses the fallback for that turn; a missing answer leaves the deterministic triggers in charge. The
+  optional `available` gate narrows the rotation: the scheduler scans to the next allowed id, and a model pick
+  outside the set is dropped with no fallback.
 - `context-growth.ts` — the `message_start` usage baseline plus streamed `chars / 4` estimator lifted out of
   the memory module.
 - `settings.ts` — `PI_CODER_REMINDER=false` disables everything; `PI_CODER_REMINDER_EVERY_TURNS` (default 5)
@@ -37,12 +39,14 @@ longer emits reminders; it owns the appendix and its snapshot lifecycle only.
 Two delivery paths, both appending at the end of the conversation, so the system-prompt prefix stays stable:
 
 - **User turns** (`before_agent_start`): the session reminder, the turn-based rotation, and the model policy.
-- **Mid-run** (`message_start` / `message_update`, when the context-growth estimate crosses
+- **Mid-run** (`message_update` only, when the context-growth estimate crosses
   `PI_CODER_REMINDER_THRESHOLD`): `pi.sendMessage(..., { deliverAs: "steer" })` queues the next rotation
   reminder into the running loop, injected after the current assistant turn and before the run's next
-  inference, so a long autonomous stretch does not wait for the user to speak again. Only the threshold
-  applies there (the turn cadence counts user turns and the model is consulted at `before_agent_start`), both
-  paths share the emission bookkeeping, and full scope only - a memory-scoped child never steers mid-run.
+  inference, so a long autonomous stretch does not wait for the user to speak again. It exempts mid-run from
+  "one per user turn" and steers only after the message emits a `toolcall_*` event: a tool call means the run
+  continues, so the reminder cannot land after a final text-only answer. `message_start` never steers, the
+  gate is computed once per message, and only the threshold applies here. Both paths share the emission
+  bookkeeping, and full scope only - a memory-scoped child never steers mid-run.
 
 Compaction may summarize an old reminder away, so session start, tree navigation, and compaction each call
 `reset()` and re-arm it.
@@ -72,6 +76,8 @@ expansion is otherwise sent whole) plus the branch's four-item recent window, an
 - `todo`: progress from the `pi-coder:todo-snapshot` entry; `memories`: names from the
   `pi-memory:memory-index` entry.
 
+`availableRotationIds` gates `memory-hygiene` on `files_modified` / `todo_writes` or a wrapping-up label.
+
 The candidate list stays in the question criteria, never in the state. Every signal is best-effort: a missing
 entry or unreadable snapshot just drops its field.
 
@@ -94,8 +100,9 @@ inferred.
 `npm run reminder-report -- <session.jsonl> [--turn N] [--turns N] [--compact] [--json]` replays a recorded
 session turn by turn: it rebuilds the exact state that would be sent, simulates the deterministic schedule
 (so the turn cadence and the threshold interaction are visible), and prints each turn's picked reminder in
-full, compact mode clipping it to one `shows=` line. The header says the model was not consulted, because a
-live choice with `reminders: true` may differ. It reads the session's own memory-index,
+full, compact mode clipping it to one `shows=` line. It applies the same activity gate and only models a
+mid-run steer for an assistant message that called a tool, matching the live rules.
+The header says the model was not consulted, because a live choice with `reminders: true` may differ. It reads the session's own memory-index,
 todo-snapshot, and reminder-state entries, needs no endpoint, and respects `PI_CODER_REMINDER_*`. The script
 is `scripts/reminder-report.mts`; the `.mts` and `src/package.json` (`type: module`) exist because the root
 package is not ESM and the pi package is ESM-only under `node --import tsx`. `parseArgs`, `replay`, and the

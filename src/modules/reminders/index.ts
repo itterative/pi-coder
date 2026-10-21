@@ -9,11 +9,12 @@ import {
     type ReminderSignals,
     type ReminderStateLabels,
 } from "../decision";
-import { MEMORY_READ_REMINDER, ROTATION_REMINDERS } from "./catalog";
+import { ACTIVE_ROTATION_REMINDERS, MEMORY_READ_REMINDER } from "./catalog";
 import { ContextGrowthTracker } from "./context-growth";
 import { ReminderScheduler, type ReminderModelChoice } from "./scheduler";
 import {
     REMINDER_STATE_TYPE,
+    availableRotationIds,
     buildReminderSignals,
     reminderLabelsFromEntries,
 } from "./session-signals";
@@ -47,7 +48,7 @@ export function modelChoiceOf(consult: ReminderConsult): ReminderModelChoice | u
         return "none";
     }
 
-    return ROTATION_REMINDERS.find((reminder) => reminder.id === decision.id)?.id;
+    return ACTIVE_ROTATION_REMINDERS.find((reminder) => reminder.id === decision.id)?.id;
 }
 
 /** Consult the decision model once its config has opted into `reminders`; never throws. */
@@ -60,7 +61,7 @@ async function consultModelFor(
     return consultReminderSelection({
         ctx,
         config,
-        options: ROTATION_REMINDERS,
+        options: ACTIVE_ROTATION_REMINDERS,
         request,
         signals,
     });
@@ -75,12 +76,18 @@ function sameLabels(left: ReminderStateLabels, right: ReminderStateLabels): bool
 }
 
 /**
- * Emit pi-coder reminders as hidden context, at most one per user turn.
+ * Emit pi-coder reminders as hidden context: at most one at the start of a user turn, plus threshold-driven
+ * mid-run steers.
  *
  * The memory reminder is tied to the memory list changing (session start, tree navigation, compaction); the
- * rest rotate on a turn cadence or a context-growth threshold. When the decision model is configured with
- * `reminders: true`, it answers first: a chosen reminder or a deliberate `none` decides the turn, and an
- * unavailable or unreadable answer leaves the deterministic schedule in charge.
+ * rest rotate on a turn cadence or a context-growth threshold. The two delivery paths are deliberately
+ * separate from the one-per-turn rule: a long autonomous run may receive a mid-run steer, but only while the
+ * streaming assistant message has called a tool, so a reminder never follows a run that is about to end.
+ *
+ * The activity gate narrows the rotation: `memory-hygiene` is unavailable until mutating work happened, and
+ * a model pick the gate disallows is dropped rather than replaced. When the decision model is configured
+ * with `reminders: true`, it answers first: a chosen reminder or a deliberate `none` decides the turn, and
+ * an unavailable or unreadable answer leaves the deterministic schedule in charge.
  */
 export default function registerRemindersExtension(
     pi: ExtensionAPI,
@@ -99,6 +106,28 @@ export default function registerRemindersExtension(
     const shown = new Map<ReminderId, number>();
     /** The model-maintained labels, re-read from the branch at every change point. */
     let labels: ReminderStateLabels = {};
+
+    /**
+     * Whether the assistant message being streamed has produced a tool call yet.
+     *
+     * A steer is delivered after the current assistant turn and its tool calls; a message with no tool call
+     * may be the run's last, so queuing a reminder there would leave it as a stray message after the final
+     * answer. Reset at each assistant `message_start`.
+     */
+    let currentMessageHasToolCalls = false;
+    /** The activity gate for the message being streamed, computed lazily once per assistant message. */
+    let midRunAvailable: ReadonlySet<ReminderId> | undefined;
+    let midRunAvailableReady = false;
+
+    const rotationSignals = (ctx: ExtensionContext, currentTurn: number): ReminderSignals =>
+        buildReminderSignals({
+            entries: ctx.sessionManager.getBranch(),
+            cwd: ctx.cwd ?? process.cwd(),
+            currentTurn,
+            contextTokens: growth.maxTokens,
+            shown,
+            labels,
+        });
 
     const restart = (ctx: ExtensionContext) => {
         scheduler.reset();
@@ -121,15 +150,31 @@ export default function registerRemindersExtension(
      *
      * `steer` queues the message for the point after the current assistant turn, before the run's next
      * inference, so a long autonomous stretch sees the nudge without waiting for the user to speak again.
-     * Only the context threshold applies here: the turn cadence counts user turns and the model policy is
-     * consulted at `before_agent_start`, so both stay user-turn events.
+     * Only a message that has already produced a tool call can steer: a tool call means the run continues
+     * to another inference, so the reminder is never left over after a final text-only answer. Only the
+     * context threshold applies here (the turn cadence counts user turns and the model policy is consulted
+     * at `before_agent_start`).
      */
-    const maybeEmitMidRun = (): void => {
-        if (!midRunEnabled) {
+    const maybeEmitMidRun = (ctx: ExtensionContext): void => {
+        if (!midRunEnabled || !currentMessageHasToolCalls) {
             return;
         }
 
-        const reminder = scheduler.decideMidRun({ maxContextTokens: growth.maxTokens });
+        if (!scheduler.midRunDue(growth.maxTokens)) {
+            return;
+        }
+
+        if (!midRunAvailableReady) {
+            midRunAvailable = availableRotationIds(
+                rotationSignals(ctx, scheduler.snapshot().userTurns),
+            );
+            midRunAvailableReady = true;
+        }
+
+        const reminder = scheduler.decideMidRun({
+            maxContextTokens: growth.maxTokens,
+            available: midRunAvailable,
+        });
         if (reminder === undefined) {
             return;
         }
@@ -161,10 +206,12 @@ export default function registerRemindersExtension(
         }
 
         growth.startAssistantMessage(ctx.getContextUsage()?.tokens ?? 0);
-        maybeEmitMidRun();
+        currentMessageHasToolCalls = false;
+        midRunAvailable = undefined;
+        midRunAvailableReady = false;
     });
 
-    pi.on("message_update", (event) => {
+    pi.on("message_update", (event, ctx) => {
         if (event.message.role !== "assistant") {
             return;
         }
@@ -174,7 +221,15 @@ export default function registerRemindersExtension(
             growth.addStreamedChars(streamed.delta.length);
         }
 
-        maybeEmitMidRun();
+        if (
+            streamed.type === "toolcall_start" ||
+            streamed.type === "toolcall_delta" ||
+            streamed.type === "toolcall_end"
+        ) {
+            currentMessageHasToolCalls = true;
+        }
+
+        maybeEmitMidRun(ctx);
     });
 
     pi.on("before_agent_start", async (event, ctx) => {
@@ -183,21 +238,17 @@ export default function registerRemindersExtension(
         }
 
         // The session reminder is already decided, and a rotation with both triggers at zero is off, so
-        // neither turn is worth a classifier request.
+        // neither turn is worth a classifier request or a branch scan.
         const snapshot = scheduler.snapshot();
-        const consultModel = scope === "full" && rotationEnabled && !snapshot.sessionArmed;
+        const rotationTurn = scope === "full" && rotationEnabled && !snapshot.sessionArmed;
         let modelChoice: ReminderModelChoice | undefined;
-        if (consultModel) {
+        let available: ReadonlySet<ReminderId> | undefined;
+        if (rotationTurn) {
+            const signals = rotationSignals(ctx, snapshot.userTurns + 1);
+            available = availableRotationIds(signals);
+
             const config = decisionConfig.load(ctx.cwd ?? process.cwd());
             if (reminderEnabled(config)) {
-                const signals = buildReminderSignals({
-                    entries: ctx.sessionManager.getBranch(),
-                    cwd: ctx.cwd ?? process.cwd(),
-                    currentTurn: snapshot.userTurns + 1,
-                    contextTokens: growth.maxTokens,
-                    shown,
-                    labels,
-                });
                 const consult = await consultModelFor(ctx, config, event.prompt, signals);
                 modelChoice = modelChoiceOf(consult);
 
@@ -214,7 +265,11 @@ export default function registerRemindersExtension(
             }
         }
 
-        const reminder = scheduler.decide({ maxContextTokens: growth.maxTokens, modelChoice });
+        const reminder = scheduler.decide({
+            maxContextTokens: growth.maxTokens,
+            modelChoice,
+            available,
+        });
         if (reminder === undefined) {
             return;
         }

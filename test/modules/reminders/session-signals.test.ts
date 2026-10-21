@@ -8,6 +8,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import {
     REMINDER_STATE_TYPE,
+    availableRotationIds,
     buildReminderSignals,
     reminderLabelsFromEntries,
 } from "../../../src/modules/reminders/session-signals";
@@ -252,5 +253,49 @@ describe("buildReminderSignals", () => {
 
         // `echo` is the command; the quoted text is an argument, and the pattern anchors on the command word.
         expect(signals.session?.tests_run).toBeUndefined();
+    });
+});
+
+describe("availableRotationIds", () => {
+    function availability(manager: SessionManager, labels?: { phase?: "wrapping_up" }) {
+        return availableRotationIds(
+            buildReminderSignals({
+                entries: manager.getBranch(),
+                cwd: CWD,
+                currentTurn: 1,
+                contextTokens: 0,
+                shown: new Map(),
+                labels,
+            }),
+        );
+    }
+
+    it("gates memory-hygiene out until mutating work has happened", () => {
+        const manager = session();
+        manager.appendMessage(userEntry("tell me about this", 1));
+
+        const available = availability(manager);
+
+        expect(available.has("memory-hygiene")).toBe(false);
+        expect(available.has("delegation")).toBe(true);
+    });
+
+    it("gates memory-hygiene in once a code file or the TODO changed", () => {
+        const edited = session();
+        edited.appendMessage(toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 1));
+        expect(availability(edited).has("memory-hygiene")).toBe(true);
+
+        const todoed = session();
+        todoed.appendMessage(
+            toolCallEntry([{ name: "edit", arguments: { path: "/tmp/scratch/TODO.md" } }], 1),
+        );
+        expect(availability(todoed).has("memory-hygiene")).toBe(true);
+    });
+
+    it("gates memory-hygiene in for a wrapping-up label", () => {
+        const manager = session();
+        manager.appendMessage(userEntry("report back", 1));
+
+        expect(availability(manager, { phase: "wrapping_up" }).has("memory-hygiene")).toBe(true);
     });
 });

@@ -11,6 +11,7 @@ import {
 } from "../decision/reminder";
 import { getTodoSnapshotFromEntries } from "../todolist/persistence";
 import { parseTodoList } from "../todolist/parser";
+import { ACTIVE_ROTATION_REMINDERS } from "./catalog";
 import type { ReminderId } from "./types";
 
 /**
@@ -55,6 +56,39 @@ export interface ReminderSignalInput {
     shown: ReadonlyMap<ReminderId, number>;
     /** The labels the model assigned on earlier turns, when any are persisted. */
     labels?: ReminderStateLabels;
+}
+
+/**
+ * The rotation ids the activity allows this turn. Only `memory-hygiene` is gated: before any file has
+ * changed its "review what you learned" text has nothing to act on, so it stays unavailable until mutating
+ * work happened. Filtering here rather than in the catalog keeps the gate a property of the session, not of
+ * the reminder.
+ */
+export function availableRotationIds(signals: ReminderSignals): ReadonlySet<ReminderId> {
+    const available = new Set<ReminderId>();
+    for (const reminder of ACTIVE_ROTATION_REMINDERS) {
+        if (reminder.id === "memory-hygiene" && !hasMutatingWork(signals.session)) {
+            continue;
+        }
+
+        available.add(reminder.id);
+    }
+
+    return available;
+}
+
+/** Work the memory-hygiene reminder can act on: a changed file, TODO progress, or a wrapping-up label. */
+function hasMutatingWork(session: ReminderSessionActivity | undefined): boolean {
+    if (session === undefined) {
+        return false;
+    }
+
+    return (
+        (session.files_modified?.length ?? 0) > 0 ||
+        (session.todo_writes ?? 0) > 0 ||
+        session.finishing === true ||
+        session.phase === "wrapping_up"
+    );
 }
 
 export function buildReminderSignals(input: ReminderSignalInput): ReminderSignals {
