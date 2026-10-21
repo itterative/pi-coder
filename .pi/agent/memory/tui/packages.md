@@ -10,7 +10,7 @@ keep_updated: true
 ## `agents/` — agent-specific browser TUI
 
 - Agent-specific browser TUI package. Its browser, session/workspace details, and workspace browser implement `Component` and compose the generic list/pager/select components.
-- Agent browser imports should use this package directly.
+- Agent browser imports should use `src/tui/agents` directly.
 - Session-transcript projections, including TODO transcript formatting, belong under `src/tools/agent/presentation/` rather than the status package.
 - Add focused package tests when extending its controller/lifecycle behavior.
 
@@ -18,7 +18,7 @@ The companion boundary rule — shared agent diagnostic formatting belongs in `s
 
 ## `decision/` — decision-model settings TUI
 
-- Decision-model settings package (`settings.ts` + index): a `ListViewComponent` subclass with toggle/field rows, opening a searchable classifier `SelectComponent` and `textInput` s as nested overlays.
+- Decision-model settings package (`settings.ts` + index): a `ListViewComponent` subclass with toggle/field rows, opening a searchable classifier `SelectComponent` and `textInput`s as nested overlays.
 - The agent browser Settings tab opens it through `onDecisionModelOpen`.
 - The folder mirrors `agents/` as the place for decision-specific TUI, not the status package.
 

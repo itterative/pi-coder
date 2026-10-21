@@ -116,7 +116,8 @@ stripped so the row names the body command, and a segment holding only `done`, `
 2. Confirm the refusal sections show nothing contradictory for that shape.
 3. Decide the narrowest correct mechanism:
     - a `CommandSpec` in `src/modules/sandbox/commands/` when the command is
-      generally safe under cwd confinement (see the `heuristics` memory);
+      generally safe under cwd confinement (see the `sandbox` memory,
+      `sandbox/confinement.md`);
     - a row in `src/modules/sandbox/suggestions.ts` when it is safe enough to _offer_
       as a session rule but not to grant silently;
     - an explicit config rule, when it is project- or machine-specific.

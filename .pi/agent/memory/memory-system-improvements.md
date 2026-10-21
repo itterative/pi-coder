@@ -29,10 +29,22 @@ history, the reasoning behind the fields, and the deferred ideas live in [meta/m
 4. **Sorting**: Within each category, memories sort by `priority` ascending (default 99)
 5. **Annotation**: `keep_updated: true` renders as `[high-churn]` next to the memory name
 6. **Guideline**: The system prompt includes: *"Memories marked with [high-churn] are high-churn — review and update them after relevant changes"*
+7. **Quoting**: quote any `description` that contains `: `. An unquoted colon makes the frontmatter invalid YAML, `parseFrontmatter` throws, `scanMemories` silently drops the file, and the memory vanishes from the index without failing anything (`agents.md` hit exactly this on 2026-10-21)
+8. **Length**: keep an *indexed* description to one line, ≤ 150 characters — every indexed description is rendered into every system prompt. Nested detail docs are never rendered, so a longer nested description is allowed and needs no trimming
+
+## Two-tier layout
+
+One top-level index per subsystem (≤ 4 KB), with detail docs in a directory of the same name reachable only
+through the index's `## Targeted references` list. An index keeps what the subsystem is, where its code lives,
+the few invariants needed *before* choosing a detail doc, and that list; everything longer belongs in a nested
+doc. Stale or one-time memories are **demoted into a directory as on-demand archives, never deleted**. Moving a
+doc one level deeper means adding `../` to its relative links, and cross-cluster pointers must name the final
+path, never an old memory name. The full convention, the 2026-10-21 restructure that produced this layout, and
+the verification gates that caught the bugs above are in [meta/memory-system.md](meta/memory-system.md).
 
 ## Targeted references
 
 Load only the detail needed for the task; these nested documents are on-demand and are not listed in the memory index.
 
-- `meta/memory-system.md` — extension change history, why these categories and fields were chosen, and the deferred improvements.
+- `meta/memory-system.md` — extension change history, why these categories and fields were chosen, the deferred improvements, and the two-tier hierarchy in full.
 - `meta/system-prompt-changes.md` — archived validation checklist for the 2026-06-01 prompt-appendix changes; on-demand history, not a live checklist.

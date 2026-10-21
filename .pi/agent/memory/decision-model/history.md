@@ -1,3 +1,10 @@
+---
+name: history
+description: "Archive of the decision-model memory as of 2026-10-18 - measured evidence and rejected alternatives. Load when a settled finding needs its numbers."
+category: architecture
+status: "Archive: measurements recorded 2026-10-18; read the indexed decision-model memory first"
+---
+
 # Decision-model measurement history (archive)
 
 Archive of the `decision-model` memory as it stood on 2026-10-18, kept for the measured evidence behind the choices summarised in the indexed [decision-model memory](../decision-model.md). Read the indexed memory first; this is the long form. The probe scripts and reports it names live in gitignored `.pi/local` and may not survive.
@@ -116,8 +123,8 @@ context is wanted, curate safety-only facts and keep every workflow prohibition 
 ## Confinement probe
 
 The probe — running a command in a copy-on-write bwrap bubble and reporting which workspace files it would
-change — is implemented in `src/modules/sandbox/probe.ts` but **not wired to anything yet**. See the
-`confinement-probe` memory for the mechanism, the invariants (status-fd run detection, overlay work-dir
+change — is implemented in `src/modules/sandbox/probe.ts` but **not wired to anything yet**. See
+`sandbox/probe.md` (the former `confinement-probe` memory) for the mechanism, the invariants (status-fd run detection, overlay work-dir
 cleanup, no writable mounts), and the measurements.
 
 Its relevance here: the reading (“these files might change”) is evidence for this module, not a policy of its
@@ -742,7 +749,7 @@ writes one, and when one exists the dialog shows a warning line above the footer
   must walk the session's **active branch** (last leaf → `parentId` → root), because a session file is a tree:
   a superseded message (retry/edit/rewind) sits on a sibling branch with the same parent, so a linear read
   duplicates it (it produced a doubled "my bad, I have 1.3.0").
-- Design prose: [docs/bash-execution-redesign.md](../../../docs/bash-execution-redesign.md) Part C.
+- Design prose: [docs/bash-execution-redesign.md](../../../../docs/bash-execution-redesign.md) Part C.
 - Next: read `classifier` in a permission-report section (the standalone `scripts/decision-report.ts` reads
 the log already), and the status footer. Both surfaces are wired through `src/tools/decision-model.ts`.
 - Next (follow-up, not implemented): use the human's allow/deny answer from the decision log as feedback for
@@ -752,7 +759,7 @@ the log already), and the status footer. Both surfaces are wired through `src/to
 
 # Part 2 — Confinement-probe classifier experiments
 
-The decision-model half of the old `confinement-probe` memory; the probe mechanism, invariants and limits stay in the indexed memory.
+The decision-model half of the former `confinement-probe` memory (now `sandbox/probe.md`); the probe mechanism, invariants and limits stay in that doc.
 
 ## Decision-model test (2026-10-17): the reading is inert as a state field
 

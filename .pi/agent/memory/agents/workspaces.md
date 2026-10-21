@@ -28,3 +28,32 @@ keep_updated: true
 ## Target shared-slot/checkpoint design
 
 The agreed direction is to make physical workspace slots reusable while preserving logical worker identity. Intermediate and terminal checkpoints remain permanently associated with the physical workspace where they were captured; a logical worker must resume only in that same workspace. If an interrupted worker X in A is checkpointed and A is reused by Y, X becomes parked and waits for A rather than moving to B. Every normally observed intermediate or terminal transition—including waiting for parent guidance, completion, failure, abort, and cancellation—must checkpoint after the operation settles; a cancellation request is not itself a safe boundary. Reuse is allowed only after a safe boundary or verified-dead/expired owner, and checkpointing must capture dirty tracked/non-ignored untracked state before reset. PID/renewable lease health checks should guard this handoff. If a normally observed checkpoint fails, the worker remains protected as interrupted. Multiple workers may have durable checkpoints/results for one slot, so exact result/checkpoint lookup must replace `latestResult` as the lifecycle authority. Result actions use persisted result IDs when available (or exact run instances for legacy records), immutable result refs, and compare-and-set reservation tokens before apply/retain/discard side effects. Reservations include owner PID recovery after a dead process and grace period; reset/discard/recycling reject in-flight reservations. Parent restart must leave parked/occupied workers persisted for explicit continuation rather than reopening them in a reused worktree. See `docs/agent-workspaces.md` for the target lifecycle and the deferred parent-working-tree design gap.
+
+## Known defects (verified 2026-10-21)
+
+Both surfaced while six isolated workers restructured `.pi/agent/memory/` in parallel. They are reproducible
+hazards for any parent that lands isolated results, so verify rather than trust the pool.
+
+- **A reused workspace can be handed out stale.** Two of three runs were assigned worktrees whose HEAD and stored
+  `base_revision` were `72bbd6d` and `fdde7a7` — divergent `tmp:` commits, not the parent HEAD `a8d8ceb` — and
+  their memory trees were missing the files the task named (14 and 21 top-level memories against the parent's
+  19). That violates the reset invariant in `agents/workspace-invariants.md`: moving to a reusable worktree must
+  rebase both the worktree and `base_revision` to the current parent HEAD. Detection that works: assert
+  `git rev-parse HEAD` equals the base hash the parent quoted **and** assert the byte sizes of the input files;
+  never proceed on a tree whose identity you cannot check. Remedy when `git status --porcelain` is empty:
+  `git checkout -f --detach <parent-hash>` then `git clean -fd <the paths in play>` — the abandoned head stays
+  safe under `refs/pi-coder/workspace-checkpoints/<workspace>/<uuid>`, so nothing is lost by moving HEAD.
+- **`resolveResultBaseRevision` (`src/tools/agent/workspaces/results.ts:437`) can prepare a patch spanning
+  unrelated commits.** It tries the recorded base, then the *then-current* parent HEAD, then
+  `merge-base recordedBase workerHead`. When a child re-points its worktree to an older parent HEAD — the exact
+  repair above — neither of the first two is an ancestor of its head, so the third branch returns the merge base
+  with the **stale recorded base** (`572fbc8`) instead of the commit the child actually built on, and the prepared
+  diff covered 95 commits. The fallback belongs against the parent HEAD (`merge-base parentHead workerHead`),
+  which yields the correct base. Meanwhile the parent-side gate: compare the "Base revision" line in the collect
+  report with the child's reported base, confirm `git log -1 --format=%p <workerHead>` names the base the child
+  claims, and check `git diff --name-status <base>..HEAD` is scoped to the expected paths. If the recorded base is
+  wrong, land with `git cherry-pick -n <workerHead>` after that verification and then `discard` the prepared
+  result — applying it would drag unrelated history into the checkout.
+- **The live workspace store is `.state/meta.sqlite`.** `.state/workspaces/meta.sqlite` is a dead leftover whose
+  `workspaces` table reads empty, which is easy to mistake for "no workspaces exist" while diagnosing pool
+  behavior.

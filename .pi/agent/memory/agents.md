@@ -1,6 +1,6 @@
 ---
 name: agents
-description: Cluster index for delegated agents: what the feature is, the capability split, the agent tool action list, and the detail docs under agents/.
+description: "Cluster index for delegated agents: what the feature is, the capability split, the agent tool action list, and the detail docs under agents/."
 category: architecture
 priority: 2
 keep_updated: true
@@ -13,7 +13,7 @@ The feature is an in-process SDK implementation under `src/tools/agent/`, regist
 
 ## High-value overview
 
-- Capability split: `scout` is read-only, `advisor` is read-only and opt-in, `reviewer` is command-capable, and `worker` is the only edit-capable built-in (permission-gated). Same-checkout mutation-capable workers are single-flight; `worker` runs in distinct isolated worktrees may mutate concurrently.
+- Capability split: `scout` is read-only, `advisor` is read-only and opt-in, `reviewer` is command-capable, and `worker` is the only edit-capable built-in (permission-gated). Same-checkout mutation-capable workers are single-flight; isolated `worker` runs in distinct worktrees may mutate concurrently.
 - The `agent` tool actions: `start` (foreground by default, background with `background=true`), `list`, `status`, `collect`, `continue`, `cancel`, and the isolated-result actions.
 - The agent UI is a compositional package: `src/tui/agents`.
 
