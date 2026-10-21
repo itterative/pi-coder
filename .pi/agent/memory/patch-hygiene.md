@@ -1,7 +1,7 @@
 ---
 name: patch-hygiene
-description: Scripted edits (python/sed) must assert their match counts before writing; silent no-op replacements have twice shipped dead code and a stale reference.
-category: Workflow
+description: Scripted edits (python/sed) must assert match counts before writing; silent no-op replacements have twice shipped dead code and a stale reference.
+category: workflow
 ---
 
 # Scripted edits must assert before they write

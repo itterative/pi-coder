@@ -1,12 +1,13 @@
 ---
 name: system-prompt-changes
-description: Validation checklist for the system prompt improvements made on 2026-06-01. Read after reloading to verify changes took effect.
+description: "On-demand history: validation checklist for the 2026-06-01 pi-coder system-prompt appendix changes; not listed in the indexed memory list."
 category: meta
-priority: 1
-keep_updated: true
+status: "Archive: validation checklist for the 2026-06-01 system-prompt changes"
 ---
 
 # System Prompt Changes — Validation Checklist
+
+Archived and reachable from [../memory-system-improvements.md](../memory-system-improvements.md); read it only when verifying the memory prompt appendix itself.
 
 ## What changed
 

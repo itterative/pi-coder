@@ -40,4 +40,4 @@ These were the only breakages; `npx tsc --noEmit` and `npm run typecheck:tests` 
 
 pi 1.1.0's `buildSessionProjection` emits a compaction summary only for the `compaction` entry at index 0, so a
 session with multiple folds carries one summary (the newest), not one per fold. The non-idempotent hoist defect is
-unchanged. Details in the `compaction` memory's `pipeline.md`.
+unchanged. Details in the `compaction` memory (`compaction.md`), nested at `compaction/pipeline.md`.
