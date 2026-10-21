@@ -57,11 +57,12 @@ async function consultModelFor(
     config: DecisionModelConfig,
     request: string,
     signals: ReminderSignals,
+    options: readonly ReminderDefinition[],
 ): Promise<ReminderConsult> {
     return consultReminderSelection({
         ctx,
         config,
-        options: ACTIVE_ROTATION_REMINDERS,
+        options,
         request,
         signals,
     });
@@ -98,8 +99,12 @@ export default function registerRemindersExtension(
     const rotationEnabled = settings.everyTurns > 0 || settings.thresholdTokens > 0;
     const scheduler = new ReminderScheduler(
         scope === "full"
-            ? { everyTurns: settings.everyTurns, thresholdTokens: settings.thresholdTokens }
-            : { everyTurns: 0, thresholdTokens: 0 },
+            ? {
+                  everyTurns: settings.everyTurns,
+                  thresholdTokens: settings.thresholdTokens,
+                  maxMidRunPerTurn: settings.midRunMax,
+              }
+            : { everyTurns: 0, thresholdTokens: 0, maxMidRunPerTurn: 0 },
     );
     const growth = new ContextGrowthTracker();
     /** When each rotation reminder was shown, keyed by the user turn it was emitted on. */
@@ -143,7 +148,11 @@ export default function registerRemindersExtension(
         growth.reset();
     });
 
-    const midRunEnabled = scope === "full" && settings.enabled && settings.thresholdTokens > 0;
+    const midRunEnabled =
+        scope === "full" &&
+        settings.enabled &&
+        settings.thresholdTokens > 0 &&
+        settings.midRunMax > 0;
 
     /**
      * Deliver a reminder inside the running agent loop rather than at the next user turn.
@@ -243,14 +252,22 @@ export default function registerRemindersExtension(
         const rotationTurn = scope === "full" && rotationEnabled && !snapshot.sessionArmed;
         let modelChoice: ReminderModelChoice | undefined;
         let available: ReadonlySet<ReminderId> | undefined;
+        let scores: Record<string, number> | undefined;
         if (rotationTurn) {
             const signals = rotationSignals(ctx, snapshot.userTurns + 1);
             available = availableRotationIds(signals);
 
+            // The gate decides what may be offered, so the model is asked only about ids that can actually
+            // be shown; a gated id cannot be chosen and then vetoed.
+            const options = ACTIVE_ROTATION_REMINDERS.filter((reminder) =>
+                available?.has(reminder.id),
+            );
+
             const config = decisionConfig.load(ctx.cwd ?? process.cwd());
             if (reminderEnabled(config)) {
-                const consult = await consultModelFor(ctx, config, event.prompt, signals);
+                const consult = await consultModelFor(ctx, config, event.prompt, signals, options);
                 modelChoice = modelChoiceOf(consult);
+                scores = consult.scores;
 
                 // The labels build state along the way: they ride on the same request and are sent back in
                 // the next turn's state. Only a real change is recorded, so the session does not grow an
@@ -283,6 +300,7 @@ export default function registerRemindersExtension(
                 reminder: reminder.id,
                 scope,
                 modelChoice: modelChoice ?? null,
+                ...(scores === undefined ? {} : { scores }),
                 labels: { ...labels },
                 ...scheduler.snapshot(),
             });

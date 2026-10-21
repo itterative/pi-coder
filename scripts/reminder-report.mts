@@ -208,6 +208,7 @@ export function replay(entries: readonly SessionEntry[], cwd: string): ReplayRes
     const scheduler = new ReminderScheduler({
         everyTurns: settings.everyTurns,
         thresholdTokens: settings.thresholdTokens,
+        maxMidRunPerTurn: settings.midRunMax,
     });
     scheduler.reset();
 

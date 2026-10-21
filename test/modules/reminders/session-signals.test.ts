@@ -71,6 +71,17 @@ function toolCallEntry(
     };
 }
 
+function toolResultEntry(toolCallId: string, isError: boolean, timestamp: number): AppendedMessage {
+    return {
+        role: "toolResult",
+        toolCallId,
+        toolName: "bash",
+        content: [{ type: "text", text: isError ? "failed" : "ok" }],
+        isError,
+        timestamp,
+    };
+}
+
 afterEach(() => {
     for (const directory of temporaryDirectories.splice(0)) {
         fs.rmSync(directory, { recursive: true, force: true });
@@ -297,5 +308,85 @@ describe("availableRotationIds", () => {
         manager.appendMessage(userEntry("report back", 1));
 
         expect(availability(manager, { phase: "wrapping_up" }).has("memory-hygiene")).toBe(true);
+    });
+});
+
+describe("outcome-aware validation", () => {
+    function signalsOf(manager: SessionManager) {
+        return buildReminderSignals({
+            entries: manager.getBranch(),
+            cwd: CWD,
+            currentTurn: 1,
+            contextTokens: 0,
+            shown: new Map(),
+        });
+    }
+
+    function editedThenTested(manager: SessionManager): void {
+        manager.appendMessage(
+            toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 1),
+        );
+        manager.appendMessage(
+            toolCallEntry([{ name: "bash", arguments: { command: "npm test" } }], 2),
+        );
+        manager.appendMessage(toolResultEntry("call-2-0", false, 3));
+    }
+
+    it("treats edits after the last passing run as unvalidated again", () => {
+        const manager = session();
+        editedThenTested(manager);
+
+        expect(signalsOf(manager).session).toMatchObject({
+            tests_run: true,
+            unvalidated: false,
+            phase: "verifying",
+        });
+
+        manager.appendMessage(
+            toolCallEntry([{ name: "edit", arguments: { path: "src/b.ts" } }], 4),
+        );
+
+        expect(signalsOf(manager).session).toMatchObject({
+            unvalidated: true,
+            phase: "implementing",
+        });
+    });
+
+    it("treats a run that failed after the last change as unvalidated and debugging", () => {
+        const manager = session();
+        manager.appendMessage(
+            toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 1),
+        );
+        manager.appendMessage(
+            toolCallEntry([{ name: "bash", arguments: { command: "npm test" } }], 2),
+        );
+        manager.appendMessage(toolResultEntry("call-2-0", true, 3));
+
+        expect(signalsOf(manager).session).toMatchObject({
+            tests_run: true,
+            last_test_failed: true,
+            unvalidated: true,
+            phase: "debugging",
+        });
+    });
+
+    it("clears the failure when a later run passes", () => {
+        const manager = session();
+        manager.appendMessage(
+            toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 1),
+        );
+        manager.appendMessage(
+            toolCallEntry([{ name: "bash", arguments: { command: "npm test" } }], 2),
+        );
+        manager.appendMessage(toolResultEntry("call-2-0", true, 3));
+        manager.appendMessage(
+            toolCallEntry([{ name: "bash", arguments: { command: "npm test" } }], 4),
+        );
+        manager.appendMessage(toolResultEntry("call-4-0", false, 5));
+
+        const session_ = signalsOf(manager).session;
+        expect(session_?.last_test_failed).toBeUndefined();
+        expect(session_?.unvalidated).toBe(false);
+        expect(session_?.phase).toBe("verifying");
     });
 });

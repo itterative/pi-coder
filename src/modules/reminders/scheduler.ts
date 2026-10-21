@@ -9,6 +9,12 @@ export interface SchedulerOptions {
     everyTurns: number;
     /** Emit a rotation reminder after this much new context; `0` disables the trigger. */
     thresholdTokens: number;
+    /**
+     * Most mid-run reminders one user turn may receive (default 1); `0` disables mid-run emissions. A long
+     * autonomous turn crosses the context threshold repeatedly, and without a cap each crossing steered
+     * another reminder into the same run.
+     */
+    maxMidRunPerTurn?: number;
 }
 
 export interface DecideInput {
@@ -35,6 +41,7 @@ export interface SchedulerSnapshot {
     lastEmitTurn: number;
     thresholdBaseline: number;
     sessionArmed: boolean;
+    midRunThisTurn: number;
 }
 
 /**
@@ -51,8 +58,12 @@ export class ReminderScheduler {
     private lastEmitTurn = 0;
     private thresholdBaseline = 0;
     private sessionArmed = false;
+    private midRunThisTurn = 0;
+    private readonly maxMidRunPerTurn: number;
 
-    constructor(private readonly options: SchedulerOptions) {}
+    constructor(private readonly options: SchedulerOptions) {
+        this.maxMidRunPerTurn = options.maxMidRunPerTurn ?? 1;
+    }
 
     /**
      * Decide a mid-run emission: only the context threshold applies, because there is no new user turn to
@@ -67,11 +78,16 @@ export class ReminderScheduler {
             return undefined;
         }
 
+        if (this.midRunThisTurn >= this.maxMidRunPerTurn) {
+            return undefined;
+        }
+
         const reminder = this.nextAvailableRotation(input.available);
         if (reminder === undefined) {
             return undefined;
         }
 
+        this.midRunThisTurn += 1;
         return this.emit(reminder, input.maxContextTokens);
     }
 
@@ -96,9 +112,12 @@ export class ReminderScheduler {
         this.lastEmitTurn = 0;
         this.thresholdBaseline = 0;
         this.sessionArmed = true;
+        this.midRunThisTurn = 0;
     }
 
     decide(input: DecideInput): ReminderDefinition | undefined {
+        // A new user turn resets the mid-run budget; the cap is per turn, not per session.
+        this.midRunThisTurn = 0;
         this.userTurns += 1;
 
         if (this.sessionArmed) {
@@ -150,6 +169,7 @@ export class ReminderScheduler {
             lastEmitTurn: this.lastEmitTurn,
             thresholdBaseline: this.thresholdBaseline,
             sessionArmed: this.sessionArmed,
+            midRunThisTurn: this.midRunThisTurn,
         };
     }
 

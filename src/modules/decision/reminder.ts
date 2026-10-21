@@ -23,19 +23,34 @@ import type { DecisionModelConfig, DecisionRecentMessage } from "./types";
  * not pause a permission verdict.
  */
 
-/** The question id in the request and the answer map. */
-export const REMINDER_QUESTION_ID = "reminder";
+/**
+ * Default probability a reminder's own answer must reach to be shown.
+ *
+ * The threshold is a ranking gate, not a calibrated probability. Measured on real session replays with
+ * `vllm-d3-flash`: read-only states peak around 0.14-0.21 for every reminder, clear `validation` states reach
+ * 0.57-0.65, and borderline states sit at 0.43-0.44. At 0.45 the read-only control abstains, the clear
+ * cases fire, and a long turn does not get a reminder on every user turn. A single-choice question with a
+ * `none` option abstained on almost every real state; asking each reminder separately and thresholding the
+ * winner is what makes the model choose again.
+ */
+export const DEFAULT_REMINDER_MIN_PROBABILITY = 0.45;
 
-/** The label that deliberately chooses no reminder. */
-export const REMINDER_NONE = "none";
+/** The two ends of one reminder's own question. */
+export const REMINDER_WORTH_SHOWING_CRITERIA = {
+    true: "Yes: it targets something the agent is likely to overlook right now",
+    false: "No: it would be noise, or the agent already has this in context",
+} as const;
 
-export const REMINDER_INSTRUCTION =
-    "Is one of these reminders worth showing the agent before this turn? Reminders restate guidance the " +
-    "agent already has, so choose one only when the current request or recent work makes it easy to " +
-    "overlook; choose none when the agent has what it needs.";
-
-export const REMINDER_NONE_CRITERION =
-    "No reminder: the request is routine for what the agent already has in context";
+/**
+ * One reminder's question. The guidance is the criterion, and every option is judged on its own so the
+ * answer is a probability rather than a pick among alternatives.
+ */
+export function reminderQuestionInstruction(option: ReminderOption): string {
+    return (
+        "Would showing this single reminder to the agent before its next step help, or is it easy to " +
+        `overlook right now? When this reminder helps: ${option.guidance}`
+    );
+}
 
 /** The phase labels the model may assign while the session proceeds. */
 export const REMINDER_PHASES = [
@@ -127,6 +142,8 @@ export interface ReminderSessionActivity {
     files_modified?: string[];
     /** Whether a bash command in the branch ran a known test runner. */
     tests_run?: boolean;
+    /** Whether the most recent test run's tool result reported an error. */
+    last_test_failed?: boolean;
     memory_writes?: number;
     todo_writes?: number;
     /** The phase label last assigned to the session. */
@@ -217,72 +234,95 @@ export function buildReminderState(context: ReminderContext): JsonObject {
 }
 
 /**
- * One request: the reminder choice plus the state questions it piggybacks.
+ * One request: one question per offered reminder, plus the state questions it piggybacks.
  *
- * The endpoint answers every question in the same round trip, as the file-access subject does with kind,
- * purpose, and loss, so the model builds session state along the way at no extra request. The state answers
- * can only inform later turns, because all answers are produced together.
+ * Every reminder is asked as its own probability question because the single-choice form with a `none`
+ * option collapsed to `none` on nearly every real state, while the same states ranked sensibly when forced.
+ * The endpoint answers every question in the same round trip, as the file-access subject does with
+ * kind/purpose/loss, so this costs no extra request.
  */
 export function reminderRequest(
     state: JsonObject,
     options: readonly ReminderOption[],
 ): ClassifierContext {
-    const criteria: Record<string, string> = {};
-    for (const option of options) {
-        criteria[option.id] = option.guidance;
-    }
-    criteria[REMINDER_NONE] = REMINDER_NONE_CRITERION;
+    const questions: Record<string, ClassifierQuestion> = {};
 
-    const questions: Record<string, ClassifierQuestion> = {
-        [REMINDER_QUESTION_ID]: {
-            type: "choice",
-            instructions: REMINDER_INSTRUCTION,
-            criteria,
-        },
-        [REMINDER_PHASE_QUESTION]: {
-            type: "choice",
-            instructions: REMINDER_PHASE_INSTRUCTION,
-            criteria: REMINDER_PHASE_CRITERIA,
-        },
-        [REMINDER_FINISHING_QUESTION]: {
+    for (const option of options) {
+        questions[option.id] = {
             type: "bool",
-            instructions: REMINDER_FINISHING_INSTRUCTION,
-            criteria: REMINDER_FINISHING_CRITERIA,
-        },
-        [REMINDER_UNVALIDATED_QUESTION]: {
-            type: "bool",
-            instructions: REMINDER_UNVALIDATED_INSTRUCTION,
-            criteria: REMINDER_UNVALIDATED_CRITERIA,
-        },
+            instructions: reminderQuestionInstruction(option),
+            criteria: REMINDER_WORTH_SHOWING_CRITERIA,
+        };
+    }
+
+    questions[REMINDER_PHASE_QUESTION] = {
+        type: "choice",
+        instructions: REMINDER_PHASE_INSTRUCTION,
+        criteria: REMINDER_PHASE_CRITERIA,
+    };
+    questions[REMINDER_FINISHING_QUESTION] = {
+        type: "bool",
+        instructions: REMINDER_FINISHING_INSTRUCTION,
+        criteria: REMINDER_FINISHING_CRITERIA,
+    };
+    questions[REMINDER_UNVALIDATED_QUESTION] = {
+        type: "bool",
+        instructions: REMINDER_UNVALIDATED_INSTRUCTION,
+        criteria: REMINDER_UNVALIDATED_CRITERIA,
     };
 
     return { state, questions };
 }
 
+/** The per-reminder probabilities the model returned, keyed by id; used for calibration and the debug log. */
+export function reminderScoresFrom(
+    answers: Record<string, ClassifierAnswer>,
+    options: readonly ReminderOption[],
+): Record<string, number> {
+    const scores: Record<string, number> = {};
+
+    for (const option of options) {
+        const answer = answers[option.id];
+        if (answer !== undefined && answer.type === "bool") {
+            scores[option.id] = answer.probability;
+        }
+    }
+
+    return scores;
+}
+
 /**
- * Read the choice.
+ * Read the per-reminder probabilities and pick the strongest above the threshold.
  *
- * `undefined` means the reply was unreadable and the caller should fall back to its deterministic schedule;
- * `{ kind: "none" }` is a deliberate decision to show nothing this turn and never falls back.
+ * `undefined` means no option's answer was readable, so the caller should fall back to its deterministic
+ * schedule; `{ kind: "none" }` is a deliberate decision to show nothing this turn and never falls back.
+ * The threshold is what keeps a low, uniform read-only state from firing.
  */
 export function reminderDecisionFrom(
     answers: Record<string, ClassifierAnswer>,
     options: readonly ReminderOption[],
+    minProbability: number = DEFAULT_REMINDER_MIN_PROBABILITY,
 ): ReminderDecision | undefined {
-    const answer = answers[REMINDER_QUESTION_ID];
-    if (answer === undefined || answer.type !== "choice") {
+    let best: { id: string; probability: number } | undefined;
+
+    for (const option of options) {
+        const answer = answers[option.id];
+        if (answer === undefined || answer.type !== "bool") {
+            continue;
+        }
+
+        if (best === undefined || answer.probability > best.probability) {
+            best = { id: option.id, probability: answer.probability };
+        }
+    }
+
+    if (best === undefined) {
         return undefined;
     }
 
-    if (answer.choice === REMINDER_NONE) {
-        return { kind: "none" };
-    }
-
-    if (!options.some((option) => option.id === answer.choice)) {
-        return undefined;
-    }
-
-    return { kind: "reminder", id: answer.choice };
+    return best.probability >= minProbability
+        ? { kind: "reminder", id: best.id }
+        : { kind: "none" };
 }
 
 /**
@@ -321,6 +361,8 @@ export interface ReminderConsult {
     decision?: ReminderDecision;
     /** Present when at least one piggybacked state label came back readable. */
     state?: ReminderStateLabels;
+    /** Every offered reminder's returned probability, for calibration and the debug log. */
+    scores?: Record<string, number>;
     status: ReminderStatus;
     latencyMs: number;
     usage?: Usage;
@@ -350,6 +392,7 @@ type Classifier = ClassifierModel<ClassifierApi>;
 interface CachedReminderAnswer {
     decision: ReminderDecision;
     state?: ReminderStateLabels;
+    scores?: Record<string, number>;
 }
 
 export class ReminderEvaluator {
@@ -378,6 +421,7 @@ export class ReminderEvaluator {
             return {
                 decision: cached.decision,
                 ...(cached.state === undefined ? {} : { state: cached.state }),
+                ...(cached.scores === undefined ? {} : { scores: cached.scores }),
                 status: "cached",
                 latencyMs: 0,
             };
@@ -406,12 +450,18 @@ export class ReminderEvaluator {
             };
         }
 
-        const decision = reminderDecisionFrom(result.answers, context.options);
+        const scores = reminderScoresFrom(result.answers, context.options);
+        const decision = reminderDecisionFrom(
+            result.answers,
+            context.options,
+            config.reminderMinProbability,
+        );
         const state = reminderStateFrom(result.answers);
         if (decision === undefined) {
-            // An unreadable choice still keeps whatever labels came back, so the state keeps building.
+            // An unreadable answer still keeps whatever labels came back, so the state keeps building.
             return {
                 ...(Object.keys(state).length === 0 ? {} : { state }),
+                ...(Object.keys(scores).length === 0 ? {} : { scores }),
                 status: "abstained",
                 latencyMs,
                 ...(result.usage === undefined ? {} : { usage: result.usage }),
@@ -421,12 +471,14 @@ export class ReminderEvaluator {
         const answer: CachedReminderAnswer = {
             decision,
             ...(Object.keys(state).length === 0 ? {} : { state }),
+            ...(Object.keys(scores).length === 0 ? {} : { scores }),
         };
         this.remember(key, answer);
 
         return {
             decision: answer.decision,
             ...(answer.state === undefined ? {} : { state: answer.state }),
+            ...(answer.scores === undefined ? {} : { scores: answer.scores }),
             status: "answered",
             latencyMs,
             ...(result.usage === undefined ? {} : { usage: result.usage }),

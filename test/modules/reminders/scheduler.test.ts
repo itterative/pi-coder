@@ -14,7 +14,11 @@ import type { ReminderId } from "../../../src/modules/reminders/types";
  * module allows this turn.
  */
 
-function armed(options: { everyTurns: number; thresholdTokens: number }): ReminderScheduler {
+function armed(options: {
+    everyTurns: number;
+    thresholdTokens: number;
+    maxMidRunPerTurn?: number;
+}): ReminderScheduler {
     const scheduler = new ReminderScheduler(options);
     scheduler.reset();
     return scheduler;
@@ -149,6 +153,23 @@ describe("ReminderScheduler", () => {
 
         expect(scheduler.midRunDue(99)).toBe(false);
         expect(scheduler.midRunDue(100)).toBe(true);
+    });
+
+    it("caps mid-run emissions per user turn", () => {
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100, maxMidRunPerTurn: 1 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        expect(scheduler.decideMidRun({ maxContextTokens: 100 })).toBe(
+            ACTIVE_ROTATION_REMINDERS[0],
+        );
+        // Same turn, another crossing: the budget is spent.
+        expect(scheduler.decideMidRun({ maxContextTokens: 200 })).toBeUndefined();
+
+        // A new user turn gets a fresh budget.
+        expect(scheduler.decide({ maxContextTokens: 100 })).toBeUndefined();
+        expect(scheduler.decideMidRun({ maxContextTokens: 200 })).toBe(
+            ACTIVE_ROTATION_REMINDERS[1],
+        );
     });
 
     it("delivers the threshold mid-run even when no user turn has passed", () => {

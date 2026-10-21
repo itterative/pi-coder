@@ -56,8 +56,9 @@ unusable answer.
   "no file"** (which is what `test/setup.ts` pins, so a suite can never reach a live endpoint). A blank env
   value otherwise falls through to the config rather than clearing it.
 - Config keys: `enabled`, `suggestions` (default true; model-refined session-rule suggestions), `reminders`
-  (default false; model-chosen agent reminders, consulted by `src/modules/reminders`), `apply`,
-  `baseUrl`, `apiKey`, `provider` (default `systemone`), `model`,
+  (default false; model-chosen agent reminders, consulted by `src/modules/reminders`), `reminderMinProbability`
+  (default 0.45; the probability a per-reminder answer must reach to be shown), `apply`, `baseUrl`,
+  `apiKey`, `provider` (default `systemone`), `model`,
   `contextWindow` (32768), `strategy`, `timeoutMs` (5000), `cooldownMs` (30000), `minConfidence` (0.8),
   `surfaces` (default `["parent"]`), and `fileSurfaces` (default none), which names the read/write gates rather
   than the Bash ones. The old `autoHost`/`autoRefuse`/`applySurfaces` keys are ignored.

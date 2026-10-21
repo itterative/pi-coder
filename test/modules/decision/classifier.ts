@@ -15,7 +15,6 @@ import {
     FILE_PURPOSE_QUESTION,
     REMINDER_FINISHING_QUESTION,
     REMINDER_PHASE_QUESTION,
-    REMINDER_QUESTION_ID,
     REMINDER_UNVALIDATED_QUESTION,
     SCRIPT_QUESTION,
     SUGGESTION_QUESTION_ID,
@@ -92,19 +91,23 @@ export interface ReminderStateAnswers {
     unvalidated?: number;
 }
 
-/** A successful answer to the reminder question: one offered reminder id, or `none`, plus any state labels. */
+/**
+ * A successful answer to the reminder request: one probability per offered reminder, plus any state labels.
+ *
+ * Every offered id needs an entry, because the endpoint answers every question in the request.
+ */
 export function reminderResult(
     model: Classifier,
-    choice: string,
-    confidence: number,
+    probabilities: Record<string, number>,
     labels: ReminderStateAnswers = {},
 ): ClassifierResult {
-    const answers: Record<string, ClassifierAnswer> = {
-        [REMINDER_QUESTION_ID]: choiceAnswer(choice, confidence),
-    };
+    const answers: Record<string, ClassifierAnswer> = {};
+    for (const [id, probability] of Object.entries(probabilities)) {
+        answers[id] = { type: "bool", probability };
+    }
 
     if (labels.phase !== undefined) {
-        answers[REMINDER_PHASE_QUESTION] = choiceAnswer(labels.phase, confidence);
+        answers[REMINDER_PHASE_QUESTION] = choiceAnswer(labels.phase, 0.9);
     }
     if (labels.finishing !== undefined) {
         answers[REMINDER_FINISHING_QUESTION] = { type: "bool", probability: labels.finishing };

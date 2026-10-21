@@ -193,6 +193,36 @@ describe("reminder emission", () => {
         expect(next?.message?.content).not.toContain("memory-audit");
     });
 
+    it("caps mid-run steers at one per user turn", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
+        vi.stubEnv("PI_CODER_REMINDER_MIDRUN_MAX", "1");
+        const stub = harness();
+        await startSession(stub);
+        await userTurn(stub);
+
+        await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
+        await stub.requireHandler("message_update")(
+            {
+                message: { role: "assistant" },
+                assistantMessageEvent: { type: "toolcall_start" },
+            },
+            ctx,
+        );
+        // Two threshold crossings inside the same assistant message.
+        for (let crossing = 0; crossing < 2; crossing += 1) {
+            await stub.requireHandler("message_update")(
+                {
+                    message: { role: "assistant" },
+                    assistantMessageEvent: { type: "text_delta", delta: "x".repeat(400) },
+                },
+                ctx,
+            );
+        }
+
+        expect(stub.sentMessages).toHaveLength(1);
+    });
+
     it("does not deliver mid-run when the threshold is off", async () => {
         vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "1");
         vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "0");

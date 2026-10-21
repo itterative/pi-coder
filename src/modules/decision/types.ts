@@ -169,6 +169,14 @@ export interface DecisionModelConfig {
      */
     reminders?: boolean;
     /**
+     * Probability a reminder's own answer must reach to be shown (default 0.45).
+     *
+     * The per-reminder questions return probabilities, not a calibrated confidence, so this gates the
+     * ranking: measured on real replays, read-only states stay below it for every reminder while states with
+     * unvalidated work clear it on `validation`. Only meaningful when `reminders` is on.
+     */
+    reminderMinProbability?: number;
+    /**
      * Whether a verdict may resolve a prompt (default false).
      *
      * The one toggle for the whole feature: off means the model is consulted and its verdict is logged while

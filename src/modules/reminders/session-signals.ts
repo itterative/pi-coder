@@ -92,14 +92,14 @@ function hasMutatingWork(session: ReminderSessionActivity | undefined): boolean 
 }
 
 export function buildReminderSignals(input: ReminderSignalInput): ReminderSignals {
-    const activity = scanActivity(input.entries, input.cwd);
-    const labels = resolveSessionLabels(input.labels, inferSessionLabels(activity));
+    const scan = scanActivity(input.entries, input.cwd);
+    const labels = resolveSessionLabels(input.labels, inferSessionLabels(scan));
     const signals: ReminderSignals = {
         cwd: input.cwd,
         session: {
             user_turns: input.currentTurn,
             context_tokens: input.contextTokens,
-            ...activity,
+            ...scan.activity,
             ...labels,
         },
     };
@@ -154,8 +154,9 @@ function resolveSessionLabels(
     return labels;
 }
 
-/** What the activity counts alone imply: writes without a test run are implementation, reads are exploration. */
-function inferSessionLabels(activity: ReminderSessionActivity): ReminderStateLabels {
+/** What the activity counts alone imply: writes without a validation success after them are unvalidated. */
+function inferSessionLabels(scan: ActivityScan): ReminderStateLabels {
+    const activity = scan.activity;
     const changed =
         (activity.files_modified?.length ?? 0) > 0 ||
         (activity.memory_writes ?? 0) > 0 ||
@@ -163,8 +164,16 @@ function inferSessionLabels(activity: ReminderSessionActivity): ReminderStateLab
     const labels: ReminderStateLabels = {};
 
     if (changed) {
-        labels.phase = activity.tests_run === true ? "verifying" : "implementing";
-        labels.unvalidated = activity.tests_run !== true;
+        if (scan.lastTestFailed) {
+            // The last test run failed, so the work is being diagnosed, not confirmed.
+            labels.phase = "debugging";
+        } else if (scan.lastTestIndex >= 0 && scan.lastWriteIndex > scan.lastTestIndex) {
+            // Edits after the last run moved the work back to implementation.
+            labels.phase = "implementing";
+        } else {
+            labels.phase = activity.tests_run === true ? "verifying" : "implementing";
+        }
+        labels.unvalidated = isUnvalidated(scan);
         return labels;
     }
 
@@ -173,6 +182,29 @@ function inferSessionLabels(activity: ReminderSessionActivity): ReminderStateLab
     }
 
     return labels;
+}
+
+/**
+ * Changes without a validation success after them.
+ *
+ * The branch-wide `tests_run` boolean cannot answer this on its own: it stays true after any earlier run, so
+ * an edit that follows a passing run would still read as validated. Ordering the last code write against the
+ * last test run fixes that, and a failed last run counts as unvalidated even when it came after the write.
+ */
+function isUnvalidated(scan: ActivityScan): boolean {
+    if (scan.lastWriteIndex < 0) {
+        return false;
+    }
+
+    if (scan.lastTestIndex < 0) {
+        return true;
+    }
+
+    if (scan.lastTestFailed) {
+        return true;
+    }
+
+    return scan.lastWriteIndex > scan.lastTestIndex;
 }
 
 function hasReadTools(tools: Record<string, number> | undefined): boolean {
@@ -207,79 +239,171 @@ export function reminderLabelsFromEntries(entries: readonly SessionEntry[]): Rem
     return labels;
 }
 
-/** Tool calls, writes, and test runs observed in the branch, as counts and bounded lists. */
-function scanActivity(entries: readonly SessionEntry[], cwd: string): ReminderSessionActivity {
-    const tools: Record<string, number> = {};
-    const recentTools: string[] = [];
-    const files = new Set<string>();
-    let testsRun = false;
-    let memoryWrites = 0;
-    let todoWrites = 0;
+/**
+ * The scanned activity plus the ordering the labels need.
+ *
+ * The counts answer "what happened"; the indices answer "in what order", which `tests_run` alone loses:
+ * a test run anywhere in the branch reads the same as one after the last edit.
+ */
+interface ActivityScan {
+    activity: ReminderSessionActivity;
+    /** Entry index of the last edit/write to a code file, or -1 when none. */
+    lastWriteIndex: number;
+    /** Entry index of the last test-runner call, or -1 when none. */
+    lastTestIndex: number;
+    /** Whether the most recent test run's tool result reported an error. */
+    lastTestFailed: boolean;
+}
 
-    for (const entry of entries) {
-        if (entry.type !== "message" || entry.message.role !== "assistant") {
+/** Tool calls, writes, and test runs observed in the branch, as counts, bounded lists, and ordering. */
+function scanActivity(entries: readonly SessionEntry[], cwd: string): ActivityScan {
+    const state: ActivityState = {
+        tools: {},
+        recentTools: [],
+        files: new Set(),
+        pendingTestCalls: new Set(),
+        testsRun: false,
+        memoryWrites: 0,
+        todoWrites: 0,
+        lastWriteIndex: -1,
+        lastTestIndex: -1,
+        lastTestFailed: false,
+    };
+
+    for (const [index, entry] of entries.entries()) {
+        if (entry.type !== "message") {
             continue;
         }
 
-        for (const call of toolCalls(entry.message.content)) {
-            tools[call.name] = (tools[call.name] ?? 0) + 1;
-            recentTools.push(call.name);
-            if (recentTools.length > MAX_RECENT_TOOLS) {
-                recentTools.shift();
-            }
+        const { message } = entry;
+        if (message.role === "toolResult") {
+            applyTestResult(state, message);
+            continue;
+        }
 
-            if (call.name === "bash") {
-                const command = argumentText(call.arguments, "command");
-                testsRun ||= command !== undefined && runsTests(command);
-                continue;
-            }
+        if (message.role !== "assistant") {
+            continue;
+        }
 
-            if (!WRITE_TOOLS.has(call.name)) {
-                continue;
-            }
-
-            const target = argumentText(call.arguments, "path");
-            if (target === undefined) {
-                continue;
-            }
-
-            const relative = relativePath(cwd, target);
-            if (isMemoryPath(relative)) {
-                memoryWrites += 1;
-                continue;
-            }
-
-            if (path.basename(relative) === "TODO.md") {
-                todoWrites += 1;
-                continue;
-            }
-
-            // Re-insert so the set keeps the most recently written paths at the end.
-            files.delete(relative);
-            files.add(relative);
+        for (const call of toolCalls(message.content)) {
+            applyToolCall(state, call, index, cwd);
         }
     }
 
-    const activity: ReminderSessionActivity = {};
-    if (Object.keys(tools).length > 0) {
-        activity.tools = tools;
-    }
-    if (recentTools.length > 0) {
-        activity.recent_tools = recentTools;
+    return {
+        activity: activityFrom(state),
+        lastWriteIndex: state.lastWriteIndex,
+        lastTestIndex: state.lastTestIndex,
+        lastTestFailed: state.lastTestFailed,
+    };
+}
+
+/** The mutable counters one scan accumulates. */
+interface ActivityState {
+    tools: Record<string, number>;
+    recentTools: string[];
+    files: Set<string>;
+    /** Ids of test-runner calls whose result has not been seen yet. */
+    pendingTestCalls: Set<string>;
+    testsRun: boolean;
+    memoryWrites: number;
+    todoWrites: number;
+    lastWriteIndex: number;
+    lastTestIndex: number;
+    lastTestFailed: boolean;
+}
+
+function applyToolCall(state: ActivityState, call: ToolCall, index: number, cwd: string): void {
+    state.tools[call.name] = (state.tools[call.name] ?? 0) + 1;
+    state.recentTools.push(call.name);
+    if (state.recentTools.length > MAX_RECENT_TOOLS) {
+        state.recentTools.shift();
     }
 
-    const modified = [...files].slice(-MAX_FILES_MODIFIED);
+    if (call.name === "bash") {
+        applyBashCall(state, call, index);
+        return;
+    }
+
+    if (!WRITE_TOOLS.has(call.name)) {
+        return;
+    }
+
+    const target = argumentText(call.arguments, "path");
+    if (target !== undefined) {
+        applyWriteCall(state, target, index, cwd);
+    }
+}
+
+function applyBashCall(state: ActivityState, call: ToolCall, index: number): void {
+    const command = argumentText(call.arguments, "command");
+    if (command === undefined || !runsTests(command)) {
+        return;
+    }
+
+    state.testsRun = true;
+    state.lastTestIndex = index;
+    if (call.id !== undefined) {
+        state.pendingTestCalls.add(call.id);
+    }
+}
+
+/** Track a write, splitting memory files and TODO.md out of the code changes the labels are about. */
+function applyWriteCall(state: ActivityState, target: string, index: number, cwd: string): void {
+    const relative = relativePath(cwd, target);
+    if (isMemoryPath(relative)) {
+        state.memoryWrites += 1;
+        return;
+    }
+
+    if (path.basename(relative) === "TODO.md") {
+        state.todoWrites += 1;
+        return;
+    }
+
+    state.lastWriteIndex = index;
+    // Re-insert so the set keeps the most recently written paths at the end.
+    state.files.delete(relative);
+    state.files.add(relative);
+}
+
+/** Only a test runner's own result matters, and only its outcome: the body is never read. */
+function applyTestResult(
+    state: ActivityState,
+    message: { toolCallId: string; isError: boolean },
+): void {
+    if (!state.pendingTestCalls.delete(message.toolCallId)) {
+        return;
+    }
+
+    state.lastTestFailed = message.isError === true;
+}
+
+/** Project the accumulated state onto the fields the decision state carries. */
+function activityFrom(state: ActivityState): ReminderSessionActivity {
+    const activity: ReminderSessionActivity = {};
+    if (Object.keys(state.tools).length > 0) {
+        activity.tools = state.tools;
+    }
+    if (state.recentTools.length > 0) {
+        activity.recent_tools = state.recentTools;
+    }
+
+    const modified = [...state.files].slice(-MAX_FILES_MODIFIED);
     if (modified.length > 0) {
         activity.files_modified = modified;
     }
-    if (testsRun) {
+    if (state.testsRun) {
         activity.tests_run = true;
     }
-    if (memoryWrites > 0) {
-        activity.memory_writes = memoryWrites;
+    if (state.lastTestFailed) {
+        activity.last_test_failed = true;
     }
-    if (todoWrites > 0) {
-        activity.todo_writes = todoWrites;
+    if (state.memoryWrites > 0) {
+        activity.memory_writes = state.memoryWrites;
+    }
+    if (state.todoWrites > 0) {
+        activity.todo_writes = state.todoWrites;
     }
 
     return activity;
@@ -327,6 +451,7 @@ function relativePath(cwd: string, target: string): string {
 }
 
 interface ToolCall {
+    id?: string;
     name: string;
     arguments: unknown;
 }
@@ -346,7 +471,11 @@ function toolCalls(content: unknown): ToolCall[] {
             continue;
         }
 
-        calls.push({ name: part.name, arguments: part.arguments });
+        calls.push({
+            ...(typeof part.id === "string" ? { id: part.id } : {}),
+            name: part.name,
+            arguments: part.arguments,
+        });
     }
 
     return calls;
