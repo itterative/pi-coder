@@ -77,7 +77,10 @@ session turn by turn: it rebuilds the exact state that would be sent, simulates 
 (so the turn cadence and the threshold interaction are visible), and prints each turn's picked reminder in
 full, compact mode clipping it to one `shows=` line. It applies the same activity gate and only models a
 mid-run steer for an assistant message that called a tool, matching the live rules.
-The header says the model was not consulted, because a live choice with `reminders: true` may differ. It reads the session's own memory-index,
+The header says the model was not consulted, because a live choice with `reminders: true` may differ. It is
+also linear: it models neither a `compaction` entry nor a reload, so a run that spans either replays
+differently from what was delivered (the first post-fold turn replays as `none` where the live module
+re-arms `memory-read`). It reads the session's own memory-index,
 todo-snapshot, and reminder-state entries, needs no endpoint, and respects `PI_CODER_REMINDER_*`. The live
 choices themselves are recorded as `pi-coder-reminder:debug` session entries carrying the state, gate,
 options, consult, and scheduler snapshot, so a replay's reconstruction can be compared against what was
