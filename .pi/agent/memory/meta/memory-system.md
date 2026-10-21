@@ -153,3 +153,26 @@ First run against real trees: project `12 indexed, 61 nested, 0 errors, 0 warnin
 8 warnings (five `index-budget` — `pi-tui-types.md` at 15,965 B, `pi-types.md` 9,197 B, `pi-extensions.md` 8,083
 B, `searching-code.md` 5,597 B, `llama-cpp-quirks.md` 4,766 B — and three over-budget descriptions). Same bloat
 pattern the project tree just lost, left unedited because user-level memories change only on explicit request.
+
+## Snapshot lifecycle (2026-10-21)
+
+The appendix is not rebuilt on every prompt. It is a branch-aware snapshot with three anchors, and the anchors
+explain the behavior an agent sees when the list changes or does not:
+
+- **`session_start`** reads both trees unless the active branch already carries a `pi-memory:memory-index`
+  custom entry, in which case that entry is reused without touching disk. The prompt therefore stays
+  byte-stable across reloads and the provider prefix cache survives.
+- **`session_compact`** rescans both trees, rebuilds the appendix, and appends a fresh snapshot. It is
+  deliberately *after* the fold: the custom compaction pipeline's stage 1 sends a strict shorter prefix of the
+  previously cached request, which carries the old appendix, so the prompt must not change during
+  `session_before_compact`. Running on `session_compact` costs nothing extra because the fold already rebuilds
+  the request prefix.
+- **`session_tree`** re-resolves the appendix from the branch. The lookup walks `getBranch()` backwards and
+  stops at the first `compaction` entry: a snapshot older than the newest fold is invalid for that branch
+  point, so the handler rescans instead. This is what keeps the old index when navigation returns to before a
+  compaction while a point at or after the fold gets the rebuilt one. Navigation never appends - a return to a
+  post-fold point would otherwise add another duplicate sibling snapshot with every visit.
+
+`PI_MEMORY_SESSION_CACHE=false` skips the snapshot entries entirely while still rescanning at all three
+anchors. The appendix's own guideline sentence describes this to every agent; the earlier wording claimed
+`/reload` refreshed the list, which it never did while the session cache was on.

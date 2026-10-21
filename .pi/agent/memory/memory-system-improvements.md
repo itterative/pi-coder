@@ -33,6 +33,14 @@ history, the reasoning behind the fields, and the deferred ideas live in [meta/m
 8. **Length**: keep an *indexed* description to one line, ≤ 150 characters — every indexed description is rendered into every system prompt. Nested detail docs are never rendered, so a longer nested description is allowed and needs no trimming
 9. **Audit**: `/memory-audit` (or the `memory_audit` tool) re-reads both trees with this parser and reports files that fail to index, oversized indexes, over-budget descriptions, nested docs no index names, and broken or stale references. Run it after any memory edit: only this parser can see a memory that silently failed to parse. Its errors are broken things; its warnings are review indicators that may be deliberate
 
+## Snapshot lifecycle
+
+The rendered list is a snapshot, not a live view: it is read at session start and after each compaction, and
+`session_tree` re-resolves it from the active branch so that navigating back before a fold restores that
+branch's older snapshot. `PI_MEMORY_SESSION_CACHE=false` skips the recorded snapshot but still rescans. The
+mechanics and the reason the rebuild lives after the fold rather than before it are in
+[meta/memory-system.md](meta/memory-system.md).
+
 ## Two-tier layout
 
 One top-level index per subsystem (advisory budget 8 KB) with detail docs in a directory of the same name, reachable only

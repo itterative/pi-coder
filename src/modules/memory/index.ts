@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 import { getUserMemoryDirectory } from "../../common/constants";
 import { scanMemories, type MemoryMeta } from "./memories";
@@ -142,7 +142,7 @@ Indexed memories are stored directly in these directories. Detailed reference do
   - Add new memories or edit existing ones to keep them consistent with any changes made
 - Memories marked with [high-churn] are high-churn — review and update them after relevant changes
 - After creating, moving, renaming, or splitting memory files, run \`/memory-audit\` (or the \`memory_audit\` tool). Its errors mean a memory is not indexed or a reference is broken; its warnings are review indicators, not defects - a deliberately large index or a long nested description needs no fix
-- The memory list below is cached at session start. New or updated memories created during this session will not appear in the list until the next session or a \`/reload\`
+- The memory list below is a snapshot: it is read at session start and rebuilt after each compaction, and navigating back on the session tree to before a compaction restores the snapshot that was current on that branch. New or updated memories do not appear until one of those points
 
 ### Available Project Memories
 
@@ -153,6 +153,111 @@ ${projectLines}
 ${userLines}${notIndexed}`;
 }
 
+interface MemoryDirectories {
+    projectDir: string;
+    userDir: string;
+}
+
+interface ScannedMemoryIndex {
+    snapshot: CachedMemoryIndex;
+    errors: FrontmatterParseError[];
+    appendix: string;
+}
+
+function memoryDirectories(cwd: string): MemoryDirectories {
+    return {
+        projectDir: join(cwd, ".pi", "agent", "memory"),
+        userDir: getUserMemoryDirectory(),
+    };
+}
+
+function sessionCacheEnabled(): boolean {
+    return process.env.PI_MEMORY_SESSION_CACHE !== "false";
+}
+
+/**
+ * The snapshot the active branch should use: walking backwards, the first `pi-memory:memory-index`
+ * entry wins. A `compaction` entry hit first means every snapshot on this branch predates the fold,
+ * so the branch point has no usable snapshot and the caller rescans. This is what keeps the old index
+ * when navigation returns to a point before a compaction while a point at or after the fold gets the
+ * rebuilt one, and why the lookup walks the branch rather than every entry in the session file.
+ */
+function findBranchSnapshot(
+    branch: readonly SessionEntry[],
+    dirs: MemoryDirectories,
+): CachedMemoryIndex | undefined {
+    for (const entry of [...branch].reverse()) {
+        if (entry.type === "compaction") {
+            return undefined;
+        }
+
+        if (entry.type === "custom" && entry.customType === ENTRY_TYPE) {
+            const snapshot = entry.data as CachedMemoryIndex;
+            if (snapshot.projectDir !== dirs.projectDir || snapshot.userDir !== dirs.userDir) {
+                return undefined;
+            }
+
+            return snapshot;
+        }
+    }
+
+    return undefined;
+}
+
+function appendixFromSnapshot(snapshot: CachedMemoryIndex): string {
+    return buildPromptAppendix(
+        snapshot.projectMemories,
+        snapshot.userMemories,
+        snapshot.projectDir,
+        snapshot.userDir,
+    );
+}
+
+/** Read both trees and build the snapshot and prompt appendix from disk. */
+async function scanMemoryIndex(dirs: MemoryDirectories): Promise<ScannedMemoryIndex> {
+    const [projectResult, userResult] = await Promise.all([
+        scanMemories(dirs.projectDir),
+        scanMemories(dirs.userDir),
+    ]);
+    const errors = [...projectResult.errors, ...userResult.errors];
+
+    return {
+        snapshot: {
+            projectDir: dirs.projectDir,
+            userDir: dirs.userDir,
+            projectMemories: projectResult.memories,
+            userMemories: userResult.memories,
+        },
+        errors,
+        appendix: buildPromptAppendix(
+            projectResult.memories,
+            userResult.memories,
+            dirs.projectDir,
+            dirs.userDir,
+            errors,
+        ),
+    };
+}
+
+function notifyParseErrors(ctx: ExtensionContext, errors: readonly FrontmatterParseError[]): void {
+    if (errors.length === 0 || !ctx.hasUI) {
+        return;
+    }
+
+    for (const error of errors) {
+        ctx.ui.notify(`pi-memory: ${error.message}`, "warning");
+    }
+}
+
+function notifyRescanFailure(ctx: ExtensionContext, what: string, error: unknown): void {
+    if (!ctx.hasUI) {
+        return;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.ui.notify(`pi-memory: ${what}: ${message}`, "warning");
+}
+
 export default function registerMemoryExtension(pi: ExtensionAPI) {
     let cachedAppendix = "";
     let maxContextTokens = 0;
@@ -161,82 +266,76 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
     let currentStreamedChars = 0;
     let needsReminder = false;
 
-    pi.on("session_start", async (event, ctx) => {
-        const projectDir = join(ctx.cwd, ".pi", "agent", "memory");
-        const userDir = getUserMemoryDirectory();
+    pi.on("session_start", async (_event, ctx) => {
+        const dirs = memoryDirectories(ctx.cwd);
 
         // Ensure directories exist
-        await mkdir(projectDir, { recursive: true });
-        await mkdir(userDir, { recursive: true });
+        await mkdir(dirs.projectDir, { recursive: true });
+        await mkdir(dirs.userDir, { recursive: true });
 
-        const useSessionCache = process.env.PI_MEMORY_SESSION_CACHE !== "false";
+        const cached = sessionCacheEnabled()
+            ? findBranchSnapshot(ctx.sessionManager.getBranch(), dirs)
+            : undefined;
 
-        let projectMemories: MemoryMeta[];
-        let userMemories: MemoryMeta[];
-        let allErrors: FrontmatterParseError[];
-
-        if (useSessionCache) {
-            // Try to restore from session entries (last match)
-            const entries = ctx.sessionManager.getEntries();
-            let cached: CachedMemoryIndex | undefined;
-            for (let i = entries.length - 1; i >= 0; i--) {
-                const entry = entries[i];
-                if (entry.type === "custom" && entry.customType === ENTRY_TYPE) {
-                    cached = entry.data as CachedMemoryIndex;
-                    break;
-                }
-            }
-
-            if (cached && cached.projectDir === projectDir && cached.userDir === userDir) {
-                projectMemories = cached.projectMemories;
-                userMemories = cached.userMemories;
-                allErrors = [];
-            } else {
-                const [projectResult, userResult] = await Promise.all([
-                    scanMemories(projectDir),
-                    scanMemories(userDir),
-                ]);
-                projectMemories = projectResult.memories;
-                userMemories = userResult.memories;
-                allErrors = [...projectResult.errors, ...userResult.errors];
-
-                pi.appendEntry(ENTRY_TYPE, {
-                    projectDir,
-                    userDir,
-                    projectMemories,
-                    userMemories,
-                } satisfies CachedMemoryIndex);
-            }
+        if (cached) {
+            cachedAppendix = appendixFromSnapshot(cached);
         } else {
-            const [projectResult, userResult] = await Promise.all([
-                scanMemories(projectDir),
-                scanMemories(userDir),
-            ]);
-            projectMemories = projectResult.memories;
-            userMemories = userResult.memories;
-            allErrors = [...projectResult.errors, ...userResult.errors];
-        }
+            const scanned = await scanMemoryIndex(dirs);
+            cachedAppendix = scanned.appendix;
+            notifyParseErrors(ctx, scanned.errors);
 
-        if (allErrors.length > 0 && ctx.hasUI) {
-            for (const error of allErrors) {
-                ctx.ui.notify(`pi-memory: ${error.message}`, "warning");
+            if (sessionCacheEnabled()) {
+                pi.appendEntry(ENTRY_TYPE, scanned.snapshot);
             }
         }
-
-        // Build and cache the prompt appendix
-        cachedAppendix = buildPromptAppendix(
-            projectMemories,
-            userMemories,
-            projectDir,
-            userDir,
-            allErrors,
-        );
 
         // Remind the agent to check memories on the first turn of this session
         needsReminder = true;
     });
 
-    pi.on("session_compact", async (_event, _ctx) => {
+    pi.on("session_tree", async (_event, ctx) => {
+        const dirs = memoryDirectories(ctx.cwd);
+        const cached = sessionCacheEnabled()
+            ? findBranchSnapshot(ctx.sessionManager.getBranch(), dirs)
+            : undefined;
+
+        if (cached) {
+            cachedAppendix = appendixFromSnapshot(cached);
+        } else {
+            // No snapshot at this branch point, or the session cache is off: read the trees. This path
+            // appends nothing on purpose - a navigation is not a session start, and every return to a
+            // point at or after a compaction would otherwise add another duplicate sibling snapshot.
+            try {
+                cachedAppendix = (await scanMemoryIndex(dirs)).appendix;
+            } catch (error) {
+                // A failed rescan must cost freshness, never the appendix already in the prompt.
+                notifyRescanFailure(ctx, "rescan after tree navigation failed", error);
+            }
+        }
+
+        // The list may differ on the branch just entered, so re-arm the reminder
+        needsReminder = true;
+    });
+
+    pi.on("session_compact", async (_event, ctx) => {
+        // Rebuild against the filesystem: compaction is where the frozen session list is allowed to
+        // change. Doing it here, not in `session_before_compact`, keeps the prompt unchanged through
+        // the pipeline that measured it as a cached prefix, while the prefix is rebuilt for the fold
+        // anyway.
+        try {
+            const dirs = memoryDirectories(ctx.cwd);
+            const scanned = await scanMemoryIndex(dirs);
+            cachedAppendix = scanned.appendix;
+            notifyParseErrors(ctx, scanned.errors);
+
+            if (sessionCacheEnabled()) {
+                pi.appendEntry(ENTRY_TYPE, scanned.snapshot);
+            }
+        } catch (error) {
+            // A failed rescan must cost freshness, never the appendix already in the prompt.
+            notifyRescanFailure(ctx, "post-compaction rescan failed", error);
+        }
+
         // Remind the agent to check memories on the first turn after compaction
         needsReminder = true;
     });
