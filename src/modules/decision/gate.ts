@@ -1,8 +1,15 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { DecisionEvaluator } from "./evaluator";
+import {
+    ReminderEvaluator,
+    reminderEnabled,
+    type ReminderConsult,
+    type ReminderOption,
+    type ReminderSignals,
+} from "./reminder";
 import { readScriptFile, resolveScriptRun, scriptFileIdentity } from "./script";
-import { decisionSessionContext } from "./session-context";
+import { clipRequest, decisionSessionContext } from "./session-context";
 import { SuggestionEvaluator, type SuggestionConsult } from "./suggestion";
 import { workspaceStatusFor } from "./workspace";
 import type { ClassifierRegistry } from "./model";
@@ -191,6 +198,74 @@ function suggestionEvaluatorFor(seed: SuggestionEvaluatorSeed): SuggestionEvalua
     return evaluator;
 }
 
+/** What it takes to reach the reminder evaluator: the config it is keyed by and the registry to resolve from. */
+export interface ReminderEvaluatorSeed {
+    ctx: ExtensionContext;
+    config: DecisionModelConfig;
+    registry?: ClassifierRegistry;
+}
+
+let cachedReminderEvaluator: { key: string; evaluator: ReminderEvaluator } | undefined;
+
+/** One reminder evaluator per configuration: a failed reminder request must not pause a permission verdict. */
+function reminderEvaluatorFor(seed: ReminderEvaluatorSeed): ReminderEvaluator {
+    const key = JSON.stringify(seed.config);
+    if (cachedReminderEvaluator?.key === key) {
+        return cachedReminderEvaluator.evaluator;
+    }
+
+    const evaluator = new ReminderEvaluator({
+        registry: seed.registry ?? seed.ctx.modelRegistry,
+        config: seed.config,
+    });
+    cachedReminderEvaluator = { key, evaluator };
+    return evaluator;
+}
+
+export interface ReminderConsultOptions extends ReminderEvaluatorSeed {
+    /** The reminders the model may choose from, in the order their criteria should read. */
+    options: readonly ReminderOption[];
+    /**
+     * The request being judged, when the caller already has it and the session branch does not yet carry
+     * it. A `before_agent_start` consult passes the live prompt, because the user message has not been
+     * persisted at that point and the branch's request is the previous turn's. Clipped like a branch-built
+     * request.
+     */
+    request?: string;
+    /** Activity, prior reminders, TODO progress, and the memory list. */
+    signals?: ReminderSignals;
+}
+
+/**
+ * Ask the model whether the coming turn should receive a reminder, and which one.
+ *
+ * Never rejects, and never grants anything: a disabled, failed, or unreadable answer comes back without a
+ * decision and the caller falls back to its deterministic schedule. The answer only picks among reminders the
+ * caller already wrote; the model never authors the text shown to the agent.
+ */
+export async function consultReminderSelection(
+    options: ReminderConsultOptions,
+): Promise<ReminderConsult> {
+    if (!reminderEnabled(options.config)) {
+        return { status: "disabled", latencyMs: 0 };
+    }
+
+    try {
+        const session = decisionSessionContext(options.ctx.sessionManager.getBranch());
+        const request =
+            options.request === undefined ? session.request : clipRequest(options.request);
+
+        return await reminderEvaluatorFor(options).evaluate({
+            options: options.options,
+            ...(request === undefined ? {} : { request }),
+            ...(session.recent.length === 0 ? {} : { recent: session.recent }),
+            ...(options.signals === undefined ? {} : { signals: options.signals }),
+        });
+    } catch {
+        return { status: "error", latencyMs: 0 };
+    }
+}
+
 export interface SuggestionConsultOptions extends SuggestionEvaluatorSeed {
     /** The single uncovered segment, as text. */
     command: string;
@@ -245,6 +320,7 @@ export interface EvaluatorSeed {
 export function resetDecisionEvaluator(): void {
     cachedEvaluator = undefined;
     cachedSuggestionEvaluator = undefined;
+    cachedReminderEvaluator = undefined;
 }
 
 export interface ConsultOptions extends EvaluatorSeed {

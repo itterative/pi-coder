@@ -7,6 +7,9 @@
     "extends": "./tsconfig.json",
     "compilerOptions": {
         "noEmit": true,
+        // scripts/reminder-report.mts is imported by its test with the extension it must carry; the flag is
+        // legal here because this config never emits.
+        "allowImportingTsExtensions": true,
         "rootDir": ".",
         "declaration": false,
         "declarationMap": false,

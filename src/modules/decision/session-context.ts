@@ -37,6 +37,17 @@ function clip(text: string, limit: number): string {
     return `${collapsed.slice(0, limit - 1)}…`;
 }
 
+/**
+ * Whitespace-collapse and clip a caller-supplied request to the state's request limit.
+ *
+ * A `before_agent_start` caller passes the live prompt, which is not in the branch yet and can carry a full
+ * template or skill expansion; the branch-built request is clipped where it is read, so the override needs the
+ * same bound rather than sending the expansion whole to a small classifier window.
+ */
+export function clipRequest(text: string): string {
+    return clip(text, REQUEST_CHARS);
+}
+
 function isTextPart(part: unknown): part is { type: "text"; text: string } {
     if (typeof part !== "object" || part === null) {
         return false;

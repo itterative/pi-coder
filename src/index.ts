@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import registerConfigCommand from "./commands/config";
 import { registerCompactionExtension } from "./modules/compaction";
 import registerMemoryExtension from "./modules/memory";
+import registerRemindersExtension from "./modules/reminders";
 import registerScratchpadExtension from "./modules/scratchpad";
 import registerTodoListExtension from "./modules/todolist";
 import registerAgentTool from "./tools/agent";
@@ -24,6 +25,7 @@ export default function (pi: ExtensionAPI) {
     registerDecisionModelShortcut(pi);
     registerStatusFooter(pi);
     registerMemoryExtension(pi);
+    registerRemindersExtension(pi);
     registerScratchpadExtension(pi);
     registerTodoListExtension(pi);
     registerCompactionExtension(pi);

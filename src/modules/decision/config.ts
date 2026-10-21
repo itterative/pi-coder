@@ -165,6 +165,7 @@ function readDecisionModelConfig(data: unknown): DecisionModelConfig | undefined
     return {
         enabled: booleanField(raw.enabled),
         suggestions: booleanField(raw.suggestions),
+        reminders: booleanField(raw.reminders),
         apply: booleanField(raw.apply),
         baseUrl: textField(raw.baseUrl),
         apiKey: textField(raw.apiKey),
@@ -200,6 +201,7 @@ function mergeDecisionConfigs(
     return {
         enabled: override.enabled ?? base.enabled,
         suggestions: override.suggestions ?? base.suggestions,
+        reminders: override.reminders ?? base.reminders,
         apply: override.apply ?? base.apply,
         baseUrl: override.baseUrl ?? base.baseUrl,
         apiKey: override.apiKey ?? base.apiKey,

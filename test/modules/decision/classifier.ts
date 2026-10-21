@@ -13,6 +13,10 @@ import {
     FILE_KIND_QUESTION,
     FILE_LOSS_QUESTION,
     FILE_PURPOSE_QUESTION,
+    REMINDER_FINISHING_QUESTION,
+    REMINDER_PHASE_QUESTION,
+    REMINDER_QUESTION_ID,
+    REMINDER_UNVALIDATED_QUESTION,
     SCRIPT_QUESTION,
     SUGGESTION_QUESTION_ID,
     VETO_QUESTION,
@@ -77,6 +81,39 @@ export function scriptResult(
 /** A successful answer to the suggestion role question: the probability that an argument is executed code. */
 export function suggestionResult(model: Classifier, probability: number): ClassifierResult {
     return result(model, { [SUGGESTION_QUESTION_ID]: { type: "bool", probability } });
+}
+
+/** The piggybacked reminder-state answers a case can include beside the choice. */
+export interface ReminderStateAnswers {
+    phase?: string;
+    /** Probability that the task is wrapping up. */
+    finishing?: number;
+    /** Probability that changes are unvalidated. */
+    unvalidated?: number;
+}
+
+/** A successful answer to the reminder question: one offered reminder id, or `none`, plus any state labels. */
+export function reminderResult(
+    model: Classifier,
+    choice: string,
+    confidence: number,
+    labels: ReminderStateAnswers = {},
+): ClassifierResult {
+    const answers: Record<string, ClassifierAnswer> = {
+        [REMINDER_QUESTION_ID]: choiceAnswer(choice, confidence),
+    };
+
+    if (labels.phase !== undefined) {
+        answers[REMINDER_PHASE_QUESTION] = choiceAnswer(labels.phase, confidence);
+    }
+    if (labels.finishing !== undefined) {
+        answers[REMINDER_FINISHING_QUESTION] = { type: "bool", probability: labels.finishing };
+    }
+    if (labels.unvalidated !== undefined) {
+        answers[REMINDER_UNVALIDATED_QUESTION] = { type: "bool", probability: labels.unvalidated };
+    }
+
+    return result(model, answers);
 }
 
 /** What a file-access answer pair says, in the shape a case reads as one line. */

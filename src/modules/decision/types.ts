@@ -160,6 +160,15 @@ export interface DecisionModelConfig {
      */
     suggestions?: boolean;
     /**
+     * Whether the model may choose the agent reminders (default false).
+     *
+     * One choice question over the caller's reminder list, asked before an agent turn, and asked whether or
+     * not the deterministic schedule considers a reminder due: the answer decides both the cadence and the
+     * choice. Off, `src/modules/reminders` schedules deterministically. It never grants authority and never
+     * resolves a prompt, which is why it is not tied to `surfaces`.
+     */
+    reminders?: boolean;
+    /**
      * Whether a verdict may resolve a prompt (default false).
      *
      * The one toggle for the whole feature: off means the model is consulted and its verdict is logged while

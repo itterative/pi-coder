@@ -260,11 +260,6 @@ function notifyRescanFailure(ctx: ExtensionContext, what: string, error: unknown
 
 export default function registerMemoryExtension(pi: ExtensionAPI) {
     let cachedAppendix = "";
-    let maxContextTokens = 0;
-    let lastRemindedAt = 0;
-    let currentBaseline = 0;
-    let currentStreamedChars = 0;
-    let needsReminder = false;
 
     pi.on("session_start", async (_event, ctx) => {
         const dirs = memoryDirectories(ctx.cwd);
@@ -288,9 +283,6 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
                 pi.appendEntry(ENTRY_TYPE, scanned.snapshot);
             }
         }
-
-        // Remind the agent to check memories on the first turn of this session
-        needsReminder = true;
     });
 
     pi.on("session_tree", async (_event, ctx) => {
@@ -312,9 +304,6 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
                 notifyRescanFailure(ctx, "rescan after tree navigation failed", error);
             }
         }
-
-        // The list may differ on the branch just entered, so re-arm the reminder
-        needsReminder = true;
     });
 
     pi.on("session_compact", async (_event, ctx) => {
@@ -335,40 +324,9 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
             // A failed rescan must cost freshness, never the appendix already in the prompt.
             notifyRescanFailure(ctx, "post-compaction rescan failed", error);
         }
-
-        // Remind the agent to check memories on the first turn after compaction
-        needsReminder = true;
     });
 
     registerMemoryAudit(pi);
-
-    pi.on("agent_start", async (_event, _ctx) => {
-        maxContextTokens = 0;
-        currentBaseline = 0;
-        currentStreamedChars = 0;
-    });
-
-    pi.on("message_start", async (event, ctx) => {
-        if (event.message.role !== "assistant") return;
-        const usage = ctx.getContextUsage();
-        currentBaseline = usage?.tokens ?? 0;
-        currentStreamedChars = 0;
-        if (currentBaseline > maxContextTokens) {
-            maxContextTokens = currentBaseline;
-        }
-    });
-
-    pi.on("message_update", async (event, _ctx) => {
-        if (event.message.role !== "assistant") return;
-        const ev = event.assistantMessageEvent;
-        if (ev.type === "text_delta" || ev.type === "thinking_delta") {
-            currentStreamedChars += ev.delta.length;
-        }
-        const estimated = currentBaseline + Math.ceil(currentStreamedChars / 4);
-        if (estimated > maxContextTokens) {
-            maxContextTokens = estimated;
-        }
-    });
 
     pi.on("before_agent_start", async (event, _ctx) => {
         if (!cachedAppendix) return;
@@ -394,54 +352,6 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
             systemPrompt = systemPrompt + "\n" + memoryBlock;
         }
 
-        const result: {
-            systemPrompt: string;
-            message?: { customType: string; content: string; display: boolean };
-        } = {
-            systemPrompt,
-        };
-
-        if (!event.systemPromptOptions) {
-            return result;
-        }
-
-        // Session-start / post-compaction reminder (always enabled)
-        const sessionReminder = needsReminder;
-        if (sessionReminder) {
-            needsReminder = false;
-        }
-
-        // Token-threshold reminder (opt-in via env var)
-        const thresholdReminderEnabled = process.env.PI_MEMORY_REMINDER === "true";
-        const threshold = parseInt(process.env.PI_MEMORY_REMINDER_THRESHOLD ?? "25000", 10);
-        const newTokens = maxContextTokens - lastRemindedAt;
-        const thresholdTriggered = thresholdReminderEnabled && newTokens >= threshold;
-
-        if (thresholdTriggered) {
-            lastRemindedAt = maxContextTokens;
-        }
-
-        if (thresholdReminderEnabled) {
-            pi.appendEntry("pi-memory:debug", {
-                reminderEnabled: thresholdReminderEnabled,
-                threshold,
-                maxContextTokens,
-                newTokens,
-                lastRemindedAt,
-                triggered: thresholdTriggered,
-                sessionReminder,
-            });
-        }
-
-        if (sessionReminder || thresholdTriggered) {
-            result.message = {
-                customType: "pi-memory",
-                content:
-                    "<memory_reminder>\nBefore starting work, consider whether any memories listed in the <memory_system> section of your system prompt are relevant to the user's request and read them if so.\n</memory_reminder>",
-                display: false,
-            };
-        }
-
-        return result;
+        return { systemPrompt };
     });
 }

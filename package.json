@@ -48,6 +48,7 @@
         "permission-report": "node --import tsx scripts/permission-report.ts",
         "decision-report": "node --import tsx scripts/decision-report.ts",
         "compaction-report": "node --import tsx scripts/compaction-report.ts",
+        "reminder-report": "node --import tsx scripts/reminder-report.mts",
         "scratch": "node --import tsx scripts/scratch.ts",
         "typecheck": "tsc --noEmit",
         "lint": "eslint .",

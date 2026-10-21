@@ -15,7 +15,9 @@ Index: [../decision-model.md](../decision-model.md). Load this before touching `
 All three bash decision points consult the model when `enabled` is true and their surface is in `surfaces`:
 the parent hook, the delegated command gate, and the read-only child gate (`safe-bash-decision.ts`) — the last
 only for commands whose sole heuristic failure is the curated allowlist
-([child-consult.md](child-consult.md)).
+([child-consult.md](child-consult.md)). The reminder subject is the one non-gate consumer: `src/modules/reminders`
+asks it before an agent turn when `reminders` is true, and falls back to its deterministic schedule on any
+unusable answer.
 
 | file | holds |
 | ---- | ----- |
@@ -31,6 +33,7 @@ only for commands whose sole heuristic failure is the curated allowlist
 | `strategies/` | `types.ts`, `veto.ts` (default), `history.ts`, `classification.ts` (criteria + table), `index.ts` |
 | `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify + the `pi-coder:decision-status` check count the footer animates), the suggestion bridge (`suggestRuleForPrompt`, `consultSuggestionForPrompt`), and the runner-facing block sentences (`attributedBashBlockReason`, `readOnlyGateSentence`, `permissionAllowsCall`) |
 | `decision/suggestion.ts` | the suggestion subject: the `executes_code` bool, `buildSuggestionState`, `suggestionRoleFrom` (probability ≥ 0.5 → code), and the separate `SuggestionEvaluator` with its own cache/cooldown |
+| `decision/reminder.ts` | the reminder subject: `reminderRequest` / `reminderDecisionFrom` over the caller's ids plus `none`, and the separate `ReminderEvaluator` with its own cache/cooldown |
 | `tools/bash/index.ts` | parent hook: consult on `ask`, record, prompt unless `apply` resolves it |
 | `tools/agent/child/command-permissions.ts` | child hook: consult with the child's own session, runner/isolation, and the parent's registry |
 | `tools/agent/child/safe-bash.ts` | read-only assessment; the relaxed (generic-spec) re-check `isRelaxedConfinementSafe` |
@@ -52,7 +55,8 @@ only for commands whose sole heuristic failure is the curated allowlist
   `DECISION_MODEL_CONFIG_PATH_GLOBAL` / `DECISION_MODEL_CONFIG_PATH` redirect the files; **set-but-blank means
   "no file"** (which is what `test/setup.ts` pins, so a suite can never reach a live endpoint). A blank env
   value otherwise falls through to the config rather than clearing it.
-- Config keys: `enabled`, `suggestions` (default true; model-refined session-rule suggestions), `apply`,
+- Config keys: `enabled`, `suggestions` (default true; model-refined session-rule suggestions), `reminders`
+  (default false; model-chosen agent reminders, consulted by `src/modules/reminders`), `apply`,
   `baseUrl`, `apiKey`, `provider` (default `systemone`), `model`,
   `contextWindow` (32768), `strategy`, `timeoutMs` (5000), `cooldownMs` (30000), `minConfidence` (0.8),
   `surfaces` (default `["parent"]`), and `fileSurfaces` (default none), which names the read/write gates rather

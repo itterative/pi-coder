@@ -1,6 +1,6 @@
 ---
 name: decision-model
-description: "Optional classifier for unresolved bash commands and file accesses (src/modules/decision). Load when touching that module, its config, or its wording."
+description: "Optional classifier for commands, file accesses, and reminder selection (src/modules/decision). Load when touching that module or its config."
 category: architecture
 priority: 7
 keep_updated: true
@@ -10,8 +10,10 @@ status: "Shipped: the veto strategy is wired into the Bash gates, the file gates
 # Decision model
 
 Optional classifier consulted when the rule/heuristic pipeline leaves a command `ask` (`src/modules/decision/`),
-and for one advisory question when the permission prompt is choosing the width of a session-rule suggestion. It has
-two judged subjects — Bash commands, and file accesses no root resolved — plus that one advisory question. The code
+for one advisory question when the permission prompt is choosing the width of a session-rule suggestion, and for
+the reminder question `src/modules/reminders` asks before an agent turn. It has three judged subjects — Bash
+commands, file accesses no root resolved, and reminder selection (the last grants no authority) — plus that one
+advisory question. The code
 is `src/modules/decision/` with the shared bridge at `src/tools/decision-model.ts`; the config is the global
 `~/.pi/decision-model-config.json` (holds the token) overridden by the project
 `.pi/decision-model-config.json`, then `SYSTEMONE_*` environment last.
@@ -26,6 +28,10 @@ Read this memory first; go there only for the numbers behind a decision.
   so a row changes when the sandbox changes — not when a case is annoying. `decision-model/strategy.md`.
 - **The deterministic scope gate** folds a capability × runner-rung check in as another form: a capability above
   the runner's rung refuses at confidence 0, with no request sent. `decision-model/scope-suggestion.md`.
+- **The reminder subject** (`reminders: true`, default false): one `choice` question over the caller's reminder
+  catalog plus `none`, asked before a non-session agent turn; the answer decides both cadence and which
+  reminder. Its own evaluator, cache, and cooldown, so a failed reminder request cannot pause a permission
+  verdict. `decision-model/wiring-config.md`.
 - **The block-sentence contract**: a verdict that takes part in a block is named in the runner's vocabulary —
   never a criterion id, action name, or config key — and a person's answer is never reattributed to the model.
   `decision-model/runner-output.md` holds those sentences and snapshot tests pin them.

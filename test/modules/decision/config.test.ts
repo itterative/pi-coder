@@ -32,6 +32,7 @@ const CONFIG_FIELDS = [
     "minConfidence",
     "surfaces",
     "fileSurfaces",
+    "reminders",
 ] as const;
 
 function expectUnconfigured(config: DecisionModelConfig): void {
@@ -205,6 +206,7 @@ describe("decision config field validation", () => {
         ["contextWindow", "big"],
         ["minConfidence", 2],
         ["surfaces", "parent"],
+        ["reminders", "yes"],
     ] as Array<[keyof DecisionModelConfig, unknown]>)("drops a wrong-typed %s", (field, value) => {
         writeProjectConfig({ decisionModel: { [field]: value } });
 
@@ -227,6 +229,15 @@ describe("decision config field validation", () => {
 
         writeProjectConfig({ decisionModel: { fileSurfaces: ["child", "elsewhere"] } });
         expect(loadDecisionConfig(workspace).fileSurfaces).toEqual(["child"]);
+    });
+
+    it("reads reminders as its own opt-in", () => {
+        // Reminders are hidden context, not a permission verdict, so the switch is separate from `surfaces`
+        // and the subject stays off until the file names it.
+        writeProjectConfig({ decisionModel: { enabled: true, reminders: true } });
+
+        expect(loadDecisionConfig(workspace).reminders).toBe(true);
+        expect(loadDecisionConfig(workspace).surfaces).toBeUndefined();
     });
 
     it("ignores removed fields instead of reviving them", () => {

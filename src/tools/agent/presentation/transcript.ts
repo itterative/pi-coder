@@ -324,7 +324,7 @@ function collectConversationParts(
             continue;
         }
         if (entry.type === "custom_message" && entry.display) {
-            // Hidden custom messages (e.g. pi-memory reminders, mailbox notes)
+            // Hidden custom messages (e.g. pi-coder reminders, mailbox notes)
             // are injected for the model, not shown in the transcript.
             conversation.push({ kind: "custom", text: quoteText(contentText(entry.content)) });
             continue;
