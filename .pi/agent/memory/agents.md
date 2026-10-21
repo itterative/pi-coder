@@ -1,8 +1,8 @@
 ---
 name: agents
-description: Index of targeted reference memories for the delegated-agent feature.
+description: Cluster index for delegated agents: what the feature is, the capability split, the agent tool action list, and the detail docs under agents/.
 category: architecture
-priority: 4
+priority: 2
 keep_updated: true
 status: Implemented; reference docs are maintenance-oriented
 ---
@@ -13,24 +13,19 @@ The feature is an in-process SDK implementation under `src/tools/agent/`, regist
 
 ## High-value overview
 
-- Built-ins include read-only `scout` and opt-in `advisor`, command-capable `reviewer`, and the edit-capable permission-gated `worker`; all built-ins load the memory extension. Custom Markdown agents are loaded from `~/.pi/agent/agents` and trusted-project `.pi/agents`; they receive baseline read/search tools and may opt into `memories`, `safe-bash`, or permission-gated `command-runner`. The `memories` capability loads pi-coder's memory extension and adds `~/.pi/agent/memory` as a child read root; definitions can also declare `additionalPaths` read roots and exact `safeBashCommands` patterns.
-- The `agent` tool supports `start` (foreground by default, or background with `background=true`), `list`, `status`, `collect`, `continue`, `cancel`, and isolated-result actions. `continue` resumes waiting/interrupted runs or reopens a terminal run in its existing child conversation; a same-checkout worker is revived without collecting first (retiring its retained result), while a background isolated run must be collected so its prepared task lease is held. A running foreground `start` or `continue` can be detached to the background with Ctrl+Alt+B; its foreground result returns collection guidance while the child continues. Up to four runs may be active or interrupted; only one mutating worker may run at a time.
-- `ask_parent` pauses a child for guidance. Foreground and background children may use restricted `ask_user` when direct user interaction is allowed and the parent is in an interactive TUI; all children may use `ask_parent`, while the advisor remains parent-guidance-only. Full background results remain explicit through `collect`.
-- `/agents` browses current/past child sessions, isolated workspaces, and built-in agent model settings. Durable restoration is limited to the exact parent session and active tree branch; interrupted runs never restart or replay automatically.
-- Read-only children are cwd-confined plus definition-configured additional read roots; the `memories` capability adds `~/.pi/agent/memory`. Children with Bash access may read exact validated temp files reported in their own truncated Bash result details; `safeBashCommands` extends the curated `safe-bash` set while retaining confinement checks, and `safe-bash` remains heuristic `SAFE_READONLY`, not a security sandbox. Non-isolated command-capable children inherit the parent's Bash permission state; edit-capable workers additionally share same-checkout/outside-cwd file permission behavior. Isolated workspaces keep independent Bash permission state and do not inherit parent-session rules; an explicit remembered Bash rule is also recorded in the parent session for later parent or non-isolated child calls. Changed results remain outside the parent checkout until explicit disposition.
-- Agent UI lives in the compositional `src/tui/agents` package. The browser host, session/workspace detail views, workspace browser, and activity widget own generic TUI children rather than extending agent-specific base classes. Shared agent diagnostic formatting belongs in `src/tools/agent/presentation/text.ts`, not the TUI barrel.
-- Built-in model overrides are defined in `src/tools/agent/config.ts`, persisted in `~/.pi/agent-config.json` or an existing nearest project `.pi/agent-config.json`, and applied during `AgentLifecycle.discover()` without mutating the shared built-in definitions. Advisor availability is opt-in, persisted alongside those settings, and its runs require an explicit model override.
-- Delegated runtime context uses bounded `context.sections` that every agent receives, deduplicated by ID and character-bounded as a block; a definition's optional context policy only narrows (its `sectionIds` and `maxChars`), and an agent without one accepts any ID under the renderer's default budget. Custom/project definitions cannot declare a policy today, so only the advisor narrows. Start (including background starts) returns a non-blocking warning to the parent only for sections actually dropped; automatic parent-summary/recent-context collection remains future work.
-- Before release, restore the intended `PI_CODER_AGENT_TRACE=1` opt-in; tracing is currently forced on during development.
+- Capability split: `scout` is read-only, `advisor` is read-only and opt-in, `reviewer` is command-capable, and `worker` is the only edit-capable built-in (permission-gated). Same-checkout mutation-capable workers are single-flight; `worker` runs in distinct isolated worktrees may mutate concurrently.
+- The `agent` tool actions: `start` (foreground by default, background with `background=true`), `list`, `status`, `collect`, `continue`, `cancel`, and the isolated-result actions.
+- The agent UI is a compositional package: `src/tui/agents`.
 
 ## Targeted references
 
 Load only the detail needed for the task:
 
-- `agents/architecture.md` — package boundaries, definitions, prompts, and child runtime.
-- `agents/lifecycle.md` — actions, states, interaction, mailbox, UI, and traces.
+- `agents/architecture.md` — package boundaries (including `src/tui/agents`), definitions, prompts, child runtime, and the built-in model-override config.
+- `agents/lifecycle.md` — actions, states, interaction, mailbox, UI, traces, and the forced-on tracing release blocker.
 - `agents/safety.md` — capabilities, confinement, approvals, and trust boundary.
 - `agents/persistence.md` — durable sessions, restoration, and `/agents` browsing.
 - `agents/workspaces.md` — isolated worktrees, leases, setup, and result disposition.
+- `agents/workspace-invariants.md` — the lease, reservation, collection, reset, capacity, and browser invariants found during manual validation.
 
 These nested documents are on-demand references and are intentionally not included in the memory list automatically. Keep this overview and the detailed files concise; update them when behavior or ownership changes.

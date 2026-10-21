@@ -1,0 +1,48 @@
+---
+name: workspace-invariants
+description: Workspace lease, result-reservation, collection, and disposition invariants discovered during manual validation.
+category: architecture
+keep_updated: true
+---
+
+# Workspace lifecycle invariants
+
+Detail companion to the `agents` memory (`../agents.md`). These invariants came from manual validation of workspace leases and result disposition; the pool, setup, and finalization detail lives in `workspaces.md`.
+
+## Lease ownership and reconciliation
+
+- A no-change `workspace_results` row may outlive the lease that created it.
+- Reconciliation must only release a task lease when `latestResult.runId === workspace.leaseRunId`; otherwise a new task lease can be released because of an older result.
+- `/agents` browsing runs the same safe no-change reconciliation; changed/uncertain leases remain protected.
+- A lease with any matching catalog row is known, including terminal runs whose prepared result still awaits disposition; only a missing catalog row is orphaned.
+- Durable active task leases and setup leases remain protected; orphan recovery remains available.
+- A historical result must not suppress stale-lease release.
+
+## Result reservations, apply/re-entry, and the `applying` state
+
+- Workspace `latestResult` is a display projection only: result actions resolve the exact run-instance/result row and reserve it with a compare-and-set token before side effects.
+- Historical changed results use their immutable Git ref and must not reset a reused worker's worktree.
+- Result reservations record the owner PID and can be reclaimed only after dead-owner verification and a grace period; reset/discard/recycling are serialized against active reservations.
+- Result application records an `applying` state before changing the parent; re-entry uses an owner/liveness check plus a CAS recovery claim so a live apply cannot be reinterpreted concurrently, while a crashed apply can be classified as applied, unapplied, or uncertain.
+
+## Collection and no-change release
+
+- Collection must consume the retained agent result before releasing a no-change lease, so failed collection cannot strand an unleased retained run.
+- Manual workspace collection flows must use `agent(action="start", background=true, isolation="worktree")`; foreground `start` results are returned directly and are not collectable.
+- Foreground isolated `start`/`continue`/explicit cancellation must therefore prepare the workspace result directly, releasing verified no-change leases or retaining changed leases for disposition.
+- Parent agent actions can inspect, apply, discard, or continue prepared isolated results; continuation starts a new worker in the same leased workspace.
+
+## Worktree reset, rebase, and `base_revision`
+
+- Reset, discard, and verified no-change release must rebase the reusable worktree and stored `base_revision` to the current parent HEAD; otherwise a later worker can run against stale source.
+- Reset returns a freshly reloaded workspace row so cleared lease state and discarded-result status are projected immediately.
+
+## Capacity, allocation, and starting from a dirty parent
+
+- Workspace allocation serializes its capacity check, worktree creation, and row insertion under a SQLite write transaction; capacity is configurable per repository (default three); normal isolated work permits a dirty parent and bases the worktree on committed HEAD, as does manual browser creation, and the start result warns that uncommitted parent changes are not visible in the worktree.
+
+## Browser actions and dispositions
+
+- Past persisted startup/running metadata is displayed as interrupted because no live child handle is attached to a past transcript.
+- Workspace browser actions must compare both lease ownership and `latestResult.runId === leaseRunId`: apply/retain remain owner-bound, while reset/discard may manually clear an inactive task lease from another session.
+- The `/agents` Workspaces tab exposes a non-workspace create item; selecting it closes the browser before asking the normal setup prompt, and an optional setup lease is released after setup completes.

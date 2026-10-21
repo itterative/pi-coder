@@ -100,6 +100,8 @@ absent reference from an unusable one" and the old-build tolerance test.
 
 ## The suite
 
+Focused invocation: `npx vitest run test/modules/compaction/ test/scripts/compaction-report.test.ts` — the whole suite, no provider calls.
+
 `test/modules/compaction/{budget,chain,chain-store,config,cut-invariants,cut-selection,cut-shapes,fold-chain,handler,ledger,native-sizing,prefix-diff,prompt,real-session-sizing,sections,serialize,session-fixture,span-session,summarize,trace}.test.ts`
 plus `test/scripts/compaction-report.test.ts` — the full suite (verified 2026-09-08), two reviewed file
 snapshots, no provider calls. `createCompactionHarness()` in `test/helpers/compaction-doubles.ts` records the contexts
