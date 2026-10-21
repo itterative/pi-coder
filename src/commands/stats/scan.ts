@@ -5,15 +5,25 @@
  * skipped rather than failing the command. Raw JSONL is read instead of `SessionManager`, because
  * usage on abandoned branches was still real spend and belongs in the totals.
  *
- * Every file read yields the event loop once so the loader keeps animating during long scans.
+ * Repeats of `/stats` in one process reuse an in-memory parse cache (see `cache.ts`), but discovery
+ * is always complete: the cache never excludes a file, it only skips re-reading an unchanged one.
+ * Every disk read yields the event loop once so the loader keeps animating during long scans.
  */
 
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import type { FileStamp, TranscriptCache } from "./cache";
 import { toLocalDateString } from "./range";
-import type { DailyActivity, ScanOptions, ScanResult, SessionRecord, StatsSource } from "./types";
+import type {
+    DailyActivity,
+    FileScan,
+    ScanOptions,
+    ScanResult,
+    SessionRecord,
+    StatsSource,
+} from "./types";
 import { addReportedUsage, addUsageTotals, emptyUsageTotals, ensureModelUsage } from "./usage";
 
 /** Maximum directory depth below a sessions root; parents nest two levels, children three. */
@@ -27,15 +37,10 @@ interface SessionFile {
     source: StatsSource;
 }
 
-interface FileScan {
-    days: Map<string, DailyActivity>;
-    /** Current model within this file, tracked from `model_change` and assistant messages. */
-    model: string | null;
-    sessionId: string | null;
-    firstMessageMs: number | null;
-    lastMessageMs: number | null;
-    messages: number;
-    toolCalls: number;
+/** One transcript's parse plus where it came from, so the caller can skip a yield for cache hits. */
+interface LoadedScan {
+    scan: FileScan;
+    fromCache: boolean;
 }
 
 /** Scan a root and aggregate every reachable JSONL transcript. */
@@ -45,6 +50,8 @@ export async function scanSessions(options: ScanOptions): Promise<ScanResult> {
         ...(await collectSessionFiles(options.childRoot, "child")),
     ];
 
+    options.cache?.retain(new Set(discovered.map((file) => file.path)));
+
     const days = new Map<string, DailyActivity>();
     const sessions: SessionRecord[] = [];
     const total = discovered.length;
@@ -53,10 +60,14 @@ export async function scanSessions(options: ScanOptions): Promise<ScanResult> {
 
     for (const file of discovered) {
         options.signal?.throwIfAborted();
-        await mergeFile(file, days, sessions);
+        const loaded = await mergeFile(file, days, sessions, options.cache);
         scanned++;
         options.onProgress?.({ scanned, total });
-        await yieldToEventLoop(YIELD_MS, options.signal);
+        // Only disk reads need the yield: a warm cache hit is stat-bound and would otherwise pay
+        // one timer tick per file for no animation benefit.
+        if (loaded && !loaded.fromCache) {
+            await yieldToEventLoop(YIELD_MS, options.signal);
+        }
     }
 
     return {
@@ -119,30 +130,80 @@ async function walk(
     }
 }
 
+/** Merge one transcript into the shared aggregates; null when its file vanished or is unreadable. */
 async function mergeFile(
     file: SessionFile,
     days: Map<string, DailyActivity>,
     sessions: SessionRecord[],
-): Promise<void> {
+    cache: TranscriptCache | undefined,
+): Promise<LoadedScan | null> {
+    const loaded = await loadFile(file, cache);
+    if (!loaded) {
+        return null;
+    }
+
+    for (const day of loaded.scan.days.values()) {
+        mergeDay(days, day);
+    }
+
+    // The session record bumps its start day's session/hour counters. Merging the per-file days
+    // first leaves `FileScan` untouched, so a cached parse stays reusable by the next scan.
+    const record = sessionRecord(file, loaded.scan);
+    if (record) {
+        sessions.push(record);
+        countSessionStart(days, record.startDate, new Date(record.startTimestampMs).getHours());
+    }
+
+    return loaded;
+}
+
+/**
+ * Load one transcript, reusing the cached parse when the file's stamp is unchanged.
+ *
+ * The stamp is taken before the read and confirmed after it: an entry is only cached when the file
+ * was untouched for the whole read, so a concurrent append (pi writing the active session) can
+ * never be stored under a stale key. A file that changes mid-read is still parsed, just not cached.
+ */
+async function loadFile(
+    file: SessionFile,
+    cache: TranscriptCache | undefined,
+): Promise<LoadedScan | null> {
+    const before = await statFile(file.path);
+    if (!before) {
+        return null;
+    }
+
+    const cached = cache?.get(file.path, file.source, before);
+    if (cached) {
+        return { scan: cached, fromCache: true };
+    }
+
     let content: string;
     try {
         content = await fs.readFile(file.path, "utf8");
     } catch {
-        return;
+        return null;
     }
 
     const scan = scanFile(content, file.source);
-
-    // The session record bumps its start day's session/hour counters, so it must run before the
-    // per-file days are merged into the shared map (which is what those counters are copied from).
-    const record = sessionRecord(file, scan);
-    if (record) {
-        sessions.push(record);
+    const after = cache ? await statFile(file.path) : null;
+    if (cache && after && matchesStamp(before, after)) {
+        cache.set(file.path, file.source, before, scan);
     }
 
-    for (const day of scan.days.values()) {
-        mergeDay(days, day);
+    return { scan, fromCache: false };
+}
+
+async function statFile(filePath: string): Promise<FileStamp | null> {
+    try {
+        return await fs.stat(filePath);
+    } catch {
+        return null;
     }
+}
+
+function matchesStamp(left: FileStamp, right: FileStamp): boolean {
+    return left.mtimeMs === right.mtimeMs && left.size === right.size;
 }
 
 function scanFile(content: string, source: StatsSource): FileScan {
@@ -352,23 +413,30 @@ function sessionRecord(file: SessionFile, scan: FileScan): SessionRecord | null 
         return null;
     }
 
-    const start = new Date(scan.firstMessageMs);
-    const startDate = toLocalDateString(start);
-    const day = scan.days.get(startDate);
-    if (day) {
-        day.sessions++;
-        day.hours[start.getHours()]!++;
-    }
-
     return {
         sessionId: scan.sessionId ?? path.basename(file.path, ".jsonl"),
         source: file.source,
         startTimestampMs: scan.firstMessageMs,
-        startDate,
+        startDate: toLocalDateString(new Date(scan.firstMessageMs)),
         durationMs: scan.lastMessageMs - scan.firstMessageMs,
         messages: scan.messages,
         toolCalls: scan.toolCalls,
     };
+}
+
+/** Bump the shared start day's session/hour counters after `mergeFile` merged the per-file days. */
+function countSessionStart(
+    days: Map<string, DailyActivity>,
+    startDate: string,
+    startHour: number,
+): void {
+    const day = days.get(startDate);
+    if (!day) {
+        return;
+    }
+
+    day.sessions++;
+    day.hours[startHour]!++;
 }
 
 function entryTimeMs(entry: Record<string, unknown>): number | null {

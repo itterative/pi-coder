@@ -5,6 +5,8 @@
  * from memory without touching disk again.
  */
 
+import type { TranscriptCache } from "./cache";
+
 /** Where a transcript came from. */
 export type StatsSource = "parent" | "child";
 
@@ -57,6 +59,21 @@ export interface SessionRecord {
     toolCalls: number;
 }
 
+/**
+ * One transcript's parse result: per-day buckets keyed by local date plus the session-level totals
+ * used to build a `SessionRecord`. Immutable once produced, so scans can cache and reuse it.
+ */
+export interface FileScan {
+    days: Map<string, DailyActivity>;
+    /** Current model within this file, tracked from `model_change` and assistant messages. */
+    model: string | null;
+    sessionId: string | null;
+    firstMessageMs: number | null;
+    lastMessageMs: number | null;
+    messages: number;
+    toolCalls: number;
+}
+
 /** Everything one scan collected; every range is aggregated from this. */
 export interface ScanResult {
     dailyActivity: DailyActivity[];
@@ -75,6 +92,8 @@ export interface ScanOptions {
     childRoot: string;
     signal?: AbortSignal;
     onProgress?: (progress: ScanProgress) => void;
+    /** In-memory parse cache; omitted means every discovered file is read from disk. */
+    cache?: TranscriptCache;
 }
 
 export interface StreakInfo {

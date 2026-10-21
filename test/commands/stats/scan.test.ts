@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { TranscriptCache } from "../../../src/commands/stats/cache";
 import { scanSessions } from "../../../src/commands/stats/scan";
 import { localIso } from "./fixtures";
 
@@ -89,6 +90,24 @@ function toolResultMessage(timestamp: string, usage?: Json): Json {
 
 function encode(entries: Array<Json | string>): string[] {
     return entries.map((entry) => (typeof entry === "string" ? entry : JSON.stringify(entry)));
+}
+
+/** Set a precise mtime so cache-stamp assertions are deterministic. */
+async function stampFile(file: string, timestamp: string): Promise<void> {
+    const when = new Date(timestamp);
+    await fs.utimes(file, when, when);
+}
+
+/** Same byte length for either model name and usage input digit, so only the stamp can differ. */
+function cachedSessionLines(model: string, input: number): string[] {
+    return encode([
+        sessionHeader("cached-session", localIso(2026, 3, 10, 9, 0)),
+        userMessage(localIso(2026, 3, 10, 9, 0, 1)),
+        assistantMessage(localIso(2026, 3, 10, 9, 0, 2), {
+            model,
+            usage: { input, output: 1, cost: { total: 0 } },
+        }),
+    ]);
 }
 
 describe("scanSessions", () => {
@@ -247,5 +266,75 @@ describe("scanSessions", () => {
         expect(result.totalFiles).toBe(1);
         expect(result.sessions).toEqual([]);
         expect(result.dailyActivity).toEqual([]);
+    });
+
+    it("reuses a cached parse while the file stamp is unchanged", async () => {
+        const parentRoot = await makeTempRoot();
+        const cache = new TranscriptCache();
+        const options = { parentRoot, childRoot: path.join(parentRoot, "missing"), cache };
+
+        const firstLines = cachedSessionLines("first-model", 1);
+        const file = await writeSession(
+            parentRoot,
+            path.join("--tmp-project--", "cached.jsonl"),
+            firstLines,
+        );
+        await stampFile(file, "2026-03-10T08:00:00.000Z");
+        const first = await scanSessions(options);
+        expect(cache.size).toBe(1);
+
+        const secondLines = cachedSessionLines("other-model", 2);
+        expect(Buffer.byteLength(secondLines.join("\n"))).toBe(
+            Buffer.byteLength(firstLines.join("\n")),
+        );
+        await fs.writeFile(file, `${secondLines.join("\n")}\n`, "utf8");
+        await stampFile(file, "2026-03-10T08:00:00.000Z");
+
+        const cachedScan = await scanSessions(options);
+        expect(cachedScan.dailyActivity).toEqual(first.dailyActivity);
+
+        // A fresh cache proves the rewrite really would have changed the report.
+        const fresh = await scanSessions({ ...options, cache: new TranscriptCache() });
+        expect(fresh.dailyActivity).not.toEqual(first.dailyActivity);
+    });
+
+    it("re-reads a transcript when its stamp changes", async () => {
+        const parentRoot = await makeTempRoot();
+        const cache = new TranscriptCache();
+        const options = { parentRoot, childRoot: path.join(parentRoot, "missing"), cache };
+
+        const file = await writeSession(
+            parentRoot,
+            path.join("--tmp-project--", "stamped.jsonl"),
+            cachedSessionLines("first-model", 1),
+        );
+        await stampFile(file, "2026-03-10T08:00:00.000Z");
+        const first = await scanSessions(options);
+
+        await fs.writeFile(file, `${cachedSessionLines("other-model", 2).join("\n")}\n`, "utf8");
+        await stampFile(file, "2026-03-10T09:00:00.000Z");
+        const second = await scanSessions(options);
+
+        expect(second.dailyActivity).not.toEqual(first.dailyActivity);
+        expect(Object.keys(second.dailyActivity[0]!.usageByModel)).toEqual(["other-model"]);
+    });
+
+    it("drops cached entries for transcripts that disappeared", async () => {
+        const parentRoot = await makeTempRoot();
+        const cache = new TranscriptCache();
+        const options = { parentRoot, childRoot: path.join(parentRoot, "missing"), cache };
+
+        const file = await writeSession(
+            parentRoot,
+            path.join("--tmp-project--", "gone.jsonl"),
+            cachedSessionLines("first-model", 1),
+        );
+        await scanSessions(options);
+        expect(cache.size).toBe(1);
+
+        await fs.rm(file);
+        const result = await scanSessions(options);
+        expect(result.totalFiles).toBe(0);
+        expect(cache.size).toBe(0);
     });
 });

@@ -17,6 +17,7 @@ import type { AutocompleteItem } from "@earendil-works/pi-tui";
 
 import { PI_CODER_AGENT_SESSIONS_DIR } from "../../common/constants";
 import { aggregateStats } from "./aggregate";
+import { TranscriptCache } from "./cache";
 import { parseRangeArgs, presetRange } from "./range";
 import { buildReportLines, identityReportTheme } from "./render";
 import { scanSessions } from "./scan";
@@ -48,7 +49,11 @@ function parentSessionsRoot(ctx: ExtensionCommandContext): string {
     return path.dirname(path.dirname(sessionFile));
 }
 
-async function handleStats(args: string, ctx: ExtensionCommandContext): Promise<void> {
+async function handleStats(
+    args: string,
+    ctx: ExtensionCommandContext,
+    cache: TranscriptCache,
+): Promise<void> {
     const today = new Date();
     const parsed = parseRangeArgs(args, today);
     if (!parsed.ok) {
@@ -59,6 +64,7 @@ async function handleStats(args: string, ctx: ExtensionCommandContext): Promise<
     const options = {
         parentRoot: parentSessionsRoot(ctx),
         childRoot: PI_CODER_AGENT_SESSIONS_DIR,
+        cache,
     };
     const scan = ctx.hasUI ? await scanWithLoader(ctx, options) : await scanSessions(options);
     if (!scan) {
@@ -84,6 +90,10 @@ async function handleStats(args: string, ctx: ExtensionCommandContext): Promise<
 }
 
 export default function registerStatsCommand(pi: ExtensionAPI): void {
+    // One cache per extension instance: each repeat `/stats` re-reads only transcripts that
+    // changed since the previous scan, and a restarted pi starts clean.
+    const cache = new TranscriptCache();
+
     pi.registerCommand("stats", {
         description: "Show pi usage statistics (range: 7d, 30d, all, or YYYY-MM-DD dates)",
         getArgumentCompletions: (prefix: string): AutocompleteItem[] => {
@@ -95,6 +105,6 @@ export default function registerStatsCommand(pi: ExtensionAPI): void {
                 }),
             );
         },
-        handler: handleStats,
+        handler: (args, ctx) => handleStats(args, ctx, cache),
     });
 }
