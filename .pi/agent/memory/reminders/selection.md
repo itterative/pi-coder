@@ -71,3 +71,6 @@ shown history, and the turn count after a tree move or reload, so resume never d
 probabilities put read-only states at 0.14-0.21, clear `validation` states at 0.57-0.65, and borderline states
 at 0.43-0.44, which is where the 0.45 default sits. Feeding the agent's reasoning text as an extra window item
 or state field moved no choice and only one phase label, so it was not adopted.
+
+The `clef-flash` vs `vllm-d3-flash` speed, real-state decisions, and order-sensitivity results are in
+`reminders/model-comparison.md`.

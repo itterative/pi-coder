@@ -87,9 +87,8 @@ still enter post-fold state; a reload adds no entries and is replayed as it is.
 labels, judged signals) and the messages actually delivered, matched to their turns, warning when no debug
 entries exist or a message carries no id/turn details. The file can lag a live session, so the newest turns
 may show no record yet.
-It reads the session's own memory-index, todo-snapshot, and reminder-state entries, needs no endpoint, and
-respects `PI_CODER_REMINDER_*`. Those entries keep the live choices for comparison with the replay's
-reconstruction. The script
+It reads the session's own memory-index, todo-snapshot, and reminder-state entries and respects
+`PI_CODER_REMINDER_*`. Those entries keep the live choices for comparison. The script
 is `scripts/reminder-report.mts`; the `.mts` and `src/package.json` (`type: module`) exist because the root
 package is not ESM and the pi package is ESM-only under `node --import tsx`. `parseArgs`, `replay`, and the
 renderers are exported; `tsconfig.check.json` enables `allowImportingTsExtensions` so the test can import the
@@ -107,4 +106,5 @@ tool. `decision-model.md` covers the classifier plumbing this builds on.
 
 ## Targeted references
 
-- `reminders/selection.md` — the selection subject, the signals state, the labels, and the calibration numbers.
+- `reminders/selection.md` — selection subject, signals, labels, calibration.
+- `reminders/model-comparison.md` — clef-flash vs vllm-d3-flash speed, decisions, order sensitivity.
