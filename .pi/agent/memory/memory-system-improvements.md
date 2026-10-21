@@ -31,11 +31,11 @@ history, the reasoning behind the fields, and the deferred ideas live in [meta/m
 6. **Guideline**: The system prompt includes: *"Memories marked with [high-churn] are high-churn — review and update them after relevant changes"*
 7. **Quoting**: quote any `description` that contains `: `. An unquoted colon makes the frontmatter invalid YAML, `parseFrontmatter` throws, `scanMemories` silently drops the file, and the memory vanishes from the index without failing anything (`agents.md` hit exactly this on 2026-10-21)
 8. **Length**: keep an *indexed* description to one line, ≤ 150 characters — every indexed description is rendered into every system prompt. Nested detail docs are never rendered, so a longer nested description is allowed and needs no trimming
-9. **Audit**: `/memory-audit` (or the `memory_audit` tool) re-reads both trees with this parser and reports files that fail to index, oversized indexes, over-budget descriptions, nested docs no index names, and broken or stale references. Run it after any memory edit: only this parser can see a memory that silently failed to parse
+9. **Audit**: `/memory-audit` (or the `memory_audit` tool) re-reads both trees with this parser and reports files that fail to index, oversized indexes, over-budget descriptions, nested docs no index names, and broken or stale references. Run it after any memory edit: only this parser can see a memory that silently failed to parse. Its errors are broken things; its warnings are review indicators that may be deliberate
 
 ## Two-tier layout
 
-One top-level index per subsystem (≤ 4 KB) with detail docs in a directory of the same name, reachable only
+One top-level index per subsystem (advisory budget 8 KB) with detail docs in a directory of the same name, reachable only
 through that index's `## Targeted references` list. Stale or one-time memories are demoted into a directory as
 on-demand archives, never deleted. Moving a doc deeper means adding `../` to its relative links, and pointers
 must name the final path, never an old memory name. The full convention, the 2026-10-21 restructure behind this

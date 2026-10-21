@@ -18,8 +18,14 @@ regression.
 - `name` must equal the filename stem; `category` must be lowercase (an unknown or capitalized value renders
   its own section, which duplicates the intended one); `description` containing `: ` must be quoted, or the file
   fails to parse and silently vanishes from the index.
-- Budget an index at ~4 KB and its description at ~150 characters. Nested docs have no prompt cost, so they may
-  be longer and may keep long descriptions.
+- Budget an index at **~8 KB advisory** and its description at ~150 characters. Neither is a hard rule: an index
+  that legitimately carries more load-bearing invariants is a reasonable choice, and the audit reports both as
+  warnings (indicators), not failures. Nested docs have no prompt cost, so they may be longer and may keep long
+  descriptions.
+- The audit separates **errors** (a memory that does not index, a `name` that does not match its stem, an index
+  naming a path that does not exist, a link that resolves nowhere) from **warnings** (size, description length,
+  category spelling, a nested doc no index names, a pointer to a memory name that no longer exists). Fix the
+  errors; weigh the warnings and record why you left one.
 
 ## Procedure
 
@@ -35,7 +41,8 @@ regression.
 5. **Do the parent pass last**: cross-cluster references, link depth, `category`/`priority`/description
    normalization, and stale names in `AGENTS.md`, `docs/`, and source comments that pointed at renamed memories.
 6. **Close with the audit**: run `/memory-audit` (or the `memory_audit` tool) and report before/after indexed
-   counts, prompt-visible bytes, and description characters. Repeat the check after any follow-up edit.
+   counts, prompt-visible bytes, and description characters. Repeat the check after any follow-up edit. Fix every
+   error; treat each warning as an indicator and decide rather than obey it.
 
 ## Brief contract for a split agent
 
@@ -53,10 +60,11 @@ item is a check the child must run and quote:
 - **Ownership list.** The paths it may create, move, and delete; the paths it must not touch (other clusters,
   `src/`, `docs/`, `AGENTS.md`, `.state/`); and "do not create stub files for other clusters".
 - **Hard rules.** No information loss (every claim, path, symbol, env var, number, date, and `must`/`never`
-  appears exactly once; merge only literal duplicates; keep the _reasoning_ attached to a rule); index budget;
-  `name` == stem; one-line descriptions; lowercase `category`; heading structure so a single rule is locatable;
-  link depth (`../../../docs/x.md` → `../../../../docs/x.md` when a doc moves deeper); `git mv`/`git rm` for
-  moves; no Prettier until edits are finished.
+  appears exactly once; merge only literal duplicates; keep the _reasoning_ attached to a rule); the advisory
+  index budget (~8 KB) and description limit (~150 chars) stated as budgets a reviewer may argue with, not gates
+  that fail a build; `name` == stem; one-line descriptions; lowercase `category`; heading structure so a single
+  rule is locatable; link depth (`../../../docs/x.md` → `../../../../docs/x.md` when a doc moves deeper); `git
+mv`/`git rm` for moves; no Prettier until edits are finished.
 - **Fidelity gate, defined precisely.** Extract every exact backticked span and every number token from each
   input and assert presence in the output set. Do not judge rewording with a similarity ratio against a large
   corpus — it reads ~0 for everything. Use whitespace-normalized sentence containment instead, and hand-inspect

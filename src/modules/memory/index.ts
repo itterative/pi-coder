@@ -120,14 +120,15 @@ You have access to a persistent memory system for storing and recalling informat
 - Project-level indexed memories: ${projectDir}/*.md
 - User-level indexed memories: ${userDir}/*.md
 
-Indexed memories are stored directly in these directories. Detailed reference documents may be kept in subdirectories and linked from an indexed memory; they are not listed automatically. The \`category\` field is frontmatter metadata and does not create subdirectories.
+Indexed memories are stored directly in these directories. Detailed reference documents may be kept in subdirectories and linked from an indexed memory; they are not listed automatically, so a nested document is reachable only when an indexed memory names it - conventionally in a \`## Targeted references\` list. The \`category\` field is frontmatter metadata and does not create subdirectories.
 
 ### How to use
 
 - Each memory file has YAML frontmatter with \`name\` (string), \`description\` (string), and optional \`category\` (string) / \`priority\` (number) / \`keep_updated\` (boolean) / \`status\` (string) fields
   - The \`name\` must match the filename without \`.md\` (e.g. \`name: conventions\` in \`conventions.md\`)
   - Keep \`description\` to one line; it appears in the system prompt to help future agents decide whether to load the memory
-- Use the standard built-in tools (\`read\`, \`write\`, \`edit\`, \`bash\`) to work with memories — there are no custom memory tools
+  - Quote a \`description\` that contains \`: \`. Unquoted, the frontmatter is invalid YAML, the file fails to parse, and the memory silently disappears from the list with only a startup warning
+- Use the standard built-in tools (\`read\`, \`write\`, \`edit\`, \`bash\`) to create and edit memories - there are no custom memory-writing tools. The \`memory_audit\` tool and \`/memory-audit\` command only validate the trees
 - Use the \`read\` tool to load specific memories as needed
 - Use \`write\` to create new memories (include frontmatter) or \`edit\` to update existing ones
 - Use \`bash\` with \`rm\` to delete a memory file
@@ -140,6 +141,7 @@ Indexed memories are stored directly in these directories. Detailed reference do
   - Before finishing your task, review what you have learned
   - Add new memories or edit existing ones to keep them consistent with any changes made
 - Memories marked with [high-churn] are high-churn — review and update them after relevant changes
+- After creating, moving, renaming, or splitting memory files, run \`/memory-audit\` (or the \`memory_audit\` tool). Its errors mean a memory is not indexed or a reference is broken; its warnings are review indicators, not defects - a deliberately large index or a long nested description needs no fix
 - The memory list below is cached at session start. New or updated memories created during this session will not appear in the list until the next session or a \`/reload\`
 
 ### Available Project Memories

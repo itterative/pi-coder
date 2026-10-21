@@ -14,10 +14,13 @@ import { dirname, join, relative, resolve } from "node:path";
 
 import { FrontmatterParseError, parseFrontmatter, type MemoryMeta } from "./frontmatter";
 
-/** A top-level index should stay small: its whole body lands in each session prompt. */
-export const INDEX_BUDGET_BYTES = 4096;
+/**
+ * Advisory budget for a top-level index: its whole body lands in each session prompt. This is a review
+ * signal, not a hard limit - a deliberately dense index is a legitimate choice.
+ */
+export const INDEX_BUDGET_BYTES = 8192;
 
-/** Indexed descriptions are rendered verbatim into every system prompt. */
+/** Advisory limit for indexed descriptions, which are rendered verbatim into every system prompt. */
 const INDEXED_DESCRIPTION_LIMIT = 150;
 
 const KNOWN_CATEGORIES = ["architecture", "meta", "workflow", "tools", "convention"];
@@ -179,7 +182,7 @@ function checkIndexedFile(file: MemoryFile, rel: string): AuditFinding[] {
             severity: "warning",
             path: rel,
             rule: "index-budget",
-            message: `index body is ${size} bytes (budget ${INDEX_BUDGET_BYTES}); move detail into a nested doc`,
+            message: `index body is ${size} bytes (advisory budget ${INDEX_BUDGET_BYTES}); consider moving detail into a nested doc`,
         });
     }
 
@@ -222,7 +225,7 @@ function checkIndexedFile(file: MemoryFile, rel: string): AuditFinding[] {
             severity: "warning",
             path: rel,
             rule: "description",
-            message: `description is ${meta.description.length} chars (limit ${INDEXED_DESCRIPTION_LIMIT}); it is rendered into every system prompt`,
+            message: `description is ${meta.description.length} chars (advisory limit ${INDEXED_DESCRIPTION_LIMIT}); it is rendered into every system prompt`,
         });
     }
 
@@ -318,7 +321,8 @@ function checkReachability(files: MemoryFile[]): AuditFinding[] {
             severity: "warning" as const,
             path: file.rel,
             rule: "reachability" as const,
-            message: "no indexed memory names this nested doc, so no agent can find it",
+            message:
+                "no indexed memory names this nested doc, so an agent can reach it only from another nested doc",
         }));
 }
 
@@ -522,6 +526,9 @@ export function summarizeAudit(results: AuditResult[]): string {
 
 /** Full report text: findings grouped per tree, errors first, plus the tree line. */
 export function formatAuditReport(results: AuditResult[]): string {
+    const hasWarnings = results.some((result) =>
+        result.findings.some((finding) => finding.severity === "warning"),
+    );
     const blocks = results.map((result) => {
         const lines = [`${result.label} memory tree: ${result.dir}`];
 
@@ -538,5 +545,9 @@ export function formatAuditReport(results: AuditResult[]): string {
         return lines.join("\n");
     });
 
-    return `${summarizeAudit(results)}\n\n${blocks.join("\n\n")}`;
+    return `${summarizeAudit(results)}\n\n${blocks.join("\n\n")}${hasWarnings ? WarningsLegend : ""}`;
 }
+
+/** Said out loud because an advisory number is not a defect: see the tool description. */
+export const WarningsLegend =
+    "\n\nWarnings are review indicators, not defects. Fix the ones that hide content (an unindexed memory, an unreachable nested doc, a broken or stale reference); leave a deliberate index size or description length alone and say why.";

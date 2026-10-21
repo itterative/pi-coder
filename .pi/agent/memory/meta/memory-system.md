@@ -63,7 +63,7 @@ A boolean is simpler to maintain than a date. The `[high-churn]` annotation is a
 
 `scanMemories()` reads only `.md` files directly in `.pi/agent/memory/`, so the hierarchy is exactly two tiers:
 
-- **Index** (top level, ≤ 4 KB, description ≤ 150 chars): what the subsystem is, where its code lives, the few
+- **Index** (top level, description ≤ 150 chars, body under the advisory 8 KB budget): what the subsystem is, where its code lives, the few
   invariants an agent needs *before* choosing a detail doc, then `## Targeted references` listing every nested
   doc with a one-line pointer. A nested file that no index lists does not exist as far as any agent is concerned.
 - **Detail docs** (`<index-stem>/<topic>.md`, one topic per file, `##`/`###` headings so a single rule is
@@ -112,7 +112,10 @@ What the gates caught, and what to remember from each:
   (complexity), 25% (decision-model), 42% (test-doubles), 46% (testing), 53% (TUI), and 109% (memory-system, where
   two demoted archives gained frontmatter and banners), while `agents` moved +1% and `compaction` −2% because
   merged restatement offset the new scaffolding. The added bytes are frontmatter blocks, headings, lead-ins, and
-  index summaries. That is the intended trade: a fact that used to cost a 21 KB read now costs a 1.5–4 KB doc.
+  index summaries. That is the intended trade: a fact that used to cost a 21 KB read now costs a 1.5–11 KB doc. The 4 KB index budget this pass was gated on
+  is now advisory and set to 8 KB (`INDEX_BUDGET_BYTES`): a subsystem index can legitimately carry more than
+  4 KB of load-bearing invariants. The sizes quoted above were measured against 4 KB and remain accurate as
+  history.
 - **An independent re-audit found no blocker and no major finding**, and did correct the numbers above: it re-ran
   `scanMemories()` (12 indexed, 0 parse errors), name==stem across all 73 files, relative-link resolution (0
   broken), per-cluster span coverage with 0 real losses, and sentence containment to separate paraphrase from

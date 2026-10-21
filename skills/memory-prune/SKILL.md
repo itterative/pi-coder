@@ -20,7 +20,9 @@ reference docs and are reachable only through an indexed memory's `## Targeted r
 1. **Get the structural state first, not by reading files.** Run the `/memory-audit` command (or the
    `memory_audit` tool with `scope` `"project"`, `"user"`, or `"both"`). It reports memories that fail to
    index, oversized index files, over-budget descriptions, nested docs no index lists, dangling references, and
-   broken links. Fix or note those before judging content.
+   broken links. Fix or note those before judging content. Errors mean something is broken (a memory that does
+   not index, a reference that resolves nowhere); warnings are review indicators - a dense index or a long nested
+   description may be exactly what that tree wants.
 2. **Inventory with sizes, then read only the top level.** `wc -c .pi/agent/memory/*.md | sort -n` shows what
    you are about to pay. Do not read every file in both trees: a large memory tree can exceed 100k tokens before
    any judgement is made, and nested docs cost the same while offering no routing value. Read the indexed

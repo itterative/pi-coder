@@ -18,6 +18,7 @@ import {
     auditMemoryTrees,
     formatAuditReport,
     summarizeAudit,
+    WarningsLegend,
     type AuditFinding,
     type AuditResult,
 } from "./audit";
@@ -74,15 +75,16 @@ export default function registerMemoryAudit(pi: ExtensionAPI) {
         name: "memory_audit",
         label: "Memory Audit",
         description:
-            "Validate the memory trees with the same parser that builds the memory list: frontmatter " +
-            "and name rules, index size and description budget, nested docs no index lists, dangling or " +
-            "broken references, and pointers to memory names that no longer exist. Run it after " +
-            "creating, moving, renaming, or splitting memory files.",
+            "Validate the memory trees with the same parser that builds the memory list: frontmatter and name " +
+            "rules, index size and description budget, nested docs no index names, and broken or stale " +
+            "references. Run it after creating, moving, renaming, or splitting memory files. Errors mean a " +
+            "memory is not indexed or a reference is broken; warnings are review indicators and may be " +
+            "deliberate - a dense index or a long nested description needs no fix.",
         promptSnippet:
             "Use memory_audit after editing project or user memories to catch files that silently fail to index.",
         promptGuidelines: [
             "Run memory_audit before finishing work that creates, moves, renames, or splits memory files; a memory that fails to parse is invisible to every later session, and only the extension's own parser reports it",
-            "Treat an indexed memory as reachable only when an index names it: a nested doc that no indexed memory lists cannot be found",
+            "Weigh warnings rather than obeying them: fix the ones that hide content (a nested doc no index names, a broken link, a stale memory name), leave deliberate ones (a dense index, a long nested description) alone and say why",
         ],
         parameters: Type.Object({
             scope: Type.Optional(
@@ -217,6 +219,11 @@ function buildAuditItems(results: AuditResult[]): PagerItem<AuditLine>[] {
         }
 
         items.push({ value: { type: "blank" }, label: "" });
+    }
+
+    if (warnings > 0) {
+        const legend = WarningsLegend.trim();
+        items.push({ value: { type: "summary", text: legend }, label: legend });
     }
 
     return items;
