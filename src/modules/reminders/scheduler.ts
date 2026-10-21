@@ -115,6 +115,23 @@ export class ReminderScheduler {
         this.midRunThisTurn = 0;
     }
 
+    /**
+     * Resume from a branch that already has history: a tree move, reload, resume, or fork.
+     *
+     * The pointer continues after the last emitted rotation id and the turn cadence keeps its origin, so the
+     * branch is not treated as new and an id it already showed is not repeated. The memory reminder is
+     * re-armed because the appendix is rebuilt for the branch, and the context threshold is measured fresh:
+     * the live run's context is not on the branch.
+     */
+    seed(state: { userTurns: number; lastEmitTurn: number; lastRotationId?: string }): void {
+        this.userTurns = state.userTurns;
+        this.lastEmitTurn = state.lastEmitTurn;
+        this.rotationIndex = rotationIndexAfter(state.lastRotationId);
+        this.thresholdBaseline = 0;
+        this.midRunThisTurn = 0;
+        this.sessionArmed = true;
+    }
+
     decide(input: DecideInput): ReminderDefinition | undefined {
         // A new user turn resets the mid-run budget; the cap is per turn, not per session.
         this.midRunThisTurn = 0;
@@ -220,4 +237,14 @@ export class ReminderScheduler {
         this.thresholdBaseline = maxContextTokens;
         return reminder;
     }
+}
+
+/** The rotation pointer just past `id`, or zero when there is no history to continue from. */
+function rotationIndexAfter(id: string | undefined): number {
+    if (id === undefined) {
+        return 0;
+    }
+
+    const index = ACTIVE_ROTATION_REMINDERS.findIndex((reminder) => reminder.id === id);
+    return index < 0 ? 0 : (index + 1) % ACTIVE_ROTATION_REMINDERS.length;
 }

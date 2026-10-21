@@ -11,17 +11,18 @@ import {
 } from "../decision";
 import { ACTIVE_ROTATION_REMINDERS, MEMORY_READ_REMINDER, REMINDER_NOTICE } from "./catalog";
 import { ContextGrowthTracker } from "./context-growth";
-import { ReminderScheduler, type ReminderModelChoice } from "./scheduler";
+import { ReminderScheduler, type ReminderModelChoice, type SchedulerSnapshot } from "./scheduler";
 import {
+    REMINDER_CUSTOM_TYPE,
     REMINDER_STATE_TYPE,
     availableRotationIds,
     buildReminderSignals,
     reminderLabelsFromEntries,
+    reminderResumeState,
 } from "./session-signals";
 import { loadReminderSettings } from "./settings";
 import type { ReminderDefinition, ReminderId } from "./types";
 
-const CUSTOM_TYPE = "pi-coder-reminder";
 const DEBUG_ENTRY_TYPE = "pi-coder-reminder:debug";
 
 export interface ReminderRegistrationOptions {
@@ -35,6 +36,57 @@ export interface ReminderRegistrationOptions {
 
 function formatReminder(reminder: ReminderDefinition): string {
     return `<pi_coder_reminder>\n${REMINDER_NOTICE}\n${reminder.text}\n</pi_coder_reminder>`;
+}
+
+/** Everything the debug entry records about one selection decision, however it was reached. */
+interface DecisionEntryInput {
+    trigger: "session" | "turn" | "mid-run";
+    reminder: ReminderDefinition | undefined;
+    scope: "full" | "memory";
+    /** The state a model decision was made from; absent for the session reminder and mid-run steers. */
+    state?: ReminderSignals;
+    available?: ReadonlySet<ReminderId>;
+    options?: readonly ReminderDefinition[];
+    modelChoice?: ReminderModelChoice;
+    scores?: Record<string, number>;
+    consult?: ReminderConsult;
+    labels?: ReminderStateLabels;
+    contextTokens: number;
+    scheduler: SchedulerSnapshot;
+}
+
+/**
+ * The `pi-coder-reminder:debug` entry: the state a selection was made from and what it decided.
+ *
+ * Recorded whether or not a reminder was chosen - "nothing was shown" is exactly the case the state is
+ * needed to explain - and the pre-decision scheduler snapshot is kept so the threshold and rotation the
+ * decision saw are recoverable rather than inferred.
+ */
+function decisionEntry(input: DecisionEntryInput): Record<string, unknown> {
+    const options = input.options ?? [];
+
+    return {
+        trigger: input.trigger,
+        reminder: input.reminder?.id ?? null,
+        scope: input.scope,
+        ...(input.state === undefined ? {} : { state: input.state }),
+        ...(input.available === undefined ? {} : { available: [...input.available] }),
+        ...(options.length === 0 ? {} : { options: options.map((option) => option.id) }),
+        ...(input.modelChoice === undefined ? {} : { modelChoice: input.modelChoice }),
+        ...(input.scores === undefined ? {} : { scores: input.scores }),
+        ...(input.consult === undefined
+            ? {}
+            : {
+                  consult: {
+                      status: input.consult.status,
+                      latencyMs: input.consult.latencyMs,
+                      ...(input.consult.usage === undefined ? {} : { usage: input.consult.usage }),
+                  },
+              }),
+        ...(input.labels === undefined ? {} : { labels: { ...input.labels } }),
+        contextTokens: input.contextTokens,
+        scheduler: input.scheduler,
+    };
 }
 
 /** Map the decision model's answer onto the scheduler's vocabulary; `undefined` leaves the fallback in charge. */
@@ -122,6 +174,8 @@ export default function registerRemindersExtension(
     let currentMessageHasToolCalls = false;
     /** The activity gate for the message being streamed, computed lazily once per assistant message. */
     let midRunAvailable: ReadonlySet<ReminderId> | undefined;
+    /** The signals the mid-run gate was computed from, kept for the debug entry. */
+    let midRunSignals: ReminderSignals | undefined;
     let midRunAvailableReady = false;
 
     const rotationSignals = (ctx: ExtensionContext, currentTurn: number): ReminderSignals =>
@@ -134,15 +188,35 @@ export default function registerRemindersExtension(
             labels,
         });
 
-    const restart = (ctx: ExtensionContext) => {
-        scheduler.reset();
+    /**
+     * A restart point: session start, tree navigation, or compaction.
+     *
+     * `resume` reads the history back off the branch, so a reload, resume, fork, or tree move continues the
+     * rotation and the shown history instead of treating the branch as new. Compaction deliberately resets:
+     * the fold is a context reset, so only the memory reminder is re-armed and the rotation starts over. The
+     * labels are branch-derived either way.
+     */
+    const restart = (ctx: ExtensionContext, resume = false) => {
         growth.reset();
+        const branch = ctx.sessionManager.getBranch();
+        labels = reminderLabelsFromEntries(branch);
+
+        const state = resume ? reminderResumeState(branch) : undefined;
+        if (state === undefined) {
+            scheduler.reset();
+            shown.clear();
+            return;
+        }
+
+        scheduler.seed(state);
         shown.clear();
-        labels = reminderLabelsFromEntries(ctx.sessionManager.getBranch());
+        for (const [id, turn] of state.shown) {
+            shown.set(id, turn);
+        }
     };
 
-    pi.on("session_start", (_event, ctx) => restart(ctx));
-    pi.on("session_tree", (_event, ctx) => restart(ctx));
+    pi.on("session_start", (_event, ctx) => restart(ctx, true));
+    pi.on("session_tree", (_event, ctx) => restart(ctx, true));
     pi.on("session_compact", (_event, ctx) => restart(ctx));
     pi.on("agent_start", () => {
         growth.reset();
@@ -174,12 +248,12 @@ export default function registerRemindersExtension(
         }
 
         if (!midRunAvailableReady) {
-            midRunAvailable = availableRotationIds(
-                rotationSignals(ctx, scheduler.snapshot().userTurns),
-            );
+            midRunSignals = rotationSignals(ctx, scheduler.snapshot().userTurns);
+            midRunAvailable = availableRotationIds(midRunSignals);
             midRunAvailableReady = true;
         }
 
+        const before = scheduler.snapshot();
         const reminder = scheduler.decideMidRun({
             maxContextTokens: growth.maxTokens,
             available: midRunAvailable,
@@ -188,22 +262,31 @@ export default function registerRemindersExtension(
             return;
         }
 
-        shown.set(reminder.id, scheduler.snapshot().userTurns);
+        const turn = scheduler.snapshot().userTurns;
+        shown.set(reminder.id, turn);
 
         if (settings.debug) {
-            pi.appendEntry(DEBUG_ENTRY_TYPE, {
-                reminder: reminder.id,
-                scope,
-                midRun: true,
-                ...scheduler.snapshot(),
-            });
+            pi.appendEntry(
+                DEBUG_ENTRY_TYPE,
+                decisionEntry({
+                    trigger: "mid-run",
+                    reminder,
+                    scope,
+                    state: midRunSignals,
+                    available: midRunAvailable,
+                    contextTokens: growth.maxTokens,
+                    scheduler: before,
+                }),
+            );
         }
 
         pi.sendMessage(
             {
-                customType: CUSTOM_TYPE,
+                customType: REMINDER_CUSTOM_TYPE,
                 content: formatReminder(reminder),
                 display: false,
+                // The entry records what was shown and when, so a restart on this branch can resume.
+                details: { id: reminder.id, turn },
             },
             { deliverAs: "steer" },
         );
@@ -217,6 +300,7 @@ export default function registerRemindersExtension(
         growth.startAssistantMessage(ctx.getContextUsage()?.tokens ?? 0);
         currentMessageHasToolCalls = false;
         midRunAvailable = undefined;
+        midRunSignals = undefined;
         midRunAvailableReady = false;
     });
 
@@ -253,19 +337,20 @@ export default function registerRemindersExtension(
         let modelChoice: ReminderModelChoice | undefined;
         let available: ReadonlySet<ReminderId> | undefined;
         let scores: Record<string, number> | undefined;
+        let signals: ReminderSignals | undefined;
+        let options: ReminderDefinition[] = [];
+        let consult: ReminderConsult | undefined;
         if (rotationTurn) {
-            const signals = rotationSignals(ctx, snapshot.userTurns + 1);
+            signals = rotationSignals(ctx, snapshot.userTurns + 1);
             available = availableRotationIds(signals);
 
             // The gate decides what may be offered, so the model is asked only about ids that can actually
             // be shown; a gated id cannot be chosen and then vetoed.
-            const options = ACTIVE_ROTATION_REMINDERS.filter((reminder) =>
-                available?.has(reminder.id),
-            );
+            options = ACTIVE_ROTATION_REMINDERS.filter((reminder) => available?.has(reminder.id));
 
             const config = decisionConfig.load(ctx.cwd ?? process.cwd());
             if (reminderEnabled(config)) {
-                const consult = await consultModelFor(ctx, config, event.prompt, signals, options);
+                consult = await consultModelFor(ctx, config, event.prompt, signals, options);
                 modelChoice = modelChoiceOf(consult);
                 scores = consult.scores;
 
@@ -287,30 +372,45 @@ export default function registerRemindersExtension(
             modelChoice,
             available,
         });
+
+        /** The turn the reminder is emitted on, stamped on the message so a later restart can resume. */
+        const emitTurn = scheduler.snapshot().userTurns;
+        if (reminder !== undefined && reminder.id !== MEMORY_READ_REMINDER.id) {
+            shown.set(reminder.id, emitTurn);
+        }
+
+        // Record the decision whether or not a reminder was chosen: "nothing was shown" is exactly the case
+        // the state is needed to explain, and the session reminder is recorded too so turn one is no gap.
+        if (settings.debug && (rotationTurn || reminder !== undefined)) {
+            pi.appendEntry(
+                DEBUG_ENTRY_TYPE,
+                decisionEntry({
+                    trigger: rotationTurn ? "turn" : "session",
+                    reminder,
+                    scope,
+                    state: signals,
+                    available,
+                    options,
+                    modelChoice,
+                    scores,
+                    consult,
+                    labels,
+                    contextTokens: growth.maxTokens,
+                    scheduler: snapshot,
+                }),
+            );
+        }
+
         if (reminder === undefined) {
             return;
         }
 
-        if (reminder.id !== MEMORY_READ_REMINDER.id) {
-            shown.set(reminder.id, scheduler.snapshot().userTurns);
-        }
-
-        if (settings.debug) {
-            pi.appendEntry(DEBUG_ENTRY_TYPE, {
-                reminder: reminder.id,
-                scope,
-                modelChoice: modelChoice ?? null,
-                ...(scores === undefined ? {} : { scores }),
-                labels: { ...labels },
-                ...scheduler.snapshot(),
-            });
-        }
-
         return {
             message: {
-                customType: CUSTOM_TYPE,
+                customType: REMINDER_CUSTOM_TYPE,
                 content: formatReminder(reminder),
                 display: false,
+                details: { id: reminder.id, turn: emitTurn },
             },
         };
     });

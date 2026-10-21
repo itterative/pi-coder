@@ -51,6 +51,20 @@ together. With the model off or a label unreadable, `session-signals.ts` infers 
 activity: the last code write is ordered against the last test run, a failed last run reads as `debugging`,
 and writes after it read as unvalidated. `finishing` is never inferred.
 
+## Recorded decisions
+
+Every selection decision is written to the session as a `pi-coder-reminder:debug` entry, so the state a
+choice was made from survives without re-deriving it. The entry holds `trigger` (`session` / `turn` /
+`mid-run`), the emitted id or `null` - a turn that chose nothing is recorded too, because that is the case the
+state explains - the full `state`, the gate's `available` set, the `options` actually offered, `modelChoice`,
+`scores`, a `consult` summary (status, latency, usage), the labels in force, `contextTokens`, and the
+pre-decision `scheduler` snapshot. Debug recording is on by default for now (`reminderDebugEnabled` in
+`settings.ts`, temporarily ignoring `PI_CODER_REMINDER_DEBUG` like `isAgentTraceEnabled`); it uses session
+entries rather than a `.state/` JSONL because the reminder state is per-session and the replay already reads
+the session file. Separate from the debug entry, every delivered reminder message carries `details: { id,
+ turn }`; that always-present marker is what `reminderResumeState` reads to resume the rotation pointer, the
+shown history, and the turn count after a tree move or reload, so resume never depends on debug being on.
+
 ## Measured notes
 
 `vllm-d3-flash`, real session replays: the single-choice form abstained on 30/30 runs; per-reminder

@@ -34,6 +34,14 @@ const MEMORY_INDEX_ENTRY = "pi-memory:memory-index";
 /** The session entry the model-maintained state labels are persisted under. */
 export const REMINDER_STATE_TYPE = "pi-coder:reminder-state";
 
+/**
+ * The `customType` of a delivered reminder message.
+ *
+ * Its `details` carry the id and the turn it was emitted on, which is how a later restart on a populated
+ * branch rebuilds what was already shown without a separate marker entry.
+ */
+export const REMINDER_CUSTOM_TYPE = "pi-coder-reminder";
+
 /** The commands that count as having run the project's tests, anchored to a chain segment's command word. */
 const TEST_COMMANDS = [
     /^npm(?:\s+run)?\s+test(?::run)?\b/u,
@@ -237,6 +245,83 @@ export function reminderLabelsFromEntries(entries: readonly SessionEntry[]): Rem
     }
 
     return labels;
+}
+
+/** What a branch can tell a restarted module: the turns counted, what was shown, and where the pointer was. */
+export interface ReminderResumeState {
+    /** User turns on the branch since the last compaction. */
+    userTurns: number;
+    /** Rotation ids already shown, keyed by the user turn they were emitted on. */
+    shown: Map<ReminderId, number>;
+    /** The last rotation id emitted, so the pointer resumes after it; absent when none was. */
+    lastRotationId?: ReminderId;
+    /** The user turn of the last reminder of any kind, for the turn cadence. */
+    lastEmitTurn: number;
+}
+
+/**
+ * Rebuild the scheduler's view from a branch after a restart on a populated session.
+ *
+ * A delivered reminder is a `custom_message` whose `details` carry the id and the turn it was emitted on, so
+ * the branch itself records what was shown. Only entries after the last `compaction` are read: the fold is a
+ * full reset (the module re-arms the memory reminder and restarts the rotation), so pre-fold emissions must
+ * not leak into a post-fold resume. `undefined` means the branch holds nothing to resume, and the caller
+ * starts fresh.
+ */
+export function reminderResumeState(
+    entries: readonly SessionEntry[],
+): ReminderResumeState | undefined {
+    const afterFold = entries.findLastIndex((entry) => entry.type === "compaction") + 1;
+    const slice = entries.slice(afterFold);
+
+    let userTurns = 0;
+    let lastEmitTurn = 0;
+    let lastRotationId: ReminderId | undefined;
+    const shown = new Map<ReminderId, number>();
+
+    for (const entry of slice) {
+        if (entry.type === "message" && entry.message.role === "user") {
+            userTurns += 1;
+            continue;
+        }
+
+        if (entry.type !== "custom_message" || entry.customType !== REMINDER_CUSTOM_TYPE) {
+            continue;
+        }
+
+        const details = entry.details;
+        if (!isRecord(details)) {
+            continue;
+        }
+
+        const id = details.id;
+        const turn = details.turn;
+        if (typeof id !== "string" || typeof turn !== "number" || !Number.isFinite(turn)) {
+            continue;
+        }
+
+        lastEmitTurn = Math.max(lastEmitTurn, turn);
+        if (isRotationId(id)) {
+            shown.set(id, turn);
+            lastRotationId = id;
+        }
+    }
+
+    if (userTurns === 0 && lastEmitTurn === 0) {
+        return undefined;
+    }
+
+    return {
+        userTurns: Math.max(userTurns, lastEmitTurn),
+        shown,
+        ...(lastRotationId === undefined ? {} : { lastRotationId }),
+        lastEmitTurn,
+    };
+}
+
+/** Whether an id names a rotation reminder, which `shown` tracks; the memory reminder is not rotated. */
+function isRotationId(value: string): value is ReminderId {
+    return ACTIVE_ROTATION_REMINDERS.some((reminder) => reminder.id === value);
 }
 
 /**

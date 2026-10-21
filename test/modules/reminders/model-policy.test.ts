@@ -112,6 +112,36 @@ describe("decision-model reminder policy", () => {
         ).toEqual([{ customType: "pi-coder:reminder-state", data: { phase: "implementing" } }]);
     });
 
+    it("records the state and the gate on the decision entry", async () => {
+        const stub = harness();
+        await startSession(stub);
+        await userTurn(stub);
+
+        await userTurn(stub);
+
+        const entry = stub.entries.findLast(
+            (candidate) => candidate.customType === "pi-coder-reminder:debug",
+        );
+        expect(entry?.data).toMatchObject({
+            trigger: "turn",
+            reminder: "delegation",
+            scope: "full",
+            modelChoice: "delegation",
+            // The pre-decision snapshot, which is why the state carries user_turns 2 and this carries 1.
+            scheduler: { userTurns: 1, sessionArmed: false },
+        });
+
+        const data = entry?.data as {
+            state?: ReminderSignals;
+            available?: string[];
+            options?: string[];
+        };
+        expect(data.state?.session).toMatchObject({ user_turns: 2 });
+        expect(data.available).toContain("delegation");
+        expect(data.available).not.toContain("memory-hygiene");
+        expect(data.options).toContain("delegation");
+    });
+
     it("treats none as final but falls back when the consult is unusable", async () => {
         vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "1");
         const stub = harness();

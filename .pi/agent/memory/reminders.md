@@ -28,14 +28,17 @@ owns the appendix and snapshot lifecycle.
   suppresses the fallback for that turn; a missing answer leaves the deterministic triggers in charge. The
   optional `available` gate narrows the rotation: the scheduler scans to the next allowed id, and a model pick
   outside the set is dropped with no fallback. Mid-run emissions are capped at `maxMidRunPerTurn` (default 1)
-  per user turn, reset by each `decide`.
+  per user turn, reset by each `decide`. `reset()` starts a fresh schedule; `seed()` resumes a populated
+  branch (a tree move, reload, resume, or fork) with the user-turn count, the last emission turn, and the
+  rotation pointer just past the last emitted id, so an id the branch already showed is not repeated.
 - `context-growth.ts` — the `message_start` usage baseline plus streamed `chars / 4` estimator lifted out of
   the memory module.
 - `settings.ts` — `PI_CODER_REMINDER=false` disables everything; `PI_CODER_REMINDER_EVERY_TURNS` (default 5)
   and `PI_CODER_REMINDER_THRESHOLD` (default 30000, alias `PI_MEMORY_REMINDER_THRESHOLD`) each disable their
   trigger at `0`, and both at `0` also removes the model consult; `PI_CODER_REMINDER_MIDRUN_MAX` (default 1)
-  caps the mid-run steers one user turn may receive; `PI_CODER_REMINDER_DEBUG=true` records a
-  `pi-coder-reminder:debug` entry per emission.
+  caps the mid-run steers one user turn may receive; `PI_CODER_REMINDER_DEBUG` records a
+  `pi-coder-reminder:debug` entry with the state and outcome of every selection decision, and is on by
+  default for now (see `reminderDebugEnabled`).
 - `index.ts` — `registerRemindersExtension(pi, { scope })`. `scope: "full"` is a parent session;
   `scope: "memory"` is for delegated children, registered by the `memories` capability factory beside the
   appendix, and emits only the session reminder.
@@ -53,8 +56,12 @@ Two delivery paths, both appending at the end of the conversation, so the system
   `PI_CODER_REMINDER_MIDRUN_MAX` (default 1) per user turn. Both paths share the emission bookkeeping, and
   full scope only - a memory-scoped child never steers mid-run.
 
-Compaction may summarize an old reminder away, so session start, tree navigation, and compaction each call
-`reset()` and re-arm it.
+`restart()` runs at three points. Session start (including reload, resume, and fork) and tree navigation
+`seed()` from the branch: `reminderResumeState` reads each delivered reminder's `custom_message` entry, whose
+`details` carry `{ id, turn }`, to rebuild `shown`, the last emitted rotation id, and the user-turn count, so
+the pointer and cadence continue instead of restarting and `turns_ago` keeps a real origin. Compaction is a
+full `reset()`: the fold is a context reset, so pre-fold emissions are ignored, the rotation restarts, and
+the session reminder is re-armed. Labels are branch-derived (`reminderLabelsFromEntries`) in every case.
 
 ## Decision-model selection
 
@@ -71,7 +78,10 @@ session turn by turn: it rebuilds the exact state that would be sent, simulates 
 full, compact mode clipping it to one `shows=` line. It applies the same activity gate and only models a
 mid-run steer for an assistant message that called a tool, matching the live rules.
 The header says the model was not consulted, because a live choice with `reminders: true` may differ. It reads the session's own memory-index,
-todo-snapshot, and reminder-state entries, needs no endpoint, and respects `PI_CODER_REMINDER_*`. The script
+todo-snapshot, and reminder-state entries, needs no endpoint, and respects `PI_CODER_REMINDER_*`. The live
+choices themselves are recorded as `pi-coder-reminder:debug` session entries carrying the state, gate,
+options, consult, and scheduler snapshot, so a replay's reconstruction can be compared against what was
+actually sent. The script
 is `scripts/reminder-report.mts`; the `.mts` and `src/package.json` (`type: module`) exist because the root
 package is not ESM and the pi package is ESM-only under `node --import tsx`. `parseArgs`, `replay`, and the
 renderers are exported; `tsconfig.check.json` enables `allowImportingTsExtensions` so the test can import the
@@ -79,9 +89,10 @@ script with the extension it must carry.
 
 ## Tests
 
-`test/modules/reminders/{scheduler,emission,model-policy,session-signals,catalog}.test.ts` cover the pure
-schedule, the hidden-message emission, the decision-model wiring, the signal builder and gate, and the catalog
-filter;
+`test/modules/reminders/{scheduler,emission,model-policy,session-signals,catalog,settings}.test.ts` cover the
+pure schedule, the hidden-message emission, the decision-model wiring, the signal builder and gate, the
+catalog
+filter, and the settings defaults;
 `test/modules/decision/reminder.test.ts` covers the subject, consult, and prompt clipping; the config key is
 pinned in `test/modules/decision/config.test.ts`, and `test/scripts/reminder-report.test.ts` pins the replay
 tool. `decision-model.md` covers the classifier plumbing this builds on.

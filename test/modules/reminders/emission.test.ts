@@ -1,10 +1,20 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { SessionManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import registerRemindersExtension, { modelChoiceOf } from "../../../src/modules/reminders";
-import type { ReminderConsult } from "../../../src/modules/decision";
+import type { ReminderConsult, ReminderSignals } from "../../../src/modules/decision";
 import { ACTIVE_ROTATION_REMINDERS } from "../../../src/modules/reminders/catalog";
-import { createPiStub, stubContext, stubSessionManager, type PiStub } from "../../helpers/pi-stub";
+import {
+    createPiStub,
+    stubContext,
+    stubSessionContext,
+    stubSessionManager,
+    type PiStub,
+} from "../../helpers/pi-stub";
 
 /**
  * The emission path: one hidden custom message per user turn, armed by the session lifecycle and suppressed
@@ -46,8 +56,34 @@ beforeEach(() => {
     });
 });
 
+const temporaryDirectories: string[] = [];
+
+/** A real session manager, so branch entries have the shape `SessionManager` writes. */
+function realSession(): SessionManager {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-reminder-emission-"));
+    temporaryDirectories.push(directory);
+    return SessionManager.create("/tmp/reminder-project", directory);
+}
+
+function appendUser(manager: SessionManager, text: string, timestamp: number): void {
+    manager.appendMessage({ role: "user", content: text, timestamp });
+}
+
+/** One delivered reminder, as the branch records it: the message's `details` carry id and turn. */
+function appendReminder(manager: SessionManager, id: string, turn: number): void {
+    manager.appendCustomMessageEntry(
+        "pi-coder-reminder",
+        `<pi_coder_reminder>${id}</pi_coder_reminder>`,
+        false,
+        { id, turn },
+    );
+}
+
 afterEach(() => {
     vi.unstubAllEnvs();
+    for (const directory of temporaryDirectories.splice(0)) {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 });
 
 describe("reminder emission", () => {
@@ -96,6 +132,32 @@ describe("reminder emission", () => {
         await stub.requireHandler("session_compact")({ reason: "manual" }, ctx);
 
         expect((await userTurn(stub))?.message?.content).toContain("memory_system");
+    });
+
+    it("resumes the rotation and the shown history after a tree move", async () => {
+        const manager = realSession();
+        appendUser(manager, "first", 1);
+        appendReminder(manager, "delegation", 1);
+        appendUser(manager, "second", 3);
+        ctx = stubSessionContext(manager, { cwd: "/tmp/reminder-project" });
+
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "1");
+        const stub = harness();
+        await stub.requireHandler("session_tree")({ newLeafId: "a", oldLeafId: "b" }, ctx);
+
+        // Turn 1 re-arms the memory reminder; turn 2 rotates and must continue after delegation, not restart
+        // at the top of the catalog and repeat it.
+        await userTurn(stub);
+        const result = await userTurn(stub);
+        expect(result?.message?.content).toContain("TODO.md");
+
+        const entry = stub.entries.findLast(
+            (candidate) => candidate.customType === "pi-coder-reminder:debug",
+        );
+        expect(entry?.data).toMatchObject({ reminder: "todo", scheduler: { rotationIndex: 2 } });
+        const data = entry?.data as { state?: ReminderSignals };
+        // Restored from the branch: delegation was emitted at turn 1, and this decision prepares turn 4.
+        expect(data.state?.reminders_shown).toContainEqual({ id: "delegation", turns_ago: 3 });
     });
 
     it("keeps a child-scoped session to the memory reminder only", async () => {
@@ -278,15 +340,18 @@ describe("reminder emission", () => {
         expect(stub.sentMessages).toHaveLength(0);
     });
 
-    it("records a debug entry when asked", async () => {
-        vi.stubEnv("PI_CODER_REMINDER_DEBUG", "true");
+    it("records the session decision as a debug entry by default", async () => {
         const stub = harness();
         await startSession(stub);
         await userTurn(stub);
 
         expect(stub.entries).toHaveLength(1);
         expect(stub.entries[0]?.customType).toBe("pi-coder-reminder:debug");
-        expect(stub.entries[0]?.data).toMatchObject({ reminder: "memory-read", scope: "full" });
+        expect(stub.entries[0]?.data).toMatchObject({
+            trigger: "session",
+            reminder: "memory-read",
+            scope: "full",
+        });
     });
 });
 

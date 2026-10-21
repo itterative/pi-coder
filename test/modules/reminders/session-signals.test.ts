@@ -11,6 +11,7 @@ import {
     availableRotationIds,
     buildReminderSignals,
     reminderLabelsFromEntries,
+    reminderResumeState,
 } from "../../../src/modules/reminders/session-signals";
 import { zeroUsage } from "../../helpers/agent-doubles";
 
@@ -80,6 +81,16 @@ function toolResultEntry(toolCallId: string, isError: boolean, timestamp: number
         isError,
         timestamp,
     };
+}
+
+/** One delivered reminder, as a branch records it: the `customType` and `details` a restart reads back. */
+function appendReminder(manager: SessionManager, id: string, turn: number): void {
+    manager.appendCustomMessageEntry(
+        "pi-coder-reminder",
+        `<pi_coder_reminder>${id}</pi_coder_reminder>`,
+        false,
+        { id, turn },
+    );
 }
 
 afterEach(() => {
@@ -248,6 +259,20 @@ describe("buildReminderSignals", () => {
         });
     });
 
+    it("keeps persisted labels across a compaction", () => {
+        const manager = session();
+        manager.appendCustomEntry(REMINDER_STATE_TYPE, { phase: "wrapping_up", finishing: true });
+        manager.appendCompaction("folded", null, 1000);
+
+        // The branch still reaches the pre-fold entry, so a post-compaction restart re-reads the labels
+        // instead of dropping them. Only the memory index treats a compaction as a hard boundary, because
+        // its snapshot is rebuilt from the filesystem rather than re-read.
+        expect(reminderLabelsFromEntries(manager.getBranch())).toEqual({
+            phase: "wrapping_up",
+            finishing: true,
+        });
+    });
+
     it("does not count a test-looking string inside other commands", () => {
         const manager = session();
         manager.appendMessage(
@@ -264,6 +289,49 @@ describe("buildReminderSignals", () => {
 
         // `echo` is the command; the quoted text is an argument, and the pattern anchors on the command word.
         expect(signals.session?.tests_run).toBeUndefined();
+    });
+});
+
+describe("reminderResumeState", () => {
+    it("rebuilds the turns, the shown history, and the last rotation id", () => {
+        const manager = session();
+        manager.appendMessage(userEntry("first", 1));
+        appendReminder(manager, "delegation", 1);
+        manager.appendMessage(userEntry("second", 3));
+
+        const state = reminderResumeState(manager.getBranch());
+        expect(state?.userTurns).toBe(2);
+        expect(state?.lastEmitTurn).toBe(1);
+        expect(state?.lastRotationId).toBe("delegation");
+        expect([...(state?.shown ?? new Map())]).toEqual([["delegation", 1]]);
+    });
+
+    it("does not track the memory reminder in shown but does count its turn", () => {
+        const manager = session();
+        appendReminder(manager, "memory-read", 1);
+
+        const state = reminderResumeState(manager.getBranch());
+        expect(state?.lastEmitTurn).toBe(1);
+        expect(state?.lastRotationId).toBeUndefined();
+        expect(state?.shown.size).toBe(0);
+    });
+
+    it("ignores emissions before the last compaction", () => {
+        const manager = session();
+        appendReminder(manager, "delegation", 1);
+        manager.appendCompaction("folded", null, 1000);
+        manager.appendMessage(userEntry("after", 2));
+
+        // The fold is a full reset, so its pre-fold rotation must not leak into a post-fold resume.
+        const state = reminderResumeState(manager.getBranch());
+        expect(state?.userTurns).toBe(1);
+        expect(state?.lastEmitTurn).toBe(0);
+        expect(state?.lastRotationId).toBeUndefined();
+        expect(state?.shown.size).toBe(0);
+    });
+
+    it("returns undefined for a branch with nothing to resume", () => {
+        expect(reminderResumeState(session().getBranch())).toBeUndefined();
     });
 });
 

@@ -45,6 +45,26 @@ describe("ReminderScheduler", () => {
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
     });
 
+    it("resumes the rotation pointer and the cadence origin from branch history", () => {
+        // A tree move or reload on a branch that already emitted delegation at turn 1.
+        const scheduler = new ReminderScheduler({ everyTurns: 1, thresholdTokens: 0 });
+        scheduler.seed({ userTurns: 1, lastEmitTurn: 1, lastRotationId: "delegation" });
+
+        expect(scheduler.snapshot()).toMatchObject({ userTurns: 1, sessionArmed: true });
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+
+        // One turn later the cadence fires, and the pointer continues after delegation rather than repeating
+        // it from the top of the catalog.
+        expect(scheduler.decide({ maxContextTokens: 0 })?.id).toBe("todo");
+    });
+
+    it("starts the rotation pointer at zero when there is no rotation history", () => {
+        const scheduler = new ReminderScheduler(NO_TURNS);
+        scheduler.seed({ userTurns: 3, lastEmitTurn: 0 });
+
+        expect(scheduler.snapshot()).toMatchObject({ userTurns: 3, rotationIndex: 0 });
+    });
+
     it("waits everyTurns turns after the last emission before rotating", () => {
         const scheduler = armed({ everyTurns: 5, thresholdTokens: 0 });
 
