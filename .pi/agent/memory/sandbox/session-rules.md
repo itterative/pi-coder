@@ -1,0 +1,49 @@
+---
+name: session-rules
+description: How the bash prompt proposes a session rule, how the pattern is built, where the rules live, how they match, and known gaps.
+category: architecture
+keep_updated: true
+---
+
+# Suggested session rules
+
+When `src/tools/bash/index.ts` receives an `ask` caused by exactly one uncovered command segment, it can offer a suggested rule. Suggestions are explicit user choices, never auto-applied, and live only for the current session.
+
+## When a rule is offered
+
+- `src/modules/sandbox/resolve.ts` returns unresolved tokenized segments through `resolvePermissionDetails()`.
+- The suggested option appears only for one unresolved segment; multiple unresolved segments use the plain prompt.
+
+## How the pattern is built
+
+- Permission suggestion rules in `src/modules/sandbox/suggestions.ts` preserve wildcard semantics: a trailing `*` consumes one or more arguments, so suggestions for argument-less invocations save an exact rule and only append `*` when extra arguments are present.
+- `src/modules/sandbox/suggestions.ts` uses a curated table, not token-shape inference. Scoped rows cover runners such as `npx`, `npm run`, `yarn`, `yarn dlx`, `pnpm`, `pnpm dlx`, `bun`, `bunx`, `uv`, `docker`, `cargo`, `go test`, `go vet`, `go fmt`, `go generate`, `dotnet test`, `mvn test`, `gradle test`, `bazel test`, `flutter test`, `dart test`, `swift test`, `mix test`, `deno test`, `deno fmt`, `deno lint`, and `cmake --build`; fixed rows cover tools such as `make`, `just`, `task`, `ninja`, `eslint`, `prettier`, `biome`, `tsc`, `stylelint`, `tox`, `ruff`, and `pytest`, plus the bare JS runners `npm test`, `node --test`, `vitest`, `jest`, `mocha`, `ava`, `playwright`, and `cypress` (a multi-token command name like `node --test` passes its base length to `fixed` so the bare form stays exact).
+- npx-style package-runner suggestions reject inline-code/evaluator flags; whether a path-like argument is pinned depends on the package — `CODE_EXECUTOR_PACKAGES` (tsx/ts-node/node/python…) keep it exact, `DATA_TOOL_PACKAGES` (vitest/jest/prettier/eslint…) wildcard it, and an unrecognized package keeps it exact while offering the decision model a `widened` alternative (`suggestRuleOutcome()` / `suggestRuleForPrompt`).
+- Whether a path-like argument may be covered by the wildcard is a property of the runner, not the spelling. `CODE_EXECUTOR_PACKAGES` (`tsx`, `ts-node`, `nodemon`, `node`, `python3`, interpreters) keeps the first path-like operand exact and wildcards only later arguments, and pins the whole invocation when a second path-like argument follows (so `npx tsx watch src/index.ts` no longer offers the over-broad `npx tsx *`). `DATA_TOOL_PACKAGES` (`vitest`, `jest`, `mocha`, `prettier`, `eslint`, `tsc`, …) wildcards its paths, which is what makes `npx vitest test/a.test.ts` and `npx prettier src/a.ts` become `npx vitest *` / `npx prettier *`. An **unrecognized** package with a path-like argument keeps the path exact and, when the decision model is enabled, also offers a `widened` wildcard: the model's one `bool` answer (`executes_code`) picks between the two, never generating a pattern. Measured on a 30-command battery the yes/no reached 29/30, while asking the model to choose a pattern itself twice picked wildcards around executed code (`npx tsx *`, `npx tsx -e *`), so pattern construction stays in code.
+- Tokens used in a suggested pattern must match the safe-token policy. Unsafe tokens or missing rows produce no suggestion. Every generated pattern, including the `widened` alternative, is reparsed as one line of safe tokens before it is used.
+- A transparent wrapper is unwrapped before suggesting, so `timeout 600 npm run test:run` offers `npm run test:run`—the same rule the bare command offers—because the matcher accepts the wrapped form too (likewise the shell keyword `time [-p]`). A `timeout *` rule is never offered: it would authorize any command run under a timeout. Wrapper grammar lives in `command-wrappers.ts`; see `commands.md`.
+
+## The decision-model consult
+
+- The model consult (`decisionModel.enabled` and `suggestions !== false`, default true) is a **separate request** through `consultSuggestionRole`/`suggestRuleForPrompt`, not a question on the veto request: the veto's measured state and wording stay byte-identical, and a failed suggestion request cannot pause a permission verdict. It runs only when a prompt will actually be shown (`ctx.hasUI`, and the veto consult did not error/timeout) and only when the table returned `widened`. Its state carries `command`, `cwd`, and `recent_commands` — up to 3 earlier commands from the same session sharing the segment's first two words (`decisionSimilarCommands`), clipped like other session items. That same-tool window is what makes an unknown tool answerable: one earlier `npx zorch run test/bar.test.ts` moved `npx zorch run test/foo.test.ts` from 0.80 (code → exact) to 0.36 (data → `npx zorch *`), while a mixed recent window stayed at 0.61. Live request cost ~85 ms / ~225 input tokens; the evaluator has its own bounded cache (keyed on model, segment, and recent window) and 30 s cooldown.
+
+## Where rules live and how they match
+
+- Session rules are per-parent-session-manager runtime state, cleared on `session_start`, merged after config rules, and therefore win on identical patterns. Non-isolated delegated children share this live state; isolated workers use a separate state and do not inherit these rules. An explicit remembered rule selected in an isolated worker is also copied into the parent state for later parent or non-isolated child calls. They are never written to config or shown by `/bash-sandbox-config`.
+
+## Prompt behaviour, modes, and choices
+
+- The remembered action is resolved when the prompt is confirmed. The session prompt mode resets to sandbox on session start; `s` toggles sandbox/direct mode, while configured rules and heuristic grants retain their own actions. Prompt choices put one-shot `Yes` first, remembered `Yes, and allow ...` second, and `No` third, making the default selection least-privileged across bash and file access.
+- The prompt uses `src/tui/select-with-message.ts`: its title is live, the border tone indicates sandbox/direct mode, `InlineEditor` handles optional notes, and `j/k` page-scroll the command/file content while `↑/↓` navigate permission choices (unmodified PageUp/PageDown are consumed by pi fullscreen viewport routing).
+- Child edit/write mutation previews use pi's `generateDiffString` and `renderDiff` from the proposed payload only; they do not read an unapproved target path.
+- Bash and child-agent permission prompts set a 150 ms `confirmationDelayMs` grace period so buffered terminal input cannot immediately approve a command or mutation; the guard is on the confirmation flow, not general input.
+
+## Logging
+
+- Every prompt is recorded in the bash decision log with its outcome — `yes`, `remember`, `no`, or `dismissed` for an Esc/abort, which the gates treat as a denial but which is not a judgement on the command — plus the rule offered (`suggestion`), whether the table or the model chose its width (`suggestionSource`, `"table"` | `"model"`), and the rule actually saved. See `decision-log.md`.
+
+## Tests
+
+Tests: `test/modules/sandbox/suggestions.test.ts`, `test/modules/decision/suggestion.test.ts`, `test/modules/decision/session-context.test.ts`, the `suggestRuleForPrompt` block in `test/tools/decision-model.test.ts`, the child-prompt case in `test/tools/agent-scout-bash.test.ts`, and the unresolved-segment block in `test/modules/sandbox/resolve.test.ts`.
+
+Cluster index: `../sandbox.md`. Related detail: `commands.md` (wrapper grammar) and `decision-log.md` (what every prompt records).

@@ -1,6 +1,6 @@
 ---
-name: confinement-probe
-description: src/modules/sandbox/probe.ts — running a command in a copy-on-write overlay bubble to report which workspace files it would change, and the invariants (status-fd run detection, overlay work-dir cleanup, no writable mounts) that must not be broken.
+name: probe
+description: probe.ts runs a command in a copy-on-write overlay bubble to report which workspace files it would change; invariants, limits, and findings.
 category: architecture
 ---
 
@@ -14,7 +14,7 @@ It is a **sensor, not a policy layer**: it reports, it does not decide. Do not i
 (a veto vote, byte thresholds, escalation) before a model has been seen using the reading; a first draft of
 this design did exactly that and was overreach. The classifier experiments (three rounds; the reading stayed
 inert, and the field that shipped is `git status`, not the probe) are archived in
-[decision-model/history.md](decision-model/history.md) Part 2 — read the short version below first.
+[decision-model/history.md](../decision-model/history.md) Part 2 — read the short version below first.
 
 ## Mechanism, and why not strace
 
@@ -64,11 +64,15 @@ the write log, already deduplicated and content-addressed.
 - **Toolchains outside the mount profile** (`npx` under `~/.nvm` when home is not mounted) are absent.
 - Probing a stale command correctly reports `changes: 0` when its precondition no longer holds.
 
+## Tests
+
 Tests: `test/modules/sandbox/probe.test.ts` — pure `scanOverlay` tests, `buildProbeCommand` line assertions,
 and real-bwrap integration tests guarded by `describe.skipIf(!canProbe)`. Node cannot fabricate an overlayfs
 whiteout, so "deleted" is only covered by the integration path.
 
 ## Classifier integration (concluded 2026-10-17)
+
+Concluded state — measured findings that closed this design direction, not open work.
 
 - **As a passive state field the model did not use it.** 200 real readings (193 unique cases) and three arms
   (`module_state`, `effects`, `effects_scoped`): two flips in 200, both at confidence < 0.09, and the crafted
@@ -77,9 +81,10 @@ whiteout, so "deleted" is only covered by the integration path.
 - **Giving it a rule did not rescue it.** In a 2×2 of {no reading, reading} × {old instruction, new
   instruction} the instruction did nearly all the work and the reading's marginal value was ~1/221, with the
   rest reacting to no-ops or benign growth. The instruction change needed no bubble and no execution.
-- **What shipped is a different field**: `workspace_status`, from `git status`, in the `decision-model`
-  memory. The bubble reading stays unwired, and if it is ever wired it needs a rule rather than presence, must
+- **What shipped is a different field**: `workspace_status`, from `git status`, in `decision-model.md`. The bubble reading stays unwired, and if it is ever wired it needs a rule rather than presence, must
   omit readings from probes that did not complete, and must keep the scope line: two curated dangers probe as
   **false cleans** (`curl -sL … | bash` reports exit 0 because the pipeline swallows curl's failure, and
   `pip install requests` reports exit 0 because the requirement is already satisfied). Both are commands whose
   real risk is off the filesystem.
+
+Cluster index: `../sandbox.md`.
