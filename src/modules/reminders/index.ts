@@ -14,6 +14,7 @@ import { ContextGrowthTracker } from "./context-growth";
 import { ReminderScheduler, type ReminderModelChoice, type SchedulerSnapshot } from "./scheduler";
 import {
     REMINDER_CUSTOM_TYPE,
+    REMINDER_DEBUG_ENTRY_TYPE,
     REMINDER_STATE_TYPE,
     availableRotationIds,
     buildReminderSignals,
@@ -22,8 +23,6 @@ import {
 } from "./session-signals";
 import { loadReminderSettings } from "./settings";
 import type { ReminderDefinition, ReminderId } from "./types";
-
-const DEBUG_ENTRY_TYPE = "pi-coder-reminder:debug";
 
 export interface ReminderRegistrationOptions {
     /**
@@ -267,7 +266,7 @@ export default function registerRemindersExtension(
 
         if (settings.debug) {
             pi.appendEntry(
-                DEBUG_ENTRY_TYPE,
+                REMINDER_DEBUG_ENTRY_TYPE,
                 decisionEntry({
                     trigger: "mid-run",
                     reminder,
@@ -383,7 +382,7 @@ export default function registerRemindersExtension(
         // the state is needed to explain, and the session reminder is recorded too so turn one is no gap.
         if (settings.debug && (rotationTurn || reminder !== undefined)) {
             pi.appendEntry(
-                DEBUG_ENTRY_TYPE,
+                REMINDER_DEBUG_ENTRY_TYPE,
                 decisionEntry({
                     trigger: rotationTurn ? "turn" : "session",
                     reminder,

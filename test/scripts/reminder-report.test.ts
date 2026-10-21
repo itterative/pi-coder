@@ -81,6 +81,18 @@ function assistantToolCallEntry(
     };
 }
 
+/** A tool result entry, which a steered user message can be delivered after mid-run. */
+function toolResultEntry(toolCallId: string, timestamp: number): AppendedMessage {
+    return {
+        role: "toolResult",
+        toolCallId,
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+        timestamp,
+    };
+}
+
 beforeEach(() => {
     vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "5");
     vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "30000");
@@ -94,14 +106,24 @@ afterEach(() => {
 });
 
 describe("parseArgs", () => {
-    it("reads the file positionally and the numeric flags", () => {
+    it("reads the file positionally and the flags", () => {
         expect(
-            parseArgs(["session.jsonl", "--turn", "3", "--turns", "5", "--compact", "--json"]),
+            parseArgs([
+                "session.jsonl",
+                "--turn",
+                "3",
+                "--turns",
+                "5",
+                "--compact",
+                "--recorded",
+                "--json",
+            ]),
         ).toEqual({
             file: "session.jsonl",
             turn: 3,
             turns: 5,
             compact: true,
+            recorded: true,
             json: true,
             help: false,
         });
@@ -110,6 +132,7 @@ describe("parseArgs", () => {
     it("ignores a non-positive or non-numeric turn instead of failing", () => {
         expect(parseArgs(["session.jsonl", "--turn", "0"]).turn).toBeUndefined();
         expect(parseArgs(["session.jsonl", "--turns", "nope"]).turns).toBeUndefined();
+        expect(parseArgs(["session.jsonl"]).recorded).toBe(false);
         expect(parseArgs(["--unknown", "session.jsonl"]).file).toBe("session.jsonl");
     });
 
@@ -167,20 +190,44 @@ describe("replay", () => {
         ]);
     });
 
-    it("models mid-run threshold emissions as steers into the run", () => {
+    it("models mid-run threshold emissions as steers into the emitting turn", () => {
         vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
         const cwd = "/repo";
         const session = sessionAt(cwd);
         session.appendMessage(userEntry("first request", 1));
         session.appendMessage(assistantToolCallEntry("done", 2, { ...zeroUsage(), input: 200 }));
-        session.appendMessage(userEntry("second request", 3));
+        session.appendMessage(toolResultEntry("call-2", 3));
+        session.appendMessage(assistantEntry("finished", 4));
+        session.appendMessage(userEntry("second request", 5));
 
         const result = replay(session.getBranch(), cwd);
 
-        expect(result.turns[1]?.midRun).toMatchObject([{ schedule: "delegation" }]);
-        expect(result.turns[1]?.midRun?.[0]?.reminderText).toContain("scout");
-        // The baseline moved mid-run, so the user turn itself emits nothing.
+        // The crossing happened inside the first run, so the emission sits with that turn.
+        expect(result.turns[0]?.midRun).toMatchObject([{ schedule: "delegation" }]);
+        expect(result.turns[0]?.midRun?.[0]?.reminderText).toContain("scout");
+        // The baseline moved mid-run, so the next turn itself emits nothing.
         expect(result.turns[1]?.schedule).toBe("none");
+    });
+
+    it("keeps a steered message with the run it joined instead of making it a turn", () => {
+        const cwd = "/repo";
+        const session = sessionAt(cwd);
+        session.appendMessage(userEntry("first request", 1));
+        session.appendMessage(assistantToolCallEntry("working", 2));
+        session.appendMessage(toolResultEntry("call-2", 3));
+        session.appendMessage(userEntry("steered request", 4));
+        session.appendMessage(assistantEntry("finished", 5));
+        session.appendMessage(userEntry("next request", 6));
+
+        const result = replay(session.getBranch(), cwd);
+
+        // The steer never reaches a decision, so `next request` is still the second turn.
+        expect(result.userTurns).toBe(2);
+        expect(result.turns.map((turn) => turn.turn)).toEqual([1, 2]);
+        expect(result.turns[0]?.steers).toMatchObject([{ request: "steered request" }]);
+        expect(result.turns[0]?.state.session).toMatchObject({ user_turns: 1 });
+        expect(result.turns[1]?.request).toBe("next request");
+        expect(result.turns[1]?.state.session).toMatchObject({ user_turns: 2 });
     });
 
     it("replays a recorded fixture through the real session manager", () => {
@@ -192,6 +239,168 @@ describe("replay", () => {
         expect(result.userTurns).toBeGreaterThan(1);
         expect(result.turns[0]?.schedule).toBe("memory-read");
         expect(result.turns.every((turn) => typeof turn.state.cwd === "string")).toBe(true);
+        // The fixture folds twice: once between turns 2 and 3, once with no turn after it.
+        expect(result.compactions).toEqual([
+            { entryId: "200c25a3", turn: 3 },
+            { entryId: "8d61f3d7", turn: 4 },
+        ]);
+        // The first post-fold turn re-arms the memory reminder instead of continuing the rotation.
+        expect(result.turns[2]?.schedule).toBe("memory-read");
+    });
+});
+
+describe("compaction folds", () => {
+    it("restarts the rotation and re-arms the memory reminder at a fold", () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "1");
+        const cwd = "/repo";
+        const session = sessionAt(cwd);
+        session.appendMessage(userEntry("first", 1));
+        session.appendMessage(assistantEntry("one", 2, { ...zeroUsage(), input: 5000 }));
+        session.appendMessage(userEntry("second", 3));
+        session.appendMessage(assistantEntry("two", 4, { ...zeroUsage(), input: 6000 }));
+        const foldId = session.appendCompaction("folded", null, 6000);
+        session.appendMessage(userEntry("third", 5));
+        session.appendMessage(assistantEntry("three", 6, { ...zeroUsage(), input: 1000 }));
+        session.appendMessage(userEntry("fourth", 7));
+
+        const result = replay(session.getBranch(), cwd);
+
+        expect(result.turns.map((turn) => turn.schedule)).toEqual([
+            "memory-read",
+            "delegation",
+            "memory-read",
+            "delegation",
+        ]);
+        expect(result.compactions).toEqual([{ entryId: foldId, turn: 3 }]);
+        // The module's own counter restarts at the fold, even though the report numbers turns globally.
+        expect(result.turns[2]?.state.session).toMatchObject({ user_turns: 1 });
+        expect(result.turns[3]?.state.session).toMatchObject({ user_turns: 2 });
+        // The fold resets the growth estimate, so no pre-fold context size leaks into its first turn.
+        expect(result.turns[2]?.contextTokens).toBe(0);
+        // `shown` was cleared, so the pre-fold emission no longer rides in the post-fold state.
+        expect(result.turns[2]?.state.reminders_shown).toBeUndefined();
+    });
+});
+
+describe("recorded data", () => {
+    function recordedSession(cwd: string): SessionManager {
+        const session = sessionAt(cwd);
+        session.appendCustomEntry("pi-coder-reminder:debug", {
+            trigger: "session",
+            reminder: "memory-read",
+            scheduler: { userTurns: 0, sessionArmed: true },
+        });
+        session.appendMessage(userEntry("first", 1));
+        session.appendCustomMessageEntry(
+            "pi-coder-reminder",
+            "<pi_coder_reminder>\nAutomated reminder (not from the user) - ignore if not relevant.\nread them if so\n</pi_coder_reminder>",
+            false,
+            { id: "memory-read", turn: 1 },
+        );
+        session.appendMessage(assistantEntry("one", 2));
+        session.appendCustomEntry("pi-coder-reminder:debug", {
+            trigger: "turn",
+            reminder: null,
+            modelChoice: "none",
+            scores: { delegation: 0.3 },
+            options: ["delegation"],
+            available: ["delegation"],
+            labels: { phase: "exploring" },
+            state: { cwd, session: { user_turns: 1 } },
+        });
+        session.appendMessage(userEntry("second", 3));
+
+        return session;
+    }
+
+    it("attaches the recorded decision and delivered message to the turn", () => {
+        const cwd = "/repo";
+        const result = replay(recordedSession(cwd).getBranch(), cwd);
+
+        expect(result.recordedNotes).toEqual([]);
+        expect(result.turns[0]?.recorded.decision).toMatchObject({
+            trigger: "session",
+            reminder: "memory-read",
+        });
+        expect(result.turns[0]?.recorded.delivered).toMatchObject([
+            { id: "memory-read", turn: 1, hasDetails: true },
+        ]);
+        // The decision entry precedes the user message it decides, so it lands on this turn.
+        expect(result.turns[1]?.recorded.decision).toMatchObject({
+            trigger: "turn",
+            reminder: null,
+            modelChoice: "none",
+            scores: { delegation: 0.3 },
+        });
+        expect(result.turns[1]?.recorded.midRun).toEqual([]);
+        expect(result.turns[1]?.recorded.decision?.state).toMatchObject({ cwd });
+    });
+
+    it("warns when the session has no recorded decisions or message details", () => {
+        const cwd = "/repo";
+        const session = sessionAt(cwd);
+        session.appendMessage(userEntry("first", 1));
+        session.appendCustomMessageEntry("pi-coder-reminder", "reminder without a stamp", false);
+
+        const result = replay(session.getBranch(), cwd);
+
+        expect(result.recordedNotes).toHaveLength(2);
+        expect(result.recordedNotes[0]).toContain("no pi-coder-reminder:debug entries");
+        expect(result.recordedNotes[1]).toContain("no id/turn details");
+    });
+
+    it("renders the recorded block only with --recorded", () => {
+        const cwd = "/repo";
+        const result = replay(recordedSession(cwd).getBranch(), cwd);
+        const selected = selectTurns(result, parseArgs([]));
+
+        const recorded = renderText(result, selected, parseArgs(["session.jsonl", "--recorded"]));
+        expect(recorded).toContain("recorded decision: trigger=session pick=memory-read");
+        expect(recorded).toContain("recorded decision: trigger=turn pick=none model=none");
+        expect(recorded).toContain("recorded delivered: memory-read (turn 1)");
+        expect(recorded).toContain("recorded state (signals the live module judged)");
+        expect(recorded).toContain("replay:");
+
+        const plain = renderText(result, selected, parseArgs(["session.jsonl"]));
+        expect(plain).not.toContain("recorded decision");
+        expect(plain).not.toContain("replay:");
+
+        const compact = renderText(
+            result,
+            selected,
+            parseArgs(["session.jsonl", "--compact", "--recorded"]),
+        );
+        expect(compact).toContain("recorded=none");
+        expect(compact).toContain("delivered=memory-read");
+    });
+
+    it("flags a recorded decision whose module turn disagrees with the replay", () => {
+        const cwd = "/repo";
+        const session = sessionAt(cwd);
+        session.appendCustomEntry("pi-coder-reminder:debug", {
+            trigger: "session",
+            reminder: "memory-read",
+            scheduler: { userTurns: 0 },
+        });
+        session.appendMessage(userEntry("first", 1));
+        session.appendMessage(assistantEntry("one", 2));
+        session.appendCustomEntry("pi-coder-reminder:debug", {
+            trigger: "turn",
+            reminder: null,
+            scheduler: { userTurns: 5 },
+        });
+        session.appendMessage(userEntry("second", 3));
+
+        const result = replay(session.getBranch(), cwd);
+        const text = renderText(
+            result,
+            selectTurns(result, parseArgs([])),
+            parseArgs(["--recorded"]),
+        );
+
+        expect(text).toContain(
+            "recorded turn mismatch: the session counted module turn 6, the replay 2",
+        );
     });
 });
 
@@ -227,20 +436,22 @@ describe("selectTurns and rendering", () => {
         expect(text).toContain('"request": "first"');
     });
 
-    it("prints mid-run emissions above the turn's own schedule", () => {
+    it("prints mid-run emissions with the turn whose run emitted them", () => {
         vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
         const cwd = "/repo";
         const session = sessionAt(cwd);
         session.appendMessage(userEntry("first", 1));
         session.appendMessage(assistantToolCallEntry("done", 2, { ...zeroUsage(), input: 200 }));
-        session.appendMessage(userEntry("second", 3));
+        session.appendMessage(toolResultEntry("call-2", 3));
+        session.appendMessage(assistantEntry("finished", 4));
+        session.appendMessage(userEntry("second", 5));
         const result = replay(session.getBranch(), cwd);
-        const selected = selectTurns(result, parseArgs(["--turn", "2"]));
+        const selected = selectTurns(result, parseArgs(["--turn", "1"]));
 
         const text = renderText(result, selected, parseArgs([]));
 
         expect(text).toContain("mid-run: delegation");
-        expect(text).toContain("schedule: none");
+        expect(text).toContain("schedule: memory-read");
     });
 
     it("renders compact lines and machine-readable JSON", () => {
@@ -252,7 +463,11 @@ describe("selectTurns and rendering", () => {
         expect(compact).toContain("shows=");
         expect(compact).not.toContain('"request":');
 
-        const parsed = JSON.parse(renderJson(result, selected)) as { turns: unknown[] };
+        const parsed = JSON.parse(renderJson(result, selected)) as {
+            turns: Record<string, unknown>[];
+        };
         expect(parsed.turns).toHaveLength(3);
+        // A turn with no recorded data keeps the report shape from before the mode existed.
+        expect(parsed.turns[0]).not.toHaveProperty("recorded");
     });
 });

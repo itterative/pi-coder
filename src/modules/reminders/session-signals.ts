@@ -42,6 +42,9 @@ export const REMINDER_STATE_TYPE = "pi-coder:reminder-state";
  */
 export const REMINDER_CUSTOM_TYPE = "pi-coder-reminder";
 
+/** The `custom` entry each selection decision is recorded under, so a replay can read what live decided. */
+export const REMINDER_DEBUG_ENTRY_TYPE = "pi-coder-reminder:debug";
+
 /** The commands that count as having run the project's tests, anchored to a chain segment's command word. */
 const TEST_COMMANDS = [
     /^npm(?:\s+run)?\s+test(?::run)?\b/u,
