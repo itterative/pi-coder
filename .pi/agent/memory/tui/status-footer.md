@@ -59,6 +59,6 @@ keep_updated: true
 
 ## Event ownership
 
-- Domain modules publish typed `pi.events` snapshots on `pi-coder:agent-status`, `pi-coder:todo-status`, and `pi-coder:decision-status`, while the status package alone owns footer registration, the `Spinner`, the `TipRotator`, and event listeners; `invalidate()` is a no-op because each render rebuilds the line from pushed state.
+- Domain modules publish typed `pi.events` snapshots on `pi-coder:agent-status`, `pi-coder:todo-status`, and `pi-coder:decision-status`, while the status package alone owns footer registration, its `Spinner` instance, the `TipRotator`, and event listeners; `invalidate()` is a no-op because each render rebuilds the line from pushed state.
 
 Related: [`packages.md`](packages.md) for the `Spinner` component the badge drives, [`../agents.md`](../agents.md) + [`../agents/lifecycle.md`](../agents/lifecycle.md) for agent-run states the summary renders, and [`../decision-model.md`](../decision-model.md) for the `alt+a` toggle and the consult the badge reports.

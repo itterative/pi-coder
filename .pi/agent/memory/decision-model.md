@@ -45,3 +45,6 @@ Load only the detail needed for the task; these nested documents are on-demand a
 - `decision-model/wiring-config.md` — which file holds what, config layering and keys, `alt+a`, settings, footer.
 - `decision-model/runner-output.md` — the exact runner-facing block sentences and what deliberately keeps raw ids.
 - `decision-model/findings.md` — settled measurements not to re-litigate, and the open worklist.
+- `decision-model/history.md` — the 76 KB measurement archive behind those findings: raw logs, per-arm numbers,
+  and rejected alternatives. On-demand only, and intentionally not indexed; read it when a settled claim needs
+  its evidence, never to decide how the code works.

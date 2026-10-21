@@ -83,9 +83,12 @@ A boolean is simpler to maintain than a date. The `[high-churn]` annotation is a
 19 top-level memories / 173 KB → 12 indexed memories / ~40 KB of indexes, with 61 nested docs behind them. Each
 cluster was split by an isolated worker against a verified base commit, landed as its own commit, and gated by
 the same two checks: every exact backticked span and every number in the sources must appear in the output set
-(0 misses in the five clusters the parent measured — 502 spans for sandbox, 494 for testing/test-doubles, 227 for
-complexity/meta, 149 for agents/compaction, 135 for TUI; decision-model was gated on targeted symbol and
-settled-finding checks plus the child's own line-range verbatim build), and the demoted/merged prose must still
+(0 misses in the five clusters the parent measured, counting per-file-unique backticked spans summed over each
+cluster's *input* files — 502 for sandbox (4 inputs), 494 for testing + test-doubles (2), 227 for the
+complexity/meta pass (6 inputs, including the three files only normalized), 149 for agents + compaction (3), 135
+for TUI (3); deduplicating spans across the whole output set gives lower numbers, which is why the definition is
+part of the claim. decision-model was gated by the child on line-range verbatim rebuilds plus targeted symbol
+checks, not by this gate), and the demoted/merged prose must still
 match its source verbatim or differ only by disclosed paraphrase.
 
 Landed layout: `agents.md`+`agents/` (6), `compaction.md`+`compaction/` (9), `complexity-hotspots.md`+its dir (3),
@@ -102,8 +105,20 @@ What the gates caught, and what to remember from each:
   index hit this; only a run of the repo's own `scanMemories()` found it, after a PyYAML-based check passed.
 - **`category` must be lowercase.** `patch-hygiene.md` shipped `category: Workflow` for months, which rendered a
   second `#### Workflow` section because unknown categories get their own heading.
-- **Indexed descriptions are prompt cost.** They totaled 2,904 characters (~730 tokens) with a single 366-char
-  outlier; the worst offenders are why rule 8 exists.
-- **Byte counts go up, load-per-question goes down.** Clusters grew 14–45% in words (frontmatter blocks,
-  headings, lead-ins, index summaries). That is the intended trade: a fact that used to cost a 21 KB read now
-  costs a 1.5–4 KB doc.
+- **Indexed descriptions are prompt cost.** The 19 pre-restructure descriptions summed to 2,826 parsed characters
+  (~707 tokens) with a single 366-char outlier; the 12 after sum to 1,579. Rule 8 exists for that delta, not for
+  tidiness.
+- **Byte counts go up, load-per-question goes down.** Cluster sizes grew in bytes by 15% (sandbox), 20%
+  (complexity), 25% (decision-model), 42% (test-doubles), 46% (testing), 53% (TUI), and 109% (memory-system, where
+  two demoted archives gained frontmatter and banners), while `agents` moved +1% and `compaction` −2% because
+  merged restatement offset the new scaffolding. The added bytes are frontmatter blocks, headings, lead-ins, and
+  index summaries. That is the intended trade: a fact that used to cost a 21 KB read now costs a 1.5–4 KB doc.
+- **An independent re-audit found no blocker and no major finding**, and did correct the numbers above: it re-ran
+  `scanMemories()` (12 indexed, 0 parse errors), name==stem across all 73 files, relative-link resolution (0
+  broken), per-cluster span coverage with 0 real losses, and sentence containment to separate paraphrase from
+  loss. Its findings were that `decision-model/history.md` was reachable only by a body link rather than the
+  index's `## Targeted references`, that `src/modules/sandbox/PLAN.md` still said "the heuristics memory", that
+  "the status package owns the `Spinner`" reads as file ownership rather than instance ownership, and that two
+  compaction pointers named a doc that never landed on `main` and a suite-temp fixture that looks like a repo
+  path. All five were fixed in the same pass that corrected these metrics — the lesson is that a metric written
+  into a memory is a claim that gets re-measured later.

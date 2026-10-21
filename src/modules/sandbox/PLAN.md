@@ -252,7 +252,7 @@ mis-modeled match actually hurts.
 Proposal: v1 allows expansion **only for reads** (`SAFE_READONLY` classification). Any spec whose
 `writes` flag or `OUTPUT_PATH_VALUE`/`pathSlots`-with-`writes` semantics mark the slot as a mutation
 target keeps refusing. That preserves the "scratchpad-only mutators reject expansion in consumed path
-and data values" rule already documented in the heuristics memory, and `wc -l src/**.ts`,
+and data values" rule already documented in the sandbox memory (`sandbox/path-safety.md`), and `wc -l src/**.ts`,
 `grep -rn foo src/*/`, `ls ~/Repos/*/README.md` are the cases with the evidence behind them.
 
 ### 6. Which shell runs the command

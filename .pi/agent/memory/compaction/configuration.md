@@ -27,7 +27,8 @@ user is waiting on.
 **A field is only configurable once `readConfigFile()` reads it.** That function maps keys through validators into an
 explicit return object, so a field added to `CompactionConfig`, the interface docs, and the loader still does nothing
 unless it is also added there — "unknown fields fall back to defaults" makes the omission silent, not an error.
-`retryMaxRetries` was dead for exactly one test run before `test-defaults.json` proved it: the suite slept a real second
+`retryMaxRetries` was dead for exactly one test run before `test-defaults.json` (a file the suite writes into its own
+temp directory — see `test/modules/compaction/handler.test.ts` and `trace.test.ts`) proved it: the suite slept a real second
 on a backoff that was supposed to be off. Add the field to `readConfigFile` in the same edit, and let a test observe it:
 `nonNegativeNumberField` keeps a `0`, `positiveNumberField` drops one.
 

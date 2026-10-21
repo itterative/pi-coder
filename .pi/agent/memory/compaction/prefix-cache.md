@@ -109,7 +109,8 @@ comparable depth, matching hashes over differently sized prompts, comparable obs
 violation there means the trace is lying, and it must be believed before any cache conclusion is.
 
 Naming rule for future fields: the trace record and `pi_coder_debug` must use the **same key** for the same quantity,
-or the ambiguity this pass removed comes back through a second surface. See `docs/pi-coder-debug-tool.md`.
+or the ambiguity this pass removed comes back through a second surface. (`docs/pi-coder-debug-tool.md` was planned
+on a `tmp:` branch and never landed on `main`, so the rule is the operative part of that sentence.)
 
 **The instrument names the gate, not the conjunction.** `obs=0` was ambiguous between "nothing on the branch" and
 "the shape filter rejected everything on it", and the suspect asserted *both* halves — on the 10:23 run, where
