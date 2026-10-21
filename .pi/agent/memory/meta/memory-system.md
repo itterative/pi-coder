@@ -122,3 +122,31 @@ What the gates caught, and what to remember from each:
   compaction pointers named a doc that never landed on `main` and a suite-temp fixture that looks like a repo
   path. All five were fixed in the same pass that corrected these metrics — the lesson is that a metric written
   into a memory is a claim that gets re-measured later.
+
+## Audit surfaces (added with the restructure)
+
+The convention above is only useful if something enforces it, and the enforcement has to be the extension's own
+code: a worker validated `agents.md` with a generic YAML library, which accepted the file, while
+`parseFrontmatter` threw and `scanMemories` dropped the memory from every prompt. A second implementation of the
+reader is not a check on the first.
+
+- `src/modules/memory/audit.ts` — `auditMemoryTrees({ projectDir, userDir, projectRoot })` returns findings with
+  `severity` (`error` | `warning`), a memory-dir-relative `path`, a `rule`, and a message. Rules:
+  `frontmatter`, `name`, `description`, `category`, `index-budget`, `reachability`, `dangling-reference`,
+  `broken-link`, `stale-memory-reference`. Indexed failures are errors; the same problems in nested docs are
+  warnings, since nested docs are not parsed into the prompt. Both trees are audited together so a reference to a
+  memory that exists only in the user tree is not reported as stale, and "former/old/previously `x` memory"
+  framing is exempt as history.
+- `src/modules/memory/audit-ui.ts` — registers the `memory_audit` tool (`scope`: `"project"`/`"user"`/`"both"`) and
+  the `/memory-audit` command (a pager over the same report, with `AutocompleteItem` scope completions).
+- `src/modules/memory/index.ts` — when `scanMemories` reports parse errors, the prompt appendix gains a
+  `### Not Indexed` section naming the files and why. It costs nothing when the tree is clean and makes the
+  silent-drop case visible to every agent and to the user.
+- Skills: `memory-prune` now audits first and reads only the top level before judging content (a full-tree read of
+  this repo's memories would have cost ~130k tokens); `memory-restructure` carries the two-tier rules, the split
+  procedure, the parallel-worker brief contract, and the isolated-result landing checks.
+
+First run against real trees: project `12 indexed, 61 nested, 0 errors, 0 warnings`; user tree `7 indexed` with
+8 warnings (five `index-budget` — `pi-tui-types.md` at 15,965 B, `pi-types.md` 9,197 B, `pi-extensions.md` 8,083
+B, `searching-code.md` 5,597 B, `llama-cpp-quirks.md` 4,766 B — and three over-budget descriptions). Same bloat
+pattern the project tree just lost, left unedited because user-level memories change only on explicit request.

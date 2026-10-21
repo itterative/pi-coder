@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getUserMemoryDirectory } from "../../common/constants";
 import { scanMemories, type MemoryMeta } from "./memories";
 import { FrontmatterParseError } from "./frontmatter";
+import registerMemoryAudit from "./audit-ui";
 
 interface CachedMemoryIndex {
     projectDir: string;
@@ -20,6 +21,29 @@ const CATEGORY_ORDER = ["architecture", "meta", "workflow", "tools", "convention
 
 function titleCaseCategory(category: string): string {
     return category.charAt(0).toUpperCase() + category.slice(1);
+}
+
+/**
+ * A memory whose frontmatter fails to parse is dropped by `scanMemories` and vanishes from every
+ * system prompt. Say so in the prompt itself: the absence is otherwise invisible.
+ */
+function buildNotIndexedSection(errors: FrontmatterParseError[]): string {
+    if (errors.length === 0) {
+        return "";
+    }
+
+    const lines = errors.map((error) => {
+        const name = error.filePath.split("/").pop() ?? error.filePath;
+        return `- \`${name}\`: ${error.message}`;
+    });
+
+    return `
+
+### Not Indexed
+
+These memory files exist but are absent from the lists above because their frontmatter failed to parse. An unquoted \`:\` in a \`description\` is the usual cause - quote the value. Run \`/memory-audit\` (or the \`memory_audit\` tool) after fixing them, and treat the lists above as incomplete until then.
+
+${lines.join("\n")}`;
 }
 
 export function formatMemoryList(memories: MemoryMeta[]): string {
@@ -81,9 +105,11 @@ function buildPromptAppendix(
     userMemories: MemoryMeta[],
     projectDir: string,
     userDir: string,
+    errors: FrontmatterParseError[] = [],
 ): string {
     const projectLines = formatMemoryList(projectMemories);
     const userLines = formatMemoryList(userMemories);
+    const notIndexed = buildNotIndexedSection(errors);
 
     return `## Memory System
 
@@ -122,7 +148,7 @@ ${projectLines}
 
 ### Available User Memories
 
-${userLines}`;
+${userLines}${notIndexed}`;
 }
 
 export default function registerMemoryExtension(pi: ExtensionAPI) {
@@ -196,7 +222,13 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
         }
 
         // Build and cache the prompt appendix
-        cachedAppendix = buildPromptAppendix(projectMemories, userMemories, projectDir, userDir);
+        cachedAppendix = buildPromptAppendix(
+            projectMemories,
+            userMemories,
+            projectDir,
+            userDir,
+            allErrors,
+        );
 
         // Remind the agent to check memories on the first turn of this session
         needsReminder = true;
@@ -206,6 +238,8 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
         // Remind the agent to check memories on the first turn after compaction
         needsReminder = true;
     });
+
+    registerMemoryAudit(pi);
 
     pi.on("agent_start", async (_event, _ctx) => {
         maxContextTokens = 0;

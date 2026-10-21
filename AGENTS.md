@@ -8,6 +8,7 @@ pi-coder is a pi extension providing coding-oriented memory, sandbox, TUI, and d
 - Resolve relative paths mentioned in project documentation from the project root, not from the location of the document that mentions them.
 - Give a thorough plan before making changes unless the user has directly requested the specific change.
 - After making requested changes, review and update relevant project memories.
+- After creating, moving, renaming, or splitting memory files, run `/memory-audit` (or the `memory_audit` tool). A memory whose frontmatter fails to parse is dropped from the index silently, and only the extension's own parser reports it. Use the `memory-prune` skill for staleness sweeps and `memory-restructure` for splitting a bloated memory tree.
 - Ask clarifying questions when requirements or tradeoffs are unclear.
 
 ## Code styleguide
