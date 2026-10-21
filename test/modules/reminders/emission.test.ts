@@ -60,6 +60,8 @@ describe("reminder emission", () => {
         expect(result?.message?.customType).toBe("pi-coder-reminder");
         expect(result?.message?.display).toBe(false);
         expect(result?.message?.content).toContain("<pi_coder_reminder>");
+        // The block says it is automated, because it rides in the user role.
+        expect(result?.message?.content).toContain("not from the user");
         expect(result?.message?.content).toContain("memory_system");
     });
 

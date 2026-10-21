@@ -10,7 +10,9 @@ keep_updated: true
 
 `src/modules/reminders/` emits hidden pi-coder reminders as at most one custom message at the start of a user
 turn, plus threshold-driven mid-run steers (`customType: "pi-coder-reminder"`, `display: false`, wrapped in
-`<pi_coder_reminder>`). The memory module owns the appendix and snapshot lifecycle.
+`<pi_coder_reminder>`). Every block opens with `REMINDER_NOTICE` ("Automated reminder (not from the user)...")
+because the message rides in the user role and a bare one would read as the user speaking. The memory module
+owns the appendix and snapshot lifecycle.
 
 ## Files and schedule
 

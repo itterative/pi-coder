@@ -42,6 +42,7 @@ import type { JsonObject } from "@earendil-works/pi-ai";
 
 import { buildReminderState } from "../src/modules/decision/reminder";
 import { decisionSessionContext } from "../src/modules/decision/session-context";
+import { REMINDER_NOTICE } from "../src/modules/reminders/catalog";
 import { ReminderScheduler } from "../src/modules/reminders/scheduler";
 import {
     availableRotationIds,
@@ -380,6 +381,7 @@ export function renderText(
             } else {
                 lines.push(`reminder: ${turn.schedule}`);
                 lines.push("<pi_coder_reminder>");
+                lines.push(REMINDER_NOTICE);
                 lines.push(turn.reminderText);
                 lines.push("</pi_coder_reminder>");
             }

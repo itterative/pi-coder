@@ -1,6 +1,14 @@
 import type { ReminderDefinition } from "./types";
 
 /**
+ * The first line of every reminder block.
+ *
+ * A reminder is delivered as a hidden message in the user role, so one that arrives alone reads as the user
+ * speaking. This line marks it as automated without changing the role.
+ */
+export const REMINDER_NOTICE = "Automated reminder (not from the user) - ignore if not relevant.";
+
+/**
  * The reminder that follows a changed memory list: the first turn of a session, a tree navigation, and the
  * first turn after a compaction. Kept out of the rotation because it is tied to the appendix being rebuilt,
  * not to a cadence.

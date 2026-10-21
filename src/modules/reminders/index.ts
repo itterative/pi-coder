@@ -9,7 +9,7 @@ import {
     type ReminderSignals,
     type ReminderStateLabels,
 } from "../decision";
-import { ACTIVE_ROTATION_REMINDERS, MEMORY_READ_REMINDER } from "./catalog";
+import { ACTIVE_ROTATION_REMINDERS, MEMORY_READ_REMINDER, REMINDER_NOTICE } from "./catalog";
 import { ContextGrowthTracker } from "./context-growth";
 import { ReminderScheduler, type ReminderModelChoice } from "./scheduler";
 import {
@@ -34,7 +34,7 @@ export interface ReminderRegistrationOptions {
 }
 
 function formatReminder(reminder: ReminderDefinition): string {
-    return `<pi_coder_reminder>\n${reminder.text}\n</pi_coder_reminder>`;
+    return `<pi_coder_reminder>\n${REMINDER_NOTICE}\n${reminder.text}\n</pi_coder_reminder>`;
 }
 
 /** Map the decision model's answer onto the scheduler's vocabulary; `undefined` leaves the fallback in charge. */
