@@ -55,7 +55,11 @@ import type { JsonObject } from "@earendil-works/pi-ai";
 
 import { buildReminderState } from "../src/modules/decision/reminder";
 import { decisionSessionContext } from "../src/modules/decision/session-context";
-import { COMPACTION_REMINDER, REMINDER_NOTICE } from "../src/modules/reminders/catalog";
+import {
+    COMPACTION_REMINDER,
+    MEMORY_READ_REMINDER,
+    REMINDER_NOTICE,
+} from "../src/modules/reminders/catalog";
 import { ReminderScheduler } from "../src/modules/reminders/scheduler";
 import {
     REMINDER_CUSTOM_TYPE,
@@ -396,7 +400,8 @@ export function replay(entries: readonly SessionEntry[], cwd: string): ReplayRes
         thresholdTokens: settings.thresholdTokens,
         maxMidRunPerTurn: settings.midRunMax,
     });
-    scheduler.reset();
+    // The replay starts where the session did: a session start, which arms the memory reminder.
+    scheduler.reset(MEMORY_READ_REMINDER);
 
     const shown = new Map<ReminderId, number>();
     const turns: ReplayTurn[] = [];

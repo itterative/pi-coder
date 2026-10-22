@@ -9,14 +9,15 @@ import type { ReminderDefinition } from "./types";
 export const REMINDER_NOTICE = "Automated reminder (not from the user) - ignore if not relevant.";
 
 /**
- * The reminder that follows a changed memory list: the first turn of a session or a tree navigation. Kept
- * out of the rotation because it is tied to the appendix being rebuilt, not to a cadence. A compaction arms
+ * The reminder that follows a changed memory list: the first turn of a session. Kept out of the rotation
+ * because it is tied to the appendix being rebuilt, not to a cadence. A tree navigation does not arm it -
+ * the branch is already in flight and the rebuilt list is in the next prompt - and a compaction arms
  * `COMPACTION_REMINDER` instead, which covers this re-read together with what else the fold changed.
  */
 export const MEMORY_READ_REMINDER: ReminderDefinition = {
     id: "memory-read",
     text: "Before starting work, consider whether any memories listed in the `<memory_system>` section of your system prompt are relevant to the user's request and read them if so.",
-    guidance: "A fresh session or branch just changed the memory list.",
+    guidance: "A fresh session just changed the memory list.",
 };
 
 /**

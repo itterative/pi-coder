@@ -159,9 +159,8 @@ describe("reminder emission", () => {
         const stub = harness();
         await stub.requireHandler("session_tree")({ newLeafId: "a", oldLeafId: "b" }, ctx);
 
-        // Turn 1 re-arms the memory reminder; turn 2 rotates and must continue after delegation, not restart
-        // at the top of the catalog and repeat it.
-        await userTurn(stub);
+        // A navigation arms nothing, so the first turn is a plain rotation turn: it must continue after
+        // delegation, not restart at the top of the catalog and repeat it.
         const result = await userTurn(stub);
         expect(result?.message?.content).toContain("TODO.md");
 
@@ -170,8 +169,8 @@ describe("reminder emission", () => {
         );
         expect(entry?.data).toMatchObject({ reminder: "todo", scheduler: { rotationIndex: 2 } });
         const data = entry?.data as { state?: ReminderSignals };
-        // Restored from the branch: delegation was emitted at turn 1, and this decision prepares turn 4.
-        expect(data.state?.reminders_shown).toContainEqual({ id: "delegation", turns_ago: 3 });
+        // Restored from the branch: delegation was emitted at turn 1, and this decision prepares turn 3.
+        expect(data.state?.reminders_shown).toContainEqual({ id: "delegation", turns_ago: 2 });
     });
 
     it("keeps a child-scoped session to the memory reminder only", async () => {

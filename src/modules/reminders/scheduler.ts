@@ -1,4 +1,4 @@
-import { ACTIVE_ROTATION_REMINDERS, MEMORY_READ_REMINDER } from "./catalog";
+import { ACTIVE_ROTATION_REMINDERS } from "./catalog";
 import type { ReminderDefinition, ReminderId } from "./types";
 
 /** What the model chose for this turn, or `undefined` when it was not asked or gave no readable answer. */
@@ -101,14 +101,14 @@ export class ReminderScheduler {
     }
 
     /**
-     * A new session, branch, or post-compaction point: arm `armed` for the next turn and restart the cadence.
-     * Session start and tree moves leave the default, the memory reminder; a compaction arms the reminder
-     * that covers the rest of what the fold changed.
+     * A new session or post-compaction point: start a fresh cadence and arm `armed`, if given. Session start
+     * arms the memory reminder, a compaction the reminder that covers the rest of what the fold changed, and
+     * a restart point that arms nothing only resets the cadence.
      *
      * The thresholds are moments of change, not a continuous clock, so a branch that just changed its
      * context gets the armed reminder and a fresh cooldown rather than inheriting the previous point's.
      */
-    reset(armed: ReminderDefinition = MEMORY_READ_REMINDER): void {
+    reset(armed?: ReminderDefinition): void {
         this.userTurns = 0;
         this.rotationIndex = 0;
         this.lastEmitTurn = 0;
@@ -121,17 +121,21 @@ export class ReminderScheduler {
      * Resume from a branch that already has history: a tree move, reload, resume, or fork.
      *
      * The pointer continues after the last emitted rotation id and the turn cadence keeps its origin, so the
-     * branch is not treated as new and an id it already showed is not repeated. The memory reminder is
-     * re-armed because the appendix is rebuilt for the branch, and the context threshold is measured fresh:
-     * the live run's context is not on the branch.
+     * branch is not treated as new and an id it already showed is not repeated. `armed` is the caller's
+     * choice: a session start arms the memory reminder for the rebuilt appendix, while a navigation arms
+     * nothing, because landing on an existing branch is not a change point. The context threshold is measured
+     * fresh either way: the live run's context is not on the branch.
      */
-    seed(state: { userTurns: number; lastEmitTurn: number; lastRotationId?: string }): void {
+    seed(
+        state: { userTurns: number; lastEmitTurn: number; lastRotationId?: string },
+        armed?: ReminderDefinition,
+    ): void {
         this.userTurns = state.userTurns;
         this.lastEmitTurn = state.lastEmitTurn;
         this.rotationIndex = rotationIndexAfter(state.lastRotationId);
         this.thresholdBaseline = 0;
         this.midRunThisTurn = 0;
-        this.armed = MEMORY_READ_REMINDER;
+        this.armed = armed;
     }
 
     decide(input: DecideInput): ReminderDefinition | undefined {

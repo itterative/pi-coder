@@ -21,7 +21,7 @@ function armed(options: {
     maxMidRunPerTurn?: number;
 }): ReminderScheduler {
     const scheduler = new ReminderScheduler(options);
-    scheduler.reset();
+    scheduler.reset(MEMORY_READ_REMINDER);
     return scheduler;
 }
 
@@ -36,12 +36,17 @@ describe("ReminderScheduler", () => {
         expect(scheduler.decide({ maxContextTokens: 0 })).toBeUndefined();
     });
 
-    it("re-arms the memory reminder on every reset", () => {
+    it("arms a restart point only with the reminder it is given", () => {
         const scheduler = armed(NO_TURNS);
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
         expect(scheduler.decide({ maxContextTokens: 0 })).toBeUndefined();
 
         scheduler.reset();
+
+        expect(scheduler.snapshot().sessionArmed).toBe(false);
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBeUndefined();
+
+        scheduler.reset(MEMORY_READ_REMINDER);
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
     });
@@ -58,23 +63,35 @@ describe("ReminderScheduler", () => {
     });
 
     it("resumes the rotation pointer and the cadence origin from branch history", () => {
-        // A tree move or reload on a branch that already emitted delegation at turn 1.
+        // A tree move on a branch that already emitted delegation at turn 1: a navigation seeds the state
+        // without arming, so the next turn is a plain rotation turn.
         const scheduler = new ReminderScheduler({ everyTurns: 1, thresholdTokens: 0 });
         scheduler.seed({ userTurns: 1, lastEmitTurn: 1, lastRotationId: "delegation" });
 
-        expect(scheduler.snapshot()).toMatchObject({ userTurns: 1, sessionArmed: true });
-        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        expect(scheduler.snapshot()).toMatchObject({ userTurns: 1, sessionArmed: false });
 
-        // One turn later the cadence fires, and the pointer continues after delegation rather than repeating
-        // it from the top of the catalog.
+        // The cadence fires, and the pointer continues after delegation rather than repeating it from the top
+        // of the catalog.
         expect(scheduler.decide({ maxContextTokens: 0 })?.id).toBe("todo");
+    });
+
+    it("arms the memory reminder when a session start seeds the branch", () => {
+        const scheduler = new ReminderScheduler(NO_TURNS);
+        scheduler.seed({ userTurns: 2, lastEmitTurn: 2 }, MEMORY_READ_REMINDER);
+
+        expect(scheduler.snapshot().sessionArmed).toBe(true);
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
     });
 
     it("starts the rotation pointer at zero when there is no rotation history", () => {
         const scheduler = new ReminderScheduler(NO_TURNS);
         scheduler.seed({ userTurns: 3, lastEmitTurn: 0 });
 
-        expect(scheduler.snapshot()).toMatchObject({ userTurns: 3, rotationIndex: 0 });
+        expect(scheduler.snapshot()).toMatchObject({
+            userTurns: 3,
+            rotationIndex: 0,
+            sessionArmed: false,
+        });
     });
 
     it("waits everyTurns turns after the last emission before rotating", () => {

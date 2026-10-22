@@ -37,8 +37,8 @@ describe("reminder catalog", () => {
     it("keeps the change-point reminders out of the rotation", () => {
         const active = ACTIVE_ROTATION_REMINDERS.map((reminder) => reminder.id);
 
-        // Session start, tree moves, and compaction arm these directly; rotating them on a cadence would
-        // show them for the schedule rather than for the change that makes them relevant.
+        // Session start and compaction arm these directly; rotating them on a cadence would show them for the
+        // schedule rather than for the change that makes them relevant.
         expect(active).not.toContain("memory-read");
         expect(active).not.toContain("compaction");
         expect(MEMORY_READ_REMINDER.text.length).toBeGreaterThan(0);

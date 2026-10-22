@@ -16,7 +16,7 @@ owns the appendix and snapshot lifecycle.
 
 ## Files and schedule
 
-- `catalog.ts` — the change-point reminders `MEMORY_READ_REMINDER` (session start, tree navigation) and
+- `catalog.ts` — the change-point reminders `MEMORY_READ_REMINDER` (session start) and
   `COMPACTION_REMINDER` (a fold) plus `ROTATION_REMINDERS`
   (memory-hygiene, sandbox, delegation, todo, validation), each with `text` and `guidance`. A `disabled: true`
   entry stays in the catalog but is filtered out of the rotation and the model's offer by
@@ -33,6 +33,8 @@ owns the appendix and snapshot lifecycle.
   per user turn, reset by each `decide`. `reset()` starts a fresh schedule; `seed()` resumes a populated
   branch (a tree move, reload, resume, or fork) with the user-turn count, the last emission turn, and the
   rotation pointer just past the last emitted id, so an id the branch already showed is not repeated.
+  Neither arms anything on its own: the caller passes the reminder a restart point should arm, because
+  arming is a statement about the change point, not about the cadence.
 - `context-growth.ts` — the `message_start` usage baseline plus streamed `chars / 4` estimator lifted out of
   the memory module.
 - `settings.ts` — `PI_CODER_REMINDER=false` disables everything; `PI_CODER_REMINDER_EVERY_TURNS` (default 5)
@@ -58,9 +60,12 @@ Two delivery paths, both appending at the end of the conversation, so the system
   `PI_CODER_REMINDER_MIDRUN_MAX` (default 1) per user turn. Both paths share the emission bookkeeping, and
   full scope only - a memory-scoped child never steers mid-run.
 
-`restart()` runs at three points. Session start (including reload, resume, and fork) and tree navigation
-`seed()` from the branch: `reminderResumeState` reads each delivered reminder's `custom_message` entry, whose
-`details` carry `{ id, turn }`, to rebuild `shown`, the last emitted rotation id, and the user-turn count, so
+`restart()` runs at three points. Session start (including reload, resume, and fork) seeds from the branch
+and arms the memory reminder, since the appendix is rebuilt for a new session; a tree navigation seeds the
+same way but arms nothing, because landing on an existing branch mid-conversation is not a starting point -
+the rebuilt `<memory_system>` list is already in the next prompt. `reminderResumeState` reads each delivered
+reminder's `custom_message` entry, whose `details` carry `{ id, turn }`, to rebuild `shown`, the last emitted
+rotation id, and the user-turn count, so
 the pointer and cadence continue instead of restarting and `turns_ago` keeps a real origin. Compaction is a
 full `reset(COMPACTION_REMINDER)`: the fold is a context reset, so pre-fold emissions are ignored, the
 rotation restarts, and the fold's own reminder is armed in place of the memory one - it also names the

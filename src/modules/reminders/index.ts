@@ -9,7 +9,12 @@ import {
     type ReminderSignals,
     type ReminderStateLabels,
 } from "../decision";
-import { ACTIVE_ROTATION_REMINDERS, COMPACTION_REMINDER, REMINDER_NOTICE } from "./catalog";
+import {
+    ACTIVE_ROTATION_REMINDERS,
+    COMPACTION_REMINDER,
+    MEMORY_READ_REMINDER,
+    REMINDER_NOTICE,
+} from "./catalog";
 import { ContextGrowthTracker } from "./context-growth";
 import { ReminderScheduler, type ReminderModelChoice, type SchedulerSnapshot } from "./scheduler";
 import {
@@ -155,8 +160,9 @@ function sameLabels(left: ReminderStateLabels, right: ReminderStateLabels): bool
  * Emit pi-coder reminders as hidden context: at most one at the start of a user turn, plus threshold-driven
  * mid-run steers.
  *
- * The memory reminder is tied to the memory list changing (session start, tree navigation); a compaction
- * arms its own reminder for the fold. The rest rotate on a turn cadence or a context-growth threshold. The two delivery paths are deliberately
+ * The memory reminder is tied to the memory list changing at a session start; a tree navigation only
+ * resumes the schedule, and a compaction arms its own reminder for the fold. The rest rotate on a turn
+ * cadence or a context-growth threshold. The two delivery paths are deliberately
  * separate from the one-per-turn rule: a long autonomous run may receive a mid-run steer, but only while the
  * streaming assistant message has called a tool, so a reminder never follows a run that is about to end.
  *
@@ -215,10 +221,11 @@ export default function registerRemindersExtension(
      * A restart point: session start, tree navigation, or compaction.
      *
      * `resume` reads the history back off the branch, so a reload, resume, fork, or tree move continues the
-     * rotation and the shown history instead of treating the branch as new. Compaction deliberately resets:
-     * the fold is a context reset, so only the armed reminder is re-armed and the rotation starts over.
-     * Session start and tree moves arm the memory reminder; a fold arms `COMPACTION_REMINDER`, which also
-     * covers what the summary cannot carry. The labels are branch-derived either way.
+     * rotation and the shown history instead of treating the branch as new. A session start arms the memory
+     * reminder because the appendix is rebuilt for a new session; a tree move only seeds, since landing on an
+     * existing branch mid-conversation is not a starting point and "before starting work" would mislead.
+     * Compaction deliberately resets: the fold is a context reset, so the rotation starts over and the fold's
+     * own reminder is armed in place of the memory one. The labels are branch-derived either way.
      */
     const restart = (
         ctx: ExtensionContext,
@@ -235,14 +242,16 @@ export default function registerRemindersExtension(
             return;
         }
 
-        scheduler.seed(state);
+        scheduler.seed(state, options.armed);
         shown.clear();
         for (const [id, turn] of state.shown) {
             shown.set(id, turn);
         }
     };
 
-    pi.on("session_start", (_event, ctx) => restart(ctx, { resume: true }));
+    pi.on("session_start", (_event, ctx) =>
+        restart(ctx, { resume: true, armed: MEMORY_READ_REMINDER }),
+    );
     pi.on("session_tree", (_event, ctx) => restart(ctx, { resume: true }));
     pi.on("session_compact", (_event, ctx) => restart(ctx, { armed: COMPACTION_REMINDER }));
     pi.on("agent_start", () => {

@@ -18,7 +18,8 @@ stays under its run's turn and never reaches the decision.
 
 A `compaction` entry is modeled as the live `session_compact` restart: the scheduler, the shown map, and
 the context estimate reset there, the compaction reminder is armed, and the module turn counter restarts;
-the report keeps global numbering and marks folds in the header and at the first post-fold turn. The
+the report keeps global numbering and marks folds in the header and at the first post-fold turn. The opening
+reset mirrors a session start and arms `memory-read`, and a fold replaces that arm with `compaction`. The
 activity scan keeps reading the whole branch, which is what `getBranch()` serves live, so pre-fold facts
 still enter post-fold state; a reload adds no entries and is replayed as it is.
 
