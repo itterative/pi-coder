@@ -117,6 +117,16 @@ describe("todoMoveFrom", () => {
         ).toMatchObject({ item: { id: "next" } });
     });
 
+    it("separates the two live reads that set the floor", () => {
+        // Oct 22 live consults (reminders/selection.md): a turn that was about its pending item read
+        // 0.32 against outside 0.24, an unrelated one 0.06 against 0.27. The first is a move, the second is
+        // not; both must keep holding.
+        expect(todoMoveFrom({ [next]: bool(0.32), [outside]: bool(0.24) }, query)).toMatchObject({
+            item: { id: "next" },
+        });
+        expect(todoMoveFrom({ [next]: bool(0.06), [outside]: bool(0.27) }, query)).toBeUndefined();
+    });
+
     it("does not let a missing outside answer veto a clear move", () => {
         expect(todoMoveFrom({ [next]: bool(0.8) }, query)).toMatchObject({ item: { id: "next" } });
         expect(todoMoveFrom({}, query)).toBeUndefined();

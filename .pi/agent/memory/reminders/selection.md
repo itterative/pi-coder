@@ -61,7 +61,7 @@ item (capped at 4, titles only - statuses never reach the model) asking whether 
 item, plus one `outside` bool. Work on the `in_progress` item was already said, so only a move to an unlisted
 item can fire.
 
-`todoChoiceFrom` weighs the answers: the top item at >= 0.45 that beats `outside` counts as a move the list
+`todoChoiceFrom` weighs the answers: the top item at >= 0.30 that beats `outside` counts as a move the list
 has not recorded, and it overrides a deliberate `none` or an unreadable reminder answer; an explicit pick of
 another reminder wins that turn and the move stays visible on the next one. `ReminderContext.extraQuestions` /
 `ReminderConsult.extras` carry a caller's questions and their raw answers through the same round trip, cached
@@ -74,11 +74,12 @@ discussion turns (`outside` dominated) and scored the work item where the work e
 `status_cur` vs `status_stale` criteria agreed on 14/15, so the model reads the work rather than parroting the
 `in_progress` label.
 
-First live consult (Oct 22, after a reload): the turn state carried `todo` for the first time (`{completed: 4,
-total: 6}`) and `todoScores` proved the two bools were answered (`live-check` 0.06, `outside` 0.27 -> no
-move), at ~250 input tokens for one item bool plus `outside`. That turn was the pending item's own work and
-the model still read it as outside, so the conservative read is real: the trigger misses moves whose titles
-the model cannot connect to the request. A positive live fire still needs a real transition.
+Live reads (Oct 22, after reloads): the first turn state to carry `todo` (`{completed: 4, total: 6}`) also
+proved the ask (`todoScores`: `live-check` 0.06, `outside` 0.27 -> no move), and a later turn whose pending
+item was the actual work read 0.32 against outside 0.24 - the item won the comparison but sat below the
+then-0.45 floor, so it did not fire. That pair set the floor to 0.30: it is an item-match probability, not the
+reminder threshold's "worth showing" one, and the offline discussion turns stayed well below it. The ask costs
+~250 input tokens for one item bool plus `outside`.
 
 Not adopted: per-item phases in TODO.md (schema churn), persisted per-item phase labels, a deterministic
 stale-TODO gate, and enriching the state with item lists or `updated_turns_ago`.

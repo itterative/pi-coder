@@ -22,8 +22,15 @@ import { todoItemsFrom } from "./session-signals";
 /** How many candidates one query asks about; the list allows 50 and the request should not carry them. */
 export const MAX_TODO_QUERY_ITEMS = 4;
 
-/** The probability an item must reach, and beat the outside answer, to count as where the work moved. */
-export const DEFAULT_TODO_MOVE_MIN_PROBABILITY = 0.45;
+/**
+ * The probability an item must reach, and beat the outside answer, to count as where the work moved.
+ *
+ * Lower than the reminder threshold's 0.45 on purpose: this is an item-match floor, not a "reminder worth
+ * showing" probability. Live reads put a turn that was about its pending item at 0.32 against outside 0.24,
+ * while an unrelated turn stayed at 0.06 against 0.27, so 0.30 separates the two without firing on the weak
+ * scores the offline discussion turns produced (tables in `reminders/selection.md`).
+ */
+export const DEFAULT_TODO_MOVE_MIN_PROBABILITY = 0.3;
 
 /** The question that catches work no item describes. */
 export const TODO_QUERY_OUTSIDE_QUESTION = "todo_outside";
