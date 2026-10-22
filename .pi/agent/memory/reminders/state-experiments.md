@@ -160,6 +160,26 @@ live consult is the first to carry `todo` at all. Design direction from these re
 phases + `updated_turns_ago` in the state, make the eager trigger deterministic, and only then consider
 persisting the phases (the reminder-state entry, not the TODO frontmatter).
 
+## TODO-item query form (Oct 22)
+
+The same 15 recorded states, clef live, three question shapes, to decide how a TODO-aware query should be asked:
+
+- **Single choice, criteria = item titles only**: answers discriminate (4 `none`, 5 reminder-state, 6
+  model-comparison) and do not collapse to `none` like the reminder single-choice did. The list's status
+  labels are ignored: the same question with `status_cur` vs `status_stale` criteria agreed on 14/15 states,
+  so the model names the item the work is actually on rather than parroting `in_progress`. A comparison-based
+  trigger is viable.
+- **But active-only candidates go quiet**: with only the pending/in_progress items offered, the choice answers
+  `none` on 12/15 states, so a choice-based trigger would rarely fire on real work.
+- **Per-item bools work**: one bool per candidate item plus an `outside the list` bool. `outside` dominates on
+  every discussion turn (no false fires), and an item scores high only when the turn is about it. Candidate set
+  = pending/blocked items (work on the in_progress item was already said); the rule is top item >= .45 and
+  above `outside`.
+
+Implementation note: the endpoint rejects a raw `bool` question type (only `choice`, `score`, `noul`), so the
+probe had to send `noul` directly; the SDK's typesafe-system-one api translates `ClassifierBoolQuestion` to
+`noul`, so production can keep using `bool`.
+
 ## Single choice collapses for both models
 
 Asking one `choice` question over the four reminders plus `none`, with `none` first or last, returned `none`
