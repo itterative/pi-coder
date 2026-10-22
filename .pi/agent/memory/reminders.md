@@ -67,8 +67,8 @@ the session reminder is re-armed. Labels are branch-derived (`reminderLabelsFrom
 
 With `decisionModel.reminders: true`, `consultReminderSelection` asks one probability question per offered
 reminder before each non-session turn; the strongest answer at or above `reminderMinProbability` (default
-0.45) is shown, and nothing at or above it means none. The signals state, the piggybacked labels, and the
-measured calibration: [reminders/selection.md](reminders/selection.md).
+0.45) is shown, and nothing at or above it means none. Signals, labels, and calibration:
+[reminders/selection.md](reminders/selection.md).
 
 ## Replay
 
@@ -107,5 +107,5 @@ tool. `decision-model.md` covers the classifier plumbing this builds on.
 ## Targeted references
 
 - `reminders/selection.md` — selection subject, signals, labels, calibration.
-- `reminders/model-comparison.md` — clef-flash, vllm-d3-flash, and lfm2-d1 speed, decisions, order sensitivity.
-- `reminders/state-experiments.md` — state-shape and question-form replays through lfm2-d1 and clef-flash.
+- `reminders/model-comparison.md` — clef/d3/lfm2 speed and real-state decisions.
+- `reminders/state-experiments.md` — state-shape and question-form replays.
