@@ -133,6 +133,33 @@ The questions and their wording are identical in every variant (four reminder bo
 - The minimal state loses 381 and its separation, so clef does use the state - the current facts are simply
   sufficient for these turns.
 
+## TODO-state experiment (Oct 22)
+
+Same 15 recorded states, no extension changes: five fabricated `todo` blocks on top of each state - none,
+progress-only, items with per-item phases, stale items (`updated_turns_ago: 5`, in-progress item's phase
+mismatched) and a list whose items are nearly all completed. Focus: will the model pick the `todo` reminder
+from TODO state, and does a per-item phase reach the label answers?
+
+- **No model raises the todo question for a populated or stale list.** clef's todo score stays .15-.31 in
+  every variant (below the .45 threshold); a stale list lowers it, and progress-only is the highest of the
+  four. lfm2's `todo` floor does not move either.
+- **Both models read completion status, not staleness.** A nearly all-completed list raised `finishing` from
+  .08-.42 to .26-.62 (clef) and .06-.64 to .49-.80 (lfm2), usually flipping `phase` to `wrapping_up`.
+  `updated_turns_ago: 5` alone changed almost nothing.
+- **Per-item phases are read, modestly**: clef's `phase` answer on turn 163 moved verifying -> implementing to
+  match the in-progress item's label, but no decision changed.
+- **A threshold cannot make the todo reminder trigger-happy on clef**: at .30 the progress-only variant would
+  fire on 246, 298, 312, 381 (two discussion turns) and even no-TODO baseline fires on two. A deterministic
+  gate (work underway + TODO not updated in N turns) is the only way to make it eager.
+- **Risk**: TODO completion is treated as ground truth and `finishing`/`wrapping_up` feed the memory-hygiene
+  availability gate, so a stale or optimistic list can cause the wrong reminder. Keep `updated_turns_ago` in
+  the state and do not gate on the model's completion reading.
+
+Live: a real three-item `TODO.md` was written during the session; the snapshot landed at 08:00:19, and the next
+live consult is the first to carry `todo` at all. Design direction from these results: carry items + per-item
+phases + `updated_turns_ago` in the state, make the eager trigger deterministic, and only then consider
+persisting the phases (the reminder-state entry, not the TODO frontmatter).
+
 ## Single choice collapses for both models
 
 Asking one `choice` question over the four reminders plus `none`, with `none` first or last, returned `none`
