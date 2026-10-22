@@ -24,13 +24,71 @@ changed; the harness is throwaway scratch and is not part of the repo.
   `since_last_turn` deltas, a `last_failure` channel, dropping `finishing`, dropping all three labels, the
   combined proposal, a lean state (proposal minus the cumulative totals), and a minimal state
   (`request` + `recent_messages` only).
-- Known outcomes: seven turns expect no reminder (32, 36, 163, 190, 298, 312, 394) and two expect
-  `memory-hygiene` (246, 381); 283 and 363 stay ambiguous. Metrics: false fires, `memory-hygiene` on the
-  fires, the `todo` top-pick count, and separation `min(mh@fire) - max(mh@none)`.
+- Labelling: a *fire* is the top reminder answer at or above the module threshold (0.45), and a **misfire** in
+  the tables is a fire on an *expect-none* turn. The labels are inferred, not ground truth: expect-none (32,
+  36, 163, 190, 298, 312, 394) comes from the recorded d3/clef abstains on questions, discussion, or
+  model-comparison turns; 394 is the softest (it follows memory edits) and 163 asks for a command. Expect
+  `memory-hygiene`: 246 (d3 and clef live both fired) and 381 (clef live fired, the user endorsed it).  283
+  (d3 fired validation, clef and the user read it as a false positive) and 363 stay ambiguous. Metrics:
+  misfires, `memory-hygiene` on the two expect-fire turns, the `todo` top-pick count, and separation
+  `min(mh@fire) - max(mh@none)`.
+
+## State shapes
+
+All variants are deltas on the production `buildReminderState` shape, rebuilt from the same recorded turn.
+The baseline for turn 246:
+
+```json
+{
+  "request": "<current user message, clipped 600 chars>",
+  "recent_messages": [{ "role": "assistant|user|command", "text": "<clipped 240>" }],
+  "cwd": "/home/sd/Repos/pi-coder",
+  "session": {
+    "user_turns": 6,
+    "context_tokens": 223721,
+    "tools": { "read": 16, "bash": 53, "ask_user": 1, "write": 5, "edit": 11, "memory_audit": 3 },
+    "recent_tools": ["edit", "bash", "memory_audit", "bash", "write", "bash"],
+    "files_modified": ["src/modules/reminders/session-signals.ts", "…"],
+    "tests_run": true,
+    "last_test_failed": true,
+    "memory_writes": 3,
+    "todo_writes": 3,
+    "phase": "exploring",
+    "finishing": false,
+    "unvalidated": false
+  },
+  "reminders_shown": [{ "id": "validation", "turns_ago": 1 }],
+  "todo": { "completed": 2, "total": 5, "current": "<80 chars>" },
+  "memories": ["agents", "compaction", "…"]
+}
+```
+
+- `recent_messages` is the four items before the request; only assistant prose and bash commands become items.
+  `request` and `recent_messages` are the only fields every variant keeps.
+- The session counts are branch-wide since the last reset; `files_modified` is the last eight distinct write
+  paths; `reminders_shown`, `todo`, and `memories` are present only when non-empty; `last_test_failed` is
+  present only when the last test run failed.
+- Variant deltas (all inside `session` unless noted); `turns_ago` counts consult turns, and a mid-run steer
+  does not increment it:
+
+| variant | shape delta (before -> after) | review slice |
+| --- | --- | --- |
+| v1 recency | `files_modified: ["src/a.ts"]` -> `[{"path": "src/a.ts", "turns_ago": 3}]`; `tests_run: true`, `last_test_failed` -> `tests: {"last_change_turns_ago": 1, "ran_turns_ago": 1, "failed": false}` | S1 |
+| v2 recent_actions | `recent_tools: ["edit", "bash", "memory_audit"]` -> `recent_actions: [{"tool": "edit", "target": ".pi/agent/memory/reminders.md"}, {"tool": "bash", "target": "npx prettier --write …"}]` (last 6, target clipped 90) | S2 |
+| v3 since_last_turn | adds `since_last_turn: {"tools": {"edit": 5, "bash": 10}, "wrote": ["…"], "tests": "passed"}` for the previous turn | S3 |
+| v4 no finishing | drops `finishing` | S4 |
+| v5 no labels | drops `phase`, `finishing`, `unvalidated` | S4 |
+| v6 last_failure | adds `last_failure: {"tool": "edit", "turns_ago": 1}` | S5 |
+| v7 proposal | v1+v2+v3, drops `finishing`, recomputes `unvalidated` from the write/test ordering | S1-S4 |
+| v8 lean | v7 minus the `tools` totals and `files_modified` | control |
+| v9 minimal | state is `{request, recent_messages}` only | control |
+
+The questions and their wording are identical in every variant (four reminder bools plus
+`phase`/`finishing`/`unvalidated`); only the state changes.
 
 ## lfm2-d1: the state is not the limit
 
-| variant                     | false fires | mh 246 | mh 381 | todo top | separation |
+| variant                     | misfires    | mh 246 | mh 381 | todo top | separation |
 | --------------------------- | ----------- | ------ | ------ | -------- | ---------- |
 | baseline                    | 7/7         | .47    | .43    | 10/11    | -0.157     |
 | recency files/tests         | 7/7         | .45    | .41    | 10/11    | -0.168     |
@@ -43,19 +101,19 @@ changed; the harness is throwaway scratch and is not part of the repo.
 | lean (proposal, no totals)  | 5/7         | .46    | .47    | 10/11    | -0.190     |
 | minimal (request+window)    | 5/7         | .45    | .43    | 8/11     | -0.182     |
 
-- Baseline fires on all seven known-none turns with `todo` top on 10/11, and no variant fixes it: every
-  state stays at 5-7 false fires and the `todo` floor on the Q&A turns never drops below ~.44.
+- Baseline fires on all seven expect-none turns with `todo` top on 10/11, and no variant fixes it: every
+  state stays at 5-7 misfires and the `todo` floor on the Q&A turns never drops below ~.44.
 - The four request-shaped turns (32, 36, 163, 190) fire even with no session state at all, so that
   over-firing is the model/request prior, not state content. The two model-discussion turns (298, 312) do
   stop firing once the cumulative totals are removed, so those fires are state-shaped.
 - 394 is the softest of the seven (it follows memory edits); excluding it, lfm2 still fires on every pure
   Q&A turn in every variant.
 - The one useful movement: recency + actions + delta (proposal/lean) put `memory-hygiene` on top for 381 at
-  .46-.47 and keep 246 at .45-.46, but `todo` still outranks both and the false fires remain.
+  .46-.47 and keep 246 at .45-.46, but `todo` still outranks both and the misfires remain.
 
 ## clef-flash: the current state already works
 
-| variant         | false fires | mh 246 | mh 381 | separation |
+| variant         | misfires    | mh 246 | mh 381 | separation |
 | --------------- | ----------- | ------ | ------ | ---------- |
 | baseline        | 0/7         | .58    | .49    | +0.083     |
 | recency         | 0/7         | .55    | .49    | +0.070     |
@@ -68,7 +126,7 @@ changed; the harness is throwaway scratch and is not part of the repo.
 | lean            | 0/7         | .53    | .47    | +0.078     |
 | minimal         | 0/7         | .50    | .42    | -0.022     |
 
-- Every variant keeps 0/7 false fires and changes no decision. The recency/actions enrichment shaves
+- Every variant keeps 0/7 misfires and changes no decision. The recency/actions enrichment shaves
   `memory-hygiene`'s confidence (246 .58 -> .48-.53) and narrows separation, while dropping the model-authored
   labels (v5) gives the widest separation in the set (+0.128 vs +0.083) and `last_failure` +0.100. With only
   two fire states, treat that ordering as a lead, not a result.
