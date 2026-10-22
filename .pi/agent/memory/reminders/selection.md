@@ -72,8 +72,13 @@ Measured (Oct 22, clef, 15 recorded states; tables in `reminders/state-experimen
 the production-shaped active candidates answered `none` on 12/15, while the per-item bools stayed quiet on
 discussion turns (`outside` dominated) and scored the work item where the work existed. The same question with
 `status_cur` vs `status_stale` criteria agreed on 14/15, so the model reads the work rather than parroting the
-`in_progress` label. No form was validated on a real work transition - the recorded states are conversation
-turns and the session had no TODO - so live consults are the first real test.
+`in_progress` label.
+
+First live consult (Oct 22, after a reload): the turn state carried `todo` for the first time (`{completed: 4,
+total: 6}`) and `todoScores` proved the two bools were answered (`live-check` 0.06, `outside` 0.27 -> no
+move), at ~250 input tokens for one item bool plus `outside`. That turn was the pending item's own work and
+the model still read it as outside, so the conservative read is real: the trigger misses moves whose titles
+the model cannot connect to the request. A positive live fire still needs a real transition.
 
 Not adopted: per-item phases in TODO.md (schema churn), persisted per-item phase labels, a deterministic
 stale-TODO gate, and enriching the state with item lists or `updated_turns_ago`.
