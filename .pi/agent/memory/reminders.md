@@ -107,4 +107,5 @@ tool. `decision-model.md` covers the classifier plumbing this builds on.
 ## Targeted references
 
 - `reminders/selection.md` — selection subject, signals, labels, calibration.
-- `reminders/model-comparison.md` — clef-flash vs vllm-d3-flash speed, decisions, order sensitivity.
+- `reminders/model-comparison.md` — clef-flash, vllm-d3-flash, and lfm2-d1 speed, decisions, order sensitivity.
+- `reminders/state-experiments.md` — state-shape and question-form replays through lfm2-d1 and clef-flash.

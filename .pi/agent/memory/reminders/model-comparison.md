@@ -131,8 +131,9 @@ states replayed from the debug entries. Raw scores sit beside the other models i
 
 Reading: lfm2-d1 is fast and order-stable but strongly yes-biased in the independent-bool form - the `todo`
 question in particular never comes back negative - so no single `reminderMinProbability` makes it behave
-like the other two. If it is worth pursuing, change the request shape (one "which reminder, if any" choice
-question, or a per-question calibration offset) rather than the threshold.
+like the other two. Neither state enrichment nor the single-choice "which reminder, if any" form rescues it
+(see [state-experiments.md](state-experiments.md)); treat it as a model-form mismatch rather than a threshold
+or state problem.
 
 ## Verdict
 
