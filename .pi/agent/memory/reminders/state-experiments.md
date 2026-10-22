@@ -61,12 +61,17 @@ changed; the harness is throwaway scratch and is not part of the repo.
 | recency         | 0/7         | .55    | .49    | +0.070     |
 | recent_actions  | 0/7         | .50    | .44    | +0.046     |
 | since_last_turn | 0/7         | .54    | .47    | +0.063     |
+| no finishing    | 0/7         | .60    | .50    | +0.088     |
+| no labels       | 0/7         | .57    | .53    | +0.128     |
+| last_failure    | 0/7         | .60    | .52    | +0.100     |
 | proposal        | 0/7         | .48    | .47    | +0.088     |
 | lean            | 0/7         | .53    | .47    | +0.078     |
 | minimal         | 0/7         | .50    | .42    | -0.022     |
 
-- Every variant keeps 0/7 false fires and changes no decision; the enrichments mostly shave
-  `memory-hygiene`'s confidence (246 falls .58 -> .48-.53) without improving separation.
+- Every variant keeps 0/7 false fires and changes no decision. The recency/actions enrichment shaves
+  `memory-hygiene`'s confidence (246 .58 -> .48-.53) and narrows separation, while dropping the model-authored
+  labels (v5) gives the widest separation in the set (+0.128 vs +0.083) and `last_failure` +0.100. With only
+  two fire states, treat that ordering as a lead, not a result.
 - The minimal state loses 381 and its separation, so clef does use the state - the current facts are simply
   sufficient for these turns.
 
@@ -82,7 +87,8 @@ bools with a threshold on the winner remain the only form that separates anythin
 - State enrichment is not the lever for lfm2-d1: the over-firing survives even a request-plus-window state.
   Its problem is the yes-bias of the model on this form, not the poverty of the state.
 - For clef (and by the earlier data d3), the current state already carries what the recorded turns need;
-  recency/actions are worth adding only if they fix a named failure, and these replays do not show one.
+  recency/actions are worth adding only if they fix a named failure, and these replays do not show one. The
+  label-free state is the one clef lead worth a larger corpus before any code change.
 - The one state-side fact worth keeping from the corpus: cumulative totals are what make the model-discussion
   turns fire, so trimming or aging them has a measurable effect even if it does not fix the request-shaped
   turns.
