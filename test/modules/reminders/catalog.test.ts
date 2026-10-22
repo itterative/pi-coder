@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
     ACTIVE_ROTATION_REMINDERS,
+    COMPACTION_REMINDER,
+    MEMORY_READ_REMINDER,
     ROTATION_REMINDERS,
 } from "../../../src/modules/reminders/catalog";
 import type { ReminderDefinition } from "../../../src/modules/reminders/types";
@@ -30,5 +32,16 @@ describe("reminder catalog", () => {
         expect(ACTIVE_ROTATION_REMINDERS).toEqual(
             ROTATION_REMINDERS.filter((reminder: ReminderDefinition) => reminder.disabled !== true),
         );
+    });
+
+    it("keeps the change-point reminders out of the rotation", () => {
+        const active = ACTIVE_ROTATION_REMINDERS.map((reminder) => reminder.id);
+
+        // Session start, tree moves, and compaction arm these directly; rotating them on a cadence would
+        // show them for the schedule rather than for the change that makes them relevant.
+        expect(active).not.toContain("memory-read");
+        expect(active).not.toContain("compaction");
+        expect(MEMORY_READ_REMINDER.text.length).toBeGreaterThan(0);
+        expect(COMPACTION_REMINDER.text.length).toBeGreaterThan(0);
     });
 });

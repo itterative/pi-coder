@@ -9,14 +9,26 @@ import type { ReminderDefinition } from "./types";
 export const REMINDER_NOTICE = "Automated reminder (not from the user) - ignore if not relevant.";
 
 /**
- * The reminder that follows a changed memory list: the first turn of a session, a tree navigation, and the
- * first turn after a compaction. Kept out of the rotation because it is tied to the appendix being rebuilt,
- * not to a cadence.
+ * The reminder that follows a changed memory list: the first turn of a session or a tree navigation. Kept
+ * out of the rotation because it is tied to the appendix being rebuilt, not to a cadence. A compaction arms
+ * `COMPACTION_REMINDER` instead, which covers this re-read together with what else the fold changed.
  */
 export const MEMORY_READ_REMINDER: ReminderDefinition = {
     id: "memory-read",
     text: "Before starting work, consider whether any memories listed in the `<memory_system>` section of your system prompt are relevant to the user's request and read them if so.",
-    guidance: "A fresh session, branch, or compaction just changed the memory list.",
+    guidance: "A fresh session or branch just changed the memory list.",
+};
+
+/**
+ * The reminder a compaction arms in place of `MEMORY_READ_REMINDER`. A fold is not just a changed memory
+ * list: the TODO state lives in a file the summary does not carry and the summary is lossy in a way the
+ * original transcript is not. Kept out of the rotation - it fires once, at the first turn after the fold.
+ */
+export const COMPACTION_REMINDER: ReminderDefinition = {
+    id: "compaction",
+    text: "The conversation was just compacted: the summary replaces the folded transcript and is lossy - check the session JSONL if you need pre-fold detail. The memory list and the runtime `TODO.md` from your prompt were not part of the fold: re-read the relevant memories and the TODO before continuing multi-step work.",
+    guidance:
+        "A compaction just folded the transcript; memory and TODO state live in files it did not fold.",
 };
 
 /**

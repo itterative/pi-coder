@@ -267,7 +267,7 @@ export interface ReminderResumeState {
  *
  * A delivered reminder is a `custom_message` whose `details` carry the id and the turn it was emitted on, so
  * the branch itself records what was shown. Only entries after the last `compaction` are read: the fold is a
- * full reset (the module re-arms the memory reminder and restarts the rotation), so pre-fold emissions must
+ * full reset (the module arms a change-point reminder and restarts the rotation), so pre-fold emissions must
  * not leak into a post-fold resume. `undefined` means the branch holds nothing to resume, and the caller
  * starts fresh.
  */
@@ -322,7 +322,7 @@ export function reminderResumeState(
     };
 }
 
-/** Whether an id names a rotation reminder, which `shown` tracks; the memory reminder is not rotated. */
+/** Whether an id names a rotation reminder, which `shown` tracks; change-point reminders are not rotated. */
 function isRotationId(value: string): value is ReminderId {
     return ACTIVE_ROTATION_REMINDERS.some((reminder) => reminder.id === value);
 }

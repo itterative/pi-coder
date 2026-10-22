@@ -15,4 +15,10 @@ export interface ReminderDefinition {
 }
 
 export type ReminderId =
-    "memory-read" | "memory-hygiene" | "sandbox" | "delegation" | "todo" | "validation";
+    | "memory-read"
+    | "compaction"
+    | "memory-hygiene"
+    | "sandbox"
+    | "delegation"
+    | "todo"
+    | "validation";

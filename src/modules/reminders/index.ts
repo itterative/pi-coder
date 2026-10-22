@@ -9,7 +9,7 @@ import {
     type ReminderSignals,
     type ReminderStateLabels,
 } from "../decision";
-import { ACTIVE_ROTATION_REMINDERS, MEMORY_READ_REMINDER, REMINDER_NOTICE } from "./catalog";
+import { ACTIVE_ROTATION_REMINDERS, COMPACTION_REMINDER, REMINDER_NOTICE } from "./catalog";
 import { ContextGrowthTracker } from "./context-growth";
 import { ReminderScheduler, type ReminderModelChoice, type SchedulerSnapshot } from "./scheduler";
 import {
@@ -34,8 +34,23 @@ export interface ReminderRegistrationOptions {
     scope?: "full" | "memory";
 }
 
-function formatReminder(reminder: ReminderDefinition): string {
-    return `<pi_coder_reminder>\n${REMINDER_NOTICE}\n${reminder.text}\n</pi_coder_reminder>`;
+function formatReminder(text: string): string {
+    return `<pi_coder_reminder>\n${REMINDER_NOTICE}\n${text}\n</pi_coder_reminder>`;
+}
+
+/**
+ * The text one emission carries. Only the compaction reminder differs from its catalog entry: the session's
+ * own JSONL path is known at emission time and makes its "check the transcript" line actionable.
+ */
+function reminderTextFor(reminder: ReminderDefinition, ctx: ExtensionContext): string {
+    if (reminder.id !== COMPACTION_REMINDER.id) {
+        return reminder.text;
+    }
+
+    const sessionFile = ctx.sessionManager.getSessionFile?.();
+    return sessionFile === undefined
+        ? reminder.text
+        : `${reminder.text}\nSession JSONL: \`${sessionFile}\`.`;
 }
 
 /** Everything the debug entry records about one selection decision, however it was reached. */
@@ -140,8 +155,8 @@ function sameLabels(left: ReminderStateLabels, right: ReminderStateLabels): bool
  * Emit pi-coder reminders as hidden context: at most one at the start of a user turn, plus threshold-driven
  * mid-run steers.
  *
- * The memory reminder is tied to the memory list changing (session start, tree navigation, compaction); the
- * rest rotate on a turn cadence or a context-growth threshold. The two delivery paths are deliberately
+ * The memory reminder is tied to the memory list changing (session start, tree navigation); a compaction
+ * arms its own reminder for the fold. The rest rotate on a turn cadence or a context-growth threshold. The two delivery paths are deliberately
  * separate from the one-per-turn rule: a long autonomous run may receive a mid-run steer, but only while the
  * streaming assistant message has called a tool, so a reminder never follows a run that is about to end.
  *
@@ -201,17 +216,21 @@ export default function registerRemindersExtension(
      *
      * `resume` reads the history back off the branch, so a reload, resume, fork, or tree move continues the
      * rotation and the shown history instead of treating the branch as new. Compaction deliberately resets:
-     * the fold is a context reset, so only the memory reminder is re-armed and the rotation starts over. The
-     * labels are branch-derived either way.
+     * the fold is a context reset, so only the armed reminder is re-armed and the rotation starts over.
+     * Session start and tree moves arm the memory reminder; a fold arms `COMPACTION_REMINDER`, which also
+     * covers what the summary cannot carry. The labels are branch-derived either way.
      */
-    const restart = (ctx: ExtensionContext, resume = false) => {
+    const restart = (
+        ctx: ExtensionContext,
+        options: { resume?: boolean; armed?: ReminderDefinition } = {},
+    ) => {
         growth.reset();
         const branch = ctx.sessionManager.getBranch();
         labels = reminderLabelsFromEntries(branch);
 
-        const state = resume ? reminderResumeState(branch) : undefined;
+        const state = options.resume === true ? reminderResumeState(branch) : undefined;
         if (state === undefined) {
-            scheduler.reset();
+            scheduler.reset(options.armed);
             shown.clear();
             return;
         }
@@ -223,9 +242,9 @@ export default function registerRemindersExtension(
         }
     };
 
-    pi.on("session_start", (_event, ctx) => restart(ctx, true));
-    pi.on("session_tree", (_event, ctx) => restart(ctx, true));
-    pi.on("session_compact", (_event, ctx) => restart(ctx));
+    pi.on("session_start", (_event, ctx) => restart(ctx, { resume: true }));
+    pi.on("session_tree", (_event, ctx) => restart(ctx, { resume: true }));
+    pi.on("session_compact", (_event, ctx) => restart(ctx, { armed: COMPACTION_REMINDER }));
     pi.on("agent_start", () => {
         growth.reset();
     });
@@ -291,7 +310,7 @@ export default function registerRemindersExtension(
         pi.sendMessage(
             {
                 customType: REMINDER_CUSTOM_TYPE,
-                content: formatReminder(reminder),
+                content: formatReminder(reminder.text),
                 display: false,
                 // The entry records what was shown and when, so a restart on this branch can resume.
                 details: { id: reminder.id, turn },
@@ -401,7 +420,7 @@ export default function registerRemindersExtension(
 
         /** The turn the reminder is emitted on, stamped on the message so a later restart can resume. */
         const emitTurn = scheduler.snapshot().userTurns;
-        if (reminder !== undefined && reminder.id !== MEMORY_READ_REMINDER.id) {
+        if (reminder !== undefined && !snapshot.sessionArmed) {
             shown.set(reminder.id, emitTurn);
         }
 
@@ -436,7 +455,7 @@ export default function registerRemindersExtension(
         return {
             message: {
                 customType: REMINDER_CUSTOM_TYPE,
-                content: formatReminder(reminder),
+                content: formatReminder(reminderTextFor(reminder, ctx)),
                 display: false,
                 details: { id: reminder.id, turn: emitTurn },
             },

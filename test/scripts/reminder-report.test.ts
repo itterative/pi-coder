@@ -244,13 +244,13 @@ describe("replay", () => {
             { entryId: "200c25a3", turn: 3 },
             { entryId: "8d61f3d7", turn: 4 },
         ]);
-        // The first post-fold turn re-arms the memory reminder instead of continuing the rotation.
-        expect(result.turns[2]?.schedule).toBe("memory-read");
+        // The first post-fold turn arms the compaction reminder instead of continuing the rotation.
+        expect(result.turns[2]?.schedule).toBe("compaction");
     });
 });
 
 describe("compaction folds", () => {
-    it("restarts the rotation and re-arms the memory reminder at a fold", () => {
+    it("restarts the rotation and arms the compaction reminder at a fold", () => {
         vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "1");
         const cwd = "/repo";
         const session = sessionAt(cwd);
@@ -268,7 +268,7 @@ describe("compaction folds", () => {
         expect(result.turns.map((turn) => turn.schedule)).toEqual([
             "memory-read",
             "delegation",
-            "memory-read",
+            "compaction",
             "delegation",
         ]);
         expect(result.compactions).toEqual([{ entryId: foldId, turn: 3 }]);

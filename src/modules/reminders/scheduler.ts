@@ -45,8 +45,8 @@ export interface SchedulerSnapshot {
 }
 
 /**
- * The deterministic half of the reminder schedule: the memory reminder for a changed memory list, and a
- * rotation through the catalog on a turn cadence or a context-growth threshold.
+ * The deterministic half of the reminder schedule: the reminder a restart arms (a changed memory list, or a
+ * folded transcript), and a rotation through the catalog on a turn cadence or a context-growth threshold.
  *
  * One call per user turn. The model policy is layered on top by passing its answer in; a deliberate `none`
  * is respected for that turn, while an unavailable model leaves the deterministic triggers in charge so
@@ -57,7 +57,7 @@ export class ReminderScheduler {
     private rotationIndex = 0;
     private lastEmitTurn = 0;
     private thresholdBaseline = 0;
-    private sessionArmed = false;
+    private armed: ReminderDefinition | undefined;
     private midRunThisTurn = 0;
     private readonly maxMidRunPerTurn: number;
 
@@ -67,7 +67,7 @@ export class ReminderScheduler {
 
     /**
      * Decide a mid-run emission: only the context threshold applies, because there is no new user turn to
-     * count and the session reminder is tied to the memory list changing. The emission bookkeeping is the
+     * count and the session reminder is tied to a change point. The emission bookkeeping is the
      * same, so the next user turn starts a full cadence after it rather than repeating it.
      */
     decideMidRun(input: {
@@ -101,17 +101,19 @@ export class ReminderScheduler {
     }
 
     /**
-     * A new session, branch, or post-compaction point: re-arm the memory reminder and restart the cadence.
+     * A new session, branch, or post-compaction point: arm `armed` for the next turn and restart the cadence.
+     * Session start and tree moves leave the default, the memory reminder; a compaction arms the reminder
+     * that covers the rest of what the fold changed.
      *
      * The thresholds are moments of change, not a continuous clock, so a branch that just changed its
-     * context gets the memory reminder and a fresh cooldown rather than inheriting the previous point's.
+     * context gets the armed reminder and a fresh cooldown rather than inheriting the previous point's.
      */
-    reset(): void {
+    reset(armed: ReminderDefinition = MEMORY_READ_REMINDER): void {
         this.userTurns = 0;
         this.rotationIndex = 0;
         this.lastEmitTurn = 0;
         this.thresholdBaseline = 0;
-        this.sessionArmed = true;
+        this.armed = armed;
         this.midRunThisTurn = 0;
     }
 
@@ -129,7 +131,7 @@ export class ReminderScheduler {
         this.rotationIndex = rotationIndexAfter(state.lastRotationId);
         this.thresholdBaseline = 0;
         this.midRunThisTurn = 0;
-        this.sessionArmed = true;
+        this.armed = MEMORY_READ_REMINDER;
     }
 
     decide(input: DecideInput): ReminderDefinition | undefined {
@@ -137,9 +139,10 @@ export class ReminderScheduler {
         this.midRunThisTurn = 0;
         this.userTurns += 1;
 
-        if (this.sessionArmed) {
-            this.sessionArmed = false;
-            return this.emit(MEMORY_READ_REMINDER, input.maxContextTokens);
+        if (this.armed !== undefined) {
+            const armed = this.armed;
+            this.armed = undefined;
+            return this.emit(armed, input.maxContextTokens);
         }
 
         if (input.modelChoice !== undefined) {
@@ -185,7 +188,7 @@ export class ReminderScheduler {
             rotationIndex: this.rotationIndex,
             lastEmitTurn: this.lastEmitTurn,
             thresholdBaseline: this.thresholdBaseline,
-            sessionArmed: this.sessionArmed,
+            sessionArmed: this.armed !== undefined,
             midRunThisTurn: this.midRunThisTurn,
         };
     }

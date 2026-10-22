@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
     ACTIVE_ROTATION_REMINDERS,
+    COMPACTION_REMINDER,
     MEMORY_READ_REMINDER,
 } from "../../../src/modules/reminders/catalog";
 import { ReminderScheduler } from "../../../src/modules/reminders/scheduler";
@@ -43,6 +44,17 @@ describe("ReminderScheduler", () => {
         scheduler.reset();
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+    });
+
+    it("arms the reminder a post-compaction reset passes", () => {
+        const scheduler = armed(NO_TURNS);
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+
+        scheduler.reset(COMPACTION_REMINDER);
+
+        expect(scheduler.snapshot().sessionArmed).toBe(true);
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(COMPACTION_REMINDER);
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBeUndefined();
     });
 
     it("resumes the rotation pointer and the cadence origin from branch history", () => {

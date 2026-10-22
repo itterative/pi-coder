@@ -52,7 +52,10 @@ async function userTurn(stub: PiStub): Promise<BeforeAgentStartResult> {
 beforeEach(() => {
     ctx = stubContext({
         cwd: "/tmp/reminder-project",
-        sessionManager: stubSessionManager({ getBranch: () => [] }),
+        sessionManager: stubSessionManager({
+            getBranch: () => [],
+            getSessionFile: () => "/tmp/pi/sessions/folded.jsonl",
+        }),
     });
 });
 
@@ -124,14 +127,25 @@ describe("reminder emission", () => {
         expect(await userTurn(stub)).toBeUndefined();
     });
 
-    it("re-arms the memory reminder after a compaction", async () => {
+    it("arms the compaction reminder after a compaction", async () => {
         const stub = harness();
         await startSession(stub);
         expect((await userTurn(stub))?.message?.content).toContain("memory_system");
 
         await stub.requireHandler("session_compact")({ reason: "manual" }, ctx);
 
-        expect((await userTurn(stub))?.message?.content).toContain("memory_system");
+        const folded = await userTurn(stub);
+        // The fold's own reminder covers both the rebuilt memory list and the TODO state the summary does
+        // not carry, and names this session's transcript for the detail the summary lost.
+        expect(folded?.message?.content).toContain("compacted");
+        expect(folded?.message?.content).toContain("TODO.md");
+        expect(folded?.message?.content).toContain("/tmp/pi/sessions/folded.jsonl");
+        expect(folded?.message?.content).not.toContain("memory_system");
+
+        const entry = stub.entries.findLast(
+            (candidate) => candidate.customType === "pi-coder-reminder:debug",
+        );
+        expect(entry?.data).toMatchObject({ reminder: "compaction", trigger: "session" });
     });
 
     it("resumes the rotation and the shown history after a tree move", async () => {

@@ -16,7 +16,7 @@
  * and todo-snapshot entries recorded in the session are picked up as the live module would pick them up.
  *
  * A `compaction` entry is modeled as the live `session_compact` restart: the schedule, the shown map, and
- * the context estimate start over and the memory reminder is re-armed, while the activity scan keeps reading
+ * the context estimate start over and the compaction reminder is armed, while the activity scan keeps reading
  * the whole branch, which is what `getBranch()` serves the live module. `--recorded` additionally shows what
  * the session itself recorded for each turn - the `pi-coder-reminder:debug` decision and the signals it was
  * made from, and any reminder message actually delivered - and warns when that data is missing. The file is
@@ -55,7 +55,7 @@ import type { JsonObject } from "@earendil-works/pi-ai";
 
 import { buildReminderState } from "../src/modules/decision/reminder";
 import { decisionSessionContext } from "../src/modules/decision/session-context";
-import { REMINDER_NOTICE } from "../src/modules/reminders/catalog";
+import { COMPACTION_REMINDER, REMINDER_NOTICE } from "../src/modules/reminders/catalog";
 import { ReminderScheduler } from "../src/modules/reminders/scheduler";
 import {
     REMINDER_CUSTOM_TYPE,
@@ -417,9 +417,9 @@ export function replay(entries: readonly SessionEntry[], cwd: string): ReplayRes
         }
 
         if (entry.type === "compaction") {
-            // The fold is a full reset: the rotation restarts, the memory reminder is re-armed, and the
+            // The fold is a full reset: the rotation restarts, the compaction reminder is armed, and the
             // context estimate starts over, while the branch scan below keeps its pre-fold facts.
-            scheduler.reset();
+            scheduler.reset(COMPACTION_REMINDER);
             shown.clear();
             contextTokens = 0;
             foldEntryId = String(entry.id);
@@ -784,7 +784,7 @@ export function renderText(
         const compactionEntryId = compactionAt.get(turn.turn);
         if (compactionEntryId !== undefined && !options.compact) {
             lines.push(
-                `----- compaction entry ${compactionEntryId}: rotation restarted, memory reminder re-armed -----`,
+                `----- compaction entry ${compactionEntryId}: rotation restarted, compaction reminder armed -----`,
             );
         }
 

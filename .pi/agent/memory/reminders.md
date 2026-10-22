@@ -16,13 +16,15 @@ owns the appendix and snapshot lifecycle.
 
 ## Files and schedule
 
-- `catalog.ts` — `MEMORY_READ_REMINDER` (session start, tree navigation, compaction) plus `ROTATION_REMINDERS`
+- `catalog.ts` — the change-point reminders `MEMORY_READ_REMINDER` (session start, tree navigation) and
+  `COMPACTION_REMINDER` (a fold) plus `ROTATION_REMINDERS`
   (memory-hygiene, sandbox, delegation, todo, validation), each with `text` and `guidance`. A `disabled: true`
   entry stays in the catalog but is filtered out of the rotation and the model's offer by
   `ACTIVE_ROTATION_REMINDERS`; `sandbox` is disabled until it keys on a real gated event rather than rotating
   context-free. Catalog texts stay extension-generic: they may name pi-coder mechanics but never one
   repository's commands, which live in that project's instructions and memories.
-- `scheduler.ts` — pure `ReminderScheduler`: the session reminder first; otherwise rotation due after
+- `scheduler.ts` — pure `ReminderScheduler`: the armed change-point reminder first; otherwise rotation due
+  after
   `everyTurns` user turns since the last emission or `thresholdTokens` new context tokens, whichever comes
   first. A model answer naming an offered id is chosen and advances the rotation past it; a deliberate `none`
   suppresses the fallback for that turn; a missing answer leaves the deterministic triggers in charge. The
@@ -60,8 +62,10 @@ Two delivery paths, both appending at the end of the conversation, so the system
 `seed()` from the branch: `reminderResumeState` reads each delivered reminder's `custom_message` entry, whose
 `details` carry `{ id, turn }`, to rebuild `shown`, the last emitted rotation id, and the user-turn count, so
 the pointer and cadence continue instead of restarting and `turns_ago` keeps a real origin. Compaction is a
-full `reset()`: the fold is a context reset, so pre-fold emissions are ignored, the rotation restarts, and
-the session reminder is re-armed. Labels are branch-derived (`reminderLabelsFromEntries`) in every case.
+full `reset(COMPACTION_REMINDER)`: the fold is a context reset, so pre-fold emissions are ignored, the
+rotation restarts, and the fold's own reminder is armed in place of the memory one - it also names the
+session JSONL and the runtime `TODO.md` a summary does not carry. Labels are branch-derived
+(`reminderLabelsFromEntries`) in every case.
 
 ## Decision-model selection
 
@@ -79,7 +83,7 @@ it to one `shows=` line). It applies the activity gate and models a mid-run stee
 assistant message, printing it with its emitting turn. A turn is a run-starting prompt; a steered message
 stays under its run's turn and never reaches the decision.
 A `compaction` entry is modeled as the live `session_compact` restart: the scheduler, the shown map, and
-the context estimate reset there, the memory reminder is re-armed, and the module turn counter restarts;
+the context estimate reset there, the compaction reminder is armed, and the module turn counter restarts;
 the report keeps global numbering and marks folds in the header and at the first post-fold turn. The
 activity scan keeps reading the whole branch, which is what `getBranch()` serves live, so pre-fold facts
 still enter post-fold state; a reload adds no entries and is replayed as it is.
