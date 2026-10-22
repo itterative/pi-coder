@@ -1,15 +1,16 @@
 ---
 name: model-comparison
-description: "clef-flash vs vllm-d3-flash on the reminder decision: latency, real-state decisions, order sensitivity, and the verdict."
+description: "clef-flash, vllm-d3-flash, and lfm2-d1 on the reminder decision: latency, real-state decisions, order sensitivity, and verdicts."
 category: architecture
 keep_updated: true
 ---
 
-# Decision-model comparison: clef-flash vs vllm-d3-flash
+# Decision-model comparison: clef-flash, vllm-d3-flash, and lfm2-d1
 
-Measured 2026-10-21 against the same System One endpoint while both models were loaded. The question: can
+Measured 2026-10-21/22 against the same System One endpoint while the models shared it. The question: can
 the faster `clef-flash` replace `vllm-d3-flash`, which scores better on general benchmarks but is slower and
-cannot co-reside with clef in VRAM. The config lives in `~/.pi/decision-model-config.json`.
+has to share VRAM; and from Oct 22, how the newly added `lfm2-d1` compares. The config lives in
+`~/.pi/decision-model-config.json`.
 
 ## Method
 
@@ -19,9 +20,11 @@ cannot co-reside with clef in VRAM. The config lives in `~/.pi/decision-model-co
   piggybacked labels (`phase` choice, `finishing`, `unvalidated`), with the module's own guidance and criteria
   wording.
 - Budget: ten `vllm-d3-flash` requests - eight labeled synthetic scenarios plus two order tests.
-  `clef-flash` re-runs were free.
-- Real states: this session's six recorded turn decisions. The `pi-coder-reminder:debug` entries carry the
-  signals, scores, labels, and pick, so only the two live inputs missing from them had to be rebuilt:
+  `clef-flash` and `lfm2-d1` re-runs were free.
+- Real states: the recorded turn decisions. The d3/clef comparison used the six d3-judged states; the
+  `lfm2-d1` test replayed all eleven recorded turns, including the clef-judged ones that re-validated the
+  rebuild (clef reproduces its own live scores within 0.002). The `pi-coder-reminder:debug` entries carry
+  the signals, scores, labels, and pick, so only the two live inputs missing from them had to be rebuilt:
   - `request` is the user message *after* the debug entry. The live request is `event.prompt`, which is not
     in the branch yet at `before_agent_start`; the branch prefix's last user message is the previous turn's,
     and scoring with it sends the wrong prompt.
@@ -85,7 +88,8 @@ dropped `memory-hygiene` by roughly 0.1-0.15 on every scenario (exploration .319
 .346 -> .163, done-wrap .237 -> .165). The live request always asks `memory-hygiene` first (catalog order),
 so the first-question boost is present live. vllm returned byte-identical scores for one real state in both
 orders (`validation` .631 forward and reversed), so it did not show the effect. Only one state was tested for
-vllm, so treat the asymmetry as directional.
+vllm, so treat the asymmetry as directional. `lfm2-d1` later showed the same stability as vllm: reversed and
+forward runs of the eight synthetic scenarios differed by at most 0.013.
 
 ## Synthetic labeled set (not usable as an accuracy probe)
 
@@ -95,7 +99,33 @@ planning question, and a validated wrap-up. Both models scored 4/8, and neither 
 every intended fire stayed below 0.45 (vllm max .409, clef max .286) while controls reached .439 (vllm) and
 .346 (clef). The scenarios are too sparse - the real models key on accumulated activity (`files_modified`,
 branch-wide tool counts, `tests_run`, prior reminders) that a hand-built state does not reproduce. The set
-was kept only as the source of the order-flip test.
+was kept only as the source of the order-flip test. The `lfm2-d1` run below reuses the set and reports
+which scenarios it fires.
+
+## lfm2-d1 (added Oct 22)
+
+Run through the same scripts: eight synthetic scenarios forward and reversed, and all eleven recorded turn
+states replayed from the debug entries. Raw scores sit beside the other models in the comparison results.
+
+- Speed: 192-218 ms on the synthetic states and 245-331 ms on the real-shaped replays, the fastest of the
+  three, despite the largest server-side prompt (3.0-3.6k input tokens synthetic, 3.7-7.5k on the grown real
+  states, versus clef's 1.2k synthetic and 1.6-1.7k real). Question order barely moves it (max delta 0.013).
+- Labeled set: 3/8 - the only model that fires the intended reminder on any labeled fire scenario,
+  `validation` .789 on the unvalidated-edit state (the strongest expected score any model produced) and
+  `todo` .540 on the stale-TODO state. It also fires 3/4 of the "none" scenarios (read-only .582, debugging
+  .551, planning .498) and misses `memory-hygiene` and `delegation`.
+- Real states: fires on all six d3-judged states and 10/11 recorded turns at 0.45, with `todo` the top pick
+  on 10/11 and never below .442. Four of those fires are Q&A turns where d3 and clef both abstained (both
+  under .45, max .404). On the turn both other models reminded `memory-hygiene`, lfm2 tops `todo` .610 over
+  `memory-hygiene` .470, so it would show the wrong reminder.
+- Threshold sweep: its fire and none scores overlap (fires .330-.789, none .439-.582 on the synthetic set;
+  on the six shared real states, .55 still fires 3/4 Q&A turns and .60 fires 2/4). At .45 it shows a reminder
+  on essentially every turn.
+
+Reading: lfm2-d1 is fast and order-stable but strongly yes-biased in the independent-bool form - the `todo`
+question in particular never comes back negative - so no single `reminderMinProbability` makes it behave
+like the other two. If it is worth pursuing, change the request shape (one "which reminder, if any" choice
+question, or a per-question calibration offset) rather than the threshold.
 
 ## Verdict
 
@@ -116,6 +146,8 @@ What is measured and worth keeping:
 - Both models fire sparingly, and the `memory-hygiene` fire at turn 6 was state-driven. The turn-7
   disagreement points at how well the state separates "wrapping up" from "still discussing", not at model
   quality - better state shape is the next lever, ahead of another model.
+- `lfm2-d1` is a separate case: fastest and order-stable, but so yes-biased that no single threshold
+  separates its fires from its none scores. See its section.
 
 Caveats: one session, two fire states, one d3 order test. Every session now records its decisions, so a
 real-state corpus can be accumulated and re-scored offline with no extra endpoint requests.
