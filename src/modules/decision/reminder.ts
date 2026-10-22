@@ -184,6 +184,13 @@ export interface ReminderContext {
     options: readonly ReminderOption[];
     /** Activity, prior reminders, TODO progress, and the memory list. */
     signals?: ReminderSignals;
+    /**
+     * Extra questions the caller wants answered in the same round trip, keyed by question id.
+     *
+     * A built-in id wins a collision, so an extra question can never replace a reminder or label question.
+     * The answers come back under `ReminderConsult.extras`; the decision module never interprets them.
+     */
+    extraQuestions?: Readonly<Record<string, ClassifierQuestion>>;
 }
 
 /** What the model chose: no reminder, or one of the offered reminders. */
@@ -244,6 +251,7 @@ export function buildReminderState(context: ReminderContext): JsonObject {
 export function reminderRequest(
     state: JsonObject,
     options: readonly ReminderOption[],
+    extraQuestions?: Readonly<Record<string, ClassifierQuestion>>,
 ): ClassifierContext {
     const questions: Record<string, ClassifierQuestion> = {};
 
@@ -270,6 +278,16 @@ export function reminderRequest(
         instructions: REMINDER_UNVALIDATED_INSTRUCTION,
         criteria: REMINDER_UNVALIDATED_CRITERIA,
     };
+
+    // The caller's own questions ride along in the same round trip, after the built-ins so a collision
+    // cannot replace a question the decision itself reads.
+    if (extraQuestions !== undefined) {
+        for (const [id, question] of Object.entries(extraQuestions)) {
+            if (questions[id] === undefined) {
+                questions[id] = question;
+            }
+        }
+    }
 
     return { state, questions };
 }
@@ -352,6 +370,31 @@ export function reminderStateFrom(answers: Record<string, ClassifierAnswer>): Re
     return labels;
 }
 
+/**
+ * The caller's extra answers, keyed by question id.
+ *
+ * Unanswered ids are omitted; `undefined` means nothing was asked or nothing came back, so a caller can skip
+ * its own interpretation without checking the request again.
+ */
+function extraAnswersFrom(
+    answers: Record<string, ClassifierAnswer>,
+    extraQuestions: Readonly<Record<string, ClassifierQuestion>> | undefined,
+): Record<string, ClassifierAnswer> | undefined {
+    if (extraQuestions === undefined) {
+        return undefined;
+    }
+
+    const extras: Record<string, ClassifierAnswer> = {};
+    for (const id of Object.keys(extraQuestions)) {
+        const answer = answers[id];
+        if (answer !== undefined) {
+            extras[id] = answer;
+        }
+    }
+
+    return Object.keys(extras).length === 0 ? undefined : extras;
+}
+
 /** How one reminder consult ended, for tests and the caller. */
 export type ReminderStatus =
     "answered" | "cached" | "cooldown" | "abstained" | "error" | "timeout" | "disabled";
@@ -363,6 +406,8 @@ export interface ReminderConsult {
     state?: ReminderStateLabels;
     /** Every offered reminder's returned probability, for calibration and the debug log. */
     scores?: Record<string, number>;
+    /** Answers to the caller's extra questions, keyed by question id; absent when none were asked. */
+    extras?: Record<string, ClassifierAnswer>;
     status: ReminderStatus;
     latencyMs: number;
     usage?: Usage;
@@ -393,6 +438,7 @@ interface CachedReminderAnswer {
     decision: ReminderDecision;
     state?: ReminderStateLabels;
     scores?: Record<string, number>;
+    extras?: Record<string, ClassifierAnswer>;
 }
 
 export class ReminderEvaluator {
@@ -418,13 +464,7 @@ export class ReminderEvaluator {
         const key = reminderCacheKey(model, context);
         const cached = this.cache.get(key);
         if (cached !== undefined) {
-            return {
-                decision: cached.decision,
-                ...(cached.state === undefined ? {} : { state: cached.state }),
-                ...(cached.scores === undefined ? {} : { scores: cached.scores }),
-                status: "cached",
-                latencyMs: 0,
-            };
+            return consultFrom(cached, "cached", 0);
         }
 
         if (this.now() < this.cooldownUntil) {
@@ -434,7 +474,7 @@ export class ReminderEvaluator {
         const started = this.now();
         const classified = await this.classify(
             model,
-            reminderRequest(buildReminderState(context), context.options),
+            reminderRequest(buildReminderState(context), context.options, context.extraQuestions),
         );
         const { result } = classified;
         const latencyMs = this.now() - started;
@@ -443,11 +483,7 @@ export class ReminderEvaluator {
             this.cooldownUntil = this.now() + (config.cooldownMs ?? DEFAULT_COOLDOWN_MS);
             const status = classified.timedOut ? "timeout" : "error";
 
-            return {
-                status,
-                latencyMs,
-                ...(result.usage === undefined ? {} : { usage: result.usage }),
-            };
+            return consultFrom({}, status, latencyMs, result.usage);
         }
 
         const scores = reminderScoresFrom(result.answers, context.options);
@@ -457,32 +493,16 @@ export class ReminderEvaluator {
             config.reminderMinProbability,
         );
         const state = reminderStateFrom(result.answers);
+        const extras = extraAnswersFrom(result.answers, context.extraQuestions);
         if (decision === undefined) {
             // An unreadable answer still keeps whatever labels came back, so the state keeps building.
-            return {
-                ...(Object.keys(state).length === 0 ? {} : { state }),
-                ...(Object.keys(scores).length === 0 ? {} : { scores }),
-                status: "abstained",
-                latencyMs,
-                ...(result.usage === undefined ? {} : { usage: result.usage }),
-            };
+            return consultFrom({ state, scores, extras }, "abstained", latencyMs, result.usage);
         }
 
-        const answer: CachedReminderAnswer = {
-            decision,
-            ...(Object.keys(state).length === 0 ? {} : { state }),
-            ...(Object.keys(scores).length === 0 ? {} : { scores }),
-        };
+        const answer: CachedReminderAnswer = { decision, state, scores, extras };
         this.remember(key, answer);
 
-        return {
-            decision: answer.decision,
-            ...(answer.state === undefined ? {} : { state: answer.state }),
-            ...(answer.scores === undefined ? {} : { scores: answer.scores }),
-            status: "answered",
-            latencyMs,
-            ...(result.usage === undefined ? {} : { usage: result.usage }),
-        };
+        return consultFrom(answer, "answered", latencyMs, result.usage);
     }
 
     private remember(key: string, answer: CachedReminderAnswer): void {
@@ -521,6 +541,44 @@ export class ReminderEvaluator {
     }
 }
 
+/**
+ * One consult response from whatever parts came back readable.
+ *
+ * Empty `state` and `scores` records are dropped here rather than at each call site: an abstained answer may
+ * carry no labels at all, and the response should read the same as one whose labels never came back.
+ */
+function consultFrom(
+    parts: {
+        decision?: ReminderDecision;
+        state?: ReminderStateLabels;
+        scores?: Record<string, number>;
+        extras?: Record<string, ClassifierAnswer>;
+    },
+    status: ReminderStatus,
+    latencyMs: number,
+    usage?: Usage,
+): ReminderConsult {
+    const consult: ReminderConsult = { status, latencyMs };
+
+    if (parts.decision !== undefined) {
+        consult.decision = parts.decision;
+    }
+    if (parts.state !== undefined && Object.keys(parts.state).length > 0) {
+        consult.state = parts.state;
+    }
+    if (parts.scores !== undefined && Object.keys(parts.scores).length > 0) {
+        consult.scores = parts.scores;
+    }
+    if (parts.extras !== undefined) {
+        consult.extras = parts.extras;
+    }
+    if (usage !== undefined) {
+        consult.usage = usage;
+    }
+
+    return consult;
+}
+
 /** Whether the config lets the model choose reminders at all. */
 export function reminderEnabled(config: DecisionModelConfig): boolean {
     return config.enabled === true && config.reminders === true;
@@ -539,6 +597,7 @@ function reminderCacheKey(model: Classifier, context: ReminderContext): string {
         context.request ?? "",
         context.recent ?? [],
         context.signals ?? null,
+        context.extraQuestions ?? null,
     ]);
 }
 

@@ -10,7 +10,7 @@ import {
     type ReminderTodoState,
 } from "../decision/reminder";
 import { getTodoSnapshotFromEntries } from "../todolist/persistence";
-import { parseTodoList } from "../todolist/parser";
+import { parseTodoList, type TodoItem } from "../todolist/parser";
 import { ACTIVE_ROTATION_REMINDERS } from "./catalog";
 import type { ReminderId } from "./types";
 
@@ -578,30 +578,40 @@ function argumentText(args: unknown, key: string): string | undefined {
     return typeof value === "string" ? value : undefined;
 }
 
-function todoState(entries: readonly SessionEntry[]): ReminderTodoState | undefined {
+/**
+ * The parsed TODO items behind the latest snapshot, or `undefined` when there is no readable list.
+ *
+ * The signals carry only the progress summary, so the TODO query asks about these items without putting them
+ * in the decision state: the question criteria are the only place they travel.
+ */
+export function todoItemsFrom(entries: readonly SessionEntry[]): TodoItem[] | undefined {
     const snapshot = getTodoSnapshotFromEntries(entries);
     if (snapshot === undefined) {
         return undefined;
     }
 
     try {
-        const list = parseTodoList(snapshot.content);
-        const total = list.items.length;
-        if (total === 0) {
-            return undefined;
-        }
-
-        const completed = list.items.filter((item) => item.status === "completed").length;
-        const current = list.items.find((item) => item.status === "in_progress")?.title.trim();
-        const state: ReminderTodoState = { completed, total };
-        if (current !== undefined && current !== "") {
-            state.current = current.slice(0, 80);
-        }
-
-        return state;
+        const items = parseTodoList(snapshot.content).items;
+        return items.length === 0 ? undefined : items;
     } catch {
         return undefined;
     }
+}
+
+function todoState(entries: readonly SessionEntry[]): ReminderTodoState | undefined {
+    const items = todoItemsFrom(entries);
+    if (items === undefined) {
+        return undefined;
+    }
+
+    const completed = items.filter((item) => item.status === "completed").length;
+    const current = items.find((item) => item.status === "in_progress")?.title.trim();
+    const state: ReminderTodoState = { completed, total: items.length };
+    if (current !== undefined && current !== "") {
+        state.current = current.slice(0, 80);
+    }
+
+    return state;
 }
 
 function projectMemoryNames(entries: readonly SessionEntry[]): string[] {

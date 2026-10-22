@@ -187,6 +187,21 @@ describe("reminder state, request, and answer", () => {
         expect(request.questions[REMINDER_UNVALIDATED_QUESTION]?.type).toBe("bool");
     });
 
+    it("carries the caller's extra questions, with a built-in id winning a collision", () => {
+        const extra: ClassifierQuestion = {
+            type: "bool",
+            instructions: "Is the work on the second item?",
+            criteria: { true: "yes", false: "no" },
+        };
+
+        const request = reminderRequest({}, OPTIONS, { todo_item_second: extra });
+        expect(request.questions.todo_item_second).toEqual(extra);
+
+        // An extra question can never replace a reminder or label question the decision itself reads.
+        const collided = reminderRequest({}, OPTIONS, { todo: extra });
+        expect(collided.questions.todo?.instructions).toContain(OPTIONS[1]?.guidance);
+    });
+
     it("reads the piggybacked labels and drops unreadable ones", () => {
         const read = (answers: Record<string, ClassifierAnswer>) => reminderStateFrom(answers);
 
@@ -288,6 +303,56 @@ describe("ReminderEvaluator", () => {
             status: "answered",
             decision: { kind: "none" },
         });
+    });
+
+    it("returns the caller's extra answers with the decision, and caches them", async () => {
+        const extra: ClassifierQuestion = {
+            type: "bool",
+            instructions: "Is the work on the second item?",
+            criteria: { true: "yes", false: "no" },
+        };
+        const withExtras: ReminderContext = {
+            ...context,
+            extraQuestions: { todo_item_second: extra },
+        };
+        const extras = { todo_item_second: { type: "bool" as const, probability: 0.8 } };
+        const { evaluator, classify } = harness({
+            behavior: async (model) => reminderResult(model, { sandbox: 0.9 }, {}, extras),
+        });
+
+        expect(await evaluator.evaluate(withExtras)).toMatchObject({
+            status: "answered",
+            decision: { kind: "reminder", id: "sandbox" },
+            extras,
+        });
+        expect(await evaluator.evaluate(withExtras)).toMatchObject({ status: "cached", extras });
+
+        // A different extra question is a different request, so the cache cannot serve the first answer.
+        await evaluator.evaluate({
+            ...context,
+            extraQuestions: { ...withExtras.extraQuestions, todo_item_third: extra },
+        });
+        expect(classify).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the caller's extra answers when the reminder answer is unreadable", async () => {
+        const extra: ClassifierQuestion = {
+            type: "bool",
+            instructions: "Is the work on the second item?",
+            criteria: { true: "yes", false: "no" },
+        };
+        const extras = { todo_item_second: { type: "bool" as const, probability: 0.8 } };
+        const { evaluator } = harness({
+            behavior: async (model) => reminderResult(model, { "not-offered": 0.8 }, {}, extras),
+        });
+
+        const consult = await evaluator.evaluate({
+            ...context,
+            extraQuestions: { todo_item_second: extra },
+        });
+
+        expect(consult.status).toBe("abstained");
+        expect(consult.extras).toEqual(extras);
     });
 
     it("abstains on an unreadable answer but keeps readable labels", async () => {

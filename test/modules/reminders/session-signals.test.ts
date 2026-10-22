@@ -12,6 +12,7 @@ import {
     buildReminderSignals,
     reminderLabelsFromEntries,
     reminderResumeState,
+    todoItemsFrom,
 } from "../../../src/modules/reminders/session-signals";
 import { zeroUsage } from "../../helpers/agent-doubles";
 
@@ -186,6 +187,20 @@ describe("buildReminderSignals", () => {
 
         expect(signals.memories).toBeUndefined();
         expect(signals.todo).toBeUndefined();
+    });
+
+    it("returns the parsed TODO items behind the latest snapshot", () => {
+        const manager = session();
+        manager.appendCustomEntry("pi-coder:todo-snapshot", {
+            version: 1,
+            content: TODO_DOCUMENT,
+        });
+
+        expect(todoItemsFrom(manager.getBranch())).toEqual([
+            { id: "first", title: "First step", status: "completed" },
+            { id: "second", title: "Second step", status: "in_progress" },
+        ]);
+        expect(todoItemsFrom([])).toBeUndefined();
     });
 
     it("infers implementation and unvalidated changes without the model", () => {

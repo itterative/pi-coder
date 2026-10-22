@@ -51,18 +51,32 @@ together. With the model off or a label unreadable, `session-signals.ts` infers 
 activity: the last code write is ordered against the last test run, a failed last run reads as `debugging`,
 and writes after it read as unvalidated. `finishing` is never inferred.
 
-## Open lead: TODO as phase state
+## TODO query and the transition trigger
 
-The runtime TODO is the only signal that can carry task progress rather than activity counts, and the channel
-already exists (`pi-coder:todo-snapshot` -> `signals.todo`). It has never carried data in practice: all 14
-recorded turn states in the Oct 21-22 session had no `todo` field (the list was empty; the freeform body is
-not parsed), so the `todo` question was judged from `todo_writes` alone. To make it a phase signal the state
-needs age and structure - `updated_turns_ago`, in-progress/pending counts, per-item status - and `phase` /
-`finishing` could then be derived from the in-progress item instead of persisted as model labels, which
-flapped and survived compaction (`wrapping_up` / `finishing: true` was still in the state on a later planning
-turn, including clef's first live consult). Keeping the list current is what the `todo` reminder is for, and
-its gate should be deterministic (work underway and no TODO write in N turns) because the model that would
-choose it needs the staleness fact to see it. Not measured yet.
+The TODO signal is used through a dedicated query rather than richer state. `signals.todo` keeps its summary
+shape (`completed` / `total` / `current`); the item list travels in the question criteria only, so no per-item
+phase is stored and TODO.md keeps its schema. The reminders module builds the query from the parsed snapshot
+(`todoItemsFrom` -> `todoQueryFor`, `src/modules/reminders/todo-query.ts`): one bool per `pending` / `blocked`
+item (capped at 4, titles only - statuses never reach the model) asking whether the current work is on that
+item, plus one `outside` bool. Work on the `in_progress` item was already said, so only a move to an unlisted
+item can fire.
+
+`todoChoiceFrom` weighs the answers: the top item at >= 0.45 that beats `outside` counts as a move the list
+has not recorded, and it overrides a deliberate `none` or an unreadable reminder answer; an explicit pick of
+another reminder wins that turn and the move stays visible on the next one. `ReminderContext.extraQuestions` /
+`ReminderConsult.extras` carry a caller's questions and their raw answers through the same round trip, cached
+with the rest of the request. The debug entry records `todoMove` (what the query read, won or not) and
+`todoScores`.
+
+Measured (Oct 22, clef, 15 recorded states; tables in `reminders/state-experiments.md`): a single choice with
+the production-shaped active candidates answered `none` on 12/15, while the per-item bools stayed quiet on
+discussion turns (`outside` dominated) and scored the work item where the work existed. The same question with
+`status_cur` vs `status_stale` criteria agreed on 14/15, so the model reads the work rather than parroting the
+`in_progress` label. No form was validated on a real work transition - the recorded states are conversation
+turns and the session had no TODO - so live consults are the first real test.
+
+Not adopted: per-item phases in TODO.md (schema churn), persisted per-item phase labels, a deterministic
+stale-TODO gate, and enriching the state with item lists or `updated_turns_ago`.
 
 ## Recorded decisions
 

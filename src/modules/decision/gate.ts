@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ClassifierQuestion } from "@earendil-works/pi-ai";
 
 import { DecisionEvaluator } from "./evaluator";
 import {
@@ -234,6 +235,8 @@ export interface ReminderConsultOptions extends ReminderEvaluatorSeed {
     request?: string;
     /** Activity, prior reminders, TODO progress, and the memory list. */
     signals?: ReminderSignals;
+    /** Extra questions the caller wants answered in the same round trip; returned under `consult.extras`. */
+    extraQuestions?: Readonly<Record<string, ClassifierQuestion>>;
 }
 
 /**
@@ -260,6 +263,9 @@ export async function consultReminderSelection(
             ...(request === undefined ? {} : { request }),
             ...(session.recent.length === 0 ? {} : { recent: session.recent }),
             ...(options.signals === undefined ? {} : { signals: options.signals }),
+            ...(options.extraQuestions === undefined
+                ? {}
+                : { extraQuestions: options.extraQuestions }),
         });
     } catch {
         return { status: "error", latencyMs: 0 };

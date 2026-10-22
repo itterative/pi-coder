@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -53,6 +53,40 @@ async function userTurn(stub: PiStub): Promise<BeforeAgentStartResult> {
         { systemPrompt: "", prompt: "do the thing" },
         ctx,
     )) as BeforeAgentStartResult;
+}
+
+const TODO_DOCUMENT = `---
+version: 1
+todos:
+  - id: first
+    title: First step
+    status: completed
+  - id: second
+    title: Second step
+    status: in_progress
+  - id: third
+    title: Third step
+    status: pending
+---
+`;
+
+/** One TODO snapshot as the branch records it: the item list the query is built from. */
+function todoSnapshotEntry(): SessionEntry {
+    return {
+        type: "custom",
+        customType: "pi-coder:todo-snapshot",
+        data: { version: 1, content: TODO_DOCUMENT },
+        id: "todo-snapshot",
+        parentId: null,
+        timestamp: "2026-10-22T00:00:00.000Z",
+    };
+}
+
+function contextWithTodo(): ExtensionContext {
+    return stubContext({
+        cwd: "/tmp/reminder-project",
+        sessionManager: stubSessionManager({ getBranch: () => [todoSnapshotEntry()] }),
+    });
 }
 
 beforeEach(() => {
@@ -157,5 +191,80 @@ describe("decision-model reminder policy", () => {
 
         mocks.consult.mockResolvedValue({ status: "error", latencyMs: 1 });
         expect((await userTurn(stub))?.message?.content).toContain("scout");
+    });
+
+    it("forces the todo reminder when the query reads a move to a pending item", async () => {
+        ctx = contextWithTodo();
+        const stub = harness();
+        await startSession(stub);
+        await userTurn(stub);
+
+        mocks.consult.mockResolvedValue({
+            decision: { kind: "none" },
+            extras: {
+                todo_item_third: { type: "bool", probability: 0.8 },
+                todo_outside: { type: "bool", probability: 0.2 },
+            },
+            status: "answered",
+            latencyMs: 1,
+        });
+
+        const result = await userTurn(stub);
+
+        expect(result?.message?.content).toContain("TODO.md");
+        const sent = mocks.consult.mock.calls[0]?.[0] as {
+            extraQuestions?: Record<string, unknown>;
+        };
+        expect(Object.keys(sent.extraQuestions ?? {})).toEqual(["todo_item_third", "todo_outside"]);
+
+        const entry = stub.entries.findLast(
+            (candidate) => candidate.customType === "pi-coder-reminder:debug",
+        );
+        expect(entry?.data).toMatchObject({
+            reminder: "todo",
+            modelChoice: "todo",
+            todoMove: { id: "third", probability: 0.8 },
+            todoScores: { third: 0.8, outside: 0.2 },
+        });
+    });
+
+    it("lets an explicit reminder pick win over the detected move, and still records it", async () => {
+        ctx = contextWithTodo();
+        const stub = harness();
+        await startSession(stub);
+        await userTurn(stub);
+
+        mocks.consult.mockResolvedValue({
+            decision: { kind: "reminder", id: "delegation" },
+            extras: {
+                todo_item_third: { type: "bool", probability: 0.8 },
+                todo_outside: { type: "bool", probability: 0.2 },
+            },
+            status: "answered",
+            latencyMs: 1,
+        });
+
+        const result = await userTurn(stub);
+
+        expect(result?.message?.content).toContain("scout");
+        const entry = stub.entries.findLast(
+            (candidate) => candidate.customType === "pi-coder-reminder:debug",
+        );
+        expect(entry?.data).toMatchObject({
+            reminder: "delegation",
+            modelChoice: "delegation",
+            todoMove: { id: "third", probability: 0.8 },
+        });
+    });
+
+    it("does not ask the TODO query when the list has nothing the work could move to", async () => {
+        const stub = harness();
+        await startSession(stub);
+        await userTurn(stub);
+
+        await userTurn(stub);
+
+        const sent = mocks.consult.mock.calls[0]?.[0] as { extraQuestions?: unknown };
+        expect(sent.extraQuestions).toBeUndefined();
     });
 });

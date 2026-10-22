@@ -100,6 +100,7 @@ export function reminderResult(
     model: Classifier,
     probabilities: Record<string, number>,
     labels: ReminderStateAnswers = {},
+    extras: Record<string, ClassifierAnswer> = {},
 ): ClassifierResult {
     const answers: Record<string, ClassifierAnswer> = {};
     for (const [id, probability] of Object.entries(probabilities)) {
@@ -116,7 +117,7 @@ export function reminderResult(
         answers[REMINDER_UNVALIDATED_QUESTION] = { type: "bool", probability: labels.unvalidated };
     }
 
-    return result(model, answers);
+    return result(model, { ...answers, ...extras });
 }
 
 /** What a file-access answer pair says, in the shape a case reads as one line. */

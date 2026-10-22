@@ -22,6 +22,7 @@ import {
     reminderResumeState,
 } from "./session-signals";
 import { loadReminderSettings } from "./settings";
+import { todoChoiceFrom, todoQueryFrom, type TodoQuery } from "./todo-query";
 import type { ReminderDefinition, ReminderId } from "./types";
 
 export interface ReminderRegistrationOptions {
@@ -50,6 +51,10 @@ interface DecisionEntryInput {
     scores?: Record<string, number>;
     consult?: ReminderConsult;
     labels?: ReminderStateLabels;
+    /** The TODO item the extra query read as the current work, when it moved off the list. */
+    todoMove?: { id: string; probability: number };
+    /** Every TODO query candidate's returned probability, for calibration. */
+    todoScores?: Record<string, number>;
     contextTokens: number;
     scheduler: SchedulerSnapshot;
 }
@@ -83,6 +88,8 @@ function decisionEntry(input: DecisionEntryInput): Record<string, unknown> {
                   },
               }),
         ...(input.labels === undefined ? {} : { labels: { ...input.labels } }),
+        ...(input.todoMove === undefined ? {} : { todoMove: { ...input.todoMove } }),
+        ...(input.todoScores === undefined ? {} : { todoScores: { ...input.todoScores } }),
         contextTokens: input.contextTokens,
         scheduler: input.scheduler,
     };
@@ -109,6 +116,7 @@ async function consultModelFor(
     request: string,
     signals: ReminderSignals,
     options: readonly ReminderDefinition[],
+    todoQuery?: TodoQuery,
 ): Promise<ReminderConsult> {
     return consultReminderSelection({
         ctx,
@@ -116,6 +124,7 @@ async function consultModelFor(
         options,
         request,
         signals,
+        ...(todoQuery === undefined ? {} : { extraQuestions: todoQuery.questions }),
     });
 }
 
@@ -339,6 +348,8 @@ export default function registerRemindersExtension(
         let signals: ReminderSignals | undefined;
         let options: ReminderDefinition[] = [];
         let consult: ReminderConsult | undefined;
+        let todoMove: { id: string; probability: number } | undefined;
+        let todoScores: Record<string, number> | undefined;
         if (rotationTurn) {
             signals = rotationSignals(ctx, snapshot.userTurns + 1);
             available = availableRotationIds(signals);
@@ -349,9 +360,25 @@ export default function registerRemindersExtension(
 
             const config = decisionConfig.load(ctx.cwd ?? process.cwd());
             if (reminderEnabled(config)) {
-                consult = await consultModelFor(ctx, config, event.prompt, signals, options);
+                // The TODO query asks about the items the list has not marked in progress; the item list
+                // lives in the question criteria only, so the decision state keeps its summary shape.
+                const todoQuery = todoQueryFrom(ctx.sessionManager.getBranch());
+
+                consult = await consultModelFor(
+                    ctx,
+                    config,
+                    event.prompt,
+                    signals,
+                    options,
+                    todoQuery,
+                );
                 modelChoice = modelChoiceOf(consult);
                 scores = consult.scores;
+
+                const todo = todoChoiceFrom(todoQuery, consult.extras, modelChoice);
+                modelChoice = todo.choice;
+                todoMove = todo.move;
+                todoScores = todo.scores;
 
                 // The labels build state along the way: they ride on the same request and are sent back in
                 // the next turn's state. Only a real change is recorded, so the session does not grow an
@@ -394,6 +421,8 @@ export default function registerRemindersExtension(
                     scores,
                     consult,
                     labels,
+                    ...(todoMove === undefined ? {} : { todoMove }),
+                    ...(todoScores === undefined ? {} : { todoScores }),
                     contextTokens: growth.maxTokens,
                     scheduler: snapshot,
                 }),

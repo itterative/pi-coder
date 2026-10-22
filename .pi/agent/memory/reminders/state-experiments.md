@@ -180,6 +180,9 @@ Implementation note: the endpoint rejects a raw `bool` question type (only `choi
 probe had to send `noul` directly; the SDK's typesafe-system-one api translates `ClassifierBoolQuestion` to
 `noul`, so production can keep using `bool`.
 
+The shipped rule and its wiring are in `reminders/selection.md`; the per-item bools above are what
+`src/modules/reminders/todo-query.ts` builds.
+
 ## Single choice collapses for both models
 
 Asking one `choice` question over the four reminders plus `none`, with `none` first or last, returned `none`
