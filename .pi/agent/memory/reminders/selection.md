@@ -74,12 +74,13 @@ discussion turns (`outside` dominated) and scored the work item where the work e
 `status_cur` vs `status_stale` criteria agreed on 14/15, so the model reads the work rather than parroting the
 `in_progress` label.
 
-Live reads (Oct 22, after reloads): the first turn state to carry `todo` (`{completed: 4, total: 6}`) also
-proved the ask (`todoScores`: `live-check` 0.06, `outside` 0.27 -> no move), and a later turn whose pending
-item was the actual work read 0.32 against outside 0.24 - the item won the comparison but sat below the
-then-0.45 floor, so it did not fire. That pair set the floor to 0.30: it is an item-match probability, not the
-reminder threshold's "worth showing" one, and the offline discussion turns stayed well below it. The ask costs
-~250 input tokens for one item bool plus `outside`.
+Live reads (Oct 22, after reloads, three turns that were all about their pending item): `alright, is it there
+yet?` read the item 0.06 against outside 0.27, `go ahead` 0.32 against 0.24 (the item won, but sat below the
+then-0.45 floor), and `alright, let's see` 0.08 against 0.60. The middle pair set the floor to 0.30 - an
+item-match probability, not the reminder threshold's "worth showing" one. The pattern is the finding: the item
+bools track visible work, not conversational topic, so a passive meta-request about the item still reads as
+outside. That is the intended target (a work move, not a topic move), and the ask costs ~250 input tokens for
+one item bool plus `outside`.
 
 Not adopted: per-item phases in TODO.md (schema churn), persisted per-item phase labels, a deterministic
 stale-TODO gate, and enriching the state with item lists or `updated_turns_ago`.
