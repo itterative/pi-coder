@@ -89,6 +89,13 @@ item bool plus `outside`.
 Not adopted: per-item phases in TODO.md (schema churn), persisted per-item phase labels, a deterministic
 stale-TODO gate, and enriching the state with item lists or `updated_turns_ago`.
 
+Live fires (Oct 22): the compaction reminder fired once, after a reload's fold - the next turn's debug entry
+read `trigger=session`, `reminder=compaction`, `modelChoice=None` (the armed turn never consults), and a fresh
+`sessionArmed: true` / `rotationIndex: 0`; the delivered message carried `{id: compaction, turn: 1}` and the
+real session JSONL path appended at emission. Open question raised there: an aborted partial message moves the
+tree, and a tree move re-arms `memory-read` through the same `seed()` as session start, so it may want its own
+shape rather than the session-start text. Worth a look later, not yet a defect.
+
 ## Recorded decisions
 
 Every selection decision is written to the session as a `pi-coder-reminder:debug` entry, so the state a
