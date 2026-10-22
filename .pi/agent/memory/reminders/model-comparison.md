@@ -33,7 +33,7 @@ has to share VRAM; and from Oct 22, how the newly added `lfm2-d1` compares. The 
   - The signals are copied from the debug entry as-is.
 - The reconstruction was validated by re-scoring the two recorded live clef decisions, which matched within
   0.002.
-- Latency is client wall-clock; the endpoint reports `output_tokens: 0` for both models.
+- Latency is client wall-clock; the endpoint reports `output_tokens: 0` for all three models.
 
 ## Speed
 
@@ -48,6 +48,12 @@ The probe's 3.6 s for vllm is inflated by VRAM pressure with both models loaded;
 while vllm was resident. clef's smaller server-side template (1.4k vs 3.7k input tokens for the identical
 body) is why the probe gap is larger than the live one. Neither model reports output tokens, so decode cost
 has to be read from latency alone.
+
+Residency confound: the endpoint has less VRAM than multiple models need together, and models that do not
+fit are served from CPU/RAM instead of the GPU. Every latency above and in the lfm2 section therefore
+tracks which model was GPU-resident at measurement time, not intrinsic model speed - the slow vllm probe
+ran while clef was also loaded, the faster vllm live turns ran when it was resident, and clef's 375-640 ms
+may itself be CPU-served. Do not rank models by these numbers unless residency is held fixed.
 
 ## Real-state decisions
 
@@ -107,9 +113,10 @@ which scenarios it fires.
 Run through the same scripts: eight synthetic scenarios forward and reversed, and all eleven recorded turn
 states replayed from the debug entries. Raw scores sit beside the other models in the comparison results.
 
-- Speed: 192-218 ms on the synthetic states and 245-331 ms on the real-shaped replays, the fastest of the
-  three, despite the largest server-side prompt (3.0-3.6k input tokens synthetic, 3.7-7.5k on the grown real
-  states, versus clef's 1.2k synthetic and 1.6-1.7k real). Question order barely moves it (max delta 0.013).
+- Speed: 192-218 ms on the synthetic states and 245-331 ms on the real-shaped replays, the fastest measured
+  and likely GPU-resident at the time (see the residency note under Speed), despite the largest server-side
+  prompt (3.0-3.6k input tokens synthetic, 3.7-7.5k on the grown real states, versus clef's 1.2k synthetic
+  and 1.6-1.7k real). Question order barely moves it (max delta 0.013).
 - Labeled set: 3/8 - the only model that fires the intended reminder on any labeled fire scenario,
   `validation` .789 on the unvalidated-edit state (the strongest expected score any model produced) and
   `todo` .540 on the stale-TODO state. It also fires 3/4 of the "none" scenarios (read-only .582, debugging
