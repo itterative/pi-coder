@@ -79,8 +79,12 @@ yet?` read the item 0.06 against outside 0.27, `go ahead` 0.32 against 0.24 (the
 then-0.45 floor), and `alright, let's see` 0.08 against 0.60. The middle pair set the floor to 0.30 - an
 item-match probability, not the reminder threshold's "worth showing" one. The pattern is the finding: the item
 bools track visible work, not conversational topic, so a passive meta-request about the item still reads as
-outside. That is the intended target (a work move, not a topic move), and the ask costs ~250 input tokens for
-one item bool plus `outside`.
+outside. That is the intended target (a work move, not a topic move). The positive fire then worked in exactly
+that shape: with `live-reads` still pending after a turn that documented the reads, the next consult scored it
+0.58 against outside 0.26, `todoMove` appeared, and `todo` was forced even though its own reminder score was
+only 0.23 (every candidate sat below the 0.45 threshold). The reminder was delivered before the user message
+was persisted, and the item was marked complete in that same turn. The ask costs ~250 input tokens for one
+item bool plus `outside`.
 
 Not adopted: per-item phases in TODO.md (schema churn), persisted per-item phase labels, a deterministic
 stale-TODO gate, and enriching the state with item lists or `updated_turns_ago`.
