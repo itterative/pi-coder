@@ -51,6 +51,19 @@ together. With the model off or a label unreadable, `session-signals.ts` infers 
 activity: the last code write is ordered against the last test run, a failed last run reads as `debugging`,
 and writes after it read as unvalidated. `finishing` is never inferred.
 
+## Open lead: TODO as phase state
+
+The runtime TODO is the only signal that can carry task progress rather than activity counts, and the channel
+already exists (`pi-coder:todo-snapshot` -> `signals.todo`). It has never carried data in practice: all 14
+recorded turn states in the Oct 21-22 session had no `todo` field (the list was empty; the freeform body is
+not parsed), so the `todo` question was judged from `todo_writes` alone. To make it a phase signal the state
+needs age and structure - `updated_turns_ago`, in-progress/pending counts, per-item status - and `phase` /
+`finishing` could then be derived from the in-progress item instead of persisted as model labels, which
+flapped and survived compaction (`wrapping_up` / `finishing: true` was still in the state on a later planning
+turn, including clef's first live consult). Keeping the list current is what the `todo` reminder is for, and
+its gate should be deterministic (work underway and no TODO write in N turns) because the model that would
+choose it needs the staleness fact to see it. Not measured yet.
+
 ## Recorded decisions
 
 Every selection decision is written to the session as a `pi-coder-reminder:debug` entry, so the state a
