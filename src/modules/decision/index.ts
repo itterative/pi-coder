@@ -100,10 +100,13 @@ export {
 } from "./script-classification";
 export { scopeAnswer } from "./scope";
 export {
+    DEFAULT_REMINDER_FORM,
     DEFAULT_REMINDER_MIN_PROBABILITY,
+    DEFAULT_REMINDER_MIN_SCORE,
     REMINDER_FINISHING_CRITERIA,
     REMINDER_FINISHING_INSTRUCTION,
     REMINDER_FINISHING_QUESTION,
+    REMINDER_HELPFULNESS_CRITERIA,
     REMINDER_PHASE_CRITERIA,
     REMINDER_PHASE_INSTRUCTION,
     REMINDER_PHASE_QUESTION,
@@ -119,6 +122,7 @@ export {
     reminderEnabled,
     reminderQuestionInstruction,
     reminderRequest,
+    reminderScoreInstruction,
     reminderScoresFrom,
     reminderStateFrom,
     type ReminderConsult,
@@ -219,6 +223,7 @@ export type {
     DecisionVetoAnswer,
     DecisionVetoConfig,
     DecisionVetoReason,
+    ReminderQuestionForm,
     ScriptArtifact,
     ScriptCapability,
     ScriptCapabilitySummary,

@@ -38,6 +38,18 @@ todos:
 ---
 `;
 
+const TODO_COMPLETE_DOCUMENT = `---
+version: 1
+todos:
+  - id: first
+    title: First step
+    status: completed
+  - id: second
+    title: Second step
+    status: completed
+---
+`;
+
 const temporaryDirectories: string[] = [];
 
 function session(): SessionManager {
@@ -391,6 +403,29 @@ describe("availableRotationIds", () => {
         manager.appendMessage(userEntry("report back", 1));
 
         expect(availability(manager, { phase: "wrapping_up" }).has("memory-hygiene")).toBe(true);
+    });
+
+    it("gates todo out when there is no list", () => {
+        const manager = session();
+        manager.appendMessage(userEntry("tell me about this", 1));
+
+        const available = availability(manager);
+
+        expect(available.has("todo")).toBe(false);
+        expect(available.has("validation")).toBe(true);
+    });
+
+    it("gates todo in for a list with work left, and out once it is complete", () => {
+        const open = session();
+        open.appendCustomEntry("pi-coder:todo-snapshot", { version: 1, content: TODO_DOCUMENT });
+        expect(availability(open).has("todo")).toBe(true);
+
+        const closed = session();
+        closed.appendCustomEntry("pi-coder:todo-snapshot", {
+            version: 1,
+            content: TODO_COMPLETE_DOCUMENT,
+        });
+        expect(availability(closed).has("todo")).toBe(false);
     });
 });
 

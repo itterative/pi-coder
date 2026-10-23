@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { DECISION_STRATEGIES, type DecisionStrategyId } from "./strategies";
-import type { DecisionModelConfig, DecisionSurface } from "./types";
+import type { DecisionModelConfig, DecisionSurface, ReminderQuestionForm } from "./types";
 
 /**
  * The decision model's configuration, in a file of its own.
@@ -121,6 +121,15 @@ function ratioField(value: unknown): number | undefined {
     return ratio !== undefined && ratio <= 1 ? ratio : undefined;
 }
 
+/** A non-negative finite number; unlike `positiveNumber`, zero is a legal threshold. */
+function nonNegativeNumber(value: unknown): number | undefined {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function reminderFormField(value: unknown): ReminderQuestionForm | undefined {
+    return value === "bool" || value === "score" ? value : undefined;
+}
+
 function strategyField(value: unknown): DecisionStrategyId | undefined {
     // `Object.hasOwn`, not `in`: the prototype chain would accept `toString` and hand `resolveStrategy` a
     // function that has no `buildRequest`.
@@ -167,6 +176,8 @@ function readDecisionModelConfig(data: unknown): DecisionModelConfig | undefined
         suggestions: booleanField(raw.suggestions),
         reminders: booleanField(raw.reminders),
         reminderMinProbability: ratioField(raw.reminderMinProbability),
+        reminderForm: reminderFormField(raw.reminderForm),
+        reminderMinScore: nonNegativeNumber(raw.reminderMinScore),
         apply: booleanField(raw.apply),
         baseUrl: textField(raw.baseUrl),
         apiKey: textField(raw.apiKey),
@@ -204,6 +215,8 @@ function mergeDecisionConfigs(
         suggestions: override.suggestions ?? base.suggestions,
         reminders: override.reminders ?? base.reminders,
         reminderMinProbability: override.reminderMinProbability ?? base.reminderMinProbability,
+        reminderForm: override.reminderForm ?? base.reminderForm,
+        reminderMinScore: override.reminderMinScore ?? base.reminderMinScore,
         apply: override.apply ?? base.apply,
         baseUrl: override.baseUrl ?? base.baseUrl,
         apiKey: override.apiKey ?? base.apiKey,

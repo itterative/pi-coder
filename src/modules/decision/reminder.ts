@@ -10,7 +10,7 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import { resolveClassifier, type ClassifierRegistry } from "./model";
-import type { DecisionModelConfig, DecisionRecentMessage } from "./types";
+import type { DecisionModelConfig, DecisionRecentMessage, ReminderQuestionForm } from "./types";
 
 /**
  * The reminder subject: one choice question that decides whether an agent turn gets a reminder, and which
@@ -35,6 +35,27 @@ import type { DecisionModelConfig, DecisionRecentMessage } from "./types";
  */
 export const DEFAULT_REMINDER_MIN_PROBABILITY = 0.45;
 
+/**
+ * The question form the per-reminder questions use by default.
+ *
+ * `"score"` is the measured default: on real states the bool form kept `todo` at 0.12-0.29 and never fired
+ * it, while the score form ranked `todo` first whenever work was underway (0.94-1.21) and yielded to
+ * `validation` when that was the real need.
+ */
+export const DEFAULT_REMINDER_FORM: ReminderQuestionForm = "score";
+
+/**
+ * Default score a reminder's own answer must reach when the form is `"score"`.
+ *
+ * The scale is `[0, criteria.length - 1]`, so 1.0 is the second of four levels. Measured `todo` scores on
+ * real states were 0.94-1.21 while work was underway and 0.44 on a closed list, so 1.0 fires the former and
+ * not the latter; the `todo` availability gate suppresses the no-list states the model also scored high.
+ */
+export const DEFAULT_REMINDER_MIN_SCORE = 1;
+
+/** The helpfulness levels of the score form, in order; the answer is a continuous point in this range. */
+export const REMINDER_HELPFULNESS_CRITERIA = ["no help", "mild", "useful", "important"] as const;
+
 /** The two ends of one reminder's own question. */
 export const REMINDER_WORTH_SHOWING_CRITERIA = {
     true: "Yes: it targets something the agent is likely to overlook right now",
@@ -50,6 +71,32 @@ export function reminderQuestionInstruction(option: ReminderOption): string {
         "Would showing this single reminder to the agent before its next step help, or is it easy to " +
         `overlook right now? When this reminder helps: ${option.guidance}`
     );
+}
+
+/**
+ * One reminder's score-form question: the same guidance, asked as a helpfulness level rather than a yes/no.
+ *
+ * The wording is the one measured in the score-form comparison, not a rewrite of the bool instruction.
+ */
+export function reminderScoreInstruction(option: ReminderOption): string {
+    return `How helpful would showing this reminder be right now: ${option.guidance}`;
+}
+
+/** The question for one reminder in the configured form; the piggybacked labels stay bool/choice. */
+function reminderQuestion(option: ReminderOption, form: ReminderQuestionForm): ClassifierQuestion {
+    if (form === "score") {
+        return {
+            type: "score",
+            instructions: reminderScoreInstruction(option),
+            criteria: [...REMINDER_HELPFULNESS_CRITERIA],
+        };
+    }
+
+    return {
+        type: "bool",
+        instructions: reminderQuestionInstruction(option),
+        criteria: REMINDER_WORTH_SHOWING_CRITERIA,
+    };
 }
 
 /** The phase labels the model may assign while the session proceeds. */
@@ -243,24 +290,22 @@ export function buildReminderState(context: ReminderContext): JsonObject {
 /**
  * One request: one question per offered reminder, plus the state questions it piggybacks.
  *
- * Every reminder is asked as its own probability question because the single-choice form with a `none`
- * option collapsed to `none` on nearly every real state, while the same states ranked sensibly when forced.
- * The endpoint answers every question in the same round trip, as the file-access subject does with
- * kind/purpose/loss, so this costs no extra request.
+ * Every reminder is asked on its own rather than as a single choice because the choice form with a `none`
+ * option collapsed to `none` on nearly every real state. Which form its own question takes is `form`: a
+ * probability bool, or a helpfulness score (the default, which separates the reminders where the bool
+ * flattens them). The endpoint answers every question in the same round trip, as the file-access subject does
+ * with kind/purpose/loss, so this costs no extra request.
  */
 export function reminderRequest(
     state: JsonObject,
     options: readonly ReminderOption[],
     extraQuestions?: Readonly<Record<string, ClassifierQuestion>>,
+    form: ReminderQuestionForm = DEFAULT_REMINDER_FORM,
 ): ClassifierContext {
     const questions: Record<string, ClassifierQuestion> = {};
 
     for (const option of options) {
-        questions[option.id] = {
-            type: "bool",
-            instructions: reminderQuestionInstruction(option),
-            criteria: REMINDER_WORTH_SHOWING_CRITERIA,
-        };
+        questions[option.id] = reminderQuestion(option, form);
     }
 
     questions[REMINDER_PHASE_QUESTION] = {
@@ -292,7 +337,25 @@ export function reminderRequest(
     return { state, questions };
 }
 
-/** The per-reminder probabilities the model returned, keyed by id; used for calibration and the debug log. */
+/**
+ * The numeric answer one reminder question returned, or `undefined` when it was not answered readably.
+ *
+ * Reads whichever form was asked: a bool's `probability` or a score's `score`. Keeping this in one place is
+ * what lets the decision and the calibration log stay form-agnostic.
+ */
+function reminderAnswerValue(answer: ClassifierAnswer | undefined): number | undefined {
+    if (answer === undefined) {
+        return undefined;
+    }
+
+    if (answer.type === "bool") {
+        return answer.probability;
+    }
+
+    return answer.type === "score" ? answer.score : undefined;
+}
+
+/** The per-reminder values the model returned, keyed by id; used for calibration and the debug log. */
 export function reminderScoresFrom(
     answers: Record<string, ClassifierAnswer>,
     options: readonly ReminderOption[],
@@ -300,9 +363,9 @@ export function reminderScoresFrom(
     const scores: Record<string, number> = {};
 
     for (const option of options) {
-        const answer = answers[option.id];
-        if (answer !== undefined && answer.type === "bool") {
-            scores[option.id] = answer.probability;
+        const value = reminderAnswerValue(answers[option.id]);
+        if (value !== undefined) {
+            scores[option.id] = value;
         }
     }
 
@@ -310,27 +373,28 @@ export function reminderScoresFrom(
 }
 
 /**
- * Read the per-reminder probabilities and pick the strongest above the threshold.
+ * Read the per-reminder values and pick the strongest above the threshold.
  *
  * `undefined` means no option's answer was readable, so the caller should fall back to its deterministic
- * schedule; `{ kind: "none" }` is a deliberate decision to show nothing this turn and never falls back.
- * The threshold is what keeps a low, uniform read-only state from firing.
+ * schedule; `{ kind: "none" }` is a deliberate decision to show nothing this turn and never falls back. The
+ * threshold is the configured form's own gate, so `minValue` means a probability for `"bool"` and a
+ * helpfulness level for `"score"`; the default is the bool gate because that is what most direct callers ask.
  */
 export function reminderDecisionFrom(
     answers: Record<string, ClassifierAnswer>,
     options: readonly ReminderOption[],
-    minProbability: number = DEFAULT_REMINDER_MIN_PROBABILITY,
+    minValue: number = DEFAULT_REMINDER_MIN_PROBABILITY,
 ): ReminderDecision | undefined {
-    let best: { id: string; probability: number } | undefined;
+    let best: { id: string; value: number } | undefined;
 
     for (const option of options) {
-        const answer = answers[option.id];
-        if (answer === undefined || answer.type !== "bool") {
+        const value = reminderAnswerValue(answers[option.id]);
+        if (value === undefined) {
             continue;
         }
 
-        if (best === undefined || answer.probability > best.probability) {
-            best = { id: option.id, probability: answer.probability };
+        if (best === undefined || value > best.value) {
+            best = { id: option.id, value };
         }
     }
 
@@ -338,9 +402,7 @@ export function reminderDecisionFrom(
         return undefined;
     }
 
-    return best.probability >= minProbability
-        ? { kind: "reminder", id: best.id }
-        : { kind: "none" };
+    return best.value >= minValue ? { kind: "reminder", id: best.id } : { kind: "none" };
 }
 
 /**
@@ -461,7 +523,8 @@ export class ReminderEvaluator {
             return { status: "disabled", latencyMs: 0 };
         }
 
-        const key = reminderCacheKey(model, context);
+        const form = config.reminderForm ?? DEFAULT_REMINDER_FORM;
+        const key = reminderCacheKey(model, context, form);
         const cached = this.cache.get(key);
         if (cached !== undefined) {
             return consultFrom(cached, "cached", 0);
@@ -474,7 +537,12 @@ export class ReminderEvaluator {
         const started = this.now();
         const classified = await this.classify(
             model,
-            reminderRequest(buildReminderState(context), context.options, context.extraQuestions),
+            reminderRequest(
+                buildReminderState(context),
+                context.options,
+                context.extraQuestions,
+                form,
+            ),
         );
         const { result } = classified;
         const latencyMs = this.now() - started;
@@ -490,7 +558,7 @@ export class ReminderEvaluator {
         const decision = reminderDecisionFrom(
             result.answers,
             context.options,
-            config.reminderMinProbability,
+            reminderThresholdOf(config, form),
         );
         const state = reminderStateFrom(result.answers);
         const extras = extraAnswersFrom(result.answers, context.extraQuestions);
@@ -584,15 +652,29 @@ export function reminderEnabled(config: DecisionModelConfig): boolean {
     return config.enabled === true && config.reminders === true;
 }
 
+/** The gate the configured form compares against: a probability for bool, a helpfulness level for score. */
+function reminderThresholdOf(config: DecisionModelConfig, form: ReminderQuestionForm): number {
+    if (form === "score") {
+        return config.reminderMinScore ?? DEFAULT_REMINDER_MIN_SCORE;
+    }
+
+    return config.reminderMinProbability ?? DEFAULT_REMINDER_MIN_PROBABILITY;
+}
+
 /**
- * A reminder answer keyed by everything that can change it: the model, the candidates, the request, and the
- * recent window. The request turns over every turn, so the cache mostly helps a repeated consult for the
- * same turn rather than serving an old choice into new context.
+ * A reminder answer keyed by everything that can change it: the model, the question form, the candidates, the
+ * request, and the recent window. The request turns over every turn, so the cache mostly helps a repeated
+ * consult for the same turn rather than serving an old choice into new context.
  */
-function reminderCacheKey(model: Classifier, context: ReminderContext): string {
+function reminderCacheKey(
+    model: Classifier,
+    context: ReminderContext,
+    form: ReminderQuestionForm,
+): string {
     return JSON.stringify([
         model.provider,
         model.id,
+        form,
         context.options.map((option) => [option.id, option.guidance]),
         context.request ?? "",
         context.recent ?? [],

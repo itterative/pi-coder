@@ -107,6 +107,33 @@ export function reminderResult(
         answers[id] = { type: "bool", probability };
     }
 
+    return result(model, { ...answers, ...reminderLabelAnswers(labels), ...extras });
+}
+
+/**
+ * A successful answer to the reminder request in the score form: one helpfulness level per offered reminder.
+ *
+ * The endpoint returns a continuous level in `[0, criteria.length - 1]` for a `score` question, not a
+ * probability, so a case states the level directly.
+ */
+export function reminderScoreResult(
+    model: Classifier,
+    scores: Record<string, number>,
+    labels: ReminderStateAnswers = {},
+    extras: Record<string, ClassifierAnswer> = {},
+): ClassifierResult {
+    const answers: Record<string, ClassifierAnswer> = {};
+    for (const [id, score] of Object.entries(scores)) {
+        answers[id] = { type: "score", score, confidence: 0.5 };
+    }
+
+    return result(model, { ...answers, ...reminderLabelAnswers(labels), ...extras });
+}
+
+/** The piggybacked label answers, which are bool/choice in either reminder form. */
+function reminderLabelAnswers(labels: ReminderStateAnswers): Record<string, ClassifierAnswer> {
+    const answers: Record<string, ClassifierAnswer> = {};
+
     if (labels.phase !== undefined) {
         answers[REMINDER_PHASE_QUESTION] = choiceAnswer(labels.phase, 0.9);
     }
@@ -117,7 +144,7 @@ export function reminderResult(
         answers[REMINDER_UNVALIDATED_QUESTION] = { type: "bool", probability: labels.unvalidated };
     }
 
-    return result(model, { ...answers, ...extras });
+    return answers;
 }
 
 /** What a file-access answer pair says, in the shape a case reads as one line. */

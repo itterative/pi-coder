@@ -70,10 +70,12 @@ export interface ReminderSignalInput {
 }
 
 /**
- * The rotation ids the activity allows this turn. Only `memory-hygiene` is gated: before any file has
- * changed its "review what you learned" text has nothing to act on, so it stays unavailable until mutating
- * work happened. Filtering here rather than in the catalog keeps the gate a property of the session, not of
- * the reminder.
+ * The rotation ids the activity allows this turn.
+ *
+ * `memory-hygiene` is gated on mutating work: before any file has changed its "review what you learned"
+ * text has nothing to act on. `todo` is gated on a readable list with work left in it: the score form ranks
+ * `todo` high even when no list exists, and a closed list has nothing left to keep current. Filtering here
+ * rather than in the catalog keeps each gate a property of the session, not of the reminder.
  */
 export function availableRotationIds(signals: ReminderSignals): ReadonlySet<ReminderId> {
     const available = new Set<ReminderId>();
@@ -82,10 +84,19 @@ export function availableRotationIds(signals: ReminderSignals): ReadonlySet<Remi
             continue;
         }
 
+        if (reminder.id === "todo" && !hasOpenTodo(signals.todo)) {
+            continue;
+        }
+
         available.add(reminder.id);
     }
 
     return available;
+}
+
+/** A readable TODO list with at least one item still open. */
+function hasOpenTodo(todo: ReminderTodoState | undefined): boolean {
+    return todo !== undefined && todo.completed < todo.total;
 }
 
 /** Work the memory-hygiene reminder can act on: a changed file, TODO progress, or a wrapping-up label. */

@@ -141,6 +141,9 @@ export interface DecisionVetoConfig {
     escalateTo?: DecisionAction;
 }
 
+/** Which question form the per-reminder questions use: a probability bool, or a helpfulness score. */
+export type ReminderQuestionForm = "bool" | "score";
+
 /**
  * Configuration for consulting a classifier model about unresolved commands.
  *
@@ -176,6 +179,23 @@ export interface DecisionModelConfig {
      * unvalidated work clear it on `validation`. Only meaningful when `reminders` is on.
      */
     reminderMinProbability?: number;
+    /**
+     * Which question form the per-reminder questions use (default `"score"`).
+     *
+     * `"bool"` asks each reminder as a probability question ("would this help?"); `"score"` asks how helpful
+     * it would be on a four-level scale. Measured on real states, the bool form flattens every reminder to
+     * 0.12-0.29 and never fires `todo`, while the score form ranks `todo` first whenever work is underway and
+     * yields to `validation` when that is the real need. Only meaningful when `reminders` is on.
+     */
+    reminderForm?: ReminderQuestionForm;
+    /**
+     * Score a reminder's own answer must reach to be shown (default 1.0, with `reminderForm: "score"`).
+     *
+     * The score form returns a continuous level in `[0, criteria.length - 1]`, not a probability, so it has
+     * its own gate; 1.0 separates the measured show/no-show states for `todo`. Unlike `reminderMinProbability`
+     * it is not bounded by 1. Only meaningful when `reminders` is on.
+     */
+    reminderMinScore?: number;
     /**
      * Whether a verdict may resolve a prompt (default false).
      *

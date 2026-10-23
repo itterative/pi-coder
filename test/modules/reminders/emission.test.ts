@@ -82,6 +82,19 @@ function appendReminder(manager: SessionManager, id: string, turn: number): void
     );
 }
 
+/** An open TODO list, so the `todo` gate allows the rotation id the navigation test expects. */
+const TODO_DOCUMENT = `---
+version: 1
+todos:
+  - id: first
+    title: First step
+    status: completed
+  - id: second
+    title: Second step
+    status: pending
+---
+`;
+
 afterEach(() => {
     vi.unstubAllEnvs();
     for (const directory of temporaryDirectories.splice(0)) {
@@ -152,6 +165,10 @@ describe("reminder emission", () => {
         const manager = realSession();
         appendUser(manager, "first", 1);
         appendReminder(manager, "delegation", 1);
+        manager.appendCustomEntry("pi-coder:todo-snapshot", {
+            version: 1,
+            content: TODO_DOCUMENT,
+        });
         appendUser(manager, "second", 3);
         ctx = stubSessionContext(manager, { cwd: "/tmp/reminder-project" });
 

@@ -34,6 +34,8 @@ const CONFIG_FIELDS = [
     "fileSurfaces",
     "reminders",
     "reminderMinProbability",
+    "reminderForm",
+    "reminderMinScore",
 ] as const;
 
 function expectUnconfigured(config: DecisionModelConfig): void {
@@ -207,6 +209,8 @@ describe("decision config field validation", () => {
         ["contextWindow", "big"],
         ["minConfidence", 2],
         ["reminderMinProbability", 2],
+        ["reminderForm", "helpful"],
+        ["reminderMinScore", -1],
         ["surfaces", "parent"],
         ["reminders", "yes"],
     ] as Array<[keyof DecisionModelConfig, unknown]>)("drops a wrong-typed %s", (field, value) => {
@@ -243,6 +247,20 @@ describe("decision config field validation", () => {
         expect(loadDecisionConfig(workspace).reminders).toBe(true);
         expect(loadDecisionConfig(workspace).reminderMinProbability).toBe(0.5);
         expect(loadDecisionConfig(workspace).surfaces).toBeUndefined();
+    });
+
+    it("reads the reminder form and its score gate", () => {
+        writeProjectConfig({
+            decisionModel: {
+                enabled: true,
+                reminders: true,
+                reminderForm: "bool",
+                reminderMinScore: 1.5,
+            },
+        });
+
+        expect(loadDecisionConfig(workspace).reminderForm).toBe("bool");
+        expect(loadDecisionConfig(workspace).reminderMinScore).toBe(1.5);
     });
 
     it("ignores removed fields instead of reviving them", () => {

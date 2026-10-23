@@ -8,8 +8,11 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import {
+    DEFAULT_REMINDER_FORM,
     DEFAULT_REMINDER_MIN_PROBABILITY,
+    DEFAULT_REMINDER_MIN_SCORE,
     REMINDER_FINISHING_QUESTION,
+    REMINDER_HELPFULNESS_CRITERIA,
     REMINDER_PHASE_CRITERIA,
     REMINDER_PHASE_QUESTION,
     REMINDER_UNVALIDATED_QUESTION,
@@ -19,6 +22,7 @@ import {
     reminderDecisionFrom,
     reminderEnabled,
     reminderRequest,
+    reminderScoreInstruction,
     reminderStateFrom,
     resetDecisionEvaluator,
     type ClassifierRegistry,
@@ -35,6 +39,7 @@ import {
     classifier,
     classifierModelRegistry,
     reminderResult,
+    reminderScoreResult,
     type Classifier,
 } from "./classifier";
 
@@ -66,7 +71,8 @@ interface HarnessOptions {
 function harness(options: HarnessOptions = {}) {
     const models = options.models ?? [MODEL];
     const behavior =
-        options.behavior ?? (async (model) => reminderResult(model, { sandbox: 0.9, todo: 0.05 }));
+        options.behavior ??
+        (async (model) => reminderScoreResult(model, { sandbox: 2, todo: 0.1 }));
     const classify = vi.fn(
         (model: Classifier, context: ClassifierContext, opts?: ModelsClassifierOptions) =>
             behavior(model, context, opts?.signal),
@@ -159,14 +165,18 @@ describe("reminder state, request, and answer", () => {
         });
     });
 
-    it("asks one probability question per offered reminder", () => {
+    it("asks one score question per offered reminder by default", () => {
         const request = reminderRequest({ request: "run the tests" }, OPTIONS);
 
         for (const option of OPTIONS) {
             const question = request.questions[option.id];
 
-            expect(question?.type).toBe("bool");
-            expect(question?.instructions).toContain(option.guidance);
+            expect(question?.type).toBe("score");
+            if (question?.type !== "score") {
+                throw new Error("expected a score question");
+            }
+            expect(question.criteria).toEqual([...REMINDER_HELPFULNESS_CRITERIA]);
+            expect(question.instructions).toContain(option.guidance);
         }
 
         expect(Object.keys(request.questions)).toEqual([
@@ -175,6 +185,21 @@ describe("reminder state, request, and answer", () => {
             REMINDER_FINISHING_QUESTION,
             REMINDER_UNVALIDATED_QUESTION,
         ]);
+        expect(DEFAULT_REMINDER_FORM).toBe("score");
+        expect(reminderScoreInstruction(OPTIONS[0] as ReminderOption)).toContain(
+            OPTIONS[0]?.guidance ?? "",
+        );
+    });
+
+    it("asks one probability question per reminder in the bool form", () => {
+        const request = reminderRequest({ request: "run the tests" }, OPTIONS, undefined, "bool");
+
+        for (const option of OPTIONS) {
+            const question = request.questions[option.id];
+
+            expect(question?.type).toBe("bool");
+            expect(question?.instructions).toContain(option.guidance);
+        }
     });
 
     it("piggybacks the phase, finishing, and unvalidated questions", () => {
@@ -248,6 +273,31 @@ describe("reminder state, request, and answer", () => {
         // No offered id answered at all: unreadable, so the caller falls back to its schedule.
         expect(reminderDecisionFrom(answers({ "not-offered": 0.9 }), OPTIONS)).toBeUndefined();
         expect(reminderDecisionFrom({}, OPTIONS)).toBeUndefined();
+
+        // The score form reads levels instead of probabilities, gated by its own threshold.
+        const levels = (scores: Record<string, number>): Record<string, ClassifierAnswer> => {
+            const result: Record<string, ClassifierAnswer> = {};
+            for (const [id, score] of Object.entries(scores)) {
+                result[id] = { type: "score", score, confidence: 0.5 };
+            }
+
+            return result;
+        };
+
+        expect(
+            reminderDecisionFrom(
+                levels({ sandbox: 1.4, todo: 0.3 }),
+                OPTIONS,
+                DEFAULT_REMINDER_MIN_SCORE,
+            ),
+        ).toEqual({ kind: "reminder", id: "sandbox" });
+        expect(
+            reminderDecisionFrom(
+                levels({ sandbox: 0.4, todo: 0.2 }),
+                OPTIONS,
+                DEFAULT_REMINDER_MIN_SCORE,
+            ),
+        ).toEqual({ kind: "none" });
     });
 
     it("only enables the subject when the config opts in", () => {
@@ -269,9 +319,9 @@ describe("ReminderEvaluator", () => {
     it("returns the model's choice and labels, and caches the identical consult", async () => {
         const { evaluator, classify } = harness({
             behavior: async (model) =>
-                reminderResult(
+                reminderScoreResult(
                     model,
-                    { sandbox: 0.9, todo: 0.05 },
+                    { sandbox: 2, todo: 0.1 },
                     {
                         phase: "debugging",
                         finishing: 0.2,
@@ -284,7 +334,7 @@ describe("ReminderEvaluator", () => {
             status: "answered",
             decision: { kind: "reminder", id: "sandbox" },
             state: { phase: "debugging", finishing: false, unvalidated: true },
-            scores: { sandbox: 0.9, todo: 0.05 },
+            scores: { sandbox: 2, todo: 0.1 },
         });
         expect(await evaluator.evaluate(context)).toMatchObject({
             status: "cached",
@@ -294,9 +344,33 @@ describe("ReminderEvaluator", () => {
         expect(classify).toHaveBeenCalledTimes(1);
     });
 
-    it("preserves a deliberate none when every probability is below the threshold", async () => {
+    it("preserves a deliberate none when every level is below the threshold", async () => {
         const { evaluator } = harness({
-            behavior: async (model) => reminderResult(model, { sandbox: 0.1, todo: 0.2 }),
+            behavior: async (model) => reminderScoreResult(model, { sandbox: 0.2, todo: 0.3 }),
+        });
+
+        expect(await evaluator.evaluate(context)).toMatchObject({
+            status: "answered",
+            decision: { kind: "none" },
+        });
+    });
+
+    it("gates on the probability when the configured form is bool", async () => {
+        const { evaluator } = harness({
+            config: { reminderForm: "bool" },
+            behavior: async (model) => reminderResult(model, { sandbox: 0.5, todo: 0.1 }),
+        });
+
+        expect(await evaluator.evaluate(context)).toMatchObject({
+            status: "answered",
+            decision: { kind: "reminder", id: "sandbox" },
+        });
+    });
+
+    it("gates on reminderMinScore in the score form", async () => {
+        const { evaluator } = harness({
+            config: { reminderForm: "score", reminderMinScore: 2 },
+            behavior: async (model) => reminderScoreResult(model, { sandbox: 1.5, todo: 0.1 }),
         });
 
         expect(await evaluator.evaluate(context)).toMatchObject({
@@ -317,7 +391,7 @@ describe("ReminderEvaluator", () => {
         };
         const extras = { todo_item_second: { type: "bool" as const, probability: 0.8 } };
         const { evaluator, classify } = harness({
-            behavior: async (model) => reminderResult(model, { sandbox: 0.9 }, {}, extras),
+            behavior: async (model) => reminderScoreResult(model, { sandbox: 2 }, {}, extras),
         });
 
         expect(await evaluator.evaluate(withExtras)).toMatchObject({
@@ -343,7 +417,7 @@ describe("ReminderEvaluator", () => {
         };
         const extras = { todo_item_second: { type: "bool" as const, probability: 0.8 } };
         const { evaluator } = harness({
-            behavior: async (model) => reminderResult(model, { "not-offered": 0.8 }, {}, extras),
+            behavior: async (model) => reminderScoreResult(model, { "not-offered": 2 }, {}, extras),
         });
 
         const consult = await evaluator.evaluate({
@@ -358,7 +432,7 @@ describe("ReminderEvaluator", () => {
     it("abstains on an unreadable answer but keeps readable labels", async () => {
         const { evaluator } = harness({
             behavior: async (model) =>
-                reminderResult(model, { "not-offered": 0.8 }, { phase: "verifying" }),
+                reminderScoreResult(model, { "not-offered": 2 }, { phase: "verifying" }),
         });
 
         const consult = await evaluator.evaluate(context);
@@ -418,7 +492,7 @@ describe("consultReminderSelection", () => {
 
         const sent = classify.mock.calls[0]?.[1] as ClassifierContext;
         const question = sent.questions[OPTIONS[0]?.id ?? ""];
-        expect(question?.type).toBe("bool");
+        expect(question?.type).toBe("score");
         expect(question?.instructions).toContain(OPTIONS[0]?.guidance);
         // The live prompt is what the model judges, not the branch's previous request.
         expect(sent.state.request).toBe("run the tests");

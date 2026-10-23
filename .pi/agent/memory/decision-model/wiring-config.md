@@ -57,7 +57,9 @@ unusable answer.
   value otherwise falls through to the config rather than clearing it.
 - Config keys: `enabled`, `suggestions` (default true; model-refined session-rule suggestions), `reminders`
   (default false; model-chosen agent reminders, consulted by `src/modules/reminders`), `reminderMinProbability`
-  (default 0.45; the probability a per-reminder answer must reach to be shown), `apply`, `baseUrl`,
+  (default 0.45; the probability a per-reminder answer must reach when `reminderForm` is `"bool"`),
+  `reminderForm` (default `"score"`; the per-reminder question shape), `reminderMinScore` (default 1.0; the
+  level a per-reminder answer must reach when `reminderForm` is `"score"`), `apply`, `baseUrl`,
   `apiKey`, `provider` (default `systemone`), `model`,
   `contextWindow` (32768), `strategy`, `timeoutMs` (5000), `cooldownMs` (30000), `minConfidence` (0.8),
   `surfaces` (default `["parent"]`), and `fileSurfaces` (default none), which names the read/write gates rather

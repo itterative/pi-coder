@@ -186,9 +186,32 @@ The shipped rule and its wiring are in `reminders/selection.md`; the per-item bo
 ## Single choice collapses for both models
 
 Asking one `choice` question over the four reminders plus `none`, with `none` first or last, returned `none`
-on all 13 states for both `lfm2-d1` and `clef-flash`, including the two known fires. The four independent
-bools with a threshold on the winner remain the only form that separates anything; this matches the earlier
-`vllm-d3-flash` measurement.
+on all 13 states for both `lfm2-d1` and `clef-flash`, including the two known fires, and the four independent
+bools with a threshold on the winner were the only form that separated anything. Both results are about the
+long-guidance wording and the bool form, not the subject: the score-form section below reopens the choice and
+finds a short-criteria choice does surface `todo`.
+
+## Question form: score beats bool (Oct 22)
+
+The state-shape replays above held the question fixed. A later corpus did the opposite: 105 intra-turn
+checkpoints from the `session-review` build (the TODO list goes `0/5` to `5/5` inside one 16-minute turn), the
+production state, and one model (clef-flash). The form is the lever, not the state.
+
+- The `todo` reminder as a `noul`/bool stayed at 0.12-0.29 across the entire turn, including `0/5` with 4 files
+  changed and 26 tool steps since the last list write, so it never cleared the 0.45 gate.
+- A per-reminder **score** ("How helpful would showing this reminder be right now: <guidance>", four levels)
+  ranked `todo` first at 0.94-1.21 whenever work was underway, and let `validation` win at 0.97 vs 1.41 when
+  the list was current and validation was the real need.
+- A **short-criteria choice** surfaced `todo` (0.38-0.68) but collapsed the ranking; the **long-guidance
+  choice** stayed conservative and picked `delegation`. Criteria wording, not just the form, moves the answer.
+- Every state-shape variant (steps-since-update, item list with statuses, `next`, a `stale` flag, a rewritten
+  criterion) left the bool at 0.12-0.29. A dedicated "is the list stale?" question scored 0.10-0.47 (bool) and
+  0.55-1.34 (score) — there is no model-side staleness trigger.
+
+The score form is also eager: on recorded turn states `memory-hygiene` reached 1.0-1.8 and `todo` scored >= 1.0
+with no list at all. That is why the shipped change pairs the score form with a deterministic per-reminder gate
+(`todo` only with a readable open list) and a score threshold (`reminderMinScore`, 1.0) that is not the old
+probability gate. Raw tables: `.pi/local/REMINDERS_FINDINGS.md` (local, not committed).
 
 ## Reading
 

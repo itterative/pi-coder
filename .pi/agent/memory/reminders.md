@@ -74,10 +74,13 @@ session JSONL and the runtime `TODO.md` a summary does not carry. Labels are bra
 
 ## Decision-model selection
 
-With `decisionModel.reminders: true`, `consultReminderSelection` asks one probability question per offered
-reminder before each non-session turn; the strongest answer at or above `reminderMinProbability` (default
-0.45) is shown, and nothing at or above it means none. Signals, labels, and calibration:
-[reminders/selection.md](reminders/selection.md).
+With `decisionModel.reminders: true`, `consultReminderSelection` asks one question per offered reminder
+before each non-session turn. The default form is a helpfulness **score** (`reminderForm: "score"`,
+`reminderMinScore` default 1.0 on a 0-3 scale); the strongest answer at or above the gate is shown, and
+nothing at or above it means none. `reminderForm: "bool"` restores the older per-reminder probability
+question (`reminderMinProbability` default 0.45), which measured as flat and never fired `todo`. The
+activity gate narrows the offer too: `memory-hygiene` needs mutating work, and `todo` needs a readable list
+with open items. Signals, labels, and calibration: [reminders/selection.md](reminders/selection.md).
 
 ## Replay
 

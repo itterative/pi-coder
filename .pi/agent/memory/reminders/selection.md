@@ -8,11 +8,14 @@ keep_updated: true
 # Reminder selection and model state
 
 With `decisionModel.enabled: true` and `decisionModel.reminders: true`, the model decides both cadence and
-choice. `consultReminderSelection` (decision module) is asked before each non-session turn: one probability
-question per offered reminder (its guidance is the criterion). The strongest answer at or above
-`reminderMinProbability` (default 0.45) is shown; nothing at or above it is a deliberate `none`, and an
-unreadable response leaves the deterministic schedule in charge. The per-reminder form replaced a single
-`choice` over the ids plus `none`, which measured as `none` on almost every real state. The evaluator in
+choice. `consultReminderSelection` (decision module) is asked before each non-session turn: one question per
+offered reminder, whose guidance is the criterion. The default form is a helpfulness **score**
+(`reminderForm: "score"`): four levels `no help | mild | useful | important`, returned as a continuous level
+in `[0, 3]`, gated by `reminderMinScore` (default 1.0). The strongest answer at or above the gate is shown;
+nothing at or above it is a deliberate `none`; an unreadable response leaves the deterministic schedule in
+charge. `reminderForm: "bool"` restores the older probability question gated by `reminderMinProbability`
+(default 0.45). Both forms replaced a single `choice` over the ids plus `none`, which measured as `none` on
+almost every real state. The evaluator in
 `decision/reminder.ts` has its own cache and cooldown, so a failed reminder request cannot pause a permission
 verdict. `reminders` defaults to false, and `timeoutMs`/`cooldownMs` are shared with the rest of the decision
 module. The settings dialog does not expose either key yet; they are edited in the config file.
@@ -32,7 +35,9 @@ expansion is otherwise sent whole) plus the branch's four-item recent window, an
 - `todo`: progress from the `pi-coder:todo-snapshot` entry; `memories`: names from the
   `pi-memory:memory-index` entry.
 
-`availableRotationIds` gates `memory-hygiene` on `files_modified` / `todo_writes` or a wrapping-up label.
+`availableRotationIds` gates `memory-hygiene` on `files_modified` / `todo_writes` or a wrapping-up label, and
+`todo` on a readable list with `completed < total` (the score form ranks `todo` high even with no list, so the
+gate is what suppresses those turns).
 
 The candidate list stays in the question criteria, never in the state. Every signal is best-effort: a missing
 entry or unreadable snapshot just drops its field.
@@ -118,6 +123,15 @@ shown history, and the turn count after a tree move or reload, so resume never d
 probabilities put read-only states at 0.14-0.21, clear `validation` states at 0.57-0.65, and borderline states
 at 0.43-0.44, which is where the 0.45 default sits. Feeding the agent's reasoning text as an extra window item
 or state field moved no choice and only one phase label, so it was not adopted.
+
+Question form (Oct 22, clef-flash, intra-turn checkpoints of the `session-review` build): the bool form kept
+`todo` at 0.12-0.29 across the whole turn, including a state with `0/5` completed, 4 files changed, and 26
+tool steps since the last list write. A per-reminder **score** question ("How helpful would showing this
+reminder be right now: <guidance>", four levels) ranked `todo` first at 0.94-1.21 whenever work was underway
+and yielded to `validation` (0.97 vs 1.41) when the list was current; a short-criteria choice surfaced `todo`
+too but collapsed the ranking, and the state-shape variants moved nothing. The score form is also eager
+(`memory-hygiene` reached 1.0-1.8, and `todo` scored >= 1.0 with no list at all), which is why `todo` is gated
+on an open list and why the per-reminder score threshold is not the old probability gate.
 
 The `clef-flash` vs `vllm-d3-flash` speed, real-state decisions, and order-sensitivity results are in
 `reminders/model-comparison.md`.
