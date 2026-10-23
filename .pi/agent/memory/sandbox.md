@@ -39,6 +39,12 @@ explicit segment rule first, then the cwd-confinement heuristic, and only for a 
 `safeBashCommands` extending it conservatively); it is **not** a security sandbox, and `probe.ts` is a sensor that
 reports what a command would change — it decides nothing.
 
+**Session-sandbox direction (not implemented).** A longer-lived, session-level sandbox is under discussion —
+a persistent `bwrap` supervisor or a rootless container per session, and whether the parent works in a
+per-session worktree or the live checkout. The reasoning, options, and open decisions are recorded in
+`docs/bash-execution-redesign.md` under *Considered and deferred: persistent sandbox*. The current profile
+remains a path view, not a security boundary (no `--unshare-*`, shared net/pid, `~/.pi` rw, `/etc` ro).
+
 ## Targeted references
 
 Load only the detail needed for the task:

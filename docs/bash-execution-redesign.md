@@ -737,10 +737,41 @@ Later phase, on top of `src/tui/status/`:
 
 ## Considered and deferred: persistent sandbox
 
-The original idea: keep one `bwrap` process alive and forward commands to it over a unix socket, with
-profile-keyed instances that restart when sandbox settings change.
+**Status:** discussion recorded, no decision; nothing here is implemented. The deferral below was
+argued on latency grounds; the motivation that reopened the question is different, so those
+conclusions do not settle it.
 
-It is feasible (probe above) and the protocol is straightforward:
+### Why the question reopened
+
+The original reason to consider a long-lived sandbox was avoiding a `bwrap` spawn per command, and the
+measurements killed that argument. The current discussion is about two different goals:
+
+- **Coarse confinement replacing per-command gating.** Shift the question from "is this command safe?"
+  (a heuristic plus a prompt, correct only up to the commands it models) to "what world did I hand the
+  agent, and is everything outside it out of reach?" (a boundary, correct up to its leaks). The gate
+  does not disappear; it moves to the boundary crossings — host execution, network, widening the world,
+  reading a secret, committing writes. That is fewer, higher-signal decisions, and a better use of the
+  Part C decision model than classifying every unresolved command.
+- **An installable tool environment.** A bind-mount view can only expose the host's toolchains; a
+  mutable container can install what the task needs.
+
+Neither is a latency argument, so "~15 ms is invisible" is not a counter-argument to them.
+
+### The current profile is a path view, not a security boundary
+
+`sandbox()` passes no `--unshare-*` flags (only the probe profile uses `--unshare-all`), so net, pid,
+ipc, and uts are shared with the host; it bind-mounts cwd rw, `/tmp` rw, `/usr /bin /lib /lib64 /etc
+/sys` ro, home configs ro, and the configured mounts, and the global config mounts `~/.pi` rw and
+`/etc` ro. Against that profile, "let it run free inside the box" is _less_ safe than the gate: the
+agent can delete the checkout, signal host processes, read `/etc` and `~/.pi`, and reach the network.
+Coarse confinement needs a strengthened profile first (decision 13).
+
+### Backend A — persistent `bwrap` plus a unix-socket supervisor
+
+The original idea: keep one `bwrap` process alive and forward commands to it over a unix socket, with
+profile-keyed instances that restart when sandbox settings change. A probe in `.pi/local/` proved a
+long-lived `bwrap` can host a Node server whose socket the host reaches, and the protocol is
+straightforward:
 
 ```
 [type: u8][length: u32 big-endian][payload]
@@ -748,34 +779,122 @@ It is feasible (probe above) and the protocol is straightforward:
 0x04 EXIT    0x05 CANCEL                    0x06 ERROR
 ```
 
-But it is deferred for now:
+What it buys beyond per-command `bwrap`: long-lived processes under a pid namespace (`npm run dev &`
+surviving across calls), loopback-only networking under isolation, and a stable session profile. What it
+costs: a server, a protocol, lifecycle, profile keying, a runtime inside the sandbox (the probe leaned
+on Node via the `~/.nvm` mount — fragile as a hard dependency), and a fallback. It cannot install tools.
 
-- It does not reduce latency (~17 ms `bwrap` is already the baseline, and an external Node forwarder is
-  ~20 ms). Only in-process routing would, and that matters less than the runtime-roots problem.
-- Filesystem state already persists across commands, so the shared-state argument is weak.
-- It is net new architecture (server, lifecycle, profile keying, Node-in-sandbox dependency, fallback),
-  which is the opposite of the cleanliness goal.
-- The real pain was per-call assembly of runtime paths, which layer 1 fixes without it.
+### Backend B — a rootless container per session (`podman run -d` + `podman exec`)
 
-If it is ever wanted, it belongs behind the layer-2 `operations.exec` seam as a pooled backend, and the
-protocol above is the starting point.
+A long-lived rootless container with `podman exec -w <cwd>` per command replaces the custom protocol:
+lifecycle, mounts, networking, per-command isolation, concurrency, signals, exit codes, and streams all
+come from the runtime. It also makes the world mutable and installable (base image + session writable
+layer + named cache volumes), which is the goal Backend A cannot serve. Costs: a runtime dependency, an
+image carrying the toolchain, a second isolation model alongside `bwrap`, and a fallback when absent.
+
+| Concern     | Note                                                                                                                                                 |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ownership   | `--userns=keep-id` (or equivalent) so files created on the bind-mounted worktree stay host-owned; SELinux hosts may need `:Z` or `label=disable`     |
+| installs    | session writable layer for `apt`/`pip`/`npm -g`; named volumes for npm/pip/uv/cargo caches so the reinstall cost is paid once                        |
+| GPU         | `--device /dev/kfd --device /dev/dri` (or `--gpus`) to mirror the `bwrap` profile                                                                    |
+| network     | default NAT enables installs and pushes but is the exfiltration hole; alternatives are a proxy/allowlist or `--network=none` with per-command opt-in |
+| credentials | pi stays on the host, so model keys stay out; `git push` needs an agent socket or `gh` config — a deliberate, visible hole                           |
+| degradation | fall back to today's per-command `bwrap` when the runtime is missing                                                                                 |
+
+### Worktree mounting and the Git reference problem
+
+A Git worktree stores absolute paths in three places. On this machine:
+
+```
+.state/workspaces/<slug>/.git              gitdir: <repo>/.git/worktrees/<slug>
+<repo>/.git/worktrees/<slug>/gitdir        <repo>/.state/workspaces/<slug>/.git
+<repo>/.git/worktrees/<slug>/commondir     ../..   (the main <repo>/.git)
+```
+
+The fix is not to rewrite them but to **mount them at the same absolute paths** inside the container,
+which is exactly what `buildGitWorktreeMountCmd` already does for per-command `bwrap` (it parses
+`gitdir:`, reads `commondir`, and mounts both). Worktrees already live inside the repository at
+`.state/workspaces/<slug>`, so this is two bind mounts — `<repo>/.git` rw and the worktree rw, both at
+their real paths. Mounting the worktree at `/workspace` instead would require rewriting `.git`,
+`gitdir`, and `commondir` (and `git worktree repair` on resume) — fragile, and it breaks host tooling.
+
+Two consequences worth naming:
+
+- `.git` must be read-write for a functional worktree (index, objects, refs, `worktrees/<slug>`). That is
+  an authority surface: the sandboxed agent can move refs, edit `.git/config` or `.git/hooks`, and
+  rewrite history. Cheap mitigations are read-only `.git/config` and `.git/hooks`, and a reserved ref
+  namespace; detached worktree commits still need a durable ref anchored (as `RESULT_REF_PREFIX` does)
+  or GC can prune them.
+- Same-path mounting also keeps the host `read`/`write`/`edit` tools coherent with in-container `bash`:
+  they see the same worktree files, so no file RPC and no overlay is needed for coherence. Only `.git`
+  and the worktree directory need mounting; the rest of the repository root can be an empty directory
+  inside the container.
+
+### Bringing changes back
+
+Because `.git` is shared, the agent's commits are already in the same object store; transfer is a local
+Git operation, not a copy. The existing worker flow is the reference implementation:
+
+1. `prepareAgentWorkspaceApplication()` commits a dirty worktree (`git add -A` + `git commit --no-verify`),
+   anchors the detached commits with a durable ref, and records `baseRevision..workerHead`.
+2. `applyAgentWorkspaceApplication()` requires a clean parent, generates
+   `git diff --binary base..workerHead`, runs `git apply --check --binary`, then `git apply --binary` in
+   the parent — leaving the changes uncommitted and creating no parent commit.
+
+Alternatives: merge or cherry-pick from a branch (more Git-native, but abandons the no-parent-commit
+contract), or an overlay upper layer plus an explicit commit step (recoverable writes, at the cost of
+coherence with the host file tools). A live session adds friction the terminal worker result did not
+have: patch-apply is not idempotent, and an apply dirties the parent, so the next sync needs a
+checkpoint/rebase model rather than the worker's one-shot disposition.
+
+### Parent vs worker: the decisive question
+
+The worker path is terminal, discrete, leased, and recycled (three worktrees per repository), which fits
+background delegation. The parent is the surface the user is watching in real time, and a per-session
+worktree changes more than the allocation:
+
+- **Two sources of truth.** The user's editor, LSP, and `git status` show the main checkout while the
+  agent edits another tree.
+- **Uncommitted changes are invisible.** Isolated work is based on committed `HEAD` only — a much larger
+  loss for the interactive agent than for a background worker.
+- **Project state resolves unevenly.** `memoryDirectories(cwd)` is `join(cwd, ".pi/agent/memory")` with
+  no walk-up, while `findConfigLocations()` (sandbox config) and `nearestProjectAgentsDir()` (agent
+  definitions) walk up. With the parent's cwd in a worktree, config and agents still resolve, but memory
+  silently points at the worktree's copy — and because `.pi/agent/memory/*.md` is tracked, that copy is
+  a stale base-revision snapshot rather than a missing directory, so it fails quietly. Any parent
+  worktree needs project-scoped paths resolved from the repository root (or the main memory bound into
+  the tree).
+
+Crucially, the container goal does **not** require a worktree: mounting the real checkout read-write at
+its real path into the container gives the tooling and the boundary with no transfer problem and a single
+source of truth, giving up only destructive-write isolation from the working tree. The posture fork is
+therefore: parent proposes changes (per-session worktree plus a sync/review contract) versus parent
+collaborates live (real checkout in the container), and that choice, not the mount layout, determines how
+much of the workspace machinery is reusable.
+
+If a longer-lived backend is ever built, it belongs behind the layer-2 `operations.exec` seam. Backend
+A's protocol above is a starting point; Backend B needs no protocol of its own.
 
 ---
 
 ## Cross-cutting decisions needed
 
-| #   | Decision                     | Options                                                  | Recommendation                                                                                                      |
-| --- | ---------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| 0   | pi dev-dependency version    | stay on 0.84.1 · bump to 1.3.0                           | bump to 1.3.0: `classify()` does not exist earlier                                                                  |
-| 1   | Order of layers              | layer 1 first · go straight to layer 2                   | layer 1 first: independently useful and de-risks layer 2                                                            |
-| 2   | Runtime dir location         | reuse scratchpad · dedicated `.state/runtime/<session>`  | dedicated dir with cleanup; keeps the scratchpad scope narrow                                                       |
-| 3   | Temp-dir approach            | redirect `TMPDIR` · declare `os.tmpdir()` as a read root | redirect `TMPDIR`; the alternative broadens `/tmp` reads                                                            |
-| 4   | Decision model authority     | auto-sandbox/refuse only · also auto-host behind a flag  | auto-sandbox/refuse; auto-host opt-in + threshold                                                                   |
-| 5   | Decision model surfaces      | parent only · parent + child                             | parent first, child behind a config flag                                                                            |
-| 6   | Context shape / question set | single/decomposed/risk; five context shapes              | start `single` + `request_history`, keep configurable                                                               |
-| 7   | `audit` config fate          | rename to `decisionModel` · keep and extend              | rename to `decisionModel`                                                                                           |
-| 8   | Sandbox networking           | full (today) · loopback-only · none, opt-in per command  | loopback-only needs the persistent sandbox; until then isolate by default and let a command opt into the host netns |
-| 9   | Long-lived processes         | leak as today · reap at call end · persistent sandbox    | reap at call end; the persistent sandbox is what buys them back                                                     |
+| #   | Decision                     | Options                                                                   | Recommendation                                                                                                      |
+| --- | ---------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| 0   | pi dev-dependency version    | stay on 0.84.1 · bump to 1.3.0                                            | bump to 1.3.0: `classify()` does not exist earlier                                                                  |
+| 1   | Order of layers              | layer 1 first · go straight to layer 2                                    | layer 1 first: independently useful and de-risks layer 2                                                            |
+| 2   | Runtime dir location         | reuse scratchpad · dedicated `.state/runtime/<session>`                   | dedicated dir with cleanup; keeps the scratchpad scope narrow                                                       |
+| 3   | Temp-dir approach            | redirect `TMPDIR` · declare `os.tmpdir()` as a read root                  | redirect `TMPDIR`; the alternative broadens `/tmp` reads                                                            |
+| 4   | Decision model authority     | auto-sandbox/refuse only · also auto-host behind a flag                   | auto-sandbox/refuse; auto-host opt-in + threshold                                                                   |
+| 5   | Decision model surfaces      | parent only · parent + child                                              | parent first, child behind a config flag                                                                            |
+| 6   | Context shape / question set | single/decomposed/risk; five context shapes                               | start `single` + `request_history`, keep configurable                                                               |
+| 7   | `audit` config fate          | rename to `decisionModel` · keep and extend                               | rename to `decisionModel`                                                                                           |
+| 8   | Sandbox networking           | full (today) · loopback-only · none, opt-in per command                   | loopback-only needs the persistent sandbox; until then isolate by default and let a command opt into the host netns |
+| 9   | Long-lived processes         | leak as today · reap at call end · persistent sandbox                     | reap at call end; the persistent sandbox is what buys them back                                                     |
+| 10  | Session sandbox backend      | persistent `bwrap` daemon · rootless container · stay per-command         | open; the container serves the installable-tool goal Backend A cannot serve; decide the posture below first         |
+| 11  | Session workspace posture    | per-session worktree (propose) · real checkout in container (live)        | open; live avoids the transfer problem and the project-state split, worktree buys destructive-write isolation       |
+| 12  | Change-transfer contract     | patch-apply into a clean parent (reuse worker) · branch-per-session merge | open; the worker contract fits a terminal result, not a live session                                                |
+| 13  | Profile strengthening        | unshare net/pid/ipc/uts · drop `~/.pi` rw and `/etc` ro · filter env      | prerequisite for any "free inside the box" model; the current profile is a path view, not a boundary                |
 
 ## Implementation order (proposed)
 
@@ -789,4 +908,6 @@ protocol above is the starting point.
 4. **Bash tool wrapper (layer 2):** argv-based `bwrap` operations, `toolCallId` decision map, parity
    suite, child registration.
 5. **Children for the decision model**, then the status footer.
-6. Optional later: pooled sandbox backend behind the layer-2 seam.
+6. Optional later: a session-level sandbox behind the layer-2 seam — strengthen the profile first
+   (decision 13), then choose the posture (decision 11) and backend (decision 10). See
+   [Considered and deferred: persistent sandbox](#considered-and-deferred-persistent-sandbox).
