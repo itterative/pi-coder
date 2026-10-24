@@ -31,7 +31,7 @@ unusable answer.
 | `scope.ts` | the deterministic capability × runner-rung gate |
 | `script.ts` / `script-classification.ts` | body resolution and the capability verdict |
 | `strategies/` | `types.ts`, `veto.ts` (default), `history.ts`, `classification.ts` (criteria + table), `index.ts` |
-| `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify + the `pi-coder:decision-status` check count the footer animates), the suggestion bridge (`suggestRuleForPrompt`, `consultSuggestionForPrompt`), and the runner-facing block sentences (`attributedBashBlockReason`, `readOnlyGateSentence`, `permissionAllowsCall`) |
+| `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify, under the shared check count), the suggestion bridge (`suggestRuleForPrompt`, `consultSuggestionForPrompt`), and the runner-facing block sentences (`attributedBashBlockReason`, `readOnlyGateSentence`, `permissionAllowsCall`) |
 | `decision/suggestion.ts` | the suggestion subject: the `executes_code` bool, `buildSuggestionState`, `suggestionRoleFrom` (probability ≥ 0.5 → code), and the separate `SuggestionEvaluator` with its own cache/cooldown |
 | `decision/reminder.ts` | the reminder subject: `reminderRequest` / `reminderDecisionFrom` over the caller's ids plus `none`, and the separate `ReminderEvaluator` with its own cache/cooldown |
 | `tools/bash/index.ts` | parent hook: consult on `ask`, record, prompt unless `apply` resolves it |
@@ -79,8 +79,15 @@ footer's `» auto` / `» manual` badge as the state readout (the footer's first 
 shortcut while the model is off); it warns when a project config file outranks the saved value or when enabling
 finds no endpoint configured.
 
-`consultForGate` wraps every consult (all three gates) in a process-wide in-flight count and emits
-`pi-coder:decision-status` `{ checking }` on the bus the caller passes — the parent's, which the child gate
-receives through its extension options, so a child's check animates the parent footer too. The parent footer
-shows `» auto` while the model is enabled, with the spinner frame replacing the marker while the count is
-nonzero.
+`withDecisionCheck(events, consult)` in `modules/decision/events.ts` owns the process-wide in-flight count and
+emits `pi-coder:decision-status` `{ checking }` on the bus the caller passes — the parent's, which a child gate
+receives through its extension options, so a child's check animates the parent footer too. Every consult that
+reaches the endpoint goes through it: `consultForGate` (Bash), `consultFileAccessForGate` (file access),
+`consultReminderState` (the cascade's tier 1) and `consultReminderSelection` (the pool's selection, threaded
+from `reminders/index.ts`). One counter for one badge, so overlapping consults count up instead of overwriting
+each other, and a disabled subject checks the config *before* entering the wrapper, so it never blinks the badge.
+The parent footer shows `» auto` while the model is enabled, with the spinner frame replacing the marker while
+the count is nonzero, and the judged session phase as a dim suffix (`» auto · implementing`). That phase arrives
+on its own channel, `pi-coder:decision-state`, published by the parent reminder module alone: the phase is the
+one the model moved to under the accept gate, with the activity scan filling an unanchored session, so the badge
+reads it in `manual` mode too, and a child session never publishes (its bus is the parent's).

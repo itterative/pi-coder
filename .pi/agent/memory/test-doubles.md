@@ -30,6 +30,9 @@ keep_updated: true
   `classifierRecord`
 - decision request contexts the snapshots pin → `test/modules/decision/fixtures.ts` → `FIXTURES`, `packageDeploy`,
   `parentRewrite`, `indentedJson`
+- a real session **branch** (messages, tool calls, tool results) → `test/helpers/session-branch.ts` → `branch`,
+  `sessionManager` (mutable, for a case that appends between turns), `userEntry`, `assistantEntry`,
+  `toolResultEntry`, `textPart`, `toolCall`, `cleanupBranches`
 - child extension wired as production wires it → `test/tools/child-run-fixture.ts` → `buildChildRun`,
   `probeDefinition`, `mode.decision`
 - compaction event, summarized span, or provider summary → `test/helpers/compaction-doubles.ts` → `compactEvent`,

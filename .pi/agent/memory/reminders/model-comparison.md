@@ -28,8 +28,10 @@ has to share VRAM; and from Oct 22, how the newly added `lfm2-d1` compares. The 
   - `request` is the user message *after* the debug entry. The live request is `event.prompt`, which is not
     in the branch yet at `before_agent_start`; the branch prefix's last user message is the previous turn's,
     and scoring with it sends the wrong prompt.
-  - `recent_messages` is `decisionSessionContext`'s window: four clipped items, with the last user item
-    dropped, built from the prefix before the debug entry.
+  - `recent_messages` is `decisionSessionContext`'s planned window (`planSessionWindow`), with the last user
+    item dropped as the request, built from the prefix before the debug entry. The debug entries themselves
+    record `state: signals` only, so the request and the window a live decision was made from are not in them
+    and have to be rebuilt this way.
   - The signals are copied from the debug entry as-is.
 - The reconstruction was validated by re-scoring the two recorded live clef decisions, which matched within
   0.002.

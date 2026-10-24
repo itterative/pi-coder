@@ -20,7 +20,7 @@ import type {
     ScriptRun,
     SuggestionRole,
 } from "../modules/decision";
-import { emitDecisionStatus } from "../modules/decision/events";
+import { withDecisionCheck } from "../modules/decision/events";
 import { DEFAULT_DECISION_STRATEGY } from "../modules/decision/strategies";
 import type {
     BashClassifierCommandRecord,
@@ -431,10 +431,7 @@ export async function consultFileAccessForGate(
         return undefined;
     }
 
-    checksInFlight += 1;
-    emitDecisionStatus(options.events, checksInFlight);
-
-    try {
+    return withDecisionCheck(options.events, async () => {
         const verdict = await consultFileAccessDecision({
             ctx: options.ctx,
             config: options.config,
@@ -458,10 +455,7 @@ export async function consultFileAccessForGate(
             ...(permission === undefined ? {} : { permission }),
             record: classifierRecord(verdict, options.config, permission !== undefined),
         };
-    } finally {
-        checksInFlight = Math.max(0, checksInFlight - 1);
-        emitDecisionStatus(options.events, checksInFlight);
-    }
+    });
 }
 
 /** What a consulted file access produced: the permission when `apply` licensed it, and the log record. */
@@ -470,9 +464,6 @@ export interface FileAccessConsultResult {
     permission?: Permission;
     record: BashClassifierRecord;
 }
-
-/** Consults in flight across both gates; the shared evaluator can serve several concurrently. */
-let checksInFlight = 0;
 
 /** A rule a permission prompt may remember, and what offered it. */
 export interface PromptRuleSuggestion {
@@ -572,10 +563,7 @@ export async function consultSuggestionForPrompt(
  * Never rejects: the verdict abstains when the endpoint fails, and the prompt path stays intact.
  */
 export async function consultForGate(options: GateConsultOptions): Promise<GateConsultedDecision> {
-    checksInFlight += 1;
-    emitDecisionStatus(options.events, checksInFlight);
-
-    try {
+    return withDecisionCheck(options.events, async () => {
         const consulted = await consultDecisionContext({
             ctx: options.ctx,
             config: options.config,
@@ -604,8 +592,5 @@ export async function consultForGate(options: GateConsultOptions): Promise<GateC
                 consulted.context?.script,
             ),
         };
-    } finally {
-        checksInFlight = Math.max(0, checksInFlight - 1);
-        emitDecisionStatus(options.events, checksInFlight);
-    }
+    });
 }

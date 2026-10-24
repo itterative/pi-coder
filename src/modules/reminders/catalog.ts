@@ -1,4 +1,4 @@
-import type { ReminderDefinition } from "./types";
+import type { ReminderDefinition, RotationReminderDefinition } from "./types";
 
 /**
  * The first line of every reminder block.
@@ -45,6 +45,9 @@ export const ROTATION_REMINDERS = [
         text: "Before finishing, review what you learned and update or add project memories; run `/memory-audit` after editing memory files, and review `[high-churn]` memories touched by the change.",
         guidance:
             "Work was completed and its learnings are not saved yet; never for a turn that only read or searched.",
+        // Something has to have been produced before there is anything to record, and the hand-back states
+        // are where "before finishing" bites.
+        states: ["implementing", "validating", "documenting", "reporting"],
     },
     {
         id: "sandbox",
@@ -54,17 +57,24 @@ export const ROTATION_REMINDERS = [
         // Disabled for now: the text restates the always-present sandbox guidance and rotation cannot time
         // it to a real gated event. Re-enable once it is keyed on a block, prompt, or user note.
         disabled: true,
+        states: ["implementing", "validating"],
     },
     {
         id: "delegation",
         text: "For large independent work, delegate to `scout` (read-only) or `worker` (mutation) with a fully self-contained brief; don't duplicate a running child's work.",
         guidance:
             "Large independent work is being done inline that a scout or a worker could take.",
+        // The advice is about work already underway: offering it while the turn is still reading or deciding
+        // asks for a split before there is anything to split.
+        states: ["exploring", "implementing"],
     },
     {
         id: "todo",
         text: "For multi-step work, keep the runtime `TODO.md` from your prompt current as steps complete.",
         guidance: "Multi-step work is underway and the runtime TODO.md may not reflect it.",
+        // The list is worth offering from the moment a multi-step task is being worked out, not only once
+        // files change; its open-item gate is separate and lives in `availableRotationIds`.
+        states: ["discussing", "exploring", "implementing"],
     },
     {
         id: "validation",
@@ -72,14 +82,17 @@ export const ROTATION_REMINDERS = [
         // repository's scripts here would fire wrong (or stale) guidance in every other project.
         text: "Before finishing, run the project's validation - tests, typecheck, lint, and format checks as its instructions specify - instead of assuming the change works.",
         guidance: "A change is about to be called finished without the project's validation pass.",
+        // Offered from the moment a change exists, not only once a run has happened: the case this text is
+        // about is an unvalidated change being built (`implementing`), where an agent can call the work done
+        // without running anything. The later states keep it offered while the work is confirmed or recorded.
+        states: ["implementing", "validating", "documenting", "reporting"],
     },
-] as const satisfies readonly [ReminderDefinition, ...ReminderDefinition[]];
+] as const satisfies readonly [RotationReminderDefinition, ...RotationReminderDefinition[]];
 
 /**
  * The rotation the scheduler and the decision model actually use: the catalog minus entries marked
  * `disabled`. Filtering stays here so a disabled reminder is a one-line catalog change; an empty result is
  * handled by the scheduler as "emit nothing" rather than dividing by zero.
  */
-export const ACTIVE_ROTATION_REMINDERS = ROTATION_REMINDERS.filter(
-    (reminder: ReminderDefinition) => reminder.disabled !== true,
-);
+export const ACTIVE_ROTATION_REMINDERS: readonly RotationReminderDefinition[] =
+    ROTATION_REMINDERS.filter((reminder: RotationReminderDefinition) => reminder.disabled !== true);

@@ -1,6 +1,7 @@
 import type {
     ClassifierAnswer,
     ClassifierApi,
+    ClassifierChoiceAnswer,
     ClassifierContext,
     ClassifierModel,
     ClassifierQuestion,
@@ -10,6 +11,7 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import { resolveClassifier, type ClassifierRegistry } from "./model";
+import type { SessionWindow } from "./session-context";
 import type { DecisionModelConfig, DecisionRecentMessage, ReminderQuestionForm } from "./types";
 
 /**
@@ -99,51 +101,53 @@ function reminderQuestion(option: ReminderOption, form: ReminderQuestionForm): C
     };
 }
 
-/** The phase labels the model may assign while the session proceeds. */
+/**
+ * The state labels the model may assign while the session proceeds.
+ *
+ * The set is the mid-run state probe's `--states doc` (`session-midturn.py`, `reminders/stage-gating.md`),
+ * adopted here so the live state and the probe's measurements speak the same language. Two folds came with
+ * it: `planning` splits between `discussing` (deciding or asking) and `documenting` (writing the plan), and
+ * `debugging` folds into `validating`, whose criteria already cover diagnosing a failure.
+ */
 export const REMINDER_PHASES = [
+    "discussing",
     "exploring",
-    "planning",
     "implementing",
-    "debugging",
-    "verifying",
-    "wrapping_up",
+    "validating",
+    "documenting",
+    "reporting",
 ] as const;
 
 export type ReminderPhase = (typeof REMINDER_PHASES)[number];
 
 /** Question ids for the state the model builds alongside the reminder choice. */
-export const REMINDER_PHASE_QUESTION = "phase";
-export const REMINDER_FINISHING_QUESTION = "finishing";
-export const REMINDER_UNVALIDATED_QUESTION = "unvalidated";
+export const REMINDER_PHASE_QUESTION = "next_state";
 
+/**
+ * The state question, verbatim from the probe's `--tier` instruction.
+ *
+ * The anchor travels in the state (`current_state`), and the probe's wording tells the model so; it is not
+ * paraphrased here, because the variant was measured as this text.
+ */
 export const REMINDER_PHASE_INSTRUCTION =
-    "What is the agent currently doing, given the recent activity? Keep the previous phase when the work has " +
-    "not moved on.";
+    "The session is currently in the state shown in current_state. Below is the recent conversation between " +
+    "the user and the agent, with tool calls in short form. Which state does the session move to next? " +
+    "Choose the current state if it continues in it.";
 
+/**
+ * The criteria, verbatim from the probe's `--states doc` set.
+ *
+ * The sentences carry their subject ("The assistant is …") because that is what the measured variants asked;
+ * the live phase vocabulary is the same list, so the labels and the probe's answers line up one for one.
+ */
 export const REMINDER_PHASE_CRITERIA: Record<ReminderPhase, string> = {
-    exploring: "Reading and searching to understand the codebase or the request",
-    planning: "Designing an approach, writing a plan, or asking the user before changing files",
-    implementing: "Editing or writing files to build the requested change",
-    debugging: "Diagnosing a failure; retrying or narrowing down a problem",
-    verifying: "Running tests, typechecks, or checks to confirm a change works",
-    wrapping_up: "Finishing up: summarizing, updating memories or the TODO list, reporting back",
-};
-
-export const REMINDER_FINISHING_INSTRUCTION =
-    "Is the task this turn serves about to be wrapped up - the work is done and only reporting, memory, or " +
-    "cleanup remains?";
-
-export const REMINDER_FINISHING_CRITERIA = {
-    true: "Yes: the requested work appears complete or is being concluded",
-    false: "No: the task is still in progress",
-};
-
-export const REMINDER_UNVALIDATED_INSTRUCTION =
-    "Have files changed during this task without a test or typecheck run since the last change?";
-
-export const REMINDER_UNVALIDATED_CRITERIA = {
-    true: "Yes: changes were made and validation has not run since",
-    false: "No: validation ran after the last change, or nothing changed",
+    discussing:
+        "The assistant is answering questions, debating options, or deciding, without changing files",
+    exploring: "The assistant is reading or searching code or docs to understand before acting",
+    implementing: "The assistant is changing the deliverable's code, tests, or configuration",
+    validating: "The assistant is running tests, typechecks, or lint, or diagnosing a failure",
+    documenting: "The assistant is writing or updating a plan, design doc, README, memory, or TODO",
+    reporting: "The assistant is summarizing what was done and handing it back to the user",
 };
 
 /** Whether a string names one of the phase labels. */
@@ -152,11 +156,42 @@ export function isReminderPhase(value: string): value is ReminderPhase {
 }
 
 /**
- * Labels the model maintains as the session proceeds.
+ * How confident a phase answer must be to move the phase off the one already accepted.
  *
- * They are piggybacked on the reminder request - the endpoint answers every question in one round trip - and
- * persisted by the caller so the next turn's state carries them. They are not authority: an unreadable label
- * is dropped and the caller's deterministic inference stands.
+ * The accept rule is the mid-run state probe's (`session-midturn.py`): hold the state in hand unless the
+ * proposal is confident. Without it the tracked phase only ever moved when the model decided to move it, and
+ * the consult's own state field carries the previous phase back in, so an answer that disagreed quietly came
+ * back as the same phase on the next turn (one session held `validating` for a thousand entries of code and
+ * test work while the branch read `implementing`).
+ */
+export const PHASE_MOVE_CONFIDENCE = 0.5;
+
+/**
+ * The phase one answer accepts: the first answer is taken as-is, a repeat keeps the phase in hand, and a
+ * different phase has to be confident enough to move it.
+ */
+export function acceptedReminderPhase(
+    answer: ClassifierChoiceAnswer,
+    held: ReminderPhase | undefined,
+    threshold = PHASE_MOVE_CONFIDENCE,
+): ReminderPhase | undefined {
+    if (!isReminderPhase(answer.choice)) {
+        return undefined;
+    }
+
+    if (held === undefined || answer.choice === held || answer.confidence >= threshold) {
+        return answer.choice;
+    }
+
+    return held;
+}
+
+/**
+ * The state labels the model may assign while the session proceeds.
+ *
+ * The phase is the one the questions ask. `finishing` and `unvalidated` are read from a persisted entry when an
+ * older session recorded them, but no question sets them any more: nothing gates on them (the pool gate is the
+ * phase and the TODO), and `unvalidated` has a deterministic inference the labels only ever overrode.
  */
 export interface ReminderStateLabels {
     phase?: ReminderPhase;
@@ -193,6 +228,8 @@ export interface ReminderSessionActivity {
     last_test_failed?: boolean;
     memory_writes?: number;
     todo_writes?: number;
+    /** Prose documents written or edited in the branch, memory files and TODO.md excluded. */
+    doc_writes?: number;
     /** The phase label last assigned to the session. */
     phase?: ReminderPhase;
     finishing?: boolean;
@@ -231,6 +268,20 @@ export interface ReminderContext {
     options: readonly ReminderOption[];
     /** Activity, prior reminders, TODO progress, and the memory list. */
     signals?: ReminderSignals;
+    /**
+     * The phase already accepted, when one is. The accept rule holds it unless this answer is confident enough
+     * to move it, so it is the answer being tested against, not only the state the model reads as
+     * `current_state`.
+     */
+    heldPhase?: ReminderPhase;
+    /**
+     * The fitted conversation the state ask is judged by, when this is a state ask.
+     *
+     * The state question is the only one that reads the transcript, and the transcript is fitted by the caller
+     * ({@link windowTranscript}) from the same branch walk the pool's window comes from. Absent for a pool ask,
+     * which judges from signals instead.
+     */
+    transcript?: string;
     /**
      * Extra questions the caller wants answered in the same round trip, keyed by question id.
      *
@@ -287,16 +338,48 @@ export function buildReminderState(context: ReminderContext): JsonObject {
     return state;
 }
 
+/** The one state question: which state the session moves to next. */
+export function reminderStateQuestions(): Record<string, ClassifierQuestion> {
+    return {
+        [REMINDER_PHASE_QUESTION]: {
+            type: "choice",
+            instructions: REMINDER_PHASE_INSTRUCTION,
+            criteria: REMINDER_PHASE_CRITERIA,
+        },
+    };
+}
+
 /**
- * One request: one question per offered reminder, plus the state questions it piggybacks.
+ * The state ask: the anchor and the fitted transcript, and the one question judged from them.
+ *
+ * Verbatim the probe's variant - `{current_state, conversation}` and a single choice question - because the
+ * payload shape is what the measurement was about: the same window sent as structured `recent_messages` with
+ * the anchor only in a gate read `exploring` at 0.17 confidence, this shape read `validating` at 0.82.
+ *
+ * `state` is not the pool's state: the pool judges from signals, and it has its own builder
+ * ({@link buildReminderState}).
+ */
+export function reminderStateRequest(
+    currentState: ReminderPhase | undefined,
+    conversation: string,
+): ClassifierContext {
+    return {
+        state: { current_state: currentState ?? "none", conversation },
+        questions: reminderStateQuestions(),
+    };
+}
+
+/**
+ * The tier-2 request: one question per offered reminder, plus the caller's own questions.
  *
  * Every reminder is asked on its own rather than as a single choice because the choice form with a `none`
  * option collapsed to `none` on nearly every real state. Which form its own question takes is `form`: a
  * probability bool, or a helpfulness score (the default, which separates the reminders where the bool
  * flattens them). The endpoint answers every question in the same round trip, as the file-access subject does
- * with kind/purpose/loss, so this costs no extra request.
+ * with kind/purpose/loss. The state question is not one of them: it has its own state, its own transcript and
+ * its own window, and it is asked as its own call, so this state stays the signals the pool is judged by.
  */
-export function reminderRequest(
+export function reminderChoiceRequest(
     state: JsonObject,
     options: readonly ReminderOption[],
     extraQuestions?: Readonly<Record<string, ClassifierQuestion>>,
@@ -307,22 +390,6 @@ export function reminderRequest(
     for (const option of options) {
         questions[option.id] = reminderQuestion(option, form);
     }
-
-    questions[REMINDER_PHASE_QUESTION] = {
-        type: "choice",
-        instructions: REMINDER_PHASE_INSTRUCTION,
-        criteria: REMINDER_PHASE_CRITERIA,
-    };
-    questions[REMINDER_FINISHING_QUESTION] = {
-        type: "bool",
-        instructions: REMINDER_FINISHING_INSTRUCTION,
-        criteria: REMINDER_FINISHING_CRITERIA,
-    };
-    questions[REMINDER_UNVALIDATED_QUESTION] = {
-        type: "bool",
-        instructions: REMINDER_UNVALIDATED_INSTRUCTION,
-        criteria: REMINDER_UNVALIDATED_CRITERIA,
-    };
 
     // The caller's own questions ride along in the same round trip, after the built-ins so a collision
     // cannot replace a question the decision itself reads.
@@ -406,27 +473,26 @@ export function reminderDecisionFrom(
 }
 
 /**
- * Read the state labels the request piggybacked.
+ * Read the state label the request answered.
  *
- * An unreadable label is omitted rather than guessed; the caller merges what came back over its persisted
- * labels and fills the rest with its deterministic inference.
+ * The phase is the only one a question asks now; `finishing` and `unvalidated` come from a persisted entry of
+ * an older session, if at all. An unreadable or unasked phase is omitted rather than guessed, and the caller
+ * merges what came back over its persisted labels and fills the rest with its deterministic inference.
  */
-export function reminderStateFrom(answers: Record<string, ClassifierAnswer>): ReminderStateLabels {
+export function reminderStateFrom(
+    answers: Record<string, ClassifierAnswer>,
+    heldPhase?: ReminderPhase,
+): ReminderStateLabels {
     const labels: ReminderStateLabels = {};
 
     const phase = answers[REMINDER_PHASE_QUESTION];
-    if (phase?.type === "choice" && isReminderPhase(phase.choice)) {
-        labels.phase = phase.choice;
-    }
-
-    const finishing = answers[REMINDER_FINISHING_QUESTION];
-    if (finishing?.type === "bool") {
-        labels.finishing = finishing.probability >= 0.5;
-    }
-
-    const unvalidated = answers[REMINDER_UNVALIDATED_QUESTION];
-    if (unvalidated?.type === "bool") {
-        labels.unvalidated = unvalidated.probability >= 0.5;
+    if (phase?.type === "choice") {
+        // The accept rule, not the raw answer: a phase that disagrees with the one in hand only moves it when
+        // the model is confident, so a quiet disagreement cannot be inherited by the next turn.
+        const accepted = acceptedReminderPhase(phase, heldPhase);
+        if (accepted !== undefined) {
+            labels.phase = accepted;
+        }
     }
 
     return labels;
@@ -464,8 +530,6 @@ export type ReminderStatus =
 export interface ReminderConsult {
     /** Present when the model chose no reminder or named one. */
     decision?: ReminderDecision;
-    /** Present when at least one piggybacked state label came back readable. */
-    state?: ReminderStateLabels;
     /** Every offered reminder's returned probability, for calibration and the debug log. */
     scores?: Record<string, number>;
     /** Answers to the caller's extra questions, keyed by question id; absent when none were asked. */
@@ -473,11 +537,51 @@ export interface ReminderConsult {
     status: ReminderStatus;
     latencyMs: number;
     usage?: Usage;
+    /**
+     * The recent window this consult was judged by, beside the state the caller built.
+     *
+     * Carried back rather than recomputed: the consult reads the branch once, so a log that re-read the branch
+     * afterwards can record a window that was not the one sent. An empty window is recorded as empty, so a
+     * reader never has to guess from the state whether there was one. Absent when no consult was attempted.
+     */
+    window?: SessionWindow;
 }
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_COOLDOWN_MS = 30000;
 const CACHE_LIMIT = 64;
+
+/** What the tier-1 consult reports: the state it accepted, and how sure the phase answer was. */
+export interface ReminderStateConsult {
+    /** The state the accept rule produced; empty when nothing readable came back. */
+    state: ReminderStateLabels;
+    /**
+     * The raw confidence of the phase answer, before the accept rule holds or moves the phase.
+     *
+     * The cascade escalates on it: below the move threshold the state may be the held one rather than what the
+     * short window suggested, so the full window is asked and its answer is the one that counts.
+     */
+    phaseConfidence?: number;
+    /**
+     * The phase the model answered, before the accept rule.
+     *
+     * `state.phase` is what the accept rule produced, so it equals the phase in hand whenever a disagreement
+     * was not confident enough to move it; this is what the answer itself said, which is the only way to tell a
+     * model that keeps proposing another phase from one that keeps confirming this one.
+     */
+    answeredPhase?: ReminderPhase;
+    status: ReminderStatus;
+    latencyMs: number;
+    usage?: Usage;
+    /**
+     * The fitted conversation this state was judged by, exactly as it was sent.
+     *
+     * Recorded because the state ask does not send the pool's window: it sends one rendered transcript, and a
+     * reader comparing the request against the probe's has to see those bytes rather than a plan re-derived
+     * from the branch afterwards.
+     */
+    transcript?: string;
+}
 
 export interface ReminderEvaluatorOptions {
     registry: ClassifierRegistry;
@@ -498,18 +602,87 @@ type Classifier = ClassifierModel<ClassifierApi>;
  */
 interface CachedReminderAnswer {
     decision: ReminderDecision;
-    state?: ReminderStateLabels;
     scores?: Record<string, number>;
     extras?: Record<string, ClassifierAnswer>;
+}
+
+/** A cached tier-1 answer: the accepted state, the phase confidence, and the phase the model named. */
+interface CachedStateAnswer {
+    state: ReminderStateLabels;
+    phaseConfidence?: number;
+    answeredPhase?: ReminderPhase;
 }
 
 export class ReminderEvaluator {
     private readonly now: () => number;
     private readonly cache = new Map<string, CachedReminderAnswer>();
+    private readonly stateCache = new Map<string, CachedStateAnswer>();
     private cooldownUntil = 0;
 
     constructor(private readonly options: ReminderEvaluatorOptions) {
         this.now = options.now ?? Date.now;
+    }
+
+    /**
+     * Tier 1 of the cascade: judge the state alone, from the anchor and the caller's fitted transcript.
+     *
+     * Answered before the pool exists, because the pool is built from it. It is the cheap half: one choice
+     * question over a short transcript, where the pool ask pays for a question per reminder. When this answer's
+     * phase was not confident, the caller asks the same question again on its own, with the window transcript.
+     */
+    async evaluateState(context: ReminderContext): Promise<ReminderStateConsult> {
+        const { config } = this.options;
+        if (!reminderEnabled(config)) {
+            return { status: "disabled", latencyMs: 0, state: {} };
+        }
+
+        const model = resolveClassifier(this.options.registry, config);
+        if (model === undefined) {
+            return { status: "disabled", latencyMs: 0, state: {} };
+        }
+
+        const key = reminderStateCacheKey(model, context);
+        const cached = this.stateCache.get(key);
+        if (cached !== undefined) {
+            return stateConsultFrom(cached, "cached", 0);
+        }
+
+        if (this.now() < this.cooldownUntil) {
+            return { status: "cooldown", latencyMs: 0, state: {} };
+        }
+
+        const started = this.now();
+        const classified = await this.classify(
+            model,
+            reminderStateRequest(context.heldPhase, context.transcript ?? ""),
+        );
+        const { result } = classified;
+        const latencyMs = this.now() - started;
+
+        if (result.stopReason !== "stop") {
+            this.cooldownUntil = this.now() + (config.cooldownMs ?? DEFAULT_COOLDOWN_MS);
+
+            return {
+                status: classified.timedOut ? "timeout" : "error",
+                latencyMs,
+                state: {},
+                ...(result.usage === undefined ? {} : { usage: result.usage }),
+            };
+        }
+
+        const phase = result.answers[REMINDER_PHASE_QUESTION];
+        const answer: CachedStateAnswer = {
+            state: reminderStateFrom(result.answers, context.heldPhase),
+            ...(phase?.type === "choice" ? { phaseConfidence: phase.confidence } : {}),
+            // The raw answer beside the accepted one: the two differ exactly when the gate held a quiet
+            // disagreement, which is the case a frozen phase is diagnosed from.
+            ...(phase?.type === "choice" && isReminderPhase(phase.choice)
+                ? { answeredPhase: phase.choice }
+                : {}),
+        };
+        this.rememberState(key, answer);
+
+        return stateConsultFrom(answer, "answered", latencyMs, result.usage);
     }
 
     async evaluate(context: ReminderContext): Promise<ReminderConsult> {
@@ -535,15 +708,7 @@ export class ReminderEvaluator {
         }
 
         const started = this.now();
-        const classified = await this.classify(
-            model,
-            reminderRequest(
-                buildReminderState(context),
-                context.options,
-                context.extraQuestions,
-                form,
-            ),
-        );
+        const classified = await this.classify(model, this.choiceRequest(context, form));
         const { result } = classified;
         const latencyMs = this.now() - started;
 
@@ -560,17 +725,37 @@ export class ReminderEvaluator {
             context.options,
             reminderThresholdOf(config, form),
         );
-        const state = reminderStateFrom(result.answers);
         const extras = extraAnswersFrom(result.answers, context.extraQuestions);
         if (decision === undefined) {
-            // An unreadable answer still keeps whatever labels came back, so the state keeps building.
-            return consultFrom({ state, scores, extras }, "abstained", latencyMs, result.usage);
+            // An unreadable answer still keeps whatever came back, so the state keeps building.
+            return consultFrom({ scores, extras }, "abstained", latencyMs, result.usage);
         }
 
-        const answer: CachedReminderAnswer = { decision, state, scores, extras };
+        const answer: CachedReminderAnswer = { decision, scores, extras };
         this.remember(key, answer);
 
         return consultFrom(answer, "answered", latencyMs, result.usage);
+    }
+
+    /** The tier-2 request: the pool's questions, whose state is the signals and the planned window. */
+    private choiceRequest(context: ReminderContext, form: ReminderQuestionForm): ClassifierContext {
+        return reminderChoiceRequest(
+            buildReminderState(context),
+            context.options,
+            context.extraQuestions,
+            form,
+        );
+    }
+
+    private rememberState(key: string, answer: CachedStateAnswer): void {
+        if (this.stateCache.size >= CACHE_LIMIT) {
+            const oldest = this.stateCache.keys().next().value;
+            if (oldest !== undefined) {
+                this.stateCache.delete(oldest);
+            }
+        }
+
+        this.stateCache.set(key, answer);
     }
 
     private remember(key: string, answer: CachedReminderAnswer): void {
@@ -618,7 +803,6 @@ export class ReminderEvaluator {
 function consultFrom(
     parts: {
         decision?: ReminderDecision;
-        state?: ReminderStateLabels;
         scores?: Record<string, number>;
         extras?: Record<string, ClassifierAnswer>;
     },
@@ -631,14 +815,33 @@ function consultFrom(
     if (parts.decision !== undefined) {
         consult.decision = parts.decision;
     }
-    if (parts.state !== undefined && Object.keys(parts.state).length > 0) {
-        consult.state = parts.state;
-    }
     if (parts.scores !== undefined && Object.keys(parts.scores).length > 0) {
         consult.scores = parts.scores;
     }
     if (parts.extras !== undefined) {
         consult.extras = parts.extras;
+    }
+    if (usage !== undefined) {
+        consult.usage = usage;
+    }
+
+    return consult;
+}
+
+/** A tier-1 consult response from its cached answer. */
+function stateConsultFrom(
+    parts: CachedStateAnswer,
+    status: ReminderStatus,
+    latencyMs: number,
+    usage?: Usage,
+): ReminderStateConsult {
+    const consult: ReminderStateConsult = { status, latencyMs, state: { ...parts.state } };
+
+    if (parts.phaseConfidence !== undefined) {
+        consult.phaseConfidence = parts.phaseConfidence;
+    }
+    if (parts.answeredPhase !== undefined) {
+        consult.answeredPhase = parts.answeredPhase;
     }
     if (usage !== undefined) {
         consult.usage = usage;
@@ -680,6 +883,22 @@ function reminderCacheKey(
         context.recent ?? [],
         context.signals ?? null,
         context.extraQuestions ?? null,
+    ]);
+}
+
+/**
+ * A state answer keyed by what its own request carries: the anchor, the transcript, and the request line.
+ *
+ * The pool, the signals and the extra questions are deliberately absent - the state request does not send them,
+ * so a change in any of them cannot change its answer.
+ */
+function reminderStateCacheKey(model: Classifier, context: ReminderContext): string {
+    return JSON.stringify([
+        model.provider,
+        model.id,
+        context.heldPhase ?? null,
+        context.transcript ?? "",
+        context.request ?? "",
     ]);
 }
 

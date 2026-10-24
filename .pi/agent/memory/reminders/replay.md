@@ -28,6 +28,26 @@ labels, judged signals) and the messages actually delivered, matched to their tu
 entries exist or a message carries no id/turn details. The file can lag a live session, so the newest turns
 may show no record yet.
 
+Both windows print as transcripts, next to the state JSON: the replay's own (`ReplayTurn.window`, also in
+`--json`, with a `dropped=` count in `--compact`), and under `--recorded` the window the live consult judged
+(`debug.window`, recorded since the consult carries it back). That pairing is the point - a window change is
+read line by line against what a live decision actually sent, instead of being unrecoverable. An entry whose
+consult ran but kept no window says so (`predates the window record`). When the window holds a recorded state
+entry it is annotated in place (`── phase: X ──`), the same marker the model is sent (`reminderStateMarker`), so
+a replay reads the phase timeline exactly where the consult saw it.
+
+Decision lines print tier 1's own half - `state-conf=` (the raw phase confidence), `state-phase=` (the phase it
+named, before the accept rule) and `state-latency=` - plus `escalated`, so a held phase can be told from a
+confident one and a *quiet disagreement* from a confirmation without reading the JSON. The accepted labels the
+same line carries are the other half of that pair: `state-phase=implementing` beside
+`labels={"phase":"documenting"}` is a tier 1 that proposed one thing and lost the argument. A checkpoint
+decision is printed as its own `recorded checkpoint:` line under the turn it was judged in: the walker buckets
+`trigger: "checkpoint"` like `"mid-run"` (never as `pendingDecision`), because a checkpoint is appended
+*during* a run and would otherwise be misattributed as the next prompt's turn decision. A **deferred** rotation
+turn is the same shape for the same reason - it is judged off the boundary, so its entry lands after the prompt
+it belongs to; the walker attaches it to the run in hand and reads its turn off its own `scheduler.userTurns`
+(no `+1`, which is what the pre-boundary shape needed), and the line prints `deferred`.
+
 It reads the session's own memory-index, todo-snapshot, and reminder-state entries and respects
 `PI_CODER_REMINDER_*`. Those entries keep the live choices for comparison. The script
 is `scripts/reminder-report.mts`; the `.mts` and `src/package.json` (`type: module`) exist because the root

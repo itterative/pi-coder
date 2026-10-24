@@ -18,9 +18,9 @@ import type { ReminderId } from "./types";
  * The context the decision model judges a reminder by, derived from the session branch and the module's own
  * emission history.
  *
- * The recent window in `decisionSessionContext` is four clipped items and bash-only, so a turn that edited
- * three files and delegated to a worker can read as one line of prose. Everything here is a bounded summary:
- * counts, small lists, and the current TODO progress, never transcript text beyond the request and window.
+ * The recent window in `decisionSessionContext` is a planned window of user, assistant and tool items, so the
+ * state reads what was done; everything here is still a bounded summary — counts, small lists, and the current
+ * TODO progress — and never transcript text beyond the request and the window.
  */
 
 /** How many paths, recent tool names, and memory names the state carries. */
@@ -31,7 +31,7 @@ const MAX_MEMORY_NAMES = 24;
 /** The entry the memory module records its index under; read structurally rather than importing its private type. */
 const MEMORY_INDEX_ENTRY = "pi-memory:memory-index";
 
-/** The session entry the model-maintained state labels are persisted under. */
+/** The session entry the accepted state labels are persisted under; it is also the window's annotation. */
 export const REMINDER_STATE_TYPE = "pi-coder:reminder-state";
 
 /**
@@ -57,34 +57,48 @@ const TEST_COMMANDS = [
 
 const WRITE_TOOLS = new Set(["edit", "write"]);
 
-export interface ReminderSignalInput {
+export interface ReminderLabelInput {
     entries: readonly SessionEntry[];
     cwd: string;
+    /**
+     * The accepted labels so far, when any are. They are the anchor the accept rule holds: the activity scan
+     * is what an unanchored session (and a session with the model off) reports instead.
+     */
+    labels?: ReminderStateLabels;
+}
+
+export interface ReminderSignalInput extends ReminderLabelInput {
     /** The turn being prepared, counting from 1 after a reset. */
     currentTurn: number;
     contextTokens: number;
     /** When each rotation reminder was shown, keyed by the user turn it was emitted on. */
     shown: ReadonlyMap<ReminderId, number>;
-    /** The labels the model assigned on earlier turns, when any are persisted. */
-    labels?: ReminderStateLabels;
 }
 
 /**
  * The rotation ids the activity allows this turn.
  *
  * `memory-hygiene` is gated on mutating work: before any file has changed its "review what you learned"
- * text has nothing to act on. `todo` is gated on a readable list with work left in it: the score form ranks
- * `todo` high even when no list exists, and a closed list has nothing left to keep current. Filtering here
- * rather than in the catalog keeps each gate a property of the session, not of the reminder.
+ * text has nothing to act on. `validation` is gated the same way and on the coarse state rather than the
+ * instantaneous stage - a turn that only read and searched produced nothing to validate, which is exactly
+ * the noise state scoping exists to remove. `todo` is gated on a readable list with work left in it: the
+ * score form ranks `todo` high even when no list exists, and a closed list has nothing left to keep current.
+ * Filtering here rather than in the catalog keeps each gate a property of the session, not of the reminder.
+ *
+ * The state drives it: each rotation reminder names the states that offer it (`catalog.ts`), and the judged
+ * state is the session's own answer to "what is happening now". The scan infers a state for every turn, so the
+ * pool is always definite - a fresh session reads `discussing` until something is read or written.
  */
 export function availableRotationIds(signals: ReminderSignals): ReadonlySet<ReminderId> {
     const available = new Set<ReminderId>();
+    const phase = signals.session?.phase;
+
     for (const reminder of ACTIVE_ROTATION_REMINDERS) {
-        if (reminder.id === "memory-hygiene" && !hasMutatingWork(signals.session)) {
+        if (reminder.id === "todo" && !hasOpenTodo(signals.todo)) {
             continue;
         }
 
-        if (reminder.id === "todo" && !hasOpenTodo(signals.todo)) {
+        if (phase !== undefined && isReminderPhase(phase) && !reminder.states.includes(phase)) {
             continue;
         }
 
@@ -97,20 +111,6 @@ export function availableRotationIds(signals: ReminderSignals): ReadonlySet<Remi
 /** A readable TODO list with at least one item still open. */
 function hasOpenTodo(todo: ReminderTodoState | undefined): boolean {
     return todo !== undefined && todo.completed < todo.total;
-}
-
-/** Work the memory-hygiene reminder can act on: a changed file, TODO progress, or a wrapping-up label. */
-function hasMutatingWork(session: ReminderSessionActivity | undefined): boolean {
-    if (session === undefined) {
-        return false;
-    }
-
-    return (
-        (session.files_modified?.length ?? 0) > 0 ||
-        (session.todo_writes ?? 0) > 0 ||
-        session.finishing === true ||
-        session.phase === "wrapping_up"
-    );
 }
 
 export function buildReminderSignals(input: ReminderSignalInput): ReminderSignals {
@@ -147,11 +147,26 @@ export function buildReminderSignals(input: ReminderSignalInput): ReminderSignal
 }
 
 /**
- * The labels the model assigned win per field; deterministic inference fills the gaps.
+ * The judged labels from a branch alone.
  *
- * Inference never invents `finishing`: that is a judgement about the task, not something the activity counts
- * can see. `phase` and `unvalidated` have activity-shaped fallbacks, so the state stays populated when the
- * model is off, abstains, or returns an unreadable label.
+ * The whole signal payload also builds the turn counts, the TODO read, and the memory list; a caller that only
+ * shows the state - the footer's badge - needs the activity scan and nothing else. Both paths resolve through
+ * `resolveSessionLabels`, so a label's rule stays in one place.
+ */
+export function reminderSessionLabels(input: ReminderLabelInput): ReminderStateLabels {
+    const scan = scanActivity(input.entries, input.cwd);
+    return resolveSessionLabels(input.labels, inferSessionLabels(scan));
+}
+
+/**
+ * The state one turn reports: the accepted labels, with the activity scan filling what is not answered yet.
+ *
+ * The accepted phase is the one the model moved to under the confidence gate in `decision/reminder.ts`, and it
+ * is what the state has to keep: it is the state the model itself reasoned from. The activity scan is the
+ * bootstrap - a session that has not answered yet - and the whole answer while the model is off.
+ *
+ * `unvalidated` is inferred, never inherited: the question that used to answer it is gone, so a value recorded
+ * by an older session would be frozen forever and would override the inference on every later turn.
  */
 function resolveSessionLabels(
     persisted: ReminderStateLabels | undefined,
@@ -164,46 +179,68 @@ function resolveSessionLabels(
         labels.phase = phase;
     }
 
-    if (persisted?.finishing !== undefined) {
-        labels.finishing = persisted.finishing;
-    }
-
-    const unvalidated = persisted?.unvalidated ?? inferred.unvalidated;
-    if (unvalidated !== undefined) {
-        labels.unvalidated = unvalidated;
+    if (inferred.unvalidated !== undefined) {
+        labels.unvalidated = inferred.unvalidated;
     }
 
     return labels;
 }
 
-/** What the activity counts alone imply: writes without a validation success after them are unvalidated. */
+/**
+ * What the activity counts alone imply: writes without a validation success after them are unvalidated.
+ *
+ * This is the state a session reports before the model has answered anything, and the whole state while the
+ * model is off, so every turn gets one: the falls-through end is `discussing`, a turn that neither changed nor
+ * read anything.
+ *
+ * Known blind spot: the scan sees the `edit`/`write` tools, so a change produced through bash instead - a
+ * heredoc, a redirect, or `sed -i` - leaves the activity looking read-only or empty. It is a fallback, not a
+ * guarantee: the model judges the same window and is free to answer otherwise.
+ */
 function inferSessionLabels(scan: ActivityScan): ReminderStateLabels {
     const activity = scan.activity;
-    const changed =
-        (activity.files_modified?.length ?? 0) > 0 ||
-        (activity.memory_writes ?? 0) > 0 ||
-        (activity.todo_writes ?? 0) > 0;
+    const codeChanged = (activity.files_modified?.length ?? 0) > 0;
     const labels: ReminderStateLabels = {};
 
-    if (changed) {
+    if (codeChanged) {
         if (scan.lastTestFailed) {
-            // The last test run failed, so the work is being diagnosed, not confirmed.
-            labels.phase = "debugging";
+            // The last test run failed: diagnosing a failure is part of the `validating` phase.
+            labels.phase = "validating";
         } else if (scan.lastTestIndex >= 0 && scan.lastWriteIndex > scan.lastTestIndex) {
             // Edits after the last run moved the work back to implementation.
             labels.phase = "implementing";
         } else {
-            labels.phase = activity.tests_run === true ? "verifying" : "implementing";
+            labels.phase = activity.tests_run === true ? "validating" : "implementing";
         }
         labels.unvalidated = isUnvalidated(scan);
         return labels;
     }
 
-    if (hasReadTools(activity.tools)) {
-        labels.phase = "exploring";
+    if (recordedWork(activity)) {
+        // Memory, TODO and document writes are the recording phase the criteria call `documenting`, not
+        // implementation: the branch changed but no code did, so nothing is left unvalidated and the
+        // validation reminder has nothing to ask for. Counting a document write as a code change did both.
+        labels.phase = "documenting";
+        return labels;
     }
 
+    if (hasReadTools(activity.tools)) {
+        labels.phase = "exploring";
+        return labels;
+    }
+
+    // Nothing changed and nothing was read: the turn is answering, debating, or deciding.
+    labels.phase = "discussing";
     return labels;
+}
+
+/** Whether the branch recorded something - a memory, the TODO list, or a prose document - rather than changing code. */
+function recordedWork(activity: ReminderSessionActivity): boolean {
+    return (
+        (activity.memory_writes ?? 0) > 0 ||
+        (activity.todo_writes ?? 0) > 0 ||
+        (activity.doc_writes ?? 0) > 0
+    );
 }
 
 /**
@@ -247,18 +284,35 @@ export function reminderLabelsFromEntries(entries: readonly SessionEntry[]): Rem
     }
 
     const labels: ReminderStateLabels = {};
-    const { phase, finishing, unvalidated } = entry.data;
+    // Only the phase: an entry of an older session also recorded `finishing`/`unvalidated`, and those are not
+    // read back any more - the questions that produced them are gone, so a recorded value would never change.
+    const { phase } = entry.data;
     if (typeof phase === "string" && isReminderPhase(phase)) {
         labels.phase = phase;
     }
-    if (typeof finishing === "boolean") {
-        labels.finishing = finishing;
-    }
-    if (typeof unvalidated === "boolean") {
-        labels.unvalidated = unvalidated;
-    }
 
     return labels;
+}
+
+/**
+ * One recorded state entry as the window's annotation line, or `undefined` for any other entry.
+ *
+ * The mid-run probe inserted its own accepted states into the transcript at the tool item where each was
+ * accepted (`--annotate`), so the model reads the phase timeline in the conversation rather than confirming a
+ * single claim in the state. This is that marker, in the probe's own wording (`  ── state: X ──`), so an
+ * annotated transcript reads the same here as in the measurement.
+ */
+export function reminderStateMarker(entry: SessionEntry): string | undefined {
+    if (entry.type !== "custom" || entry.customType !== REMINDER_STATE_TYPE) {
+        return undefined;
+    }
+
+    const data = entry.data;
+    if (!isRecord(data) || typeof data.phase !== "string" || !isReminderPhase(data.phase)) {
+        return undefined;
+    }
+
+    return `  ── state: ${data.phase} ──`;
 }
 
 /** What a branch can tell a restarted module: the turns counted, what was shown, and where the pointer was. */
@@ -364,6 +418,7 @@ function scanActivity(entries: readonly SessionEntry[], cwd: string): ActivitySc
         testsRun: false,
         memoryWrites: 0,
         todoWrites: 0,
+        docWrites: 0,
         lastWriteIndex: -1,
         lastTestIndex: -1,
         lastTestFailed: false,
@@ -407,6 +462,8 @@ interface ActivityState {
     testsRun: boolean;
     memoryWrites: number;
     todoWrites: number;
+    /** Prose documents written, counted apart from the code changes the labels read. */
+    docWrites: number;
     lastWriteIndex: number;
     lastTestIndex: number;
     lastTestFailed: boolean;
@@ -447,7 +504,7 @@ function applyBashCall(state: ActivityState, call: ToolCall, index: number): voi
     }
 }
 
-/** Track a write, splitting memory files and TODO.md out of the code changes the labels are about. */
+/** Track a write, splitting memory files, TODO.md and documents out of the code changes the labels are about. */
 function applyWriteCall(state: ActivityState, target: string, index: number, cwd: string): void {
     const relative = relativePath(cwd, target);
     if (isMemoryPath(relative)) {
@@ -460,10 +517,20 @@ function applyWriteCall(state: ActivityState, target: string, index: number, cwd
         return;
     }
 
+    if (isDocumentPath(relative)) {
+        state.docWrites += 1;
+        return;
+    }
+
     state.lastWriteIndex = index;
     // Re-insert so the set keeps the most recently written paths at the end.
     state.files.delete(relative);
     state.files.add(relative);
+}
+
+/** Whether a path is a prose document rather than code the labels and the validation gate are about. */
+function isDocumentPath(relative: string): boolean {
+    return path.extname(relative).toLowerCase() === ".md";
 }
 
 /** Only a test runner's own result matters, and only its outcome: the body is never read. */
@@ -503,6 +570,9 @@ function activityFrom(state: ActivityState): ReminderSessionActivity {
     }
     if (state.todoWrites > 0) {
         activity.todo_writes = state.todoWrites;
+    }
+    if (state.docWrites > 0) {
+        activity.doc_writes = state.docWrites;
     }
 
     return activity;

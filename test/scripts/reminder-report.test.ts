@@ -178,14 +178,19 @@ describe("replay", () => {
         const cwd = "/repo";
         const session = sessionAt(cwd);
         session.appendMessage(userEntry("first request", 1));
-        session.appendMessage(userEntry("second request", 2));
+        // A read, and a text-only assistant message closing the run: the state of the next turn is
+        // `exploring`, which offers delegation.
+        session.appendMessage(assistantToolCallEntry("reading", 2));
+        session.appendMessage(toolResultEntry("call-2", 3));
+        session.appendMessage(assistantEntry("done", 4));
+        session.appendMessage(userEntry("second request", 5));
 
         const result = replay(session.getBranch(), cwd);
 
         expect(result.turns.map((turn) => turn.schedule)).toEqual([
             "memory-read",
-            // No mutating work in the branch, so memory-hygiene is gated out and the rotation starts at
-            // delegation.
+            // The turn has only read, so the state is `exploring`: memory-hygiene is not in that state's pool
+            // and the rotation starts at delegation.
             "delegation",
         ]);
     });
@@ -195,10 +200,14 @@ describe("replay", () => {
         const cwd = "/repo";
         const session = sessionAt(cwd);
         session.appendMessage(userEntry("first request", 1));
-        session.appendMessage(assistantToolCallEntry("done", 2, { ...zeroUsage(), input: 200 }));
+        // A read earlier in the turn, so the mid-run state is `exploring` and offers delegation: the mid-run
+        // check reads the committed prefix, never the streaming message that carries the read itself.
+        session.appendMessage(assistantToolCallEntry("reading", 2));
         session.appendMessage(toolResultEntry("call-2", 3));
-        session.appendMessage(assistantEntry("finished", 4));
-        session.appendMessage(userEntry("second request", 5));
+        session.appendMessage(assistantToolCallEntry("done", 4, { ...zeroUsage(), input: 200 }));
+        session.appendMessage(toolResultEntry("call-4", 5));
+        session.appendMessage(assistantEntry("finished", 6));
+        session.appendMessage(userEntry("second request", 7));
 
         const result = replay(session.getBranch(), cwd);
 
@@ -255,7 +264,12 @@ describe("compaction folds", () => {
         const cwd = "/repo";
         const session = sessionAt(cwd);
         session.appendMessage(userEntry("first", 1));
-        session.appendMessage(assistantEntry("one", 2, { ...zeroUsage(), input: 5000 }));
+        // A read, so the state offers delegation instead of reading `discussing`, whose pool is the list only.
+        session.appendMessage(
+            assistantToolCallEntry("reading", 2, { ...zeroUsage(), input: 5000 }),
+        );
+        session.appendMessage(toolResultEntry("call-2", 2.5));
+        session.appendMessage(assistantEntry("one", 2.75));
         session.appendMessage(userEntry("second", 3));
         session.appendMessage(assistantEntry("two", 4, { ...zeroUsage(), input: 6000 }));
         const foldId = session.appendCompaction("folded", null, 6000);
@@ -307,8 +321,23 @@ describe("recorded data", () => {
             available: ["delegation"],
             labels: { phase: "exploring" },
             state: { cwd, session: { user_turns: 1 } },
+            // Tier 1's own half: the phase it named, its confidence, and what the ask cost.
+            statePhase: "implementing",
+            stateConfidence: 0.42,
+            stateLatencyMs: 288,
         });
         session.appendMessage(userEntry("second", 3));
+        // A checkpoint is judged after a tool-using response, so it is recorded during turn 2's run.
+        session.appendMessage(assistantEntry("two", 4));
+        session.appendCustomEntry("pi-coder-reminder:debug", {
+            trigger: "checkpoint",
+            reminder: null,
+            labels: { phase: "implementing" },
+            stateConfidence: 0.4,
+            escalated: true,
+            state: { cwd, session: { user_turns: 2 } },
+        });
+        session.appendMessage(userEntry("third", 5));
 
         return session;
     }
@@ -334,6 +363,103 @@ describe("recorded data", () => {
         });
         expect(result.turns[1]?.recorded.midRun).toEqual([]);
         expect(result.turns[1]?.recorded.decision?.state).toMatchObject({ cwd });
+    });
+
+    it("prints tier 1's own answer, confidence, and latency", () => {
+        const cwd = "/repo";
+        const result = replay(recordedSession(cwd).getBranch(), cwd);
+        const text = renderText(
+            result,
+            selectTurns(result, parseArgs([])),
+            parseArgs(["--recorded"]),
+        );
+
+        // The raw answer is printed beside the accepted labels the same line carries, so a held phase can be
+        // told from a confirmed one without reading the JSON.
+        expect(text).toContain("state-conf=0.42 state-phase=implementing state-latency=288ms");
+    });
+
+    it("records a checkpoint under the run it was judged in, not as the next prompt's decision", () => {
+        const cwd = "/repo";
+        const result = replay(recordedSession(cwd).getBranch(), cwd);
+
+        expect(result.turns[1]?.recorded.checkpoints).toMatchObject([
+            {
+                trigger: "checkpoint",
+                reminder: null,
+                labels: { phase: "implementing" },
+                stateConfidence: 0.4,
+                escalated: true,
+            },
+        ]);
+        // A checkpoint decides no reminder, so it must not become the turn decision of the prompt after it.
+        expect(result.turns[2]?.recorded.decision).toBeUndefined();
+    });
+
+    /**
+     * A turn whose judgement was deferred: the entry is recorded *after* the prompt it was made for, because
+     * the boundary hands the consult to the background instead of holding the user's message behind it.
+     */
+    function deferredTurnSession(cwd: string, recordedTurn: number): SessionManager {
+        const session = sessionAt(cwd);
+        session.appendCustomEntry("pi-coder-reminder:debug", {
+            trigger: "session",
+            reminder: "memory-read",
+            scheduler: { userTurns: 0, sessionArmed: true },
+        });
+        session.appendMessage(userEntry("first", 1));
+        session.appendMessage(assistantEntry("one", 2));
+        // The rotation turn's prompt goes out first; the judgement lands once the consult answers, inside that
+        // turn's run.
+        session.appendMessage(userEntry("second", 3));
+        session.appendCustomEntry("pi-coder-reminder:debug", {
+            trigger: "turn",
+            deferred: true,
+            reminder: "delegation",
+            modelChoice: "delegation",
+            scheduler: { userTurns: recordedTurn },
+        });
+
+        return session;
+    }
+
+    it("attributes a deferred turn decision to the prompt it was judged for", () => {
+        const cwd = "/repo";
+        const result = replay(deferredTurnSession(cwd, 2).getBranch(), cwd);
+
+        // The deferred entry belongs to the turn whose prompt preceded it, and its own count is that turn
+        // rather than the one before it, so the replay agrees with the session.
+        expect(result.turns[1]?.recorded.decision).toMatchObject({
+            trigger: "turn",
+            deferred: true,
+            reminder: "delegation",
+        });
+        expect(result.recordedNotes).toEqual([]);
+
+        const text = renderText(
+            result,
+            selectTurns(result, parseArgs([])),
+            parseArgs(["--recorded"]),
+        );
+        // The flag is rendered too: a deferred turn decided after the prompt, which the trigger alone cannot say.
+        expect(text).toContain(
+            "recorded decision: trigger=turn pick=delegation model=delegation deferred",
+        );
+    });
+
+    it("reads a deferred decision's turn off its own snapshot", () => {
+        const cwd = "/repo";
+        const result = replay(deferredTurnSession(cwd, 5).getBranch(), cwd);
+        const text = renderText(
+            result,
+            selectTurns(result, parseArgs([])),
+            parseArgs(["--recorded"]),
+        );
+
+        // No `+ 1`: a deferred entry is stamped with the turn it judged, unlike one recorded before the prompt.
+        expect(text).toContain(
+            "recorded turn mismatch: the session counted module turn 5, the replay 2",
+        );
     });
 
     it("warns when the session has no recorded decisions or message details", () => {
@@ -372,6 +498,76 @@ describe("recorded data", () => {
         );
         expect(compact).toContain("recorded=none");
         expect(compact).toContain("delivered=memory-read");
+    });
+
+    it("renders the recorded window beside the replay's own", () => {
+        const cwd = "/repo";
+        const session = sessionAt(cwd);
+        session.appendCustomEntry("pi-coder-reminder:debug", {
+            trigger: "turn",
+            reminder: null,
+            consult: { status: "answered", latencyMs: 12 },
+            state: { cwd, session: { user_turns: 1 } },
+            window: {
+                items: [
+                    { role: "user", text: "first" },
+                    { role: "command", text: "rg -n step src" },
+                ],
+                omitted: 3,
+            },
+        });
+        session.appendMessage(userEntry("first", 1));
+        session.appendMessage(assistantToolCallEntry("reading", 2));
+        session.appendMessage(toolResultEntry("call-2", 3));
+        // A plain assistant answer closes the run, so the next prompt starts a turn instead of steering.
+        session.appendMessage(assistantEntry("done", 4));
+        session.appendMessage(userEntry("second", 5));
+
+        const result = replay(session.getBranch(), cwd);
+        const text = renderText(
+            result,
+            selectTurns(result, parseArgs([])),
+            parseArgs(["session.jsonl", "--recorded"]),
+        );
+
+        expect(text).toContain("recorded window (2 items, 3 dropped):");
+        expect(text).toContain("User: first");
+        expect(text).toContain("Tool: bash(rg -n step src)");
+        // The replay renders its own window from the branch prefix, so the two read as transcripts and a
+        // difference between what was sent and what would be sent now is visible line by line.
+        expect(text).toContain("window (3 items, 0 dropped):");
+        expect(text).toContain("Assistant: reading");
+        expect(text).toContain("Tool: read(src/a.ts)");
+    });
+
+    it("says when a recorded consult kept no window", () => {
+        const cwd = "/repo";
+        const session = sessionAt(cwd);
+        session.appendCustomEntry("pi-coder-reminder:debug", {
+            trigger: "turn",
+            reminder: null,
+            consult: { status: "answered", latencyMs: 12 },
+            state: { cwd, session: { user_turns: 1 } },
+        });
+        session.appendMessage(userEntry("first", 1));
+        session.appendMessage(assistantEntry("one", 2));
+        // A consult the config disabled never built a window, so it is not an old record.
+        session.appendCustomEntry("pi-coder-reminder:debug", {
+            trigger: "turn",
+            reminder: null,
+            consult: { status: "disabled", latencyMs: 0 },
+            state: { cwd, session: { user_turns: 2 } },
+        });
+        session.appendMessage(userEntry("second", 3));
+
+        const result = replay(session.getBranch(), cwd);
+        const text = renderText(
+            result,
+            selectTurns(result, parseArgs([])),
+            parseArgs(["--recorded"]),
+        );
+
+        expect(text.match(/predates the window record/gu)).toHaveLength(1);
     });
 
     it("flags a recorded decision whose module turn disagrees with the replay", () => {
@@ -434,6 +630,9 @@ describe("selectTurns and rendering", () => {
         expect(text).toContain("<pi_coder_reminder>");
         expect(text).toContain("read them if so");
         expect(text).toContain('"request": "first"');
+        // The window is rendered as a transcript as well as carried in the state, so it can be read without
+        // parsing the JSON: this turn's prefix is one earlier message, which the request field replaced.
+        expect(text).toContain("window (1 item, 0 dropped):\nUser: first");
     });
 
     it("prints mid-run emissions with the turn whose run emitted them", () => {
@@ -441,10 +640,12 @@ describe("selectTurns and rendering", () => {
         const cwd = "/repo";
         const session = sessionAt(cwd);
         session.appendMessage(userEntry("first", 1));
-        session.appendMessage(assistantToolCallEntry("done", 2, { ...zeroUsage(), input: 200 }));
+        session.appendMessage(assistantToolCallEntry("reading", 2));
         session.appendMessage(toolResultEntry("call-2", 3));
-        session.appendMessage(assistantEntry("finished", 4));
-        session.appendMessage(userEntry("second", 5));
+        session.appendMessage(assistantToolCallEntry("done", 4, { ...zeroUsage(), input: 200 }));
+        session.appendMessage(toolResultEntry("call-4", 5));
+        session.appendMessage(assistantEntry("finished", 6));
+        session.appendMessage(userEntry("second", 7));
         const result = replay(session.getBranch(), cwd);
         const selected = selectTurns(result, parseArgs(["--turn", "1"]));
 
@@ -461,6 +662,7 @@ describe("selectTurns and rendering", () => {
 
         expect(compact).toContain("schedule=memory-read");
         expect(compact).toContain("shows=");
+        expect(compact).toContain("window=0");
         expect(compact).not.toContain('"request":');
 
         const parsed = JSON.parse(renderJson(result, selected)) as {
@@ -469,5 +671,11 @@ describe("selectTurns and rendering", () => {
         expect(parsed.turns).toHaveLength(3);
         // A turn with no recorded data keeps the report shape from before the mode existed.
         expect(parsed.turns[0]).not.toHaveProperty("recorded");
+        // The window rides in the machine-readable turns too, drop count included, so `--json` reports the
+        // same input the state carries without re-reading the branch.
+        expect(parsed.turns[2]?.window).toEqual({
+            items: [{ role: "user", text: "first" }],
+            omitted: 0,
+        });
     });
 });

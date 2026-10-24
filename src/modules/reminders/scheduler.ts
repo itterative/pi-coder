@@ -48,9 +48,10 @@ export interface SchedulerSnapshot {
  * The deterministic half of the reminder schedule: the reminder a restart arms (a changed memory list, or a
  * folded transcript), and a rotation through the catalog on a turn cadence or a context-growth threshold.
  *
- * One call per user turn. The model policy is layered on top by passing its answer in; a deliberate `none`
- * is respected for that turn, while an unavailable model leaves the deterministic triggers in charge so
- * reminders never silently stop.
+ * The boundary and the decision are separate: `beginTurn` runs the moment a user turn starts, `decide`
+ * advances the turn itself unless the caller already did. The model policy is layered on top by passing its
+ * answer in; a deliberate `none` is respected for that turn, while an unavailable model leaves the
+ * deterministic triggers in charge so reminders never silently stop.
  */
 export class ReminderScheduler {
     private userTurns = 0;
@@ -138,10 +139,34 @@ export class ReminderScheduler {
         this.armed = armed;
     }
 
-    decide(input: DecideInput): ReminderDefinition | undefined {
+    /**
+     * The turn boundary's bookkeeping, run the moment a user turn starts.
+     *
+     * Separate from `decide` because the decision is deferred: the rotation judgement is a model consult, so the
+     * boundary advances the cadence and lets the pick follow in the background. Everything downstream of the
+     * boundary - the signals' `user_turns`, a mid-run cap, a rotation pointer read - sees the new turn at once.
+     */
+    beginTurn(): void {
         // A new user turn resets the mid-run budget; the cap is per turn, not per session.
         this.midRunThisTurn = 0;
         this.userTurns += 1;
+    }
+
+    /**
+     * Decide the reminder for a user turn.
+     *
+     * The turn is advanced here - `userTurns`, and the mid-run budget the new turn resets - because a decision
+     * belongs to a turn. `turnBegun` is for the deferred path: the boundary runs `beginTurn` the moment the user
+     * speaks so everything downstream sees the new turn, and the decision follows once the model has answered.
+     */
+    decide(
+        input: DecideInput,
+        options: { turnBegun?: boolean } = {},
+    ): ReminderDefinition | undefined {
+        // A new user turn resets the mid-run budget; the cap is per turn, not per session.
+        if (options.turnBegun !== true) {
+            this.beginTurn();
+        }
 
         if (this.armed !== undefined) {
             const armed = this.armed;

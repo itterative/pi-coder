@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { AssistantMessage, JsonObject } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 
 import {
     REMINDER_STATE_TYPE,
@@ -12,8 +12,12 @@ import {
     buildReminderSignals,
     reminderLabelsFromEntries,
     reminderResumeState,
+    reminderSessionLabels,
+    reminderStateMarker,
     todoItemsFrom,
 } from "../../../src/modules/reminders/session-signals";
+import type { ReminderId } from "../../../src/modules/reminders/types";
+import type { ReminderPhase } from "../../../src/modules/decision";
 import { zeroUsage } from "../../helpers/agent-doubles";
 
 /**
@@ -157,7 +161,7 @@ describe("buildReminderSignals", () => {
                 tests_run: true,
                 memory_writes: 1,
                 todo_writes: 1,
-                phase: "verifying",
+                phase: "validating",
                 unvalidated: false,
             },
             reminders_shown: [{ id: "sandbox", turns_ago: 2 }],
@@ -180,7 +184,7 @@ describe("buildReminderSignals", () => {
 
         expect(signals).toEqual({
             cwd: CWD,
-            session: { user_turns: 1, context_tokens: 0 },
+            session: { user_turns: 1, context_tokens: 0, phase: "discussing" },
         });
     });
 
@@ -232,6 +236,54 @@ describe("buildReminderSignals", () => {
         expect(signals.session).toMatchObject({ phase: "implementing", unvalidated: true });
     });
 
+    it("treats a document write as recording work rather than a code change", () => {
+        const manager = session();
+        manager.appendMessage(
+            toolCallEntry([{ name: "write", arguments: { path: "docs/plan.md" } }], 1),
+        );
+
+        const signals = buildReminderSignals({
+            entries: manager.getBranch(),
+            cwd: CWD,
+            currentTurn: 2,
+            contextTokens: 0,
+            shown: new Map(),
+        });
+
+        // A plan edit is the recording phase: it changed the branch, but not the code the validation
+        // reminder is about, so a doc-only turn is not unvalidated work.
+        expect(signals.session).toMatchObject({ doc_writes: 1, phase: "documenting" });
+        expect(signals.session?.files_modified).toBeUndefined();
+        expect(signals.session?.unvalidated).toBeUndefined();
+    });
+
+    it("keeps a document write from excusing a code change", () => {
+        const manager = session();
+        manager.appendMessage(
+            toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 1),
+        );
+        manager.appendMessage(
+            toolCallEntry([{ name: "write", arguments: { path: "docs/plan.md" } }], 2),
+        );
+
+        const signals = buildReminderSignals({
+            entries: manager.getBranch(),
+            cwd: CWD,
+            currentTurn: 2,
+            contextTokens: 0,
+            shown: new Map(),
+        });
+
+        // The doc write neither joins `files_modified` nor moves the last write past the last run, so the
+        // code change stays unvalidated.
+        expect(signals.session).toMatchObject({
+            doc_writes: 1,
+            files_modified: ["src/a.ts"],
+            phase: "implementing",
+            unvalidated: true,
+        });
+    });
+
     it("infers exploration from reads alone", () => {
         const manager = session();
         manager.appendMessage(
@@ -250,7 +302,7 @@ describe("buildReminderSignals", () => {
         expect(signals.session?.unvalidated).toBeUndefined();
     });
 
-    it("lets persisted model labels win over inference", () => {
+    it("keeps the accepted labels and hands the activity only what they leave unanswered", () => {
         const manager = session();
         manager.appendMessage(
             toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 1),
@@ -262,42 +314,58 @@ describe("buildReminderSignals", () => {
             currentTurn: 4,
             contextTokens: 0,
             shown: new Map(),
-            labels: { phase: "debugging", finishing: true, unvalidated: false },
+            labels: { phase: "validating", finishing: true, unvalidated: false },
         });
 
+        // The accepted phase is the anchor the accept rule holds in `decision/reminder.ts`; the activity scan
+        // is the bootstrap, not the judge - and it is the only source of `unvalidated` now, so a value recorded
+        // by an older session cannot freeze in place.
         expect(signals.session).toMatchObject({
-            phase: "debugging",
-            finishing: true,
-            unvalidated: false,
+            phase: "validating",
+            unvalidated: true,
         });
     });
 
-    it("reads persisted labels from the last state entry and drops bad fields", () => {
+    it("infers discussing for a turn that changed and read nothing", () => {
+        const manager = session();
+        manager.appendMessage(userEntry("hello", 1));
+
+        const signals = buildReminderSignals({
+            entries: manager.getBranch(),
+            cwd: CWD,
+            currentTurn: 1,
+            contextTokens: 0,
+            shown: new Map(),
+        });
+
+        // The scan answers every turn, so the state is never empty: a turn that neither changed nor read
+        // anything is the one the criteria call `discussing`.
+        expect(signals.session?.phase).toBe("discussing");
+        expect(signals.session?.finishing).toBeUndefined();
+    });
+
+    it("reads the persisted phase from the last state entry and drops bad fields", () => {
         const manager = session();
         manager.appendCustomEntry(REMINDER_STATE_TYPE, {
-            phase: "wrapping_up",
+            phase: "documenting",
             finishing: true,
             unvalidated: "nope",
         });
 
-        expect(reminderLabelsFromEntries(manager.getBranch())).toEqual({
-            phase: "wrapping_up",
-            finishing: true,
-        });
+        // Only the phase: the labels an older session recorded for `finishing`/`unvalidated` are not read back,
+        // because the questions behind them are gone and a frozen value would outrank the activity inference.
+        expect(reminderLabelsFromEntries(manager.getBranch())).toEqual({ phase: "documenting" });
     });
 
-    it("keeps persisted labels across a compaction", () => {
+    it("keeps the persisted phase across a compaction", () => {
         const manager = session();
-        manager.appendCustomEntry(REMINDER_STATE_TYPE, { phase: "wrapping_up", finishing: true });
+        manager.appendCustomEntry(REMINDER_STATE_TYPE, { phase: "documenting", finishing: true });
         manager.appendCompaction("folded", null, 1000);
 
-        // The branch still reaches the pre-fold entry, so a post-compaction restart re-reads the labels
-        // instead of dropping them. Only the memory index treats a compaction as a hard boundary, because
+        // The branch still reaches the pre-fold entry, so a post-compaction restart re-reads the phase
+        // instead of dropping it. Only the memory index treats a compaction as a hard boundary, because
         // its snapshot is rebuilt from the filesystem rather than re-read.
-        expect(reminderLabelsFromEntries(manager.getBranch())).toEqual({
-            phase: "wrapping_up",
-            finishing: true,
-        });
+        expect(reminderLabelsFromEntries(manager.getBranch())).toEqual({ phase: "documenting" });
     });
 
     it("does not count a test-looking string inside other commands", () => {
@@ -316,6 +384,83 @@ describe("buildReminderSignals", () => {
 
         // `echo` is the command; the quoted text is an argument, and the pattern anchors on the command word.
         expect(signals.session?.tests_run).toBeUndefined();
+    });
+});
+
+describe("reminderSessionLabels", () => {
+    it("infers the phase from the branch when the model assigned nothing", () => {
+        const manager = session();
+        manager.appendMessage(userEntry("do the work", 1));
+        manager.appendMessage(
+            toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 2),
+        );
+
+        expect(reminderSessionLabels({ entries: manager.getBranch(), cwd: CWD })).toEqual({
+            phase: "implementing",
+            unvalidated: true,
+        });
+    });
+
+    it("lets the accepted phase stand over the activity", () => {
+        const manager = session();
+        manager.appendMessage(userEntry("do the work", 1));
+        manager.appendMessage(
+            toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 2),
+        );
+
+        const labels = reminderSessionLabels({
+            entries: manager.getBranch(),
+            cwd: CWD,
+            labels: { phase: "validating" },
+        });
+
+        // The accepted phase is what the consult reasoned from, so it stands; the field it did not answer
+        // (`unvalidated`) comes from the activity.
+        expect(labels).toEqual({ phase: "validating", unvalidated: true });
+    });
+
+    it("infers the phase while nothing is accepted yet", () => {
+        const manager = session();
+        manager.appendMessage(userEntry("do the work", 1));
+        manager.appendMessage(
+            toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 2),
+        );
+
+        const labels = reminderSessionLabels({ entries: manager.getBranch(), cwd: CWD });
+
+        expect(labels).toEqual({ phase: "implementing", unvalidated: true });
+    });
+
+    it("reads discussing from a branch with no activity", () => {
+        expect(reminderSessionLabels({ entries: [], cwd: CWD })).toEqual({ phase: "discussing" });
+    });
+});
+
+describe("reminderStateMarker", () => {
+    it("renders a recorded phase as one annotation line", () => {
+        const manager = session();
+        manager.appendCustomEntry(REMINDER_STATE_TYPE, { phase: "documenting" });
+
+        // The marker is the line itself: no role prefix, and only the phase, which is what the probe's
+        // `--annotate` inserted into the transcript.
+        expect(reminderStateMarker(manager.getBranch().at(-1) as SessionEntry)).toBe(
+            "  ── state: documenting ──",
+        );
+    });
+
+    it("ignores every other entry, and a phase it cannot name", () => {
+        const manager = session();
+        manager.appendMessage(userEntry("hello", 1));
+        manager.appendCustomEntry("pi-memory:memory-index", { projectMemories: [] });
+        manager.appendCustomEntry(REMINDER_STATE_TYPE, { finishing: true });
+        manager.appendCustomEntry(REMINDER_STATE_TYPE, { phase: "not-a-phase" });
+
+        const phases = manager
+            .getBranch()
+            .map((entry) => reminderStateMarker(entry))
+            .filter((marker) => marker !== undefined);
+
+        expect(phases).toEqual([]);
     });
 });
 
@@ -363,7 +508,8 @@ describe("reminderResumeState", () => {
 });
 
 describe("availableRotationIds", () => {
-    function availability(manager: SessionManager, labels?: { phase?: "wrapping_up" }) {
+    /** The pool a branch produces, with optional accepted labels on top of what the scan infers. */
+    function availability(manager: SessionManager, labels?: { phase?: ReminderPhase }) {
         return availableRotationIds(
             buildReminderSignals({
                 entries: manager.getBranch(),
@@ -376,56 +522,112 @@ describe("availableRotationIds", () => {
         );
     }
 
-    it("gates memory-hygiene out until mutating work has happened", () => {
-        const manager = session();
-        manager.appendMessage(userEntry("tell me about this", 1));
+    /** The pool as a list, in catalog order, so an expectation states the whole offer. */
+    function offered(manager: SessionManager, labels?: { phase?: ReminderPhase }): ReminderId[] {
+        return [...availability(manager, labels)];
+    }
 
-        const available = availability(manager);
+    it("offers the list only, while the turn is still discussing", () => {
+        const discussing = session();
+        discussing.appendMessage(userEntry("tell me about this", 1));
+        discussing.appendCustomEntry("pi-coder:todo-snapshot", {
+            version: 1,
+            content: TODO_DOCUMENT,
+        });
 
-        expect(available.has("memory-hygiene")).toBe(false);
-        expect(available.has("delegation")).toBe(true);
+        // `delegation` is about work underway and both hand-back reminders need something produced, so a turn
+        // that has neither changed nor read anything offers only the TODO list.
+        expect(offered(discussing)).toEqual(["todo"]);
     });
 
-    it("gates memory-hygiene in once a code file or the TODO changed", () => {
-        const edited = session();
-        edited.appendMessage(toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 1));
-        expect(availability(edited).has("memory-hygiene")).toBe(true);
-
-        const todoed = session();
-        todoed.appendMessage(
-            toolCallEntry([{ name: "edit", arguments: { path: "/tmp/scratch/TODO.md" } }], 1),
+    it("offers delegation and the list while exploring, not the hand-back reminders", () => {
+        const exploring = session();
+        exploring.appendMessage(
+            toolCallEntry([{ name: "read", arguments: { path: "src/a.ts" } }], 1),
         );
-        expect(availability(todoed).has("memory-hygiene")).toBe(true);
+        exploring.appendCustomEntry("pi-coder:todo-snapshot", {
+            version: 1,
+            content: TODO_DOCUMENT,
+        });
+
+        expect(offered(exploring)).toEqual(["delegation", "todo"]);
     });
 
-    it("gates memory-hygiene in for a wrapping-up label", () => {
+    it("offers every produced-work reminder while implementing", () => {
+        const implementing = session();
+        implementing.appendMessage(
+            toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 1),
+        );
+        implementing.appendCustomEntry("pi-coder:todo-snapshot", {
+            version: 1,
+            content: TODO_DOCUMENT,
+        });
+
+        // `validation` is offered here on purpose: an unvalidated change under construction is exactly when
+        // an agent can call the work finished without running anything.
+        expect(offered(implementing)).toEqual([
+            "memory-hygiene",
+            "delegation",
+            "todo",
+            "validation",
+        ]);
+    });
+
+    it("drops delegation and the list once the turn is validating", () => {
+        const validating = session();
+        validating.appendMessage(
+            toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 1),
+        );
+        validating.appendMessage(
+            toolCallEntry([{ name: "bash", arguments: { command: "npm test" } }], 2),
+        );
+        validating.appendCustomEntry("pi-coder:todo-snapshot", {
+            version: 1,
+            content: TODO_DOCUMENT,
+        });
+
+        // The advice to split work or keep the list current has passed; what is left to say is about
+        // finishing, which is what the hand-back pair is for.
+        expect(offered(validating)).toEqual(["memory-hygiene", "validation"]);
+    });
+
+    it("offers the hand-back pair from a recording state", () => {
+        const documenting = session();
+        documenting.appendMessage(
+            toolCallEntry([{ name: "write", arguments: { path: "docs/plan.md" } }], 1),
+        );
+
+        expect(offered(documenting)).toEqual(["memory-hygiene", "validation"]);
+    });
+
+    it("lets an accepted state decide the pool over what the scan can see", () => {
         const manager = session();
         manager.appendMessage(userEntry("report back", 1));
 
-        expect(availability(manager, { phase: "wrapping_up" }).has("memory-hygiene")).toBe(true);
+        // The scan reads `discussing` here; the accepted `reporting` is the state the session is in, and it
+        // is what the pool follows.
+        expect(offered(manager, { phase: "reporting" })).toEqual(["memory-hygiene", "validation"]);
+        expect(offered(manager, { phase: "discussing" })).toEqual([]);
     });
 
-    it("gates todo out when there is no list", () => {
-        const manager = session();
-        manager.appendMessage(userEntry("tell me about this", 1));
+    it("gates the list on an open list whatever the state says", () => {
+        const exploring = session();
+        exploring.appendMessage(
+            toolCallEntry([{ name: "read", arguments: { path: "src/a.ts" } }], 1),
+        );
+        expect(availability(exploring).has("todo")).toBe(false);
 
-        const available = availability(manager);
-
-        expect(available.has("todo")).toBe(false);
-        expect(available.has("validation")).toBe(true);
-    });
-
-    it("gates todo in for a list with work left, and out once it is complete", () => {
-        const open = session();
-        open.appendCustomEntry("pi-coder:todo-snapshot", { version: 1, content: TODO_DOCUMENT });
-        expect(availability(open).has("todo")).toBe(true);
-
-        const closed = session();
-        closed.appendCustomEntry("pi-coder:todo-snapshot", {
+        exploring.appendCustomEntry("pi-coder:todo-snapshot", {
             version: 1,
             content: TODO_COMPLETE_DOCUMENT,
         });
-        expect(availability(closed).has("todo")).toBe(false);
+        expect(availability(exploring).has("todo")).toBe(false);
+
+        exploring.appendCustomEntry("pi-coder:todo-snapshot", {
+            version: 1,
+            content: TODO_DOCUMENT,
+        });
+        expect(availability(exploring).has("todo")).toBe(true);
     });
 });
 
@@ -457,7 +659,7 @@ describe("outcome-aware validation", () => {
         expect(signalsOf(manager).session).toMatchObject({
             tests_run: true,
             unvalidated: false,
-            phase: "verifying",
+            phase: "validating",
         });
 
         manager.appendMessage(
@@ -470,7 +672,7 @@ describe("outcome-aware validation", () => {
         });
     });
 
-    it("treats a run that failed after the last change as unvalidated and debugging", () => {
+    it("treats a run that failed after the last change as unvalidated and validating", () => {
         const manager = session();
         manager.appendMessage(
             toolCallEntry([{ name: "edit", arguments: { path: "src/a.ts" } }], 1),
@@ -484,7 +686,7 @@ describe("outcome-aware validation", () => {
             tests_run: true,
             last_test_failed: true,
             unvalidated: true,
-            phase: "debugging",
+            phase: "validating",
         });
     });
 
@@ -505,6 +707,6 @@ describe("outcome-aware validation", () => {
         const session_ = signalsOf(manager).session;
         expect(session_?.last_test_failed).toBeUndefined();
         expect(session_?.unvalidated).toBe(false);
-        expect(session_?.phase).toBe("verifying");
+        expect(session_?.phase).toBe("validating");
     });
 });

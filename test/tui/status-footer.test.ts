@@ -23,7 +23,11 @@ import {
 import type { TodoList } from "../../src/modules/todolist/parser";
 import { emitTodoStatus } from "../../src/modules/todolist/events";
 import decisionConfig from "../../src/modules/decision/config";
-import { emitDecisionStatus } from "../../src/modules/decision/events";
+import {
+    DECISION_STATE_EVENT,
+    emitDecisionState,
+    emitDecisionStatus,
+} from "../../src/modules/decision/events";
 import type { AgentRunSummary } from "../../src/tools/agent/contracts/runs";
 import { PiCoderFooter, registerStatusFooter } from "../../src/tui/status";
 import {
@@ -380,6 +384,36 @@ describe("status footer", () => {
         footer.dispose();
     });
 
+    it("shows the judged phase beside the badge", () => {
+        vi.spyOn(decisionConfig, "current", "get").mockReturnValue({ enabled: true });
+        const fg = vi.spyOn(mockTheme, "fg");
+        const footer = makeFooter(baseContext());
+
+        footer.setDecisionLabels({ phase: "implementing" });
+        expect(renderText(footer, 80)).toContain("» auto · implementing");
+        // The mode keeps the badge's accent while the phase is dim, so the two read apart.
+        expect(fg).toHaveBeenCalledWith("dim", " · implementing");
+
+        // The state is a property of the session, not of the mode or of a check in flight.
+        footer.setDecisionChecking(1);
+        expect(renderText(footer, 80)).toContain("⠋ auto · implementing");
+
+        footer.setDecisionChecking(0);
+        footer.setDecisionLabels({});
+        expect(renderText(footer, 80)).not.toContain("implementing");
+        footer.dispose();
+    });
+
+    it("shows the judged phase in manual mode too", () => {
+        const footer = makeFooter(baseContext());
+
+        footer.setDecisionLabels({ phase: "exploring" });
+
+        // The deterministic inference fills the phase while the model is off, so the badge keeps reading it.
+        expect(renderText(footer, 80)).toContain("» manual · exploring");
+        footer.dispose();
+    });
+
     it("shows a dim manual badge while the decision model is disabled", () => {
         const fg = vi.spyOn(mockTheme, "fg");
         const footer = makeFooter(baseContext());
@@ -435,6 +469,45 @@ describe("status footer", () => {
 
         emitDecisionStatus(events, 0);
         expect(renderText(footer, 80)).not.toContain("⠋");
+        footer.dispose();
+    });
+
+    it("renders the judged phase beside a completed plan", async () => {
+        vi.spyOn(decisionConfig, "current", "get").mockReturnValue({ enabled: true });
+        const done: TodoList = {
+            ...todo,
+            items: todo.items.map((item) => ({ ...item, status: "completed" as const })),
+        };
+        const footer = makeFooter(statusContext(), footerData({ branch: "main" }), { todo: done });
+        footer.setDecisionLabels({ phase: "documenting" });
+
+        const line = renderText(footer, 140);
+        await expect(snapshotText(line)).toMatchFileSnapshot(
+            "./__snapshots__/status-footer.state.txt",
+        );
+        expect(line).toContain("» auto · documenting");
+        footer.dispose();
+    });
+
+    it("feeds decision-state events into the badge", () => {
+        vi.spyOn(decisionConfig, "current", "get").mockReturnValue({ enabled: true });
+        const { ui, calls } = recordingUi();
+        const context = baseContext({ mode: "tui", hasUI: true, ui });
+        const { events, trigger } = registerForContext();
+
+        trigger("session_start", context);
+        // The component is built lazily on the first render, so a state published before it has to be stored:
+        // the badge reads it at construction rather than waiting for the next turn to publish another.
+        emitDecisionState(events, { phase: "implementing" });
+        const footer = instantiate(calls[0]);
+        expect(renderText(footer, 80)).toContain("» auto · implementing");
+
+        emitDecisionState(events, { phase: "validating" });
+        expect(renderText(footer, 80)).toContain("» auto · validating");
+
+        // A phase the vocabulary cannot name is dropped instead of rendered.
+        events.emit(DECISION_STATE_EVENT, { labels: { phase: "nonsense" } });
+        expect(renderText(footer, 80)).toContain("» auto · validating");
         footer.dispose();
     });
 

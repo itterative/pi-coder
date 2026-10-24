@@ -1,14 +1,22 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { EventBus, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import {
     consultReminderSelection,
+    consultReminderState,
     decisionConfig,
     reminderEnabled,
+    PHASE_MOVE_CONFIDENCE,
+    TRANSCRIPT_WINDOW_CHARS,
     type DecisionModelConfig,
     type ReminderConsult,
+    type ReminderPhase,
     type ReminderSignals,
+    type ReminderStateConsult,
     type ReminderStateLabels,
+    type SessionWindow,
 } from "../decision";
+import { emitDecisionState } from "../decision/events";
+import { SerialQueue } from "../../common/async";
 import {
     ACTIVE_ROTATION_REMINDERS,
     COMPACTION_REMINDER,
@@ -25,6 +33,8 @@ import {
     buildReminderSignals,
     reminderLabelsFromEntries,
     reminderResumeState,
+    reminderSessionLabels,
+    reminderStateMarker,
 } from "./session-signals";
 import { loadReminderSettings } from "./settings";
 import { todoChoiceFrom, todoQueryFrom, type TodoQuery } from "./todo-query";
@@ -37,6 +47,16 @@ export interface ReminderRegistrationOptions {
      * reminder, which is what children received before the rotation existed.
      */
     scope?: "full" | "memory";
+}
+
+export interface ReminderExtensionHandle {
+    /**
+     * Resolves when every queued judgement has settled.
+     *
+     * The rotation judgement is deferred, so pi's own await points do not cover it: a caller that needs the
+     * settled state - the mid-run gate, a test driving the hooks - waits here rather than on any hook.
+     */
+    idle(): Promise<void>;
 }
 
 function formatReminder(text: string): string {
@@ -60,7 +80,7 @@ function reminderTextFor(reminder: ReminderDefinition, ctx: ExtensionContext): s
 
 /** Everything the debug entry records about one selection decision, however it was reached. */
 interface DecisionEntryInput {
-    trigger: "session" | "turn" | "mid-run";
+    trigger: "session" | "turn" | "checkpoint" | "mid-run";
     reminder: ReminderDefinition | undefined;
     scope: "full" | "memory";
     /** The state a model decision was made from; absent for the session reminder and mid-run steers. */
@@ -71,6 +91,31 @@ interface DecisionEntryInput {
     scores?: Record<string, number>;
     consult?: ReminderConsult;
     labels?: ReminderStateLabels;
+    /** The raw confidence of the tier-1 state answer, so a held phase can be told from a confident one. */
+    stateConfidence?: number;
+    /** The phase tier 1 answered, before the accept rule moved or held it; absent when it named none. */
+    statePhase?: ReminderPhase;
+    /** Tier 1's own latency, so the cheap half of the cascade stays measurable. */
+    stateLatencyMs?: number;
+    /** Whether the selection consult re-asked the state on the window transcript: the cascade's escalation. */
+    escalated?: boolean;
+    /**
+     * Whether the decision was reached after the turn's user message was already sent.
+     *
+     * The rotation judgement is deferred, so its entry lands inside the run it belongs to rather than before the
+     * prompt: the report attributes a deferred turn by its own `scheduler.userTurns`, not the next turn's.
+     */
+    deferred?: boolean;
+    /** The window the consult was judged by, carried back on the consult rather than rebuilt here. */
+    window?: SessionWindow;
+    /**
+     * The state transcript, exactly as the state ask sent it, when the state was judged (a checkpoint, or a turn
+     * whose short answer escalated).
+     *
+     * The state ask sends one rendered conversation rather than the pool's window, so this is the only record of
+     * what it was judged by; the transcript's own fit is not reproducible from the branch afterwards.
+     */
+    stateTranscript?: string;
     /** The TODO item the extra query read as the current work, when it moved off the list. */
     todoMove?: { id: string; probability: number };
     /** Every TODO query candidate's returned probability, for calibration. */
@@ -84,7 +129,9 @@ interface DecisionEntryInput {
  *
  * Recorded whether or not a reminder was chosen - "nothing was shown" is exactly the case the state is
  * needed to explain - and the pre-decision scheduler snapshot is kept so the threshold and rotation the
- * decision saw are recoverable rather than inferred.
+ * decision saw are recoverable rather than inferred. The window a consult judged is kept beside the signals:
+ * the branch read that produces it happens once, so nothing else can recover which window was sent - and the
+ * state ask's own transcript is kept for the same reason, since it is a fit of that same read.
  */
 function decisionEntry(input: DecisionEntryInput): Record<string, unknown> {
     const options = input.options ?? [];
@@ -108,6 +155,20 @@ function decisionEntry(input: DecisionEntryInput): Record<string, unknown> {
                   },
               }),
         ...(input.labels === undefined ? {} : { labels: { ...input.labels } }),
+        ...(input.stateConfidence === undefined ? {} : { stateConfidence: input.stateConfidence }),
+        ...(input.statePhase === undefined ? {} : { statePhase: input.statePhase }),
+        ...(input.stateLatencyMs === undefined ? {} : { stateLatencyMs: input.stateLatencyMs }),
+        ...(input.escalated === undefined ? {} : { escalated: input.escalated }),
+        ...(input.deferred === undefined ? {} : { deferred: input.deferred }),
+        ...(input.stateTranscript === undefined ? {} : { stateTranscript: input.stateTranscript }),
+        ...(input.window === undefined
+            ? {}
+            : {
+                  window: {
+                      items: input.window.items.map((item) => ({ ...item })),
+                      omitted: input.window.omitted,
+                  },
+              }),
         ...(input.todoMove === undefined ? {} : { todoMove: { ...input.todoMove } }),
         ...(input.todoScores === undefined ? {} : { todoScores: { ...input.todoScores } }),
         contextTokens: input.contextTokens,
@@ -130,21 +191,28 @@ export function modelChoiceOf(consult: ReminderConsult): ReminderModelChoice | u
 }
 
 /** Consult the decision model once its config has opted into `reminders`; never throws. */
-async function consultModelFor(
-    ctx: ExtensionContext,
-    config: DecisionModelConfig,
-    request: string,
-    signals: ReminderSignals,
-    options: readonly ReminderDefinition[],
-    todoQuery?: TodoQuery,
-): Promise<ReminderConsult> {
+async function consultModelFor(options: {
+    ctx: ExtensionContext;
+    config: DecisionModelConfig;
+    request: string;
+    signals: ReminderSignals;
+    reminders: readonly ReminderDefinition[];
+    /** The bus to count the consult on, so the footer badge animates while it runs. */
+    events?: EventBus;
+    /** The phase already accepted, which the accept rule holds unless the answer moves it confidently. */
+    heldPhase?: ReminderPhase;
+    todoQuery?: TodoQuery;
+}): Promise<ReminderConsult> {
     return consultReminderSelection({
-        ctx,
-        config,
-        options,
-        request,
-        signals,
-        ...(todoQuery === undefined ? {} : { extraQuestions: todoQuery.questions }),
+        ctx: options.ctx,
+        config: options.config,
+        options: options.reminders,
+        request: options.request,
+        signals: options.signals,
+        ...(options.events === undefined ? {} : { events: options.events }),
+        ...(options.heldPhase === undefined ? {} : { heldPhase: options.heldPhase }),
+        ...(options.todoQuery === undefined ? {} : { extraQuestions: options.todoQuery.questions }),
+        stateMarker: reminderStateMarker,
     });
 }
 
@@ -170,11 +238,18 @@ function sameLabels(left: ReminderStateLabels, right: ReminderStateLabels): bool
  * a model pick the gate disallows is dropped rather than replaced. When the decision model is configured
  * with `reminders: true`, it answers first: a chosen reminder or a deliberate `none` decides the turn, and
  * an unavailable or unreadable answer leaves the deterministic schedule in charge.
+ *
+ * The rotation judgement is deferred. Its consult is a model call, and pi builds the user message only after
+ * `before_agent_start` handlers resolve, so waiting there withholds the user's own message until the model has
+ * answered; instead the boundary advances the turn and queues the judgement, and the reminder it picks is
+ * steered into the run at the next opportunity (or carried by the next user message if the run already
+ * settled). The armed reminders are unaffected because they never consult: the memory and compaction reminders
+ * are decided at the boundary and still ride the message they belong to.
  */
 export default function registerRemindersExtension(
     pi: ExtensionAPI,
     options: ReminderRegistrationOptions = {},
-): void {
+): ReminderExtensionHandle {
     const scope = options.scope ?? "full";
     const settings = loadReminderSettings();
     const rotationEnabled = settings.everyTurns > 0 || settings.thresholdTokens > 0;
@@ -194,6 +269,31 @@ export default function registerRemindersExtension(
     let labels: ReminderStateLabels = {};
 
     /**
+     * The serialized judgement queue.
+     *
+     * The turn judgement, the checkpoint judgement, and the next turn's judgement all consult the model and all
+     * write the same labels, so they run one at a time in the order they were requested instead of racing: a
+     * checkpoint never lands before the turn judgement that preceded it, and anything waiting on the queue reads
+     * a settled state.
+     */
+    const judgements = new SerialQueue();
+
+    /** Wait for the judgements requested so far, which is how a reader of the state settles it. */
+    const idle = (): Promise<void> => judgements.idle();
+
+    /**
+     * The change-point counter that in-flight judgements check before they write.
+     *
+     * A consult outlives the event that started it, so a reload, tree move, or fold can land while one is in the
+     * air; a task stamped with an older epoch drops its answer instead of recording it into a session it no
+     * longer belongs to.
+     */
+    let epoch = 0;
+
+    /** Whether an agent run is in flight, which is what decides how a deferred reminder is delivered. */
+    let runActive = false;
+
+    /**
      * Whether the assistant message being streamed has produced a tool call yet.
      *
      * A steer is delivered after the current assistant turn and its tool calls; a message with no tool call
@@ -207,15 +307,404 @@ export default function registerRemindersExtension(
     let midRunSignals: ReminderSignals | undefined;
     let midRunAvailableReady = false;
 
-    const rotationSignals = (ctx: ExtensionContext, currentTurn: number): ReminderSignals =>
+    /**
+     * The tier-1 stream the cascade's escalations can be read from.
+     *
+     * The state is judged on the short transcript; when its phase answer came back unsure - or did not come
+     * back at all - the reported state may be the held one rather than what the short transcript suggested, so
+     * the same question is asked again on the window transcript.
+     */
+    const comesBackUnsure = (state: ReminderStateConsult | undefined): boolean =>
+        state !== undefined &&
+        (state.phaseConfidence === undefined || state.phaseConfidence < PHASE_MOVE_CONFIDENCE);
+
+    /**
+     * One rotation turn, as the cascade: tier 1 judges the state, the state scopes the pool, tier 2 asks the
+     * pool's questions.
+     *
+     * The order is the point. The pool is the judged state's (`availableRotationIds`), so it cannot be built
+     * before the state is answered; the state ask is the cheap half, so it is asked on the short transcript and
+     * re-asked on the window transcript only when that answer was unsure. The two asks are separate requests
+     * with separate states - the state ask never carries the pool's signals, and the pool ask never carries the
+     * transcript - because each shape is the one it was measured with. Everything the caller records or feeds
+     * the scheduler comes back in one object, because the alternative is a dozen locals mutated across four
+     * nested blocks.
+     */
+    const judgeTurn = async (
+        ctx: ExtensionContext,
+        request: string,
+        currentTurn: number,
+        /** The epoch the boundary stamped: a judgement whose session was replaced writes nothing. */
+        at: number,
+    ): Promise<{
+        signals: ReminderSignals;
+        available: ReadonlySet<ReminderId>;
+        options: ReminderDefinition[];
+        modelChoice: ReminderModelChoice | undefined;
+        scores: Record<string, number> | undefined;
+        consult: ReminderConsult | undefined;
+        escalated: boolean;
+        stateConfidence: number | undefined;
+        statePhase: ReminderPhase | undefined;
+        stateLatencyMs: number | undefined;
+        /** The accepted state's transcript, so the debug entry records what was judged rather than a re-fit. */
+        stateTranscript: string | undefined;
+        todoMove: { id: string; probability: number } | undefined;
+        todoScores: Record<string, number> | undefined;
+    }> => {
+        const config = decisionConfig.load(ctx.cwd ?? process.cwd());
+        const consulting = reminderEnabled(config);
+        let signals = rotationSignals(ctx, currentTurn);
+        let state = labels;
+        const askState = (windowChars?: number): Promise<ReminderStateConsult> =>
+            consultReminderState({
+                ctx,
+                config,
+                request,
+                ...(windowChars === undefined ? {} : { windowChars }),
+                ...(labels.phase === undefined ? {} : { heldPhase: labels.phase }),
+                ...(pi.events === undefined ? {} : { events: pi.events }),
+                stateMarker: reminderStateMarker,
+            });
+
+        let short: ReminderStateConsult | undefined;
+        let escalated: ReminderStateConsult | undefined;
+
+        if (consulting) {
+            short = await askState();
+            escalated = comesBackUnsure(short)
+                ? await askState(TRANSCRIPT_WINDOW_CHARS)
+                : undefined;
+            // The accepted state is the state of this turn: the pool below is scoped by it, and the state the
+            // selection consult sends carries it, so the turn reports the judged state rather than what the
+            // activity alone would have said.
+            state = { ...labels, ...(answeredState(escalated) ?? answeredState(short) ?? {}) };
+            signals = rotationSignals(ctx, currentTurn, state);
+        }
+
+        const available = availableRotationIds(signals);
+
+        // The gate decides what may be offered, so the model is asked only about ids that can actually be
+        // shown; a gated id cannot be chosen and then vetoed.
+        const options = ACTIVE_ROTATION_REMINDERS.filter((reminder) => available.has(reminder.id));
+
+        if (!consulting) {
+            return {
+                signals,
+                available,
+                options,
+                modelChoice: undefined,
+                scores: undefined,
+                consult: undefined,
+                escalated: false,
+                stateConfidence: undefined,
+                statePhase: undefined,
+                stateLatencyMs: undefined,
+                stateTranscript: undefined,
+                todoMove: undefined,
+                todoScores: undefined,
+            };
+        }
+
+        const todoQuery = todoQueryFrom(ctx.sessionManager.getBranch());
+        const consult = await consultModelFor({
+            ctx,
+            config,
+            request,
+            signals,
+            reminders: options,
+            ...(pi.events === undefined ? {} : { events: pi.events }),
+            heldPhase: state.phase,
+            todoQuery,
+        });
+        const modelChoice = modelChoiceOf(consult);
+        const todo = todoChoiceFrom(todoQuery, consult.extras, modelChoice);
+
+        // A consult outlives the event that started it, so the record waits for the epoch: a reload or fold
+        // mid-consult must not inherit the answer. The escalated answer is recorded already - it was accepted
+        // above - so this only re-records the tier-1 answer when nothing escalated.
+        if (at === epoch) {
+            rememberState(answeredState(escalated) ?? answeredState(short));
+        }
+
+        return {
+            signals,
+            available,
+            options,
+            modelChoice: todo.choice,
+            scores: consult.scores,
+            consult,
+            escalated: escalated !== undefined,
+            stateConfidence: short?.phaseConfidence,
+            statePhase: short?.answeredPhase,
+            stateLatencyMs: short?.latencyMs,
+            stateTranscript: (escalated ?? short)?.transcript,
+            todoMove: todo.move,
+            todoScores: todo.scores,
+        };
+    };
+
+    /**
+     * Merge one turn's accepted state into the module's labels, recording it only when it changed.
+     *
+     * The entry is what `restart()` re-reads, so an unchanged answer writes nothing and a session does not grow
+     * an entry per turn.
+     */
+    const rememberState = (answered: ReminderStateLabels | undefined): void => {
+        if (answered === undefined || Object.keys(answered).length === 0) {
+            return;
+        }
+
+        const updated = { ...labels, ...answered };
+        if (sameLabels(updated, labels)) {
+            return;
+        }
+
+        labels = updated;
+        pi.appendEntry(REMINDER_STATE_TYPE, labels);
+    };
+
+    /**
+     * The state a consult answered, or `undefined` when nothing readable came back.
+     *
+     * A failed or disabled ask answers an empty state rather than an absent one, so an escalation that
+     * produced nothing has to leave the answer behind it standing instead of erasing it.
+     */
+    const answeredState = (
+        consult: ReminderStateConsult | undefined,
+    ): ReminderStateLabels | undefined =>
+        consult !== undefined && Object.keys(consult.state).length > 0 ? consult.state : undefined;
+
+    /**
+     * Re-judge the state after one assistant response.
+     *
+     * pi's `turn_end` is one response plus the tools it called, not a user turn, so this is the probe's
+     * checkpoint cadence: the state is judged as the work happens, which is what lets the badge move inside a
+     * long run instead of only when the user speaks. Tier 1 is asked on the short window, and an unsure phase
+     * answer sends the same question again on the full window - the probe's `--tier`, minus the selection
+     * questions a checkpoint has no reminder decision for. No `decide()` runs here, so the user-turn count, the
+     * rotation pointer, and the mid-run budget stay the turn boundary's business; the only things that move are
+     * the labels the mid-run gate and the badge read.
+     */
+    const judgeStateCheckpoint = async (
+        ctx: ExtensionContext,
+        /** The epoch the hook stamped: a judgement whose session was replaced writes nothing. */
+        at: number,
+    ): Promise<void> => {
+        if (scope !== "full" || !settings.enabled || !rotationEnabled) {
+            return;
+        }
+
+        const config = decisionConfig.load(ctx.cwd ?? process.cwd());
+        if (!reminderEnabled(config)) {
+            return;
+        }
+
+        const signals = rotationSignals(ctx, scheduler.snapshot().userTurns);
+        const askState = (windowChars?: number): Promise<ReminderStateConsult> =>
+            consultReminderState({
+                ctx,
+                config,
+                ...(windowChars === undefined ? {} : { windowChars }),
+                ...(labels.phase === undefined ? {} : { heldPhase: labels.phase }),
+                ...(pi.events === undefined ? {} : { events: pi.events }),
+                stateMarker: reminderStateMarker,
+            });
+
+        const short = await askState();
+        const escalated = comesBackUnsure(short)
+            ? await askState(TRANSCRIPT_WINDOW_CHARS)
+            : undefined;
+        const accepted = escalated ?? short;
+
+        if (at !== epoch) {
+            return;
+        }
+
+        rememberState(answeredState(escalated) ?? answeredState(short));
+        publishState(ctx);
+
+        if (!settings.debug) {
+            return;
+        }
+
+        pi.appendEntry(
+            REMINDER_DEBUG_ENTRY_TYPE,
+            decisionEntry({
+                trigger: "checkpoint",
+                reminder: undefined,
+                scope,
+                state: signals,
+                labels,
+                ...(short.phaseConfidence === undefined
+                    ? {}
+                    : { stateConfidence: short.phaseConfidence }),
+                ...(short.answeredPhase === undefined ? {} : { statePhase: short.answeredPhase }),
+                stateLatencyMs: short.latencyMs,
+                escalated: escalated !== undefined,
+                ...((escalated ?? short).transcript === undefined
+                    ? {}
+                    : { stateTranscript: (escalated ?? short).transcript }),
+                ...(accepted.status === "disabled" ? {} : { consult: accepted }),
+                contextTokens: growth.maxTokens,
+                scheduler: scheduler.snapshot(),
+            }),
+        );
+    };
+
+    /** The message one turn reminder travels as, whether it opens a turn or joins a running one. */
+    const reminderPayload = (
+        ctx: ExtensionContext,
+        reminder: ReminderDefinition,
+        turn: number,
+    ): {
+        customType: string;
+        content: string;
+        display: boolean;
+        details: { id: ReminderId; turn: number };
+    } => ({
+        customType: REMINDER_CUSTOM_TYPE,
+        content: formatReminder(reminderTextFor(reminder, ctx)),
+        display: false,
+        // The entry records what was shown and when, so a restart on this branch can resume.
+        details: { id: reminder.id, turn },
+    });
+
+    /**
+     * Judge one rotation turn off the boundary's critical path, then deliver whatever it picked.
+     *
+     * The queue keeps the consults in order, so this never lands before the judgement it followed; the epoch
+     * check keeps an answer that outlived a session switch from writing to a session it no longer belongs to.
+     * `decide` runs here rather than at the boundary because the pool it rotates over is the judged state's, so
+     * the pick is only knowable once the consult has answered - by which time the user's message is long since
+     * with the model.
+     */
+    const judgeTurnInBackground = (ctx: ExtensionContext, request: string, turn: number): void => {
+        const at = epoch;
+        void judgements.add(async () => {
+            const judged = await judgeTurn(ctx, request, turn, at);
+            if (at !== epoch) {
+                return;
+            }
+
+            const before = scheduler.snapshot();
+            // A mid-run emission may have covered this turn while the consult ran; one reminder per turn holds
+            // whichever delivery path took the slot.
+            const reminder =
+                before.lastEmitTurn >= turn
+                    ? undefined
+                    : scheduler.decide(
+                          {
+                              maxContextTokens: growth.maxTokens,
+                              modelChoice: judged.modelChoice,
+                              available: judged.available,
+                          },
+                          { turnBegun: true },
+                      );
+
+            // The judgement moved the labels, so the badge is republished from the boundary's held state to the
+            // judged one. Every turn publishes: the phase is inferred from the branch, so the badge tracks a turn
+            // the rotation skipped just as well as one it judged.
+            publishState(ctx);
+
+            /** The turn the reminder is emitted on, stamped on the message so a later restart can resume. */
+            const emitTurn = scheduler.snapshot().userTurns;
+            if (reminder !== undefined) {
+                shown.set(reminder.id, emitTurn);
+            }
+
+            if (settings.debug) {
+                pi.appendEntry(
+                    REMINDER_DEBUG_ENTRY_TYPE,
+                    decisionEntry({
+                        trigger: "turn",
+                        deferred: true,
+                        reminder,
+                        scope,
+                        state: judged.signals,
+                        available: judged.available,
+                        options: judged.options,
+                        modelChoice: judged.modelChoice,
+                        scores: judged.scores,
+                        consult: judged.consult,
+                        labels,
+                        ...(judged.stateConfidence === undefined
+                            ? {}
+                            : { stateConfidence: judged.stateConfidence }),
+                        ...(judged.statePhase === undefined
+                            ? {}
+                            : { statePhase: judged.statePhase }),
+                        ...(judged.stateLatencyMs === undefined
+                            ? {}
+                            : { stateLatencyMs: judged.stateLatencyMs }),
+                        escalated: judged.escalated,
+                        ...(judged.stateTranscript === undefined
+                            ? {}
+                            : { stateTranscript: judged.stateTranscript }),
+                        ...(judged.consult?.window === undefined
+                            ? {}
+                            : { window: judged.consult.window }),
+                        ...(judged.todoMove === undefined ? {} : { todoMove: judged.todoMove }),
+                        ...(judged.todoScores === undefined
+                            ? {}
+                            : { todoScores: judged.todoScores }),
+                        contextTokens: growth.maxTokens,
+                        scheduler: before,
+                    }),
+                );
+            }
+
+            if (reminder === undefined) {
+                return;
+            }
+
+            // The request the decision was made for is already in flight, so the reminder cannot ride it: it
+            // joins the run at the run's next step, or - when the run has already settled - the next user
+            // message, which is the only delivery that still reaches the model.
+            pi.sendMessage(reminderPayload(ctx, reminder, emitTurn), {
+                deliverAs: runActive ? "steer" : "nextTurn",
+            });
+        });
+    };
+
+    const rotationSignals = (
+        ctx: ExtensionContext,
+        currentTurn: number,
+        stateLabels: ReminderStateLabels = labels,
+    ): ReminderSignals =>
         buildReminderSignals({
             entries: ctx.sessionManager.getBranch(),
             cwd: ctx.cwd ?? process.cwd(),
             currentTurn,
             contextTokens: growth.maxTokens,
             shown,
-            labels,
+            labels: stateLabels,
         });
+
+    /**
+     * Publish the judged session labels for the footer's badge.
+     *
+     * The state is derived from the branch alone - the model's persisted labels with the deterministic
+     * inference filling the gaps - so it tracks every turn rather than only the turns that ask the model, and
+     * the phase is published in both `auto` and `manual` mode. Publishing per turn costs one message and one
+     * footer render, which the turn triggers anyway; a child session's labels must not overwrite the parent's
+     * badge, and the readout belongs to this module, so it stays silent for `scope: "memory"` and while
+     * reminders are off.
+     */
+    const publishState = (ctx: ExtensionContext): void => {
+        if (scope !== "full" || !settings.enabled || pi.events === undefined) {
+            return;
+        }
+
+        emitDecisionState(
+            pi.events,
+            reminderSessionLabels({
+                entries: ctx.sessionManager.getBranch(),
+                cwd: ctx.cwd ?? process.cwd(),
+                labels,
+            }),
+        );
+    };
 
     /**
      * A restart point: session start, tree navigation, or compaction.
@@ -231,9 +720,16 @@ export default function registerRemindersExtension(
         ctx: ExtensionContext,
         options: { resume?: boolean; armed?: ReminderDefinition } = {},
     ) => {
+        // A change point: a judgement still in the air belongs to the session that is being left, so it drops
+        // its answer instead of recording it here.
+        epoch += 1;
         growth.reset();
         const branch = ctx.sessionManager.getBranch();
         labels = reminderLabelsFromEntries(branch);
+
+        // A restart is a change point: publishing here means a reload, a tree move, or a fold shows the phase
+        // at once instead of waiting for the first turn.
+        publishState(ctx);
 
         const state = options.resume === true ? reminderResumeState(branch) : undefined;
         if (state === undefined) {
@@ -255,7 +751,11 @@ export default function registerRemindersExtension(
     pi.on("session_tree", (_event, ctx) => restart(ctx, { resume: true }));
     pi.on("session_compact", (_event, ctx) => restart(ctx, { armed: COMPACTION_REMINDER }));
     pi.on("agent_start", () => {
+        runActive = true;
         growth.reset();
+    });
+    pi.on("agent_settled", () => {
+        runActive = false;
     });
 
     const midRunEnabled =
@@ -274,7 +774,7 @@ export default function registerRemindersExtension(
      * context threshold applies here (the turn cadence counts user turns and the model policy is consulted
      * at `before_agent_start`).
      */
-    const maybeEmitMidRun = (ctx: ExtensionContext): void => {
+    const maybeEmitMidRun = async (ctx: ExtensionContext): Promise<void> => {
         if (!midRunEnabled || !currentMessageHasToolCalls) {
             return;
         }
@@ -283,10 +783,19 @@ export default function registerRemindersExtension(
             return;
         }
 
+        // The pool this rotates over is the judged state's, so settle the judgements already requested before
+        // reading it: a checkpoint's answer lands first, and a deferred turn reminder that was going to take
+        // this turn's slot has taken it.
+        await idle();
+
         if (!midRunAvailableReady) {
             midRunSignals = rotationSignals(ctx, scheduler.snapshot().userTurns);
             midRunAvailable = availableRotationIds(midRunSignals);
             midRunAvailableReady = true;
+
+            // A mid-run check is the other point where the branch is scanned anyway, so a long turn's phase
+            // reaches the footer inside that turn rather than at its end.
+            publishState(ctx);
         }
 
         const before = scheduler.snapshot();
@@ -328,6 +837,76 @@ export default function registerRemindersExtension(
         );
     };
 
+    /**
+     * The user-turn boundary: advance the cadence, publish the state, and decide the turn's reminder.
+     *
+     * An armed reminder - the memory list changed, or the transcript was folded - carries no consult, so it is
+     * still decided here and rides the user message it is about. A rotation turn is the model's, and its consult
+     * is not worth holding the user's message behind: the turn is advanced and published at once, the judgement
+     * is queued, and the reminder it picks joins the run at the first opportunity after that message.
+     *
+     * Both paths still decide exactly once per turn, and only the deferred one can be pre-empted, by a mid-run
+     * emission that took the turn's slot while the consult was still in the air.
+     */
+    pi.on("before_agent_start", (event, ctx) => {
+        if (!settings.enabled) {
+            return;
+        }
+
+        // The session reminder is already decided, and a rotation with both triggers at zero is off, so
+        // neither turn is worth a classifier request or a branch scan.
+        const snapshot = scheduler.snapshot();
+        const rotationTurn = scope === "full" && rotationEnabled && !snapshot.sessionArmed;
+
+        scheduler.beginTurn();
+
+        if (!rotationTurn) {
+            const reminder = scheduler.decide(
+                { maxContextTokens: growth.maxTokens },
+                { turnBegun: true },
+            );
+
+            // Every turn publishes, whether or not it asked the model: the phase is inferred from the branch,
+            // so the badge tracks a turn the rotation skipped just as well as one it judged.
+            publishState(ctx);
+
+            /** The turn the reminder is emitted on, stamped on the message so a later restart can resume. */
+            const emitTurn = scheduler.snapshot().userTurns;
+            // Only the rotation is tracked: an armed reminder belongs to the catalog's session lifecycle, not to
+            // the rotation the `shown` history feeds.
+            if (reminder !== undefined && !snapshot.sessionArmed) {
+                shown.set(reminder.id, emitTurn);
+            }
+
+            // Record the decision whether or not a reminder was chosen: the session reminder is recorded so
+            // turn one is no gap, and a deliberate skip is what the state is needed to explain.
+            if (settings.debug && reminder !== undefined) {
+                pi.appendEntry(
+                    REMINDER_DEBUG_ENTRY_TYPE,
+                    decisionEntry({
+                        trigger: "session",
+                        reminder,
+                        scope,
+                        labels,
+                        contextTokens: growth.maxTokens,
+                        scheduler: snapshot,
+                    }),
+                );
+            }
+
+            if (reminder === undefined) {
+                return;
+            }
+
+            return { message: reminderPayload(ctx, reminder, emitTurn) };
+        }
+
+        // The held state is published before the consult resolves, so a turn whose judgement is slow still moves
+        // the badge the moment the user speaks; the judged state republishes when the answer lands.
+        publishState(ctx);
+        judgeTurnInBackground(ctx, event.prompt, scheduler.snapshot().userTurns);
+    });
+
     pi.on("message_start", (event, ctx) => {
         if (event.message.role !== "assistant") {
             return;
@@ -340,7 +919,7 @@ export default function registerRemindersExtension(
         midRunAvailableReady = false;
     });
 
-    pi.on("message_update", (event, ctx) => {
+    pi.on("message_update", async (event, ctx) => {
         if (event.message.role !== "assistant") {
             return;
         }
@@ -358,116 +937,35 @@ export default function registerRemindersExtension(
             currentMessageHasToolCalls = true;
         }
 
-        maybeEmitMidRun(ctx);
+        await maybeEmitMidRun(ctx);
     });
 
-    pi.on("before_agent_start", async (event, ctx) => {
-        if (!settings.enabled) {
+    /**
+     * The checkpoint cadence: every assistant response that used a tool re-judges the state.
+     *
+     * A response with no tool call changed no activity, and a checkpoint is a step - the probe's step is a
+     * tool call - so it is skipped and the next response catches up. `turn_end` rather than `message_end`
+     * because it fires once per response, after that response's tools have run and their results are in the
+     * branch, which is the conversation the state should be read from.
+     *
+     * The judgement is queued rather than awaited: nothing in pi waits on it, and its consumers - the mid-run
+     * gate, the next turn's judgement - wait for the queue, so the checkpoint never holds the run's next request
+     * behind a consult.
+     */
+    pi.on("turn_end", (event, ctx) => {
+        if (event.toolResults.length === 0) {
             return;
         }
 
-        // The session reminder is already decided, and a rotation with both triggers at zero is off, so
-        // neither turn is worth a classifier request or a branch scan.
-        const snapshot = scheduler.snapshot();
-        const rotationTurn = scope === "full" && rotationEnabled && !snapshot.sessionArmed;
-        let modelChoice: ReminderModelChoice | undefined;
-        let available: ReadonlySet<ReminderId> | undefined;
-        let scores: Record<string, number> | undefined;
-        let signals: ReminderSignals | undefined;
-        let options: ReminderDefinition[] = [];
-        let consult: ReminderConsult | undefined;
-        let todoMove: { id: string; probability: number } | undefined;
-        let todoScores: Record<string, number> | undefined;
-        if (rotationTurn) {
-            signals = rotationSignals(ctx, snapshot.userTurns + 1);
-            available = availableRotationIds(signals);
-
-            // The gate decides what may be offered, so the model is asked only about ids that can actually
-            // be shown; a gated id cannot be chosen and then vetoed.
-            options = ACTIVE_ROTATION_REMINDERS.filter((reminder) => available?.has(reminder.id));
-
-            const config = decisionConfig.load(ctx.cwd ?? process.cwd());
-            if (reminderEnabled(config)) {
-                // The TODO query asks about the items the list has not marked in progress; the item list
-                // lives in the question criteria only, so the decision state keeps its summary shape.
-                const todoQuery = todoQueryFrom(ctx.sessionManager.getBranch());
-
-                consult = await consultModelFor(
-                    ctx,
-                    config,
-                    event.prompt,
-                    signals,
-                    options,
-                    todoQuery,
-                );
-                modelChoice = modelChoiceOf(consult);
-                scores = consult.scores;
-
-                const todo = todoChoiceFrom(todoQuery, consult.extras, modelChoice);
-                modelChoice = todo.choice;
-                todoMove = todo.move;
-                todoScores = todo.scores;
-
-                // The labels build state along the way: they ride on the same request and are sent back in
-                // the next turn's state. Only a real change is recorded, so the session does not grow an
-                // entry per turn while the phase is stable.
-                if (consult.state !== undefined) {
-                    const updated = { ...labels, ...consult.state };
-                    if (!sameLabels(updated, labels)) {
-                        labels = updated;
-                        pi.appendEntry(REMINDER_STATE_TYPE, labels);
-                    }
-                }
+        const at = epoch;
+        void judgements.add(async () => {
+            if (at !== epoch) {
+                return;
             }
-        }
 
-        const reminder = scheduler.decide({
-            maxContextTokens: growth.maxTokens,
-            modelChoice,
-            available,
+            await judgeStateCheckpoint(ctx, at);
         });
-
-        /** The turn the reminder is emitted on, stamped on the message so a later restart can resume. */
-        const emitTurn = scheduler.snapshot().userTurns;
-        if (reminder !== undefined && !snapshot.sessionArmed) {
-            shown.set(reminder.id, emitTurn);
-        }
-
-        // Record the decision whether or not a reminder was chosen: "nothing was shown" is exactly the case
-        // the state is needed to explain, and the session reminder is recorded too so turn one is no gap.
-        if (settings.debug && (rotationTurn || reminder !== undefined)) {
-            pi.appendEntry(
-                REMINDER_DEBUG_ENTRY_TYPE,
-                decisionEntry({
-                    trigger: rotationTurn ? "turn" : "session",
-                    reminder,
-                    scope,
-                    state: signals,
-                    available,
-                    options,
-                    modelChoice,
-                    scores,
-                    consult,
-                    labels,
-                    ...(todoMove === undefined ? {} : { todoMove }),
-                    ...(todoScores === undefined ? {} : { todoScores }),
-                    contextTokens: growth.maxTokens,
-                    scheduler: snapshot,
-                }),
-            );
-        }
-
-        if (reminder === undefined) {
-            return;
-        }
-
-        return {
-            message: {
-                customType: REMINDER_CUSTOM_TYPE,
-                content: formatReminder(reminderTextFor(reminder, ctx)),
-                display: false,
-                details: { id: reminder.id, turn: emitTurn },
-            },
-        };
     });
+
+    return { idle };
 }

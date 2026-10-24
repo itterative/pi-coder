@@ -1,0 +1,2573 @@
+{
+    "note": "Generated from .pi/local/reminder-transitions/session-midturn.py window_transcript against its own cached checkpoints; the reference implementation is the source of truth.",
+    "cases": [
+        {
+            "session": "2026-10-19T11-16",
+            "turn": 1,
+            "toolCalls": 0,
+            "request": "I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me",
+            "items": [
+                {
+                    "kind": "user",
+                    "text": "I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me",
+                    "turn": 1
+                }
+            ],
+            "rendered": {
+                "window800": {
+                    "text": "User: I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me",
+                    "chars": 155,
+                    "omitted": 0
+                },
+                "window1800": {
+                    "text": "User: I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me",
+                    "chars": 155,
+                    "omitted": 0
+                },
+                "window800-elided": {
+                    "text": "User: I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me",
+                    "chars": 155,
+                    "omitted": 0
+                },
+                "window1800-elided": {
+                    "text": "User: I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me",
+                    "chars": 155,
+                    "omitted": 0
+                }
+            }
+        },
+        {
+            "session": "2026-10-19T11-16",
+            "turn": 1,
+            "toolCalls": 2,
+            "request": "I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me",
+            "items": [
+                {
+                    "kind": "user",
+                    "text": "I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/.pi/agent/memory/decision-model.md",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/.pi/agent/memory/bash-decision-log.md",
+                    "turn": 1
+                }
+            ],
+            "rendered": {
+                "window800": {
+                    "text": "User: I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me\nTool: read(/home/sd/Repos/pi-coder/.pi/agent/memory/decision-model.md)\nTool: read(/home/sd/Repos/pi-coder/.pi/agent/memory/bash-decision-log.md)",
+                    "chars": 300,
+                    "omitted": 0
+                },
+                "window1800": {
+                    "text": "User: I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me\nTool: read(/home/sd/Repos/pi-coder/.pi/agent/memory/decision-model.md)\nTool: read(/home/sd/Repos/pi-coder/.pi/agent/memory/bash-decision-log.md)",
+                    "chars": 300,
+                    "omitted": 0
+                },
+                "window800-elided": {
+                    "text": "User: I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me\nTool: read(/home/sd/Repos/pi-coder/.pi/agent/memory/decision-model.md)\nTool: read(/home/sd/Repos/pi-coder/.pi/agent/memory/bash-decision-log.md)",
+                    "chars": 300,
+                    "omitted": 0
+                },
+                "window1800-elided": {
+                    "text": "User: I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me\nTool: read(/home/sd/Repos/pi-coder/.pi/agent/memory/decision-model.md)\nTool: read(/home/sd/Repos/pi-coder/.pi/agent/memory/bash-decision-log.md)",
+                    "chars": 300,
+                    "omitted": 0
+                }
+            }
+        },
+        {
+            "session": "2026-10-19T11-16",
+            "turn": 5,
+            "toolCalls": 116,
+            "request": "well anyway, my intent is that we should go through the decision model for the scout/readonly agents as well. also, for inline scripts, does it make sense that we make judgements on capabilities? or if we do, maybe we should do a two-stage capability (i.e., ask the decision model if it's inline rather than our own rules and judge capabilities after)",
+            "items": [
+                {
+                    "kind": "user",
+                    "text": "I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/.pi/agent/memory/decision-model.md",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/.pi/agent/memory/bash-decision-log.md",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls src/modules/decision/ src/tools/agent/child/gates/ 2>/dev/null; echo ---; rg -n \"python|python3\" src/modules/sandbox src/tools/agent --glob '!*.test.ts' | head -80",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "cat .pi/agent/memory/agents.md 2>/dev/null | head -80",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/scope.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/gates/confinement.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/capabilities/safe-bash.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "user",
+                    "text": "can you like run the reports?",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "cat package.json | jq '.scripts'",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls -la .state/ 2>/dev/null | head; echo ---; ls scripts/; echo ---; ls .pi/local/decision-models/ 2>/dev/null",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run permission-report -- --help 2>&1 | head -60",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run decision-report -- --help 2>&1 | head -80",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "date; echo ---; jq -c 'select(.agent==\"scout\")' .state/bash-log.jsonl 2>/dev/null | wc -l; echo ---; jq -c 'select(.agent==\"scout\" and (.command // \"\" | test(\"python\")))' .state/bash-log.jsonl 2>/dev/null | wc -l",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run permission-report -- --agent scout --since 30d --limit 15 2>&1 | head -120",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "jq -c 'select(.surface==\"child\")' .state/bash-log.jsonl | head -3; echo ---FIELDS---; jq -r 'keys|join(\",\")' .state/bash-log.jsonl | sort | uniq -c | sort -rn | head",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "jq -r 'select(.surface==\"child\") | .agent // .agentName // .runner // .child // \"NO-AGENT-FIELD\"' .state/bash-log.jsonl | sort | uniq -c | sort -rn | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"agent-trace|PI_CODER_AGENT_TRACE|onTrace\" src/tools/agent --glob '!*.test.ts' | head -40",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls .state/agent-sessions 2>/dev/null | head; echo ---; find .state -name '*trace*' -o -name '*agent*' | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/policy.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls src/modules/sandbox/; echo ---; rg -n \"interpreter|python|node -e|eval|SAFE_READONLY|CWD_ONLY|UNKNOWN\" src/modules/sandbox/heuristics.ts | head -60",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls src/modules/sandbox/heuristics/ src/modules/sandbox/commands/; echo ---; rg -n \"python|interpreter|eval|inline\" src/modules/sandbox/heuristics src/modules/sandbox/commands | head -60",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"unknown|Unknown|unsupported|fallback|default\" src/modules/sandbox/heuristics/evaluator.ts src/modules/sandbox/heuristics/command-access.ts | head -40; echo ---; rg -n \"enum Heuristic|Heuristic\\.\" src/modules/sandbox/heuristics/types.ts | head -30",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/types.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"SAFE_READONLY|SAFE_EDIT|SENSITIVE|NOT_SAFE|OUTSIDE|Heuristic\" src/modules/sandbox/heuristics/evaluator.ts | head -80",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/scratch.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"UNKNOWN_COMMAND|COMMAND_NOT_ALLOWED\" src/modules/sandbox/heuristics/command-access.ts src/modules/sandbox/heuristics/evaluator.ts | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run decision-report -- --since 30d --limit 10 2>&1 | head -140",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/evaluator.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"matchesCustomSafeBashCommand|CUSTOM_SAFE_COMMAND_SPEC\" src/modules/sandbox/heuristics/*.ts | head; echo ---; rg -n \"safeBashCommands\" src/tools/agent -g '!*.test.ts' | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"KNOWN_COMMANDS\" src/modules/sandbox/heuristics/command-access.ts src/modules/sandbox/commands/index.ts | head; echo ---; sed -n '1,60p' src/modules/sandbox/commands/index.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/command-access.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/definitions/discovery.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "write",
+                    "arg": "/tmp/pi-coder-scratchpad-MGyCNT/scout-python-probe.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run scratch -- /tmp/pi-coder-scratchpad-MGyCNT/scout-python-probe.ts 2>&1 | tail -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Confirmed. Now let me check the scout traces/sessions for direct evidence of blocked commands, and get the exact report numbers for scout surfaces.",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "jq -r '[.surface, (.agent // \"-\")] | join(\"/\")' .state/bash-log.jsonl | sort | uniq -c | sort -rn; echo ---ALL-GENS---; for f in .state/bash-log.jsonl.1 .state/bash-log.jsonl.2; do jq -r '[.surface, (.agent // \"-\")] | join(\"/\")' $f 2>/dev/null; done | sort | uniq -c | sort -rn",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls .state/agent-sessions/ | head; echo ---; ls .state/agent-sessions/ | wc -l; echo ---; rg -l \"safe_bash\" .state/agent-sessions/ 2>/dev/null | head",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -l \"Read-only agent bash blocked\" .state/agent-sessions/ 2>/dev/null | head; echo ---COUNT---; rg -c \"Read-only agent bash blocked\" .state/agent-sessions/ 2>/dev/null | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -l \"\\\"scout\\\"|agent.*scout\" .state/agent-sessions/ 2>/dev/null | head -10; echo ---; rg -o \"Read-only agent bash blocked: [^\\\"]{0,120}\" .state/agent-sessions/ 2>/dev/null | sort | uniq -c | sort -rn | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; head -c 1200 \"$f\"; echo; echo ---; rg -o '\"command\":\"[^\"]*python[^\"]*\"' \"$f\" | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -c 'select((.message.content // [] | tostring) | contains(\"Read-only agent bash blocked\")) | {type, id, content: .message.content}' \"$f\" 2>/dev/null | head -3 | cut -c1-1500",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -c 'select((.message.content // [] | tostring) | test(\"python\")) | {type, id, content}' \"$f\" 2>/dev/null | head -5 | cut -c1-800",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; rg -n \"python\" \"$f\" | head -8 | cut -c1-1000",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; rg -n \"Read-only agent bash blocked\" \"$f\" | head -2 | cut -c1-600",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "for d in .state/agent-sessions/*/; do for f in \"$d\"*.jsonl; do jq -r 'select(.type==\"message\" and .message.role==\"assistant\") | .message.content[]? | select(.type==\"toolCall\" and .name==\"bash\") | .arguments.command' \"$f\" 2>/dev/null | rg -o '^\\s*[a-zA-Z0-9_.-]+' | sort -u | sed \"s|^|$(basename $d)/$(basename $f | cut -c1-19) |\"; done; done 2>/dev/null | head -5",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -c 'select(.type==\"message\" and .message.role==\"assistant\") | .message.content[]? | {type, name, args: (.arguments // null)} | select(.type==\"toolCall\")' \"$f\" | head -3 | cut -c1-300",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -s -r '\n  (map(select(.type==\"assistant\")) | map(.message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")) | map({key: .id, value: .arguments.command}) | from_entries) as $calls\n  | .[] | select(.type==\"message\" and .message.role==\"toolResult\" and .message.toolName==\"bash\" and ((.message.content[0].text // \"\") | test(\"Read-only agent bash blocked\")))\n  | ($calls[.message.toolCallId] // \"??\") + \"\\t\" + (.message.content[0].text | split(\".\")[0])\n' \"$f\"",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -c 'select(.type==\"message\" and .message.role==\"assistant\") | .message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")' \"$f\" | head -1",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -s -r '(map(select(.type==\"assistant\")) | map(.message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")) | map({key: .id, value: .arguments.command}) | from_entries) | keys | length' \"$f\"; echo ---; jq -s -r '.[] | select(.type==\"message\" and .message.role==\"toolResult\" and .message.toolName==\"bash\" and ((.message.content[0].text // \"\") | test(\"Read-only agent bash blocked\"))) | .message.toolCallId' \"$f\" | head -3",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -s -r '\n  (map(select(.type==\"message\" and .message.role==\"assistant\")) | map(.message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")) | map({key: .id, value: .arguments.command}) | from_entries) as $calls\n  | .[] | select(.type==\"message\" and .message.role==\"toolResult\" and .message.toolName==\"bash\" and ((.message.content[0].text // \"\") | test(\"Read-only agent bash blocked\")))\n  | ($calls[.message.toolCallId] // \"??\") + \"\\t\" + (.message.content[0].text | split(\".\")[0])\n' \"$f\"",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "found=0; for f in .state/agent-sessions/*/*/*.jsonl; do out=$(jq -s -r '\n  (map(select(.type==\"message\" and .message.role==\"assistant\")) | map(.message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")) | map({key: .id, value: .arguments.command}) | from_entries) as $calls\n  | (map(select(.type==\"message\" and .message.role==\"toolResult\" and .message.toolName==\"bash\")) | map({key: .message.toolCallId, value: {t: (.message.content[0].text // \"\"), err: (.message.isError // false)}}) | from_entries) as $results\n  | $calls | to_entries[] | select(.value | test(\"(^|[&;|( ])python[0-9.]*\"))\n  | .key as $k | ($results[$k].t // \"NO-RESULT\") as $t | select($t | test(\"Read-only agent bash blocked|not in the curated|UNKNOWN_COMMAND\"))\n  | [$k, .value, $t] | @tsv\n' \"$f\" 2>/dev/null); if [ -n \"$out\" ]; then found=$((found+1)); echo \"=== $f\"; echo \"$out\" | cut -c1-400; fi; done; echo \"files-with-blocked-python=$found\"",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"interpreter|SAFE_READONLY|safe-bash|safeBash\" docs/agent-tool.md .pi/agent/memory/agents/safety.md 2>/dev/null | head -30",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "for f in .state/agent-sessions/*/*/*.jsonl; do jq -s -r '\n  (map(select(.type==\"message\" and .message.role==\"assistant\")) | map(.message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")) | map({key: .id, value: .arguments.command}) | from_entries) as $calls\n  | (map(select(.type==\"message\" and .message.role==\"toolResult\" and .message.toolName==\"bash\")) | map({key: .message.toolCallId, value: (.message.content[0].text // \"\")}) | from_entries) as $results\n  | $calls | to_entries[] | select(.value | test(\"(^|[&;|( ])python[0-9.]*\"))\n  | .key as $k | ($results[$k] // \"NO-RESULT\") as $t | $t\n' \"$f\" 2>/dev/null; done | awk '/Read-only agent bash blocked/{blocked++} /python/{ } /^$/{next} {total++} END {print \"python-call results total:\", total, \"blocked:\", blocked}'",
+                    "turn": 1
+                },
+                {
+                    "kind": "assistant",
+                    "text": "This is very clear now. Let me test whether the documented escape hatch (`safeBashCommands: [\"python3 *\"]` on a definition) is actually safe, so my recommendation is grounded.",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "write",
+                    "arg": "/tmp/pi-coder-scratchpad-MGyCNT/scout-python-custom-probe.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "user",
+                    "text": "stop testing. just report",
+                    "turn": 2
+                },
+                {
+                    "kind": "assistant",
+                    "text": "## Report: yes \u2014 scouts cannot run `python3` at all\n\n**What the reports show**\n\n- `npm run permission-report` (30d, all log generations): 5,604 records \u2014 parent 1,535, child/worker 196, child/reviewer 112, child/workspace-setup 13. **Zero scout rows.**\n- `npm run decision-report` (30d): 749 model consults \u2014 bash 748, file 1. Again no scout rows.\n\nScouts don't appear because their Bash gate never prompts and **never writes a decision-log record** (`agents/safety.md`: read-only children \"do not consult the normal permission resolver, parent/session Bash rules, or approval prompts\"). So the reports under-report exactly the layer where scouts are blocked.\n\n**The mechanism**\n\n- Scout authority is the `inspect` rung, holding only `safe-bash`.\n- `guardHeuristicBashCall` (`src/tools/agent/child/capabilities/safe-bash.ts`) routes every scout Bash call to `guardSafeBashCommand`, which requires `SAFE_READONLY` from the curated heuristic.\n- `python3` is not in `KNOWN_COMMANDS` (`src/modules/sandbox/commands/index.ts`), and interpreters are deliberately excluded. `docs/agent-tool.md:92` / `agents/safety.md`: \"Unknown, mutating/network/interpreter commands \u2026 are blocked by `safe-bash` but may be approved through `command-runner`.\"\n- Result: every python form \u2014 including trivially safe ones \u2014 is `UNSAFE [UNKNOWN_COMMAND]` \u2192 blocked, no prompt, no log entry.\n\n**Verified directly (probe)**\n\n```\npython3 -c \"print(1)\"        \u2192 UNSAFE [UNKNOWN_COMMAND]\npython3 script.py            \u2192 UNSAFE [UNKNOWN_COMMAND]\npython3 - <<'PY' \u2026           \u2192 UNSAFE [UNKNOWN_COMMAND]\npython3 -m json.tool \u2026       \u2192 UNSAFE [UNKNOWN_COMMAND]\nnode -e \"console.log(1)\"     \u2192 UNSAFE [UNKNOWN_COMMAND]\nsed -n '1,10p' package.json  \u2192 SAFE_READONLY\ngit status --short           \u2192 SAFE_READONLY\n```\n\n**Session evidence** (`rg` over `.state/agent-sessions/`): blocked read-only-child calls include `python3 -c \"print(1+1)\"` and python heredocs \u2014 four run-sessions with blocked python. You were right that they looked safe; the gate never looks at the script, only at \"is `python3` a curated read-only command\" (no).\n\n**Why the classifier can't rescue it today**: the read-only child gate never consults the decision model, so `resolveScriptRun`'s body classification \u2014 which would see `print(1+1)` as `read_only`, and whose scope gate already maps `read_only \u2192 inspect` \u2014 never runs for scouts. That wiring exists only for parents and `command`-rung children.\n\n**Ways out, if you want one**\n\n1. **Per-definition escape hatch**: add `safeBashCommands: [\"python3 *\"]` to a saved scout overlay. It works syntactically, but it is a blanket trust declaration on an interpreter \u2014 it would also expose network/destructive one-liners, so I would not recommend it.\n2. **Classifier-backed allowance**: let the read-only child gate consult the decision model's script resolution and allow bodies classified `read_only` under the `inspect` rung (the scope gate already has the mapping). Real change, touches the confinement gate and `surfaces`.\n3. **Leave it**: scouts read scripts with `read`/`grep` and punt execution to a `reviewer`/`worker`.\n\nWant me to pursue option 2?",
+                    "turn": 2
+                },
+                {
+                    "kind": "user",
+                    "text": "so question is: why didn't those scripts go through the decision model?",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"decisionModel|decision_model|classify|consult|evaluateCommand|resolveDecision|gateDecision|decision\" src/tools/bash/index.ts src/tools/agent/child/command-permissions.ts src/tools/agent/child/gates/commands.ts src/tools/file-permissions.ts | head -60",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"export (async )?function|export const\" src/modules/decision/gate.ts src/modules/decision/index.ts src/modules/decision/evaluator.ts | head -40",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/bash/index.ts",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/command-permissions.ts",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"consultForGate|consultDecisionContext|consultDecisionModel|consultForPrompt|consultFileAccess\" src --glob '!*.test.ts' | grep -v \"^src/modules/decision\"",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 3
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Because the read-only child path never reaches a decision-model entry point. The model isn't a classifier that all Bash flows through \u2014 it's a tie-breaker chained *after* an unresolved permission. In production code there are exactly three consult sites:\n\n| site | file | condition |\n|---|---|---|\n| parent Bash hook | `src/tools/bash/index.ts:327` | `permission === \"ask\"` |\n| delegated command gate | `src/tools/agent/child/command-permissions.ts:517` | `needsPrompt` (i.e. `permission === \"ask\"`) |\n| file access | `src/tools/file-permissions.ts:434` | outside every trusted root |\n\nA scout never produces an `ask`:\n\n1. Scout's rung is `inspect`, below `command`. The confinement gate intercepts its Bash calls first: `guardHeuristicBashCall` (`src/tools/agent/child/capabilities/safe-bash.ts`) checks `hasAgentAuthority(authority, \"command\")` \u2014 false \u2014 and hands the command to `guardSafeBashCommand`.\n2. That function calls the curated heuristic and returns **allow or block**. It never calls `resolvePermissionDetails`, never builds an `ask`, and never calls `consultForGate`. So `decisionEnabled(config, \"child\")` is never even evaluated for a scout.\n3. Script resolution (`resolveScriptRun` \u2192 body read \u2192 capability classification \u2192 `scopeAnswer`) lives *inside* the decision evaluator. Since the evaluator is never invoked, the scripts are never read or classified \u2014 the gate only sees the string `python3 \u2026` and checks it against `KNOWN_COMMANDS`, where it isn't listed.\n\nSo it isn't gate ordering and it isn't the `surfaces` config: the model has no wiring on that rung at all. `surfaces: [\"child\"]` only affects the command gate, which reviewer/worker reach and scout doesn't. This is the documented split \u2014 `safe-bash` is deliberately the deterministic, no-prompt, no-resolver path (`agents/safety.md`), while `command-runner` is the one that consults the resolver and the model.\n\nOne nuance for the fix: even if the read-only gate were wired to consult,\n\n- `python3 script.py` (kind `file`) would carry a body and could be classified `read_only` \u2192 inspect rung \u2192 allowable for a scout;\n- `python3 -c \u2026` and heredocs (kind `inline`) carry **no body** \u2014 only the command text goes to the model, so there'd be no capability-based judgment of the code.\n\nThat's why my option 2 was specifically \"add the read-only gate as a fourth consult site\"; it would genuinely cover file scripts, and inline code only to whatever extent the command-level question judges it.",
+                    "turn": 3
+                },
+                {
+                    "kind": "user",
+                    "text": "don't we have capability-based judments on inline scripts?",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/script.ts",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/script.ts",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/script-classification.ts",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"script_capabilities|capabilities|artifacts|inline\" src/modules/decision/state.ts src/modules/decision/evaluator.ts src/modules/decision/types.ts src/modules/decision/strategies -g '*.ts' | head -60",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/state.ts",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/evaluator.ts",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"inline\" docs/ .pi/agent/memory/decision-model/ src/modules/decision/*.md test/modules/decision 2>/dev/null | rg -iv \"inline editor|inline-editor|inline value|inline form\" | head -40",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"kind.*inline|inline.*kind|scriptRequest|classifyScript\" src/modules/decision test/modules/decision -g '*.ts' | head -40",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/.pi/agent/memory/decision-model/history.md",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/docs/bash-execution-redesign.md",
+                    "turn": 4
+                },
+                {
+                    "kind": "assistant",
+                    "text": "No \u2014 not on the code. Capability judgments exist only for resolved **bodies**, and inline is deliberately body-less. The resolver decides this in two places:\n\n- `src/modules/decision/script.ts:390-393` \u2014 `interpreterProbe` sees `-c`/`-e`/`--eval`, or any heredoc redirection, and returns `{ kind: \"inline\" }`.\n- `src/modules/decision/script.ts:128-130` \u2014 `runForProbe` turns that into `{ kind: \"inline\", artifacts: [] }`, i.e. no body.\n\nEverything capability-shaped is driven off `artifacts`:\n\n- `evaluator.ts:174-180` \u2014 `artifacts` \u2192 `classifyScript()` \u2192 `scriptCapabilitySummaries()`; for inline the list is empty, so no `scriptProfiles`, no `scriptRequest(body)`, and the **scope gate never runs** (`scopeAnswer` needs profiles).\n- `state.ts:52-58` \u2014 `script_capabilities` is built only from `scriptProfiles`; `scripts` only from `scriptTexts(script)` \u2192 artifacts. Inline adds neither.\n- `test/modules/decision/state.test.ts:213` pins this: \"adds no script fields for an inline or binary form\".\n\nThe rationale is in `docs/bash-execution-redesign.md:531` and `history.md`: inline \"add[s] nothing because the code is already in the command\", and \"a run with no readable body (`inline`, `binary`) contributes no capability and the command request is the only one.\"\n\nSo what does happen for `python3 -c \"\u2026\"` / a heredoc:\n\n- The code does reach the model \u2014 as part of the `command` string under the **command** question (the veto wording: \"Is there any reason this command should not run directly on the host?\"). That's the command criterion vocabulary (`none`, `destructive`, \u2026), not the capability question.\n- The `script` question with `SCRIPT_CRITERIA` (`read_only`, `writes_files`, `network`, \u2026) is never asked about inline code.\n- `kind: \"inline\"` exists purely so the decision log can say a body was unavailable. That's why the report you saw listed 91 inline consults: they were command-only judgments.\n\nSo my earlier nuance was understated: wiring the scout gate to the decision model wouldn't produce a capability verdict for `python3 -c \u2026`/heredocs at all. To get that, the resolver would have to emit inline code as an artifact \u2014 the AST already has it (`hasInlineFlag` locates `-c`'s operand; heredocs sit in `command.redirections`). Then code hash caching, `scriptRequest`, profiles, and `scopeAnswer` (`read_only \u2192 inspect`) would all work unchanged. The caveats: the same bytes would then be sent twice (command text plus body), heredocs can blow the endpoint's batch limit, and the artifact needs a provenance label that isn't a path (`python3 -c`, `heredoc`), which the log's `sources` field doesn't have today.\n\nWant me to sketch that change?",
+                    "turn": 4
+                },
+                {
+                    "kind": "user",
+                    "text": "well anyway, my intent is that we should go through the decision model for the scout/readonly agents as well. also, for inline scripts, does it make sense that we make judgements on capabilities? or if we do, maybe we should do a two-stage capability (i.e., ask the decision model if it's inline rather than our own rules and judge capabilities after)",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Let me check the pieces that a read-only consult would need (runner mapping, what the gate runtime carries, and how the command gate does its consult) before I answer the design question.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/runner-rules.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/gates/runtime.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"decisionRunnerForAgent\" src -g '*.ts' | head; echo ---; rg -n \"interface ChildExtensionOptions\" -A 45 src/tools/agent/child/extension.ts | head -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/gates/file-access.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/runner-rules.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/decision-model.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"appliedPermission|sandboxAvailable\" src/modules/decision/policy.ts | head; echo ---; sed -n '1,80p' src/modules/decision/policy.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"wrapCommandWithSandbox|wrapCommand|sandboxCommand|bwrap\" src/tools/agent/child/command-permissions.ts src/tools/bash/index.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"event.input.command|allowed|toolCall\" src/tools/agent/child/command-permissions.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Short answer first, then the plan.\n\n## 1. Capability judgments on inline scripts: yes \u2014 and for the scout wiring they're load-bearing\n\nThe capability question only runs per artifact (`evaluator.ts:174-180`), so inline `{kind, artifacts: []}` means no `scriptProfiles`, which means **`scopeAnswer` never runs**. The scope gate is where runner authority actually lives. The command veto has no `network` criterion, so once scouts consult the model, `python3 -c \"import urllib\u2026\"` folds to `none \u2192 host` and runs at the inspect rung; inline file writes/destructive code are only caught if the veto happens to name them. With inline bodies as artifacts, the existing pipeline does the right thing with no new machinery: `read_only \u2192 inspect` passes, `network`/`writes_files` \u2192 command/mutate \u2192 `out_of_scope` (confidence 0), `destructive` \u2192 refuse.\n\nSo I'd land inline artifacts **before** letting `apply` resolve read-only surfaces.\n\nSketch:\n\n- `interpreterProbe`: on `-c`/`-e`/`--eval` with a **literal** operand, or a heredoc, return `{kind:\"inline\", artifacts:[\u2026]}` instead of kind-only. Dynamic operands (`\"$(cat f)\"`) stay kind-only, matching the existing refusal to guess.\n- Source labels: `inline:python3 -c` / `inline:heredoc` \u2014 a bare label is ambiguous because file sources can be slashless (`script.py`).\n- The nested package-line chase collects them too (`collectFileArtifacts` ignores non-file probes today).\n- Downstream is unchanged: one `scriptRequest(body)`, sha256 answer cache, profiles in the command state, scope gate, log `sources`/`chars`/`answers`. Tests to update: `script.test.ts:571`, the state test at `:213`, plus a scope case (inline `network` under scout).\n- Consequence: the code is now on the wire twice (command text + body). I'd accept v1 and measure tokens/latency/batch failures (heredocs are the size victim); eliding the inline span from the command state later is the cleaner architecture but a bigger change.\n\n## 2. The two-stage \"ask if it's inline\" idea: I'd skip it\n\n- The classifier protocol is `choice`/`bool`/`score` \u2014 no generative output. A stage-1 question can only confirm/deny a candidate our parser already extracted; it cannot produce the code.\n- For these forms, detection is exact syntax (`-c` before the first operand, heredoc redirection), not a heuristic. The genuinely uncertain forms (`deno eval`, `php -r`, `xargs sh -c`, substitutions) are exactly where a bool can't name the text to classify anyway.\n- It costs round trips against `MAX_CONCURRENT_FORMS`, adds latency/cooldown surface, and creates a false-negative path (\"not code\") that for a no-prompt child must abstain\u2192block anyway.\n- If the concern is candidate validity, the cheap version is a second **question in the same request** (the protocol supports that; file-access sends three) and treat \"not code\" as an abstain for that body. If the concern is coverage, extend the deterministic table. I'd do neither until measurements show capability noise from wrong candidates.\n\n## 3. Read-only consult plan\n\nEntry point: `guardHeuristicBashCall` (`src/tools/agent/child/capabilities/safe-bash.ts`), between the failed heuristic and the block:\n\n1. `SAFE_READONLY` \u2192 allow, no request (unchanged).\n2. else, if the config enables the child surface \u2192 `consultForGate` with `runner: decisionRunnerForAgent(agentName)`, real isolation, parent registry/events, and `sandboxAvailable: false` (there is no bwrap path on safe-bash, so `sandbox` verdicts abstain).\n3. Only `permission === \"allow\"` (host applied with `minConfidence` + `apply`) proceeds. `refuse`, `sandbox`, abstain, error, cooldown \u2192 block as today; `apply:false` = consult + record + block. Model trouble never widens authority.\n\nThree things this plan must not forget:\n\n- **Confinement re-check.** The heuristic short-circuits at `UNKNOWN_COMMAND`, so it never path-checks a command the model would newly allow. Before granting, re-assess with the allowlist disabled (the `CUSTOM_SAFE_COMMAND_SPEC` machinery already does generic positional path checking) so `OUTSIDE_CWD`/`SENSITIVE_PATH`/`SYMLINK_ESCAPE`/parse failures stay deterministic blocks. Script-internal reads can't be checked by a literal-path layer \u2014 that's the existing \"heuristic, not a security sandbox\" premise, but for a no-prompt runner it's a conscious widening; a read-only bwrap profile for allowed interpreter runs would be the stronger version.\n- **Custom read-only children.** `decisionRunnerForAgent` maps unknown names to `agent` (command rung) while their actual rung may be `inspect`, so the scope gate would let `writes_files` through. Pass the child's real authority into the decision context (the follow-up `scope.ts` already names).\n- **Logging.** The safe-bash path writes no decision record, which is why the reports were blind. A consult record needs a third writer call and a decision about the schema: synthesize a heuristic `resolution`, or extend the record/report to accept a resolution-less consult. Otherwise scouts stay invisible in `permission-report` after the change.\n\nA separate, optional phase: route read-only children's outside-cwd direct reads (`guardReadPathCall` in `confinement.ts`) through `consultFileAccessForGate` + `fileSurfaces`, same allow-one-call/block-otherwise shape.\n\nOne question before I start:",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "ask_user",
+                    "arg": "Read-only consult \u2014 what should land first?",
+                    "turn": 5
+                },
+                {
+                    "kind": "user",
+                    "text": "Bash consult + inline capabilities (recommended)",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "I'll implement the selected scope (A+B). Let me set up tracking and read the remaining pieces I'll touch.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "write",
+                    "arg": "/tmp/pi-coder-scratchpad-MGyCNT/TODO.md",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/types.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/types.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/index.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/index.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/types.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "sed -n '1,120p' src/modules/sandbox/heuristics/path-policy.ts | rg -n \"buildConfinementOptions|parseCustom|ConfinementOptions\" ; echo ---; rg -n \"export function buildConfinementOptions\" -A 60 src/modules/sandbox/heuristics/path-policy.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "sed -n '1,120p' src/modules/sandbox/heuristics/types.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/decision-model.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/decision-log.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/decision-log.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"resolution|segments|BashDecisionRecord|DecisionLogRecord|gate\" scripts/permission-report.ts | head -60; echo ---; wc -l scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/decision-log.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls test/tools | rg -i \"scout|safe|bash\"; echo ---; wc -l test/tools/agent-scout-bash.test.ts 2>/dev/null; sed -n '1,80p' test/tools/agent-scout-bash.test.ts 2>/dev/null",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"describe\\(|it\\(\" test/tools/agent-scout-bash.test.ts | head -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"classifier|decisionConfig|consult|Blocked|blocked\" test/tools/agent-scout-bash.test.ts | head -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash-rules.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"scopeAnswer\" src test --glob '!node_modules' | head -20; echo ---; rg -n \"AGENT_AUTHORITY_LADDER|export type AgentAuthority\" src/tools/agent/definitions/types.ts | head",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/script.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"heredoc|interface BashRedirection|class BashCommand|redirections|positionalWords|get args\\b\" src/modules/sandbox/bash.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Now I'll read the report's grouping/output and the remaining test expectations before editing.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Starting with the inline artifacts in `script.ts`.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/script.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"inline|resolvedBodies|collectArtifacts|\\\\\\\\u0000\" src/modules/decision/script.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Now the decision types: `DecisionAuthority`, `authority` on `DecisionContext`, and doc updates for inline bodies.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/types.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/scope.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/evaluator.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/scope.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"^import|DecisionRunner|DecisionIsolation|DecisionAuthority\" src/modules/decision/gate.ts | head -20; echo ---; rg -n \"export\" src/modules/decision/index.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/index.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/index.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"get commands|commands:\" src/modules/sandbox/bash.ts | head; echo ---; rg -n \"unwrapWrapperCommand\" src/modules/sandbox/bash.ts | head -3; echo ---; sed -n '895,945p' src/modules/sandbox/bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"interface BashSubstitutionNode\" -A 20 src/modules/sandbox/bash.ts; echo ---; rg -n \"evaluateNested\" -B4 -A12 src/modules/sandbox/heuristics/evaluator.ts | head -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Now the safe-bash guard: consult hook plus the deterministic relaxed-confinement re-check.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "write",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash-decision.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"exactOptionalPropertyTypes|strict|noUncheckedIndexedAccess\" tsconfig.json tsconfig.check.json 2>/dev/null",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/capabilities/safe-bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Now the log schema for read-only-gate records.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/decision-log.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"function isApproved\" -A 8 scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx tsc --noEmit 2>&1 | head -50",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash-decision.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx tsc --noEmit 2>&1 | head -40",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run typecheck:tests 2>&1 | head -40",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"no-non-null-assertion|no-explicit-any\" eslint.config.* .eslintrc* 2>/dev/null; ls eslint.config.* .eslintrc* 2>/dev/null",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "sed -n '140,150p;185,192p;205,215p;226,234p' test/modules/sandbox/decision-log.test.ts; echo ===; sed -n '92,100p;127,133p' test/tools/bash-decision-log.test.ts; echo ===; sed -n '476,484p;507,515p' test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "grep -n \"non-null\\|no-explicit-any\\|rules\" eslint.config.mjs | head -20",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "sed -n '30,70p' eslint.config.mjs",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "grep -n \"record\\.resolution\" test/modules/sandbox/decision-log.test.ts test/tools/bash-decision-log.test.ts test/tools/agent-scout-bash.test.ts test/scripts/permission-report.test.ts 2>/dev/null",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/sandbox/decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"function readRecords|function readDecisionLog\" -A 12 test/modules/sandbox/decision-log.test.ts test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/sandbox/decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/sandbox/decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run typecheck:tests 2>&1 | head -40",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"runHookCommand\" -A 30 test/tools/bash-decision-log.test.ts | sed -n '1,45p'",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run typecheck:tests 2>&1 | head -20",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx vitest run test/modules/decision/script.test.ts test/modules/decision/state.test.ts test/modules/decision/scope.test.ts 2>&1 | tail -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx vitest run test/modules/sandbox/decision-log.test.ts test/tools/bash-decision-log.test.ts test/scripts/permission-report.test.ts 2>&1 | tail -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/script.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/script.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/script.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"describe\\(|nested|chase\" test/modules/decision/script.test.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/script.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/script.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/state.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/state.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/scope.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/scope.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx vitest run test/modules/decision/script.test.ts test/modules/decision/state.test.ts test/modules/decision/scope.test.ts 2>&1 | tail -25",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "write",
+                    "arg": "/tmp/pi-coder-scratchpad-MGyCNT/TODO.md",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/classifier.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/classifier.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "sed -n '253,382p' test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"SCRIPT_QUESTION|VETO_QUESTION\" src/modules/decision/index.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run typecheck:tests 2>&1 | head -20",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run typecheck:tests 2>&1 | head -20 && npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"interface ConsultOptions\" -A 20 src/modules/decision/gate.ts; echo ---; sed -n '295,320p' src/tools/decision-model.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/decision-model.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/decision-model.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -40",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -12",
+                    "turn": 5
+                }
+            ],
+            "rendered": {
+                "window800": {
+                    "text": "  \u2026 111 tool calls and 12 earlier messages omitted (char cap) \u2026\nUser: Bash consult + inline capabilities (recommended)\nAssistant: Now the log schema for read-only-gate records.\nTool: edit(/home/sd/Repos/pi-coder/src/tools/decision-model.ts)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -40)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -12)",
+                    "chars": 542,
+                    "omitted": 198
+                },
+                "window1800": {
+                    "text": "  \u2026 108 tool calls and 7 earlier messages omitted (char cap) \u2026\nUser: Bash consult + inline capabilities (recommended)\nAssistant: I'll implement the selected scope (A+B). Let me set up tracking and read the remaining pieces I'll touch.\nAssistant: Now I'll read the report's grouping/output and the remaining test expectations before editing.\nAssistant: Starting with the inline artifacts in `script.ts`.\nAssistant: Now the decision types: `DecisionAuthority`, `authority` on `DecisionContext`, and doc updates for inline bodies.\nAssistant: Now the safe-bash guard: consult hook plus the deterministic relaxed-confinement re-check.\nAssistant: Now the log schema for read-only-gate records.\nTool: bash(rg -n \"interface ConsultOptions\" -A 20 src/modules/decision/gate.ts; echo ---; sed -n '295,320p' src/tools/decision-mod\u2026)\nTool: edit(/home/sd/Repos/pi-coder/src/modules/decision/gate.ts)\nTool: edit(/home/sd/Repos/pi-coder/src/tools/decision-model.ts)\nTool: edit(/home/sd/Repos/pi-coder/src/tools/decision-model.ts)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -40)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -12)",
+                    "chars": 1315,
+                    "omitted": 190
+                },
+                "window800-elided": {
+                    "text": "  \u2026 25 tool calls and 12 earlier messages omitted (char cap) \u2026\n  \u2026 86 tool calls omitted \u2026\nUser: Bash consult + inline capabilities (recommended)\nAssistant: Now the log schema for read-only-gate records.\nTool: edit(/home/sd/Repos/pi-coder/src/tools/decision-model.ts)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -40)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -12)",
+                    "chars": 569,
+                    "omitted": 197
+                },
+                "window1800-elided": {
+                    "text": "  \u2026 22 tool calls and 7 earlier messages omitted (char cap) \u2026\n  \u2026 86 tool calls omitted \u2026\nUser: Bash consult + inline capabilities (recommended)\nAssistant: I'll implement the selected scope (A+B). Let me set up tracking and read the remaining pieces I'll touch.\nAssistant: Now I'll read the report's grouping/output and the remaining test expectations before editing.\nAssistant: Starting with the inline artifacts in `script.ts`.\nAssistant: Now the decision types: `DecisionAuthority`, `authority` on `DecisionContext`, and doc updates for inline bodies.\nAssistant: Now the safe-bash guard: consult hook plus the deterministic relaxed-confinement re-check.\nAssistant: Now the log schema for read-only-gate records.\nTool: bash(rg -n \"interface ConsultOptions\" -A 20 src/modules/decision/gate.ts; echo ---; sed -n '295,320p' src/tools/decision-mod\u2026)\nTool: edit(/home/sd/Repos/pi-coder/src/modules/decision/gate.ts)\nTool: edit(/home/sd/Repos/pi-coder/src/tools/decision-model.ts)\nTool: edit(/home/sd/Repos/pi-coder/src/tools/decision-model.ts)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -40)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -12)",
+                    "chars": 1342,
+                    "omitted": 189
+                }
+            }
+        },
+        {
+            "session": "2026-10-19T11-16",
+            "turn": 5,
+            "toolCalls": 117,
+            "request": "well anyway, my intent is that we should go through the decision model for the scout/readonly agents as well. also, for inline scripts, does it make sense that we make judgements on capabilities? or if we do, maybe we should do a two-stage capability (i.e., ask the decision model if it's inline rather than our own rules and judge capabilities after)",
+            "items": [
+                {
+                    "kind": "user",
+                    "text": "I was checking the permission and decision reports. it seemed like scouts were prevented from running python scripts entirely? they looked safe to me",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/.pi/agent/memory/decision-model.md",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/.pi/agent/memory/bash-decision-log.md",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls src/modules/decision/ src/tools/agent/child/gates/ 2>/dev/null; echo ---; rg -n \"python|python3\" src/modules/sandbox src/tools/agent --glob '!*.test.ts' | head -80",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "cat .pi/agent/memory/agents.md 2>/dev/null | head -80",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/scope.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/gates/confinement.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/capabilities/safe-bash.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "user",
+                    "text": "can you like run the reports?",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "cat package.json | jq '.scripts'",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls -la .state/ 2>/dev/null | head; echo ---; ls scripts/; echo ---; ls .pi/local/decision-models/ 2>/dev/null",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run permission-report -- --help 2>&1 | head -60",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run decision-report -- --help 2>&1 | head -80",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "date; echo ---; jq -c 'select(.agent==\"scout\")' .state/bash-log.jsonl 2>/dev/null | wc -l; echo ---; jq -c 'select(.agent==\"scout\" and (.command // \"\" | test(\"python\")))' .state/bash-log.jsonl 2>/dev/null | wc -l",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run permission-report -- --agent scout --since 30d --limit 15 2>&1 | head -120",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "jq -c 'select(.surface==\"child\")' .state/bash-log.jsonl | head -3; echo ---FIELDS---; jq -r 'keys|join(\",\")' .state/bash-log.jsonl | sort | uniq -c | sort -rn | head",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "jq -r 'select(.surface==\"child\") | .agent // .agentName // .runner // .child // \"NO-AGENT-FIELD\"' .state/bash-log.jsonl | sort | uniq -c | sort -rn | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"agent-trace|PI_CODER_AGENT_TRACE|onTrace\" src/tools/agent --glob '!*.test.ts' | head -40",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls .state/agent-sessions 2>/dev/null | head; echo ---; find .state -name '*trace*' -o -name '*agent*' | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/policy.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls src/modules/sandbox/; echo ---; rg -n \"interpreter|python|node -e|eval|SAFE_READONLY|CWD_ONLY|UNKNOWN\" src/modules/sandbox/heuristics.ts | head -60",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls src/modules/sandbox/heuristics/ src/modules/sandbox/commands/; echo ---; rg -n \"python|interpreter|eval|inline\" src/modules/sandbox/heuristics src/modules/sandbox/commands | head -60",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"unknown|Unknown|unsupported|fallback|default\" src/modules/sandbox/heuristics/evaluator.ts src/modules/sandbox/heuristics/command-access.ts | head -40; echo ---; rg -n \"enum Heuristic|Heuristic\\.\" src/modules/sandbox/heuristics/types.ts | head -30",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/types.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"SAFE_READONLY|SAFE_EDIT|SENSITIVE|NOT_SAFE|OUTSIDE|Heuristic\" src/modules/sandbox/heuristics/evaluator.ts | head -80",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/scratch.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"UNKNOWN_COMMAND|COMMAND_NOT_ALLOWED\" src/modules/sandbox/heuristics/command-access.ts src/modules/sandbox/heuristics/evaluator.ts | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run decision-report -- --since 30d --limit 10 2>&1 | head -140",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/evaluator.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"matchesCustomSafeBashCommand|CUSTOM_SAFE_COMMAND_SPEC\" src/modules/sandbox/heuristics/*.ts | head; echo ---; rg -n \"safeBashCommands\" src/tools/agent -g '!*.test.ts' | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"KNOWN_COMMANDS\" src/modules/sandbox/heuristics/command-access.ts src/modules/sandbox/commands/index.ts | head; echo ---; sed -n '1,60p' src/modules/sandbox/commands/index.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/command-access.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/definitions/discovery.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "write",
+                    "arg": "/tmp/pi-coder-scratchpad-MGyCNT/scout-python-probe.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run scratch -- /tmp/pi-coder-scratchpad-MGyCNT/scout-python-probe.ts 2>&1 | tail -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Confirmed. Now let me check the scout traces/sessions for direct evidence of blocked commands, and get the exact report numbers for scout surfaces.",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "jq -r '[.surface, (.agent // \"-\")] | join(\"/\")' .state/bash-log.jsonl | sort | uniq -c | sort -rn; echo ---ALL-GENS---; for f in .state/bash-log.jsonl.1 .state/bash-log.jsonl.2; do jq -r '[.surface, (.agent // \"-\")] | join(\"/\")' $f 2>/dev/null; done | sort | uniq -c | sort -rn",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls .state/agent-sessions/ | head; echo ---; ls .state/agent-sessions/ | wc -l; echo ---; rg -l \"safe_bash\" .state/agent-sessions/ 2>/dev/null | head",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -l \"Read-only agent bash blocked\" .state/agent-sessions/ 2>/dev/null | head; echo ---COUNT---; rg -c \"Read-only agent bash blocked\" .state/agent-sessions/ 2>/dev/null | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -l \"\\\"scout\\\"|agent.*scout\" .state/agent-sessions/ 2>/dev/null | head -10; echo ---; rg -o \"Read-only agent bash blocked: [^\\\"]{0,120}\" .state/agent-sessions/ 2>/dev/null | sort | uniq -c | sort -rn | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; head -c 1200 \"$f\"; echo; echo ---; rg -o '\"command\":\"[^\"]*python[^\"]*\"' \"$f\" | head -20",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -c 'select((.message.content // [] | tostring) | contains(\"Read-only agent bash blocked\")) | {type, id, content: .message.content}' \"$f\" 2>/dev/null | head -3 | cut -c1-1500",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -c 'select((.message.content // [] | tostring) | test(\"python\")) | {type, id, content}' \"$f\" 2>/dev/null | head -5 | cut -c1-800",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; rg -n \"python\" \"$f\" | head -8 | cut -c1-1000",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; rg -n \"Read-only agent bash blocked\" \"$f\" | head -2 | cut -c1-600",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "for d in .state/agent-sessions/*/; do for f in \"$d\"*.jsonl; do jq -r 'select(.type==\"message\" and .message.role==\"assistant\") | .message.content[]? | select(.type==\"toolCall\" and .name==\"bash\") | .arguments.command' \"$f\" 2>/dev/null | rg -o '^\\s*[a-zA-Z0-9_.-]+' | sort -u | sed \"s|^|$(basename $d)/$(basename $f | cut -c1-19) |\"; done; done 2>/dev/null | head -5",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -c 'select(.type==\"message\" and .message.role==\"assistant\") | .message.content[]? | {type, name, args: (.arguments // null)} | select(.type==\"toolCall\")' \"$f\" | head -3 | cut -c1-300",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -s -r '\n  (map(select(.type==\"assistant\")) | map(.message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")) | map({key: .id, value: .arguments.command}) | from_entries) as $calls\n  | .[] | select(.type==\"message\" and .message.role==\"toolResult\" and .message.toolName==\"bash\" and ((.message.content[0].text // \"\") | test(\"Read-only agent bash blocked\")))\n  | ($calls[.message.toolCallId] // \"??\") + \"\\t\" + (.message.content[0].text | split(\".\")[0])\n' \"$f\"",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -c 'select(.type==\"message\" and .message.role==\"assistant\") | .message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")' \"$f\" | head -1",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -s -r '(map(select(.type==\"assistant\")) | map(.message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")) | map({key: .id, value: .arguments.command}) | from_entries) | keys | length' \"$f\"; echo ---; jq -s -r '.[] | select(.type==\"message\" and .message.role==\"toolResult\" and .message.toolName==\"bash\" and ((.message.content[0].text // \"\") | test(\"Read-only agent bash blocked\"))) | .message.toolCallId' \"$f\" | head -3",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "f=.state/agent-sessions/--home-sd-Repos-gufo--/01a0ee18-0d1f-769e-88bb-1415459bf4fd/2026-09-29T16-59-49-560Z_01a0ee1b-b9b8-7a17-97fd-7f301a660f74.jsonl; jq -s -r '\n  (map(select(.type==\"message\" and .message.role==\"assistant\")) | map(.message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")) | map({key: .id, value: .arguments.command}) | from_entries) as $calls\n  | .[] | select(.type==\"message\" and .message.role==\"toolResult\" and .message.toolName==\"bash\" and ((.message.content[0].text // \"\") | test(\"Read-only agent bash blocked\")))\n  | ($calls[.message.toolCallId] // \"??\") + \"\\t\" + (.message.content[0].text | split(\".\")[0])\n' \"$f\"",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "found=0; for f in .state/agent-sessions/*/*/*.jsonl; do out=$(jq -s -r '\n  (map(select(.type==\"message\" and .message.role==\"assistant\")) | map(.message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")) | map({key: .id, value: .arguments.command}) | from_entries) as $calls\n  | (map(select(.type==\"message\" and .message.role==\"toolResult\" and .message.toolName==\"bash\")) | map({key: .message.toolCallId, value: {t: (.message.content[0].text // \"\"), err: (.message.isError // false)}}) | from_entries) as $results\n  | $calls | to_entries[] | select(.value | test(\"(^|[&;|( ])python[0-9.]*\"))\n  | .key as $k | ($results[$k].t // \"NO-RESULT\") as $t | select($t | test(\"Read-only agent bash blocked|not in the curated|UNKNOWN_COMMAND\"))\n  | [$k, .value, $t] | @tsv\n' \"$f\" 2>/dev/null); if [ -n \"$out\" ]; then found=$((found+1)); echo \"=== $f\"; echo \"$out\" | cut -c1-400; fi; done; echo \"files-with-blocked-python=$found\"",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"interpreter|SAFE_READONLY|safe-bash|safeBash\" docs/agent-tool.md .pi/agent/memory/agents/safety.md 2>/dev/null | head -30",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "for f in .state/agent-sessions/*/*/*.jsonl; do jq -s -r '\n  (map(select(.type==\"message\" and .message.role==\"assistant\")) | map(.message.content[]? | select(.type==\"toolCall\" and .name==\"bash\")) | map({key: .id, value: .arguments.command}) | from_entries) as $calls\n  | (map(select(.type==\"message\" and .message.role==\"toolResult\" and .message.toolName==\"bash\")) | map({key: .message.toolCallId, value: (.message.content[0].text // \"\")}) | from_entries) as $results\n  | $calls | to_entries[] | select(.value | test(\"(^|[&;|( ])python[0-9.]*\"))\n  | .key as $k | ($results[$k] // \"NO-RESULT\") as $t | $t\n' \"$f\" 2>/dev/null; done | awk '/Read-only agent bash blocked/{blocked++} /python/{ } /^$/{next} {total++} END {print \"python-call results total:\", total, \"blocked:\", blocked}'",
+                    "turn": 1
+                },
+                {
+                    "kind": "assistant",
+                    "text": "This is very clear now. Let me test whether the documented escape hatch (`safeBashCommands: [\"python3 *\"]` on a definition) is actually safe, so my recommendation is grounded.",
+                    "turn": 1
+                },
+                {
+                    "kind": "tool",
+                    "name": "write",
+                    "arg": "/tmp/pi-coder-scratchpad-MGyCNT/scout-python-custom-probe.ts",
+                    "turn": 1
+                },
+                {
+                    "kind": "user",
+                    "text": "stop testing. just report",
+                    "turn": 2
+                },
+                {
+                    "kind": "assistant",
+                    "text": "## Report: yes \u2014 scouts cannot run `python3` at all\n\n**What the reports show**\n\n- `npm run permission-report` (30d, all log generations): 5,604 records \u2014 parent 1,535, child/worker 196, child/reviewer 112, child/workspace-setup 13. **Zero scout rows.**\n- `npm run decision-report` (30d): 749 model consults \u2014 bash 748, file 1. Again no scout rows.\n\nScouts don't appear because their Bash gate never prompts and **never writes a decision-log record** (`agents/safety.md`: read-only children \"do not consult the normal permission resolver, parent/session Bash rules, or approval prompts\"). So the reports under-report exactly the layer where scouts are blocked.\n\n**The mechanism**\n\n- Scout authority is the `inspect` rung, holding only `safe-bash`.\n- `guardHeuristicBashCall` (`src/tools/agent/child/capabilities/safe-bash.ts`) routes every scout Bash call to `guardSafeBashCommand`, which requires `SAFE_READONLY` from the curated heuristic.\n- `python3` is not in `KNOWN_COMMANDS` (`src/modules/sandbox/commands/index.ts`), and interpreters are deliberately excluded. `docs/agent-tool.md:92` / `agents/safety.md`: \"Unknown, mutating/network/interpreter commands \u2026 are blocked by `safe-bash` but may be approved through `command-runner`.\"\n- Result: every python form \u2014 including trivially safe ones \u2014 is `UNSAFE [UNKNOWN_COMMAND]` \u2192 blocked, no prompt, no log entry.\n\n**Verified directly (probe)**\n\n```\npython3 -c \"print(1)\"        \u2192 UNSAFE [UNKNOWN_COMMAND]\npython3 script.py            \u2192 UNSAFE [UNKNOWN_COMMAND]\npython3 - <<'PY' \u2026           \u2192 UNSAFE [UNKNOWN_COMMAND]\npython3 -m json.tool \u2026       \u2192 UNSAFE [UNKNOWN_COMMAND]\nnode -e \"console.log(1)\"     \u2192 UNSAFE [UNKNOWN_COMMAND]\nsed -n '1,10p' package.json  \u2192 SAFE_READONLY\ngit status --short           \u2192 SAFE_READONLY\n```\n\n**Session evidence** (`rg` over `.state/agent-sessions/`): blocked read-only-child calls include `python3 -c \"print(1+1)\"` and python heredocs \u2014 four run-sessions with blocked python. You were right that they looked safe; the gate never looks at the script, only at \"is `python3` a curated read-only command\" (no).\n\n**Why the classifier can't rescue it today**: the read-only child gate never consults the decision model, so `resolveScriptRun`'s body classification \u2014 which would see `print(1+1)` as `read_only`, and whose scope gate already maps `read_only \u2192 inspect` \u2014 never runs for scouts. That wiring exists only for parents and `command`-rung children.\n\n**Ways out, if you want one**\n\n1. **Per-definition escape hatch**: add `safeBashCommands: [\"python3 *\"]` to a saved scout overlay. It works syntactically, but it is a blanket trust declaration on an interpreter \u2014 it would also expose network/destructive one-liners, so I would not recommend it.\n2. **Classifier-backed allowance**: let the read-only child gate consult the decision model's script resolution and allow bodies classified `read_only` under the `inspect` rung (the scope gate already has the mapping). Real change, touches the confinement gate and `surfaces`.\n3. **Leave it**: scouts read scripts with `read`/`grep` and punt execution to a `reviewer`/`worker`.\n\nWant me to pursue option 2?",
+                    "turn": 2
+                },
+                {
+                    "kind": "user",
+                    "text": "so question is: why didn't those scripts go through the decision model?",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"decisionModel|decision_model|classify|consult|evaluateCommand|resolveDecision|gateDecision|decision\" src/tools/bash/index.ts src/tools/agent/child/command-permissions.ts src/tools/agent/child/gates/commands.ts src/tools/file-permissions.ts | head -60",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"export (async )?function|export const\" src/modules/decision/gate.ts src/modules/decision/index.ts src/modules/decision/evaluator.ts | head -40",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/bash/index.ts",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/command-permissions.ts",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"consultForGate|consultDecisionContext|consultDecisionModel|consultForPrompt|consultFileAccess\" src --glob '!*.test.ts' | grep -v \"^src/modules/decision\"",
+                    "turn": 3
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 3
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Because the read-only child path never reaches a decision-model entry point. The model isn't a classifier that all Bash flows through \u2014 it's a tie-breaker chained *after* an unresolved permission. In production code there are exactly three consult sites:\n\n| site | file | condition |\n|---|---|---|\n| parent Bash hook | `src/tools/bash/index.ts:327` | `permission === \"ask\"` |\n| delegated command gate | `src/tools/agent/child/command-permissions.ts:517` | `needsPrompt` (i.e. `permission === \"ask\"`) |\n| file access | `src/tools/file-permissions.ts:434` | outside every trusted root |\n\nA scout never produces an `ask`:\n\n1. Scout's rung is `inspect`, below `command`. The confinement gate intercepts its Bash calls first: `guardHeuristicBashCall` (`src/tools/agent/child/capabilities/safe-bash.ts`) checks `hasAgentAuthority(authority, \"command\")` \u2014 false \u2014 and hands the command to `guardSafeBashCommand`.\n2. That function calls the curated heuristic and returns **allow or block**. It never calls `resolvePermissionDetails`, never builds an `ask`, and never calls `consultForGate`. So `decisionEnabled(config, \"child\")` is never even evaluated for a scout.\n3. Script resolution (`resolveScriptRun` \u2192 body read \u2192 capability classification \u2192 `scopeAnswer`) lives *inside* the decision evaluator. Since the evaluator is never invoked, the scripts are never read or classified \u2014 the gate only sees the string `python3 \u2026` and checks it against `KNOWN_COMMANDS`, where it isn't listed.\n\nSo it isn't gate ordering and it isn't the `surfaces` config: the model has no wiring on that rung at all. `surfaces: [\"child\"]` only affects the command gate, which reviewer/worker reach and scout doesn't. This is the documented split \u2014 `safe-bash` is deliberately the deterministic, no-prompt, no-resolver path (`agents/safety.md`), while `command-runner` is the one that consults the resolver and the model.\n\nOne nuance for the fix: even if the read-only gate were wired to consult,\n\n- `python3 script.py` (kind `file`) would carry a body and could be classified `read_only` \u2192 inspect rung \u2192 allowable for a scout;\n- `python3 -c \u2026` and heredocs (kind `inline`) carry **no body** \u2014 only the command text goes to the model, so there'd be no capability-based judgment of the code.\n\nThat's why my option 2 was specifically \"add the read-only gate as a fourth consult site\"; it would genuinely cover file scripts, and inline code only to whatever extent the command-level question judges it.",
+                    "turn": 3
+                },
+                {
+                    "kind": "user",
+                    "text": "don't we have capability-based judments on inline scripts?",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/script.ts",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/script.ts",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/script-classification.ts",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"script_capabilities|capabilities|artifacts|inline\" src/modules/decision/state.ts src/modules/decision/evaluator.ts src/modules/decision/types.ts src/modules/decision/strategies -g '*.ts' | head -60",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/state.ts",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/evaluator.ts",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"inline\" docs/ .pi/agent/memory/decision-model/ src/modules/decision/*.md test/modules/decision 2>/dev/null | rg -iv \"inline editor|inline-editor|inline value|inline form\" | head -40",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"kind.*inline|inline.*kind|scriptRequest|classifyScript\" src/modules/decision test/modules/decision -g '*.ts' | head -40",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/.pi/agent/memory/decision-model/history.md",
+                    "turn": 4
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/docs/bash-execution-redesign.md",
+                    "turn": 4
+                },
+                {
+                    "kind": "assistant",
+                    "text": "No \u2014 not on the code. Capability judgments exist only for resolved **bodies**, and inline is deliberately body-less. The resolver decides this in two places:\n\n- `src/modules/decision/script.ts:390-393` \u2014 `interpreterProbe` sees `-c`/`-e`/`--eval`, or any heredoc redirection, and returns `{ kind: \"inline\" }`.\n- `src/modules/decision/script.ts:128-130` \u2014 `runForProbe` turns that into `{ kind: \"inline\", artifacts: [] }`, i.e. no body.\n\nEverything capability-shaped is driven off `artifacts`:\n\n- `evaluator.ts:174-180` \u2014 `artifacts` \u2192 `classifyScript()` \u2192 `scriptCapabilitySummaries()`; for inline the list is empty, so no `scriptProfiles`, no `scriptRequest(body)`, and the **scope gate never runs** (`scopeAnswer` needs profiles).\n- `state.ts:52-58` \u2014 `script_capabilities` is built only from `scriptProfiles`; `scripts` only from `scriptTexts(script)` \u2192 artifacts. Inline adds neither.\n- `test/modules/decision/state.test.ts:213` pins this: \"adds no script fields for an inline or binary form\".\n\nThe rationale is in `docs/bash-execution-redesign.md:531` and `history.md`: inline \"add[s] nothing because the code is already in the command\", and \"a run with no readable body (`inline`, `binary`) contributes no capability and the command request is the only one.\"\n\nSo what does happen for `python3 -c \"\u2026\"` / a heredoc:\n\n- The code does reach the model \u2014 as part of the `command` string under the **command** question (the veto wording: \"Is there any reason this command should not run directly on the host?\"). That's the command criterion vocabulary (`none`, `destructive`, \u2026), not the capability question.\n- The `script` question with `SCRIPT_CRITERIA` (`read_only`, `writes_files`, `network`, \u2026) is never asked about inline code.\n- `kind: \"inline\"` exists purely so the decision log can say a body was unavailable. That's why the report you saw listed 91 inline consults: they were command-only judgments.\n\nSo my earlier nuance was understated: wiring the scout gate to the decision model wouldn't produce a capability verdict for `python3 -c \u2026`/heredocs at all. To get that, the resolver would have to emit inline code as an artifact \u2014 the AST already has it (`hasInlineFlag` locates `-c`'s operand; heredocs sit in `command.redirections`). Then code hash caching, `scriptRequest`, profiles, and `scopeAnswer` (`read_only \u2192 inspect`) would all work unchanged. The caveats: the same bytes would then be sent twice (command text plus body), heredocs can blow the endpoint's batch limit, and the artifact needs a provenance label that isn't a path (`python3 -c`, `heredoc`), which the log's `sources` field doesn't have today.\n\nWant me to sketch that change?",
+                    "turn": 4
+                },
+                {
+                    "kind": "user",
+                    "text": "well anyway, my intent is that we should go through the decision model for the scout/readonly agents as well. also, for inline scripts, does it make sense that we make judgements on capabilities? or if we do, maybe we should do a two-stage capability (i.e., ask the decision model if it's inline rather than our own rules and judge capabilities after)",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Let me check the pieces that a read-only consult would need (runner mapping, what the gate runtime carries, and how the command gate does its consult) before I answer the design question.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/runner-rules.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/gates/runtime.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"decisionRunnerForAgent\" src -g '*.ts' | head; echo ---; rg -n \"interface ChildExtensionOptions\" -A 45 src/tools/agent/child/extension.ts | head -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/gates/file-access.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/runner-rules.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/decision-model.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"appliedPermission|sandboxAvailable\" src/modules/decision/policy.ts | head; echo ---; sed -n '1,80p' src/modules/decision/policy.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"wrapCommandWithSandbox|wrapCommand|sandboxCommand|bwrap\" src/tools/agent/child/command-permissions.ts src/tools/bash/index.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"event.input.command|allowed|toolCall\" src/tools/agent/child/command-permissions.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Short answer first, then the plan.\n\n## 1. Capability judgments on inline scripts: yes \u2014 and for the scout wiring they're load-bearing\n\nThe capability question only runs per artifact (`evaluator.ts:174-180`), so inline `{kind, artifacts: []}` means no `scriptProfiles`, which means **`scopeAnswer` never runs**. The scope gate is where runner authority actually lives. The command veto has no `network` criterion, so once scouts consult the model, `python3 -c \"import urllib\u2026\"` folds to `none \u2192 host` and runs at the inspect rung; inline file writes/destructive code are only caught if the veto happens to name them. With inline bodies as artifacts, the existing pipeline does the right thing with no new machinery: `read_only \u2192 inspect` passes, `network`/`writes_files` \u2192 command/mutate \u2192 `out_of_scope` (confidence 0), `destructive` \u2192 refuse.\n\nSo I'd land inline artifacts **before** letting `apply` resolve read-only surfaces.\n\nSketch:\n\n- `interpreterProbe`: on `-c`/`-e`/`--eval` with a **literal** operand, or a heredoc, return `{kind:\"inline\", artifacts:[\u2026]}` instead of kind-only. Dynamic operands (`\"$(cat f)\"`) stay kind-only, matching the existing refusal to guess.\n- Source labels: `inline:python3 -c` / `inline:heredoc` \u2014 a bare label is ambiguous because file sources can be slashless (`script.py`).\n- The nested package-line chase collects them too (`collectFileArtifacts` ignores non-file probes today).\n- Downstream is unchanged: one `scriptRequest(body)`, sha256 answer cache, profiles in the command state, scope gate, log `sources`/`chars`/`answers`. Tests to update: `script.test.ts:571`, the state test at `:213`, plus a scope case (inline `network` under scout).\n- Consequence: the code is now on the wire twice (command text + body). I'd accept v1 and measure tokens/latency/batch failures (heredocs are the size victim); eliding the inline span from the command state later is the cleaner architecture but a bigger change.\n\n## 2. The two-stage \"ask if it's inline\" idea: I'd skip it\n\n- The classifier protocol is `choice`/`bool`/`score` \u2014 no generative output. A stage-1 question can only confirm/deny a candidate our parser already extracted; it cannot produce the code.\n- For these forms, detection is exact syntax (`-c` before the first operand, heredoc redirection), not a heuristic. The genuinely uncertain forms (`deno eval`, `php -r`, `xargs sh -c`, substitutions) are exactly where a bool can't name the text to classify anyway.\n- It costs round trips against `MAX_CONCURRENT_FORMS`, adds latency/cooldown surface, and creates a false-negative path (\"not code\") that for a no-prompt child must abstain\u2192block anyway.\n- If the concern is candidate validity, the cheap version is a second **question in the same request** (the protocol supports that; file-access sends three) and treat \"not code\" as an abstain for that body. If the concern is coverage, extend the deterministic table. I'd do neither until measurements show capability noise from wrong candidates.\n\n## 3. Read-only consult plan\n\nEntry point: `guardHeuristicBashCall` (`src/tools/agent/child/capabilities/safe-bash.ts`), between the failed heuristic and the block:\n\n1. `SAFE_READONLY` \u2192 allow, no request (unchanged).\n2. else, if the config enables the child surface \u2192 `consultForGate` with `runner: decisionRunnerForAgent(agentName)`, real isolation, parent registry/events, and `sandboxAvailable: false` (there is no bwrap path on safe-bash, so `sandbox` verdicts abstain).\n3. Only `permission === \"allow\"` (host applied with `minConfidence` + `apply`) proceeds. `refuse`, `sandbox`, abstain, error, cooldown \u2192 block as today; `apply:false` = consult + record + block. Model trouble never widens authority.\n\nThree things this plan must not forget:\n\n- **Confinement re-check.** The heuristic short-circuits at `UNKNOWN_COMMAND`, so it never path-checks a command the model would newly allow. Before granting, re-assess with the allowlist disabled (the `CUSTOM_SAFE_COMMAND_SPEC` machinery already does generic positional path checking) so `OUTSIDE_CWD`/`SENSITIVE_PATH`/`SYMLINK_ESCAPE`/parse failures stay deterministic blocks. Script-internal reads can't be checked by a literal-path layer \u2014 that's the existing \"heuristic, not a security sandbox\" premise, but for a no-prompt runner it's a conscious widening; a read-only bwrap profile for allowed interpreter runs would be the stronger version.\n- **Custom read-only children.** `decisionRunnerForAgent` maps unknown names to `agent` (command rung) while their actual rung may be `inspect`, so the scope gate would let `writes_files` through. Pass the child's real authority into the decision context (the follow-up `scope.ts` already names).\n- **Logging.** The safe-bash path writes no decision record, which is why the reports were blind. A consult record needs a third writer call and a decision about the schema: synthesize a heuristic `resolution`, or extend the record/report to accept a resolution-less consult. Otherwise scouts stay invisible in `permission-report` after the change.\n\nA separate, optional phase: route read-only children's outside-cwd direct reads (`guardReadPathCall` in `confinement.ts`) through `consultFileAccessForGate` + `fileSurfaces`, same allow-one-call/block-otherwise shape.\n\nOne question before I start:",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "ask_user",
+                    "arg": "Read-only consult \u2014 what should land first?",
+                    "turn": 5
+                },
+                {
+                    "kind": "user",
+                    "text": "Bash consult + inline capabilities (recommended)",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "I'll implement the selected scope (A+B). Let me set up tracking and read the remaining pieces I'll touch.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "write",
+                    "arg": "/tmp/pi-coder-scratchpad-MGyCNT/TODO.md",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/types.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/types.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/index.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/index.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/heuristics/types.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "sed -n '1,120p' src/modules/sandbox/heuristics/path-policy.ts | rg -n \"buildConfinementOptions|parseCustom|ConfinementOptions\" ; echo ---; rg -n \"export function buildConfinementOptions\" -A 60 src/modules/sandbox/heuristics/path-policy.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "sed -n '1,120p' src/modules/sandbox/heuristics/types.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/decision-model.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/decision-log.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/decision-log.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"resolution|segments|BashDecisionRecord|DecisionLogRecord|gate\" scripts/permission-report.ts | head -60; echo ---; wc -l scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/decision-log.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "ls test/tools | rg -i \"scout|safe|bash\"; echo ---; wc -l test/tools/agent-scout-bash.test.ts 2>/dev/null; sed -n '1,80p' test/tools/agent-scout-bash.test.ts 2>/dev/null",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"describe\\(|it\\(\" test/tools/agent-scout-bash.test.ts | head -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"classifier|decisionConfig|consult|Blocked|blocked\" test/tools/agent-scout-bash.test.ts | head -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash-rules.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"scopeAnswer\" src test --glob '!node_modules' | head -20; echo ---; rg -n \"AGENT_AUTHORITY_LADDER|export type AgentAuthority\" src/tools/agent/definitions/types.ts | head",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/script.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"heredoc|interface BashRedirection|class BashCommand|redirections|positionalWords|get args\\b\" src/modules/sandbox/bash.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Now I'll read the report's grouping/output and the remaining test expectations before editing.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Starting with the inline artifacts in `script.ts`.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/script.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"inline|resolvedBodies|collectArtifacts|\\\\\\\\u0000\" src/modules/decision/script.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Now the decision types: `DecisionAuthority`, `authority` on `DecisionContext`, and doc updates for inline bodies.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/types.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/scope.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/evaluator.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/scope.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"^import|DecisionRunner|DecisionIsolation|DecisionAuthority\" src/modules/decision/gate.ts | head -20; echo ---; rg -n \"export\" src/modules/decision/index.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/index.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/index.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"get commands|commands:\" src/modules/sandbox/bash.ts | head; echo ---; rg -n \"unwrapWrapperCommand\" src/modules/sandbox/bash.ts | head -3; echo ---; sed -n '895,945p' src/modules/sandbox/bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"interface BashSubstitutionNode\" -A 20 src/modules/sandbox/bash.ts; echo ---; rg -n \"evaluateNested\" -B4 -A12 src/modules/sandbox/heuristics/evaluator.ts | head -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Now the safe-bash guard: consult hook plus the deterministic relaxed-confinement re-check.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "write",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash-decision.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"exactOptionalPropertyTypes|strict|noUncheckedIndexedAccess\" tsconfig.json tsconfig.check.json 2>/dev/null",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/capabilities/safe-bash.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "assistant",
+                    "text": "Now the log schema for read-only-gate records.",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/sandbox/decision-log.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"function isApproved\" -A 8 scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/scripts/permission-report.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx tsc --noEmit 2>&1 | head -50",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/agent/child/safe-bash-decision.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx tsc --noEmit 2>&1 | head -40",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run typecheck:tests 2>&1 | head -40",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"no-non-null-assertion|no-explicit-any\" eslint.config.* .eslintrc* 2>/dev/null; ls eslint.config.* .eslintrc* 2>/dev/null",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "sed -n '140,150p;185,192p;205,215p;226,234p' test/modules/sandbox/decision-log.test.ts; echo ===; sed -n '92,100p;127,133p' test/tools/bash-decision-log.test.ts; echo ===; sed -n '476,484p;507,515p' test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "grep -n \"non-null\\|no-explicit-any\\|rules\" eslint.config.mjs | head -20",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "sed -n '30,70p' eslint.config.mjs",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "grep -n \"record\\.resolution\" test/modules/sandbox/decision-log.test.ts test/tools/bash-decision-log.test.ts test/tools/agent-scout-bash.test.ts test/scripts/permission-report.test.ts 2>/dev/null",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/sandbox/decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"function readRecords|function readDecisionLog\" -A 12 test/modules/sandbox/decision-log.test.ts test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/sandbox/decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/sandbox/decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run typecheck:tests 2>&1 | head -40",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"runHookCommand\" -A 30 test/tools/bash-decision-log.test.ts | sed -n '1,45p'",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/bash-decision-log.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run typecheck:tests 2>&1 | head -20",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx vitest run test/modules/decision/script.test.ts test/modules/decision/state.test.ts test/modules/decision/scope.test.ts 2>&1 | tail -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx vitest run test/modules/sandbox/decision-log.test.ts test/tools/bash-decision-log.test.ts test/scripts/permission-report.test.ts 2>&1 | tail -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/script.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/script.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/script.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"describe\\(|nested|chase\" test/modules/decision/script.test.ts | head -30",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/script.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/script.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/state.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/state.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/scope.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/scope.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx vitest run test/modules/decision/script.test.ts test/modules/decision/state.test.ts test/modules/decision/scope.test.ts 2>&1 | tail -25",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "write",
+                    "arg": "/tmp/pi-coder-scratchpad-MGyCNT/TODO.md",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/classifier.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/modules/decision/classifier.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "sed -n '253,382p' test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"SCRIPT_QUESTION|VETO_QUESTION\" src/modules/decision/index.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "read",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run typecheck:tests 2>&1 | head -20",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npm run typecheck:tests 2>&1 | head -20 && npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -60",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "rg -n \"interface ConsultOptions\" -A 20 src/modules/decision/gate.ts; echo ---; sed -n '295,320p' src/tools/decision-model.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/modules/decision/gate.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/decision-model.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/src/tools/decision-model.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -40",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "edit",
+                    "arg": "/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -12",
+                    "turn": 5
+                },
+                {
+                    "kind": "tool",
+                    "name": "bash",
+                    "arg": "sed -n '1,80p' test/scripts/permission-report.test.ts",
+                    "turn": 5
+                }
+            ],
+            "rendered": {
+                "window800": {
+                    "text": "  \u2026 112 tool calls and 12 earlier messages omitted (char cap) \u2026\nUser: Bash consult + inline capabilities (recommended)\nAssistant: Now the log schema for read-only-gate records.\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -40)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -12)\nTool: bash(sed -n '1,80p' test/scripts/permission-report.test.ts)",
+                    "chars": 544,
+                    "omitted": 199
+                },
+                "window1800": {
+                    "text": "  \u2026 109 tool calls and 7 earlier messages omitted (char cap) \u2026\nUser: Bash consult + inline capabilities (recommended)\nAssistant: I'll implement the selected scope (A+B). Let me set up tracking and read the remaining pieces I'll touch.\nAssistant: Now I'll read the report's grouping/output and the remaining test expectations before editing.\nAssistant: Starting with the inline artifacts in `script.ts`.\nAssistant: Now the decision types: `DecisionAuthority`, `authority` on `DecisionContext`, and doc updates for inline bodies.\nAssistant: Now the safe-bash guard: consult hook plus the deterministic relaxed-confinement re-check.\nAssistant: Now the log schema for read-only-gate records.\nTool: edit(/home/sd/Repos/pi-coder/src/modules/decision/gate.ts)\nTool: edit(/home/sd/Repos/pi-coder/src/tools/decision-model.ts)\nTool: edit(/home/sd/Repos/pi-coder/src/tools/decision-model.ts)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -40)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -12)\nTool: bash(sed -n '1,80p' test/scripts/permission-report.test.ts)",
+                    "chars": 1248,
+                    "omitted": 191
+                },
+                "window800-elided": {
+                    "text": "  \u2026 25 tool calls and 12 earlier messages omitted (char cap) \u2026\n  \u2026 87 tool calls omitted \u2026\nUser: Bash consult + inline capabilities (recommended)\nAssistant: Now the log schema for read-only-gate records.\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -40)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -12)\nTool: bash(sed -n '1,80p' test/scripts/permission-report.test.ts)",
+                    "chars": 571,
+                    "omitted": 198
+                },
+                "window1800-elided": {
+                    "text": "  \u2026 22 tool calls and 7 earlier messages omitted (char cap) \u2026\n  \u2026 87 tool calls omitted \u2026\nUser: Bash consult + inline capabilities (recommended)\nAssistant: I'll implement the selected scope (A+B). Let me set up tracking and read the remaining pieces I'll touch.\nAssistant: Now I'll read the report's grouping/output and the remaining test expectations before editing.\nAssistant: Starting with the inline artifacts in `script.ts`.\nAssistant: Now the decision types: `DecisionAuthority`, `authority` on `DecisionContext`, and doc updates for inline bodies.\nAssistant: Now the safe-bash guard: consult hook plus the deterministic relaxed-confinement re-check.\nAssistant: Now the log schema for read-only-gate records.\nTool: edit(/home/sd/Repos/pi-coder/src/modules/decision/gate.ts)\nTool: edit(/home/sd/Repos/pi-coder/src/tools/decision-model.ts)\nTool: edit(/home/sd/Repos/pi-coder/src/tools/decision-model.ts)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -40)\nTool: edit(/home/sd/Repos/pi-coder/test/tools/agent-scout-bash.test.ts)\nTool: bash(npx vitest run test/tools/agent-scout-bash.test.ts 2>&1 | tail -12)\nTool: bash(sed -n '1,80p' test/scripts/permission-report.test.ts)",
+                    "chars": 1275,
+                    "omitted": 190
+                }
+            }
+        }
+    ]
+}

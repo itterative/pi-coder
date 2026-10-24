@@ -1,16 +1,26 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ClassifierQuestion } from "@earendil-works/pi-ai";
 
 import { DecisionEvaluator } from "./evaluator";
+import { withDecisionCheck } from "./events";
 import {
     ReminderEvaluator,
     reminderEnabled,
     type ReminderConsult,
     type ReminderOption,
+    type ReminderPhase,
     type ReminderSignals,
+    type ReminderStateConsult,
 } from "./reminder";
 import { readScriptFile, resolveScriptRun, scriptFileIdentity } from "./script";
-import { clipRequest, decisionSessionContext } from "./session-context";
+import {
+    clipRequest,
+    decisionSessionContext,
+    SHORT_WINDOW_CHARS,
+    type SessionWindow,
+    type StateMarkerReader,
+} from "./session-context";
+import { transcriptItems, windowTranscript } from "./transcript";
 import { SuggestionEvaluator, type SuggestionConsult } from "./suggestion";
 import { workspaceStatusFor } from "./workspace";
 import type { ClassifierRegistry } from "./model";
@@ -131,6 +141,9 @@ export function decisionContextFor(
         readFile: readScriptFile,
         statFile: scriptFileIdentity,
     });
+    // The request and the planned window, not the whole session context: the transcript atoms are the state
+    // ask's business, and a command's judgement carries the four items it was measured with.
+    const session = decisionSessionContext(ctx.sessionManager.getBranch());
 
     return {
         command,
@@ -139,7 +152,8 @@ export function decisionContextFor(
         isolation: shape.isolation ?? "checkout",
         ...(shape.authority === undefined ? {} : { authority: shape.authority }),
         ...(script === undefined ? {} : { script }),
-        ...decisionSessionContext(ctx.sessionManager.getBranch()),
+        ...(session.request === undefined ? {} : { request: session.request }),
+        ...(session.recent.length === 0 ? {} : { recent: session.recent }),
     };
 }
 
@@ -206,6 +220,28 @@ export interface ReminderEvaluatorSeed {
     registry?: ClassifierRegistry;
 }
 
+/**
+ * What the state consult needs: the same seed, the live prompt when the branch does not carry it yet, the phase
+ * the accept rule holds, the transcript budget, and the marker reader.
+ */
+export interface ReminderStateOptions extends ReminderEvaluatorSeed {
+    /** The turn's request, when the caller has it before the branch records it. */
+    request?: string;
+    /** The phase already accepted, which the accept rule holds unless the answer moves it confidently. */
+    heldPhase?: ReminderPhase;
+    /** Reads a recorded state entry as a window annotation, or `undefined` for any other entry. */
+    stateMarker?: StateMarkerReader;
+    /**
+     * The transcript budget; the default is {@link SHORT_WINDOW_CHARS}.
+     *
+     * A check that comes back unsure asks the same state question again with the window transcript, which is
+     * the probe's tier 2 without the selection questions: a checkpoint has no reminder to decide.
+     */
+    windowChars?: number;
+    /** The bus the in-flight count is emitted on, so a surface can animate its badge for this consult too. */
+    events?: EventBus;
+}
+
 let cachedReminderEvaluator: { key: string; evaluator: ReminderEvaluator } | undefined;
 
 /** One reminder evaluator per configuration: a failed reminder request must not pause a permission verdict. */
@@ -237,6 +273,21 @@ export interface ReminderConsultOptions extends ReminderEvaluatorSeed {
     signals?: ReminderSignals;
     /** Extra questions the caller wants answered in the same round trip; returned under `consult.extras`. */
     extraQuestions?: Readonly<Record<string, ClassifierQuestion>>;
+    /**
+     * The phase already accepted, when one is. The accept rule holds it unless the answer is confident enough
+     * to move it, which is what keeps one low-confidence answer from being locked in by the next one.
+     */
+    heldPhase?: ReminderPhase;
+    /**
+     * Reads a recorded state entry as a window annotation, or `undefined` for any other entry. The reminder
+     * module passes its own reader, so the decision module never names the reminder's entry type.
+     */
+    stateMarker?: StateMarkerReader;
+    /**
+     * The bus the in-flight count is emitted on, so a surface can animate its badge for this consult too.
+     * The caller's bus is passed rather than read from `ctx`: a child consult must animate the parent's badge.
+     */
+    events?: EventBus;
 }
 
 /**
@@ -253,23 +304,87 @@ export async function consultReminderSelection(
         return { status: "disabled", latencyMs: 0 };
     }
 
-    try {
-        const session = decisionSessionContext(options.ctx.sessionManager.getBranch());
-        const request =
-            options.request === undefined ? session.request : clipRequest(options.request);
+    // Counted like the two permission gates: this is the consult a turn of its own triggers, so the badge
+    // that says `auto` is the surface that should animate while it runs.
+    return withDecisionCheck(options.events, async () => {
+        // The window rides back on the answer so a debug entry can record what the consult judged. It is built
+        // here, once, from the same read the request is built from: re-reading the branch later could record
+        // a window that was not the one sent.
+        let window: SessionWindow | undefined;
 
-        return await reminderEvaluatorFor(options).evaluate({
-            options: options.options,
-            ...(request === undefined ? {} : { request }),
-            ...(session.recent.length === 0 ? {} : { recent: session.recent }),
-            ...(options.signals === undefined ? {} : { signals: options.signals }),
-            ...(options.extraQuestions === undefined
-                ? {}
-                : { extraQuestions: options.extraQuestions }),
-        });
-    } catch {
-        return { status: "error", latencyMs: 0 };
+        try {
+            const session = decisionSessionContext(options.ctx.sessionManager.getBranch(), {
+                ...(options.stateMarker === undefined ? {} : { stateMarker: options.stateMarker }),
+            });
+            window = { items: session.recent, omitted: session.omitted ?? 0 };
+            const request =
+                options.request === undefined ? session.request : clipRequest(options.request);
+
+            const consult = await reminderEvaluatorFor(options).evaluate({
+                options: options.options,
+                ...(request === undefined ? {} : { request }),
+                ...(session.recent.length === 0 ? {} : { recent: session.recent }),
+                ...(options.signals === undefined ? {} : { signals: options.signals }),
+                ...(options.heldPhase === undefined ? {} : { heldPhase: options.heldPhase }),
+                ...(options.extraQuestions === undefined
+                    ? {}
+                    : { extraQuestions: options.extraQuestions }),
+            });
+
+            return { ...consult, window };
+        } catch {
+            // The window is kept on the failure path too: a timeout is exactly the case its input explains.
+            return { status: "error", latencyMs: 0, ...(window === undefined ? {} : { window }) };
+        }
+    });
+}
+
+/**
+ * Tier 1 of the cascade: the state alone, judged on the short window.
+ *
+ * Never rejects and never grants anything, like the selection consult beside it. The window is the only
+ * difference from the selection's: the state questions are cheap, so this is the half that decides the pool
+ * without paying for the long transcript, and the confidence it returns decides whether the selection consult
+ * re-asks the state questions on the full window.
+ */
+export async function consultReminderState(
+    options: ReminderStateOptions,
+): Promise<ReminderStateConsult> {
+    if (!reminderEnabled(options.config)) {
+        return { status: "disabled", latencyMs: 0, state: {} };
     }
+
+    return withDecisionCheck(options.events, async () => {
+        try {
+            const session = decisionSessionContext(options.ctx.sessionManager.getBranch(), {
+                ...(options.stateMarker === undefined ? {} : { stateMarker: options.stateMarker }),
+            });
+            const request =
+                options.request === undefined ? session.request : clipRequest(options.request);
+            // The measured shape, sent as the measured script sent it: the anchor in the state, and one
+            // transcript fitted from the branch's own items. `--annotate` meant no tool elision there, so the
+            // fit decides what survives rather than a tool sampler.
+            const transcript = windowTranscript(
+                transcriptItems(session.items),
+                request ?? "",
+                false,
+                options.windowChars ?? SHORT_WINDOW_CHARS,
+            );
+
+            const consult = await reminderEvaluatorFor(options).evaluateState({
+                options: [],
+                ...(request === undefined ? {} : { request }),
+                ...(options.heldPhase === undefined ? {} : { heldPhase: options.heldPhase }),
+                transcript: transcript.text,
+            });
+
+            // The transcript is carried back on the answer: it is what the model read, and re-reading the branch
+            // later could produce a different fit.
+            return { ...consult, transcript: transcript.text };
+        } catch {
+            return { status: "error" as const, latencyMs: 0, state: {} };
+        }
+    });
 }
 
 export interface SuggestionConsultOptions extends SuggestionEvaluatorSeed {
@@ -302,7 +417,7 @@ export async function consultSuggestionRole(
                 ? {}
                 : { recentCommands: options.recentCommands }),
         });
-    } catch (error) {
+    } catch {
         return { status: "error", latencyMs: 0 };
     }
 }

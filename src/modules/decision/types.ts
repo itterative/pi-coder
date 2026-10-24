@@ -244,6 +244,13 @@ export interface DecisionModelConfig {
 export interface DecisionRecentMessage {
     role: string;
     text: string;
+    /**
+     * The user turn this item belongs to, oldest first, when the walk could tell them apart.
+     *
+     * Only the state transcript reads it (the measured variant selected turns by turn); the pool's state sends
+     * `{role, text}` alone, so the stamp never reaches the model.
+     */
+    turn?: number;
 }
 
 /**

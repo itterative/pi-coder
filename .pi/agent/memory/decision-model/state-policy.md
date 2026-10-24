@@ -23,6 +23,15 @@ and rejected; [findings.md](findings.md) has the numbers.
   turns when the turn is shorter. The request is its own field, so its item is dropped from the window rather
   than ending it; ending there discarded the whole current turn, and that bug is what made two logged commands
   abstain at 0.48/0.51 (the fix took them to 0.64/0.64). Tool output is excluded.
+- `decisionSessionContext` builds three things from one walk: `request`, `recent` (the planned window, in the
+  `{role, text}` shape above), and `items` — every item of the walk with a `turn` stamp, request included. The
+  turn stamps exist for the state ask's transcript (`decision/transcript.ts`), which selects turns the way the
+  probe did; only the transcript reads them, and `recent` stays `{role, text}` so the pool's request and the
+  debug window are unchanged. A user message starts a new turn unless it joined the running one (a steer: the
+  previous message is a tool result or an assistant message that called a tool), and a compaction or fold
+  starts a fresh turn. The request is not added to `items` twice — it is already there at its own turn — and the
+  command/file-access contexts take `request`/`recent` explicitly rather than spreading the whole context, so
+  the transcript atoms never reach a permission verdict.
 - `workspace_status` rides in every shape when the tree is dirty: the clipped
   `git status --porcelain=v1 --untracked-files=normal` list (1 s timeout, ≤10 entries, absent when clean or git
   fails). It supplies "these are the runner's own uncommitted edits" and is part of the answer-cache key.

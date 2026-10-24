@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEventBus, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type {
     ClassifierAnswer,
     ClassifierContext,
@@ -8,22 +9,26 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import {
+    consultReminderState,
     DEFAULT_REMINDER_FORM,
     DEFAULT_REMINDER_MIN_PROBABILITY,
     DEFAULT_REMINDER_MIN_SCORE,
-    REMINDER_FINISHING_QUESTION,
     REMINDER_HELPFULNESS_CRITERIA,
     REMINDER_PHASE_CRITERIA,
+    REMINDER_PHASE_INSTRUCTION,
     REMINDER_PHASE_QUESTION,
-    REMINDER_UNVALIDATED_QUESTION,
     ReminderEvaluator,
+    PHASE_MOVE_CONFIDENCE,
+    SHORT_WINDOW_CHARS,
+    TRANSCRIPT_WINDOW_CHARS,
     buildReminderState,
     consultReminderSelection,
+    reminderChoiceRequest,
     reminderDecisionFrom,
     reminderEnabled,
-    reminderRequest,
     reminderScoreInstruction,
     reminderStateFrom,
+    reminderStateRequest,
     resetDecisionEvaluator,
     type ClassifierRegistry,
     type DecisionModelConfig,
@@ -32,7 +37,17 @@ import {
     type ReminderOption,
 } from "../../../src/modules/decision";
 import { DECISION_PROVIDER_ID } from "../../../src/modules/decision/provider";
+import { DECISION_STATUS_EVENT, isDecisionStatusEvent } from "../../../src/modules/decision/events";
 import { stubContext, stubSessionManager } from "../../helpers/pi-stub";
+import {
+    assistantEntry,
+    branch,
+    cleanupBranches,
+    textPart,
+    toolCall,
+    userEntry,
+    type AppendedMessage,
+} from "../../helpers/session-branch";
 
 import {
     choiceAnswer,
@@ -166,7 +181,7 @@ describe("reminder state, request, and answer", () => {
     });
 
     it("asks one score question per offered reminder by default", () => {
-        const request = reminderRequest({ request: "run the tests" }, OPTIONS);
+        const request = reminderChoiceRequest({ request: "run the tests" }, OPTIONS);
 
         for (const option of OPTIONS) {
             const question = request.questions[option.id];
@@ -179,12 +194,8 @@ describe("reminder state, request, and answer", () => {
             expect(question.instructions).toContain(option.guidance);
         }
 
-        expect(Object.keys(request.questions)).toEqual([
-            ...OPTIONS.map((option) => option.id),
-            REMINDER_PHASE_QUESTION,
-            REMINDER_FINISHING_QUESTION,
-            REMINDER_UNVALIDATED_QUESTION,
-        ]);
+        // The state question is not part of the pool's request: it has its own state and its own call.
+        expect(Object.keys(request.questions)).toEqual(OPTIONS.map((option) => option.id));
         expect(DEFAULT_REMINDER_FORM).toBe("score");
         expect(reminderScoreInstruction(OPTIONS[0] as ReminderOption)).toContain(
             OPTIONS[0]?.guidance ?? "",
@@ -192,7 +203,12 @@ describe("reminder state, request, and answer", () => {
     });
 
     it("asks one probability question per reminder in the bool form", () => {
-        const request = reminderRequest({ request: "run the tests" }, OPTIONS, undefined, "bool");
+        const request = reminderChoiceRequest(
+            { request: "run the tests" },
+            OPTIONS,
+            undefined,
+            "bool",
+        );
 
         for (const option of OPTIONS) {
             const question = request.questions[option.id];
@@ -202,14 +218,26 @@ describe("reminder state, request, and answer", () => {
         }
     });
 
-    it("piggybacks the phase, finishing, and unvalidated questions", () => {
-        const request = reminderRequest({ request: "run the tests" }, OPTIONS);
+    it("asks the state question alone, against the anchor and the transcript", () => {
+        const request = reminderStateRequest("validating", "User: run the tests");
 
+        expect(request.state).toEqual({
+            current_state: "validating",
+            conversation: "User: run the tests",
+        });
+        expect(Object.keys(request.questions)).toEqual([REMINDER_PHASE_QUESTION]);
+        expect(request.questions[REMINDER_PHASE_QUESTION]?.instructions).toBe(
+            REMINDER_PHASE_INSTRUCTION,
+        );
         expect(choiceCriteria(request.questions[REMINDER_PHASE_QUESTION])).toEqual(
             REMINDER_PHASE_CRITERIA,
         );
-        expect(request.questions[REMINDER_FINISHING_QUESTION]?.type).toBe("bool");
-        expect(request.questions[REMINDER_UNVALIDATED_QUESTION]?.type).toBe("bool");
+
+        // No state accepted yet: the anchor reads `none`, which is what the probe sent.
+        expect(reminderStateRequest(undefined, "").state).toEqual({
+            current_state: "none",
+            conversation: "",
+        });
     });
 
     it("carries the caller's extra questions, with a built-in id winning a collision", () => {
@@ -219,27 +247,76 @@ describe("reminder state, request, and answer", () => {
             criteria: { true: "yes", false: "no" },
         };
 
-        const request = reminderRequest({}, OPTIONS, { todo_item_second: extra });
+        const request = reminderChoiceRequest({}, OPTIONS, { todo_item_second: extra });
         expect(request.questions.todo_item_second).toEqual(extra);
 
-        // An extra question can never replace a reminder or label question the decision itself reads.
-        const collided = reminderRequest({}, OPTIONS, { todo: extra });
+        // An extra question can never replace a reminder question the decision itself reads.
+        const collided = reminderChoiceRequest({}, OPTIONS, { todo: extra });
         expect(collided.questions.todo?.instructions).toContain(OPTIONS[1]?.guidance);
     });
 
-    it("reads the piggybacked labels and drops unreadable ones", () => {
+    it("reads the answered phase and drops an unreadable one", () => {
         const read = (answers: Record<string, ClassifierAnswer>) => reminderStateFrom(answers);
-
-        expect(
-            read({
-                [REMINDER_PHASE_QUESTION]: choiceAnswer("debugging", 0.9),
-                [REMINDER_FINISHING_QUESTION]: { type: "bool", probability: 0.2 },
-                [REMINDER_UNVALIDATED_QUESTION]: { type: "bool", probability: 0.8 },
-            }),
-        ).toEqual({ phase: "debugging", finishing: false, unvalidated: true });
+        expect(read({ [REMINDER_PHASE_QUESTION]: choiceAnswer("implementing", 0.9) })).toEqual({
+            phase: "implementing",
+        });
 
         expect(read({})).toEqual({});
         expect(read({ [REMINDER_PHASE_QUESTION]: choiceAnswer("not-a-phase", 0.9) })).toEqual({});
+    });
+
+    it("moves the phase only on an agreement or a confident answer", () => {
+        const phase = (choice: string, confidence: number) =>
+            reminderStateFrom(
+                { [REMINDER_PHASE_QUESTION]: choiceAnswer(choice, confidence) },
+                "implementing",
+            );
+
+        // The accept rule, as the mid-run state probe applies it: the phase in hand is what a quiet
+        // disagreement is measured against, and only a confident answer moves it.
+        expect(phase("implementing", 0.2)).toEqual({ phase: "implementing" });
+        expect(phase("validating", 0.49)).toEqual({ phase: "implementing" });
+        expect(phase("validating", PHASE_MOVE_CONFIDENCE)).toEqual({ phase: "validating" });
+        expect(phase("validating", 0.9)).toEqual({ phase: "validating" });
+
+        // Nothing accepted yet: the first answer is taken as it comes, however unsure.
+        expect(
+            reminderStateFrom({ [REMINDER_PHASE_QUESTION]: choiceAnswer("documenting", 0.1) }),
+        ).toEqual({
+            phase: "documenting",
+        });
+    });
+
+    it("holds the accepted phase through a state answer whose move is unsure", async () => {
+        const behavior = async (model: Classifier) =>
+            reminderScoreResult(model, {}, { phase: "validating", phaseConfidence: 0.2 });
+        const { evaluator } = harness({ behavior });
+
+        // The state the ask reports is the accepted one, so the caller's merge records nothing and the phase in
+        // hand survives an unsure answer instead of being replaced by it.
+        const unsure = await evaluator.evaluateState({
+            ...context,
+            heldPhase: "implementing",
+            transcript: "User: run the tests",
+        });
+
+        expect(unsure.status).toBe("answered");
+        expect(unsure.state.phase).toBe("implementing");
+        expect(unsure.answeredPhase).toBe("validating");
+
+        const { evaluator: confidentEvaluator } = harness({
+            behavior: async (model) =>
+                reminderScoreResult(model, {}, { phase: "validating", phaseConfidence: 0.9 }),
+            clock: { t: 0 },
+        });
+        const moved = await confidentEvaluator.evaluateState({
+            ...context,
+            heldPhase: "implementing",
+            transcript: "User: run the tests",
+        });
+
+        // A confident move is the one thing that replaces it.
+        expect(moved.state.phase).toBe("validating");
     });
 
     it("picks the strongest reminder above the threshold, and none below it", () => {
@@ -316,30 +393,22 @@ describe("ReminderEvaluator", () => {
         expect(classify).not.toHaveBeenCalled();
     });
 
-    it("returns the model's choice and labels, and caches the identical consult", async () => {
+    it("returns the model's choice and caches the identical consult", async () => {
         const { evaluator, classify } = harness({
             behavior: async (model) =>
-                reminderScoreResult(
-                    model,
-                    { sandbox: 2, todo: 0.1 },
-                    {
-                        phase: "debugging",
-                        finishing: 0.2,
-                        unvalidated: 0.8,
-                    },
-                ),
+                reminderScoreResult(model, { sandbox: 2, todo: 0.1 }, { phase: "implementing" }),
         });
 
+        // The pool consult reports the choice and the scores; the state is the state ask's answer, not this
+        // one's, so nothing here reads a label.
         expect(await evaluator.evaluate(context)).toMatchObject({
             status: "answered",
             decision: { kind: "reminder", id: "sandbox" },
-            state: { phase: "debugging", finishing: false, unvalidated: true },
             scores: { sandbox: 2, todo: 0.1 },
         });
         expect(await evaluator.evaluate(context)).toMatchObject({
             status: "cached",
             decision: { kind: "reminder", id: "sandbox" },
-            state: { phase: "debugging", finishing: false, unvalidated: true },
         });
         expect(classify).toHaveBeenCalledTimes(1);
     });
@@ -429,17 +498,15 @@ describe("ReminderEvaluator", () => {
         expect(consult.extras).toEqual(extras);
     });
 
-    it("abstains on an unreadable answer but keeps readable labels", async () => {
+    it("abstains on an unreadable answer without inventing a decision", async () => {
         const { evaluator } = harness({
-            behavior: async (model) =>
-                reminderScoreResult(model, { "not-offered": 2 }, { phase: "verifying" }),
+            behavior: async (model) => reminderScoreResult(model, { "not-offered": 2 }),
         });
 
         const consult = await evaluator.evaluate(context);
 
         expect(consult.status).toBe("abstained");
         expect(consult.decision).toBeUndefined();
-        expect(consult.state).toEqual({ phase: "verifying" });
     });
 
     it("cools down after a failed request and recovers", async () => {
@@ -460,7 +527,28 @@ describe("ReminderEvaluator", () => {
     });
 });
 
+/** A branch long enough that the window has to drop items, so a carried window can be checked whole. */
+function longBranch(): SessionEntry[] {
+    const messages: AppendedMessage[] = [];
+    for (let turn = 1; turn <= 6; turn += 1) {
+        messages.push(userEntry(`ask ${String(turn)}`, turn * 2 - 1));
+        messages.push(
+            assistantEntry(
+                [
+                    textPart(`Answer ${String(turn)}.`),
+                    toolCall("bash", { command: `rg step${String(turn)} src` }, `c${String(turn)}`),
+                ],
+                turn * 2,
+            ),
+        );
+    }
+
+    return branch(messages);
+}
+
 describe("consultReminderSelection", () => {
+    afterEach(cleanupBranches);
+
     function consultContext(registry: ClassifierRegistry) {
         return stubContext({
             sessionManager: stubSessionManager({ getBranch: () => [] }),
@@ -500,6 +588,96 @@ describe("consultReminderSelection", () => {
         expect(sent.state.session).toEqual({ user_turns: 2, tests_run: false });
     });
 
+    it("counts the consult in flight on the caller's bus", async () => {
+        const { registry } = harness();
+        const events = createEventBus();
+        const checks: number[] = [];
+        events.on(DECISION_STATUS_EVENT, (data) => {
+            if (isDecisionStatusEvent(data)) {
+                checks.push(data.checking);
+            }
+        });
+
+        await consultReminderSelection({
+            ctx: consultContext(registry),
+            config: {
+                enabled: true,
+                reminders: true,
+                provider: DECISION_PROVIDER_ID,
+                model: MODEL.id,
+            },
+            options: OPTIONS,
+            request: "run the tests",
+            events,
+        });
+
+        // One consult counted once, so the badge animates for the whole answer and returns to idle after it.
+        expect(checks).toEqual([1, 0]);
+    });
+
+    it("opens no check when the reminder subject is off", async () => {
+        const { registry } = harness();
+        const events = createEventBus();
+        const checks: number[] = [];
+        events.on(DECISION_STATUS_EVENT, (data) => {
+            if (isDecisionStatusEvent(data)) {
+                checks.push(data.checking);
+            }
+        });
+
+        const consult = await consultReminderSelection({
+            ctx: consultContext(registry),
+            config: {
+                enabled: true,
+                reminders: false,
+                provider: DECISION_PROVIDER_ID,
+                model: MODEL.id,
+            },
+            options: OPTIONS,
+            events,
+        });
+
+        // A subject that never reaches the endpoint must not blink the badge on its way out.
+        expect(consult.status).toBe("disabled");
+        expect(checks).toEqual([]);
+    });
+
+    it("carries the window it judged back on the answer", async () => {
+        const { registry, classify } = harness();
+        const config = {
+            enabled: true,
+            reminders: true,
+            provider: DECISION_PROVIDER_ID,
+            model: MODEL.id,
+        };
+        const entries = longBranch();
+
+        const consult = await consultReminderSelection({
+            ctx: stubContext({
+                sessionManager: stubSessionManager({ getBranch: () => entries }),
+                modelRegistry: classifierModelRegistry(registry),
+            }),
+            config,
+            options: OPTIONS,
+            request: "run the tests",
+        });
+
+        expect(consult.status).toBe("answered");
+        // The window is the read this consult made, and it is the one the state carried: a debug entry that
+        // recorded anything else, or re-read the branch later, would be describing a window that was not sent.
+        const sent = classify.mock.calls[0]?.[1] as ClassifierContext;
+        expect(sent.state.recent_messages).toEqual(
+            consult.window?.items.map((item) => ({ role: item.role, text: item.text })),
+        );
+        // Three items a turn - the ask, the answer, and the call. The live prompt outranks the branch's newest
+        // ask, which is dropped with the rest of the overflow: seventeen items left, a budget for ten.
+        expect(sent.state.request).toBe("run the tests");
+        expect(consult.window?.items).toHaveLength(10);
+        expect(consult.window?.omitted).toBe(7);
+        // The guarantee holds at the newest end: the turn's own tool call is kept, not trimmed away.
+        expect(consult.window?.items.at(-1)?.text).toBe("rg step6 src");
+    });
+
     it("clips a caller-supplied prompt to the state's request limit", async () => {
         const { registry, classify } = harness();
         const config = {
@@ -534,6 +712,127 @@ describe("consultReminderSelection", () => {
         });
 
         expect(consult).toMatchObject({ status: "disabled" });
+        expect(classify).not.toHaveBeenCalled();
+    });
+});
+
+describe("consultReminderState", () => {
+    afterEach(cleanupBranches);
+
+    function stateContext(registry: ClassifierRegistry, entries: SessionEntry[]) {
+        return stubContext({
+            sessionManager: stubSessionManager({ getBranch: () => entries }),
+            modelRegistry: classifierModelRegistry(registry),
+        });
+    }
+
+    const config = {
+        enabled: true,
+        reminders: true,
+        provider: DECISION_PROVIDER_ID,
+        model: MODEL.id,
+    };
+
+    it("asks the state question alone, on the short transcript", async () => {
+        const behavior = async (model: Classifier) =>
+            reminderResult(model, {}, { phase: "validating", phaseConfidence: 0.9 });
+        const { registry, classify } = harness({ behavior });
+        const events = createEventBus();
+        const checks: number[] = [];
+        events.on(DECISION_STATUS_EVENT, (data) => {
+            if (isDecisionStatusEvent(data)) {
+                checks.push(data.checking);
+            }
+        });
+
+        const consult = await consultReminderState({
+            ctx: stateContext(registry, longBranch()),
+            config,
+            request: "run the tests",
+            events,
+            heldPhase: "implementing",
+        });
+
+        const sent = classify.mock.calls[0]?.[1] as ClassifierContext;
+        // Tier 1 is the state half of the cascade: one question, no per-reminder questions, because the pool it
+        // decides does not exist yet. The state is the measured shape - the anchor and the transcript - and the
+        // transcript is fitted from the branch, so the request carries no `recent_messages` and no signals.
+        expect(Object.keys(sent.questions)).toEqual([REMINDER_PHASE_QUESTION]);
+        expect(Object.keys(sent.state ?? {}).toSorted()).toEqual(["conversation", "current_state"]);
+        expect(sent.state?.current_state).toBe("implementing");
+        expect(typeof sent.state?.conversation).toBe("string");
+        expect((sent.state?.conversation as string).length).toBeLessThanOrEqual(SHORT_WINDOW_CHARS);
+        // A confident answer moves the phase off the one in hand.
+        expect(consult.state).toEqual({ phase: "validating" });
+        expect(consult.phaseConfidence).toBe(0.9);
+        expect(consult.answeredPhase).toBe("validating");
+        // The short transcript is the point of the tier: the long branch does not fit in it, and what was
+        // judged is carried back on the consult rather than re-derived from the branch.
+        expect(consult.transcript).toBe(sent.state?.conversation);
+        expect((consult.transcript ?? "").length).toBeLessThanOrEqual(SHORT_WINDOW_CHARS);
+        // Counted in flight like the selection consult, so the badge animates for it too.
+        expect(checks).toEqual([1, 0]);
+    });
+
+    it("fits the transcript harder on the short ask than on the escalated one", async () => {
+        const behavior = async (model: Classifier) =>
+            reminderResult(model, {}, { phase: "validating", phaseConfidence: 0.9 });
+        const { registry, classify } = harness({ behavior });
+        const entries = longBranch();
+
+        const short = await consultReminderState({ ctx: stateContext(registry, entries), config });
+        const full = await consultReminderState({
+            ctx: stateContext(registry, entries),
+            config,
+            windowChars: TRANSCRIPT_WINDOW_CHARS,
+        });
+
+        const shortSent = classify.mock.calls[0]?.[1] as ClassifierContext;
+        const fullSent = classify.mock.calls[1]?.[1] as ClassifierContext;
+
+        // The escalation asks the state question where the short transcript may have hidden what decided the
+        // phase: the anchor and the question are the same, only the transcript budget differs.
+        expect(fullSent.state?.current_state).toBe(shortSent.state?.current_state);
+        expect(Object.keys(fullSent.questions)).toEqual(Object.keys(shortSent.questions));
+        expect((fullSent.state?.conversation as string).length).toBeGreaterThan(
+            (shortSent.state?.conversation as string).length,
+        );
+        expect(full.state).toEqual(short.state);
+    });
+
+    it("reports the phase confidence the accept rule measured", async () => {
+        const behavior = async (model: Classifier) =>
+            reminderResult(model, {}, { phase: "validating", phaseConfidence: 0.2 });
+        const { registry } = harness({ behavior });
+
+        const consult = await consultReminderState({
+            ctx: stateContext(registry, []),
+            config,
+            heldPhase: "implementing",
+        });
+
+        // The state in hand is held, and the raw confidence is reported so the caller knows to escalate.
+        expect(consult.state).toEqual({ phase: "implementing" });
+        expect(consult.phaseConfidence).toBe(0.2);
+        // What the answer itself named is kept beside the accepted state: the gate held `implementing`, the
+        // model proposed `validating`, and that difference is the whole diagnosis of a frozen phase.
+        expect(consult.answeredPhase).toBe("validating");
+    });
+
+    it("asks nothing for a subject that is off", async () => {
+        const { registry, classify } = harness();
+
+        const consult = await consultReminderState({
+            ctx: stateContext(registry, []),
+            config: {
+                enabled: true,
+                reminders: false,
+                provider: DECISION_PROVIDER_ID,
+                model: MODEL.id,
+            },
+        });
+
+        expect(consult).toMatchObject({ status: "disabled", state: {} });
         expect(classify).not.toHaveBeenCalled();
     });
 });

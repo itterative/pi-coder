@@ -185,7 +185,7 @@ describe("suggestRuleForPrompt", () => {
     });
 
     it("offers the table's wider rule when the model reads the arguments as data", async () => {
-        const classify = vi.fn(async (model: Classifier, context: ClassifierContext) =>
+        const classify = vi.fn(async (model: Classifier, _context: ClassifierContext) =>
             suggestionResult(model, 0.1),
         );
         const registry = answeringRegistry([MODEL], classify);

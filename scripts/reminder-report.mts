@@ -18,10 +18,12 @@
  * A `compaction` entry is modeled as the live `session_compact` restart: the schedule, the shown map, and
  * the context estimate start over and the compaction reminder is armed, while the activity scan keeps reading
  * the whole branch, which is what `getBranch()` serves the live module. `--recorded` additionally shows what
- * the session itself recorded for each turn - the `pi-coder-reminder:debug` decision and the signals it was
- * made from, and any reminder message actually delivered - and warns when that data is missing. The file is
- * what pi has persisted, so a live session can lag its own turn: recent turns may show no recorded decision
- * even though the live module already made one.
+ * the session itself recorded for each turn - the `pi-coder-reminder:debug` decision, the signals it was made
+ * from, and the window the consult judged, plus any reminder message actually delivered - and warns when that
+ * data is missing. Both windows print as transcripts, the replay's and the recorded one, so a window change
+ * can be read against what a live decision actually sent. The file is what pi has persisted, so a live session
+ * can lag its own turn: recent turns may show no recorded decision even though the live module already made
+ * one.
  *
  * A turn here is a prompt that started an agent run, which is what `before_agent_start` and the scheduler
  * count. A message submitted while the run was still streaming is queued by pi as a steer and never reaches
@@ -54,7 +56,12 @@ import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-age
 import type { JsonObject } from "@earendil-works/pi-ai";
 
 import { buildReminderState } from "../src/modules/decision/reminder";
-import { decisionSessionContext } from "../src/modules/decision/session-context";
+import {
+    decisionSessionContext,
+    renderSessionWindow,
+    type SessionWindow,
+} from "../src/modules/decision/session-context";
+import type { DecisionRecentMessage } from "../src/modules/decision/types";
 import {
     COMPACTION_REMINDER,
     MEMORY_READ_REMINDER,
@@ -141,6 +148,12 @@ export interface ReplayEmission {
     reminderText: string;
 }
 
+/** The window a recorded decision sent, with the count its budget dropped. */
+export interface RecordedWindow {
+    items: DecisionRecentMessage[];
+    omitted: number;
+}
+
 /** A selection decision the session recorded, from a `pi-coder-reminder:debug` entry. */
 export interface RecordedDecision {
     trigger: string;
@@ -154,8 +167,33 @@ export interface RecordedDecision {
     labels?: JsonObject;
     consult?: JsonObject;
     scheduler?: JsonObject;
+    /** The raw confidence of the tier-1 state answer; absent in sessions recorded before it was kept. */
+    stateConfidence?: number;
+    /** The phase tier 1 answered, before the accept rule; absent when it named none, or in older sessions. */
+    statePhase?: string;
+    /** Tier 1's own latency; absent in sessions recorded before it was kept. */
+    stateLatencyMs?: number;
+    /** Whether the state questions were re-asked on the full window, i.e. the cascaded ask. */
+    escalated?: boolean;
+    /**
+     * Whether the decision was reached after the turn's prompt was already sent.
+     *
+     * A deferred turn is judged off the boundary's critical path, so its entry lands inside the run it belongs
+     * to: it is attributed to the turn already being recorded, and its own `scheduler.userTurns` is that turn
+     * rather than the one before it.
+     */
+    deferred?: boolean;
     /** The signals the decision was made from; absent for the session reminder and mid-run steers. */
     state?: JsonObject;
+    /** The window the consult judged; absent in sessions recorded before the entry kept one. */
+    window?: RecordedWindow;
+    /**
+     * The state transcript the state ask sent, exactly as the model read it.
+     *
+     * The state ask does not send the pool's window, so this is recorded separately: it is the fitted
+     * conversation, and the fit cannot be recovered from the branch afterwards.
+     */
+    stateTranscript?: string;
 }
 
 /** A reminder message the session actually delivered, with the marker it was stamped with. */
@@ -174,6 +212,8 @@ export interface RecordedTurn {
     decision?: RecordedDecision;
     /** Mid-run decisions recorded during the turn's run. */
     midRun: RecordedDecision[];
+    /** State checkpoints recorded during the turn's run, one per tool-using response. */
+    checkpoints: RecordedDecision[];
     /** Reminder messages delivered for this turn, whether at its start or as a steer during its run. */
     delivered: RecordedDelivery[];
 }
@@ -206,6 +246,8 @@ export interface ReplayTurn {
     contextTokens: number;
     /** The classifier state `buildReminderState` would send. */
     state: JsonObject;
+    /** The window the state carries, kept whole so the report can render it rather than re-read the branch. */
+    window: SessionWindow;
     /** What the session recorded for this turn; empty when it recorded nothing. */
     recorded: RecordedTurn;
 }
@@ -361,11 +403,48 @@ function readDecision(data: unknown): RecordedDecision | undefined {
     if (isRecord(data.scheduler)) {
         decision.scheduler = data.scheduler as JsonObject;
     }
+    if (typeof data.stateConfidence === "number") {
+        decision.stateConfidence = data.stateConfidence;
+    }
+    if (typeof data.statePhase === "string") {
+        decision.statePhase = data.statePhase;
+    }
+    if (typeof data.stateLatencyMs === "number") {
+        decision.stateLatencyMs = data.stateLatencyMs;
+    }
+    if (typeof data.escalated === "boolean") {
+        decision.escalated = data.escalated;
+    }
+    if (typeof data.deferred === "boolean") {
+        decision.deferred = data.deferred;
+    }
     if (isRecord(data.state)) {
         decision.state = data.state as JsonObject;
     }
+    const window = readWindow(data.window);
+    if (window !== undefined) {
+        decision.window = window;
+    }
+    if (typeof data.stateTranscript === "string") {
+        decision.stateTranscript = data.stateTranscript;
+    }
 
     return decision;
+}
+
+/** Read a recorded window structurally; an item that is not a role/text pair is dropped like the rest. */
+function readWindow(value: unknown): RecordedWindow | undefined {
+    if (!isRecord(value) || !Array.isArray(value.items)) {
+        return undefined;
+    }
+
+    const items = value.items.flatMap((item) =>
+        isRecord(item) && typeof item.role === "string" && typeof item.text === "string"
+            ? [{ role: item.role, text: item.text }]
+            : [],
+    );
+
+    return { items, omitted: typeof value.omitted === "number" ? value.omitted : 0 };
 }
 
 /** Read a delivered reminder message and the id/turn stamp it carries, if any. */
@@ -438,6 +517,18 @@ export function replay(entries: readonly SessionEntry[], cwd: string): ReplayRes
                     recordedDecisions += 1;
                     if (decision.trigger === "mid-run") {
                         currentRecorded?.midRun.push(decision);
+                    } else if (decision.trigger === "checkpoint") {
+                        // A checkpoint is judged during the run, so it belongs to the turn already being
+                        // recorded rather than to the prompt that follows it.
+                        currentRecorded?.checkpoints.push(decision);
+                    } else if (decision.trigger === "turn" && decision.deferred === true) {
+                        // A deferred turn decision has the same shape: the judgement followed the prompt it
+                        // belongs to, so it lands in that turn's record rather than the next prompt's.
+                        if (currentRecorded === undefined) {
+                            pendingDecision = decision;
+                        } else {
+                            currentRecorded.decision = decision;
+                        }
                     } else {
                         pendingDecision = decision;
                     }
@@ -536,14 +627,15 @@ export function replay(entries: readonly SessionEntry[], cwd: string): ReplayRes
             shown,
             labels: reminderLabelsFromEntries(prefix),
         });
+        const session = decisionSessionContext(prefix);
         const state = buildReminderState({
             request,
-            recent: decisionSessionContext(prefix).recent,
+            recent: session.recent,
             options: [],
             signals,
         });
 
-        const recorded: RecordedTurn = { midRun: [], delivered: [] };
+        const recorded: RecordedTurn = { midRun: [], checkpoints: [], delivered: [] };
         if (pendingDecision !== undefined) {
             recorded.decision = pendingDecision;
             pendingDecision = undefined;
@@ -572,6 +664,7 @@ export function replay(entries: readonly SessionEntry[], cwd: string): ReplayRes
             ...(reminder === undefined ? {} : { reminderText: reminder.text }),
             contextTokens,
             state,
+            window: { items: session.recent, omitted: session.omitted ?? 0 },
             recorded,
         });
     }
@@ -623,6 +716,11 @@ function recordedPick(recorded: RecordedTurn): string {
     return recorded.decision.reminder ?? "none";
 }
 
+/** `1 item` / `2 items`, so a window header never reads "1 items". */
+function count(noun: string, value: number): string {
+    return `${String(value)} ${noun}${value === 1 ? "" : "s"}`;
+}
+
 function renderCompact(turn: ReplayTurn, options: Options): string {
     const activity = turn.state.session as JsonObject | undefined;
     const tools = activity?.tools;
@@ -650,6 +748,8 @@ function renderCompact(turn: ReplayTurn, options: Options): string {
         turn.steers === undefined ? undefined : `steers=${turn.steers.length}`,
         `phase=${String(activity?.phase ?? "-")}`,
         `tokens=${turn.contextTokens}`,
+        `window=${String(turn.window.items.length)}`,
+        turn.window.omitted === 0 ? undefined : `dropped=${String(turn.window.omitted)}`,
         toolText === "" ? undefined : `tools=${toolText}`,
         `request=${JSON.stringify(collapse(turn.request, 80))}`,
     ]
@@ -679,6 +779,23 @@ function describeDecision(decision: RecordedDecision): string {
     if (decision.labels !== undefined) {
         parts.push(`labels=${JSON.stringify(decision.labels)}`);
     }
+    if (decision.stateConfidence !== undefined) {
+        parts.push(`state-conf=${decision.stateConfidence.toFixed(2)}`);
+    }
+    // The raw tier-1 answer, printed before the accepted labels the same line carries: the pair is what says
+    // whether a held phase was the model confirming it or the gate refusing to move.
+    if (decision.statePhase !== undefined) {
+        parts.push(`state-phase=${decision.statePhase}`);
+    }
+    if (decision.stateLatencyMs !== undefined) {
+        parts.push(`state-latency=${String(decision.stateLatencyMs)}ms`);
+    }
+    if (decision.escalated === true) {
+        parts.push("escalated");
+    }
+    if (decision.deferred === true) {
+        parts.push("deferred");
+    }
 
     return parts.join(" ");
 }
@@ -690,14 +807,28 @@ function describeConsult(consult: JsonObject): string {
     return latency === "" ? status : `${status}/${latency}`;
 }
 
-/** The module turn a recorded turn decision belongs to; absent for mid-run decisions and old entries. */
+/**
+ * The module turn a recorded turn decision belongs to; absent for decisions that belong to no turn (mid-run
+ * steers, state checkpoints) and for old entries.
+ *
+ * A deferred decision carries the turn it was made for, so its snapshot's count is read straight; a decision
+ * recorded before the prompt (the older shape, and the armed session reminder) counts the turn it precedes.
+ */
 function recordedDecisionTurn(decision: RecordedDecision | undefined): number | undefined {
-    if (decision === undefined || decision.trigger === "mid-run") {
+    if (
+        decision === undefined ||
+        decision.trigger === "mid-run" ||
+        decision.trigger === "checkpoint"
+    ) {
         return undefined;
     }
 
     const turns = decision.scheduler?.userTurns;
-    return typeof turns === "number" && Number.isFinite(turns) ? turns + 1 : undefined;
+    if (typeof turns !== "number" || !Number.isFinite(turns)) {
+        return undefined;
+    }
+
+    return decision.deferred === true ? turns : turns + 1;
 }
 
 /** The module's own turn count for a replayed turn, as carried in the state it would send. */
@@ -732,6 +863,35 @@ function recordedLines(recorded: RecordedTurn, state: JsonObject): string[] {
         lines.push(`recorded mid-run: ${describeDecision(decision)}`);
     }
 
+    for (const decision of recorded.checkpoints) {
+        lines.push(`recorded checkpoint: ${describeDecision(decision)}`);
+    }
+
+    const recordedWindow = recorded.decision?.window;
+    if (recordedWindow !== undefined) {
+        lines.push(
+            `recorded window (${count("item", recordedWindow.items.length)}, ${String(recordedWindow.omitted)} dropped):`,
+        );
+        lines.push(...renderSessionWindow(recordedWindow.items, recordedWindow.omitted));
+    }
+
+    const stateTranscript = recorded.decision?.stateTranscript;
+    if (stateTranscript !== undefined) {
+        lines.push(`recorded state transcript (${String(stateTranscript.length)} chars):`);
+        lines.push(stateTranscript);
+    }
+
+    // A consult that ran but kept no window was recorded before the entry did; a disabled one never built any.
+    const consult = recorded.decision?.consult;
+    if (
+        recordedWindow === undefined &&
+        stateTranscript === undefined &&
+        consult !== undefined &&
+        consult.status !== "disabled"
+    ) {
+        lines.push("recorded window: none recorded (this entry predates the window record)");
+    }
+
     for (const delivery of recorded.delivered) {
         const id = delivery.id ?? "unmarked";
         const turn = delivery.turn === undefined ? "turn unknown" : `turn ${String(delivery.turn)}`;
@@ -751,6 +911,7 @@ function hasRecordedData(recorded: RecordedTurn): boolean {
     return (
         recorded.decision !== undefined ||
         recorded.midRun.length > 0 ||
+        recorded.checkpoints.length > 0 ||
         recorded.delivered.length > 0
     );
 }
@@ -827,6 +988,10 @@ export function renderText(
             lines.push(turn.reminderText);
             lines.push("</pi_coder_reminder>");
         }
+        lines.push(
+            `window (${count("item", turn.window.items.length)}, ${String(turn.window.omitted)} dropped):`,
+        );
+        lines.push(...renderSessionWindow(turn.window.items, turn.window.omitted));
         lines.push("state:");
         lines.push(JSON.stringify(turn.state, null, 1));
 

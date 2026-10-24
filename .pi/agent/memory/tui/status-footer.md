@@ -16,7 +16,8 @@ keep_updated: true
 
 ### Decision state badge
 
-- The left cluster is the decision model's state badge (`footer.ts` — accent `» auto` while the decision config enables the model, dim `» manual` while it is off so the `alt+a` toggle's state stays visible, with the `»` marker before the label when idle and the shared spinner frame replacing it while a consult is in flight, driven by the `pi-coder:decision-status` count).
+- The left cluster is the decision model's state badge (`footer.ts` — accent `» auto` while the decision config enables the model, dim `» manual` while it is off so the `alt+a` toggle's state stays visible, with the `»` marker before the label when idle and the shared spinner frame replacing it while a consult is in flight, driven by the `pi-coder:decision-status` count that `withDecisionCheck` maintains for *every* consult — Bash, file access, and reminder selection alike).
+- The judged phase follows as a dim ` · implementing` suffix (` · ${phase}` after the same separator the line uses between segments), shown in both modes: the phase comes from the reminder module's deterministic inference, so it is known while the model is off, and the model moves it on every tool-using response once it is on (`turn_end` checkpoints), so the suffix changes inside a long run rather than only when the user speaks. The turn boundary publishes the held state at once and the deferred judgement republishes when its answer lands, so a slow consult never withholds the badge. `setDecisionLabels` re-renders only when publishing happens; the component is built lazily on the first render, so a state that arrives before that is held on the per-bus `StatusFooterState` and passed to the constructor, exactly like `runs`/`todo`.
 
 ### Agent summary
 
@@ -59,6 +60,7 @@ keep_updated: true
 
 ## Event ownership
 
-- Domain modules publish typed `pi.events` snapshots on `pi-coder:agent-status`, `pi-coder:todo-status`, and `pi-coder:decision-status`, while the status package alone owns footer registration, its `Spinner` instance, the `TipRotator`, and event listeners; `invalidate()` is a no-op because each render rebuilds the line from pushed state.
+- Domain modules publish typed `pi.events` snapshots on `pi-coder:agent-status`, `pi-coder:todo-status`, `pi-coder:decision-status` (the in-flight count), and `pi-coder:decision-state` (the judged labels), while the status package alone owns footer registration, its `Spinner` instance, the `TipRotator`, and event listeners; `invalidate()` is a no-op because each render rebuilds the line from pushed state.
+- The two decision channels differ in who may publish: the count is a process-wide guard shared with delegated children (a child's check animates the parent badge), while the state is parent-only — a child's session must not overwrite the parent's phase.
 
 Related: [`packages.md`](packages.md) for the `Spinner` component the badge drives, [`../agents.md`](../agents.md) + [`../agents/lifecycle.md`](../agents/lifecycle.md) for agent-run states the summary renders, and [`../decision-model.md`](../decision-model.md) for the `alt+a` toggle and the consult the badge reports.

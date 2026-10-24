@@ -13,6 +13,9 @@ The tests cover the consolidated TUI, memory, config, and sandbox modules. Comma
 - `npx tsc --noEmit` (or `npm run typecheck`) — types for `src/` **only**; `tsconfig.json` excludes `test/`, so a
   green run says nothing about the test tree. Use `npm run typecheck:tests` for `src` + `test`.
 - `npm run scratch -- <script> [args...]` — bundle and run one throwaway TS script from anywhere.
+- `npm run check` — the whole chain (typecheck, typecheck:tests, `eslint .`, `prettier --check .`, `test:run`,
+  `knip`). `knip` is not a gate yet: it exits 1 on ~156 pre-existing unused exports across untouched TUI/agent
+  files, so treat its list as advisory and keep the four steps before it green.
 
 ## Checklist before adding or changing a test
 

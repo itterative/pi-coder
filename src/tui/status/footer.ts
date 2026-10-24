@@ -9,10 +9,14 @@ import { truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tu
 
 import decisionConfig from "../../modules/decision/config";
 import {
+    DECISION_STATE_EVENT,
     DECISION_STATUS_EVENT,
+    type DecisionStateEvent,
     type DecisionStatusEvent,
+    isDecisionStateEvent,
     isDecisionStatusEvent,
 } from "../../modules/decision/events";
+import type { ReminderStateLabels } from "../../modules/decision/reminder";
 import type { TodoList } from "../../modules/todolist/parser";
 import {
     TODO_STATUS_EVENT,
@@ -54,6 +58,7 @@ export class PiCoderFooter implements Component {
     private todo: TodoList | undefined;
     private tip: FooterTip | undefined;
     private decisionChecking = 0;
+    private decisionLabels: ReminderStateLabels = {};
     private disposed = false;
 
     constructor(
@@ -65,6 +70,7 @@ export class PiCoderFooter implements Component {
         hiddenCount = 0,
         todo: TodoList | undefined = undefined,
         events?: EventBus,
+        labels: ReminderStateLabels = {},
     ) {
         this.spinner = new Spinner(tui, { events });
         this.tips = new TipRotator((tip) => this.setTip(tip), {
@@ -73,6 +79,7 @@ export class PiCoderFooter implements Component {
         this.runs = runs;
         this.hiddenCount = hiddenCount;
         this.todo = todo;
+        this.decisionLabels = labels;
         this.updateSpinner();
         this.tips.start();
     }
@@ -94,6 +101,12 @@ export class PiCoderFooter implements Component {
     setDecisionChecking(checking: number): void {
         this.decisionChecking = checking;
         this.updateSpinner();
+        this.tui.requestRender();
+    }
+
+    /** Set the judged session labels the badge shows beside the mode. */
+    setDecisionLabels(labels: ReminderStateLabels): void {
+        this.decisionLabels = labels;
         this.tui.requestRender();
     }
 
@@ -168,18 +181,30 @@ export class PiCoderFooter implements Component {
     /**
      * The decision model's badge: `» auto` (accent) while the classifier is enabled, `» manual` (dim)
      * while it is off so the shortcut's state stays visible, and the shared spinner frame in place of the
-     * `»` while a check is in flight.
+     * `»` while a check is in flight. The judged phase follows as a dim ` · implementing` suffix - the mode
+     * reads first, and the state is a property of the session rather than of the mode, so it stays while the
+     * model is off.
      */
     private decisionBadge(): string {
         if (this.decisionChecking > 0) {
-            return this.theme.fg("accent", `${this.spinner.getFrame()} auto`);
+            return this.theme.fg("accent", `${this.spinner.getFrame()} auto`) + this.stateSuffix();
         }
 
         if (decisionConfig.current.enabled === true) {
-            return this.theme.fg("accent", "» auto");
+            return this.theme.fg("accent", "» auto") + this.stateSuffix();
         }
 
-        return this.theme.fg("dim", "» manual");
+        return this.theme.fg("dim", "» manual") + this.stateSuffix();
+    }
+
+    /** The judged phase, dim and after the separator the line uses between segments; empty while unknown. */
+    private stateSuffix(): string {
+        const { phase } = this.decisionLabels;
+        if (phase === undefined) {
+            return "";
+        }
+
+        return this.theme.fg("dim", ` · ${phase}`);
     }
 
     /**
@@ -254,6 +279,7 @@ interface StatusFooterState {
     hiddenCount: number;
     todo?: TodoList;
     decisionChecking: number;
+    decisionLabels: ReminderStateLabels;
     registered: boolean;
     component?: PiCoderFooter;
 }
@@ -269,6 +295,7 @@ function stateFor(events: EventBus): StatusFooterState {
         runs: [],
         hiddenCount: 0,
         decisionChecking: 0,
+        decisionLabels: {},
         registered: false,
     };
     footerStates.set(events, state);
@@ -286,6 +313,7 @@ function clearState(state: StatusFooterState, ctx?: ExtensionContext): void {
     state.hiddenCount = 0;
     state.todo = undefined;
     state.decisionChecking = 0;
+    state.decisionLabels = {};
     state.registered = false;
     state.component = undefined;
 }
@@ -306,6 +334,7 @@ function ensureFooter(state: StatusFooterState): void {
             state.hiddenCount,
             state.todo,
             state.events,
+            state.decisionLabels,
         );
         state.component = component;
         return component;
@@ -328,6 +357,11 @@ function applyDecisionEvent(state: StatusFooterState, event: DecisionStatusEvent
     state.component?.setDecisionChecking(event.checking);
 }
 
+function applyDecisionStateEvent(state: StatusFooterState, event: DecisionStateEvent): void {
+    state.decisionLabels = event.labels;
+    state.component?.setDecisionLabels(event.labels);
+}
+
 /** Register the single parent status footer and its domain-event listeners. */
 export function registerStatusFooter(pi: ExtensionAPI): void {
     const events = pi.events;
@@ -342,6 +376,9 @@ export function registerStatusFooter(pi: ExtensionAPI): void {
     });
     events.on(DECISION_STATUS_EVENT, (data) => {
         if (isDecisionStatusEvent(data)) applyDecisionEvent(state, data);
+    });
+    events.on(DECISION_STATE_EVENT, (data) => {
+        if (isDecisionStateEvent(data)) applyDecisionStateEvent(state, data);
     });
 
     pi.on("session_start", (_event, ctx) => {

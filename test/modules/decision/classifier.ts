@@ -13,9 +13,7 @@ import {
     FILE_KIND_QUESTION,
     FILE_LOSS_QUESTION,
     FILE_PURPOSE_QUESTION,
-    REMINDER_FINISHING_QUESTION,
     REMINDER_PHASE_QUESTION,
-    REMINDER_UNVALIDATED_QUESTION,
     SCRIPT_QUESTION,
     SUGGESTION_QUESTION_ID,
     VETO_QUESTION,
@@ -85,10 +83,8 @@ export function suggestionResult(model: Classifier, probability: number): Classi
 /** The piggybacked reminder-state answers a case can include beside the choice. */
 export interface ReminderStateAnswers {
     phase?: string;
-    /** Probability that the task is wrapping up. */
-    finishing?: number;
-    /** Probability that changes are unvalidated. */
-    unvalidated?: number;
+    /** How sure the model is of that phase; the accept rule moves the phase only at or above 0.5. */
+    phaseConfidence?: number;
 }
 
 /**
@@ -130,18 +126,15 @@ export function reminderScoreResult(
     return result(model, { ...answers, ...reminderLabelAnswers(labels), ...extras });
 }
 
-/** The piggybacked label answers, which are bool/choice in either reminder form. */
+/** The piggybacked label answer: the one state question, a choice in either reminder form. */
 function reminderLabelAnswers(labels: ReminderStateAnswers): Record<string, ClassifierAnswer> {
     const answers: Record<string, ClassifierAnswer> = {};
 
     if (labels.phase !== undefined) {
-        answers[REMINDER_PHASE_QUESTION] = choiceAnswer(labels.phase, 0.9);
-    }
-    if (labels.finishing !== undefined) {
-        answers[REMINDER_FINISHING_QUESTION] = { type: "bool", probability: labels.finishing };
-    }
-    if (labels.unvalidated !== undefined) {
-        answers[REMINDER_UNVALIDATED_QUESTION] = { type: "bool", probability: labels.unvalidated };
+        answers[REMINDER_PHASE_QUESTION] = choiceAnswer(
+            labels.phase,
+            labels.phaseConfidence ?? 0.9,
+        );
     }
 
     return answers;

@@ -1,11 +1,13 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
 import { SessionManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import registerRemindersExtension, { modelChoiceOf } from "../../../src/modules/reminders";
+import {
+    assistantEntry,
+    cleanupBranches,
+    sessionManager,
+    toolCall,
+} from "../../helpers/session-branch";
 import type { ReminderConsult, ReminderSignals } from "../../../src/modules/decision";
 import { ACTIVE_ROTATION_REMINDERS } from "../../../src/modules/reminders/catalog";
 import {
@@ -31,10 +33,12 @@ interface ReminderMessage {
 type BeforeAgentStartResult = { message?: ReminderMessage } | undefined;
 
 let ctx: ExtensionContext;
+/** The extension's judgement queue, so a case waits for a deferred decision the way the next hook would. */
+let idle: () => Promise<void>;
 
 function harness(options: { scope?: "full" | "memory" } = {}): PiStub {
     const stub = createPiStub();
-    registerRemindersExtension(stub.pi, options);
+    idle = registerRemindersExtension(stub.pi, options).idle;
     return stub;
 }
 
@@ -42,11 +46,56 @@ async function startSession(stub: PiStub): Promise<void> {
     await stub.requireHandler("session_start")({ reason: "startup" }, ctx);
 }
 
+/**
+ * One user turn, as pi runs it: the handler resolves, then the deferred judgement settles.
+ *
+ * An armed reminder (the memory list changed, or the transcript was folded) is decided at the boundary and
+ * comes back from the handler; a judged rotation turn delivers its reminder after the boundary, so the send it
+ * made is what this reports.
+ */
 async function userTurn(stub: PiStub): Promise<BeforeAgentStartResult> {
-    return (await stub.requireHandler("before_agent_start")(
+    const before = stub.sentMessages.length;
+    const result = (await stub.requireHandler("before_agent_start")(
         { systemPrompt: "", prompt: "do the thing" },
         ctx,
     )) as BeforeAgentStartResult;
+
+    await idle();
+    if (result?.message !== undefined) {
+        return result;
+    }
+
+    const sent = stub.sentMessages
+        .slice(before)
+        .findLast((entry) => entry.message.customType === "pi-coder-reminder");
+    return sent === undefined
+        ? undefined
+        : {
+              message: {
+                  customType: sent.message.customType,
+                  content: String(sent.message.content),
+                  display: sent.message.display,
+              },
+          };
+}
+
+/**
+ * Point the harness at a branch holding one read: the inferred state is `exploring`, whose pool is
+ * `delegation` and `todo`. A branch with no activity at all reads `discussing`, where only the list (and only
+ * with an open list) is offered, so a rotation case needs a state that has candidates.
+ */
+function useExploringBranch(): void {
+    const manager = sessionManager("/tmp/reminder-project");
+    manager.appendMessage(assistantEntry([toolCall("read", { path: "src/a.ts" }, "c1")], 1));
+    const entries = manager.getBranch();
+
+    ctx = stubContext({
+        cwd: "/tmp/reminder-project",
+        sessionManager: stubSessionManager({
+            getBranch: () => entries,
+            getSessionFile: () => "/tmp/pi/sessions/folded.jsonl",
+        }),
+    });
 }
 
 beforeEach(() => {
@@ -58,15 +107,6 @@ beforeEach(() => {
         }),
     });
 });
-
-const temporaryDirectories: string[] = [];
-
-/** A real session manager, so branch entries have the shape `SessionManager` writes. */
-function realSession(): SessionManager {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-reminder-emission-"));
-    temporaryDirectories.push(directory);
-    return SessionManager.create("/tmp/reminder-project", directory);
-}
 
 function appendUser(manager: SessionManager, text: string, timestamp: number): void {
     manager.appendMessage({ role: "user", content: text, timestamp });
@@ -97,9 +137,7 @@ todos:
 
 afterEach(() => {
     vi.unstubAllEnvs();
-    for (const directory of temporaryDirectories.splice(0)) {
-        fs.rmSync(directory, { recursive: true, force: true });
-    }
+    cleanupBranches();
 });
 
 describe("reminder emission", () => {
@@ -119,6 +157,7 @@ describe("reminder emission", () => {
 
     it("rotates after the configured number of turns", async () => {
         vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "2");
+        useExploringBranch();
         const stub = harness();
         await startSession(stub);
 
@@ -127,8 +166,7 @@ describe("reminder emission", () => {
 
         const rotated = await userTurn(stub);
 
-        // The branch has no mutating work, so memory-hygiene is gated out and the rotation starts at
-        // delegation.
+        // The turn has only read, so the pool is delegation and the list; the rotation starts at delegation.
         expect(rotated?.message?.content).toContain("scout");
     });
 
@@ -162,7 +200,7 @@ describe("reminder emission", () => {
     });
 
     it("resumes the rotation and the shown history after a tree move", async () => {
-        const manager = realSession();
+        const manager = sessionManager("/tmp/reminder-project");
         appendUser(manager, "first", 1);
         appendReminder(manager, "delegation", 1);
         manager.appendCustomEntry("pi-coder:todo-snapshot", {
@@ -203,13 +241,14 @@ describe("reminder emission", () => {
     it("delivers the threshold reminder mid-run as a steer", async () => {
         vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
         vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
+        useExploringBranch();
         const stub = harness();
         await startSession(stub);
         expect((await userTurn(stub))?.message?.content).toContain("memory_system");
 
         await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
         // The run must continue to a next inference for a steer to have a destination, which a tool call
-        // guarantees. The empty branch gates out memory-hygiene, so the rotation lands on delegation.
+        // guarantees. The exploring pool offers delegation, which is the steer's reminder.
         await stub.requireHandler("message_update")(
             {
                 message: { role: "assistant" },
@@ -274,8 +313,9 @@ describe("reminder emission", () => {
         expect(stub.sentMessages).toHaveLength(0);
     });
 
-    it("skips memory-hygiene until mutating work has happened", async () => {
+    it("does not offer memory-hygiene while nothing has changed", async () => {
         vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "1");
+        useExploringBranch();
         const stub = harness();
         await startSession(stub);
 
@@ -291,6 +331,7 @@ describe("reminder emission", () => {
         vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
         vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
         vi.stubEnv("PI_CODER_REMINDER_MIDRUN_MAX", "1");
+        useExploringBranch();
         const stub = harness();
         await startSession(stub);
         await userTurn(stub);

@@ -23,21 +23,41 @@ module. The settings dialog does not expose either key yet; they are edited in t
 ## What the model sees
 
 The live `event.prompt` as `request` (clipped to 600 chars by `clipRequest`, because a template or skill
-expansion is otherwise sent whole) plus the branch's four-item recent window, and `signals` built by
+expansion is otherwise sent whole) plus the branch's **planned window**, and `signals` built by
 `session-signals.ts`:
 
+- `recent_messages` is `planSessionWindow`'s plan over the items before the request: every tool call the branch
+  made - `edit`/`write`/`read`/`grep`/`ask_user`/`agent` as `tool(<identifying argument>)`, bash as
+  `command(<command>)` - with the newest user item, the newest assistant item and the newest two tool items
+  always kept, the rest filled newest-first inside `WINDOW_CHARS` (1200), each item capped to `ITEM_CHARS`
+  (240) before the budget is measured and then clipped to its share newest-first. It used to be the newest four
+  items and **bash-only**, so the edit, read, delegation or question that defined the turn never reached the
+  model. The current request stays its own field and is never merged into the window: flattened, the facts
+  measured worse than no context at all. `decisionSessionContext` carries the plan's `omitted` count beside the
+  items, and `renderSessionWindow` draws the window the way the probe did - `User:` / `Assistant:` lines,
+  `Tool: name(arg)` per call, the omissions named first - for a test, a replay, or a log. The model is sent the
+  items, not that text. `consultReminderSelection` carries that window back on `ReminderConsult.window` (built
+  from the same branch read, never rebuilt later), which is what the debug entry records and the replay prints.
+
 - `cwd`, `session`: `user_turns`, `context_tokens`, per-tool call counts, the last 6 tool names,
-  `files_modified` (memory files and TODO.md excluded, 8 max), `tests_run`, `last_test_failed` (the most recent
-  runner result errored), `memory_writes`, `todo_writes`, and the model-built labels `phase` / `finishing` /
-  `unvalidated`; `tests_run` is matched at a shell segment's command word, so `echo 'npm test'` does not count;
+  `files_modified` (edit/write paths with memory files, TODO.md and `.md` documents excluded, 8 max), `tests_run`,
+  `last_test_failed` (the most recent runner result errored), `memory_writes`, `todo_writes`, `doc_writes`, and
+  the model-built labels `phase` / `finishing` / `unvalidated`; `tests_run` is matched at a shell segment's
+  command word, so `echo 'npm test'` does not count;
 - `reminders_shown`: rotation ids with `turns_ago`, maintained by the module and cleared on
   session/tree/compaction;
 - `todo`: progress from the `pi-coder:todo-snapshot` entry; `memories`: names from the
   `pi-memory:memory-index` entry.
 
-`availableRotationIds` gates `memory-hygiene` on `files_modified` / `todo_writes` or a wrapping-up label, and
-`todo` on a readable list with `completed < total` (the score form ranks `todo` high even with no list, so the
-gate is what suppresses those turns).
+`availableRotationIds` drives the offer from the state. `memory-hygiene` needs produced or recorded work
+(`files_modified`, `memory_writes`, `todo_writes`, `doc_writes`) or a wrapping-up label; `validation` needs
+produced work too (a code change, a document, a memory, the TODO list, or a test run), so a turn that only read
+and searched is offered neither; `todo` on a readable list with `completed < total` (the score form ranks `todo`
+high even with no list, so the gate is what suppresses those turns). The `validation` gate has a **known blind
+spot**: the scan sees the `edit`/`write` tools only, so a change made through bash - a heredoc, a redirect,
+`sed -i` - leaves it false and the reminder unoffered, which the model then never gets to score (the reuse idea
+for it is the last note under "The pool is the judged state"). Every gate here
+is a quieting filter over the model's score, not a guarantee about relevance.
 
 The candidate list stays in the question criteria, never in the state. Every signal is best-effort: a missing
 entry or unreadable snapshot just drops its field.
@@ -45,16 +65,166 @@ entry or unreadable snapshot just drops its field.
 ## State built along the way
 
 The classifier API has no free-text channel (`choice | score | bool`), so model-built state is labels, not
-prose. The reminder request piggybacks three questions beside the per-reminder questions: `phase` (choice over
-`exploring | planning | implementing | debugging | verifying | wrapping_up`), `finishing` (bool), and
-`unvalidated` (bool). The endpoint answers every question in one round trip, as the file-access subject does
-with kind/purpose/loss, so this costs no extra request. `reminderStateFrom` reads them, the reminders module
-merges them over the persisted labels, and appends a `pi-coder:reminder-state` entry only when a label
-changes; `restart()` re-reads the latest entry at session start, tree navigation, and compaction, and the
-labels ride in the state on later turns. They cannot inform the same turn's choice because all answers arrive
-together. With the model off or a label unreadable, `session-signals.ts` infers `phase` and `unvalidated` from
-activity: the last code write is ordered against the last test run, a failed last run reads as `debugging`,
-and writes after it read as unvalidated. `finishing` is never inferred.
+prose. One state question - `next_state`, a choice over the `--states doc` set below - is asked in its own call
+(`reminderStateRequest`), against the state `{current_state, conversation}` the probe's variant sent.
+`reminderStateFrom` reads it, the reminders module records it in a `pi-coder:reminder-state` entry when one
+changes, and `restart()` re-reads the latest entry at session start, tree navigation, and compaction. The
+`finishing`/`unvalidated` questions are gone: nothing gates on them (the pool gate is the phase and the TODO),
+and `unvalidated` is inferred from activity instead. A **recorded** `unknown`/`unvalidated` is never read back
+(`reminderLabelsFromEntries` and `resolveSessionLabels` take only `phase`): with no question left, a value an
+older session stored would be frozen forever and outrank the inference on every later turn.
+
+**The state set is the probe's `--states doc`**: `discussing | exploring | implementing | validating |
+documenting | reporting`. Migrating to it folded `planning` into `discussing` (deciding, asking) and
+`documenting` (writing the plan), `debugging` into `validating` (its criteria already cover diagnosing a
+failure), and split `wrapping_up` into `documenting` (memory/TODO/doc writes) and `reporting` (summarizing with
+no write). `isReminderPhase` rejects the old names, so a `pi-coder:reminder-state` entry recorded under them
+loses that field on read and the inference takes over - which is how the migration healed the frozen session
+below without touching its JSONL.
+
+**The accepted phase is the anchor; the activity scan fills only what it does not answer.** The phase itself is
+the model's, moved under the accept gate in `decision/reminder.ts` (`acceptedReminderPhase`: the first answer
+is taken, a repeat holds, a different phase needs confidence >= 0.5), and the activity scan is the bootstrap for
+a session that has not answered yet and the whole state while the model is off. The gate exists because the
+alternatives both failed in practice: accepting every answer left the phase frozen (the state carries the
+previous phase back in, so the model confirms it), and letting the activity outrank the model turned the
+tracked state into a derived label the probe deliberately does not use. `finishing` is no longer asked or
+inferred (nothing reads it). `session-signals.ts` infers `phase` and `unvalidated` from
+activity, and now answers every turn: the last code write is ordered
+against the last test run (a failed last run is `validating`), writes after it stay `implementing` and read as
+unvalidated, a turn whose only writes were memories, the TODO list or `.md` documents is `documenting` (the
+recording phase, which is also what stopped a plan edit from arming the validation reminder), reads alone are
+`exploring`, and a turn that changed and read nothing is `discussing`. `finishing` is never inferred. Each
+recorded state entry also annotates the window (`reminderStateMarker`) with the probe's own line
+(`  ── state: X ──`, indentation included, which the transcript keeps and the planned window's clip trims), so
+the phase timeline travels in the conversation rather than only in the state's phase field.
+
+## The pool is the judged state
+
+`availableRotationIds` offers a rotation reminder only in the states its catalog entry names (`states` on
+`RotationReminderDefinition`). The table, as shipped:
+
+| reminder | states |
+|---|---|
+| `memory-hygiene` (never for a read-only turn) | implementing, validating, documenting, reporting |
+| `delegation` (work already underway) | exploring, implementing |
+| `todo` (the list matters from the start) | discussing, exploring, implementing |
+| `validation` (a change about to be called finished) | implementing, validating, documenting, reporting |
+
+The list's own gate stays: `todo` also needs a readable list with an open item, whatever the state. The table
+replaced the ad-hoc `hasProducedWork` checks (`validation` and `memory-hygiene` were gated on it, `delegation`
+was always offered), which is why `delegation` now disappears on a `discussing` or `validating` turn. `phase` is
+always known, so there is no empty-pool bootstrap: a fresh session reads `discussing`, where only `todo` (and
+only with a list) is offered. Known blind spot, now consequential: the scan sees `edit`/`write` tool calls, so
+a change produced through bash leaves the state looking read-only and the hand-back reminders unoffered.
+
+**Open idea for that blind spot (not implemented): reuse the decision model's bash classification** rather than
+re-deriving writes from the command text. The capability verdict already exists - `decision/script-classification.ts`
+answers `writes_files` / `writes_outside` for the code a command runs (`decision/script.ts` chases package scripts,
+file bodies, and inline `-c`/heredocs), and the command form's own verdict sits beside it - so a bash write is a
+verdict the model has already reached, not something the scan needs to infer. The catch is where to read it: the
+verdict is only *recorded* by the permission gate that consulted (`sandbox/decision-log.ts`, `.state/bash-log.jsonl`,
+memory `sandbox/decision-log.md`), so a log-only fix still misses an auto-allowed or sandbox-resolved command that
+never consulted, and the log is extension-local while the scan reads the session branch. A complete fix needs the
+signal where the gate runs, carried to the scan the way the other best-effort signals are (an entry like
+`pi-coder:todo-snapshot`, or the branch's own bash tool call), with the parsed `parseBashAst` command as the cheap
+fallback for the shapes that never reach the model. `session-signals.ts` is where the produced-work fields are built.
+
+## The cascade, and the pool it decides
+
+The state decides the pool, so the state cannot be judged in the same request the pool is: `judgeTurn`
+(`reminders/index.ts`) runs the cascade, queued off the user-turn boundary rather than inside it.
+
+- **Tier 1** (`consultReminderState` -> `evaluateState`) asks `next_state` alone against the **short
+  transcript** (`SHORT_WINDOW_CHARS`, 800: the probed knee), fitted by `decision/transcript.ts` from the branch's
+  items (`windowTranscript`) rather than from the pool's planned window, with the accepted phase sent as
+  `current_state` (`none` before one exists). It is what the pool is built from, so it goes first, and its
+  phase answer goes through the accept gate. Its raw `phaseConfidence` comes back beside the state, and the
+  fitted conversation comes back as `transcript` (recorded in the debug entry as `stateTranscript`). Its budget
+  is a parameter (`windowChars`), which is how the escalation re-asks it at 1800.
+- **Tier 2** (`consultReminderSelection`) asks the pool's questions on the planned window (1200). The state
+  question is **not** among them: when tier 1's phase came back unsure (`phaseConfidence` missing or < 0.5) the
+  caller asks the state again as its own call on `TRANSCRIPT_WINDOW_CHARS` (1800), so the state is re-judged
+  where the short transcript may have hidden what decided it; that escalated answer wins, otherwise tier 1's
+  stands. Keeping the pool's state the signals it was measured with is why this is a second call rather than
+  appended questions - and it is what `judgeStateCheckpoint` already did.
+- The debug entry records `stateConfidence`, `statePhase` and `stateLatencyMs` beside `labels`, `escalated`, and
+  `consult`: tier 1's raw answer (the phase *before* the accept rule, its confidence, and its latency) next to
+  the accepted labels, so a held phase can be told from a confirmed one and a quiet disagreement from a
+  confirmation. `answeredPhase` on `ReminderStateConsult` is what carries the raw answer out of the evaluator,
+  since `state.phase` is already the gate's output. The tiers are cached separately and share the cooldown, and
+  a disabled subject checks its config before entering the shared in-flight count, so it never blinks the badge.
+- Probed cost shape: tier 1 is ~0.27s at 800 chars against ~0.47s for the full window, and escalation ran
+  11.8% (`08-00`) / 26.7% (`11-16`) once the planned window carried tool lines. **Live, over 185 recorded
+  consults** (this repo's session, 20:48-22:25): 77% escalated, confidence median 0.34 and max 0.76, tier 1
+  ~525ms (the scheduled window came back ~480ms on the same runs, so the short window buys *no wall-clock* -
+  what it saves is the second request when it does resolve confidently). The phase itself is not frozen: the
+  timeline moved five times (`validating` -> `documenting` -> `reporting` -> `discussing` -> `validating`),
+  including moves at `esc=False`. Earlier entries in this memory claimed 14/14 escalation and a phase that
+  cannot move; that was one validation-heavy stretch, and it over-read the data.
+- What is left of the escalation *rate* mismatch (77% live at the time against the probe's 12-27%) was request
+  shape, and the A/B settled it: the production shape was 1037 prompt tokens / ~0.48s and read `exploring` at
+  0.17 confidence, the measured variant 576 tokens / ~0.31s and read `validating` at 0.82. **The live state ask
+  now sends the measured variant** (see `stage-gating.md`, *What the state ask sends*); the 0.5 threshold is
+  unchanged and still the parameter to revisit first if the rate stays high.
+
+## Deferred judgements
+
+The cascade is a model call, and pi builds the user's message only *after* a `before_agent_start` handler
+returns, so awaiting the consult there withholds the user's own message until the model has answered. The
+boundary therefore does the bookkeeping and hands the judgement to a background queue:
+
+- `ReminderScheduler.beginTurn()` (`scheduler.ts`) advances `userTurns` and resets the mid-run budget the
+  moment the turn starts; `decide(input, { turnBegun: true })` then picks the reminder once the answer
+exists. The armed path (below) calls plain `decide`, which runs `beginTurn` itself - the split exists only so a
+  deferred turn does not count as two turns.
+- Judgements (turn, checkpoint, next turn) run one at a time in request order through `SerialQueue`
+  (`common/async.ts`): a checkpoint never lands before the turn judgement that preceded it, and every reader
+  that needs the settled state waits on it. `maybeEmitMidRun` awaits it before reading the pool, `judgeTurn`
+  and `judgeStateCheckpoint` read `labels` inside their own task, and `registerRemindersExtension` returns
+  `{ idle }` for anyone (or any test) that needs to wait for the queue.
+- Delivery follows `runActive` (`agent_start` .. `agent_settled`): a reminder whose run is still in flight is
+  `steer`ed into that run's next step, and one whose run already settled goes out as `nextTurn` - a `steer`
+  sent while nothing streams is appended to the transcript without ever reaching the model.
+- The measured motivation: a live tier-1 ask costs ~525ms and the escalated full-window ask ~480ms on this
+  endpoint, so a rotation turn's judgement is ~1s of work that used to sit between the user hitting enter and
+  seeing their own message. Deferring removed exactly that, which is what the feedback says it feels like.
+- A consequence worth knowing when reading entries: the first turn after a reload is the **armed** memory turn
+  and consults nothing, so the first `deferred: true` turn entry appears on the *second* user message. State
+  checkpoints carry tier 1's half immediately, because they do not care which kind of turn opened the run.
+- The **armed reminders are untouched and stay synchronous**: `memory-read` and the fold reminder carry no
+  consult, so they are still decided at the boundary and still ride the user message they belong to. "The
+  reminder arrives after the user's message" is therefore only ever true of a rotation turn.
+- Writes are stamped with an epoch that `restart()` (session start, tree move, fold) bumps: a consult that
+  outlived its session drops its answer instead of recording it into the branch that replaced it.
+- One reminder per turn still holds across both paths: the deferred `decide` is skipped when a mid-run
+  emission already took the turn's slot (`lastEmitTurn >= turn`).
+- `turn_end` no longer awaits the checkpoint: it queues it and returns, which removes the per-step consult tax
+  (~0.27s, +~0.47s escalated) from every tool-using response.
+
+## The checkpoint cadence
+
+The state is not only read at the turn boundary; it is read on **every assistant response that used a tool**.
+That is pi's `turn_end` (one response plus the tool calls it made, not a user turn - see
+[concepts/turns.md](../concepts/turns.md) for the vocabulary), which is the probe's
+checkpoint: its step is a tool call, and `--tier` forces one per step. `maybeEmitMidRun`
+never consults the model, so without this the state - and the badge, and the pool a mid-run steer uses - was
+frozen at the turn-start judgement for the whole of a long run. `judgeStateCheckpoint` (`reminders/index.ts`)
+asks tier 1 on the short transcript, and when that answer was unsure asks the same state question again on the
+window transcript (`windowChars: TRANSCRIPT_WINDOW_CHARS`); the escalated answer wins, and neither ask carries
+the pool's questions, because a checkpoint has no reminder to decide. Its gates: `scope: "full"`, reminders on,
+rotation on, the model opted into reminders, and `event.toolResults.length > 0`. It does **not** look at
+`sessionArmed`, so a session-reminder turn (a reload, or the turn after a fold) now judges the state too, which
+it never did when this hung off `rotationTurn`.
+
+What it deliberately does not touch: `decide()` is the user-turn boundary event (it counts `userTurns`, resets
+the mid-run budget, and advances the rotation pointer), so a checkpoint calls none of it - `everyTurns`,
+`turns_ago`, and `midRunThisTurn` keep meaning user turns. The judgement is queued rather than awaited, so a
+tool-using response no longer pays the consult before its next request; the mid-run gate reads the same `labels`
+the checkpoint wrote, because it waits for the queue first. The emitted reminder still leaves from
+`before_agent_start` (armed only, as a returned message) or from the queue (`deliverAs: "steer"` or
+`"nextTurn"`). What the checkpoint buys, in one line: the state moves while the work happens, not when the user
+speaks. Its debug entry uses `trigger: "checkpoint"` and carries no `pick`, since it decides nothing.
 
 ## TODO query and the transition trigger
 
@@ -116,6 +286,29 @@ entries rather than a `.state/` JSONL because the reminder state is per-session 
 the session file. Separate from the debug entry, every delivered reminder message carries `details: { id,
  turn }`; that always-present marker is what `reminderResumeState` reads to resume the rotation pointer, the
 shown history, and the turn count after a tree move or reload, so resume never depends on debug being on.
+
+## The state the footer shows
+
+`pi-coder:decision-state` carries the judged labels (`{ labels }`) to the footer's badge, which renders the phase
+as `» auto · implementing`. The module publishes it from `reminderSessionLabels` - the same
+`resolveSessionLabels` the request state goes through, so the accepted phase the gate holds is what the badge
+shows and the activity scan is what an unanchored session shows - at a restart (session start, tree move,
+compaction), at every `before_agent_start`
+(whether or not that turn asked the model, so a rotation-skipped turn still updates the badge), and at each
+mid-run check, where the branch is scanned anyway. The consult itself is counted in flight like the two
+permission gates (`withDecisionCheck`), so the badge animates as `⠋ auto · implementing` for its ~0.5 s instead
+of sitting static — the reminder consult was the one that reached the endpoint without touching the count.
+Publishing is parent-only (`scope: "memory"` stays silent, since a child shares the parent's bus) and off with
+`PI_CODER_REMINDER=false`, because the readout belongs to this module.
+
+Recovery after a reload, a tree move, or a fold is **not** a stored copy of the shown state: `restart()` takes
+the model's labels from the branch's latest `pi-coder:reminder-state` entry (`findLast` over the branch, so a
+tree move reads where it landed, with each field validated separately) and recomputes the activity-derived
+fields from that same branch - and since those decide the phase, recovery reproduces what the branch says
+rather than what the session last happened to answer. Only model-assigned fields are persisted, and only when
+one changes, so the badge is a pure display: nothing is lost when the process or the footer component is
+rebuilt. `scanActivity` reads the whole branch rather than only the post-fold span, so a fold resets the
+rotation but does not blank the phase.
 
 ## Measured notes
 

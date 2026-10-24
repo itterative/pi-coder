@@ -102,7 +102,8 @@ single authority toggle for both subjects.
 A child consults with its own runner and isolation, the parent's model registry (pi's registry is
 process-wide and the parent registered the provider there), and the parent's event bus, so a worker's check
 animates the parent's `» auto` badge exactly as its command check does — the same contract as the Bash child
-gate, in `src/tools/agent/child/gates/file-access.ts`.
+gate, in `src/tools/agent/child/gates/file-access.ts`. The phase the badge also reads is the one exception:
+only the parent reminder module publishes that state, so a child's session cannot overwrite the parent's.
 
 ## Reading what happened
 
