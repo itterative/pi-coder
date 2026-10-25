@@ -95,6 +95,8 @@ function useExploringBranch(): void {
             getBranch: () => entries,
             getSessionFile: () => "/tmp/pi/sessions/folded.jsonl",
         }),
+        // A real run starts at a non-zero context, which is the baseline the mid-run threshold measures from.
+        getContextUsage: () => ({ tokens: 1_000, contextWindow: 200_000, percent: 0.005 }),
     });
 }
 
@@ -112,13 +114,18 @@ function appendUser(manager: SessionManager, text: string, timestamp: number): v
     manager.appendMessage({ role: "user", content: text, timestamp });
 }
 
-/** One delivered reminder, as the branch records it: the message's `details` carry id and turn. */
-function appendReminder(manager: SessionManager, id: string, turn: number): void {
+/** One delivered reminder, as the branch records it: the message's `details` carry id, turn, and context. */
+function appendReminder(
+    manager: SessionManager,
+    id: string,
+    turn: number,
+    contextTokens?: number,
+): void {
     manager.appendCustomMessageEntry(
         "pi-coder-reminder",
         `<pi_coder_reminder>${id}</pi_coder_reminder>`,
         false,
-        { id, turn },
+        contextTokens === undefined ? { id, turn } : { id, turn, contextTokens },
     );
 }
 
@@ -315,6 +322,82 @@ describe("reminder emission", () => {
 
         // The baseline moved, so the next user turn does not repeat it.
         expect(await userTurn(stub)).toBeUndefined();
+    });
+
+    it("does not steer immediately after a turn reminder when the context has not grown", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
+        useExploringBranch();
+        const stub = harness();
+        await startSession(stub);
+        expect((await userTurn(stub))?.message?.content).toContain("memory_system");
+
+        // The armed turn renders before the run's usage exists, so its context must not become the baseline:
+        // the first tool call would otherwise steer the whole context as growth.
+        await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
+        await stub.requireHandler("message_update")(
+            {
+                message: { role: "assistant" },
+                assistantMessageEvent: { type: "toolcall_start" },
+            },
+            ctx,
+        );
+
+        expect(stub.sentMessages).toHaveLength(0);
+    });
+
+    it("keeps the branch's threshold baseline across a reload's armed reminder", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
+        // A branch whose last reminder was stamped at 5000; the reload resumes that, and the run's prompt is
+        // only 150 tokens past it - already over the 100-token threshold, but nowhere near the whole context.
+        const manager = sessionManager("/tmp/reminder-project");
+        appendUser(manager, "first", 1);
+        appendReminder(manager, "delegation", 1, 5_000);
+        manager.appendMessage(assistantEntry([toolCall("read", { path: "src/a.ts" }, "c1")], 2));
+        ctx = stubSessionContext(manager, {
+            cwd: "/tmp/reminder-project",
+            getContextUsage: () => ({ tokens: 5_150, contextWindow: 200_000, percent: 0.026 }),
+        });
+
+        const stub = harness();
+        await startSession(stub);
+        expect((await userTurn(stub))?.message?.content).toContain("memory_system");
+
+        await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
+        await stub.requireHandler("message_update")(
+            {
+                message: { role: "assistant" },
+                assistantMessageEvent: { type: "toolcall_start" },
+            },
+            ctx,
+        );
+
+        // Had the seed been dropped, the baseline would be the reload context (5150) and the growth zero.
+        expect(stub.sentMessages).toHaveLength(1);
+    });
+
+    it("stamps a change-point reminder with the baseline it leaves in force", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
+        const manager = sessionManager("/tmp/reminder-project");
+        appendUser(manager, "first", 1);
+        appendReminder(manager, "delegation", 1, 5_000);
+        ctx = stubSessionContext(manager, {
+            cwd: "/tmp/reminder-project",
+            getContextUsage: () => ({ tokens: 5_150, contextWindow: 200_000, percent: 0.026 }),
+        });
+
+        const stub = harness();
+        await startSession(stub);
+        const result = (await stub.requireHandler("before_agent_start")(
+            { systemPrompt: "", prompt: "do the thing" },
+            ctx,
+        )) as { message?: { details?: { id?: string; contextTokens?: number } } };
+
+        // The memory reminder renders before the run's usage, so it stamps the branch baseline it leaves in
+        // force rather than the reload's own context, or the next resume would re-anchor and reset the cooldown.
+        expect(result?.message?.details).toMatchObject({ id: "memory-read", contextTokens: 5_000 });
     });
 
     it("does not steer from the assistant baseline alone", async () => {

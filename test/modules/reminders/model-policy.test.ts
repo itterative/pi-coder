@@ -599,6 +599,11 @@ describe("state checkpoints", () => {
             state: { phase: "reporting" },
             phaseConfidence: 0.9,
         });
+        // A real run starts at a non-zero context, which is the mid-run threshold's baseline.
+        ctx = {
+            ...ctx,
+            getContextUsage: () => ({ tokens: 500, contextWindow: 200_000, percent: 0.0025 }),
+        };
         const stub = harness();
         await startSession(stub);
         await toolResponse(stub);

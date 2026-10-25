@@ -20,8 +20,8 @@ because the message rides in the user role and a bare one would read as the user
   (memory-hygiene, sandbox, delegation, todo, validation), each with `text` and `guidance`. A `disabled: true`
   entry stays in the catalog but is filtered out of the rotation and the model's offer by
   `ACTIVE_ROTATION_REMINDERS`; `sandbox` is disabled until it keys on a real gated event rather than rotating
-  context-free. Catalog texts stay extension-generic: they may name pi-coder mechanics but never one
-  repository's commands, which live in that project's instructions and memories.
+  context-free. Catalog texts stay extension-generic: they never name one repository's commands, which live in
+  that project's instructions and memories.
 - `scheduler.ts` — pure `ReminderScheduler`: the armed change-point reminder first; otherwise rotation due
   after
   `everyTurns` user turns since the last emission or `thresholdTokens` new context tokens, whichever comes
@@ -104,7 +104,7 @@ classifier plumbing this builds on.
 
 ## Targeted references
 
-- `reminders/selection.md` — selection subject, signals, labels, calibration.
+- `reminders/selection.md` — selection subject, signals, labels, calibration, threshold accounting.
 - `reminders/replay.md` — reminder-report flags, fold modeling, recorded view, module/export contract.
 - `reminders/model-comparison.md` — clef/d3/lfm2 speed and real-state decisions.
 - `reminders/state-experiments.md` — state-shape and question-form replays.

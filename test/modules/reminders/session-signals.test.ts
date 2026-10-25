@@ -101,13 +101,35 @@ function toolResultEntry(toolCallId: string, isError: boolean, timestamp: number
 }
 
 /** One delivered reminder, as a branch records it: the `customType` and `details` a restart reads back. */
-function appendReminder(manager: SessionManager, id: string, turn: number): void {
+function appendReminder(
+    manager: SessionManager,
+    id: string,
+    turn: number,
+    contextTokens?: number,
+): void {
     manager.appendCustomMessageEntry(
         "pi-coder-reminder",
         `<pi_coder_reminder>${id}</pi_coder_reminder>`,
         false,
-        { id, turn },
+        contextTokens === undefined ? { id, turn } : { id, turn, contextTokens },
     );
+}
+
+/** An assistant response with a given usage, for the prompt-side baseline a resume derives. */
+function assistantUsageEntry(
+    usage: Partial<AssistantMessage["usage"]>,
+    timestamp: number,
+): AppendedMessage {
+    return {
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        api: "test",
+        provider: "test",
+        model: "test",
+        usage: { ...zeroUsage(), ...usage },
+        stopReason: "stop",
+        timestamp,
+    };
 }
 
 afterEach(() => {
@@ -504,6 +526,32 @@ describe("reminderResumeState", () => {
 
     it("returns undefined for a branch with nothing to resume", () => {
         expect(reminderResumeState(session().getBranch())).toBeUndefined();
+    });
+
+    it("resumes the threshold baseline from the last reminder's stamped context", () => {
+        const manager = session();
+        appendReminder(manager, "delegation", 1, 5_000);
+
+        expect(reminderResumeState(manager.getBranch())?.baselineContext).toBe(5_000);
+    });
+
+    it("derives the baseline from the prompt side of the response after an unstamped reminder", () => {
+        const manager = session();
+        appendReminder(manager, "compaction", 1);
+        manager.appendMessage(
+            assistantUsageEntry({ input: 3_000, cacheRead: 500, cacheWrite: 200 }, 2),
+        );
+
+        // The prompt side, never `totalTokens`, which would fold in that response's output - growth that came
+        // after the reminder rather than before it.
+        expect(reminderResumeState(manager.getBranch())?.baselineContext).toBe(3_700);
+    });
+
+    it("leaves the baseline unset when no response has measured the context yet", () => {
+        const manager = session();
+        appendReminder(manager, "memory-read", 1);
+
+        expect(reminderResumeState(manager.getBranch())?.baselineContext).toBeUndefined();
     });
 });
 

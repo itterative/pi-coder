@@ -325,16 +325,26 @@ export interface ReminderResumeState {
     lastRotationId?: ReminderId;
     /** The user turn of the last reminder of any kind, for the turn cadence. */
     lastEmitTurn: number;
+    /**
+     * The context the last reminder was shown at, when the branch recorded one.
+     *
+     * It is the reminder's own stamp, or the prompt side of the first response after it when the stamp is
+     * absent (a fold's emission renders before any post-fold usage exists). Absent means the branch holds no
+     * usable measurement, and the run establishes the baseline from its first usage instead.
+     */
+    baselineContext?: number;
 }
 
 /**
  * Rebuild the scheduler's view from a branch after a restart on a populated session.
  *
  * A delivered reminder is a `custom_message` whose `details` carry the id and the turn it was emitted on, so
- * the branch itself records what was shown. Only entries after the last `compaction` are read: the fold is a
- * full reset (the module arms a change-point reminder and restarts the rotation), so pre-fold emissions must
- * not leak into a post-fold resume. `undefined` means the branch holds nothing to resume, and the caller
- * starts fresh.
+ * the branch itself records what was shown. It also carries the context it was shown at, which the threshold
+ * resumes from; a reminder without one (an older stamp, or a fold whose context is not known at emission) falls
+ * back to the prompt side of the first response after it. Only entries after the last `compaction` are read:
+ * the fold is a full reset (the module arms a change-point reminder and restarts the rotation), so pre-fold
+ * emissions must not leak into a post-fold resume. `undefined` means the branch holds nothing to resume, and
+ * the caller starts fresh.
  */
 export function reminderResumeState(
     entries: readonly SessionEntry[],
@@ -345,9 +355,11 @@ export function reminderResumeState(
     let userTurns = 0;
     let lastEmitTurn = 0;
     let lastRotationId: ReminderId | undefined;
+    let lastReminderIndex = -1;
+    let stampedContext: number | undefined;
     const shown = new Map<ReminderId, number>();
 
-    for (const entry of slice) {
+    for (const [index, entry] of slice.entries()) {
         if (entry.type === "message" && entry.message.role === "user") {
             userTurns += 1;
             continue;
@@ -373,18 +385,53 @@ export function reminderResumeState(
             shown.set(id, turn);
             lastRotationId = id;
         }
+
+        // A 0 stamp means the context was not known when the reminder rendered, so the baseline comes from the
+        // response that followed instead.
+        lastReminderIndex = index;
+        stampedContext =
+            typeof details.contextTokens === "number" && details.contextTokens > 0
+                ? details.contextTokens
+                : undefined;
     }
 
     if (userTurns === 0 && lastEmitTurn === 0) {
         return undefined;
     }
 
+    const baselineContext = stampedContext ?? promptTokensAfter(slice, lastReminderIndex);
+
     return {
         userTurns: Math.max(userTurns, lastEmitTurn),
         shown,
         ...(lastRotationId === undefined ? {} : { lastRotationId }),
         lastEmitTurn,
+        ...(baselineContext === undefined ? {} : { baselineContext }),
     };
+}
+
+/**
+ * The prompt side of the first assistant response after `index`: `input + cacheRead + cacheWrite`.
+ *
+ * That response's prompt is the context the last reminder rode in on, so it is the baseline the threshold
+ * measures growth from. It is the fallback for a reminder whose own stamp is absent or 0 - the compaction
+ * reminder renders before a post-fold usage exists, so there is nothing to stamp - which is what lets the fold
+ * resume without a backfill write.
+ */
+function promptTokensAfter(entries: readonly SessionEntry[], index: number): number | undefined {
+    for (const entry of entries.slice(index + 1)) {
+        if (entry.type !== "message" || entry.message.role !== "assistant") {
+            continue;
+        }
+
+        const { usage } = entry.message;
+        const tokens = usage.input + usage.cacheRead + usage.cacheWrite;
+        if (tokens > 0) {
+            return tokens;
+        }
+    }
+
+    return undefined;
 }
 
 /** Whether an id names a rotation reminder, which `shown` tracks; change-point reminders are not rotated. */

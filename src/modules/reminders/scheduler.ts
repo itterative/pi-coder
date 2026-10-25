@@ -39,7 +39,8 @@ export interface SchedulerSnapshot {
     userTurns: number;
     rotationIndex: number;
     lastEmitTurn: number;
-    thresholdBaseline: number;
+    /** The context the threshold is measured from, or `undefined` before the run that will establish it. */
+    thresholdBaseline: number | undefined;
     sessionArmed: boolean;
     midRunThisTurn: number;
 }
@@ -57,7 +58,8 @@ export class ReminderScheduler {
     private userTurns = 0;
     private rotationIndex = 0;
     private lastEmitTurn = 0;
-    private thresholdBaseline = 0;
+    /** The context the threshold is measured from; `undefined` until an emission or a run's first usage sets it. */
+    private thresholdBaseline: number | undefined;
     private armed: ReminderDefinition | undefined;
     private midRunThisTurn = 0;
     private readonly maxMidRunPerTurn: number;
@@ -107,13 +109,15 @@ export class ReminderScheduler {
      * a restart point that arms nothing only resets the cadence.
      *
      * The thresholds are moments of change, not a continuous clock, so a branch that just changed its
-     * context gets the armed reminder and a fresh cooldown rather than inheriting the previous point's.
+     * context gets the armed reminder and a fresh cooldown rather than inheriting the previous point's. The
+     * baseline is left unset: a restart cannot know the context, and the run's first usage (`noteContext`)
+     * is what starts the cooldown.
      */
     reset(armed?: ReminderDefinition): void {
         this.userTurns = 0;
         this.rotationIndex = 0;
         this.lastEmitTurn = 0;
-        this.thresholdBaseline = 0;
+        this.thresholdBaseline = undefined;
         this.armed = armed;
         this.midRunThisTurn = 0;
     }
@@ -124,19 +128,43 @@ export class ReminderScheduler {
      * The pointer continues after the last emitted rotation id and the turn cadence keeps its origin, so the
      * branch is not treated as new and an id it already showed is not repeated. `armed` is the caller's
      * choice: a session start arms the memory reminder for the rebuilt appendix, while a navigation arms
-     * nothing, because landing on an existing branch is not a change point. The context threshold is measured
-     * fresh either way: the live run's context is not on the branch.
+     * nothing, because landing on an existing branch is not a change point. The context threshold resumes from
+     * the branch's last reminder when the resume state carries one (its stamp, or the first response after it),
+     * so a reload does not reset the cooldown; without one it stays unset until the run establishes it.
      */
     seed(
-        state: { userTurns: number; lastEmitTurn: number; lastRotationId?: string },
+        state: {
+            userTurns: number;
+            lastEmitTurn: number;
+            lastRotationId?: string;
+            /** The context the branch's last reminder was shown at, when it recorded one. */
+            baselineContext?: number;
+        },
         armed?: ReminderDefinition,
     ): void {
         this.userTurns = state.userTurns;
         this.lastEmitTurn = state.lastEmitTurn;
         this.rotationIndex = rotationIndexAfter(state.lastRotationId);
-        this.thresholdBaseline = 0;
+        this.thresholdBaseline =
+            state.baselineContext !== undefined && state.baselineContext > 0
+                ? state.baselineContext
+                : undefined;
         this.midRunThisTurn = 0;
         this.armed = armed;
+    }
+
+    /**
+     * The context at the start of an agent run, for a schedule whose baseline is not yet established.
+     *
+     * A turn decision renders before the run's first assistant usage, so the context it emits with is unknown
+     * and the baseline it would leave behind is 0. The run's own first usage is the real value, so it starts the
+     * cooldown the reset promised instead of letting the whole context count as growth. A baseline an emission
+     * already set is not moved: it belongs to that emission, not to this run.
+     */
+    noteContext(maxContextTokens: number): void {
+        if (this.thresholdBaseline === undefined && maxContextTokens > 0) {
+            this.thresholdBaseline = maxContextTokens;
+        }
     }
 
     /**
@@ -223,10 +251,11 @@ export class ReminderScheduler {
     }
 
     private thresholdDue(maxContextTokens: number): boolean {
-        return (
-            this.options.thresholdTokens > 0 &&
-            maxContextTokens - this.thresholdBaseline >= this.options.thresholdTokens
-        );
+        if (this.options.thresholdTokens <= 0 || this.thresholdBaseline === undefined) {
+            return false;
+        }
+
+        return maxContextTokens - this.thresholdBaseline >= this.options.thresholdTokens;
     }
 
     private triggersDue(maxContextTokens: number): boolean {
@@ -266,7 +295,14 @@ export class ReminderScheduler {
 
     private emit(reminder: ReminderDefinition, maxContextTokens: number): ReminderDefinition {
         this.lastEmitTurn = this.userTurns;
-        this.thresholdBaseline = maxContextTokens;
+        // A turn decision renders before the run's first usage, so its context can still be 0 (unknown). An
+        // unknown context leaves the baseline alone rather than clearing it: a real change point (a fold, a
+        // fresh session) already cleared it in `reset`, while a reload's armed memory reminder renders with an
+        // unknown context but is not a change point - it reuses the branch's seed through `seed`. `noteContext`
+        // establishes a baseline only when there is none.
+        if (maxContextTokens > 0) {
+            this.thresholdBaseline = maxContextTokens;
+        }
         return reminder;
     }
 }

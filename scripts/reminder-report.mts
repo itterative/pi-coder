@@ -200,6 +200,8 @@ export interface RecordedDecision {
 export interface RecordedDelivery {
     id?: string;
     turn?: number;
+    /** The prompt-side context the reminder was stamped with; absent on older stamps. */
+    contextTokens?: number;
     /** False when the entry has no id/turn marker, as in sessions recorded before the stamp existed. */
     hasDetails: boolean;
     /** The message exactly as delivered, wrapper and notice included. */
@@ -455,10 +457,15 @@ function readDelivery(entry: Extract<SessionEntry, { type: "custom_message" }>):
         typeof details?.turn === "number" && Number.isFinite(details.turn)
             ? details.turn
             : undefined;
+    const contextTokens =
+        typeof details?.contextTokens === "number" && details.contextTokens > 0
+            ? details.contextTokens
+            : undefined;
 
     return {
         ...(id === undefined ? {} : { id }),
         ...(turn === undefined ? {} : { turn }),
+        ...(contextTokens === undefined ? {} : { contextTokens }),
         hasDetails: id !== undefined && turn !== undefined,
         text: textOf(entry.content),
     };
@@ -560,6 +567,9 @@ export function replay(entries: readonly SessionEntry[], cwd: string): ReplayRes
 
         if (message.role === "assistant") {
             contextTokens = contextTokensOf(message.usage);
+            // The live module's `message_start` records the run's own context as the threshold baseline when the
+            // schedule has none yet, so the replay does the same before any mid-run check.
+            scheduler.noteContext(contextTokens);
 
             // The live module steers only once the streaming message has called a tool, and narrows the
             // rotation by the activity gate. Both read the committed prefix, not the message itself, so the
@@ -732,6 +742,7 @@ function renderCompact(turn: ReplayTurn, options: Options): string {
             : "";
     const decision = turn.recorded.decision;
     const delivered = turn.recorded.delivered.flatMap((delivery) => [delivery.id ?? "unmarked"]);
+    const recordedMidRun = turn.recorded.midRun.flatMap((midRun) => [midRun.reminder ?? "none"]);
 
     return [
         `turn ${turn.turn}`,
@@ -741,6 +752,9 @@ function renderCompact(turn: ReplayTurn, options: Options): string {
             ? `model=${decision.modelChoice}`
             : undefined,
         options.recorded && delivered.length > 0 ? `delivered=${delivered.join(",")}` : undefined,
+        options.recorded && recordedMidRun.length > 0
+            ? `recorded-midrun=${recordedMidRun.join(",")}`
+            : undefined,
         turn.reminderText === undefined
             ? undefined
             : `shows=${JSON.stringify(collapse(turn.reminderText, 64))}`,
@@ -795,6 +809,18 @@ function describeDecision(decision: RecordedDecision): string {
     }
     if (decision.deferred === true) {
         parts.push("deferred");
+    }
+    // The context and the threshold baseline it was measured against: the pair is what says whether a
+    // mid-run steer followed real growth or fired against a baseline that was never established.
+    if (decision.contextTokens !== undefined) {
+        parts.push(`ctx=${String(decision.contextTokens)}`);
+    }
+    const baseline = decision.scheduler?.thresholdBaseline;
+    if (typeof baseline === "number") {
+        parts.push(`base=${String(baseline)}`);
+        if (decision.contextTokens !== undefined) {
+            parts.push(`since=${String(decision.contextTokens - baseline)}`);
+        }
     }
 
     return parts.join(" ");
@@ -895,7 +921,9 @@ function recordedLines(recorded: RecordedTurn, state: JsonObject): string[] {
     for (const delivery of recorded.delivered) {
         const id = delivery.id ?? "unmarked";
         const turn = delivery.turn === undefined ? "turn unknown" : `turn ${String(delivery.turn)}`;
-        lines.push(`recorded delivered: ${id} (${turn})`);
+        const context =
+            delivery.contextTokens === undefined ? "" : ` ctx=${String(delivery.contextTokens)}`;
+        lines.push(`recorded delivered: ${id} (${turn})${context}`);
         lines.push(delivery.text);
     }
 

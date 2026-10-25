@@ -46,7 +46,13 @@ decision is printed as its own `recorded checkpoint:` line under the turn it was
 *during* a run and would otherwise be misattributed as the next prompt's turn decision. A **deferred** rotation
 turn is the same shape for the same reason - it is judged off the boundary, so its entry lands after the prompt
 it belongs to; the walker attaches it to the run in hand and reads its turn off its own `scheduler.userTurns`
-(no `+1`, which is what the pre-boundary shape needed), and the line prints `deferred`.
+(no `+1`, which is what the pre-boundary shape needed), and the line prints `deferred`. Every recorded
+decision also prints the threshold arithmetic - `ctx=` (the context the decision carried), `base=` (the
+snapshot's `thresholdBaseline`) and `since=` (their difference) - so a mid-run can be told apart from real
+growth instead of one fired against a baseline that was never established - and a `recorded delivered:` line
+prints the delivered reminder's own `ctx=` stamp when it has one, which is the prompt-side baseline a resume
+reads; `--compact` prints the recorded mid-run picks as `recorded-midrun=` beside the replay's simulated
+`midrun=`.
 
 It reads the session's own memory-index, todo-snapshot, and reminder-state entries and respects
 `PI_CODER_REMINDER_*`. Those entries keep the live choices for comparison. The script

@@ -202,9 +202,9 @@ describe("replay", () => {
         session.appendMessage(userEntry("first request", 1));
         // A read earlier in the turn, so the mid-run state is `exploring` and offers delegation: the mid-run
         // check reads the committed prefix, never the streaming message that carries the read itself.
-        session.appendMessage(assistantToolCallEntry("reading", 2));
+        session.appendMessage(assistantToolCallEntry("reading", 2, { ...zeroUsage(), input: 100 }));
         session.appendMessage(toolResultEntry("call-2", 3));
-        session.appendMessage(assistantToolCallEntry("done", 4, { ...zeroUsage(), input: 200 }));
+        session.appendMessage(assistantToolCallEntry("done", 4, { ...zeroUsage(), input: 250 }));
         session.appendMessage(toolResultEntry("call-4", 5));
         session.appendMessage(assistantEntry("finished", 6));
         session.appendMessage(userEntry("second request", 7));
@@ -640,9 +640,9 @@ describe("selectTurns and rendering", () => {
         const cwd = "/repo";
         const session = sessionAt(cwd);
         session.appendMessage(userEntry("first", 1));
-        session.appendMessage(assistantToolCallEntry("reading", 2));
+        session.appendMessage(assistantToolCallEntry("reading", 2, { ...zeroUsage(), input: 100 }));
         session.appendMessage(toolResultEntry("call-2", 3));
-        session.appendMessage(assistantToolCallEntry("done", 4, { ...zeroUsage(), input: 200 }));
+        session.appendMessage(assistantToolCallEntry("done", 4, { ...zeroUsage(), input: 250 }));
         session.appendMessage(toolResultEntry("call-4", 5));
         session.appendMessage(assistantEntry("finished", 6));
         session.appendMessage(userEntry("second", 7));

@@ -202,6 +202,41 @@ exists. The armed path (below) calls plain `decide`, which runs `beginTurn` itse
 - `turn_end` no longer awaits the checkpoint: it queues it and returns, which removes the per-step consult tax
   (~0.27s, +~0.47s escalated) from every tool-using response.
 
+## Threshold accounting
+
+The rotation's context trigger is `thresholdTokens` *new* context tokens since the last emission, and the
+scheduler's `thresholdBaseline` is the context that emission counted from. The baseline is a **branch fact**:
+each delivered reminder stamps the baseline it leaves in force in its `details` (`contextTokens`, the
+scheduler's post-emission `thresholdBaseline`), and `reminderResumeState` returns the last one as
+`baselineContext` - or, when the stamp is absent (an older session) or `0` (a fold, whose emission renders
+before any post-fold usage exists), derives it from the **prompt side of the first assistant response after
+that reminder** (`input + cacheRead + cacheWrite`). `restart` seeds it through `seed`, while `reset` (a fresh
+session or a fold) leaves it unset.
+
+The prompt side, not `totalTokens`: pi's providers normalize `input` as the uncached prompt and
+`cacheRead`/`cacheWrite` as the cached prompt (`openai-completions.ts`: `input = prompt_tokens - cached -
+cache_write`), so `input + cacheRead + cacheWrite` is the context that response was given, while `totalTokens`
+is that plus the response's own output - growth that happened *after* the reminder. The report's
+`contextTokensOf` uses the same convention, so live and the replay share one baseline.
+
+Live, `emit` updates the baseline when the decision already knows the context (a mid-run steer) and leaves it
+alone when it is unknown; `noteContext` at `message_start` establishes it only when there is none. A reload is
+therefore explicitly **not** a change point: its armed memory reminder renders before the run's first usage
+but keeps the branch seed instead of clearing it, so the reload reuses the entries rather than restarting the
+cooldown. The boundaries that do reset are a `compaction` (the fold shrank the context) and a fresh session
+(`reset`).
+
+Two consequences. **An unknown context defers, it never fires:** `thresholdDue` is
+`current - baseline >= thresholdTokens`, so an unknown (`0`) current context is negative, or the baseline is
+unset, and nothing emits until a usage lands. A `/tree` branch summary over a span of messages makes the
+post-summary size unknowable the same way, and it defers to the first post-summary usage rather than comparing
+against a pre-summary baseline - no "context shrank" rule is needed. **A change point owns its turn:** the
+armed reminder (memory at session start, compaction at a fold) covers the turn after a fold; the threshold
+only counts from after it. `reminderResumeState` resets on `compaction` only, not `branch_summary`, because a
+summary injects the target branch's history rather than discarding it. A mid-session `model_change` is **not**
+a boundary today; if model switches turn out to matter (a different tokenizer or context accounting), treat one
+like a fold - slice at it in `reminderResumeState` and let the baseline reset.
+
 ## The checkpoint cadence
 
 The state is not only read at the turn boundary; it is read on **every assistant response that used a tool**.

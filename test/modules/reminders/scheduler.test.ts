@@ -83,6 +83,28 @@ describe("ReminderScheduler", () => {
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
     });
 
+    it("resumes the threshold baseline from the branch state it is seeded with", () => {
+        const scheduler = new ReminderScheduler({ everyTurns: 0, thresholdTokens: 100 });
+        scheduler.seed({ userTurns: 2, lastEmitTurn: 2, baselineContext: 5_000 });
+
+        expect(scheduler.snapshot().thresholdBaseline).toBe(5_000);
+        expect(scheduler.midRunDue(5_099)).toBe(false);
+        expect(scheduler.midRunDue(5_100)).toBe(true);
+    });
+
+    it("does not let an unknown-context emission drop a seeded baseline", () => {
+        // A reload's armed memory reminder renders before the run's usage exists, so it must not clear the
+        // branch baseline and hand the cooldown back to the whole context.
+        const scheduler = new ReminderScheduler(NO_TURNS);
+        scheduler.seed(
+            { userTurns: 2, lastEmitTurn: 2, baselineContext: 5_000 },
+            MEMORY_READ_REMINDER,
+        );
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        expect(scheduler.snapshot().thresholdBaseline).toBe(5_000);
+    });
+
     it("starts the rotation pointer at zero when there is no rotation history", () => {
         const scheduler = new ReminderScheduler(NO_TURNS);
         scheduler.seed({ userTurns: 3, lastEmitTurn: 0 });
@@ -122,10 +144,12 @@ describe("ReminderScheduler", () => {
         const scheduler = armed({ everyTurns: 0, thresholdTokens: 100 });
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        // The run's first usage establishes the baseline the turn decision could not know.
+        scheduler.noteContext(99);
         expect(scheduler.decide({ maxContextTokens: 99 })).toBeUndefined();
-        expect(scheduler.decide({ maxContextTokens: 100 })).toBe(ACTIVE_ROTATION_REMINDERS[0]);
-        expect(scheduler.decide({ maxContextTokens: 199 })).toBeUndefined();
-        expect(scheduler.decide({ maxContextTokens: 200 })).toBe(ACTIVE_ROTATION_REMINDERS[1]);
+        expect(scheduler.decide({ maxContextTokens: 199 })).toBe(ACTIVE_ROTATION_REMINDERS[0]);
+        expect(scheduler.decide({ maxContextTokens: 298 })).toBeUndefined();
+        expect(scheduler.decide({ maxContextTokens: 299 })).toBe(ACTIVE_ROTATION_REMINDERS[1]);
     });
 
     it("emits only the memory reminder when both triggers are disabled", () => {
@@ -191,32 +215,59 @@ describe("ReminderScheduler", () => {
         const scheduler = armed({ everyTurns: 1, thresholdTokens: 100 });
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        scheduler.noteContext(100);
 
         const available = new Set<ReminderId>();
         expect(scheduler.decide({ maxContextTokens: 0, available })).toBeUndefined();
-        expect(scheduler.decideMidRun({ maxContextTokens: 100, available })).toBeUndefined();
+        expect(scheduler.decideMidRun({ maxContextTokens: 200, available })).toBeUndefined();
+    });
+
+    it("leaves the threshold unestablished until the run's first usage", () => {
+        // A turn decision renders before the run's first usage, so the context it carries is 0. That 0 must
+        // not become the baseline: the whole context would then count as growth on the first tool call.
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        expect(scheduler.snapshot().thresholdBaseline).toBeUndefined();
+
+        scheduler.noteContext(5_000);
+
+        expect(scheduler.snapshot().thresholdBaseline).toBe(5_000);
+        expect(scheduler.midRunDue(5_099)).toBe(false);
+        expect(scheduler.midRunDue(5_100)).toBe(true);
+    });
+
+    it("does not move a baseline an emission already set", () => {
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100 });
+        expect(scheduler.decide({ maxContextTokens: 5_000 })).toBe(MEMORY_READ_REMINDER);
+
+        scheduler.noteContext(9_000);
+
+        expect(scheduler.snapshot().thresholdBaseline).toBe(5_000);
     });
 
     it("reports a due mid-run threshold without deciding", () => {
         const scheduler = armed({ everyTurns: 0, thresholdTokens: 100 });
+        scheduler.noteContext(100);
 
-        expect(scheduler.midRunDue(99)).toBe(false);
-        expect(scheduler.midRunDue(100)).toBe(true);
+        expect(scheduler.midRunDue(199)).toBe(false);
+        expect(scheduler.midRunDue(200)).toBe(true);
     });
 
     it("caps mid-run emissions per user turn", () => {
         const scheduler = armed({ everyTurns: 0, thresholdTokens: 100, maxMidRunPerTurn: 1 });
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
-        expect(scheduler.decideMidRun({ maxContextTokens: 100 })).toBe(
+        scheduler.noteContext(100);
+        expect(scheduler.decideMidRun({ maxContextTokens: 200 })).toBe(
             ACTIVE_ROTATION_REMINDERS[0],
         );
         // Same turn, another crossing: the budget is spent.
-        expect(scheduler.decideMidRun({ maxContextTokens: 200 })).toBeUndefined();
+        expect(scheduler.decideMidRun({ maxContextTokens: 300 })).toBeUndefined();
 
         // A new user turn gets a fresh budget.
-        expect(scheduler.decide({ maxContextTokens: 100 })).toBeUndefined();
-        expect(scheduler.decideMidRun({ maxContextTokens: 200 })).toBe(
+        expect(scheduler.decide({ maxContextTokens: 200 })).toBeUndefined();
+        expect(scheduler.decideMidRun({ maxContextTokens: 300 })).toBe(
             ACTIVE_ROTATION_REMINDERS[1],
         );
     });
@@ -225,24 +276,26 @@ describe("ReminderScheduler", () => {
         const scheduler = armed({ everyTurns: 0, thresholdTokens: 100 });
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
-        expect(scheduler.decideMidRun({ maxContextTokens: 99 })).toBeUndefined();
-        expect(scheduler.decideMidRun({ maxContextTokens: 100 })).toBe(
+        scheduler.noteContext(100);
+        expect(scheduler.decideMidRun({ maxContextTokens: 199 })).toBeUndefined();
+        expect(scheduler.decideMidRun({ maxContextTokens: 200 })).toBe(
             ACTIVE_ROTATION_REMINDERS[0],
         );
-        expect(scheduler.decideMidRun({ maxContextTokens: 199 })).toBeUndefined();
+        expect(scheduler.decideMidRun({ maxContextTokens: 299 })).toBeUndefined();
     });
 
     it("counts a mid-run emission against the turn cadence", () => {
         const scheduler = armed({ everyTurns: 2, thresholdTokens: 100 });
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
-        expect(scheduler.decideMidRun({ maxContextTokens: 100 })).toBe(
+        scheduler.noteContext(100);
+        expect(scheduler.decideMidRun({ maxContextTokens: 200 })).toBe(
             ACTIVE_ROTATION_REMINDERS[0],
         );
 
         // The next user turn starts the cadence after the mid-run emission rather than repeating it.
-        expect(scheduler.decide({ maxContextTokens: 100 })).toBeUndefined();
-        expect(scheduler.decide({ maxContextTokens: 100 })).toBe(ACTIVE_ROTATION_REMINDERS[1]);
+        expect(scheduler.decide({ maxContextTokens: 200 })).toBeUndefined();
+        expect(scheduler.decide({ maxContextTokens: 200 })).toBe(ACTIVE_ROTATION_REMINDERS[1]);
     });
 
     it("never fires the turn-based rotation mid-run", () => {

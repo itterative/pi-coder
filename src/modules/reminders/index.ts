@@ -552,7 +552,14 @@ export default function registerRemindersExtension(
         );
     };
 
-    /** The message one turn reminder travels as, whether it opens a turn or joins a running one. */
+    /**
+     * The message one turn reminder travels as, whether it opens a turn or joins a running one.
+     *
+     * The stamp is the threshold baseline the emission leaves in force, not the context at emission: a
+     * change-point reminder that rendered before the run's usage updated nothing (the branch seed or the run's
+     * first usage is still the anchor), while a rotation pick or a mid-run steer has just set it to its own
+     * context. Recording the baseline is what lets a later resume continue the cooldown consistently.
+     */
     const reminderPayload = (
         ctx: ExtensionContext,
         reminder: ReminderDefinition,
@@ -561,13 +568,16 @@ export default function registerRemindersExtension(
         customType: string;
         content: string;
         display: boolean;
-        details: { id: ReminderId; turn: number };
+        details: { id: ReminderId; turn: number; contextTokens: number };
     } => ({
         customType: REMINDER_CUSTOM_TYPE,
         content: formatReminder(reminderTextFor(reminder, ctx)),
         display: false,
-        // The entry records what was shown and when, so a restart on this branch can resume.
-        details: { id: reminder.id, turn },
+        details: {
+            id: reminder.id,
+            turn,
+            contextTokens: scheduler.snapshot().thresholdBaseline ?? 0,
+        },
     });
 
     /**
@@ -844,8 +854,13 @@ export default function registerRemindersExtension(
                 customType: REMINDER_CUSTOM_TYPE,
                 content: formatReminder(reminder.text),
                 display: false,
-                // The entry records what was shown and when, so a restart on this branch can resume.
-                details: { id: reminder.id, turn },
+                // Records what was shown, when, and the baseline the emission leaves, so a later restart on
+                // this branch can resume the rotation, the cadence, and the threshold.
+                details: {
+                    id: reminder.id,
+                    turn,
+                    contextTokens: scheduler.snapshot().thresholdBaseline ?? 0,
+                },
             },
             { deliverAs: "steer" },
         );
@@ -927,6 +942,9 @@ export default function registerRemindersExtension(
         }
 
         growth.startAssistantMessage(ctx.getContextUsage()?.tokens ?? 0);
+        // A turn decision renders before this usage exists, so the run's first real context is what starts the
+        // threshold cooldown; without it the whole context would read as growth on the first tool call.
+        scheduler.noteContext(growth.maxTokens);
         currentMessageHasToolCalls = false;
         midRunAvailable = undefined;
         midRunSignals = undefined;
