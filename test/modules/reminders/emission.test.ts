@@ -199,6 +199,47 @@ describe("reminder emission", () => {
         expect(entry?.data).toMatchObject({ reminder: "compaction", trigger: "session" });
     });
 
+    it("keeps the compaction reminder armed when a session start follows the fold", async () => {
+        // A reload right after a fold rebuilds the appendix and fires `session_start`, whose resume finds
+        // nothing after the fold. That used to arm the memory reminder and drop the fold's own one; the fold
+        // reminder covers the memory re-read too, so it has to survive the resume until a turn sees it.
+        const manager = sessionManager("/tmp/reminder-project");
+        manager.appendMessage(assistantEntry([toolCall("read", { path: "src/a.ts" }, "c1")], 1));
+        manager.appendCompaction("folded", null, 1234);
+        ctx = stubSessionContext(manager, { cwd: "/tmp/reminder-project" });
+
+        const stub = harness();
+        await startSession(stub);
+
+        const folded = await userTurn(stub);
+        expect(folded?.message?.content).toContain("compacted");
+        expect(folded?.message?.content).toContain("TODO.md");
+        expect(folded?.message?.content).not.toContain("memory_system");
+
+        const entry = stub.entries.findLast(
+            (candidate) => candidate.customType === "pi-coder-reminder:debug",
+        );
+        expect(entry?.data).toMatchObject({ reminder: "compaction", trigger: "session" });
+    });
+
+    it("arms the memory reminder again once a post-fold turn has seen the fold", async () => {
+        // The counterpart to the case above: a reminder delivered after the fold makes the resume state defined,
+        // so the fold is covered and a later session start goes back to arming the memory reminder.
+        const manager = sessionManager("/tmp/reminder-project");
+        manager.appendMessage(assistantEntry([toolCall("read", { path: "src/a.ts" }, "c1")], 1));
+        manager.appendCompaction("folded", null, 1234);
+        appendUser(manager, "after the fold", 2);
+        appendReminder(manager, "compaction", 1);
+        ctx = stubSessionContext(manager, { cwd: "/tmp/reminder-project" });
+
+        const stub = harness();
+        await startSession(stub);
+
+        const resumed = await userTurn(stub);
+        expect(resumed?.message?.content).toContain("memory_system");
+        expect(resumed?.message?.content).not.toContain("compacted");
+    });
+
     it("resumes the rotation and the shown history after a tree move", async () => {
         const manager = sessionManager("/tmp/reminder-project");
         appendUser(manager, "first", 1);

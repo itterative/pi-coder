@@ -714,7 +714,10 @@ export default function registerRemindersExtension(
      * reminder because the appendix is rebuilt for a new session; a tree move only seeds, since landing on an
      * existing branch mid-conversation is not a starting point and "before starting work" would mislead.
      * Compaction deliberately resets: the fold is a context reset, so the rotation starts over and the fold's
-     * own reminder is armed in place of the memory one. The labels are branch-derived either way.
+     * own reminder is armed in place of the memory one. A fold whose reminder is still pending - a reload,
+     * resume, or tree move immediately after it, before any post-fold turn - arms the fold's reminder too,
+     * because the resume cannot tell that branch apart from a fresh one. The labels are branch-derived either
+     * way.
      */
     const restart = (
         ctx: ExtensionContext,
@@ -732,13 +735,24 @@ export default function registerRemindersExtension(
         publishState(ctx);
 
         const state = options.resume === true ? reminderResumeState(branch) : undefined;
+        // A resume that finds nothing after a fold is the fold's own reminder still pending, not a fresh
+        // start. `state === undefined` already means the post-fold slice holds no user turn and no delivered
+        // reminder, so a fold reminder that was shown makes it defined; `branch.some` then separates a pending
+        // fold from a genuinely fresh branch. The fold's reminder outranks the caller's arm because the
+        // appendix rebuild re-reads the memory list, but the fold's reminder also covers the lossy summary and
+        // the TODO state the summary does not carry; recomputing it from the branch restores the arm the
+        // `session_compact` handler set when the process that set it is gone.
+        const foldReminderPending =
+            state === undefined && branch.some((entry) => entry.type === "compaction");
+        const armed = foldReminderPending ? COMPACTION_REMINDER : options.armed;
+
         if (state === undefined) {
-            scheduler.reset(options.armed);
+            scheduler.reset(armed);
             shown.clear();
             return;
         }
 
-        scheduler.seed(state, options.armed);
+        scheduler.seed(state, armed);
         shown.clear();
         for (const [id, turn] of state.shown) {
             shown.set(id, turn);

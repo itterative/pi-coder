@@ -271,7 +271,13 @@ real session JSONL path appended at emission. The same day's follow-up: an abort
 tree, and a tree move used to re-arm `memory-read` through the same `seed()` as session start. Seeding now
 arms nothing on its own - each restart point passes its own reminder - so a navigation only continues the
 rotation and cadence, while session start still arms `memory-read` because it rebuilds the appendix. The
-rebuilt `<memory_system>` list reaches the next prompt either way, so nothing is lost by not nudging.
+rebuilt `<memory_system>` list reaches the next prompt either way, so nothing is lost by not nudging. A
+later session (Oct 25) showed the reverse failure: a fold, then a reload before any post-fold turn, armed
+`memory-read` and dropped `compaction`, because `reminderResumeState` slices after the fold and returns
+`undefined` for an empty post-fold slice, which `restart` read as a fresh start. `restart` now recomputes the
+arm from the branch: when the resume finds nothing and the branch holds a compaction, it arms
+`COMPACTION_REMINDER` whatever the caller passed, and only a resume with a non-empty post-fold slice (a turn
+has seen the fold reminder) lets `session_start` arm `memory-read` again.
 
 ## Recorded decisions
 
