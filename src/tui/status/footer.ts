@@ -32,6 +32,7 @@ import {
 import { Spinner } from "../spinner";
 import { formatAgentSummary, hasActiveAgentRuns } from "./agent-activity-format";
 import { formatTodoProgress, summarizeTodoList } from "./format";
+import { StreamRateTracker, formatStreamRate } from "./stream-rate";
 import { TipRotator, type FooterTip } from "./tips";
 import {
     UsageTotalsCache,
@@ -42,6 +43,8 @@ import {
 
 const MAX_TODO_CURRENT_CHARS = 40;
 const MAX_RIGHT_TIP_CHARS = 56;
+/** How long a stream rate holds the usage slot after the last update; silence means the response ended. */
+export const STREAM_RATE_TTL_MS = 1000;
 
 /**
  * The parent status footer: one compact line combining the decision model's auto-mode state, the visible
@@ -57,6 +60,8 @@ export class PiCoderFooter implements Component {
     private hiddenCount: number;
     private todo: TodoList | undefined;
     private tip: FooterTip | undefined;
+    private streamRate: number | undefined;
+    private streamRateTimer: ReturnType<typeof setTimeout> | undefined;
     private decisionChecking = 0;
     private decisionLabels: ReminderStateLabels = {};
     private disposed = false;
@@ -116,6 +121,25 @@ export class PiCoderFooter implements Component {
         this.tui.requestRender();
     }
 
+    /**
+     * Set the live stream rate; `undefined` clears it at once. Every value holds the usage slot for
+     * `STREAM_RATE_TTL_MS`, so a stream that stops sending updates reverts to the session totals without
+     * the footer having to know when the response ended.
+     */
+    setStreamRate(rate: number | undefined): void {
+        this.streamRate = rate;
+        this.clearStreamRateTimer();
+        if (rate !== undefined) {
+            this.streamRateTimer = setTimeout(() => {
+                this.streamRateTimer = undefined;
+                this.streamRate = undefined;
+                this.tui.requestRender();
+            }, STREAM_RATE_TTL_MS);
+        }
+
+        this.tui.requestRender();
+    }
+
     render(width: number): string[] {
         const info = footerInfoSegments(this.theme, {
             cwd: this.context.cwd,
@@ -133,11 +157,18 @@ export class PiCoderFooter implements Component {
         const tip = this.visibleTip();
         const leftTip = tip && !agentActive ? this.tipSegment(tip, "left") : undefined;
         const rightTip = tip && agentActive ? this.tipSegment(tip, "right") : undefined;
-        const usage: FooterLineSegment = rightTip ?? {
-            text: info.usage,
-            side: "right",
-            dropPriority: 2,
-        };
+        // A live rate stands in for the session totals while it lasts, and is narrower than them, so the rest
+        // of the right cluster is untouched.
+        const stream = this.streamSegment();
+        // A tip only hides the context figure while it is the one holding the usage slot; a rate that outranks
+        // the tip leaves the context where it is.
+        const tipInSlot = rightTip !== undefined && stream === undefined;
+        const usage: FooterLineSegment = stream ??
+            rightTip ?? {
+                text: info.usage,
+                side: "right",
+                dropPriority: 2,
+            };
 
         const segments: FooterLineSegment[] = [
             // Left: the agent summary is kept longest, then auto mode, TODO, and extension statuses.
@@ -151,7 +182,7 @@ export class PiCoderFooter implements Component {
             { text: info.statuses, side: "left", dropPriority: 6 },
             // Right: the cluster reserves its width, so these only shed when it cannot fit alone.
             usage,
-            { text: rightTip ? "" : info.context, side: "right", dropPriority: 0 },
+            { text: tipInSlot ? "" : info.context, side: "right", dropPriority: 0 },
             { text: info.model, side: "right", dropPriority: 3 },
             { text: info.cwd, side: "right", dropPriority: 1 },
         ];
@@ -169,6 +200,7 @@ export class PiCoderFooter implements Component {
         }
 
         this.disposed = true;
+        this.clearStreamRateTimer();
         this.spinner.dispose();
         this.tips.dispose();
     }
@@ -226,6 +258,28 @@ export class PiCoderFooter implements Component {
         };
     }
 
+    /** The live rate as the usage slot's content, dim like the totals it stands in for. */
+    private streamSegment(): FooterLineSegment | undefined {
+        if (this.streamRate === undefined) {
+            return undefined;
+        }
+
+        return {
+            text: this.theme.fg("dim", formatStreamRate(this.streamRate)),
+            side: "right",
+            dropPriority: 2,
+        };
+    }
+
+    private clearStreamRateTimer(): void {
+        if (this.streamRateTimer === undefined) {
+            return;
+        }
+
+        clearTimeout(this.streamRateTimer);
+        this.streamRateTimer = undefined;
+    }
+
     /**
      * The tip that may render right now: a conditioned tip drops out as soon as its state stops
      * applying, without waiting for the rotator's window to close.
@@ -280,6 +334,7 @@ interface StatusFooterState {
     todo?: TodoList;
     decisionChecking: number;
     decisionLabels: ReminderStateLabels;
+    stream: StreamRateTracker;
     registered: boolean;
     component?: PiCoderFooter;
 }
@@ -296,6 +351,7 @@ function stateFor(events: EventBus): StatusFooterState {
         hiddenCount: 0,
         decisionChecking: 0,
         decisionLabels: {},
+        stream: new StreamRateTracker(),
         registered: false,
     };
     footerStates.set(events, state);
@@ -314,6 +370,7 @@ function clearState(state: StatusFooterState, ctx?: ExtensionContext): void {
     state.todo = undefined;
     state.decisionChecking = 0;
     state.decisionLabels = {};
+    state.stream.reset();
     state.registered = false;
     state.component = undefined;
 }
@@ -379,6 +436,19 @@ export function registerStatusFooter(pi: ExtensionAPI): void {
     });
     events.on(DECISION_STATE_EVENT, (data) => {
         if (isDecisionStateEvent(data)) applyDecisionStateEvent(state, data);
+    });
+
+    // A response restarts the estimate rather than blending in the one before it; nothing else is needed to
+    // end it, because the rate's own TTL decides when the totals come back.
+    pi.on("message_start", (event) => {
+        if (event.message.role !== "assistant") return;
+        state.stream.onMessageStart();
+    });
+    pi.on("message_update", (event) => {
+        if (event.message.role !== "assistant") return;
+
+        state.stream.observeOutput(event.message.usage.output);
+        state.component?.setStreamRate(state.stream.rate());
     });
 
     pi.on("session_start", (_event, ctx) => {

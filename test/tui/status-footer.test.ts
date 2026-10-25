@@ -29,7 +29,7 @@ import {
     emitDecisionStatus,
 } from "../../src/modules/decision/events";
 import type { AgentRunSummary } from "../../src/tools/agent/contracts/runs";
-import { PiCoderFooter, registerStatusFooter } from "../../src/tui/status";
+import { PiCoderFooter, STREAM_RATE_TTL_MS, registerStatusFooter } from "../../src/tui/status";
 import {
     UsageTotalsCache,
     formatCwd,
@@ -150,6 +150,14 @@ function statusContext(): ExtensionContext {
     });
 }
 
+/** What the footer's streaming wiring reads off an assistant event: its role and cumulative output. */
+function streamedMessage(output = 0): unknown {
+    return { role: "assistant", usage: { output } };
+}
+
+/** How long the simulated provider takes between its cumulative-output reports. */
+const STREAM_REPORT_MS = 250;
+
 function makeFooter(
     context: ExtensionContext,
     data: ReadonlyFooterDataProvider = footerData(),
@@ -189,15 +197,15 @@ function instantiate(factory: FooterFactory | undefined, data = footerData()): P
 
 function registerForContext(): {
     events: ReturnType<typeof createEventBus>;
-    trigger: (name: string, context: ExtensionContext) => void;
+    trigger: (name: string, context: ExtensionContext, event?: unknown) => void;
 } {
     const events = createEventBus();
     const stub = createPiStub({ eventBus: events });
     registerStatusFooter(stub.pi);
     return {
         events,
-        trigger(name, context) {
-            for (const handler of stub.handlersFor(name)) handler({}, context);
+        trigger(name, context, event) {
+            for (const handler of stub.handlersFor(name)) handler(event ?? {}, context);
         },
     };
 }
@@ -557,6 +565,105 @@ describe("status footer", () => {
         const restored = renderText(footer, 140);
         expect(restored).toContain("120k tok");
         expect(restored).toContain("45.0%/200k");
+        footer.dispose();
+    });
+
+    it("shows the live stream rate in place of the session totals", async () => {
+        const footer = makeFooter(statusContext(), footerData({ branch: "main" }));
+        footer.setStreamRate(62.4);
+
+        const line = renderText(footer, 140);
+        await expect(snapshotText(line)).toMatchFileSnapshot(
+            "./__snapshots__/status-footer.stream.txt",
+        );
+        expect(line).toContain("62 tok/s");
+        expect(line).not.toContain("120k tok");
+        // Only the totals stand down; the rest of the right cluster is untouched.
+        expect(line).toContain("45.0%/200k");
+        expect(line).toContain("stub-model");
+
+        footer.setStreamRate(undefined);
+        const restored = renderText(footer, 140);
+        expect(restored).toContain("120k tok");
+        expect(restored).not.toContain("tok/s");
+        footer.dispose();
+    });
+
+    it("reverts to the session totals once the rate's window expires", () => {
+        vi.useFakeTimers();
+        try {
+            const footer = makeFooter(statusContext(), footerData({ branch: "main" }));
+            footer.setStreamRate(62.4);
+            expect(renderText(footer, 140)).toContain("62 tok/s");
+
+            // Every update holds the slot for another window...
+            vi.advanceTimersByTime(STREAM_RATE_TTL_MS - 1);
+            footer.setStreamRate(58.1);
+            vi.advanceTimersByTime(STREAM_RATE_TTL_MS - 1);
+            expect(renderText(footer, 140)).toContain("58 tok/s");
+
+            // ...and silence hands it back to the totals.
+            vi.advanceTimersByTime(1);
+            const line = renderText(footer, 140);
+            expect(line).not.toContain("tok/s");
+            expect(line).toContain("120k tok");
+            footer.dispose();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("keeps a live rate ahead of a right-placement tip and its context slot", () => {
+        const run = partialRun({
+            runId: "worker-1",
+            title: "Implement the feature",
+            task: "Implement the feature",
+            status: "running",
+            startedAt: Date.now(),
+        });
+        const footer = makeFooter(statusContext(), footerData({ branch: "main" }), {
+            runs: [run],
+            todo,
+        });
+        footer.setTip({ text: "/agents lists runs, workspaces, and settings" });
+        footer.setStreamRate(62.4);
+
+        const line = renderText(footer, 140);
+        expect(line).toContain("62 tok/s");
+        expect(line).not.toContain("tip: ");
+        // The rate takes the slot, not the tip, so the context figure stays where it was.
+        expect(line).toContain("45.0%/200k");
+        footer.dispose();
+    });
+
+    it("feeds streaming updates into the live rate", () => {
+        let clock = 1_000;
+        vi.spyOn(performance, "now").mockImplementation(() => clock);
+        const { ui, calls } = recordingUi();
+        const context = baseContext({
+            mode: "tui",
+            hasUI: true,
+            ui,
+            model: stubModel(),
+            getContextUsage: () => ({ tokens: 1_000, contextWindow: 200_000, percent: 0.5 }),
+        });
+        const { trigger } = registerForContext();
+
+        trigger("session_start", context);
+        const footer = instantiate(calls[0]);
+
+        trigger("message_start", context, { message: streamedMessage() });
+        expect(renderText(footer, 140)).not.toContain("tok/s");
+
+        // 15 tokens reported per 250 ms interval is 60 tok/s.
+        clock += STREAM_REPORT_MS;
+        trigger("message_update", context, { message: streamedMessage(15) });
+        expect(renderText(footer, 140)).toContain("60 tok/s");
+
+        // Averaging the next interval keeps it at 60 rather than making the newest one the answer.
+        clock += STREAM_REPORT_MS;
+        trigger("message_update", context, { message: streamedMessage(30) });
+        expect(renderText(footer, 140)).toContain("60 tok/s");
         footer.dispose();
     });
 
