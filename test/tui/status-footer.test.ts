@@ -155,7 +155,15 @@ function streamedMessage(output = 0): unknown {
     return { role: "assistant", usage: { output } };
 }
 
-/** How long the simulated provider takes between its cumulative-output reports. */
+/** One `message_update` carrying streamed characters and the provider's cumulative output count. */
+function streamedUpdate(characters: number, output = 0, type = "text_delta"): unknown {
+    return {
+        message: streamedMessage(output),
+        assistantMessageEvent: { type, contentIndex: 0, delta: "x".repeat(characters) },
+    };
+}
+
+/** How long the simulated provider takes between streaming updates. */
 const STREAM_REPORT_MS = 250;
 
 function makeFooter(
@@ -655,15 +663,22 @@ describe("status footer", () => {
         trigger("message_start", context, { message: streamedMessage() });
         expect(renderText(footer, 140)).not.toContain("tok/s");
 
-        // 15 tokens reported per 250 ms interval is 60 tok/s.
+        // 40 streamed characters per 250 ms is 10 tokens at the initial four characters per token: 40 tok/s,
+        // even though this provider reports no usage at all until the response ends.
         clock += STREAM_REPORT_MS;
-        trigger("message_update", context, { message: streamedMessage(15) });
-        expect(renderText(footer, 140)).toContain("60 tok/s");
+        trigger("message_update", context, streamedUpdate(40));
+        expect(renderText(footer, 140)).toContain("40 tok/s");
 
-        // Averaging the next interval keeps it at 60 rather than making the newest one the answer.
+        // Tool-call arguments are output too, so a long file write is not a stalled stream.
         clock += STREAM_REPORT_MS;
-        trigger("message_update", context, { message: streamedMessage(30) });
-        expect(renderText(footer, 140)).toContain("60 tok/s");
+        trigger("message_update", context, streamedUpdate(40, 0, "toolcall_delta"));
+        expect(renderText(footer, 140)).toContain("40 tok/s");
+
+        // The provider's single report arrives with the final chunk: it measures the ratio, without attributing
+        // the whole response to the update that carried it.
+        clock += STREAM_REPORT_MS;
+        trigger("message_update", context, streamedUpdate(40, 30));
+        expect(renderText(footer, 140)).toContain("40 tok/s");
         footer.dispose();
     });
 

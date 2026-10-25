@@ -1,3 +1,4 @@
+import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type {
     EventBus,
     ExtensionAPI,
@@ -419,6 +420,22 @@ function applyDecisionStateEvent(state: StatusFooterState, event: DecisionStateE
     state.component?.setDecisionLabels(event.labels);
 }
 
+/**
+ * Characters a streaming event contributes to the live rate. Text, thinking and tool-call arguments are all
+ * output the provider counts, so all three feed the estimate; counting only the first two made a long file
+ * write - which streams as tool-call arguments - look like a stalled stream.
+ */
+function streamedCharacters(event: AssistantMessageEvent): number {
+    if (
+        event.type === "text_delta" ||
+        event.type === "thinking_delta" ||
+        event.type === "toolcall_delta"
+    ) {
+        return event.delta.length;
+    }
+    return 0;
+}
+
 /** Register the single parent status footer and its domain-event listeners. */
 export function registerStatusFooter(pi: ExtensionAPI): void {
     const events = pi.events;
@@ -447,6 +464,7 @@ export function registerStatusFooter(pi: ExtensionAPI): void {
     pi.on("message_update", (event) => {
         if (event.message.role !== "assistant") return;
 
+        state.stream.observeDelta(streamedCharacters(event.assistantMessageEvent));
         state.stream.observeOutput(event.message.usage.output);
         state.component?.setStreamRate(state.stream.rate());
     });
