@@ -216,6 +216,16 @@ function retryPolicy(config: CompactionConfig): SummarizationRetryPolicy {
 const MIN_OUTPUT_TOKENS = 1024;
 /** Unbudgeted room, sized to the error in `requestTokens` (~1% on a provider count), not to the window. */
 const SUMMARIZATION_MARGIN_TOKENS = 1024;
+/**
+ * The largest output ask either stage may make, whatever the model or the window reports.
+ *
+ * A summary's length does not scale with the context window, and `model.maxTokens` is not always an output
+ * ceiling: hosted model stores commonly set it to the context window, which made `min(modelMaxTokens, room)`
+ * resolve to the whole remaining window. 65,536 is deliberately far above what the pipeline uses - the largest
+ * recorded checkpoint is ~3,200 tokens, and the 4,369-token cap that once truncated a live checkpoint is 15x
+ * below this - so it bounds the request without ever rationing a real answer.
+ */
+const SUMMARIZATION_MAX_OUTPUT_TOKENS = 65_536;
 
 /**
  * The room one summarization reply may take, for the request that is about to go out.
@@ -228,12 +238,21 @@ const SUMMARIZATION_MARGIN_TOKENS = 1024;
  * This replaces two numbers derived from pi's `reserveTokens` (`0.8 * reserve`, then a third of it for stage 1),
  * which capped a live 94-event checkpoint at 4,369 tokens on a route whose model reports 65,536: the reply hit the
  * cap, the truncation check rejected it, and 47.6k fresh input plus 53 seconds bought a discarded document. A cap
- * can only ever bind, so both stages now get the room the request leaves, and the rival-draft risk the fraction
- * protected is carried by the instruction and the report's checkpoint/summary ratio instead.
+ * can only ever bind, so both stages now get the room the request leaves - bounded by the summary ceiling below -
+ * and the rival-draft risk the fraction protected is carried by the instruction and the report's
+ * checkpoint/summary ratio instead.
  *
  * `requestTokens` is the whole request as the fit gate charges it - system prompt, tool schemas, span, instruction.
  * Subtracting only the span overstates the room by the fixed prefix, and the margin keeps the gate falsifiable: at
  * `budget == window - request` it reduces to `needed < needed` and refuses every run.
+ *
+ * The `min(model.maxTokens, room)` shape was still wrong on models whose store entry reports the context window as
+ * its output ceiling (21 of 98 in the local store, including every Cloudflare workers-ai deepseek/glm/kimi entry):
+ * the model term was a no-op, so both stages asked for nearly the whole remaining window. That is what rejected run
+ * `01a1775d` - stage 2 asked for 1,035,466 output tokens on a 1,048,576-token window, the provider's count of the
+ * request was 1,025 tokens above our chars/4 estimate, and the 1,024-token margin could not absorb it - and it also
+ * made the cut walk reserve the same near-window number and move boundaries earlier than needed.
+ * `SUMMARIZATION_MAX_OUTPUT_TOKENS` is the third term that bounds both.
  */
 export function summarizationBudgetTokens(input: {
     modelMaxTokens: number;
@@ -246,11 +265,12 @@ export function summarizationBudgetTokens(input: {
     const margin = input.marginTokens ?? SUMMARIZATION_MARGIN_TOKENS;
     // Deliberately unfloored: a floor here grants room the window lacks, which the gate charges back to the run.
     const room = Math.max(0, contextWindow - requestTokens - margin);
-    if (!Number.isFinite(modelMaxTokens) || modelMaxTokens <= 0) {
-        return room;
-    }
+    const modelCeiling =
+        Number.isFinite(modelMaxTokens) && modelMaxTokens > 0
+            ? modelMaxTokens
+            : Number.POSITIVE_INFINITY;
 
-    return Math.min(modelMaxTokens, room);
+    return Math.min(modelCeiling, SUMMARIZATION_MAX_OUTPUT_TOKENS, room);
 }
 
 /**
@@ -1005,7 +1025,14 @@ async function runReduceStage(
     });
 
     const attempt = await summarizeSerializedTranscript(
-        { registry: ctx.modelRegistry, model, maxTokens, retry: retryPolicy(input.config), signal },
+        {
+            registry: ctx.modelRegistry,
+            model,
+            maxTokens,
+            retry: retryPolicy(input.config),
+            signal,
+            thinkingLevel: sessionThinkingLevel(input.pi),
+        },
         { conversationText: transcript.text, requestText },
     );
 

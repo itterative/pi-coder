@@ -39,5 +39,6 @@ on a backoff that was supposed to be off. Add the field to `readConfigFile` in t
 (`obs=0` resolved the same evening). **2026-09-06** — request parity (`tool_choice` dropped, thinking level forwarded,
 sampling params merged), the request chain and its persisted rows, the prefix funnel, `stageOneSpanEntries`, the cut
 point, `estimate-skew` repaired. **2026-09-07** — the head ledger, the wire projection in `usage.ts`, the closing
-bracket, the per-stage output cap, and the ledger-backed cut walk. Where a number was later shown to be an artifact, the
-detail file says so at the number rather than silently replacing it.
+bracket, the per-stage output cap, and the ledger-backed cut walk. **2026-10-26** — the 65,536 summary output
+ceiling (`model.maxTokens` is sometimes the context window) and stage-2 thinking forwarding. Where a number was later
+shown to be an artifact, the detail file says so at the number rather than silently replacing it.

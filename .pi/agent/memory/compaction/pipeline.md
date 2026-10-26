@@ -28,13 +28,15 @@ the instruction text, because `tool_choice` is not sent (below). There is **no t
 `native-request.ts`**: it never looks at `toolCall` parts, and any future pruning must be measured against the
 reuse numbers in `prefix-cache.md`.
 
-Stage 1 forwards the session's thinking level as `reasoningEffort` (below); stage 2 deliberately does not. A
+Both stages forward the session's thinking level as `reasoningEffort` (below). A
 `toolCall` block in the response rejects the stage; a call the server leaves unparsed arrives as text and is
 **not** detected. Each stage's reply is capped by the same formula, `summarizationBudgetTokens` —
-`min(model.maxTokens, window − request − margin)`, floored at `MIN_OUTPUT_TOKENS` — where `request` is **that
-stage's own request** (stage 1: the system prompt, tool schemas, span and appended instruction; the reduce: its
-serialized blob plus its own system prompt). A cap that binds discards a checkpoint whole, so the cap must track the
-request rather than the session's fullness (see `sizing.md`, "the budgets behind the fit test"). Stage 1 is told it
+`min(model.maxTokens, SUMMARIZATION_MAX_OUTPUT_TOKENS, window − request − margin)`, floored at `MIN_OUTPUT_TOKENS` —
+where `request` is **that stage's own request** (stage 1: the system prompt, tool schemas, span and appended
+instruction; the reduce: its serialized blob plus its own system prompt). A cap that binds discards a checkpoint
+whole, so the cap must track the request rather than the session's fullness (see `sizing.md`, "the budgets behind
+the fit test"). The 65,536 summary ceiling is the third term: `model.maxTokens` is sometimes the context window,
+which made the cap the whole remaining window and rejected a live reduce (see `sizing.md`). Stage 1 is told it
 is an intermediate, because a generous intermediate becomes a rival draft: measured before any cap existed, stage 1
 wrote 3,207 tokens and the reduce then produced something *longer* than the material it was handed. That risk is
 carried by the instruction and the report's ratio, not by a smaller cap.
@@ -164,7 +166,7 @@ then. Residual gap: a call arriving as text is undetected, and that is the one c
 detector for. Verify on the next stage-1 run that `prefix.parameters` is empty, and that if the model still calls,
 the rejection reads `attempt.outcome: rejected` with `stopReason: toolUse` rather than a `stop` carrying prose.
 
-**Stage 1 forwards the thinking level.** Omitting it was not neutral: on the compatible branches pi-ai renders
+**Both stages forward the thinking level.** Omitting it was not neutral: on the compatible branches pi-ai renders
 `enable_thinking = !!options.reasoningEffort` before mapping the level through `model.thinkingLevelMap`, so a
 request that never asks gets `enable_thinking: false` and no effort key while pi's has `true` plus the user's level
 — a difference inside the templated preamble, where it costs the whole cache read. `turnThinkingEffort` in
@@ -177,9 +179,15 @@ the first. Two easy-to-miss details: we call `modelRegistry.complete()`, which t
 field is `reasoningEffort` holding a *level* — the `reasoning` → `reasoningEffort` translation lives in
 `streamSimple`, which we do not use (same reason `toolChoice` reached the wire as `tool_choice` for us); and passing
 `"off"` through is not the same as dropping it, because `!!"off"` is truthy and would flip `enable_thinking` to
-`true`, hence the collapse to `undefined`. Stage 2 does not forward it on purpose: no cached prefix (own system
-prompt, no tools, `cacheRetention: "none"`, fresh session id), and thinking tokens come out of the same output
-budget as the summary — on the one rung that *keeps* a `length`-truncated answer.
+`true`, hence the collapse to `undefined`.
+
+Stage 2 forwards it too, reversing an earlier ruling that it should not. "Leave it unset" does not mean "send no
+parameter": the qwen, deepseek and zai branches render an absent level as an **explicit disable**
+(`enable_thinking: false`, `thinking: {type: "disabled"}`), so the reduce was the one request in the pipeline that
+turned thinking off while pi's turns and core's own summarizer (`compaction.js:463-468`) forwarded the level. The
+old argument — thinking tokens compete with the summary's output budget — is answered by the 65,536 ceiling in
+`sizing.md`: thinking can no longer starve the reply, and a summary is a reasoning task. The stage-2 call now
+passes `thinkingLevel: sessionThinkingLevel(input.pi)` and goes through the same `turnThinkingEffort` guard.
 
 **The model's own sampling parameters are merged.** pi's turn request goes through `streamSimple` →
 `buildBaseOptions`, which sets `samplingParams: {...model.samplingParams, ...options.samplingParams}`, and

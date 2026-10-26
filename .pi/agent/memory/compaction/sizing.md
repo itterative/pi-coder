@@ -213,24 +213,38 @@ an earlier ruling** of this note that `reserveTokens` "feeds the trigger line an
 What the budget is now (`summarizationBudgetTokens` in `index.ts`, exported, pinned by
 `test/modules/compaction/budget.test.ts` plus handler cases):
 
-- **Each stage pays for its own body:** `max(MIN_OUTPUT_TOKENS, min(model.maxTokens, window − requestTokens −
-  margin))`, where `requestTokens` is the **whole request that stage is about to send** — for stage 1 the system
-  prompt, tool schemas, span and appended instruction (`runSegmentStage`, from its own counted request); for the
-  reduce the serialized blob plus `SERIALIZATION_SYSTEM_PROMPT`, and no tools (`stageTwoRequest`). The handler case
-  "sizes the reduce's cap from its own transcript" is the one that separates the two numbers; it dies if the reduce
-  inherits stage 1's again. whereAgainst `~/.pi/agent/models-store.json`, `qwen3.8-flash` reports `maxTokens: 65,536`,
-  so the cap went from a constant 13,107 (4,369 for stage 1) to the model's own ceiling.
-  **Sharing one number was a live defect until 2026-09-07:** `StageContext.maxTokens` came from chars/4 of *core's
+- **Each stage pays for its own body:** `max(MIN_OUTPUT_TOKENS, min(model.maxTokens,
+  SUMMARIZATION_MAX_OUTPUT_TOKENS, window − requestTokens − margin))`, where `requestTokens` is the **whole request
+  that stage is about to send** — for stage 1 the system prompt, tool schemas, span and appended instruction
+  (`runSegmentStage`, from its own counted request); for the reduce the serialized blob plus
+  `SERIALIZATION_SYSTEM_PROMPT`, and no tools (`stageTwoRequest`). The handler case "sizes the reduce's cap from its
+  own transcript" is the one that separates the two numbers; it dies if the reduce inherits stage 1's again.
+  Against `~/.pi/agent/models-store.json`, `qwen3.8-flash` reports `maxTokens: 65,536`, so the cap went from a
+  constant 13,107 (4,369 for stage 1) to the model's own ceiling — and then acquired a constant ceiling of its own
+  (next bullet), because that field is not always an output limit.
+- **The summary ceiling is the third term, and it is a constant:** `SUMMARIZATION_MAX_OUTPUT_TOKENS = 65,536`.
+  `model.maxTokens` is not always an output ceiling: 21 of 98 entries in the local store report it as the context
+  window, including every Cloudflare workers-ai deepseek/glm/kimi model, so `min(model.maxTokens, room)` resolved to
+  the whole remaining window. On a 1,048,576-token window stage 1 asked for 967,589 output tokens and stage 2 for
+  1,035,466 (2026-10-26, run `01a1775d`); the provider rejected the reduce at 1,048,577 total because its count of
+  the request was 1,025 tokens above our chars/4 estimate and the 1,024-token margin could not absorb it. The same
+  number is what `cutOutputReserveTokens` hands the walk, so it also moved boundaries earlier than needed:
+  `01a0d8b7` (200k window, 101,141 cap, 97,835 span) moved 29 rows and `01a0e358` (1M window, 384,000 cap, 611,987
+  span) moved 100, both for `span-does-not-fit`; both fit under the 65,536 ceiling. Unlike the margin, this number
+  may *not* scale with the window: a summary's length is not a function of the context size. It is 15x the
+  4,369-token cap that once truncated a live checkpoint and ~20x the largest recorded reply (~3,200t), so it bounds
+  the request without rationing an answer.
+- **Sharing one number was a live defect until 2026-09-07:** `StageContext.maxTokens` came from chars/4 of *core's
   proposed span* and was read by both the reduce and the walk, so the reduce's cap tracked how full the *session* was
   rather than how big its *request* was — 5,188 tokens on the first fill of a 200k window (against a 10,408-token
   request, answered at 3,249, 63% of the cap) and the 1,024 floor on the second fill (against 8,712). The field is
   now `cutOutputReserveTokens` and only `chooseSpanCut` reads it, which is where it belongs: the walk has to weigh a
   reserve before any stage exists, and the proposed span is its conservative side.
 - **A cap must never bind**, because a truncated checkpoint is discarded whole: recorded replies were 2,821t for 9
-  events and 2,313t for the reduce, and the cap was never the reason the model stopped. The rival-draft property the
-  old `1/3` protected (stage 2 once wrote *longer* than the 3,207-token checkpoint handed to it) is carried by the
-  instruction ("must be no longer than the checkpoint you were given") and the report's checkpoint/summary ratio.
-  Rationing the fatal direction was the bug; verbosity is only a cost.
+  events and 2,313t for the reduce, and neither the model ceiling nor the 65,536 summary ceiling was the reason the
+  model stopped. The rival-draft property the old `1/3` protected (stage 2 once wrote *longer* than the 3,207-token
+  checkpoint handed to it) is carried by the instruction ("must be no longer than the checkpoint you were given")
+  and the report's checkpoint/summary ratio. Rationing the fatal direction was the bug; verbosity is only a cost.
 - **A floored cap is worse than a binding one, and it fails silently.** The 1,024-token ask above came back
   `stopReason: "length"` with `output: 1024` and **no text at all**: a thinking model spends a budget that size before
   it starts writing, so the rung failed as `content` / "summarization returned an empty summary" rather than as a

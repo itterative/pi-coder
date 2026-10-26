@@ -147,18 +147,18 @@ describe("compaction stages", () => {
         expect(h.trailingInstruction(0)).toContain("## Key Decisions");
     });
 
-    it("stage 1 sends the session thinking level, and stage 2 does not", async () => {
+    it("both stages send the session thinking level", async () => {
         // The cache entry stage 1 is trying to hit was made by a pi turn request that carried these parameters,
         // and on the compatible branches pi-ai renders `enable_thinking` from this option's truthiness - so a
-        // silent omission is a different request, not the same one truncated.
+        // silent omission is a different request, not the same one truncated. Stage 2 has no prefix to protect,
+        // but core's own summarizer forwards the level (`compaction.js:463-468`), and an absent level is rendered
+        // as an explicit disable on the qwen/deepseek/zai formats rather than as no parameter at all.
         const h = build({ responses: [segmentSummary, reducedSummary], reasoningModel: true });
         h.piStub.thinkingSurface.level = "high";
         await h.compact();
 
         expect(h.optionField(0, "reasoningEffort")).toBe("high");
-        // Stage 2 has no cached prefix, and thinking tokens would compete with the budget of the one rung that
-        // keeps a `length`-truncated answer.
-        expect(h.optionField(1, "reasoningEffort")).toBeUndefined();
+        expect(h.optionField(1, "reasoningEffort")).toBe("high");
     });
 
     it("sends no thinking parameter when the model cannot reason or the level is off", async () => {
@@ -168,11 +168,13 @@ describe("compaction stages", () => {
         off.piStub.thinkingSurface.level = "off";
         await off.compact();
         expect(off.optionField(0, "reasoningEffort")).toBeUndefined();
+        expect(off.optionField(1, "reasoningEffort")).toBeUndefined();
 
         const plain = build({ responses: [segmentSummary, reducedSummary] });
         plain.piStub.thinkingSurface.level = "high";
         await plain.compact();
         expect(plain.optionField(0, "reasoningEffort")).toBeUndefined();
+        expect(plain.optionField(1, "reasoningEffort")).toBeUndefined();
     });
 
     it("compacts normally on a runtime that provides no thinking level", async () => {
@@ -182,6 +184,7 @@ describe("compaction stages", () => {
         const payload = await h.compact();
 
         expect(h.optionField(0, "reasoningEffort")).toBeUndefined();
+        expect(h.optionField(1, "reasoningEffort")).toBeUndefined();
         expect(payload?.details.route).toBe("two-stage");
     });
 
@@ -301,6 +304,20 @@ describe("compaction stages", () => {
         // pi's reserveTokens instead. A clamp anywhere on the reserve-derived figure is invisible at the stub's
         // 8,192 default, so the ceiling has to be tested where it is above every other candidate limit.
         const h = build({ responses: [segmentSummary, reducedSummary], maxTokens: 65_536 });
+        await h.compact();
+
+        expect(h.optionField(0, "maxTokens")).toBe(65_536);
+        expect(h.optionField(1, "maxTokens")).toBe(65_536);
+    });
+
+    it("does not ask for the whole window when the model reports the window as its output ceiling", async () => {
+        // The live shape: the Cloudflare model store entry reports contextWindow and maxTokens as the same
+        // 1,048,576. The cap used to resolve to the remaining window on both rungs; the summary ceiling bounds it.
+        const h = build({
+            responses: [segmentSummary, reducedSummary],
+            contextWindow: 1_048_576,
+            maxTokens: 1_048_576,
+        });
         await h.compact();
 
         expect(h.optionField(0, "maxTokens")).toBe(65_536);

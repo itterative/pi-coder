@@ -89,9 +89,10 @@ export interface SummarizationCall {
     /** Session id for provider affinity. Omitted on one-off requests that can never reuse a cache. */
     sessionId?: string;
     /**
-     * The session's thinking level. Only the native rung reads it: stage 1 exists to be a shorter prefix of a
-     * request the provider already cached, and pi's turn requests carry thinking parameters. The serialized
-     * rung has no cached prefix to protect and spends its whole budget on text, so it leaves this unset.
+     * The session's thinking level. Both rungs forward it: stage 1 so its rebuilt body matches the cached turn
+     * request, and stage 2 because core's own summarizer forwards it (`compaction.js:463-468`) and a summary is a
+     * reasoning task. Absence is not neutral - pi-ai renders an absent level as an explicit disable on the qwen,
+     * deepseek and zai formats - so leaving it unset here is how the reduce came to run with thinking off.
      */
     thinkingLevel?: ThinkingLevel;
     /**
@@ -419,6 +420,7 @@ export async function summarizeSerializedTranscript(
     call: SummarizationCall,
     input: SerializedTranscriptInput,
 ): Promise<SummarizationAttemptResult> {
+    const effort = turnThinkingEffort(call.model, call.thinkingLevel);
     const context: Context = {
         systemPrompt: SERIALIZATION_SYSTEM_PROMPT,
         messages: [
@@ -437,6 +439,10 @@ export async function summarizeSerializedTranscript(
             signal: call.signal,
             cacheRetention: "none",
             sessionId: uuidv7(),
+            // There is no cached prefix to protect here, but the level still belongs on the wire: an absent one
+            // renders as an explicit disable on the thinking formats, which is the one thing this rung must not
+            // silently do when the session asked for reasoning.
+            ...(effort === undefined ? {} : { reasoningEffort: effort }),
         },
         "serialized",
     );
