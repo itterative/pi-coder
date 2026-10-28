@@ -5,10 +5,10 @@ import type {
     ClassifierModel,
     ClassifierQuestion,
     ClassifierResult,
-    JsonObject,
     Usage,
 } from "@earendil-works/pi-ai";
 
+import { SUGGESTION_QUESTION_ID, type SuggestionState } from "./contract";
 import { resolveClassifier, type ClassifierRegistry } from "./model";
 import type { DecisionModelConfig } from "./types";
 
@@ -29,9 +29,6 @@ import type { DecisionModelConfig } from "./types";
  * `npx zorch run test/bar.test.ts` the same question moved from 0.80 (code) to 0.36 (data). The window is
  * filtered rather than a general transcript — a mixed recent window left the answer at 0.61.
  */
-
-/** The question id in the request and the answer map. */
-export const SUGGESTION_QUESTION_ID = "executes_code";
 
 /**
  * The measured wording. Answering "no" is the direction that widens a rule, so the instruction names the
@@ -68,8 +65,8 @@ export interface SuggestionContext {
 }
 
 /** The classifier state: the segment, and the same-tool commands that precede it. */
-export function buildSuggestionState(context: SuggestionContext): JsonObject {
-    const state: JsonObject = { command: context.command, cwd: context.cwd };
+export function buildSuggestionState(context: SuggestionContext): SuggestionState {
+    const state: SuggestionState = { command: context.command, cwd: context.cwd };
 
     if (context.recentCommands !== undefined && context.recentCommands.length > 0) {
         state.recent_commands = [...context.recentCommands];
@@ -79,7 +76,7 @@ export function buildSuggestionState(context: SuggestionContext): JsonObject {
 }
 
 /** One request, one question. */
-export function suggestionRequest(state: JsonObject): ClassifierContext {
+export function suggestionRequest(state: SuggestionState): ClassifierContext {
     return { state, questions: { [SUGGESTION_QUESTION_ID]: ROLE_QUESTION } };
 }
 

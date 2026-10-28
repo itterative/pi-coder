@@ -408,6 +408,7 @@ describe("planSessionWindow", () => {
 
     it("keeps the newest tool items and drops the older ones however small the budget", () => {
         const items = [
+            item("tool", "read(dropped)"),
             item("tool", "read(old.ts)"),
             item("tool", "edit(older.ts)"),
             item("tool", "write(newest.ts)"),
@@ -418,6 +419,7 @@ describe("planSessionWindow", () => {
         const window = planSessionWindow(items, 200);
 
         expect(window.items.map((kept) => kept.text)).toEqual([
+            "read(old.ts)",
             "edit(older.ts)",
             "write(newest.ts)",
             "the request",

@@ -47,6 +47,14 @@ Keep clocks, the per-run temp directory, temp dirs, repo paths, the home directo
 normalized out of snapshots — a sandboxed command reads as `sandbox(<inner command>)`. And send `tool_result`
 only for calls that were allowed, otherwise the snapshot claims edits that never happened.
 
+**Normalize the wrapper by shape, never by one machine's resolved path.** The bwrap and inner-shell paths vary
+(`/usr/bin/bash` vs `/bin/bash`, and `SHELL` picks between them), and `PATH` gains harness entries inside pi
+(`~/.pi/agent/bin`). A normalizer regex pinned to one argv silently no-ops, and the whole argument list — with
+`PATH`, `SHELL`, and `USER` — lands in the snapshot, so the test passes in one terminal and fails in another.
+Match any `bwrap` and any `bash`/`sh` (as `test/tools/agent-child-decisions.test.ts` now does) and regenerate.
+Do **not** pin `PATH`/`SHELL` in the test instead: the argv is deliberately not the subject, so a passing pin
+would only encode the machine.
+
 ## Assert a behavior, not a wiring detail
 
 A test that restates a literal (`expect(x.hardcodedField).toBe("same")`) catches nothing; test a double's

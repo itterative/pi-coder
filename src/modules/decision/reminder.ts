@@ -6,10 +6,14 @@ import type {
     ClassifierModel,
     ClassifierQuestion,
     ClassifierResult,
-    JsonObject,
     Usage,
 } from "@earendil-works/pi-ai";
 
+import {
+    REMINDER_PHASE_QUESTION,
+    type ReminderChoiceState,
+    type ReminderPhaseState,
+} from "./contract";
 import { resolveClassifier, type ClassifierRegistry } from "./model";
 import type { SessionWindow } from "./session-context";
 import type { DecisionModelConfig, DecisionRecentMessage, ReminderQuestionForm } from "./types";
@@ -49,11 +53,14 @@ export const DEFAULT_REMINDER_FORM: ReminderQuestionForm = "score";
 /**
  * Default score a reminder's own answer must reach when the form is `"score"`.
  *
- * The scale is `[0, criteria.length - 1]`, so 1.0 is the second of four levels. Measured `todo` scores on
- * real states were 0.94-1.21 while work was underway and 0.44 on a closed list, so 1.0 fires the former and
- * not the latter; the `todo` availability gate suppresses the no-list states the model also scored high.
+ * The scale has four levels - `[no help, mild, useful, important]` - so 1.0 *is* the "mild" rung, and mild is
+ * the median of the model's own answers: a gate at 1.0 fires on about half the points by construction rather
+ * than deciding anything. Measured over 70 mid-run points of three sessions, the deterministic pointer fires
+ * on every one of them while the hindsight oracle credits some reminder on 9% at 1.25. 1.25 is still clearly
+ * mild, and it is the threshold every cross-validated shape comparison was run at
+ * (`decision-model/window.md`), so it is the value the measurements are actually about.
  */
-export const DEFAULT_REMINDER_MIN_SCORE = 1;
+export const DEFAULT_REMINDER_MIN_SCORE = 1.25;
 
 /** The helpfulness levels of the score form, in order; the answer is a continuous point in this range. */
 export const REMINDER_HELPFULNESS_CRITERIA = ["no help", "mild", "useful", "important"] as const;
@@ -119,9 +126,6 @@ export const REMINDER_PHASES = [
 ] as const;
 
 export type ReminderPhase = (typeof REMINDER_PHASES)[number];
-
-/** Question ids for the state the model builds alongside the reminder choice. */
-export const REMINDER_PHASE_QUESTION = "next_state";
 
 /**
  * The state question, verbatim from the probe's `--tier` instruction.
@@ -209,8 +213,9 @@ export interface ReminderOption {
 /**
  * What the agent has been doing, derived from the session branch.
  *
- * The four-item recent window cannot carry this: a turn that edits three files and delegates to a worker can
- * look like one line of prose, and the reminder choice depends on exactly those facts.
+ * A conversation of clipped lines cannot carry this: a turn that edits three files and delegates to a worker can
+ * look like one line of prose, and the pool that conversation is judged over is gated on exactly those facts -
+ * which is why they are derived and recorded even though they no longer travel in the state.
  */
 export interface ReminderSessionActivity {
     /** User turns since the last reset (session start, tree navigation, compaction). */
@@ -249,7 +254,7 @@ export interface ReminderTodoState {
     current?: string;
 }
 
-/** Context the caller gathered beyond the request and the recent window. */
+/** Context the caller gathered beyond the conversation: activity, prior reminders, TODO progress, memories. */
 export interface ReminderSignals {
     cwd?: string;
     session?: ReminderSessionActivity;
@@ -260,13 +265,30 @@ export interface ReminderSignals {
 }
 
 export interface ReminderContext {
-    /** The request the turn serves. */
+    /**
+     * The request the turn serves.
+     *
+     * The tier-2 state does not carry it: its conversation ends with the request's own `User:` line, so the
+     * field would duplicate a line the model has already read. The tier-1 state cache still keys on it,
+     * because that ask's transcript is fitted around it.
+     */
     request?: string;
-    /** The last few turns, in the decision module's standard shape. */
+    /**
+     * The planned recent window, in the structured `{role, text}` shape.
+     *
+     * Kept for the callers and replays that still build it; nothing sends it now that tier 2 reads one
+     * allocator-rendered conversation ({@link ReminderContext.conversation}) instead of a structured window.
+     */
     recent?: readonly DecisionRecentMessage[];
     /** The reminders the model may choose from. */
     options: readonly ReminderOption[];
-    /** Activity, prior reminders, TODO progress, and the memory list. */
+    /**
+     * Activity, prior reminders, TODO progress, and the memory list.
+     *
+     * Measured to *hurt* the score: with these fields in the state every allocator window agreed with the
+     * oracle 0.14 kappa lower than the same window alone (`decision-model/window.md`), so the tier-2 state
+     * does not carry them. Callers still pass them - they gate the pool and fill the debug record.
+     */
     signals?: ReminderSignals;
     /**
      * The phase already accepted, when one is. The accept rule holds it unless this answer is confident enough
@@ -279,9 +301,18 @@ export interface ReminderContext {
      *
      * The state question is the only one that reads the transcript, and the transcript is fitted by the caller
      * ({@link windowTranscript}) from the same branch walk the pool's window comes from. Absent for a pool ask,
-     * which judges from signals instead.
+     * which is judged by {@link ReminderContext.conversation} instead.
      */
     transcript?: string;
+    /**
+     * The whole tier-2 state: one allocator-rendered conversation, `WINDOW_POLICY_REMINDER` over the branch's
+     * items, oldest first and ending with the request's own `User:` line.
+     *
+     * The shape the tier-2 comparison settled on (S11): the same window as text, with none of the structured
+     * signal fields, agreed with a hindsight oracle 0.14 kappa better than the window with them. Empty or
+     * absent means no state at all, because an empty `conversation` field says nothing a missing one does not.
+     */
+    conversation?: string;
     /**
      * Extra questions the caller wants answered in the same round trip, keyed by question id.
      *
@@ -293,50 +324,6 @@ export interface ReminderContext {
 
 /** What the model chose: no reminder, or one of the offered reminders. */
 export type ReminderDecision = { kind: "none" } | { kind: "reminder"; id: string };
-
-/**
- * The classifier state: the request, the recent turns, and the caller's signals.
- *
- * The candidate list is absent on purpose - the criteria carry that - and the signal objects are copied
- * rather than spread so a caller cannot mutate the state after it is built.
- */
-export function buildReminderState(context: ReminderContext): JsonObject {
-    const state: JsonObject = {};
-
-    if (context.request !== undefined && context.request.trim() !== "") {
-        state.request = context.request;
-    }
-
-    if (context.recent !== undefined && context.recent.length > 0) {
-        state.recent_messages = context.recent.map((item) => ({
-            role: item.role,
-            text: item.text,
-        }));
-    }
-
-    const signals = context.signals;
-    if (signals?.cwd !== undefined && signals.cwd !== "") {
-        state.cwd = signals.cwd;
-    }
-
-    if (signals?.session !== undefined && Object.keys(signals.session).length > 0) {
-        state.session = { ...signals.session };
-    }
-
-    if (signals?.reminders_shown !== undefined && signals.reminders_shown.length > 0) {
-        state.reminders_shown = signals.reminders_shown.map((shown) => ({ ...shown }));
-    }
-
-    if (signals?.todo !== undefined) {
-        state.todo = { ...signals.todo };
-    }
-
-    if (signals?.memories !== undefined && signals.memories.length > 0) {
-        state.memories = [...signals.memories];
-    }
-
-    return state;
-}
 
 /** The one state question: which state the session moves to next. */
 export function reminderStateQuestions(): Record<string, ClassifierQuestion> {
@@ -356,17 +343,15 @@ export function reminderStateQuestions(): Record<string, ClassifierQuestion> {
  * payload shape is what the measurement was about: the same window sent as structured `recent_messages` with
  * the anchor only in a gate read `exploring` at 0.17 confidence, this shape read `validating` at 0.82.
  *
- * `state` is not the pool's state: the pool judges from signals, and it has its own builder
- * ({@link buildReminderState}).
+ * `state` is not the pool's state: the pool judges from one conversation, and it is built in
+ * {@link ReminderEvaluator.choiceRequest}.
  */
 export function reminderStateRequest(
     currentState: ReminderPhase | undefined,
     conversation: string,
 ): ClassifierContext {
-    return {
-        state: { current_state: currentState ?? "none", conversation },
-        questions: reminderStateQuestions(),
-    };
+    const state: ReminderPhaseState = { current_state: currentState ?? "none", conversation };
+    return { state, questions: reminderStateQuestions() };
 }
 
 /**
@@ -377,10 +362,11 @@ export function reminderStateRequest(
  * probability bool, or a helpfulness score (the default, which separates the reminders where the bool
  * flattens them). The endpoint answers every question in the same round trip, as the file-access subject does
  * with kind/purpose/loss. The state question is not one of them: it has its own state, its own transcript and
- * its own window, and it is asked as its own call, so this state stays the signals the pool is judged by.
+ * its own window, and it is asked as its own call, so this state stays the one conversation the pool is
+ * judged by.
  */
 export function reminderChoiceRequest(
-    state: JsonObject,
+    state: ReminderChoiceState,
     options: readonly ReminderOption[],
     extraQuestions?: Readonly<Record<string, ClassifierQuestion>>,
     form: ReminderQuestionForm = DEFAULT_REMINDER_FORM,
@@ -538,11 +524,13 @@ export interface ReminderConsult {
     latencyMs: number;
     usage?: Usage;
     /**
-     * The recent window this consult was judged by, beside the state the caller built.
+     * The window this consult was judged by, beside the state the caller built.
      *
      * Carried back rather than recomputed: the consult reads the branch once, so a log that re-read the branch
-     * afterwards can record a window that was not the one sent. An empty window is recorded as empty, so a
-     * reader never has to guess from the state whether there was one. Absent when no consult was attempted.
+     * afterwards can record a window that was not the one sent. The items are the ones the conversation shows,
+     * each clipped to the chars the allocator gave it, so a replay reads the same text the model read. An
+     * empty window is recorded as empty, so a reader never has to guess from the state whether there was one.
+     * Absent when no consult was attempted.
      */
     window?: SessionWindow;
 }
@@ -737,10 +725,14 @@ export class ReminderEvaluator {
         return consultFrom(answer, "answered", latencyMs, result.usage);
     }
 
-    /** The tier-2 request: the pool's questions, whose state is the signals and the planned window. */
+    /** The tier-2 request: the pool's questions, whose whole state is the one conversation it reads. */
     private choiceRequest(context: ReminderContext, form: ReminderQuestionForm): ClassifierContext {
+        const conversation = context.conversation?.trim() ?? "";
+
+        // An empty window sends no state rather than an empty string: the key would carry no fact, and a
+        // `conversation: ""` reads to a small model like a claim that there is no context at all.
         return reminderChoiceRequest(
-            buildReminderState(context),
+            conversation === "" ? {} : { conversation },
             context.options,
             context.extraQuestions,
             form,
@@ -865,9 +857,13 @@ function reminderThresholdOf(config: DecisionModelConfig, form: ReminderQuestion
 }
 
 /**
- * A reminder answer keyed by everything that can change it: the model, the question form, the candidates, the
- * request, and the recent window. The request turns over every turn, so the cache mostly helps a repeated
- * consult for the same turn rather than serving an old choice into new context.
+ * A reminder answer keyed by everything the request actually carries: the model, the question form, the
+ * candidates, and the conversation.
+ *
+ * The conversation turns over every turn, so the cache mostly helps a repeated consult for the same turn
+ * rather than serving an old choice into new context. The signals and the planned window are deliberately
+ * absent: the request sends neither, so an answer keyed on them could not differ - and keying on a field the
+ * state no longer carries would let two different conversations share one answer.
  */
 function reminderCacheKey(
     model: Classifier,
@@ -879,9 +875,7 @@ function reminderCacheKey(
         model.id,
         form,
         context.options.map((option) => [option.id, option.guidance]),
-        context.request ?? "",
-        context.recent ?? [],
-        context.signals ?? null,
+        context.conversation ?? "",
         context.extraQuestions ?? null,
     ]);
 }

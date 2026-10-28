@@ -313,4 +313,88 @@ describe("ReminderScheduler", () => {
             ACTIVE_ROTATION_REMINDERS[0],
         );
     });
+
+    it("declines a mid-run point the model answers none on, and restarts the cooldown", () => {
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        scheduler.noteContext(100);
+
+        expect(
+            scheduler.decideMidRun({ maxContextTokens: 200, modelChoice: "none" }),
+        ).toBeUndefined();
+        // Nothing was shown, so the turn's own reminder slot is still open.
+        expect(scheduler.snapshot().lastEmitTurn).toBe(1);
+        // The point was decided, so the next one is a full threshold away rather than the next streamed update.
+        expect(scheduler.snapshot().thresholdBaseline).toBe(200);
+        expect(scheduler.midRunDue(250)).toBe(false);
+        expect(scheduler.midRunDue(300)).toBe(true);
+    });
+
+    it("spends the mid-run budget on a decline so the same turn is not asked twice", () => {
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100, maxMidRunPerTurn: 1 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        scheduler.noteContext(100);
+
+        expect(
+            scheduler.decideMidRun({ maxContextTokens: 200, modelChoice: "none" }),
+        ).toBeUndefined();
+        expect(scheduler.snapshot().midRunThisTurn).toBe(1);
+        expect(
+            scheduler.decideMidRun({
+                maxContextTokens: 400,
+                modelChoice: ACTIVE_ROTATION_REMINDERS[0]?.id,
+            }),
+        ).toBeUndefined();
+    });
+
+    it("emits the model's mid-run pick and leaves the pointer after it", () => {
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100 });
+        const pick = ACTIVE_ROTATION_REMINDERS[2];
+        if (pick === undefined) {
+            throw new Error("the catalog is too short for this case");
+        }
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        scheduler.noteContext(100);
+
+        expect(scheduler.decideMidRun({ maxContextTokens: 200, modelChoice: pick.id })).toBe(pick);
+
+        // A deterministic fallback on the next crossing continues after the model's pick, not from the pointer
+        // the rotation would have reached on its own.
+        expect(scheduler.decide({ maxContextTokens: 400 })).toBe(ACTIVE_ROTATION_REMINDERS[3]);
+    });
+
+    it("shows nothing when the model's mid-run pick is one the gate withholds", () => {
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100 });
+        const gated = ACTIVE_ROTATION_REMINDERS[1];
+        const allowed = ACTIVE_ROTATION_REMINDERS[0];
+        if (gated === undefined || allowed === undefined) {
+            throw new Error("the catalog is too short for this case");
+        }
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        scheduler.noteContext(100);
+
+        // The gate overrides the model, as it does on a turn: the id it did not ask for is not substituted.
+        expect(
+            scheduler.decideMidRun({
+                maxContextTokens: 200,
+                available: new Set<ReminderId>([allowed.id]),
+                modelChoice: gated.id,
+            }),
+        ).toBeUndefined();
+    });
+
+    it("keeps the deterministic mid-run rotation when the model was not asked", () => {
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        scheduler.noteContext(100);
+
+        expect(scheduler.decideMidRun({ maxContextTokens: 200, modelChoice: undefined })).toBe(
+            ACTIVE_ROTATION_REMINDERS[0],
+        );
+    });
 });

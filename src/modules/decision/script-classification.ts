@@ -4,6 +4,7 @@ import type {
     ClassifierQuestion,
 } from "@earendil-works/pi-ai";
 
+import { SCRIPT_QUESTION, type ScriptState } from "./contract";
 import type { FoldableAnswer } from "./policy";
 import type { DecisionAction, ScriptCapability } from "./types";
 
@@ -18,8 +19,6 @@ import type { DecisionAction, ScriptCapability } from "./types";
  * is capabilities rather than command criteria — `out_of_scope` is runner × capability and is composed when
  * the command classification sees these summaries beside the runner's rules, not answered here.
  */
-export const SCRIPT_QUESTION = "script";
-
 /** The capability question for a script body: one capability, the most consequential one. */
 export const SCRIPT_INSTRUCTION =
     "What can the code below do when it runs? Choose the single most consequential capability, or `read_only`.";
@@ -72,7 +71,8 @@ const CAPABILITY_QUESTION: ClassifierQuestion = {
 
 /** The one request for one body: the code itself, and the capability question. */
 export function scriptRequest(body: string): ClassifierContext {
-    return { state: { code: body }, questions: { [SCRIPT_QUESTION]: CAPABILITY_QUESTION } };
+    const state: ScriptState = { code: body };
+    return { state, questions: { [SCRIPT_QUESTION]: CAPABILITY_QUESTION } };
 }
 
 /** Whether a label is one of the script capabilities, for reading an answer from outside this module. */

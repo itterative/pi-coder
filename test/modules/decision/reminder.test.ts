@@ -13,6 +13,7 @@ import {
     DEFAULT_REMINDER_FORM,
     DEFAULT_REMINDER_MIN_PROBABILITY,
     DEFAULT_REMINDER_MIN_SCORE,
+    ITEM_CHARS,
     REMINDER_HELPFULNESS_CRITERIA,
     REMINDER_PHASE_CRITERIA,
     REMINDER_PHASE_INSTRUCTION,
@@ -21,7 +22,6 @@ import {
     PHASE_MOVE_CONFIDENCE,
     SHORT_WINDOW_CHARS,
     TRANSCRIPT_WINDOW_CHARS,
-    buildReminderState,
     consultReminderSelection,
     reminderChoiceRequest,
     reminderDecisionFrom,
@@ -132,56 +132,8 @@ function choiceCriteria(question: ClassifierQuestion | undefined): Record<string
 }
 
 describe("reminder state, request, and answer", () => {
-    it("carries the request and the recent window only when present", () => {
-        expect(buildReminderState({ options: OPTIONS })).toEqual({});
-
-        const state = buildReminderState({
-            request: "run the tests",
-            recent: [{ role: "command", text: "npm test" }],
-            options: OPTIONS,
-        });
-
-        expect(state).toEqual({
-            request: "run the tests",
-            recent_messages: [{ role: "command", text: "npm test" }],
-        });
-    });
-
-    it("merges the caller's signals into the state", () => {
-        const state = buildReminderState({
-            request: "run the tests",
-            options: OPTIONS,
-            signals: {
-                cwd: "/repo",
-                session: {
-                    user_turns: 4,
-                    context_tokens: 12_000,
-                    tools: { bash: 2 },
-                    tests_run: false,
-                },
-                reminders_shown: [{ id: "sandbox", turns_ago: 3 }],
-                todo: { completed: 1, total: 2, current: "wire it" },
-                memories: ["agents", "testing"],
-            },
-        });
-
-        expect(state).toEqual({
-            request: "run the tests",
-            cwd: "/repo",
-            session: {
-                user_turns: 4,
-                context_tokens: 12_000,
-                tools: { bash: 2 },
-                tests_run: false,
-            },
-            reminders_shown: [{ id: "sandbox", turns_ago: 3 }],
-            todo: { completed: 1, total: 2, current: "wire it" },
-            memories: ["agents", "testing"],
-        });
-    });
-
     it("asks one score question per offered reminder by default", () => {
-        const request = reminderChoiceRequest({ request: "run the tests" }, OPTIONS);
+        const request = reminderChoiceRequest({ conversation: "User: run the tests" }, OPTIONS);
 
         for (const option of OPTIONS) {
             const question = request.questions[option.id];
@@ -204,7 +156,7 @@ describe("reminder state, request, and answer", () => {
 
     it("asks one probability question per reminder in the bool form", () => {
         const request = reminderChoiceRequest(
-            { request: "run the tests" },
+            { conversation: "User: run the tests" },
             OPTIONS,
             undefined,
             "bool",
@@ -377,6 +329,27 @@ describe("reminder state, request, and answer", () => {
         ).toEqual({ kind: "none" });
     });
 
+    it("gates the score form above the mild rung the model's own answers sit at", () => {
+        const level = (score: number): Record<string, ClassifierAnswer> => ({
+            sandbox: { type: "score", score, confidence: 0.5 },
+        });
+
+        // The scale is `[no help, mild, useful, important]`, so 1.0 *is* the mild rung - and it is the median of
+        // the model's answers, which makes a gate there a coin flip rather than a decision. The shipped gate
+        // sits just above it, at the threshold the shape comparisons were run at.
+        expect(DEFAULT_REMINDER_MIN_SCORE).toBe(1.25);
+        expect(reminderDecisionFrom(level(1.1), OPTIONS, DEFAULT_REMINDER_MIN_SCORE)).toEqual({
+            kind: "none",
+        });
+        expect(
+            reminderDecisionFrom(
+                level(DEFAULT_REMINDER_MIN_SCORE),
+                OPTIONS,
+                DEFAULT_REMINDER_MIN_SCORE,
+            ),
+        ).toEqual({ kind: "reminder", id: "sandbox" });
+    });
+
     it("only enables the subject when the config opts in", () => {
         expect(reminderEnabled({ enabled: true, reminders: true })).toBe(true);
         expect(reminderEnabled({ enabled: true, reminders: false })).toBe(false);
@@ -411,6 +384,36 @@ describe("ReminderEvaluator", () => {
             decision: { kind: "reminder", id: "sandbox" },
         });
         expect(classify).toHaveBeenCalledTimes(1);
+    });
+
+    it("keys the cache on the conversation the request sends", async () => {
+        const { evaluator, classify } = harness();
+
+        expect(await evaluator.evaluate({ ...context, conversation: "User: first" })).toMatchObject(
+            { status: "answered" },
+        );
+        expect(await evaluator.evaluate({ ...context, conversation: "User: first" })).toMatchObject(
+            {
+                status: "cached",
+            },
+        );
+        // A different conversation is a different state, so the cached answer cannot be served into it.
+        expect(
+            await evaluator.evaluate({ ...context, conversation: "User: second" }),
+        ).toMatchObject({ status: "answered" });
+        expect(classify).toHaveBeenCalledTimes(2);
+
+        // The signals and the request are not in the state any more, so they must not fragment the cache:
+        // an answer for one conversation stands for the same conversation beside any other signals.
+        expect(
+            await evaluator.evaluate({
+                ...context,
+                conversation: "User: first",
+                request: "a different request",
+                signals: { cwd: "/elsewhere" },
+            }),
+        ).toMatchObject({ status: "cached" });
+        expect(classify).toHaveBeenCalledTimes(2);
     });
 
     it("preserves a deliberate none when every level is below the threshold", async () => {
@@ -527,7 +530,10 @@ describe("ReminderEvaluator", () => {
     });
 });
 
-/** A branch long enough that the window has to drop items, so a carried window can be checked whole. */
+/**
+ * A branch whose conversation is longer than the reminder window's budget, so the allocator has to drop items
+ * and a carried window can be checked whole against what was actually sent.
+ */
 function longBranch(): SessionEntry[] {
     const messages: AppendedMessage[] = [];
     for (let turn = 1; turn <= 6; turn += 1) {
@@ -535,8 +541,20 @@ function longBranch(): SessionEntry[] {
         messages.push(
             assistantEntry(
                 [
-                    textPart(`Answer ${String(turn)}.`),
-                    toolCall("bash", { command: `rg step${String(turn)} src` }, `c${String(turn)}`),
+                    textPart(
+                        `Answer ${String(turn)}. ` +
+                            "reviewing the branch and the files around it before editing. ".repeat(
+                                12,
+                            ),
+                    ),
+                    toolCall(
+                        "bash",
+                        {
+                            command:
+                                `rg step${String(turn)} src` + " --with-line-numbers".repeat(20),
+                        },
+                        `c${String(turn)}`,
+                    ),
                 ],
                 turn * 2,
             ),
@@ -582,10 +600,31 @@ describe("consultReminderSelection", () => {
         const question = sent.questions[OPTIONS[0]?.id ?? ""];
         expect(question?.type).toBe("score");
         expect(question?.instructions).toContain(OPTIONS[0]?.guidance);
-        // The live prompt is what the model judges, not the branch's previous request.
-        expect(sent.state.request).toBe("run the tests");
-        expect(sent.state.cwd).toBe("/repo");
-        expect(sent.state.session).toEqual({ user_turns: 2, tests_run: false });
+        // The state is one conversation, and it carries the live prompt rather than the branch's previous
+        // request: neither the signals nor a separate `request` field rides with it.
+        expect(Object.keys(sent.state)).toEqual(["conversation"]);
+        expect(sent.state.conversation).toBe("User: run the tests");
+    });
+
+    it("sends no state at all when the branch has no conversation to render", async () => {
+        const { registry, classify } = harness();
+
+        const consult = await consultReminderSelection({
+            ctx: consultContext(registry),
+            config: {
+                enabled: true,
+                reminders: true,
+                provider: DECISION_PROVIDER_ID,
+                model: MODEL.id,
+            },
+            options: OPTIONS,
+        });
+
+        // An empty window sends `{}` rather than `conversation: ""`: the key would carry no fact, and an
+        // empty conversation reads to a small model like a claim that there is no context at all.
+        expect(consult.status).toBe("answered");
+        expect(classify.mock.calls[0]?.[1]).toMatchObject({ state: {} });
+        expect(consult.window).toEqual({ items: [], omitted: 0 });
     });
 
     it("counts the consult in flight on the caller's bus", async () => {
@@ -663,22 +702,33 @@ describe("consultReminderSelection", () => {
         });
 
         expect(consult.status).toBe("answered");
-        // The window is the read this consult made, and it is the one the state carried: a debug entry that
+        // The window is the read this consult made, and it is the one the state is made of: a debug entry that
         // recorded anything else, or re-read the branch later, would be describing a window that was not sent.
         const sent = classify.mock.calls[0]?.[1] as ClassifierContext;
-        expect(sent.state.recent_messages).toEqual(
-            consult.window?.items.map((item) => ({ role: item.role, text: item.text })),
-        );
-        // Three items a turn - the ask, the answer, and the call. The live prompt outranks the branch's newest
-        // ask, which is dropped with the rest of the overflow: seventeen items left, a budget for ten.
-        expect(sent.state.request).toBe("run the tests");
-        expect(consult.window?.items).toHaveLength(10);
-        expect(consult.window?.omitted).toBe(7);
-        // The guarantee holds at the newest end: the turn's own tool call is kept, not trimmed away.
-        expect(consult.window?.items.at(-1)?.text).toBe("rg step6 src");
+        const conversation = sent.state.conversation as string;
+        const lines = conversation.split("\n");
+
+        expect(Object.keys(sent.state)).toEqual(["conversation"]);
+        // The conversation carries the turn's request itself, as its newest user line - the state has no
+        // separate `request` field to duplicate it into.
+        expect(lines.at(-1)).toBe("User: run the tests");
+        // The branch's own turns do not fit the 2000-char budget, so the allocator trimmed it rather than
+        // sending everything: the newest fact is never the one that is dropped.
+        expect(consult.window?.omitted).toBeGreaterThan(0);
+        expect(consult.window?.items.length).toBe(lines.length - 1);
+        expect(consult.window?.items.at(-1)).toEqual({ role: "user", text: "run the tests" });
+        // The guarantee holds at the newest end too: the turn's own tool call is kept and sent whole from its
+        // start, not trimmed away for a longer older item.
+        const newestCommand = consult.window?.items.findLast((item) => item.role === "command");
+        expect(newestCommand?.text.startsWith("rg step6 src")).toBe(true);
+        // Every recorded item is the text the model read, not the branch's unclipped atom.
+        for (const item of consult.window?.items ?? []) {
+            expect(conversation).toContain(item.text);
+            expect(item.text.length).toBeLessThanOrEqual(ITEM_CHARS);
+        }
     });
 
-    it("clips a caller-supplied prompt to the state's request limit", async () => {
+    it("clips a caller-supplied prompt to the window's share of the conversation", async () => {
         const { registry, classify } = harness();
         const config = {
             enabled: true,
@@ -695,11 +745,13 @@ describe("consultReminderSelection", () => {
         });
 
         const sent = classify.mock.calls[0]?.[1] as ClassifierContext;
-        const request = sent.state.request;
+        const requestLine = String(sent.state.conversation).split("\n").at(-1);
 
-        expect(typeof request).toBe("string");
-        expect((request as string).length).toBeLessThanOrEqual(600);
-        expect(request as string).toMatch(/…$/u);
+        // The request is clipped to the state's request limit before it becomes a window item, and the window
+        // then gives it its own share, so a template expansion never crowds out the conversation beside it.
+        expect(requestLine?.startsWith("User: x")).toBe(true);
+        expect(requestLine?.length).toBeLessThanOrEqual(ITEM_CHARS + "User: ".length);
+        expect(requestLine).toMatch(/…$/u);
     });
 
     it("does not ask when the config lacks the opt-in", async () => {

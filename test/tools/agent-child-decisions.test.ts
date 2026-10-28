@@ -95,7 +95,15 @@ function describeOutcome(result: unknown): string {
     return "allow";
 }
 
-const SANDBOX_WRAPPER = /\/usr\/bin\/bwrap .*-- \/usr\/bin\/bash -c '(.*?)'\s*$/s;
+/**
+ * The bubblewrap wrapper, collapsed to the command it sandboxes.
+ *
+ * Deliberately agnostic about the `bwrap` path and the inner shell: both are resolved per machine, and
+ * `SHELL` decides whether the tail is `/usr/bin/bash`, `/bin/bash`, or `sh`. An argv pinned to one of them
+ * would leak the forwarded `PATH`, `SHELL`, and `USER` into this snapshot and fail on any other environment
+ * (including a run from inside pi, which puts `~/.pi/agent/bin` on `PATH`).
+ */
+const SANDBOX_WRAPPER = /\S*bwrap\b.*-- \S*(?:bash|sh) -c '(.*?)'\s*$/s;
 
 /**
  * Removes everything a snapshot must not carry: the per-run temp directory, the real repository and
@@ -218,6 +226,13 @@ describe("child gate decisions", () => {
         for (const testCase of CASES) {
             blocks.push(`### ${testCase.label}`, ...(await rowsFor(testCase)));
         }
+
+        // Guard the normalization itself, not only the snapshot: a wrapper regex that stops matching would
+        // let the whole bwrap argv (PATH, SHELL, USER included) into the file, and the snapshot would then
+        // pass only on the machine that generated it — exactly the failure this file already had once.
+        const rendered = blocks.join("\n");
+        expect(rendered).not.toContain("bwrap");
+        expect(rendered).toContain('bash "sandbox(cat ');
 
         await expect(blocks.join("\n")).toMatchFileSnapshot(
             "__snapshots__/agent-child-decisions.txt",

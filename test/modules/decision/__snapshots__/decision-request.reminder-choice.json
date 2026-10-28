@@ -1,0 +1,27 @@
+{
+  "state": {
+    "conversation": "User: run the tests"
+  },
+  "questions": {
+    "todo": {
+      "type": "score",
+      "instructions": "How helpful would showing this reminder be right now: Track the open items in the TODO list.",
+      "criteria": [
+        "no help",
+        "mild",
+        "useful",
+        "important"
+      ]
+    },
+    "validation": {
+      "type": "score",
+      "instructions": "How helpful would showing this reminder be right now: Run the tests before claiming the work is done.",
+      "criteria": [
+        "no help",
+        "mild",
+        "useful",
+        "important"
+      ]
+    }
+  }
+}

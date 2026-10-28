@@ -33,6 +33,14 @@ export function sessionManager(cwd = process.cwd()): SessionManager {
     return SessionManager.create(cwd, directory);
 }
 
+/**
+ * A session in a directory the caller owns, so two sessions can share one discovery root. The caller cleans the
+ * directory up, because it is not registered with `cleanupBranches()`.
+ */
+export function sessionInDirectory(cwd: string, directory: string): SessionManager {
+    return SessionManager.create(cwd, directory);
+}
+
 /** A branch from a real session manager, so entry shapes are pi's rather than an approximation. */
 export function branch(messages: readonly AppendedMessage[]): SessionEntry[] {
     const session = sessionManager();

@@ -1,9 +1,10 @@
 offered: memory-hygiene, delegation, validation
 signals: {"user_turns":3,"context_tokens":42000,"tools":{"read":1,"bash":1,"edit":1},"recent_tools":["read","bash","edit"],"files_modified":["src/modules/reminders/session-signals.ts"],"tests_run":true,"phase":"implementing","unvalidated":true}
-conversation (6 items, 0 dropped):
+conversation (7 items, 0 dropped):
 User: gate the validation reminder on work produced
 Assistant: Reading the signals module first.
 Tool: read(src/modules/reminders/session-signals.ts)
+User: also cover the mid-run path
 Tool: bash(npx vitest run test/modules/reminders)
 Assistant: The gate reads the scan, so the edit goes there.
 Tool: edit(src/modules/reminders/session-signals.ts)

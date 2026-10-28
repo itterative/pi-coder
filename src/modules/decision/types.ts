@@ -189,11 +189,12 @@ export interface DecisionModelConfig {
      */
     reminderForm?: ReminderQuestionForm;
     /**
-     * Score a reminder's own answer must reach to be shown (default 1.0, with `reminderForm: "score"`).
+     * Score a reminder's own answer must reach to be shown (default 1.25, with `reminderForm: "score"`).
      *
      * The score form returns a continuous level in `[0, criteria.length - 1]`, not a probability, so it has
-     * its own gate; 1.0 separates the measured show/no-show states for `todo`. Unlike `reminderMinProbability`
-     * it is not bounded by 1. Only meaningful when `reminders` is on.
+     * its own gate; 1.0 is the "mild" rung and the median of the model's own answers, which fires on about
+     * half the points, so the shipped gate sits just above it. Unlike `reminderMinProbability` it is not
+     * bounded by 1. Only meaningful when `reminders` is on.
      */
     reminderMinScore?: number;
     /**
@@ -341,6 +342,9 @@ export type DecisionAuthority = "inspect" | "command" | "mutate";
  * lever `veto` and `history` differ on. `runner` and `isolation` select the runner rules, and default to
  * `parent`/`checkout`. `command` and `file` mark which subject is being judged; the script fields are
  * command-only and are absent for a file consult.
+ *
+ * This is the caller's input, not the wire shape: what the model actually receives is `CommandState` in
+ * `contract.ts`, which is where a field's conditions are declared.
  */
 export interface DecisionContext {
     /** The unresolved command, exact text. */
@@ -403,6 +407,8 @@ export interface DecisionContext {
  * almost nothing: a command consult resolves script bodies, reads the working tree, and folds a capability
  * against the runner's rung, and none of that is meaningful about a path. What they share is the session half
  * — the request and the rules the runner is judged by — and `classifierRecord`/policy on the way out.
+ *
+ * The wire shape is `FileAccessState` in `contract.ts`.
  */
 export interface FileAccessDecisionContext {
     file: FileDecisionSubject;

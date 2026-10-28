@@ -23,12 +23,14 @@ import {
 import { transcriptItems, windowTranscript } from "./transcript";
 import { SuggestionEvaluator, type SuggestionConsult } from "./suggestion";
 import { workspaceStatusFor } from "./workspace";
+import { allocationText, selectWindow, WINDOW_POLICY_REMINDER } from "./window";
 import type { ClassifierRegistry } from "./model";
 import type { DecisionIsolation, DecisionRunner } from "./runner-rules";
 import type {
     DecisionAuthority,
     DecisionContext,
     DecisionModelConfig,
+    DecisionRecentMessage,
     DecisionSurface,
     DecisionVerdict,
     FileAccessDecisionContext,
@@ -269,7 +271,13 @@ export interface ReminderConsultOptions extends ReminderEvaluatorSeed {
      * request.
      */
     request?: string;
-    /** Activity, prior reminders, TODO progress, and the memory list. */
+    /**
+     * Activity, prior reminders, TODO progress, and the memory list.
+     *
+     * No longer part of the state: the shape comparison measured these fields 0.14 kappa *below* the same
+     * window sent alone, so the consult carries them for the caller's record while the state is the
+     * conversation alone.
+     */
     signals?: ReminderSignals;
     /** Extra questions the caller wants answered in the same round trip; returned under `consult.extras`. */
     extraQuestions?: Readonly<Record<string, ClassifierQuestion>>;
@@ -288,6 +296,32 @@ export interface ReminderConsultOptions extends ReminderEvaluatorSeed {
      * The caller's bus is passed rather than read from `ctx`: a child consult must animate the parent's badge.
      */
     events?: EventBus;
+}
+
+/**
+ * The atoms the tier-2 conversation is allocated from: the branch's items, plus the request when the branch
+ * does not carry it yet.
+ *
+ * The conversation is the whole state - there is no separate `request` field in it any more - and the model
+ * reads its last `User:` line as the turn's request. `before_agent_start` passes the live prompt because pi
+ * persists the user message only after the handler returns, and the deferred judgement can read the branch
+ * before that write lands; without the guard the model would judge the *previous* turn's message as the
+ * current one. The item is stamped with a turn of its own, which is what a boundary looks like on the branch.
+ * `windowTranscript` applies the same rule for the state ask.
+ *
+ * Exported because `scripts/reminder-report.mts` replays a recorded session from prefixes that end *before* the
+ * turn's user message, so it has to append the request the same way to show the state the live consult sends.
+ */
+export function reminderConversationAtoms(
+    items: readonly DecisionRecentMessage[],
+    request: string | undefined,
+    branchRequest: string | undefined,
+): readonly DecisionRecentMessage[] {
+    if (request === undefined || request === "" || request === branchRequest) {
+        return items;
+    }
+
+    return [...items, { role: "user", text: request, turn: (items.at(-1)?.turn ?? 0) + 1 }];
 }
 
 /**
@@ -316,14 +350,29 @@ export async function consultReminderSelection(
             const session = decisionSessionContext(options.ctx.sessionManager.getBranch(), {
                 ...(options.stateMarker === undefined ? {} : { stateMarker: options.stateMarker }),
             });
-            window = { items: session.recent, omitted: session.omitted ?? 0 };
             const request =
                 options.request === undefined ? session.request : clipRequest(options.request);
+            // The state is one conversation, allocated from the branch's own atoms rather than from the planner's
+            // window: the allocator wants every item and decides itself what each one is worth, and the measured
+            // shape is the plan policy at a 2000-char budget with none of the structured signal fields beside it.
+            const selection = selectWindow(
+                reminderConversationAtoms(session.items, request, session.request),
+                WINDOW_POLICY_REMINDER,
+            );
+            // Kept as the items the conversation actually shows, each at the length the allocator gave it, so a
+            // debug entry records what was read rather than a window that was built and then thrown away.
+            window = {
+                items: selection.kept.map((allocation) => ({
+                    role: allocation.item.role,
+                    text: allocationText(allocation),
+                })),
+                omitted: selection.omitted,
+            };
 
             const consult = await reminderEvaluatorFor(options).evaluate({
                 options: options.options,
+                conversation: selection.lines.join("\n"),
                 ...(request === undefined ? {} : { request }),
-                ...(session.recent.length === 0 ? {} : { recent: session.recent }),
                 ...(options.signals === undefined ? {} : { signals: options.signals }),
                 ...(options.heldPhase === undefined ? {} : { heldPhase: options.heldPhase }),
                 ...(options.extraQuestions === undefined

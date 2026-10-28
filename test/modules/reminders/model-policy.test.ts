@@ -119,6 +119,28 @@ async function toolResponseNow(stub: PiStub, toolResults: unknown[] = [{}]): Pro
     await stub.requireHandler("turn_end")({ message: {}, toolResults }, ctx);
 }
 
+/**
+ * One mid-run threshold crossing, as pi drives it: an assistant message that called a tool and then streamed
+ * enough text to grow the context past the threshold.
+ *
+ * The tool call comes first because only a message that will continue the run may steer, and the streamed text
+ * is what the growth tracker counts.
+ */
+async function midRunCrossing(stub: PiStub, streamedChars = 400): Promise<void> {
+    await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
+    await stub.requireHandler("message_update")(
+        { message: { role: "assistant" }, assistantMessageEvent: { type: "toolcall_start" } },
+        ctx,
+    );
+    await stub.requireHandler("message_update")(
+        {
+            message: { role: "assistant" },
+            assistantMessageEvent: { type: "text_delta", delta: "x".repeat(streamedChars) },
+        },
+        ctx,
+    );
+}
+
 function stateEntries(stub: PiStub): Array<{ customType: string; data: unknown }> {
     return stub.entries.filter((entry) => entry.customType === "pi-coder:reminder-state");
 }
@@ -346,7 +368,8 @@ describe("decision-model reminder policy", () => {
         await userTurn(stub);
 
         // The escalation is a second state ask on the window transcript, not state questions bolted onto the
-        // pool's request: the pool's state stays the signals it was measured with.
+        // pool's request: the pool is judged from its own conversation, and the state question keeps its own
+        // transcript ask whatever the pool looks like.
         expect(mocks.state).toHaveBeenCalledTimes(2);
         expect((mocks.state.mock.calls[1]?.[0] as { windowChars?: number }).windowChars).toBe(
             TRANSCRIPT_WINDOW_CHARS,
@@ -592,12 +615,18 @@ describe("state checkpoints", () => {
         vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
         vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
         // The checkpoint judges `reporting`, whose pool is the hand-back pair; the branch on its own reads
-        // `exploring`, whose pool is `delegation`, so the steer's id is what proves the labels carried.
+        // `exploring`, whose pool is `delegation`, so the pool the consult is offered is what proves the labels
+        // carried.
         mocks.state.mockResolvedValue({
             status: "answered",
             latencyMs: 1,
             state: { phase: "reporting" },
             phaseConfidence: 0.9,
+        });
+        mocks.consult.mockResolvedValue({
+            decision: { kind: "reminder", id: "validation" },
+            status: "answered",
+            latencyMs: 1,
         });
         // A real run starts at a non-zero context, which is the mid-run threshold's baseline.
         ctx = {
@@ -608,23 +637,88 @@ describe("state checkpoints", () => {
         await startSession(stub);
         await toolResponse(stub);
 
-        await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
-        await stub.requireHandler("message_update")(
-            { message: { role: "assistant" }, assistantMessageEvent: { type: "toolcall_start" } },
-            ctx,
-        );
-        await stub.requireHandler("message_update")(
-            {
-                message: { role: "assistant" },
-                assistantMessageEvent: { type: "text_delta", delta: "x".repeat(400) },
-            },
-            ctx,
-        );
+        await midRunCrossing(stub);
 
         expect(lastDebugEntry(stub)).toMatchObject({
             trigger: "mid-run",
             available: ["memory-hygiene", "validation"],
+            options: ["memory-hygiene", "validation"],
+            modelChoice: "validation",
         });
+        expect(stub.sentMessages).toHaveLength(1);
+        expect(String(stub.sentMessages[0]?.message.content)).toContain("validation");
+    });
+
+    it("declines a mid-run point the model answers none on", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
+        mocks.consult.mockResolvedValue({
+            decision: { kind: "none" },
+            status: "answered",
+            latencyMs: 1,
+        });
+        ctx = {
+            ...ctx,
+            getContextUsage: () => ({ tokens: 500, contextWindow: 200_000, percent: 0.0025 }),
+        };
+        const stub = harness();
+        await startSession(stub);
+
+        await midRunCrossing(stub);
+
+        // The deterministic pointer always had an id here; the consult is what makes the point refusable.
+        expect(lastDebugEntry(stub)).toMatchObject({
+            trigger: "mid-run",
+            reminder: null,
+            modelChoice: "none",
+            available: ["delegation"],
+        });
+        expect(stub.sentMessages).toEqual([]);
+    });
+
+    it("asks the mid-run question once per crossing, without a request of its own", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
+        mocks.consult.mockResolvedValue({
+            decision: { kind: "none" },
+            status: "answered",
+            latencyMs: 1,
+        });
+        ctx = {
+            ...ctx,
+            getContextUsage: () => ({ tokens: 500, contextWindow: 200_000, percent: 0.0025 }),
+        };
+        const stub = harness();
+        await startSession(stub);
+
+        await midRunCrossing(stub);
+
+        // The prompt is already the branch's last user message, so the consult appends nothing to the
+        // conversation and sends no `request` field.
+        const ask = mocks.consult.mock.calls.at(-1)?.[0] as {
+            request?: string;
+            options: ReadonlyArray<{ id: string }>;
+        };
+        expect(ask.request).toBeUndefined();
+        expect(ask.options.map((option) => option.id)).toEqual(["delegation"]);
+        // A declined point restarts the cooldown, so the still-growing context does not ask again.
+        expect(mocks.consult).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the deterministic rotation in charge when the consult is disabled", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
+        mocks.consult.mockResolvedValue({ status: "disabled", latencyMs: 0 });
+        ctx = {
+            ...ctx,
+            getContextUsage: () => ({ tokens: 500, contextWindow: 200_000, percent: 0.0025 }),
+        };
+        const stub = harness();
+        await startSession(stub);
+
+        await midRunCrossing(stub);
+
+        expect(lastDebugEntry(stub)).toMatchObject({ trigger: "mid-run", reminder: "delegation" });
         expect(stub.sentMessages).toHaveLength(1);
     });
 });

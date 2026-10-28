@@ -49,6 +49,7 @@
         "decision-report": "node --import tsx scripts/decision-report.ts",
         "compaction-report": "node --import tsx scripts/compaction-report.ts",
         "reminder-report": "node --import tsx scripts/reminder-report.mts",
+        "window-report": "node --import tsx scripts/window-report.mts",
         "scratch": "node --import tsx scripts/scratch.ts",
         "typecheck": "tsc --noEmit",
         "lint": "eslint .",

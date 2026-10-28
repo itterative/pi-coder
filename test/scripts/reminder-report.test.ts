@@ -159,18 +159,19 @@ describe("replay", () => {
         });
         // The report prints the reminder content, not just its id.
         expect(result.turns[0]?.reminderText).toContain("memory_system");
-        expect(result.turns[0]?.state).toMatchObject({
-            request: "first request",
+        expect(result.turns[0]?.state).toEqual({ conversation: "User: first request" });
+        expect(result.turns[0]?.signals).toMatchObject({
             cwd,
             session: { user_turns: 1, context_tokens: 0 },
         });
         // Five turns between rotation triggers, and this is only the second turn.
         expect(result.turns[1]).toMatchObject({ turn: 2, schedule: "none" });
         expect(result.turns[1]?.reminderText).toBeUndefined();
-        // The previous user message is the request item and is dropped from the window by design.
-        expect(result.turns[1]?.state.recent_messages).toEqual([
-            { role: "assistant", text: "working" },
-        ]);
+        // The tier-2 state is the conversation itself: the branch's items and this turn's request, rendered as
+        // one string. The previous user message is an item of that conversation rather than a dropped edge.
+        expect(result.turns[1]?.state).toEqual({
+            conversation: "User: first request\nAssistant: working\nUser: second request",
+        });
     });
 
     it("respects the environment's cadence", () => {
@@ -234,9 +235,9 @@ describe("replay", () => {
         expect(result.userTurns).toBe(2);
         expect(result.turns.map((turn) => turn.turn)).toEqual([1, 2]);
         expect(result.turns[0]?.steers).toMatchObject([{ request: "steered request" }]);
-        expect(result.turns[0]?.state.session).toMatchObject({ user_turns: 1 });
+        expect(result.turns[0]?.signals.session).toMatchObject({ user_turns: 1 });
         expect(result.turns[1]?.request).toBe("next request");
-        expect(result.turns[1]?.state.session).toMatchObject({ user_turns: 2 });
+        expect(result.turns[1]?.signals.session).toMatchObject({ user_turns: 2 });
     });
 
     it("replays a recorded fixture through the real session manager", () => {
@@ -247,7 +248,7 @@ describe("replay", () => {
 
         expect(result.userTurns).toBeGreaterThan(1);
         expect(result.turns[0]?.schedule).toBe("memory-read");
-        expect(result.turns.every((turn) => typeof turn.state.cwd === "string")).toBe(true);
+        expect(result.turns.every((turn) => typeof turn.signals.cwd === "string")).toBe(true);
         // The fixture folds twice: once between turns 2 and 3, once with no turn after it.
         expect(result.compactions).toEqual([
             { entryId: "200c25a3", turn: 3 },
@@ -287,12 +288,12 @@ describe("compaction folds", () => {
         ]);
         expect(result.compactions).toEqual([{ entryId: foldId, turn: 3 }]);
         // The module's own counter restarts at the fold, even though the report numbers turns globally.
-        expect(result.turns[2]?.state.session).toMatchObject({ user_turns: 1 });
-        expect(result.turns[3]?.state.session).toMatchObject({ user_turns: 2 });
+        expect(result.turns[2]?.signals.session).toMatchObject({ user_turns: 1 });
+        expect(result.turns[3]?.signals.session).toMatchObject({ user_turns: 2 });
         // The fold resets the growth estimate, so no pre-fold context size leaks into its first turn.
         expect(result.turns[2]?.contextTokens).toBe(0);
-        // `shown` was cleared, so the pre-fold emission no longer rides in the post-fold state.
-        expect(result.turns[2]?.state.reminders_shown).toBeUndefined();
+        // `shown` was cleared, so the pre-fold emission no longer rides in the post-fold signals.
+        expect(result.turns[2]?.signals.reminders_shown).toBeUndefined();
     });
 });
 
@@ -533,11 +534,12 @@ describe("recorded data", () => {
         expect(text).toContain("recorded window (2 items, 3 dropped):");
         expect(text).toContain("User: first");
         expect(text).toContain("Tool: bash(rg -n step src)");
-        // The replay renders its own window from the branch prefix, so the two read as transcripts and a
-        // difference between what was sent and what would be sent now is visible line by line.
-        expect(text).toContain("window (3 items, 0 dropped):");
+        // The replay renders its own window from the branch prefix plus the turn's request, so the two read as
+        // transcripts and a difference between what was sent and what would be sent now is visible line by line.
+        expect(text).toContain("window (5 items, 0 dropped):");
         expect(text).toContain("Assistant: reading");
         expect(text).toContain("Tool: read(src/a.ts)");
+        expect(text).toContain("User: second");
     });
 
     it("says when a recorded consult kept no window", () => {
@@ -629,10 +631,26 @@ describe("selectTurns and rendering", () => {
         expect(text).toContain("reminder: memory-read");
         expect(text).toContain("<pi_coder_reminder>");
         expect(text).toContain("read them if so");
-        expect(text).toContain('"request": "first"');
-        // The window is rendered as a transcript as well as carried in the state, so it can be read without
-        // parsing the JSON: this turn's prefix is one earlier message, which the request field replaced.
+        expect(text).toContain('request: "first"');
+        // The window is rendered as a transcript, and the tier-2 state *is* that transcript, so the print says
+        // so rather than repeating the text; the signals are what the pool was scoped by.
         expect(text).toContain("window (1 item, 0 dropped):\nUser: first");
+        expect(text).toContain("state: {conversation} - the 11 chars of window above");
+        expect(text).toContain("signals:");
+    });
+
+    it("says when there is no conversation to send", () => {
+        const cwd = "/repo";
+        const session = sessionAt(cwd);
+        session.appendMessage(userEntry("", 1));
+
+        const result = replay(session.getBranch(), cwd);
+        const text = renderText(result, selectTurns(result, parseArgs([])), parseArgs([]));
+
+        // A message with no text carries no request item, so the state is empty rather than an empty string:
+        // the live consult sends `{}` for the same case rather than `conversation: ""`.
+        expect(result.turns[0]?.state).toEqual({});
+        expect(text).toContain("state: {} - no window, so nothing to send");
     });
 
     it("prints mid-run emissions with the turn whose run emitted them", () => {
@@ -662,7 +680,8 @@ describe("selectTurns and rendering", () => {
 
         expect(compact).toContain("schedule=memory-read");
         expect(compact).toContain("shows=");
-        expect(compact).toContain("window=0");
+        // The conversation carries the turn's own request, so even the first turn has a window of one item.
+        expect(compact).toContain("window=1");
         expect(compact).not.toContain('"request":');
 
         const parsed = JSON.parse(renderJson(result, selected)) as {
@@ -672,9 +691,13 @@ describe("selectTurns and rendering", () => {
         // A turn with no recorded data keeps the report shape from before the mode existed.
         expect(parsed.turns[0]).not.toHaveProperty("recorded");
         // The window rides in the machine-readable turns too, drop count included, so `--json` reports the
-        // same input the state carries without re-reading the branch.
+        // same items the conversation shows without re-reading the branch.
         expect(parsed.turns[2]?.window).toEqual({
-            items: [{ role: "user", text: "first" }],
+            items: [
+                { role: "user", text: "first" },
+                { role: "user", text: "second" },
+                { role: "user", text: "third" },
+            ],
             omitted: 0,
         });
     });

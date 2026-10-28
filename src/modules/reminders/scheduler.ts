@@ -51,8 +51,8 @@ export interface SchedulerSnapshot {
  *
  * The boundary and the decision are separate: `beginTurn` runs the moment a user turn starts, `decide`
  * advances the turn itself unless the caller already did. The model policy is layered on top by passing its
- * answer in; a deliberate `none` is respected for that turn, while an unavailable model leaves the
- * deterministic triggers in charge so reminders never silently stop.
+ * answer in, on a turn and on a mid-run point alike; a deliberate `none` is respected for the point it answered,
+ * while an unavailable model leaves the deterministic triggers in charge so reminders never silently stop.
  */
 export class ReminderScheduler {
     private userTurns = 0;
@@ -72,10 +72,17 @@ export class ReminderScheduler {
      * Decide a mid-run emission: only the context threshold applies, because there is no new user turn to
      * count and the session reminder is tied to a change point. The emission bookkeeping is the
      * same, so the next user turn starts a full cadence after it rather than repeating it.
+     *
+     * The model's answer decides this point the way it decides a turn: a named id is emitted, `none` declines
+     * it, and an id the gate withholds shows nothing rather than a reminder the model did not ask for. Without
+     * the consult the rotation always has an answer, so a threshold crossing could never be refused - the
+     * pointer is a schedule, not a judgement.
      */
     decideMidRun(input: {
         maxContextTokens: number;
         available?: ReadonlySet<ReminderId>;
+        /** The model's answer for this point; `undefined` leaves the deterministic rotation in charge. */
+        modelChoice?: ReminderModelChoice;
     }): ReminderDefinition | undefined {
         if (!this.thresholdDue(input.maxContextTokens)) {
             return undefined;
@@ -85,6 +92,32 @@ export class ReminderScheduler {
             return undefined;
         }
 
+        if (input.modelChoice !== undefined) {
+            if (input.modelChoice === "none") {
+                return this.decline(input.maxContextTokens);
+            }
+
+            const chosen = ACTIVE_ROTATION_REMINDERS.find(
+                (reminder) => reminder.id === input.modelChoice,
+            );
+            if (chosen !== undefined) {
+                // Leave the rotation pointer after the model's pick, so a deterministic fallback on the next
+                // crossing does not immediately repeat it.
+                this.rotationIndex =
+                    (ACTIVE_ROTATION_REMINDERS.indexOf(chosen) + 1) %
+                    ACTIVE_ROTATION_REMINDERS.length;
+
+                // The gate is the module's own invariant, so it overrides the model too, exactly as it does on
+                // a turn.
+                if (input.available !== undefined && !input.available.has(chosen.id)) {
+                    return this.decline(input.maxContextTokens);
+                }
+
+                this.midRunThisTurn += 1;
+                return this.emit(chosen, input.maxContextTokens);
+            }
+        }
+
         const reminder = this.nextAvailableRotation(input.available);
         if (reminder === undefined) {
             return undefined;
@@ -92,6 +125,22 @@ export class ReminderScheduler {
 
         this.midRunThisTurn += 1;
         return this.emit(reminder, input.maxContextTokens);
+    }
+
+    /**
+     * Record a mid-run point the model declined.
+     *
+     * The point was decided, so it spends the turn's mid-run budget and restarts the cooldown: leaving the
+     * threshold overdue would ask the model again on the very next streamed update. `lastEmitTurn` is left
+     * alone because nothing was shown, so the turn's own reminder slot is still open.
+     */
+    private decline(maxContextTokens: number): undefined {
+        this.midRunThisTurn += 1;
+        if (maxContextTokens > 0) {
+            this.thresholdBaseline = maxContextTokens;
+        }
+
+        return undefined;
     }
 
     /**

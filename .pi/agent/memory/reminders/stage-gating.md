@@ -102,8 +102,9 @@ answer was accepted unconditionally - 33 answered consults, all `verifying`.
   tier 2 (the pool's questions, its own window), and when tier 1's phase answer was unsure it asks the *state*
   again as its own call on `TRANSCRIPT_WINDOW_CHARS` = 1800 (`session-context.ts`) - the README's 800/1800/4500
   sweep measured 1800 equal to 4500 and cheaper. The escalation is **not** state questions bolted onto the
-  pool's request: the pool's state stays the signals it was measured with, and the state ask keeps its own
-  state. `escalated` and `stateConfidence` are recorded in the debug entry. The cascade is **deferred**: the
+  pool's request: the pool is judged from its own conversation, and the state ask keeps its own state - the two
+  never merge into one request. `escalated` and `stateConfidence` are recorded in the debug entry. The cascade
+  is **deferred**: the
   boundary advances the turn (`beginTurn`) and queues the judgement, which delivers a `steer` into the running
   turn (or `nextTurn` once it settled), because pi builds the user's message only after the `before_agent_start`
   handler returns. The armed reminders carry no consult and still ride the prompt.
@@ -211,8 +212,10 @@ The window lessons were transplanted into the live reminder path, not left in th
   model's score, not a guarantee.
 - No cascade. Escalation was size-independent once the window was composed well, so the live path keeps one
   consult per turn.
-- A debug entry records `state: signals`, not the classifier state, so a window change cannot be validated from
-  a recorded session: the request and `recent_messages` have to be rebuilt
+- A debug entry records `state: signals` - the pool's inputs - beside the `window` the consult judged, and the
+  window now *is* the tier-2 state: its items are the conversation's lines minus their prefixes, each at the
+  length it was sent, so a renderer change can be read off a recorded session. What still has to be rebuilt for
+  an *older* entry is the state itself - `request` and `recent_messages` were never recorded
   (`reminders/model-comparison.md` does exactly that). One recorded mid-run entry showed `available` containing
   `todo` while its own `state` carried no `todo` - whether the two are built at different points is unchecked.
 
@@ -221,7 +224,9 @@ The window lessons were transplanted into the live reminder path, not left in th
 Model-driven transitions only. Deterministic boundaries (write-path or test-runner rules) were considered and
 **rejected**: they encode one project's layout, language and tooling, so they cannot be the general mechanism.
 The question is only which model question drives the gate, how often it is asked, and how the turn boundary
-is handled. The model's mid-run judgment did not beat the event rule often enough to justify a per-step call.
+is handled. The model's mid-run judgment did not beat the event rule often enough to justify a per-step call - that is the
+*state* judgement on every step; the tier-2 selection consult is a different question and now runs once per
+threshold crossing (`selection-corpus.md`).
 Two product defects found in the current signals:
 
 - `applyWriteCall` in `src/modules/reminders/session-signals.ts` splits only memory paths and `TODO.md` out of

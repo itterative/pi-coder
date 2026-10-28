@@ -1,5 +1,4 @@
-import type { JsonObject } from "@earendil-works/pi-ai";
-
+import type { CommandHistoryState, CommandState } from "../contract";
 import { buildState } from "../state";
 import type { DecisionContext } from "../types";
 import { classificationAnswerFrom, classificationRequest } from "./classification";
@@ -24,7 +23,7 @@ export const HISTORY_COMMAND_CHARS = 200;
  * equivalent, so the structured form ships: it is unambiguous to the model and to a reader of the request
  * snapshot.
  */
-export function commandHistoryField(history: readonly string[]): JsonObject {
+export function commandHistoryField(history: readonly string[]): CommandHistoryState {
     const recent = history.slice(-HISTORY_DEPTH);
     if (recent.length === 0) {
         return {};
@@ -52,7 +51,7 @@ export function clipHistoryCommand(command: string): string {
  *
  * Nothing else differs, so a verdict that changes between the two strategies changed because of this field.
  */
-export function historyState(context: DecisionContext): JsonObject {
+export function historyState(context: DecisionContext): CommandState & CommandHistoryState {
     return {
         ...buildState(context, "request_context"),
         ...commandHistoryField(context.history ?? []),

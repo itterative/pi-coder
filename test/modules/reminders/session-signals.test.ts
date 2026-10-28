@@ -466,7 +466,7 @@ describe("reminderStateMarker", () => {
         // The marker is the line itself: no role prefix, and only the phase, which is what the probe's
         // `--annotate` inserted into the transcript.
         expect(reminderStateMarker(manager.getBranch().at(-1) as SessionEntry)).toBe(
-            "  ── state: documenting ──",
+            "State: *documenting*",
         );
     });
 

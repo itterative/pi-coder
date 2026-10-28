@@ -3,10 +3,10 @@
  * Replay a recorded session and print the reminder state the decision model would judge at each user turn.
  *
  * The signals are rebuilt from the branch prefix exactly as `before_agent_start` sees it: the live request
- * stands in for the user message that is not persisted yet, the recent window comes from the branch, and the
- * activity, prior-reminder, TODO, memory, and label fields are recomputed per turn. Nothing is sent anywhere:
- * this shows the input side only, so the questions' wording and the question-count tradeoff can be inspected
- * before a consult is ever made.
+ * stands in for the user message that is not persisted yet, the conversation is allocated from the branch's own
+ * atoms the way the live consult allocates it, and the activity, prior-reminder, TODO, memory, and label fields
+ * are recomputed per turn. Nothing is sent anywhere: this shows the input side only, so the questions' wording
+ * and the question-count tradeoff can be inspected before a consult is ever made.
  *
  * The deterministic schedule is simulated alongside the state, respecting `PI_CODER_REMINDER_*`, so the
  * report also shows what each turn would have received with the model off; each turn prints the picked
@@ -55,13 +55,19 @@ import { fileURLToPath } from "node:url";
 import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { JsonObject } from "@earendil-works/pi-ai";
 
-import { buildReminderState } from "../src/modules/decision/reminder";
+import { reminderConversationAtoms } from "../src/modules/decision/gate";
+import type { ReminderSignals } from "../src/modules/decision/reminder";
 import {
     decisionSessionContext,
     renderSessionWindow,
     type SessionWindow,
 } from "../src/modules/decision/session-context";
 import type { DecisionRecentMessage } from "../src/modules/decision/types";
+import {
+    allocationText,
+    selectWindow,
+    WINDOW_POLICY_REMINDER,
+} from "../src/modules/decision/window";
 import {
     COMPACTION_REMINDER,
     MEMORY_READ_REMINDER,
@@ -246,9 +252,11 @@ export interface ReplayTurn {
     /** Messages steered into this turn's run; they never reach the scheduler's turn decision. */
     steers?: ReplaySteer[];
     contextTokens: number;
-    /** The classifier state `buildReminderState` would send. */
+    /** The tier-2 classifier state the consult would send: `{ conversation }`, or empty when the window is. */
     state: JsonObject;
-    /** The window the state carries, kept whole so the report can render it rather than re-read the branch. */
+    /** The signals the pool gate was scoped by, and the activity the compact line reads. */
+    signals: ReminderSignals;
+    /** The window the conversation shows, kept whole so the report can render it rather than re-read the branch. */
     window: SessionWindow;
     /** What the session recorded for this turn; empty when it recorded nothing. */
     recorded: RecordedTurn;
@@ -638,12 +646,14 @@ export function replay(entries: readonly SessionEntry[], cwd: string): ReplayRes
             labels: reminderLabelsFromEntries(prefix),
         });
         const session = decisionSessionContext(prefix);
-        const state = buildReminderState({
-            request,
-            recent: session.recent,
-            options: [],
-            signals,
-        });
+        // The same allocation the live consult makes: the branch's atoms plus this turn's request, through the
+        // reminder policy, sent as one conversation with no signal field beside it.
+        const selection = selectWindow(
+            reminderConversationAtoms(session.items, request, session.request),
+            WINDOW_POLICY_REMINDER,
+        );
+        const conversation = selection.lines.join("\n");
+        const state: JsonObject = conversation === "" ? {} : { conversation };
 
         const recorded: RecordedTurn = { midRun: [], checkpoints: [], delivered: [] };
         if (pendingDecision !== undefined) {
@@ -674,7 +684,14 @@ export function replay(entries: readonly SessionEntry[], cwd: string): ReplayRes
             ...(reminder === undefined ? {} : { reminderText: reminder.text }),
             contextTokens,
             state,
-            window: { items: session.recent, omitted: session.omitted ?? 0 },
+            signals,
+            window: {
+                items: selection.kept.map((allocation) => ({
+                    role: allocation.item.role,
+                    text: allocationText(allocation),
+                })),
+                omitted: selection.omitted,
+            },
             recorded,
         });
     }
@@ -732,7 +749,7 @@ function count(noun: string, value: number): string {
 }
 
 function renderCompact(turn: ReplayTurn, options: Options): string {
-    const activity = turn.state.session as JsonObject | undefined;
+    const activity = turn.signals.session;
     const tools = activity?.tools;
     const toolText =
         typeof tools === "object" && tools !== null && !Array.isArray(tools)
@@ -857,18 +874,13 @@ function recordedDecisionTurn(decision: RecordedDecision | undefined): number | 
     return decision.deferred === true ? turns : turns + 1;
 }
 
-/** The module's own turn count for a replayed turn, as carried in the state it would send. */
-function moduleTurnOf(state: JsonObject): number | undefined {
-    const session = state.session;
-    if (!isRecord(session)) {
-        return undefined;
-    }
-
-    return typeof session.user_turns === "number" ? session.user_turns : undefined;
+/** The module's own turn count for a replayed turn, as the signals carried it. */
+function moduleTurnOf(signals: ReminderSignals): number | undefined {
+    return signals.session?.user_turns;
 }
 
 /** The recorded half of a turn: the decision, any delivered message text, and the judged signals. */
-function recordedLines(recorded: RecordedTurn, state: JsonObject): string[] {
+function recordedLines(recorded: RecordedTurn, signals: ReminderSignals): string[] {
     const lines: string[] = [];
 
     if (recorded.decision === undefined) {
@@ -878,7 +890,7 @@ function recordedLines(recorded: RecordedTurn, state: JsonObject): string[] {
     }
 
     const recordedTurn = recordedDecisionTurn(recorded.decision);
-    const replayedTurn = moduleTurnOf(state);
+    const replayedTurn = moduleTurnOf(signals);
     if (recordedTurn !== undefined && replayedTurn !== undefined && recordedTurn !== replayedTurn) {
         lines.push(
             `recorded turn mismatch: the session counted module turn ${String(recordedTurn)}, the replay ${String(replayedTurn)}`,
@@ -933,6 +945,22 @@ function recordedLines(recorded: RecordedTurn, state: JsonObject): string[] {
     }
 
     return lines;
+}
+
+/**
+ * The tier-2 state as one line, beside the transcript that IS it.
+ *
+ * The state is the single `conversation` field, so printing it as JSON again would only repeat the window in
+ * escapes; what is worth seeing underneath is the signals, which gate the pool and are what the debug entry
+ * records as `state`.
+ */
+function stateLine(turn: ReplayTurn): string {
+    const conversation = turn.state.conversation;
+    if (typeof conversation !== "string") {
+        return "state: {} - no window, so nothing to send";
+    }
+
+    return `state: {conversation} - the ${String(conversation.length)} chars of window above`;
 }
 
 function hasRecordedData(recorded: RecordedTurn): boolean {
@@ -991,7 +1019,7 @@ export function renderText(
         }
 
         if (options.recorded) {
-            lines.push(...recordedLines(turn.recorded, turn.state));
+            lines.push(...recordedLines(turn.recorded, turn.signals));
             lines.push("");
             lines.push("replay:");
         }
@@ -1020,8 +1048,9 @@ export function renderText(
             `window (${count("item", turn.window.items.length)}, ${String(turn.window.omitted)} dropped):`,
         );
         lines.push(...renderSessionWindow(turn.window.items, turn.window.omitted));
-        lines.push("state:");
-        lines.push(JSON.stringify(turn.state, null, 1));
+        lines.push(stateLine(turn));
+        lines.push("signals:");
+        lines.push(JSON.stringify(turn.signals, null, 1));
 
         lines.push("");
     }

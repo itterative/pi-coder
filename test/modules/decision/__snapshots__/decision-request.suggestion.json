@@ -1,0 +1,19 @@
+{
+  "state": {
+    "command": "npx zorch run test/a.test.ts",
+    "cwd": "/repo",
+    "recent_commands": [
+      "npx zorch run test/b.test.ts"
+    ]
+  },
+  "questions": {
+    "executes_code": {
+      "type": "bool",
+      "instructions": "Does this command execute code whose contents come from one of its arguments (a script file or an inline snippet)? Answer no when arguments are paths, filters, flags, names, or selectors the tool operates on.",
+      "criteria": {
+        "true": "an argument's contents are executed as code, for example a script file or an inline snippet",
+        "false": "arguments are data: paths, filters, selectors, names, or flags the tool operates on"
+      }
+    }
+  }
+}

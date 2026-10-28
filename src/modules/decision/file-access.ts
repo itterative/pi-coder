@@ -2,9 +2,14 @@ import type {
     ClassifierAnswer,
     ClassifierContext,
     ClassifierQuestion,
-    JsonObject,
 } from "@earendil-works/pi-ai";
 
+import {
+    FILE_KIND_QUESTION,
+    FILE_LOSS_QUESTION,
+    FILE_PURPOSE_QUESTION,
+    type FileAccessState,
+} from "./contract";
 import type { FoldableAnswer } from "./policy";
 import { RUNNER_AUTHORITY, runnerRulesForFileAccess, type DecisionRunner } from "./runner-rules";
 import type {
@@ -33,10 +38,6 @@ import type {
  * that means anything. The file's content is never sent — a classifier that read the file to decide whether it
  * was sensitive would leak the thing it is gating.
  */
-
-export const FILE_KIND_QUESTION = "kind";
-export const FILE_PURPOSE_QUESTION = "purpose";
-export const FILE_LOSS_QUESTION = "loss";
 
 /** The id the decision log records as this subject's strategy. */
 export const FILE_ACCESS_STRATEGY = "file-access";
@@ -149,8 +150,8 @@ const LOSS_QUESTION: ClassifierQuestion = {
  * command phrasing ("read, create, edit, and delete files in the user's working tree") reads every outside
  * path as unauthorised and pushed the corpus toward withholding.
  */
-export function buildFileAccessState(context: FileAccessDecisionContext): JsonObject {
-    const state: JsonObject = {
+export function buildFileAccessState(context: FileAccessDecisionContext): FileAccessState {
+    const state: FileAccessState = {
         operation: context.file.operation,
         path: context.file.path,
         cwd: context.cwd,
@@ -176,7 +177,7 @@ export function buildFileAccessState(context: FileAccessDecisionContext): JsonOb
  * `loss` is asked only for a write: a read cannot destroy anything, and asking it anyway would add a decision
  * whose answer means nothing.
  */
-export function fileAccessRequest(state: JsonObject): ClassifierContext {
+export function fileAccessRequest(state: FileAccessState): ClassifierContext {
     const questions: Record<string, ClassifierQuestion> = {
         [FILE_KIND_QUESTION]: KIND_QUESTION,
         [FILE_PURPOSE_QUESTION]: PURPOSE_QUESTION,

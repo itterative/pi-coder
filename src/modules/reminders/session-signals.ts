@@ -15,15 +15,16 @@ import { ACTIVE_ROTATION_REMINDERS } from "./catalog";
 import type { ReminderId } from "./types";
 
 /**
- * The context the decision model judges a reminder by, derived from the session branch and the module's own
- * emission history.
+ * What the reminders module derives from the session branch and its own emission history.
  *
- * The recent window in `decisionSessionContext` is a planned window of user, assistant and tool items, so the
- * state reads what was done; everything here is still a bounded summary — counts, small lists, and the current
- * TODO progress — and never transcript text beyond the request and the window.
+ * These signals scope the pool the model is asked about (`availableRotationIds`) and travel into the debug
+ * record; they are not the state the model reads, which is one allocator-rendered conversation. The
+ * comparison measured the structured fields *below* the same conversation sent alone
+ * (`decision-model/window.md`), so they were dropped from the request and kept where they do work - the gate
+ * and the log. Everything here is a bounded summary: counts, small lists, and the current TODO progress.
  */
 
-/** How many paths, recent tool names, and memory names the state carries. */
+/** How many paths, recent tool names, and memory names the signals carry. */
 const MAX_FILES_MODIFIED = 8;
 const MAX_RECENT_TOOLS = 6;
 const MAX_MEMORY_NAMES = 24;
@@ -312,7 +313,7 @@ export function reminderStateMarker(entry: SessionEntry): string | undefined {
         return undefined;
     }
 
-    return `  ── state: ${data.phase} ──`;
+    return `State: *${data.phase}*`;
 }
 
 /** What a branch can tell a restarted module: the turns counted, what was shown, and where the pointer was. */

@@ -30,14 +30,23 @@ Read this memory first; go there only for the numbers behind a decision.
   the runner's rung refuses at confidence 0, with no request sent. `decision-model/scope-suggestion.md`.
 - **The reminder subject** (`reminders: true`, default false): one question per offered reminder (its guidance
   is the criterion), asked before a non-session agent turn. The default form is a helpfulness score
-  (`reminderForm: "score"`, `reminderMinScore` default 1.0); `reminderForm: "bool"` restores the older
-  probability question (`reminderMinProbability` default 0.45). The strongest answer at or above the form's gate
-  decides the reminder, and nothing at or above it means none. A single `choice` over the catalog plus `none`
-  was measured to abstain on almost every real state. It has its own evaluator, cache, and cooldown, so a failed
-  reminder request cannot pause a permission verdict. `decision-model/wiring-config.md`.
+  (`reminderForm: "score"`, `reminderMinScore` default 1.25); `reminderForm: "bool"` restores the older
+  probability question (`reminderMinProbability` default 0.45). Its whole state is one allocator-rendered
+  conversation (`WINDOW_POLICY_REMINDER`), not the structured signals, which measured below it. The strongest
+  answer at or above the form's gate decides the reminder, and nothing at or above it means none. A single
+  `choice` over the catalog plus `none` was measured to abstain on almost every real state. It has its own
+  evaluator, cache, and cooldown, so a failed reminder request cannot pause a permission verdict.
+  `decision-model/wiring-config.md`.
 - **The block-sentence contract**: a verdict that takes part in a block is named in the runner's vocabulary —
   never a criterion id, action name, or config key — and a person's answer is never reattributed to the model.
   `decision-model/runner-output.md` holds those sentences and snapshot tests pin them.
+- **One contract file**: `contract.ts` holds the wire-state types (`CommandState`, `FileAccessState`, …) the
+  builders return, the question ids they key answers with, and `DECISION_REQUEST_SUBJECTS` — the six requests
+  the module sends. Wording stays in each subject module, beside the state it was measured against; the scope
+  verdict is absent because it is decided in code and sends nothing. To see what a request actually looks
+  like, read `test/modules/decision/__snapshots__/decision-request.<subject>.json`: one built example per
+  subject, state and questions together, so a changed key or question is a snapshot diff rather than an
+  inference from types. `decision-model/state-policy.md`.
 - **Opt-in**: nothing consults the model until an endpoint is configured and `enabled` is set; `surfaces` and
   `fileSurfaces` choose which gates ask. `decision-model/wiring-config.md`.
 
@@ -48,6 +57,9 @@ Load only the detail needed for the task; these nested documents are on-demand a
 - `decision-model/strategy.md` — System One transport, and the veto instruction, criteria order, and action table.
 - `decision-model/state-policy.md` — what the request state carries and deliberately omits; apply and confidence.
 - `decision-model/child-consult.md` — the read-only `safe-bash` second opinion and when its verdict may proceed.
+- `decision-model/window.md` — the policy-driven window allocator (`window.ts`, turn-level knapsack); its
+  `WINDOW_POLICY_REMINDER` renders the tier-2 reminder-selection state. The measurement behind that choice lives
+  in `reminders/selection-corpus.md`.
 - `decision-model/script-subject.md` — script body resolution, the capability verdict, caches, failure policy.
 - `decision-model/scope-suggestion.md` — the capability × rung gate, and the advisory data-vs-program question.
 - `decision-model/file-access.md` — the `kind` / `purpose` / `loss` subject and its four invariants.

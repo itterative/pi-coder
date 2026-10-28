@@ -14,9 +14,9 @@ changed; the harness is throwaway scratch and is not part of the repo.
 
 ## Method
 
-- Baseline = the recorded `pi-coder-reminder:debug` state: `request` is the user message after the entry,
-  `recent_messages` is `decisionSessionContext`'s window over the branch prefix, and the signals are copied
-  from the entry.
+- Baseline = the recorded `pi-coder-reminder:debug` state *of that era*: `request` is the user message after the
+  entry, `recent_messages` is `decisionSessionContext`'s window over the branch prefix, and the signals are copied
+  from the entry. Tier 2 sends a single `conversation` instead today.
 - 13 states: the 12 recorded turn consults plus the first live `lfm2-d1` consult (the "do some experiments"
   turn, which chose `none`, max `todo` .388). Re-running the baseline reproduced recorded scores within
   0.01, and the live consult's scores matched its replay.
@@ -35,8 +35,11 @@ changed; the harness is throwaway scratch and is not part of the repo.
 
 ## State shapes
 
-All variants are deltas on the production `buildReminderState` shape, rebuilt from the same recorded turn.
-The baseline for turn 246:
+All variants are deltas on the structured state production sent until shape S11 was wired (its builder,
+`buildReminderState`, is gone; `turn_shapes.mts` keeps a copy so this baseline stays re-runnable), rebuilt from
+the same recorded turn. The winner of the later round of that comparison - the same window rendered as one
+conversation with every signal field dropped - is what the subject sends now; see
+[selection-corpus.md](selection-corpus.md). The baseline for turn 246:
 
 ```json
 {
@@ -210,7 +213,8 @@ production state, and one model (clef-flash). The form is the lever, not the sta
 
 The score form is also eager: on recorded turn states `memory-hygiene` reached 1.0-1.8 and `todo` scored >= 1.0
 with no list at all. That is why the shipped change pairs the score form with a deterministic per-reminder gate
-(`todo` only with a readable open list) and a score threshold (`reminderMinScore`, 1.0) that is not the old
+(`todo` only with a readable open list) and a score threshold (`reminderMinScore`, then 1.0 - the shipped
+default is 1.25, because 1.0 is the rung the model's own answers sit at the median of) that is not the old
 probability gate. Raw tables: `.pi/local/REMINDERS_FINDINGS.md` (local, not committed).
 
 ## Reading

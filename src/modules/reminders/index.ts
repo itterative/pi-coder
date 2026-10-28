@@ -194,7 +194,11 @@ export function modelChoiceOf(consult: ReminderConsult): ReminderModelChoice | u
 async function consultModelFor(options: {
     ctx: ExtensionContext;
     config: DecisionModelConfig;
-    request: string;
+    /**
+     * The live prompt, when the branch does not carry it yet. A mid-run consult omits it: inside a run the
+     * branch's last user message is the turn's request, so the state needs no extra item.
+     */
+    request?: string;
     signals: ReminderSignals;
     reminders: readonly ReminderDefinition[];
     /** The bus to count the consult on, so the footer badge animates while it runs. */
@@ -207,7 +211,7 @@ async function consultModelFor(options: {
         ctx: options.ctx,
         config: options.config,
         options: options.reminders,
-        request: options.request,
+        ...(options.request === undefined ? {} : { request: options.request }),
         signals: options.signals,
         ...(options.events === undefined ? {} : { events: options.events }),
         ...(options.heldPhase === undefined ? {} : { heldPhase: options.heldPhase }),
@@ -236,8 +240,9 @@ function sameLabels(left: ReminderStateLabels, right: ReminderStateLabels): bool
  *
  * The activity gate narrows the rotation: `memory-hygiene` is unavailable until mutating work happened, and
  * a model pick the gate disallows is dropped rather than replaced. When the decision model is configured
- * with `reminders: true`, it answers first: a chosen reminder or a deliberate `none` decides the turn, and
- * an unavailable or unreadable answer leaves the deterministic schedule in charge.
+ * with `reminders: true`, it answers first - on a user turn and on a mid-run threshold crossing alike - and
+ * a chosen reminder or a deliberate `none` decides that point, while an unavailable or unreadable answer
+ * leaves the deterministic schedule in charge.
  *
  * The rotation judgement is deferred. Its consult is a model call, and pi builds the user message only after
  * `before_agent_start` handlers resolve, so waiting there withholds the user's own message until the model has
@@ -303,9 +308,16 @@ export default function registerRemindersExtension(
     let currentMessageHasToolCalls = false;
     /** The activity gate for the message being streamed, computed lazily once per assistant message. */
     let midRunAvailable: ReadonlySet<ReminderId> | undefined;
-    /** The signals the mid-run gate was computed from, kept for the debug entry. */
+    /** The signals the mid-run gate was computed from, kept for the debug entry and the selection consult. */
     let midRunSignals: ReminderSignals | undefined;
     let midRunAvailableReady = false;
+    /**
+     * Whether a mid-run decision is already asking the model.
+     *
+     * The consult is a model call and `message_update` fires per streamed delta, so without this a long
+     * assistant message would ask the same question several times over before the first answer landed.
+     */
+    let midRunInFlight = false;
 
     /**
      * The tier-1 stream the cascade's escalations can be read from.
@@ -795,17 +807,39 @@ export default function registerRemindersExtension(
      * inference, so a long autonomous stretch sees the nudge without waiting for the user to speak again.
      * Only a message that has already produced a tool call can steer: a tool call means the run continues
      * to another inference, so the reminder is never left over after a final text-only answer. Only the
-     * context threshold applies here (the turn cadence counts user turns and the model policy is consulted
-     * at `before_agent_start`).
+     * context threshold applies here (the turn cadence counts user turns).
+     *
+     * One decision per crossing: a streamed update re-enters this on every delta, and the consult is a model
+     * call, so the flag keeps a second entry from asking the same question while the first is in the air.
      */
     const maybeEmitMidRun = async (ctx: ExtensionContext): Promise<void> => {
         if (!midRunEnabled || !currentMessageHasToolCalls) {
             return;
         }
 
-        if (!scheduler.midRunDue(growth.maxTokens)) {
+        if (!scheduler.midRunDue(growth.maxTokens) || midRunInFlight) {
             return;
         }
+
+        midRunInFlight = true;
+        try {
+            await emitMidRun(ctx);
+        } finally {
+            midRunInFlight = false;
+        }
+    };
+
+    /**
+     * The mid-run decision itself: the pool, the model's answer on it, and the steer.
+     *
+     * The consult is the tier-2 question a turn boundary asks, on the state the last checkpoint judged and with
+     * no request of its own. It is what makes a mid-run point refusable: the rotation always has an answer, so
+     * without it a threshold crossing emits whatever the pointer reached, whether or not it fits. Tier 1 is not
+     * re-run - the checkpoints keep the labels current and the pool is built from them - and the TODO query is
+     * left out because it reads the turn's new request, which inside a run does not exist.
+     */
+    const emitMidRun = async (ctx: ExtensionContext): Promise<void> => {
+        const at = epoch;
 
         // The pool this rotates over is the judged state's, so settle the judgements already requested before
         // reading it: a checkpoint's answer lands first, and a deferred turn reminder that was going to take
@@ -822,18 +856,25 @@ export default function registerRemindersExtension(
             publishState(ctx);
         }
 
-        const before = scheduler.snapshot();
-        const reminder = scheduler.decideMidRun({
-            maxContextTokens: growth.maxTokens,
-            available: midRunAvailable,
-        });
-        if (reminder === undefined) {
+        const available = midRunAvailable;
+        // The gate decides what may be offered, so the model is asked only about ids that can be shown.
+        const options = ACTIVE_ROTATION_REMINDERS.filter(
+            (reminder) => available?.has(reminder.id) === true,
+        );
+        const judged = options.length === 0 ? undefined : await consultMidRun(ctx, options);
+        // A consult outlives the update that started it; an answer from a session this one replaced is dropped.
+        if (at !== epoch) {
             return;
         }
 
-        const turn = scheduler.snapshot().userTurns;
-        shown.set(reminder.id, turn);
+        const before = scheduler.snapshot();
+        const reminder = scheduler.decideMidRun({
+            maxContextTokens: growth.maxTokens,
+            available,
+            ...(judged?.modelChoice === undefined ? {} : { modelChoice: judged.modelChoice }),
+        });
 
+        // A declined point is recorded too: nothing shown is exactly the case the state and the answer explain.
         if (settings.debug) {
             pi.appendEntry(
                 REMINDER_DEBUG_ENTRY_TYPE,
@@ -842,12 +883,30 @@ export default function registerRemindersExtension(
                     reminder,
                     scope,
                     state: midRunSignals,
-                    available: midRunAvailable,
+                    available,
+                    options,
+                    ...(judged?.modelChoice === undefined
+                        ? {}
+                        : { modelChoice: judged.modelChoice }),
+                    ...(judged?.consult.scores === undefined
+                        ? {}
+                        : { scores: judged.consult.scores }),
+                    ...(judged === undefined ? {} : { consult: judged.consult }),
+                    ...(judged?.consult.window === undefined
+                        ? {}
+                        : { window: judged.consult.window }),
                     contextTokens: growth.maxTokens,
                     scheduler: before,
                 }),
             );
         }
+
+        if (reminder === undefined) {
+            return;
+        }
+
+        const turn = scheduler.snapshot().userTurns;
+        shown.set(reminder.id, turn);
 
         pi.sendMessage(
             {
@@ -864,6 +923,41 @@ export default function registerRemindersExtension(
             },
             { deliverAs: "steer" },
         );
+    };
+
+    /**
+     * The tier-2 question at a mid-run point, asked the way a turn boundary asks it.
+     *
+     * The pool is the judged state's, so the answer can only name an id the gate allows; the state is the same
+     * one conversation, and the signals ride along for the caller's record rather than as part of it. A disabled
+     * or unreadable consult answers no choice, which leaves the deterministic rotation in charge.
+     */
+    const consultMidRun = async (
+        ctx: ExtensionContext,
+        options: readonly ReminderDefinition[],
+    ): Promise<
+        { modelChoice: ReminderModelChoice | undefined; consult: ReminderConsult } | undefined
+    > => {
+        const config = decisionConfig.load(ctx.cwd ?? process.cwd());
+        if (!reminderEnabled(config)) {
+            return undefined;
+        }
+
+        const signals = midRunSignals;
+        if (signals === undefined) {
+            return undefined;
+        }
+
+        const consult = await consultModelFor({
+            ctx,
+            config,
+            signals,
+            reminders: options,
+            ...(pi.events === undefined ? {} : { events: pi.events }),
+            ...(signals.session?.phase === undefined ? {} : { heldPhase: signals.session.phase }),
+        });
+
+        return { modelChoice: modelChoiceOf(consult), consult };
     };
 
     /**

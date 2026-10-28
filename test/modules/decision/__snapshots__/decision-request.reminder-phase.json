@@ -1,0 +1,20 @@
+{
+  "state": {
+    "current_state": "validating",
+    "conversation": "User: run the tests"
+  },
+  "questions": {
+    "next_state": {
+      "type": "choice",
+      "instructions": "The session is currently in the state shown in current_state. Below is the recent conversation between the user and the agent, with tool calls in short form. Which state does the session move to next? Choose the current state if it continues in it.",
+      "criteria": {
+        "discussing": "The assistant is answering questions, debating options, or deciding, without changing files",
+        "exploring": "The assistant is reading or searching code or docs to understand before acting",
+        "implementing": "The assistant is changing the deliverable's code, tests, or configuration",
+        "validating": "The assistant is running tests, typechecks, or lint, or diagnosing a failure",
+        "documenting": "The assistant is writing or updating a plan, design doc, README, memory, or TODO",
+        "reporting": "The assistant is summarizing what was done and handing it back to the user"
+      }
+    }
+  }
+}

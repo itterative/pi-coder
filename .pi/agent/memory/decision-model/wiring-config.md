@@ -33,7 +33,7 @@ unusable answer.
 | `strategies/` | `types.ts`, `veto.ts` (default), `history.ts`, `classification.ts` (criteria + table), `index.ts` |
 | `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify, under the shared check count), the suggestion bridge (`suggestRuleForPrompt`, `consultSuggestionForPrompt`), and the runner-facing block sentences (`attributedBashBlockReason`, `readOnlyGateSentence`, `permissionAllowsCall`) |
 | `decision/suggestion.ts` | the suggestion subject: the `executes_code` bool, `buildSuggestionState`, `suggestionRoleFrom` (probability ≥ 0.5 → code), and the separate `SuggestionEvaluator` with its own cache/cooldown |
-| `decision/reminder.ts` | the reminder subject: `reminderRequest` / `reminderDecisionFrom` over the caller's ids plus `none`, and the separate `ReminderEvaluator` with its own cache/cooldown |
+| `decision/reminder.ts` | the reminder subject: `reminderChoiceRequest` / `reminderDecisionFrom` over one question per caller-supplied id (score or bool form), its state the one conversation the consult sent, and the separate `ReminderEvaluator` with a cache keyed on that state and its own cooldown |
 | `tools/bash/index.ts` | parent hook: consult on `ask`, record, prompt unless `apply` resolves it |
 | `tools/agent/child/command-permissions.ts` | child hook: consult with the child's own session, runner/isolation, and the parent's registry |
 | `tools/agent/child/safe-bash.ts` | read-only assessment; the relaxed (generic-spec) re-check `isRelaxedConfinementSafe` |
@@ -58,12 +58,29 @@ unusable answer.
 - Config keys: `enabled`, `suggestions` (default true; model-refined session-rule suggestions), `reminders`
   (default false; model-chosen agent reminders, consulted by `src/modules/reminders`), `reminderMinProbability`
   (default 0.45; the probability a per-reminder answer must reach when `reminderForm` is `"bool"`),
-  `reminderForm` (default `"score"`; the per-reminder question shape), `reminderMinScore` (default 1.0; the
-  level a per-reminder answer must reach when `reminderForm` is `"score"`), `apply`, `baseUrl`,
+  `reminderForm` (default `"score"`; the per-reminder question shape), `reminderMinScore` (default 1.25 - the
+  level a per-reminder answer must reach when `reminderForm` is `"score"`; 1.0 is the "mild" rung and the median
+  of the model's own answers, so the gate sits above it), `apply`, `baseUrl`,
   `apiKey`, `provider` (default `systemone`), `model`,
   `contextWindow` (32768), `strategy`, `timeoutMs` (5000), `cooldownMs` (30000), `minConfidence` (0.8),
   `surfaces` (default `["parent"]`), and `fileSurfaces` (default none), which names the read/write gates rather
   than the Bash ones. The old `autoHost`/`autoRefuse`/`applySurfaces` keys are ignored.
+- **Cloudflare Clef is a native pi classifier, not a System One endpoint.** A config that pairs
+  `provider: "systemone"` with a Workers AI run URL (`…/ai/run/@cf/cloudflare/clef`) builds
+  `…/run/@cf/cloudflare/clef/systemone` and gets `400 code 7000 "No route for that URI"`; every consult
+  errors, the evaluator cools the model down, and the gate silently abstains. Clef and `typesafe/jev` live
+  under pi's `cloudflare-workers-ai` provider (`cloudflare-workers-ai-system-one`, `POST {baseUrl}/run` with
+  `{model, input}`), so select `provider: "cloudflare-workers-ai"`, `model: "@cf/cloudflare/clef"` and let
+  `resolveClassifier` find it. For AI Gateway observability, override that provider's `baseUrl` in
+  `~/.pi/agent/models.json` — `applyModelsJson` applies a provider `baseUrl` to classifier models too — e.g.
+  `https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/<gateway>/workers-ai`. Use a **literal**
+  gateway id: `cloudflareWorkersAIAuth` resolves only `CLOUDFLARE_ACCOUNT_ID`, so `{CLOUDFLARE_GATEWAY_ID}`
+  stays literal. `modelOverrides` cannot do this (chat-only, no `baseUrl`), and pi's `cloudflare-ai-gateway`
+  provider declares no classifiers at all, so it never appears in the Settings list. **Confirmed working:** an
+  *unauthenticated* AI Gateway with only the `baseUrl` override — Workers AI auth still happens via
+  `Authorization`. An *authenticated* gateway instead needs `cf-aig-authorization` on that provider (add it via
+  a `headers` block), since pi's workers-ai auth sets only `Authorization`; a missing/wrong gateway token comes
+  back as `401 {"code":10000,"message":"Authentication error"}`.
 - The strategy id comes out of a file, so both the config and `resolveStrategy` use `Object.hasOwn`;
   `toString` would otherwise return a prototype function.
 - Settings dialog (Settings tab): writes the **global** file only, merges into the existing document so

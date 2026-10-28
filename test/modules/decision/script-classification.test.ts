@@ -10,10 +10,9 @@ import {
 } from "../../../src/modules/decision";
 
 import { choiceAnswer } from "./classifier";
-import { indentedJson } from "./fixtures";
 
 describe("script classification request", () => {
-    it("sends the body alone, under the capability question", async () => {
+    it("sends the body alone, under the capability question", () => {
         const request = scriptRequest('print("hello")\n');
 
         expect(request.state).toEqual({ code: 'print("hello")\n' });
@@ -21,10 +20,6 @@ describe("script classification request", () => {
             type: "choice",
             criteria: SCRIPT_CRITERIA,
         });
-
-        await expect(indentedJson(request)).toMatchFileSnapshot(
-            "__snapshots__/decision-script.request.json",
-        );
     });
 });
 

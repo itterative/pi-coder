@@ -3,9 +3,9 @@ import type {
     ClassifierContext,
     ClassifierQuestion,
 } from "@earendil-works/pi-ai";
-import type { JsonObject } from "@earendil-works/pi-ai";
 
-import { VETO_CRITERIA, VETO_INSTRUCTION, VETO_QUESTION } from "../questions";
+import { VETO_QUESTION, type CommandState } from "../contract";
+import { VETO_CRITERIA, VETO_INSTRUCTION } from "../questions";
 import type { DecisionAction, DecisionReason } from "../types";
 import type { StrategyAnswer } from "./types";
 
@@ -50,7 +50,7 @@ const CLASSIFICATION_QUESTION: ClassifierQuestion = {
 };
 
 /** One request: the state a strategy built, asked the classification question. */
-export function classificationRequest(state: JsonObject): ClassifierContext {
+export function classificationRequest(state: CommandState): ClassifierContext {
     return { state, questions: { [VETO_QUESTION]: CLASSIFICATION_QUESTION } };
 }
 

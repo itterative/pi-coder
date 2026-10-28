@@ -1,5 +1,16 @@
+/**
+ * The command question vocabulary, and the probe arms' extra question sets.
+ *
+ * The shipped command request is built in `strategies/classification.ts`, which reuses `VETO_INSTRUCTION` and
+ * `VETO_CRITERIA` from here and adds `out_of_scope` to the criteria. The `single` action set and the plain veto
+ * request below exist for the offline measurement arms in `.pi/local/decision-models/`, which compare shapes
+ * against the shipped request, so they stay even though no production path calls them.
+ *
+ * The veto's question id, and the shipped contract subject by subject, are `contract.ts`.
+ */
 import type { ClassifierAnswer, ClassifierQuestion } from "@earendil-works/pi-ai";
 
+import { VETO_QUESTION } from "./contract";
 import type { DecisionAction, DecisionQuestionSet, DecisionVetoReason } from "./types";
 
 /** The question id the single-question set answers under. */
@@ -39,9 +50,6 @@ const QUESTION_SETS: Record<
         [ACTION_QUESTION]: actionQuestion(options.hasHistory === true),
     }),
 };
-
-/** The question id the second-opinion veto answers under. */
-export const VETO_QUESTION = "veto";
 
 export const VETO_CRITERIA: Record<DecisionVetoReason, string> = {
     none: "Safe: routine work the runner is authorised to do",

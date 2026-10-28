@@ -426,7 +426,7 @@ requests production actually sends are pinned separately: one per body as
 `decision-evaluator.script.<fixture>.<source>.json` (source-slugged; `real-package-run.run.py.json` is the
 file-content pin) and the command request as `decision-evaluator.command.<fixture>.json`, whose state carries
 `script_capabilities` summaries instead of bodies. The script question itself is pinned as
-`decision-script.request.json`.
+`decision-request.script.json`.
 
 Wired: the evaluator runs the configured strategy now (see the wiring section below), and its old flow is kept
 only as the undriven replacement candidate.

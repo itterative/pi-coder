@@ -1,6 +1,6 @@
 ---
 name: selection
-description: "Reminder decision-model subject: per-reminder probability questions, the threshold, the signals state, and the labels."
+description: "Reminder decision-model subject: per-reminder score questions, the 1.25 gate, the conversation state, the signals, and the labels."
 category: architecture
 keep_updated: true
 ---
@@ -11,8 +11,10 @@ With `decisionModel.enabled: true` and `decisionModel.reminders: true`, the mode
 choice. `consultReminderSelection` (decision module) is asked before each non-session turn: one question per
 offered reminder, whose guidance is the criterion. The default form is a helpfulness **score**
 (`reminderForm: "score"`): four levels `no help | mild | useful | important`, returned as a continuous level
-in `[0, 3]`, gated by `reminderMinScore` (default 1.0). The strongest answer at or above the gate is shown;
-nothing at or above it is a deliberate `none`; an unreadable response leaves the deterministic schedule in
+in `[0, 3]`, gated by `reminderMinScore` (default **1.25**: the gate is a point on that ladder, and 1.0 is the
+"mild" rung the model's own answers sit at the median of, so a bar at 1.0 fires about half the time). The
+strongest answer at or above the gate is shown; nothing at or above it is a deliberate `none`; an unreadable
+response leaves the deterministic schedule in
 charge. `reminderForm: "bool"` restores the older probability question gated by `reminderMinProbability`
 (default 0.45). Both forms replaced a single `choice` over the ids plus `none`, which measured as `none` on
 almost every real state. The evaluator in
@@ -22,22 +24,38 @@ module. The settings dialog does not expose either key yet; they are edited in t
 
 ## What the model sees
 
-The live `event.prompt` as `request` (clipped to 600 chars by `clipRequest`, because a template or skill
-expansion is otherwise sent whole) plus the branch's **planned window**, and `signals` built by
-`session-signals.ts`:
+The tier-2 state is **one field**: `conversation`, the branch rendered by the window allocator
+(`decision/window.ts`) under `WINDOW_POLICY_REMINDER` - `WINDOW_POLICY_PLAN`'s numbers at a 2000-char budget -
+oldest first, ending with the turn's request as its own `User:` line. Nothing else is sent: no `request` field,
+no `recent_messages`, no signals. This is shape S11 of the state comparison, which beat the structured state
+(kappa 0.28 against a hindsight oracle at the shipped 1.25 gate, over 70 mid-run points of three sessions) and
+which measured the structured signal fields at **-0.14 kappa** for every allocator window beside them; the
+numbers and the rejected alternatives are in `decision-model/window.md`.
 
-- `recent_messages` is `planSessionWindow`'s plan over the items before the request: every tool call the branch
-  made - `edit`/`write`/`read`/`grep`/`ask_user`/`agent` as `tool(<identifying argument>)`, bash as
-  `command(<command>)` - with the newest user item, the newest assistant item and the newest two tool items
-  always kept, the rest filled newest-first inside `WINDOW_CHARS` (1200), each item capped to `ITEM_CHARS`
-  (240) before the budget is measured and then clipped to its share newest-first. It used to be the newest four
-  items and **bash-only**, so the edit, read, delegation or question that defined the turn never reached the
-  model. The current request stays its own field and is never merged into the window: flattened, the facts
-  measured worse than no context at all. `decisionSessionContext` carries the plan's `omitted` count beside the
-  items, and `renderSessionWindow` draws the window the way the probe did - `User:` / `Assistant:` lines,
-  `Tool: name(arg)` per call, the omissions named first - for a test, a replay, or a log. The model is sent the
-  items, not that text. `consultReminderSelection` carries that window back on `ReminderConsult.window` (built
-  from the same branch read, never rebuilt later), which is what the debug entry records and the replay prints.
+- `consultReminderSelection` allocates over `decisionSessionContext`'s `items` - every item of the branch walk,
+  with its turn stamps - rather than over the planner's window, because the allocator is the thing that decides
+  what each item is worth. `reminderConversationAtoms` appends the live `event.prompt` as a newest user item when
+  the branch does not carry it yet (`before_agent_start` runs before pi persists the message, and the deferred
+  judgement can read the branch either side of that write), which is the same rule `windowTranscript` applies
+  for the state ask; a clipped (`clipRequest`, 600) request whose text already ends the branch is not doubled.
+  The allocator keeps the newest user item, the newest assistant item and the newest two tool items whatever the
+  budget, caps each item at `ITEM_CHARS` (240), and lets a recorded state marker compete for its own length.
+- What the model read is recoverable: `ReminderConsult.window` carries the kept items back **as they were sent**
+  (each clipped to the chars its allocation bought, via `allocationText`) beside the drop count, built from the
+  same single branch read and never rebuilt later. That is what the debug entry records and what the replay
+  prints, and the rendered `conversation` is those items behind their `User:` / `Assistant:` / `Tool:` prefixes.
+- `planSessionWindow` still builds the command and file-access `recent_messages` window, and
+  `renderSessionWindow` still draws any window as a transcript for a test, a replay, or a log - the reminder
+  subject just no longer sends the planner's items. Flattening the request into the window is what measured
+  *worse* than no context for the command subject (`decision-model/state-policy.md`); for the reminder subject
+  the flattened conversation measured better than the structured fields, which is why the two now differ.
+
+## The signals
+
+`signals` built by `session-signals.ts` are still what the pool is scoped by and what the debug entry records;
+they are no longer part of the state the model reads, and `reminderCacheKey` does not include them - the key is
+the state that is sent (the conversation, the option ids and guidance, and the form), because keying on a field
+the request no longer carries would let two different conversations share one answer.
 
 - `cwd`, `session`: `user_turns`, `context_tokens`, per-tool call counts, the last 6 tool names,
   `files_modified` (edit/write paths with memory files, TODO.md and `.md` documents excluded, 8 max), `tests_run`,
@@ -142,12 +160,14 @@ The state decides the pool, so the state cannot be judged in the same request th
   phase answer goes through the accept gate. Its raw `phaseConfidence` comes back beside the state, and the
   fitted conversation comes back as `transcript` (recorded in the debug entry as `stateTranscript`). Its budget
   is a parameter (`windowChars`), which is how the escalation re-asks it at 1800.
-- **Tier 2** (`consultReminderSelection`) asks the pool's questions on the planned window (1200). The state
+- **Tier 2** (`consultReminderSelection`) asks the pool's questions on its own allocator-rendered conversation
+  (`WINDOW_POLICY_REMINDER`, 2000 chars; see "What the model sees" above). The state
   question is **not** among them: when tier 1's phase came back unsure (`phaseConfidence` missing or < 0.5) the
   caller asks the state again as its own call on `TRANSCRIPT_WINDOW_CHARS` (1800), so the state is re-judged
   where the short transcript may have hidden what decided it; that escalated answer wins, otherwise tier 1's
-  stands. Keeping the pool's state the signals it was measured with is why this is a second call rather than
-  appended questions - and it is what `judgeStateCheckpoint` already did.
+  stands. Keeping each ask to the state it was measured with - the phase to its transcript, the pool to its
+  conversation - is why this is a second call rather than appended questions, and it is what
+  `judgeStateCheckpoint` already did.
 - The debug entry records `stateConfidence`, `statePhase` and `stateLatencyMs` beside `labels`, `escalated`, and
   `consult`: tier 1's raw answer (the phase *before* the accept rule, its confidence, and its latency) next to
   the accepted labels, so a held phase can be told from a confirmed one and a quiet disagreement from a
@@ -198,7 +218,8 @@ exists. The armed path (below) calls plain `decide`, which runs `beginTurn` itse
 - Writes are stamped with an epoch that `restart()` (session start, tree move, fold) bumps: a consult that
   outlived its session drops its answer instead of recording it into the branch that replaced it.
 - One reminder per turn still holds across both paths: the deferred `decide` is skipped when a mid-run
-  emission already took the turn's slot (`lastEmitTurn >= turn`).
+  emission already took the turn's slot (`lastEmitTurn >= turn`). A mid-run point the model *declines* does not
+  take that slot - nothing was shown - so the turn's own reminder can still arrive.
 - `turn_end` no longer awaits the checkpoint: it queues it and returns, which removes the per-step consult tax
   (~0.27s, +~0.47s escalated) from every tool-using response.
 
@@ -319,7 +340,9 @@ has seen the fold reminder) lets `session_start` arm `memory-read` again.
 Every selection decision is written to the session as a `pi-coder-reminder:debug` entry, so the state a
 choice was made from survives without re-deriving it. The entry holds `trigger` (`session` / `turn` /
 `mid-run`), the emitted id or `null` - a turn that chose nothing is recorded too, because that is the case the
-state explains - the full `state`, the gate's `available` set, the `options` actually offered, `modelChoice`,
+state explains, and a mid-run point the model declined is recorded the same way, with its `modelChoice`, scores
+and the `scheduler` snapshot showing the cooldown the decline left behind - the full `state`, the gate's
+`available` set, the `options` actually offered, `modelChoice`,
 `scores`, a `consult` summary (status, latency, usage), the labels in force, `contextTokens`, and the
 pre-decision `scheduler` snapshot. Debug recording is on by default for now (`reminderDebugEnabled` in
 `settings.ts`, temporarily ignoring `PI_CODER_REMINDER_DEBUG` like `isAgentTraceEnabled`); it uses session

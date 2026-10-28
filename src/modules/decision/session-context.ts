@@ -46,7 +46,7 @@ export const ITEM_CHARS = 240;
 /** Floor reserved for every kept item, so the newest item cannot take the whole window. */
 export const ITEM_MIN = 120;
 /** Newest tool calls the window always keeps, whichever items the budget would otherwise have taken. */
-export const TOOL_ITEMS_KEPT = 2;
+export const TOOL_ITEMS_KEPT = 3;
 /** Characters for the request itself, matching `MAX_USER`. */
 export const REQUEST_CHARS = 600;
 
@@ -56,11 +56,13 @@ export interface DecisionSessionContext {
     /** Items the plan dropped, so a caller can tell a trimmed window from a complete one. */
     omitted?: number;
     /**
-     * Every item of the branch walk, oldest first, the request item included - the atoms the state transcript is
-     * fitted from.
+     * Every item of the branch walk, oldest first, the request item included - the atoms a window is allocated
+     * from.
      *
-     * The planned `recent` is what the pool's state carries. The transcript is fitted from these atoms instead,
-     * because the measured variant fitted them itself, and its turn selection needs the items the plan drops.
+     * The planned `recent` is what the command and file-access states carry. The two model readers that count
+     * what is worth the budget - the state ask's transcript (`decision/transcript.ts`) and the reminder
+     * selection's conversation (`decision/window.ts`) - are built from these atoms instead, because each
+     * measured variant fitted them itself and needs the items the plan drops.
      */
     items: DecisionRecentMessage[];
 }

@@ -1,5 +1,4 @@
-import type { JsonObject } from "@earendil-works/pi-ai";
-
+import type { CommandState } from "./contract";
 import { runnerRulesFor } from "./runner-rules";
 import type { DecisionContext, DecisionContextShape, ScriptOmission, ScriptRun } from "./types";
 
@@ -23,8 +22,8 @@ export function hasRequestContext(shape: DecisionContextShape): boolean {
  * The strategies choose the shape: `veto` sends `request_context`, and `history` is that state plus one
  * `command_history` field.
  */
-export function buildState(context: DecisionContext, shape: DecisionContextShape): JsonObject {
-    const state: JsonObject = {
+export function buildState(context: DecisionContext, shape: DecisionContextShape): CommandState {
+    const state: CommandState = {
         command: context.command,
         cwd: context.cwd,
         runner_rules: [

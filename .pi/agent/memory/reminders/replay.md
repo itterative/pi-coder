@@ -12,7 +12,12 @@ Detail companion to the `reminders` memory.
 `npm run reminder-report -- <session.jsonl> [--turn N] [--turns N] [--compact] [--recorded] [--json]`
 replays a session turn by turn, rebuilding the exact state that would be sent, simulating the schedule
 (turn cadence and threshold interaction visible), and printing each turn's reminder in full (compact clips
-it to one `shows=` line). It applies the activity gate and models a mid-run steer only for a tool-calling
+it to one `shows=` line). The tier-2 state is rebuilt through the production path - `reminderConversationAtoms`
+over `decisionSessionContext`'s items, then `selectWindow(..., WINDOW_POLICY_REMINDER)` - because a recorded
+prefix ends *before* the turn's user message, so the request is appended exactly as the live consult appends it;
+`ReplayTurn.state` is the resulting `{ conversation }` and `ReplayTurn.signals` are the signals the pool gate
+read, which `--compact`'s `phase=` and `tools=` fields come from. It applies the activity gate and models a
+mid-run steer only for a tool-calling
 assistant message, printing it with its emitting turn. A turn is a run-starting prompt; a steered message
 stays under its run's turn and never reaches the decision.
 
@@ -28,10 +33,13 @@ labels, judged signals) and the messages actually delivered, matched to their tu
 entries exist or a message carries no id/turn details. The file can lag a live session, so the newest turns
 may show no record yet.
 
-Both windows print as transcripts, next to the state JSON: the replay's own (`ReplayTurn.window`, also in
+Both windows print as transcripts: the replay's own (`ReplayTurn.window`, also in
 `--json`, with a `dropped=` count in `--compact`), and under `--recorded` the window the live consult judged
 (`debug.window`, recorded since the consult carries it back). That pairing is the point - a window change is
-read line by line against what a live decision actually sent, instead of being unrecoverable. An entry whose
+read line by line against what a live decision actually sent, instead of being unrecoverable. The tier-2 state
+*is* that window, so the text output prints one `state: {conversation} - the N chars of window above` line and
+then the `signals:` JSON instead of repeating the same text twice; an empty window prints
+`state: {} - no window, so nothing to send`. An entry whose
 consult ran but kept no window says so (`predates the window record`). When the window holds a recorded state
 entry it is annotated in place (`── phase: X ──`), the same marker the model is sent (`reminderStateMarker`), so
 a replay reads the phase timeline exactly where the consult saw it.
