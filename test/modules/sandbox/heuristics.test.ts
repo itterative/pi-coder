@@ -1629,6 +1629,30 @@ describe("getCwdConfinementPermission", () => {
             { desc: "id", command: "id -u", expected: Heuristic.SAFE_READONLY },
             { desc: "df", command: "df -h .", expected: Heuristic.SAFE_READONLY },
             { desc: "df outside cwd", command: "df /etc", expected: Heuristic.UNSAFE },
+            { desc: "findmnt", command: "findmnt", expected: Heuristic.SAFE_READONLY },
+            // The shape a container agent actually runs: a clustered boolean plus a value flag.
+            {
+                desc: "findmnt -no TARGET,OPTIONS",
+                command: "findmnt -no TARGET,OPTIONS",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "findmnt --target inside cwd",
+                command: "findmnt --target .",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "findmnt positional outside cwd",
+                command: "findmnt /etc/fstab",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "findmnt --tab-file outside cwd",
+                command: "findmnt -F /etc/fstab",
+                expected: Heuristic.UNSAFE,
+            },
+            // Monitoring never terminates, so it is refused rather than left to the command timeout.
+            { desc: "findmnt --poll", command: "findmnt --poll", expected: Heuristic.UNSAFE },
         ]);
     });
 

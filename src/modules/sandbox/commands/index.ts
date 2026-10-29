@@ -21,6 +21,13 @@ export type { CommandSpec, FlagSpec } from "./spec";
  * (or execute other programs) should be listed here. Scratchpad-only mutators
  * are explicitly marked and remain ineligible without an additional root.
  * Unknown commands fall back to the permission system.
+ *
+ * Growth policy: this table is deliberately finite and is not the answer to every
+ * unfamiliar command. A read-only child's allowlist miss already reaches the decision
+ * model through the `child` surface, which costs roughly half a second and ~870 input
+ * tokens per judged call but keeps no state and needs no maintenance; prefer that for
+ * one-off commands. Add an entry here only for a command an agent hits repeatedly,
+ * where that per-call cost is worth paying once, in code, for everyone.
  */
 export const KNOWN_COMMANDS: Record<string, CommandSpec> = {
     ...READER_COMMANDS,
