@@ -147,8 +147,17 @@ export class ReminderScheduler {
      * Whether a mid-run threshold crossing is due, without deciding which reminder or emitting. Lets the
      * caller skip the branch scan that builds the availability set on the many stream updates where nothing
      * is due.
+     *
+     * The per-turn cap belongs here, not only in `decideMidRun`: a point past the cap can not emit, and the
+     * consult that would answer it is the expensive half of the decision - a branch read plus a window
+     * allocation over every message - while the answer is discarded. Checking only the threshold re-consulted
+     * on every tick of a long turn after the budget was spent.
      */
     midRunDue(maxContextTokens: number): boolean {
+        if (this.midRunThisTurn >= this.maxMidRunPerTurn) {
+            return false;
+        }
+
         return this.thresholdDue(maxContextTokens);
     }
 

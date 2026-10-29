@@ -254,6 +254,25 @@ describe("ReminderScheduler", () => {
         expect(scheduler.midRunDue(200)).toBe(true);
     });
 
+    it("stops reporting a due threshold once the per-turn cap is spent", () => {
+        // The consult that answers a mid-run point reads the branch and allocates a window over every
+        // message; a point past the cap cannot emit, so it must not be reported as due at all. Reporting it
+        // re-consulted on every streamed delta for the rest of a long turn.
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100, maxMidRunPerTurn: 1 });
+        scheduler.noteContext(100);
+
+        expect(scheduler.midRunDue(200)).toBe(true);
+        expect(scheduler.decideMidRun({ maxContextTokens: 200 })).toBe(
+            ACTIVE_ROTATION_REMINDERS[0],
+        );
+        expect(scheduler.midRunDue(300)).toBe(false);
+        expect(scheduler.midRunDue(10_000)).toBe(false);
+
+        // The cap is per turn, so the next turn reports again.
+        scheduler.beginTurn();
+        expect(scheduler.midRunDue(300)).toBe(true);
+    });
+
     it("caps mid-run emissions per user turn", () => {
         const scheduler = armed({ everyTurns: 0, thresholdTokens: 100, maxMidRunPerTurn: 1 });
 
@@ -315,7 +334,8 @@ describe("ReminderScheduler", () => {
     });
 
     it("declines a mid-run point the model answers none on, and restarts the cooldown", () => {
-        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100 });
+        // A second slot, so the per-turn cap does not mask what this asserts: the baseline, not the budget.
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100, maxMidRunPerTurn: 2 });
 
         expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
         scheduler.noteContext(100);

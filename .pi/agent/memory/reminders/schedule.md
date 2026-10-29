@@ -20,8 +20,7 @@ where the decision-model gate lives.
   context-free. Catalog texts stay extension-generic: they never name one repository's commands, which live in
   that project's instructions and memories.
 - `scheduler.ts` — pure `ReminderScheduler`: the armed change-point reminder first; otherwise rotation due
-  after
-  `everyTurns` user turns since the last emission or `thresholdTokens` new context tokens, whichever comes
+  after `everyTurns` user turns since the last emission or `thresholdTokens` new context tokens, whichever comes
   first. A model answer naming an offered id is chosen and advances the rotation past it; a deliberate `none`
   suppresses the fallback for that turn; a missing answer leaves the deterministic triggers in charge. The
   optional `available` gate narrows the rotation: the scheduler scans to the next allowed id, and a model pick
@@ -29,10 +28,10 @@ where the decision-model gate lives.
   per user turn, reset by each `decide`; `decideMidRun` takes the same `modelChoice`, so a mid-run crossing is
   decided rather than merely scheduled - a decline spends that budget and restarts the threshold cooldown
   (leaving `lastEmitTurn` alone), which is what keeps an overdue threshold from re-asking on the next streamed
-  update. `reset()` starts a fresh schedule; `seed()` resumes a populated
-  branch (a tree move, reload, resume, or fork) with the user-turn count, the last emission turn, and the
-  rotation pointer just past the last emitted id, so a shown id is not repeated. Neither arms anything on its
-  own: the caller passes the reminder a restart point should arm.
+  update. `reset()` starts a fresh schedule; `seed()` resumes a populated branch (a tree move, reload, resume,
+  or fork) with the user-turn count, the last emission turn, and the rotation pointer just past the last emitted
+  id, so a shown id is not repeated. Neither arms anything on its own: the caller passes the reminder a restart
+  point should arm.
 - `context-growth.ts` — the `message_start` usage baseline plus streamed `chars / 4` estimator lifted out of
   the memory module.
 - `settings.ts` — `PI_CODER_REMINDER=false` disables everything; `PI_CODER_REMINDER_EVERY_TURNS` (default 5)
@@ -51,18 +50,21 @@ where the decision-model gate lives.
 Both append at the end of the conversation, so the system-prompt prefix stays stable:
 
 - **User turns** (`before_agent_start`): the session reminder, the turn-based rotation, and the model policy.
-- **Mid-run** (`message_update` only, when the context-growth estimate crosses
+- **Mid-run** (`turn_end` with tool results, when the context-growth estimate crosses
   `PI_CODER_REMINDER_THRESHOLD`): `pi.sendMessage(..., { deliverAs: "steer" })` queues the next rotation
-  reminder into the running loop, so a long autonomous stretch does not wait for the user to speak again. It
-  steers only after the message emits a `toolcall_*` event: a tool call means the run continues, so the
-  reminder cannot land after a final text-only answer. `message_start` never steers, the gate is computed once
-  per message, and only the threshold applies here. The decision is consulted first, when the decision model
-  has opted into reminders: the tier-2 question on the judged state, with no `request` of its own (inside a run
-  the branch's last user message is the turn's request), no tier-1 re-judge (the checkpoints keep the labels
-  current) and no TODO query (it reads a new request). Without it the rotation always has an answer, so a
-  crossing could never be refused; a disabled or unreadable consult leaves the pointer in charge. An in-flight
-  flag keeps one crossing from asking once per streamed delta. Both paths share the emission bookkeeping, and
-  full scope only - a memory-scoped child never steers mid-run.
+  reminder into the running loop, so a long autonomous stretch does not wait for the user to speak again. The
+  decision point is the **step boundary** - pi awaits that dispatch, the step's tools have run, and a steer
+  lands after the turn and before the next inference, the only point where delivering one means anything.
+  `message_update` contributes only the growth estimate; streaming never consults. A step with no tool result
+  may be the run's last, so it steers nothing. The gate is computed once per step, and only the threshold
+  applies here. The decision is consulted first, when the decision model has opted into reminders: the tier-2
+  question on the judged state, with no `request` of its own (inside a run the branch's last user message is
+  the turn's request), no tier-1 re-judge (the checkpoints keep the labels current) and no TODO query (it reads
+  a new request). Without it the rotation always has an answer, so a crossing could never be refused; a disabled
+  or unreadable consult leaves the pointer in charge. The per-turn cap is checked in `midRunDue` *before* the
+  consult, so a spent budget costs a threshold comparison, and the in-flight flag only guards a re-entrant
+  dispatch. Both paths share the emission bookkeeping, and full scope only - a memory-scoped child never steers
+  mid-run.
 
 ## Lifecycle: start, navigation, and the fold
 

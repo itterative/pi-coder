@@ -81,8 +81,9 @@ halves have very different reliability.
 
 ## The schedule the decisions happen on
 
-The rotation does not decide at turn starts. `message_update` -> `maybeEmitMidRun` -> `scheduler.decideMidRun` ->
-`nextAvailableRotation(available)`: a deterministic pick over the phase-gated pool with **no model call** (the
+The rotation does not decide at turn starts. `turn_end` (a step boundary with tool results) -> `maybeEmitMidRun`
+-> `scheduler.decideMidRun` -> `nextAvailableRotation(available)`: a deterministic pick over the phase-gated pool
+with **no model call** (the
 `mid-run` debug records carry no `modelChoice`/`scores`; the `turn` ones do). The trigger is 30 000 tokens of
 context growth since the last delivery (`DEFAULT_REMINDER_THRESHOLD`) or 5 user turns
 (`DEFAULT_REMINDER_EVERY_TURNS`), whichever comes first, capped at one mid-run reminder per user turn

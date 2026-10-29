@@ -290,6 +290,53 @@ export class UsageTotalsCache {
     }
 }
 
+/** The surface the context figure is read from: the session identity plus pi's own accounting. */
+export interface FooterContextUsageSource {
+    sessionManager: FooterSessionSource;
+    getContextUsage(): ContextUsage | undefined;
+}
+
+/**
+ * How long a computed context figure stays authoritative when the branch has not moved.
+ *
+ * The key below only moves on an appended entry, but the figure also grows while a response streams, because
+ * pi counts the in-flight message. A key-only cache would freeze mid-reply, so the floor bounds the recompute
+ * rate instead: the footer renders several times per frame, and the call it avoids is not cheap.
+ */
+export const CONTEXT_USAGE_REFRESH_MS = 1000;
+
+/**
+ * `ctx.getContextUsage()` is not memoized: it rebuilds the session projection, walking the whole branch, so
+ * calling it per render costs O(transcript) several times per frame. On a long session that is the TUI stutter
+ * seen while output streams — a 60s profile attributed ~50-60% of main-thread samples to this one call chain.
+ */
+export class ContextUsageCache {
+    private key: string | undefined;
+    private computedAt: number | undefined;
+    private usage: ContextUsage | undefined;
+
+    get(context: FooterContextUsageSource, now = Date.now()): ContextUsage | undefined {
+        const session = context.sessionManager;
+        // The leaf, not the entry count: `entryCount` falls back to `getEntries().length`, and reading the
+        // entries is part of the cost this cache exists to avoid.
+        const key = `${session.getSessionId()}\u0000${session.getLeafId() ?? ""}`;
+
+        if (
+            this.computedAt !== undefined &&
+            this.key === key &&
+            now - this.computedAt < CONTEXT_USAGE_REFRESH_MS
+        ) {
+            return this.usage;
+        }
+
+        this.usage = context.getContextUsage();
+        this.key = key;
+        this.computedAt = now;
+
+        return this.usage;
+    }
+}
+
 function collectUsageTotals(entries: readonly SessionEntry[]): SessionUsageTotals {
     const totals: SessionUsageTotals = {
         input: 0,

@@ -36,6 +36,7 @@ import { formatTodoProgress, summarizeTodoList } from "./format";
 import { StreamRateTracker, formatStreamRate } from "./stream-rate";
 import { TipRotator, type FooterTip } from "./tips";
 import {
+    ContextUsageCache,
     UsageTotalsCache,
     footerInfoSegments,
     layoutFooterLine,
@@ -57,6 +58,7 @@ export class PiCoderFooter implements Component {
     private readonly spinner: Spinner;
     private readonly tips: TipRotator;
     private readonly totals = new UsageTotalsCache();
+    private readonly contextUsage = new ContextUsageCache();
     private runs: AgentRunSummary[];
     private hiddenCount: number;
     private todo: TodoList | undefined;
@@ -147,7 +149,7 @@ export class PiCoderFooter implements Component {
             home: process.env.HOME || process.env.USERPROFILE,
             branch: this.footerData.getGitBranch(),
             model: this.context.model,
-            contextUsage: this.context.getContextUsage(),
+            contextUsage: this.contextUsage.get(this.context),
             totals: this.totals.get(this.context.sessionManager),
             extensionStatuses: this.footerData.getExtensionStatuses(),
         });

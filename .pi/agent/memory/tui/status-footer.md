@@ -61,6 +61,37 @@ keep_updated: true
 
 - While a tip shows it takes whichever slot is free — the right cluster's usage/context while an agent is active, otherwise the TODO's left slot — rendered dim with a `tip: ` prefix; a left tip takes all remaining left width (`shrinkToFit` with a dimmed `ellipsis`, so the layout shortens it instead of dropping it), while the right placement is capped at 56 columns so it cannot balloon the reserved cluster.
 
+## Render cost and the context-usage cache
+
+`ctx.getContextUsage()` is **not memoized**: it rebuilds the session projection (`getContextUsage` →
+`buildSessionProjection` → `buildSessionPath` / `buildContextEntries` / `getBranch`), walking the whole branch.
+Calling it per render was the TUI stutter on a long session: a 60s CPU profile of the live process (attached
+with `scripts/attach-profile.mjs`, no reload) put **78% of main-thread samples in pi core with ~50-60% of them
+inside that one call chain** (`render@src/tui/status/footer.ts ← getContextUsage ← buildSessionProjection`),
+with 18 non-idle runs of 250-500ms and 6 of ≥500ms per minute, longest 1.0s, and only 14% idle time.
+
+After the cache, the same 60s window (big streamed bash call + a scout's bash calls) measures: idle 90%, pi
+core 78% → 7%, pi-coder 5.2% → 1.2%, no block ≥500ms, and 1356 of 1372 non-idle runs under 50ms. What is left
+is the floor doing its job: **one rebuild on this branch costs ~250ms**, so a 1s floor still produces 3-4
+hitches of 250-500ms per minute. Cheap ways to go further, in order of value: raise the floor (the figure is a
+footer readout), compute the number from `UsageTotalsCache` + a chars estimate the way the compaction ledger
+does instead of calling pi's projection at all, or recompute off the paint path. pi renders the footer several
+times per frame (`render` + `measureHeight` + `layoutComponent`), so every repaint paid it — which is why the
+symptom tracked output volume and branch size, and why it looked like the container's fault. It was not:
+`src/modules/sandbox/container` has nothing blocking on that path.
+
+`ContextUsageCache` (`footer-info.ts`) is the fix, and the shape matters:
+
+- the key is `sessionId \0 leafId` — **not** the entry count `UsageTotalsCache` uses, because `entryCount()`
+  falls back to `getEntries().length` and reading the entries is part of the cost;
+- `CONTEXT_USAGE_REFRESH_MS` (1s) is a floor on recomputation, because a streamed reply grows the projection
+  without appending an entry: keyed alone, the figure would freeze mid-response;
+- the footer holds one instance beside `this.totals`, so the cost is amortized per rendered frame rather than
+  paid per `render()` call.
+
+When adding anything else to `render()`, treat it as running several times per frame: read pushed state or a
+cache, never a session projection.
+
 ## Event ownership
 
 - Domain modules publish typed `pi.events` snapshots on `pi-coder:agent-status`, `pi-coder:todo-status`, `pi-coder:decision-status` (the in-flight count), and `pi-coder:decision-state` (the judged labels), while the status package alone owns footer registration, its `Spinner` instance, the `TipRotator`, and event listeners; `invalidate()` is a no-op because each render rebuilds the line from pushed state.

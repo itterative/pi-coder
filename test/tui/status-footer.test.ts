@@ -31,6 +31,8 @@ import {
 import type { AgentRunSummary } from "../../src/tools/agent/contracts/runs";
 import { PiCoderFooter, STREAM_RATE_TTL_MS, registerStatusFooter } from "../../src/tui/status";
 import {
+    CONTEXT_USAGE_REFRESH_MS,
+    ContextUsageCache,
     UsageTotalsCache,
     formatCwd,
     formatTokens,
@@ -978,5 +980,78 @@ describe("usage totals cache", () => {
         leaf = "a1";
         cache.get(session);
         expect(entryReads).toBe(2);
+    });
+});
+
+describe("context usage cache", () => {
+    function countingSource() {
+        let leaf = "u1";
+        let calls = 0;
+        let entryReads = 0;
+        const sessionManager: FooterSessionSource = {
+            getSessionId: () => "session-1",
+            getLeafId: () => leaf,
+            getEntries: () => {
+                entryReads += 1;
+                return [];
+            },
+        };
+        const source = {
+            sessionManager,
+            getContextUsage: () => {
+                calls += 1;
+                return { tokens: 90_000, contextWindow: 200_000, percent: 45 };
+            },
+        };
+
+        return {
+            source,
+            calls: () => calls,
+            entryReads: () => entryReads,
+            moveLeaf: (id: string) => {
+                leaf = id;
+            },
+        };
+    }
+
+    it("recomputes only when the branch moves or the floor elapses", () => {
+        const { source, calls, entryReads, moveLeaf } = countingSource();
+        const cache = new ContextUsageCache();
+
+        expect(cache.get(source, 1_000)?.tokens).toBe(90_000);
+        expect(cache.get(source, 1_000 + CONTEXT_USAGE_REFRESH_MS - 1)?.tokens).toBe(90_000);
+        expect(calls()).toBe(1);
+
+        // The cheap key must not read the entries: reading them is part of the cost being avoided.
+        expect(entryReads()).toBe(0);
+
+        moveLeaf("a1");
+        cache.get(source, 1_010);
+        expect(calls()).toBe(2);
+
+        // A streamed reply grows the projection without appending an entry, so time alone re-reads it.
+        cache.get(source, 1_010 + CONTEXT_USAGE_REFRESH_MS);
+        expect(calls()).toBe(3);
+    });
+
+    it("renders a burst of frames without re-reading the context figure", () => {
+        let calls = 0;
+        const footer = makeFooter(
+            baseContext({
+                sessionManager: footerSession(),
+                model: stubModel(),
+                getContextUsage: () => {
+                    calls += 1;
+                    return { tokens: 90_000, contextWindow: 200_000, percent: 45 };
+                },
+            }),
+        );
+
+        // pi measures and lays out the footer around each paint, so one visible frame is several renders.
+        const lines = Array.from({ length: 5 }, () => renderText(footer, 160));
+
+        expect(lines.every((line) => line.includes("45.0%/200k"))).toBe(true);
+        expect(calls).toBe(1);
+        footer.dispose();
     });
 });

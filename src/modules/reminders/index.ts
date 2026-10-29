@@ -298,15 +298,7 @@ export default function registerRemindersExtension(
     /** Whether an agent run is in flight, which is what decides how a deferred reminder is delivered. */
     let runActive = false;
 
-    /**
-     * Whether the assistant message being streamed has produced a tool call yet.
-     *
-     * A steer is delivered after the current assistant turn and its tool calls; a message with no tool call
-     * may be the run's last, so queuing a reminder there would leave it as a stray message after the final
-     * answer. Reset at each assistant `message_start`.
-     */
-    let currentMessageHasToolCalls = false;
-    /** The activity gate for the message being streamed, computed lazily once per assistant message. */
+    /** The activity gate for the step being judged, computed lazily once per assistant message. */
     let midRunAvailable: ReadonlySet<ReminderId> | undefined;
     /** The signals the mid-run gate was computed from, kept for the debug entry and the selection consult. */
     let midRunSignals: ReminderSignals | undefined;
@@ -314,8 +306,8 @@ export default function registerRemindersExtension(
     /**
      * Whether a mid-run decision is already asking the model.
      *
-     * The consult is a model call and `message_update` fires per streamed delta, so without this a long
-     * assistant message would ask the same question several times over before the first answer landed.
+     * `turn_end` is awaited by pi and a step is one boundary, so this only guards against a re-entrant dispatch;
+     * it is not the cadence.
      */
     let midRunInFlight = false;
 
@@ -809,11 +801,15 @@ export default function registerRemindersExtension(
      * to another inference, so the reminder is never left over after a final text-only answer. Only the
      * context threshold applies here (the turn cadence counts user turns).
      *
-     * One decision per crossing: a streamed update re-enters this on every delta, and the consult is a model
-     * call, so the flag keeps a second entry from asking the same question while the first is in the air.
+     * One decision per step, and a step is a *completed* assistant message whose tool calls have run, not a
+     * streamed delta: a delta is neither a point a steer can be delivered at (it lands after the turn, before
+     * the next inference) nor a point worth a branch read and a window allocation, and judging there meant the
+     * extension blocked the render loop once per crossing in the middle of the text the user is reading.
+     * `turn_end` is the same boundary the checkpoint uses, and pi awaits it, so a steer still lands before the
+     * run asks its next question.
      */
     const maybeEmitMidRun = async (ctx: ExtensionContext): Promise<void> => {
-        if (!midRunEnabled || !currentMessageHasToolCalls) {
+        if (!midRunEnabled) {
             return;
         }
 
@@ -832,7 +828,7 @@ export default function registerRemindersExtension(
     /**
      * The mid-run decision itself: the pool, the model's answer on it, and the steer.
      *
-     * The consult is the tier-2 question a turn boundary asks, on the state the last checkpoint judged and with
+     * The consult is the tier-2 question a step boundary asks, on the state the last checkpoint judged and with
      * no request of its own. It is what makes a mid-run point refusable: the rotation always has an answer, so
      * without it a threshold crossing emits whatever the pointer reached, whether or not it fits. Tier 1 is not
      * re-run - the checkpoints keep the labels current and the pool is built from them - and the TODO query is
@@ -1039,51 +1035,48 @@ export default function registerRemindersExtension(
         // A turn decision renders before this usage exists, so the run's first real context is what starts the
         // threshold cooldown; without it the whole context would read as growth on the first tool call.
         scheduler.noteContext(growth.maxTokens);
-        currentMessageHasToolCalls = false;
         midRunAvailable = undefined;
         midRunSignals = undefined;
         midRunAvailableReady = false;
     });
 
-    pi.on("message_update", async (event, ctx) => {
+    pi.on("message_update", (event) => {
         if (event.message.role !== "assistant") {
             return;
         }
 
         const streamed = event.assistantMessageEvent;
         if (streamed.type === "text_delta" || streamed.type === "thinking_delta") {
+            // Growth only: the decision itself is taken at `turn_end`, because a delta is not a point a steer
+            // can be delivered at and the consult must never run while text is streaming.
             growth.addStreamedChars(streamed.delta.length);
         }
-
-        if (
-            streamed.type === "toolcall_start" ||
-            streamed.type === "toolcall_delta" ||
-            streamed.type === "toolcall_end"
-        ) {
-            currentMessageHasToolCalls = true;
-        }
-
-        await maybeEmitMidRun(ctx);
     });
 
     /**
-     * The checkpoint cadence: every assistant response that used a tool re-judges the state.
+     * The step boundary: every assistant response that used a tool re-judges the state and offers a mid-run
+     * reminder.
      *
-     * A response with no tool call changed no activity, and a checkpoint is a step - the probe's step is a
-     * tool call - so it is skipped and the next response catches up. `turn_end` rather than `message_end`
-     * because it fires once per response, after that response's tools have run and their results are in the
-     * branch, which is the conversation the state should be read from.
+     * A response with no tool call changed no activity, and a step - the probe's step is a tool call - so it is
+     * skipped and the next response catches up. `turn_end` rather than `message_end` because it fires once per
+     * response, after that response's tools have run and their results are in the branch, which is the
+     * conversation the state should be read from.
      *
-     * The judgement is queued rather than awaited: nothing in pi waits on it, and its consumers - the mid-run
-     * gate, the next turn's judgement - wait for the queue, so the checkpoint never holds the run's next request
-     * behind a consult.
+     * The checkpoint judgement is queued rather than awaited: nothing in pi waits on it, and its consumers - the
+     * mid-run gate, the next turn's judgement - wait for the queue, so the checkpoint never holds the run's next
+     * request behind a consult. The mid-run decision *is* awaited, because a steer that arrives after the next
+     * inference has started is a turn too late; its own cheap `midRunDue` check runs before anything waits, so a
+     * step with nothing due pays nothing.
      */
-    pi.on("turn_end", (event, ctx) => {
+    pi.on("turn_end", async (event, ctx) => {
         if (event.toolResults.length === 0) {
+            // A step that ran no tool has no next inference to steer into: the run may be over, so a reminder
+            // queued here would arrive as a stray message after the final answer.
             return;
         }
 
         const at = epoch;
+        // Queued first, because the mid-run gate reads the labels this checkpoint produces and waits for it.
         void judgements.add(async () => {
             if (at !== epoch) {
                 return;
@@ -1091,6 +1084,9 @@ export default function registerRemindersExtension(
 
             await judgeStateCheckpoint(ctx, at);
         });
+
+        // Awaited: the steer has to be queued before pi asks its next question.
+        await maybeEmitMidRun(ctx);
     });
 
     return { idle };

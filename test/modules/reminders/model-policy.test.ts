@@ -120,18 +120,14 @@ async function toolResponseNow(stub: PiStub, toolResults: unknown[] = [{}]): Pro
 }
 
 /**
- * One mid-run threshold crossing, as pi drives it: an assistant message that called a tool and then streamed
- * enough text to grow the context past the threshold.
+ * One mid-run threshold crossing, as pi drives it: an assistant message that streamed enough text to grow the
+ * context past the threshold, then the step boundary after its tool ran.
  *
- * The tool call comes first because only a message that will continue the run may steer, and the streamed text
- * is what the growth tracker counts.
+ * The streamed text is what the growth tracker counts, and the tool result is what makes the step a point a
+ * steer can be delivered at. The decision itself is taken at that boundary, never on a delta.
  */
 async function midRunCrossing(stub: PiStub, streamedChars = 400): Promise<void> {
     await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
-    await stub.requireHandler("message_update")(
-        { message: { role: "assistant" }, assistantMessageEvent: { type: "toolcall_start" } },
-        ctx,
-    );
     await stub.requireHandler("message_update")(
         {
             message: { role: "assistant" },
@@ -139,6 +135,7 @@ async function midRunCrossing(stub: PiStub, streamedChars = 400): Promise<void> 
         },
         ctx,
     );
+    await toolResponse(stub);
 }
 
 function stateEntries(stub: PiStub): Array<{ customType: string; data: unknown }> {

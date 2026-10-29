@@ -26,6 +26,17 @@ a mid-run point is decided rather than merely scheduled: a `none` there suppress
 pointer would have emitted. The state it sends is one allocator-rendered conversation
 (`WINDOW_POLICY_REMINDER`), and the signals gate the pool instead of appearing in that state.
 
+**A mid-run decision point is a step boundary, not a streamed delta.** `turn_end` is where it is taken: pi
+awaits that dispatch, the run's tools have already run, and a steer therefore lands after the turn and before
+the next inference - the only point where delivering one is meaningful. `message_update` now carries only the
+growth estimate. Two earlier mistakes compounded here, and both are pinned by tests: the consult ran on
+`message_update` (so every delta of a long answer asked the same question), and the per-turn cap was checked
+only in `decideMidRun`, i.e. *after* the consult, so once the budget was spent the module kept re-asking until
+the turn ended and discarded every answer. Measured on one real session: 51,878 `trigger:"mid-run"` records,
+98.9% of them re-asks of an unchanged state, 100% emitting nothing, 49,206 answered from the decision model's
+own cache (so the whole cost was our branch read plus window allocation, ~160 ms each), and 199 MB of the
+212 MB transcript. `ReminderScheduler.midRunDue` now honours the cap, and the trigger is the step.
+
 `reminders/selection.md` is the subject itself - the signals, the labels, the calibration, and the threshold
 accounting. `reminders/stage-gating.md` is the judged state that decides the pool, with the cascade behind it.
 

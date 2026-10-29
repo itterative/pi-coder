@@ -129,6 +129,44 @@ function appendReminder(
     );
 }
 
+/**
+ * One completed agent step, as pi runs it: the message streams, then the boundary dispatch after its tools ran.
+ *
+ * The mid-run decision belongs to that boundary and not to a delta - a steer is delivered after the turn and
+ * before the next inference - so every case that used to poke `message_update` drives `turn_end` instead. The
+ * streamed text is what the growth estimate is built from, which is why it is still sent.
+ */
+async function step(
+    stub: PiStub,
+    options: { growth?: number; toolResults?: boolean } = {},
+): Promise<void> {
+    const growth = options.growth ?? 400;
+    await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
+    if (growth > 0) {
+        await stub.requireHandler("message_update")(
+            {
+                message: { role: "assistant" },
+                assistantMessageEvent: { type: "text_delta", delta: "x".repeat(growth) },
+            },
+            ctx,
+        );
+    }
+    await stub.requireHandler("turn_end")(
+        {
+            message: { role: "assistant", content: [] },
+            toolResults: options.toolResults === false ? [] : [{ role: "toolResult" }],
+        },
+        ctx,
+    );
+}
+
+/** The mid-run debug records a case produced: what a decision point actually cost, independent of the steer. */
+function midRunRecords(stub: PiStub): unknown[] {
+    return stub.entries
+        .filter((entry) => entry.customType === "pi-coder-reminder:debug")
+        .filter((entry) => (entry.data as { trigger?: string }).trigger === "mid-run");
+}
+
 /** An open TODO list, so the `todo` gate allows the rotation id the navigation test expects. */
 const TODO_DOCUMENT = `---
 version: 1
@@ -294,23 +332,9 @@ describe("reminder emission", () => {
         await startSession(stub);
         expect((await userTurn(stub))?.message?.content).toContain("memory_system");
 
-        await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
-        // The run must continue to a next inference for a steer to have a destination, which a tool call
+        // The run must continue to a next inference for a steer to have a destination, which a tool result
         // guarantees. The exploring pool offers delegation, which is the steer's reminder.
-        await stub.requireHandler("message_update")(
-            {
-                message: { role: "assistant" },
-                assistantMessageEvent: { type: "toolcall_start" },
-            },
-            ctx,
-        );
-        await stub.requireHandler("message_update")(
-            {
-                message: { role: "assistant" },
-                assistantMessageEvent: { type: "text_delta", delta: "x".repeat(400) },
-            },
-            ctx,
-        );
+        await step(stub);
 
         expect(stub.sentMessages).toHaveLength(1);
         expect(stub.sentMessages[0]?.message).toMatchObject({
@@ -333,15 +357,8 @@ describe("reminder emission", () => {
         expect((await userTurn(stub))?.message?.content).toContain("memory_system");
 
         // The armed turn renders before the run's usage exists, so its context must not become the baseline:
-        // the first tool call would otherwise steer the whole context as growth.
-        await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
-        await stub.requireHandler("message_update")(
-            {
-                message: { role: "assistant" },
-                assistantMessageEvent: { type: "toolcall_start" },
-            },
-            ctx,
-        );
+        // the first step would otherwise steer the whole context as growth.
+        await step(stub, { growth: 0 });
 
         expect(stub.sentMessages).toHaveLength(0);
     });
@@ -364,14 +381,7 @@ describe("reminder emission", () => {
         await startSession(stub);
         expect((await userTurn(stub))?.message?.content).toContain("memory_system");
 
-        await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
-        await stub.requireHandler("message_update")(
-            {
-                message: { role: "assistant" },
-                assistantMessageEvent: { type: "toolcall_start" },
-            },
-            ctx,
-        );
+        await step(stub);
 
         // Had the seed been dropped, the baseline would be the reload context (5150) and the growth zero.
         expect(stub.sentMessages).toHaveLength(1);
@@ -413,8 +423,15 @@ describe("reminder emission", () => {
         await userTurn(stub);
 
         await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
+        await stub.requireHandler("message_update")(
+            {
+                message: { role: "assistant" },
+                assistantMessageEvent: { type: "text_delta", delta: "x".repeat(400) },
+            },
+            ctx,
+        );
 
-        // The message has not called a tool yet, so it may be the run's last; nothing is queued.
+        // Streaming alone decides nothing: the boundary has not happened yet, and a delta is not a step.
         expect(stub.sentMessages).toHaveLength(0);
     });
 
@@ -425,14 +442,8 @@ describe("reminder emission", () => {
         await startSession(stub);
         await userTurn(stub);
 
-        await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
-        await stub.requireHandler("message_update")(
-            {
-                message: { role: "assistant" },
-                assistantMessageEvent: { type: "text_delta", delta: "x".repeat(400) },
-            },
-            ctx,
-        );
+        // A response with no tool result may be the run's last, so nothing is steered into it.
+        await step(stub, { toolResults: false });
 
         expect(stub.sentMessages).toHaveLength(0);
     });
@@ -460,16 +471,27 @@ describe("reminder emission", () => {
         await startSession(stub);
         await userTurn(stub);
 
+        // Three steps in the same user turn: the first steers, the rest are past the per-turn budget.
+        for (let crossing = 0; crossing < 3; crossing += 1) {
+            await step(stub);
+        }
+
+        expect(stub.sentMessages).toHaveLength(1);
+    });
+
+    it("decides nothing while the message is still streaming", async () => {
+        // The regression this pins: the consult used to run on `message_update`, so a long streamed answer asked
+        // the same question after every delta - 51,878 decision records in one session, 98.9% of them re-asks of
+        // an unchanged state, all of them discarded by the per-turn cap. A delta is not a step.
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
+        useExploringBranch();
+        const stub = harness();
+        await startSession(stub);
+        await userTurn(stub);
+
         await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
-        await stub.requireHandler("message_update")(
-            {
-                message: { role: "assistant" },
-                assistantMessageEvent: { type: "toolcall_start" },
-            },
-            ctx,
-        );
-        // Two threshold crossings inside the same assistant message.
-        for (let crossing = 0; crossing < 2; crossing += 1) {
+        for (let delta = 0; delta < 20; delta += 1) {
             await stub.requireHandler("message_update")(
                 {
                     message: { role: "assistant" },
@@ -479,6 +501,16 @@ describe("reminder emission", () => {
             );
         }
 
+        expect(midRunRecords(stub)).toEqual([]);
+        expect(stub.sentMessages).toEqual([]);
+
+        // The step boundary decides once, and the growth the stream accumulated is what it measures.
+        await stub.requireHandler("turn_end")(
+            { message: { role: "assistant", content: [] }, toolResults: [{ role: "toolResult" }] },
+            ctx,
+        );
+
+        expect(midRunRecords(stub)).toHaveLength(1);
         expect(stub.sentMessages).toHaveLength(1);
     });
 
@@ -489,14 +521,7 @@ describe("reminder emission", () => {
         await startSession(stub);
         await userTurn(stub);
 
-        await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
-        await stub.requireHandler("message_update")(
-            {
-                message: { role: "assistant" },
-                assistantMessageEvent: { type: "text_delta", delta: "x".repeat(400) },
-            },
-            ctx,
-        );
+        await step(stub);
 
         expect(stub.sentMessages).toHaveLength(0);
     });
@@ -507,13 +532,7 @@ describe("reminder emission", () => {
         await startSession(stub);
         await userTurn(stub);
 
-        await stub.requireHandler("message_update")(
-            {
-                message: { role: "assistant" },
-                assistantMessageEvent: { type: "text_delta", delta: "x".repeat(400) },
-            },
-            ctx,
-        );
+        await step(stub);
 
         expect(stub.sentMessages).toHaveLength(0);
     });
@@ -524,13 +543,7 @@ describe("reminder emission", () => {
         const stub = harness();
         await startSession(stub);
 
-        await stub.requireHandler("message_update")(
-            {
-                message: { role: "assistant" },
-                assistantMessageEvent: { type: "text_delta", delta: "x".repeat(400) },
-            },
-            ctx,
-        );
+        await step(stub);
 
         expect(stub.sentMessages).toHaveLength(0);
     });
