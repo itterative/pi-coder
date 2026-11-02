@@ -17,15 +17,17 @@
             "./skills"
         ]
     },
+    "peerDependencies": {
+        "@earendil-works/pi-ai": "^1.1.0",
+        "@earendil-works/pi-coding-agent": "^1.1.0",
+        "@earendil-works/pi-tui": "^1.1.0"
+    },
     "dependencies": {
         "lookpath": "^1.2.3",
         "sqlite": "^5.1.1",
         "sqlite3": "file:vendor/sqlite3"
     },
     "devDependencies": {
-        "@earendil-works/pi-ai": "^1.1.0",
-        "@earendil-works/pi-coding-agent": "^1.1.0",
-        "@earendil-works/pi-tui": "^1.1.0",
         "@eslint/js": "^10.0.1",
         "@types/node": "^25.3.3",
         "@vitest/coverage-v8": "^4.1.11",
