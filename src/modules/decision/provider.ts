@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ProviderConfig } from "@earendil-works/pi-coding-agent";
-import { classify as classifySystemOne } from "@earendil-works/pi-ai/api/typesafe-system-one";
+import type { ProviderClassifier } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 import type { DecisionModelConfig } from "./types";
 
@@ -14,6 +15,51 @@ import type { DecisionModelConfig } from "./types";
  * `models.json` cannot express this: its model entries have no type, and classifier models need an explicit
  * discriminant plus an implementation, both of which only an extension registration can carry.
  */
+
+/** The built-in provider whose classifier implementation speaks System One. */
+const SYSTEM_ONE_PROVIDER_ID = "typesafe";
+
+/** `builtinProviders()` constructs every built-in provider, so the lookup waits for the first request. */
+let systemOneClassify: ProviderClassifier["classify"] | undefined;
+
+/**
+ * pi's own System One transport, taken from its built-in `typesafe` provider.
+ *
+ * `Provider.classify` only dispatches on `model.api` and runs the transport with the model and options it is
+ * handed, so this provider's id, `baseUrl`, and credentials pass straight through — nothing here resolves
+ * against TypeSafe's own catalog entry or its `TYPESAFE_API_KEY`. A throw is safe: `Models.classify` wraps it
+ * into an error `ClassifierResult`, which is the shape the evaluators already branch on.
+ *
+ * The transport module itself cannot be imported. Extension imports resolve through pi's alias table, which
+ * holds exact specifiers only (`@earendil-works/pi-ai`, `/compat`, `/oauth`, `/providers/all`, ...), so a deep
+ * `@earendil-works/pi-ai/api/typesafe-system-one` import resolves against the *extension's* `node_modules` —
+ * absent for an installed package, because pi installs no peers — and fails the whole extension load. It only
+ * looks fine in a checkout, where the devDependency puts a real `pi-ai` next to it. `/providers/all` is
+ * aliased, and the classifier it exposes is the same lazy transport.
+ */
+function systemOneClassifier(): ProviderClassifier["classify"] {
+    if (systemOneClassify !== undefined) {
+        return systemOneClassify;
+    }
+
+    const classify = builtinProviders().find(
+        (provider) => provider.id === SYSTEM_ONE_PROVIDER_ID,
+    )?.classify;
+
+    if (classify === undefined) {
+        throw new Error(
+            `pi's built-in ${SYSTEM_ONE_PROVIDER_ID} provider has no classifier implementation`,
+        );
+    }
+
+    systemOneClassify = classify;
+    return systemOneClassify;
+}
+
+/** The registration's classifier entry, shared so every registration carries the same object. */
+const SYSTEM_ONE_CLASSIFIER: ProviderClassifier = {
+    classify: (model, context, options) => systemOneClassifier()(model, context, options),
+};
 
 /** Provider id the endpoint is registered under; also the config's default provider. */
 export const DECISION_PROVIDER_ID = "systemone";
@@ -66,7 +112,7 @@ export function decisionProviderConfig(config: DecisionModelConfig): ProviderCon
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             },
         ],
-        classifiers: { [DECISION_CLASSIFIER_API]: { classify: classifySystemOne } },
+        classifiers: { [DECISION_CLASSIFIER_API]: SYSTEM_ONE_CLASSIFIER },
     };
 }
 
