@@ -4,6 +4,10 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { AutocompleteItem } from "@earendil-works/pi-tui";
+
+import type { SandboxConfig } from "../../../../src/common/config";
+import sandboxConfig from "../../../../src/common/config";
 import { registerSandboxCommand } from "../../../../src/modules/sandbox/container/command";
 import type { ContainerReadiness } from "../../../../src/modules/sandbox/container/selection";
 import { createContainerState } from "../../../../src/modules/sandbox/container/state";
@@ -65,6 +69,7 @@ function run(
         hasUI?: boolean;
         confirm?: boolean;
         readiness?: ContainerReadiness;
+        config?: SandboxConfig;
     } = {},
 ) {
     const stub = createPiStub();
@@ -73,12 +78,14 @@ function run(
     const notifications: Array<{ message: string; level: string }> = [];
     const onImageBuilt = vi.fn(async () => {});
     const onConfigChanged = vi.fn(async () => {});
+    const completionConfig = options.config;
 
     registerSandboxCommand(stub.pi, {
         state,
         onImageBuilt,
         onConfigChanged,
         inspect: async () => options.readiness ?? { state: "no-recipe" },
+        configForCompletions: completionConfig === undefined ? undefined : () => completionConfig,
     });
 
     const ctx = stubCommandContext({
@@ -92,8 +99,26 @@ function run(
     });
 
     const handler = stub.requireCommand("sandbox").handler;
+    const completions = stub.requireCommand("sandbox").getArgumentCompletions;
 
-    return { handler, ctx, notifications, onImageBuilt, onConfigChanged };
+    return { handler, ctx, notifications, onImageBuilt, onConfigChanged, completions };
+}
+
+/** The `value` strings a user would see at this position. */
+function suggestions(result: ReturnType<typeof run>, prefix: string): string[] {
+    const complete = result.completions;
+
+    if (complete === undefined) {
+        throw new Error("the sandbox command registered no argument completions");
+    }
+
+    const items = complete(prefix);
+
+    if (!Array.isArray(items)) {
+        throw new Error("the sandbox completions must be synchronous");
+    }
+
+    return items.map((item: AutocompleteItem) => item.value);
 }
 
 describe("/sandbox status", () => {
@@ -423,5 +448,94 @@ describe("/sandbox status plan", () => {
         expect(plan.at(-1)?.message).toContain(`${fs.realpathSync(cache)} (rw)`);
         expect(plan.at(-1)?.message).toContain("network: egress");
         expect(plan.at(-1)?.message).toContain("ports: 127.0.0.1:3000:3000");
+    });
+});
+
+describe("/sandbox completions", () => {
+    /** A configured project, so the value-level suggestions have something to list. */
+    const configured: SandboxConfig = {
+        ...sandboxConfig.default,
+        sandbox: {
+            ...sandboxConfig.default.sandbox,
+            mounts: { "/work": { mode: "readwrite" }, "/data": "readonly" },
+            network: { mode: "egress", ports: [3000, "8080:80"] },
+            devices: ["/dev/kfd", "/dev/dri/renderD128"],
+        },
+    };
+
+    function complete(prefix: string): string[] {
+        return suggestions(run(workspace(), "status", { config: configured }), prefix);
+    }
+
+    it("lists every verb when no argument has been typed", () => {
+        expect(complete("")).toEqual([
+            "status",
+            "build",
+            "mounts ",
+            "network ",
+            "devices ",
+            "backend ",
+        ]);
+    });
+
+    it("completes the second word instead of nothing", () => {
+        expect(complete("mounts ")).toEqual(["mounts show", "mounts add ", "mounts remove "]);
+        expect(complete("network ")).toEqual([
+            "network show",
+            "network egress",
+            "network none",
+            "network host",
+            "network port ",
+        ]);
+        expect(complete("devices ")).toEqual([
+            "devices show",
+            "devices gpu",
+            "devices none",
+            "devices add ",
+            "devices remove ",
+        ]);
+        expect(complete("backend ")).toEqual([
+            "backend auto",
+            "backend container",
+            "backend bwrap",
+        ]);
+    });
+
+    it("filters the current word while keeping the earlier words", () => {
+        expect(complete("m")).toEqual(["mounts "]);
+        expect(complete("mounts a")).toEqual(["mounts add "]);
+        expect(complete("network port ")).toEqual(["network port add ", "network port remove "]);
+    });
+
+    it("offers the mount options, and drops the ones already written", () => {
+        expect(complete("mounts add ")).toEqual([
+            "mounts add readonly",
+            "mounts add readwrite",
+            "mounts add create",
+            "mounts add target=",
+        ]);
+        expect(complete("mounts add /data readonly ")).toEqual([
+            "mounts add /data readonly readwrite",
+            "mounts add /data readonly create",
+            "mounts add /data readonly target=",
+        ]);
+    });
+
+    it("offers the configured mounts, ports, and devices for removal", () => {
+        expect(complete("mounts remove ")).toEqual(["mounts remove /data", "mounts remove /work"]);
+        expect(complete("network port remove ")).toEqual([
+            "network port remove 3000",
+            "network port remove 8080:80",
+        ]);
+        expect(complete("devices remove ")).toEqual([
+            "devices remove /dev/kfd",
+            "devices remove /dev/dri/renderD128",
+        ]);
+    });
+
+    it("stays quiet where only free-form input is accepted", () => {
+        expect(complete("status ")).toEqual([]);
+        expect(complete("devices add ")).toEqual([]);
+        expect(complete("nonsense ")).toEqual([]);
     });
 });

@@ -64,6 +64,13 @@ The design record is `docs/sandbox-config-redesign.md`.
 `/sandbox network [egress|none|host | port add|remove <spec>]`,
 `/sandbox devices [gpu|none|add|remove <path>]`, `/sandbox status` (prints `describeSandboxSettings`).
 
+Tab completion is word-level, not only the first verb. `completeSandboxArguments` parses the whole argument
+text and returns full argument strings (with a trailing space when more input follows), so `/sandbox mounts `
+offers `add`/`remove`/`show`, `add` offers the modes and `target=`, and the `remove` forms suggest the
+configured mount sources, published ports, and device paths read from `config.current`. The completion
+callback receives no context, so it has no cwd and reads the module's loaded config; tests inject
+`configForCompletions` instead of depending on what sits beside the runner.
+
 Each edit writes the project config through `updateSandboxConfigField` (mount edits patch single keys so
 global mounts survive; `network`/`devices` are whole-value replace because the project file overrides the
 global one), reloads `config.load()`, then calls the backend's `reloadConfig`, which marks sessions stale so

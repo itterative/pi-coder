@@ -39,6 +39,11 @@ export interface SandboxCommandDependencies {
     /** The readiness probe, injectable for the same reason the backend's is: no test needs podman. */
     inspect?: (projectDir: string) => Promise<ContainerReadiness>;
     /**
+     * Config access for completions, which receive no context and so cannot know the session's cwd. Injectable
+     * so suggestions are deterministic under test instead of following the config beside the test runner.
+     */
+    configForCompletions?: () => SandboxConfig;
+    /**
      * Applied after a settings edit (mounts, network, devices).
      *
      * The mount set is frozen at container create, so an edit that took effect "next session" would look like
@@ -47,48 +52,238 @@ export interface SandboxCommandDependencies {
     onConfigChanged?: (ctx: ExtensionContext) => Promise<void>;
 }
 
-const SUBCOMMANDS: readonly AutocompleteItem[] = [
+/**
+ * One word `/sandbox` accepts at a given position, and what it does.
+ *
+ * `more` records that the word is followed by further input (another word, or a free-form path). Selecting it
+ * leaves a trailing space so the next Tab continues at the next level instead of ending the command.
+ */
+interface CompletionWord {
+    word: string;
+    description: string;
+    more?: boolean;
+}
+
+const TOP_LEVEL: readonly CompletionWord[] = [
     {
-        value: "status",
-        label: "status",
+        word: "status",
         description: "Which backend runs bash, and whether the image is built",
     },
     {
-        value: "build",
-        label: "build",
+        word: "build",
         description: "Build the image from .pi/Containerfile (runs on this host)",
     },
     {
-        value: "mounts",
-        label: "mounts",
+        word: "mounts",
         description: "Show, add, or remove the paths the sandbox mounts",
+        more: true,
     },
     {
-        value: "network",
-        label: "network",
+        word: "network",
         description: "Show or set network mode, and publish container ports",
+        more: true,
     },
     {
-        value: "devices",
-        label: "devices",
+        word: "devices",
         description: "Show, add, or remove host devices (GPU) passed to the sandbox",
+        more: true,
     },
     {
-        value: "backend container",
-        label: "backend container",
-        description: "Use the sandbox container for this project",
-    },
-    {
-        value: "backend bwrap",
-        label: "backend bwrap",
-        description: "Use bubblewrap for this project",
-    },
-    {
-        value: "backend auto",
-        label: "backend auto",
-        description: "Ask once, then decide by image readiness",
+        word: "backend",
+        description: "Choose container, bubblewrap, or auto",
+        more: true,
     },
 ];
+
+const BACKENDS: readonly CompletionWord[] = [
+    { word: "auto", description: "Ask once, then decide by image readiness" },
+    { word: "container", description: "Use the sandbox container for this project" },
+    { word: "bwrap", description: "Use bubblewrap for this project" },
+];
+
+const MOUNT_ACTIONS: readonly CompletionWord[] = [
+    { word: "show", description: "Show the paths the sandbox mounts" },
+    { word: "add", description: "Mount a host path, read-only unless told otherwise", more: true },
+    { word: "remove", description: "Stop mounting a configured path", more: true },
+];
+
+const MOUNT_ADD_OPTIONS: readonly CompletionWord[] = [
+    { word: "readonly", description: "Read-only access (alias: ro)" },
+    { word: "readwrite", description: "Read-write access (alias: rw)" },
+    { word: "create", description: "Create the host path when it is missing" },
+    { word: "target=", description: "Mount it at a different path inside the sandbox" },
+];
+
+const NETWORK_ACTIONS: readonly CompletionWord[] = [
+    { word: "show", description: "Show the network mode and published ports" },
+    { word: "egress", description: "Outbound network only (NAT), the default" },
+    { word: "none", description: "No route and no resolver" },
+    { word: "host", description: "Share the host network namespace" },
+    { word: "port", description: "Publish a container port to the host", more: true },
+];
+
+const PORT_ACTIONS: readonly CompletionWord[] = [
+    {
+        word: "add",
+        description: "Publish a port (3000, 8080:80, or 127.0.0.1:8080:80)",
+        more: true,
+    },
+    { word: "remove", description: "Stop publishing a port", more: true },
+];
+
+const DEVICE_ACTIONS: readonly CompletionWord[] = [
+    { word: "show", description: "Show the devices passed to the sandbox" },
+    { word: "gpu", description: "Pass the host GPU nodes (/dev/kfd and /dev/dri)" },
+    { word: "none", description: "Pass no devices" },
+    { word: "add", description: "Pass an explicit host device path", more: true },
+    { word: "remove", description: "Stop passing a device", more: true },
+];
+
+/**
+ * Completions receive the whole argument text (`"mounts add /opt "`), and the chosen item's `value` replaces
+ * all of it, so every item is a complete argument string rather than just the next word.
+ */
+export function completeSandboxArguments(
+    prefix: string,
+    loadConfig: () => SandboxConfig = currentSandboxConfig,
+): AutocompleteItem[] {
+    const text = prefix.trimStart();
+    const trailingSpace = text.length > 0 && /\s$/.test(text);
+    const trimmed = trailingSpace ? text.trimEnd() : text;
+    const words = trimmed.length === 0 ? [] : trimmed.split(/\s+/);
+    const path = trailingSpace ? words : words.slice(0, -1);
+    const partial = trailingSpace ? "" : (words.at(-1) ?? "");
+
+    return argumentWords(path, loadConfig)
+        .filter((candidate) => candidate.word.startsWith(partial))
+        .map((candidate) => {
+            const completed = [...path, candidate.word].join(" ");
+
+            return {
+                value: candidate.more === true ? `${completed} ` : completed,
+                label: candidate.word,
+                description: candidate.description,
+            };
+        });
+}
+
+function argumentWords(
+    path: readonly string[],
+    loadConfig: () => SandboxConfig,
+): readonly CompletionWord[] {
+    const [head, action] = path;
+
+    if (head === undefined) {
+        return TOP_LEVEL;
+    }
+
+    if (head === "backend") {
+        return path.length === 1 ? BACKENDS : [];
+    }
+
+    if (head === "mounts" || head === "mount") {
+        return mountWords(path, action, loadConfig);
+    }
+
+    if (head === "network") {
+        return networkWords(path, action, loadConfig);
+    }
+
+    if (head === "devices") {
+        return deviceWords(path, action, loadConfig);
+    }
+
+    return [];
+}
+
+function mountWords(
+    path: readonly string[],
+    action: string | undefined,
+    loadConfig: () => SandboxConfig,
+): readonly CompletionWord[] {
+    if (path.length === 1) {
+        return MOUNT_ACTIONS;
+    }
+
+    if (action === "add") {
+        const used = new Set(path.slice(2));
+
+        return MOUNT_ADD_OPTIONS.filter((option) => !used.has(option.word));
+    }
+
+    if ((action === "remove" || action === "rm") && path.length === 2) {
+        return mountSources(loadConfig());
+    }
+
+    return [];
+}
+
+function networkWords(
+    path: readonly string[],
+    action: string | undefined,
+    loadConfig: () => SandboxConfig,
+): readonly CompletionWord[] {
+    if (path.length === 1) {
+        return NETWORK_ACTIONS;
+    }
+
+    if (action !== "port" && action !== "ports") {
+        return [];
+    }
+
+    if (path.length === 2) {
+        return PORT_ACTIONS;
+    }
+
+    if ((path[2] === "remove" || path[2] === "rm") && path.length === 3) {
+        return publishedPorts(loadConfig());
+    }
+
+    return [];
+}
+
+function deviceWords(
+    path: readonly string[],
+    action: string | undefined,
+    loadConfig: () => SandboxConfig,
+): readonly CompletionWord[] {
+    if (path.length === 1) {
+        return DEVICE_ACTIONS;
+    }
+
+    if ((action === "remove" || action === "rm") && path.length === 2) {
+        return declaredDevicePaths(loadConfig()).map((device) => ({
+            word: device,
+            description: "passed through to the sandbox",
+        }));
+    }
+
+    return [];
+}
+
+function mountSources(loaded: SandboxConfig): readonly CompletionWord[] {
+    return Object.entries(loaded.sandbox.mounts)
+        .map(([source, value]) => ({ word: source, description: describeMount(value) }))
+        .toSorted((left, right) => left.word.localeCompare(right.word));
+}
+
+function publishedPorts(loaded: SandboxConfig): readonly CompletionWord[] {
+    return declaredPorts(loaded).map((port) => ({
+        word: String(port),
+        description: "published to the host",
+    }));
+}
+
+function describeMount(value: SandboxConfigMountValue): string {
+    const mode = typeof value === "string" ? value : (value.mode ?? "readonly");
+
+    return mode === "readwrite" || mode === "rw" ? "read-write mount" : "read-only mount";
+}
+
+/** The loaded config, or the defaults before any config file exists. */
+function currentSandboxConfig(): SandboxConfig {
+    return config.current ?? config.default;
+}
 
 export function registerSandboxCommand(
     pi: ExtensionAPI,
@@ -96,9 +291,11 @@ export function registerSandboxCommand(
 ): void {
     pi.registerCommand("sandbox", {
         description: "Sandbox backend for this project (status, build, backend)",
-        getArgumentCompletions: (prefix: string): AutocompleteItem[] => {
-            return SUBCOMMANDS.filter((item) => item.value.startsWith(prefix));
-        },
+        getArgumentCompletions: (prefix: string): AutocompleteItem[] =>
+            completeSandboxArguments(
+                prefix,
+                dependencies.configForCompletions ?? currentSandboxConfig,
+            ),
         handler: async (args, ctx) => {
             await handleCommand(args.trim(), ctx, dependencies);
         },
