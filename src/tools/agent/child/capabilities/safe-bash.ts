@@ -5,6 +5,7 @@ import {
     type ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 
+import { readConfinementFor } from "../../../../modules/sandbox/read-confinement";
 import { hasAgentAuthority } from "../../definitions/types";
 import { guardSafeBashCommand, type SafeBashBlock } from "../safe-bash";
 import { createSafeBashConsult } from "../safe-bash-decision";
@@ -54,9 +55,17 @@ export function guardHeuristicBashCall(
 
     const command = event.input.command;
     const sensitiveRoots = scratchpadRoots(ctx);
+    // A container-backed child's own mount set is its boundary, so reads are not re-checked against the cwd.
+    // Per runtime: a bubblewrap child of a containerized parent keeps cwd-confined reads. It belongs in
+    // `roots`, not only in the guard options below, because the consult re-derives the relaxed assessment
+    // from that same object: without it, an allowlist miss naming an absolute container-visible path failed
+    // the relaxed pass on `OUTSIDE_CWD`, was reported as unconsultable, and the child saw a plain allowlist
+    // refusal for a command its own read boundary allows.
+    const readConfinement = readConfinementFor(options.containerBash);
     const roots = {
         additionalRoots: [...(options.additionalPaths ?? []), ...sensitiveRoots],
         sensitiveAdditionalRoots: sensitiveRoots,
+        readConfinement,
         ...(options.safeBashCommands === undefined
             ? {}
             : { safeBashCommands: options.safeBashCommands }),

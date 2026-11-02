@@ -167,6 +167,25 @@ describe("heuristic assessments", () => {
         }
     });
 
+    it("blames the missing writable root, not the working directory, for a write inside the cwd", () => {
+        // A read-only child has no writable root at all, and the mutator commands are only granted under an
+        // additional root. `touch ./probe` is exactly where it appears to be, so "outside the working
+        // directory" is the wrong reason — an agent reads it and retries with other paths instead of stopping.
+        expect(
+            getCwdConfinementAssessment("touch ./probe", { cwd: CWD, config: {} }).reasons,
+        ).toEqual([UnsafeReason.NOT_IN_WRITABLE_ROOT]);
+
+        expect(
+            getCwdConfinementAssessment("mkdir sub/dir", { cwd: CWD, config: {} }).reasons,
+        ).toEqual([UnsafeReason.NOT_IN_WRITABLE_ROOT]);
+
+        // A target that really is outside keeps the reason that says so, even with no writable root either.
+        expect(
+            getCwdConfinementAssessment("touch /tmp/elsewhere.txt", { cwd: CWD, config: {} })
+                .reasons,
+        ).toEqual([UnsafeReason.OUTSIDE_CWD]);
+    });
+
     it("allows conservative filesystem mutators only inside an additional root", () => {
         const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-mutator-root-"));
         const targetDirectory = path.join(scratchpad, "target");
@@ -1225,6 +1244,21 @@ describe("getCwdConfinementPermission", () => {
                 expected: Heuristic.SAFE_READONLY,
             },
             {
+                desc: "find name pattern is data, not a path slot",
+                command: "find src -name '*.ts'",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "find path pattern is data too",
+                command: "find . -path './src/*'",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
+                desc: "find newer still opens its file argument",
+                command: "find . -newer /etc/passwd",
+                expected: Heuristic.UNSAFE,
+            },
+            {
                 desc: "find outside cwd",
                 command: "find /etc -name foo",
                 expected: Heuristic.UNSAFE,
@@ -2097,8 +2131,23 @@ describe("getCwdConfinementPermission", () => {
                 expected: Heuristic.UNSAFE,
             },
             {
+                desc: "git stash list: only the read-only verb is dispatched",
+                command: "git stash list",
+                expected: Heuristic.SAFE_READONLY,
+            },
+            {
                 desc: "git stash pop: falls back",
                 command: "git stash pop",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "bare git stash is a push",
+                command: "git stash",
+                expected: Heuristic.UNSAFE,
+            },
+            {
+                desc: "git stash list with a flag: falls back",
+                command: "git stash list --format=%s",
                 expected: Heuristic.UNSAFE,
             },
             {
@@ -3433,7 +3482,6 @@ describe("getCwdConfinementPermission", () => {
             ["output slot of a read command", "sort -o out*.txt src/*/*.ts"],
             ["redirection target", "cat src/*/*.ts > out*.txt"],
             ["in-place editor", "sed -i s/a/b/ *.ts"],
-            ["find name pattern", 'find . -name "*.ts"'],
         ])("refuses %s instead of guessing", (_description, command) => {
             withTree((repo) => {
                 expect(classify(repo, command)).toBe(Heuristic.UNSAFE);
@@ -3695,5 +3743,60 @@ describe("getCwdConfinementPermission", () => {
                 expected: Heuristic.UNSAFE,
             },
         ]);
+    });
+});
+
+describe("read confinement keyed on the runtime's own view", () => {
+    const classify = (command: string, readConfinement: "cwd" | "runtime") =>
+        getCwdConfinementAssessment(command, { cwd: CWD, config: {}, readConfinement })
+            .classification;
+    const reasons = (command: string, readConfinement: "cwd" | "runtime") =>
+        getCwdConfinementAssessment(command, { cwd: CWD, config: {}, readConfinement }).reasons;
+
+    it("treats rg --files arguments as paths, not as a pattern", () => {
+        // `--files` removes the pattern, so every positional is a path the shell will read.
+        expect(classify("rg --files /etc", "cwd")).toBe(Heuristic.UNSAFE);
+        expect(reasons("rg --files /etc", "cwd")).toContain(UnsafeReason.OUTSIDE_CWD);
+        expect(classify("rg --files", "cwd")).toBe(Heuristic.SAFE_READONLY);
+        expect(classify("rg --files src", "cwd")).toBe(Heuristic.SAFE_READONLY);
+        expect(classify("rg pattern /etc", "cwd")).toBe(Heuristic.UNSAFE);
+    });
+
+    it("stops confining a read to the working directory", () => {
+        expect(classify("cat /etc/hostname", "cwd")).toBe(Heuristic.UNSAFE);
+        expect(classify("cat /etc/hostname", "runtime")).toBe(Heuristic.SAFE_READONLY);
+        expect(classify("rg pattern /etc", "runtime")).toBe(Heuristic.SAFE_READONLY);
+    });
+
+    it("keeps a sensitive name refused, so an opt-in credential mount stays unreadable", () => {
+        expect(classify("cat ~/.ssh/id_rsa", "runtime")).toBe(Heuristic.UNSAFE);
+        expect(reasons("cat ~/.ssh/id_rsa", "runtime")).toContain(UnsafeReason.SENSITIVE_PATH);
+    });
+
+    it("resolves a dynamic read operand instead of refusing it", () => {
+        expect(classify("cat $HOME/notes.txt", "cwd")).toBe(Heuristic.UNSAFE);
+        expect(classify("cat $HOME/notes.txt", "runtime")).toBe(Heuristic.SAFE_READONLY);
+    });
+
+    it("never relaxes a write", () => {
+        expect(classify("touch /tmp/x", "runtime")).toBe(Heuristic.UNSAFE);
+        expect(classify("rm /tmp/x", "runtime")).toBe(Heuristic.UNSAFE);
+        expect(classify("sed -i s/a/b/ /etc/hostname", "runtime")).toBe(Heuristic.UNSAFE);
+        expect(classify("cat /etc/hostname > /etc/out", "runtime")).toBe(Heuristic.UNSAFE);
+    });
+
+    it("applies the same split to direct file paths", () => {
+        const read = { cwd: CWD, access: "read" as const, readConfinement: "runtime" as const };
+        const write = { ...read, access: "write" as const };
+
+        expect(getPathConfinementAssessment("/etc/hostname", read).classification).toBe(
+            Heuristic.SAFE_READONLY,
+        );
+        expect(getPathConfinementAssessment("/etc/hostname", write).classification).toBe(
+            Heuristic.UNSAFE,
+        );
+        expect(getPathConfinementAssessment("/home/sd/.ssh/id_rsa", read).classification).toBe(
+            Heuristic.UNSAFE,
+        );
     });
 });

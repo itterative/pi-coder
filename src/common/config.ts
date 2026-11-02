@@ -7,13 +7,69 @@ function getGlobalConfigPath(): string | undefined {
     return process.env.SANDBOX_CONFIG_PATH_GLOBAL ?? SANDBOX_CONFIG_PATH_GLOBAL;
 }
 
-export type SandboxConfigMounts = Record<string, "readonly" | "readwrite">;
+export type SandboxConfigMountAccess = "readonly" | "readwrite";
+
+/**
+ * One mount, long form. `target` remaps the path inside the sandbox (a deliberate exception to Shape A's
+ * "paths mean the same thing in and out"), and `create` makes the host source with `mkdir -p` when missing,
+ * which is what a cache directory needs.
+ */
+export interface SandboxConfigMountOptions {
+    mode?: SandboxConfigMountAccess | SandboxConfigMountShorthand;
+    target?: string;
+    create?: boolean;
+}
+
+/** `ro`/`rw` are accepted aliases so a hand-written config may stay short. */
+export type SandboxConfigMountShorthand = "ro" | "rw";
+
+/** `readonly`/`readwrite` are the canonical spellings; `ro`/`rw` and the object form are accepted too. */
+export type SandboxConfigMountValue =
+    SandboxConfigMountAccess | SandboxConfigMountShorthand | SandboxConfigMountOptions;
+
+export type SandboxConfigMounts = Record<string, SandboxConfigMountValue>;
 export type SandboxConfigPermissions = Record<string, "deny" | "ask" | "allow" | "allow:sandbox">;
 export type SandboxConfigEnvFilter = Record<string, "allow" | "deny">;
+/**
+ * Legacy only: `sandbox.homeMounts` is no longer applied.
+ *
+ * The default read-only set of home dotfiles was a leak surface (`.config` routinely holds tokens) and mostly
+ * useful to bubblewrap, where host binaries wanted host config. The key is still parsed so a config that sets
+ * it is told it does nothing; the posture resolver names the replacement (`sandbox.mounts`).
+ */
 export type SandboxConfigHomeMounts = boolean | string[];
 
-// Default home directory mounts when homeMounts is true
-export const DEFAULT_HOME_MOUNTS = [".bashrc", ".bash_profile", ".local", ".config"];
+/**
+ * `egress` is the container's NAT (installs and pushes work, and it is the exfiltration path); `none` has no
+ * route and no resolver; `host` shares the user's network namespace, so the container reaches host services
+ * and the LAN and its own loopback stops being private.
+ *
+ * `ports` publishes container ports to the host, loopback by default: `3000` means `127.0.0.1:3000:3000`,
+ * and a long entry is `[ip:][host-port:]container-port`, passed through after validation.
+ */
+export type SandboxConfigNetworkMode = "egress" | "none" | "host";
+export type SandboxConfigNetworkPort = string | number;
+export interface SandboxConfigNetworkSettings {
+    mode?: SandboxConfigNetworkMode;
+    ports?: SandboxConfigNetworkPort[];
+}
+export type SandboxConfigNetwork = SandboxConfigNetworkMode | SandboxConfigNetworkSettings;
+
+/** `gpu` is shorthand for the Linux GPU nodes; anything else is a host device path to pass through. */
+export type SandboxConfigDevices = "gpu" | string[];
+
+/** The host device nodes `devices: "gpu"` asks for; each one is optional and reported when missing. */
+export const GPU_DEVICE_PATHS = ["/dev/kfd", "/dev/dri"] as const;
+
+/**
+ * Which backend confines a command: bubblewrap on the host, or the sandbox container.
+ *
+ * `auto` is the default and the only value that asks the user anything: it uses the container when this
+ * project's image is ready, offers to build it when a recipe exists but the image is not, and stays on
+ * bubblewrap otherwise. `container` and `bwrap` are settled answers — the prompt never appears again.
+ * `PI_SANDBOX_BACKEND` overrides all three, which is what keeps tests and CI hermetic.
+ */
+export type SandboxBackendChoice = "auto" | "container" | "bwrap";
 
 export interface SandboxConfigAudit {
     provider?: string;
@@ -123,10 +179,14 @@ function mergeFiles(
 export interface SandboxConfig {
     sandbox: {
         enabled?: boolean; // master switch for bubblewrap sandboxing (default: true)
+        backend?: SandboxBackendChoice; // auto (default), container, or bwrap
+        containerDeclinedTag?: string; // recipe tag the user said no to, so the prompt stays quiet until it changes
         mounts: SandboxConfigMounts;
         env?: Record<string, string>; // custom env vars
         inheritEnv?: SandboxConfigEnvFilter; // filter for existing env vars
-        homeMounts?: SandboxConfigHomeMounts; // home directory mounts: true (default), false (none), or array of paths
+        homeMounts?: SandboxConfigHomeMounts; // true (default), false (none), or a deprecated array of home-relative paths
+        network?: SandboxConfigNetwork; // egress (default), none, host, or { mode, ports }
+        devices?: SandboxConfigDevices; // "gpu", or host device paths to pass through
         gitWorktreeSupport?: boolean; // auto-mount git worktree dependencies (default: true)
     };
     permissions: SandboxConfigPermissions;
@@ -134,6 +194,147 @@ export interface SandboxConfig {
     decisionLog?: SandboxConfigDecisionLog;
     heuristics?: SandboxConfigHeuristics;
     files?: SandboxConfigFiles;
+}
+
+function parseBackendChoice(value: unknown): SandboxBackendChoice | undefined {
+    return value === "auto" || value === "container" || value === "bwrap" ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Keep only entries whose shape is one this version understands.
+ *
+ * Validation is lenient on purpose: a malformed entry is dropped rather than made to look loadable, and the
+ * posture resolver reports the ones that survive but cannot be used (missing path, relative path, credential
+ * exposure). Keeping the raw shape here is what lets `updateSandboxConfigField` edit one key without
+ * rewriting the file into the merged view.
+ */
+function parseMounts(value: unknown): SandboxConfigMounts {
+    if (!isRecord(value)) {
+        return {};
+    }
+
+    const mounts: SandboxConfigMounts = {};
+
+    for (const [source, entry] of Object.entries(value)) {
+        const parsed = parseMountEntry(entry);
+
+        if (parsed !== undefined) {
+            mounts[source] = parsed;
+        }
+    }
+
+    return mounts;
+}
+
+function parseMountEntry(value: unknown): SandboxConfigMountValue | undefined {
+    if (value === "readonly" || value === "readwrite" || value === "ro" || value === "rw") {
+        return value;
+    }
+
+    if (!isRecord(value)) {
+        return undefined;
+    }
+
+    const mode =
+        value.mode === "readonly" ||
+        value.mode === "readwrite" ||
+        value.mode === "ro" ||
+        value.mode === "rw"
+            ? value.mode
+            : undefined;
+    const target =
+        typeof value.target === "string" && value.target.trim().length > 0
+            ? value.target
+            : undefined;
+    const create = value.create === true ? true : undefined;
+
+    if (mode === undefined && target === undefined && create === undefined) {
+        return undefined;
+    }
+
+    return {
+        ...(mode === undefined ? {} : { mode }),
+        ...(target === undefined ? {} : { target }),
+        ...(create === undefined ? {} : { create }),
+    };
+}
+
+function parseHomeMounts(value: unknown): SandboxConfigHomeMounts | undefined {
+    if (value === true || value === false) {
+        return value;
+    }
+
+    if (!Array.isArray(value)) {
+        return undefined;
+    }
+
+    const entries = value.filter((entry): entry is string => typeof entry === "string");
+
+    // An empty list means "no home mounts", which is not the same as the key being absent (defaults apply).
+    return entries;
+}
+
+function parseNetwork(value: unknown): SandboxConfigNetwork | undefined {
+    if (value === "egress" || value === "none" || value === "host") {
+        return value;
+    }
+
+    if (!isRecord(value)) {
+        return undefined;
+    }
+
+    const mode =
+        value.mode === "egress" || value.mode === "none" || value.mode === "host"
+            ? value.mode
+            : undefined;
+    const ports = Array.isArray(value.ports)
+        ? value.ports.filter(
+              (port): port is SandboxConfigNetworkPort =>
+                  typeof port === "number" || typeof port === "string",
+          )
+        : undefined;
+
+    if (mode === undefined && ports === undefined) {
+        return undefined;
+    }
+
+    return {
+        ...(mode === undefined ? {} : { mode }),
+        ...(ports === undefined ? {} : { ports }),
+    };
+}
+
+function parseDevices(value: unknown): SandboxConfigDevices | undefined {
+    if (value === "gpu") {
+        return value;
+    }
+
+    if (!Array.isArray(value)) {
+        return undefined;
+    }
+
+    const paths = value.filter(
+        (entry): entry is string => typeof entry === "string" && entry.length > 0,
+    );
+
+    return paths.length === 0 ? undefined : paths;
+}
+
+/** The canonical access for any accepted mount value; anything unrecognised is the conservative `readonly`. */
+export function mountAccessOf(
+    value: SandboxConfigMountValue | undefined,
+): SandboxConfigMountAccess {
+    const mode = typeof value === "string" ? value : value?.mode;
+
+    return mode === "readwrite" || mode === "rw" ? "readwrite" : "readonly";
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function tryLoad(path: string): SandboxConfig | null {
@@ -151,10 +352,14 @@ function tryLoad(path: string): SandboxConfig | null {
         return {
             sandbox: {
                 enabled: data.sandbox?.enabled,
-                mounts: data.sandbox?.mounts ?? {},
+                backend: parseBackendChoice(data.sandbox?.backend),
+                containerDeclinedTag: nonEmptyString(data.sandbox?.containerDeclinedTag),
+                mounts: parseMounts(data.sandbox?.mounts),
                 env: data.sandbox?.env,
                 inheritEnv: data.sandbox?.inheritEnv,
-                homeMounts: data.sandbox?.homeMounts,
+                homeMounts: parseHomeMounts(data.sandbox?.homeMounts),
+                network: parseNetwork(data.sandbox?.network),
+                devices: parseDevices(data.sandbox?.devices),
                 gitWorktreeSupport: data.sandbox?.gitWorktreeSupport,
             },
             permissions: data.permissions ?? {},
@@ -249,6 +454,22 @@ function mergeRecordsOrDefault<K extends string, V>(
     return merged;
 }
 
+/** A project may add devices; a shorthand (`gpu`) on either side replaces the other, since it is a whole answer. */
+function mergeDevices(
+    base: SandboxConfigDevices | undefined,
+    override: SandboxConfigDevices | undefined,
+): SandboxConfigDevices | undefined {
+    if (override === undefined) {
+        return base;
+    }
+
+    if (base === undefined || typeof base === "string" || typeof override === "string") {
+        return override;
+    }
+
+    return [...new Set([...base, ...override])];
+}
+
 function mergeHomeMounts(
     base: SandboxConfigHomeMounts | undefined,
     override: SandboxConfigHomeMounts | undefined,
@@ -335,10 +556,15 @@ function mergeConfigs(global: SandboxConfig | null, project: SandboxConfig | nul
     return {
         sandbox: {
             enabled: project.sandbox.enabled ?? base.sandbox.enabled,
+            backend: project.sandbox.backend ?? base.sandbox.backend,
+            containerDeclinedTag:
+                project.sandbox.containerDeclinedTag ?? base.sandbox.containerDeclinedTag,
             mounts: mergeRecordsOrDefault(base.sandbox.mounts, project.sandbox.mounts, {}),
             env: mergeRecords(base.sandbox.env, project.sandbox.env),
             inheritEnv: mergeRecords(base.sandbox.inheritEnv, project.sandbox.inheritEnv),
             homeMounts: mergeHomeMounts(base.sandbox.homeMounts, project.sandbox.homeMounts),
+            network: project.sandbox.network ?? base.sandbox.network,
+            devices: mergeDevices(base.sandbox.devices, project.sandbox.devices),
             gitWorktreeSupport:
                 project.sandbox.gitWorktreeSupport ?? base.sandbox.gitWorktreeSupport,
         },
@@ -348,6 +574,107 @@ function mergeConfigs(global: SandboxConfig | null, project: SandboxConfig | nul
         decisionLog: project.decisionLog ?? base.decisionLog,
         heuristics: mergeHeuristics(base.heuristics, project.heuristics),
     };
+}
+
+/**
+ * The file a project-level write belongs in: the config already in use, or a new one in this checkout.
+ *
+ * The sandbox container image is a property of a repository (its recipe lives in the checkout), so a backend
+ * answer the user gives while working in that repository is written next to the recipe rather than to the
+ * global config: a checkout that wants a container should not turn one on for every other repository.
+ */
+export function resolveProjectConfigPath(cwd: string): string {
+    return findConfigLocations(cwd).project ?? path.join(cwd, ".pi", "bash-sandbox-config.json");
+}
+
+/**
+ * Write one field into a sandbox config file, creating it if needed.
+ *
+ * A read-modify-write of the raw JSON rather than a save of the merged in-memory config: the merged value
+ * folds the global file, defaults, and every unknown key into one object, so writing it back would silently
+ * move settings between files and drop keys this version does not know. Only the touched field changes;
+ * everything else in the file survives the parse untouched.
+ */
+export interface SandboxConfigMountEdit {
+    source: string;
+    /** `null` removes the entry; the object form sets it. */
+    value: SandboxConfigMountValue | null;
+}
+
+export interface SandboxConfigPatch {
+    backend?: SandboxBackendChoice;
+    containerDeclinedTag?: string | null;
+    mounts?: readonly SandboxConfigMountEdit[];
+    homeMounts?: SandboxConfigHomeMounts | null;
+    network?: SandboxConfigNetwork | null;
+    devices?: SandboxConfigDevices | null;
+}
+
+export function updateSandboxConfigField(configPath: string, patch: SandboxConfigPatch): void {
+    let document: Record<string, unknown> = {};
+
+    if (fs.existsSync(configPath)) {
+        try {
+            const parsed: unknown = JSON.parse(fs.readFileSync(configPath, "utf8"));
+
+            if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+                document = parsed as Record<string, unknown>;
+            }
+        } catch {
+            // A malformed file is the user's to fix; overwriting it would destroy what they were editing.
+            throw new Error(`${configPath} is not valid JSON`);
+        }
+    }
+
+    const sandbox =
+        document.sandbox !== null && typeof document.sandbox === "object"
+            ? (document.sandbox as Record<string, unknown>)
+            : {};
+
+    if (patch.backend !== undefined) {
+        sandbox.backend = patch.backend;
+    }
+
+    if (patch.containerDeclinedTag !== undefined) {
+        if (patch.containerDeclinedTag === null) {
+            delete sandbox.containerDeclinedTag;
+        } else {
+            sandbox.containerDeclinedTag = patch.containerDeclinedTag;
+        }
+    }
+
+    if (patch.mounts !== undefined) {
+        const mounts = isRecord(sandbox.mounts) ? { ...sandbox.mounts } : {};
+
+        for (const edit of patch.mounts) {
+            if (edit.value === null) {
+                delete mounts[edit.source];
+
+                continue;
+            }
+
+            mounts[edit.source] = edit.value;
+        }
+
+        sandbox.mounts = mounts;
+    }
+
+    for (const key of ["homeMounts", "network", "devices"] as const) {
+        if (patch[key] === undefined) {
+            continue;
+        }
+
+        if (patch[key] === null) {
+            delete sandbox[key];
+        } else {
+            sandbox[key] = patch[key];
+        }
+    }
+
+    document.sandbox = sandbox;
+
+    fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o640 });
+    fs.writeFileSync(configPath, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
 }
 
 function findConfigLocations(cwd: string): { global: string | null; project: string | null } {

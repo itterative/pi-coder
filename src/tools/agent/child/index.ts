@@ -8,7 +8,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { READ_ONLY_AGENT_TOOLS } from "../definitions/discovery";
 import { registerCompactionExtension } from "../../../modules/compaction";
+import { registerContainerBackend } from "../../../modules/sandbox/container";
+import {
+    createContainerState,
+    type ContainerState,
+} from "../../../modules/sandbox/container/state";
 import { capabilityExtensions } from "./capabilities";
+import { sandboxRoleFor } from "./sandbox-role";
 import { registerChildExtension } from "./extension";
 import { childProtocolPrompt } from "./prompt";
 import { resolveChildGrant, type ChildGrant } from "./grant";
@@ -66,13 +72,36 @@ interface ChildAssemblyRequest {
  * the end user may invoke. The child extension receives the option bag the grant already resolved, so
  * the only decision left here is which resource extensions accompany it.
  */
-function childExtensionEntries(request: ChildAssemblyRequest): InlineExtension[] {
+/**
+ * Per-run container state, shared between the backend extension and the command gate.
+ *
+ * `containerized` is what the gate asks instead of the environment: only this runtime knows whether its bash
+ * tool is the container-backed one, and the switch is process-wide, so the two must not be confused. `close`
+ * is how the run reaps the container it started; until the backend installs, it is a no-op.
+ */
+interface ChildContainerState {
+    /** The shared flag the backend sets and the child gate reads; false until a container is running. */
+    state: ContainerState;
+    close: () => Promise<void>;
+}
+
+function createChildContainerState(): ChildContainerState {
+    return { state: createContainerState(), close: async () => {} };
+}
+
+function childExtensionEntries(
+    request: ChildAssemblyRequest,
+    container: ChildContainerState,
+): InlineExtension[] {
     const { context, parentContext, cwd, tracker, grant } = request;
     const entries: InlineExtension[] = [
         {
             name: grant.extensionKind,
             hidden: true,
-            factory: registerChildExtension(tracker, parentContext, cwd, grant.extensionOptions),
+            factory: registerChildExtension(tracker, parentContext, cwd, {
+                ...grant.extensionOptions,
+                containerBash: () => container.state.active,
+            }),
         },
         // A child compacts its own transcript, and pi's default serialization costs it exactly what it costs
         // the parent. Not a capability: nothing grants or revokes it, and it registers no tools, so it sits
@@ -83,6 +112,29 @@ function childExtensionEntries(request: ChildAssemblyRequest): InlineExtension[]
             factory: registerCompactionExtension,
         },
     ];
+
+    // The sandbox backend runs the same code the parent uses, so "host" keeps meaning "no extra sandbox"
+    // here too. It registers before the capability entries because gates install in order and this one owns
+    // the tool those gates classify; nothing is announced, and the container starts on the first command.
+    // Registered unconditionally; whether this runtime actually containerizes is resolved per session from
+    // the same config the parent reads. A child never prompts: a build dialog here would appear in the middle
+    // of a delegated run, attributed to whoever is watching.
+    entries.push({
+        name: "pi-coder-container",
+        hidden: true,
+        factory: (pi) => {
+            const handle = registerContainerBackend(pi, {
+                state: container.state,
+                notify: false,
+                eagerStart: false,
+                // A scout's container mounts its checkout read-only and has no network, so its commands
+                // fail closed instead of being argued about one prompt at a time.
+                role: sandboxRoleFor(grant.authority),
+            });
+
+            container.close = handle.close;
+        },
+    });
 
     // Each resource capability registers its own extension, so adding one is a unit file rather than
     // another branch here. Order comes from the registry, which is load-bearing: registration order
@@ -124,6 +176,7 @@ export async function createAgentChild(
     context.onSessionCreated?.(sessionManager.getSessionFile(), sessionManager.getLeafId());
     const settingsManager = SettingsManager.create(cwd, agentDir);
     const request: ChildAssemblyRequest = { context, parentContext, cwd, tracker, grant };
+    const container = createChildContainerState();
     const resourceLoader = new DefaultResourceLoader({
         cwd,
         agentDir,
@@ -133,7 +186,7 @@ export async function createAgentChild(
         noPromptTemplates: true,
         noThemes: true,
         noContextFiles: false,
-        extensionFactories: childExtensionEntries(request),
+        extensionFactories: childExtensionEntries(request, container),
         appendSystemPrompt: [childSystemPrompt(request)],
     });
     await resourceLoader.reload();
@@ -201,6 +254,11 @@ export async function createAgentChild(
         tracker,
         unsubscribe,
         onTrace: context.onTrace,
+        // The container outlives individual commands but not the run: dispose is the one place every path
+        // (success, failure, cancel) passes through.
+        onDispose: () => {
+            void container.close();
+        },
     });
 }
 

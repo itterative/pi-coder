@@ -201,6 +201,13 @@ export const VCS_COMMANDS: Record<string, CommandSpec> = {
             whatchanged: LOG_SPEC,
             branch: BRANCH_SPEC,
             tag: TAG_SPEC,
+            // `stash` dispatches again on its own verb, and only `list` reads: pop/drop/clear/push all
+            // move refs or the worktree, and bare `git stash` is a push. The subcommand validate hook is
+            // what keeps the single-level dispatch from granting the mutators with the reader.
+            stash: {
+                positionals: "ignore",
+                validate: (args) => args.length === 2 && args[1] === "list",
+            },
         },
     },
 };

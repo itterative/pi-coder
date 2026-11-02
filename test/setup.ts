@@ -24,3 +24,9 @@ process.env.DECISION_MODEL_CONFIG_PATH ??= "";
 // `--clearenv` appear — so a blanket pin quietly redefines the sandbox's environment policy for every suite.
 // Tests that depend on roots, mounts, or env behaviour pass their own config object or write their own project
 // file; `test/modules/sandbox/file-roots.test.ts` is the example.
+
+// Where the suite runs must not change its meaning: inside the pi-coder sandbox the harness exports
+// PI_SANDBOX_BACKEND=container, which would quietly stop every sandboxed command from being wrapped in bwrap
+// and make command-transcript assertions depend on the machine. Suites that exercise the container backend
+// stub this themselves; everyone else gets the bubblewrap world the assertions describe.
+process.env.PI_SANDBOX_BACKEND = "bwrap";

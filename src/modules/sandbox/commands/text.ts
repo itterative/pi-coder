@@ -45,7 +45,9 @@ export const TEXT_COMMANDS: Record<string, CommandSpec> = {
     zgrep: GREP_SPEC,
     rg: {
         positionals: "first-pattern",
-        patternBypassFlags: ["-e", "--regexp", "-f", "--file"],
+        // `--files` has no pattern at all: it turns every positional into a path, so the first-pattern
+        // skip must not apply. Without this, `rg --files /etc` was granted as if `/etc` were a pattern.
+        patternBypassFlags: ["-e", "--regexp", "-f", "--file", "--files"],
         flags: {
             "-e": VALUE,
             "--regexp": VALUE,
@@ -171,8 +173,40 @@ export const TEXT_COMMANDS: Record<string, CommandSpec> = {
     },
     tr: { positionals: "ignore" },
     find: {
-        // flags that write files or execute commands
+        // Test predicates whose value is a match pattern, a name, or a number: never opened, so never a path
+        // slot. Treating them as paths made `find src -name '*.ts'` refuse with DYNAMIC_PATH, because a quoted
+        // glob cannot be expanded and the pattern is not a place.
         flags: {
+            "-name": VALUE,
+            "-iname": VALUE,
+            "-lname": VALUE,
+            "-ilname": VALUE,
+            "-path": VALUE,
+            "-ipath": VALUE,
+            "-wholename": VALUE,
+            "-iwholename": VALUE,
+            "-regex": VALUE,
+            "-iregex": VALUE,
+            "-type": VALUE,
+            "-xtype": VALUE,
+            "-size": VALUE,
+            "-maxdepth": VALUE,
+            "-mindepth": VALUE,
+            "-newermt": VALUE,
+            "-mtime": VALUE,
+            "-atime": VALUE,
+            "-ctime": VALUE,
+            "-perm": VALUE,
+            "-user": VALUE,
+            "-group": VALUE,
+            "-links": VALUE,
+            "-printf": VALUE,
+            // These do open a file, so the value is a path and stays confined.
+            "-newer": PATH_VALUE,
+            "-anewer": PATH_VALUE,
+            "-cnewer": PATH_VALUE,
+            "-samefile": PATH_VALUE,
+            // flags that write files or execute commands
             "-delete": UNSAFE,
             "-exec": UNSAFE,
             "-execdir": UNSAFE,

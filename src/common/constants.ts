@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { getPackageDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, getPackageDir } from "@earendil-works/pi-coding-agent";
 
 /** Root of this installed pi-coder extension, for both source and compiled layouts. */
 export const PI_CODER_EXTENSION_DIR = path.resolve(
@@ -35,9 +35,27 @@ export const BASH_DECISION_LOG_PATH = path.join(PI_CODER_STATE_DIR, "bash-log.js
  */
 export const COMPACTION_TRACE_PATH = path.join(PI_CODER_STATE_DIR, "compaction-trace.jsonl");
 
-/** User-level pi agent memories shared by the parent and delegated agents. */
+/**
+ * The pi sessions directory every transcript for this agent dir is written to.
+ *
+ * Resolved through pi's own agent dir rather than a hardcoded `~/.pi/agent`, so a config that moved
+ * (`PI_CODING_AGENT_DIR`) mounts the directory pi actually writes to. pi's `getSessionsDir()` is not on its
+ * public surface, so this mirrors it: `<agent dir>/sessions`. The parent, not a per-cwd subdirectory, because
+ * pi writes sessions under `sessions/<encoded-cwd>/` and a runtime that reviews sessions needs all of them.
+ */
+export function getUserSessionsDirectory(): string {
+    return path.join(getAgentDir(), "sessions");
+}
+
+/**
+ * User-level pi agent memories shared by the parent and delegated agents.
+ *
+ * Resolved through pi's own agent dir, like {@link getUserSessionsDirectory}, so a session that moved its config
+ * (`PI_CODING_AGENT_DIR`) reads and writes the memories pi actually builds its prompt from. The default is
+ * unchanged: `~/.pi/agent/memory`.
+ */
 export function getUserMemoryDirectory(): string {
-    return path.join(os.homedir(), ".pi", "agent", "memory");
+    return path.join(getAgentDir(), "memory");
 }
 
 /**

@@ -97,10 +97,11 @@ interface StubTool<Details = unknown> {
 }
 
 /**
- * `ToolInfo` without pi's source metadata. Nothing in this project reads where a tool was registered from,
- * and `SourceInfo` is not exported from pi's root, so the double reports only what production consults.
+ * `ToolInfo` with a reduced source record. `SourceInfo` is not exported from pi's root, and only its `path`
+ * matters here: pi marks its own tools `builtin:<name>`, and the container backend takes over a file tool only
+ * when the path says the tool is genuinely pi's rather than another extension's. The default is that marker.
  */
-export type StubToolInfo = Omit<ToolInfo, "sourceInfo">;
+export type StubToolInfo = Omit<ToolInfo, "sourceInfo"> & { sourceInfo: { path: string } };
 
 /** A configured tool as `pi.getAllTools()` reports it. Override the description or schema when a suite cares. */
 export function stubToolInfo(name: string, overrides: Partial<StubToolInfo> = {}): StubToolInfo {
@@ -108,6 +109,7 @@ export function stubToolInfo(name: string, overrides: Partial<StubToolInfo> = {}
         name,
         description: `stub description for ${name}`,
         exposure: "direct",
+        sourceInfo: { path: `builtin:${name}` },
         // TypeBox schemas carry brand symbols no test can construct honestly; the value is only ever
         // forwarded into a provider request, where a suite asserts identity rather than contents.
         parameters: { type: "object", properties: {} } as unknown as ToolInfo["parameters"],

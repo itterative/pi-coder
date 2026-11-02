@@ -1,0 +1,7 @@
+{
+    "decisionModel": {
+        "enabled": true,
+        "apply": true,
+        "surfaces": ["parent", "child"]
+    }
+}

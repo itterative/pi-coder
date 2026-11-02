@@ -50,7 +50,8 @@ Not recorded: a deterministic read-only gate block (a confinement failure, a
 known-command flag or mode failure, a skipped consult). When the safe-bash guard
 reaches the decision model through the `child` surface it appends a `readOnlyGate`
 record, so model-judged scout calls are visible in the permission log while the
-gate's ordinary blocks stay unlogged. Both prompt gates consult the decision model
+gate's ordinary blocks stay unlogged. Such a record has no `resolution.segments`,
+so mining records by command has to anchor on `"command":"` and not on a token. Both prompt gates consult the decision model
 when their surface is enabled, so `classifier` appears on parent and child records
 alike; the record is the same either way because `src/tools/decision-model.ts` builds
 it once for both.

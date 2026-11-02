@@ -17,14 +17,14 @@ import {
 
 import { AutocompleteItem, matchesKey } from "@earendil-works/pi-tui";
 
-import sandboxConfig from "../common/config";
+import sandboxConfig, { mountAccessOf } from "../common/config";
 import { pager, type PagerItem } from "../tui/pager";
 
 // Types for config display items
 type ConfigLineType =
     | { type: "header"; text: string }
     | { type: "dim"; text: string }
-    | { type: "mount"; path: string; access: string }
+    | { type: "mount"; path: string; access: string; target?: string; create?: boolean }
     | { type: "env"; key: string; value: string }
     | { type: "inherit-env"; key: string; action: string }
     | { type: "permission"; pattern: string; perm: string }
@@ -40,17 +40,7 @@ function buildConfigItems(
 
     // Sandbox section
     items.push({ value: { type: "header", text: "Sandbox:" }, label: "Sandbox:" });
-
-    // Mounts
-    const mounts = Object.entries(config.sandbox.mounts);
-    if (mounts.length > 0) {
-        items.push({ value: { type: "dim", text: "Mounts:" }, label: "Mounts:" });
-        for (const [path, access] of mounts) {
-            items.push({ value: { type: "mount", path, access }, label: `${path} → ${access}` });
-        }
-    } else {
-        items.push({ value: { type: "dim", text: "(no mounts)" }, label: "(no mounts)" });
-    }
+    items.push(...mountItems(config), ...networkItems(config));
 
     // Env vars
     if (config.sandbox.env && Object.keys(config.sandbox.env).length > 0) {
@@ -118,6 +108,81 @@ function buildConfigItems(
     return items;
 }
 
+function mountItems(
+    config: NonNullable<typeof sandboxConfig.current>,
+): PagerItem<ConfigLineType>[] {
+    const entries = Object.entries(config.sandbox.mounts);
+
+    if (entries.length === 0) {
+        return [{ value: { type: "dim", text: "(no mounts)" }, label: "(no mounts)" }];
+    }
+
+    return [
+        { value: { type: "dim", text: "Mounts:" }, label: "Mounts:" },
+        ...entries.map(([path, value]) => {
+            const entry = typeof value === "object" && value !== null ? value : undefined;
+            const access = mountAccessOf(value);
+            const created = entry?.create === true;
+            const target = entry?.target;
+            const label =
+                `${path}${target === undefined ? "" : ` → ${target}`} → ${access}` +
+                `${created ? " (create)" : ""}`;
+
+            return {
+                value: {
+                    type: "mount" as const,
+                    path,
+                    access,
+                    ...(target === undefined ? {} : { target }),
+                    ...(created ? { create: true } : {}),
+                },
+                label,
+            };
+        }),
+    ];
+}
+
+function networkItems(
+    config: NonNullable<typeof sandboxConfig.current>,
+): PagerItem<ConfigLineType>[] {
+    const network = config.sandbox.network;
+    const mode = networkModeLabel(network);
+    const items: PagerItem<ConfigLineType>[] = [
+        { value: { type: "dim", text: `Network: ${mode}` }, label: `Network: ${mode}` },
+    ];
+    const ports = typeof network === "object" && network !== null ? (network.ports ?? []) : [];
+
+    if (ports.length > 0) {
+        items.push({
+            value: { type: "dim", text: `Ports: ${ports.join(", ")}` },
+            label: `Ports: ${ports.join(", ")}`,
+        });
+    }
+
+    const devices = config.sandbox.devices;
+
+    if (devices !== undefined) {
+        const label = Array.isArray(devices) ? devices.join(", ") : devices;
+
+        items.push({
+            value: { type: "dim", text: `Devices: ${label}` },
+            label: `Devices: ${label}`,
+        });
+    }
+
+    return items;
+}
+
+function networkModeLabel(
+    network: NonNullable<typeof sandboxConfig.current>["sandbox"]["network"],
+): string {
+    if (network === undefined) {
+        return "egress (default)";
+    }
+
+    return typeof network === "string" ? network : (network.mode ?? "egress");
+}
+
 // Render a config line with theme styling
 function renderConfigLine(
     item: PagerItem<ConfigLineType>,
@@ -134,7 +199,10 @@ function renderConfigLine(
 
         case "mount": {
             const accessColor = line.access === "readonly" ? "warning" : "success";
-            return `    ${line.path} → ${theme.fg(accessColor, line.access)}`;
+            const target = line.target === undefined ? "" : ` → ${line.target}`;
+            const create = line.create === true ? " (create)" : "";
+
+            return `    ${line.path}${target} → ${theme.fg(accessColor, line.access)}${create}`;
         }
 
         case "env":

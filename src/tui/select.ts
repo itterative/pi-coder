@@ -6,7 +6,7 @@
  * (Enter/Escape, confirm result) and the select-specific options.
  */
 
-import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, Text, type Box, type Component, type Container } from "@earendil-works/pi-tui";
 import type { ListViewState } from "./list-view";
 import { ListViewComponent } from "./list-view";
@@ -178,7 +178,9 @@ export class SelectComponent<T> extends ListViewComponent<T, T | undefined, Sele
 // Show select UI and return selected value (or undefined if cancelled)
 export async function select<T>(
     options: SelectOptions<T>,
-    ctx: ExtensionCommandContext,
+    // Only these two fields are used, so a caller holding a plain `ExtensionContext` (a session-start hook,
+    // for example) can show a dialog without pretending to be a command context.
+    ctx: Pick<ExtensionContext, "hasUI" | "ui">,
 ): Promise<T | undefined> {
     if (!ctx.hasUI) {
         return undefined;

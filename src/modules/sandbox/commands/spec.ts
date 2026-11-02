@@ -88,7 +88,10 @@ export interface CommandSpec {
      * validated separately from the AST by the confinement evaluator.
      */
     validate?: (argv: readonly string[]) => boolean;
-    /** For "first-pattern": flags that provide the pattern, making all positionals paths. */
+    /**
+     * For "first-pattern": flags that supply the pattern, making all positionals paths. A flag that removes
+     * pattern mode entirely (`rg --files`) belongs here too: its positionals are paths, not a pattern.
+     */
     patternBypassFlags?: string[];
     /**
      * For commands that dispatch on a subcommand (e.g. git): the first

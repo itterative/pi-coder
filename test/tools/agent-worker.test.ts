@@ -109,6 +109,7 @@ describe("command and edit permission gate", () => {
         registerCommandPermissionHooks(pi, {
             parentContext,
             runId: "worker-7",
+            authority: "mutate",
             isolated: options.isolated ?? false,
             permissionState,
             agentName: "worker",

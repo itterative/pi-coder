@@ -17,6 +17,7 @@ import {
 import { getScratchpadPath } from "../../modules/scratchpad";
 import { ALLOWED_COMMAND_ENTRY_TYPE, type AllowedCommandEntry } from "../../common/audit";
 import sandbox from "../../modules/sandbox/bubblewrap";
+import type { ContainerState } from "../../modules/sandbox/container/state";
 import { Permission } from "../../modules/sandbox/permissions";
 import {
     resolvePermissionDetails,
@@ -61,6 +62,27 @@ interface ToolCallEventResult {
 function userNote(input: Record<string, unknown>): string | undefined {
     const note = input._userMessage;
     return typeof note === "string" && note.trim() ? note.trim() : undefined;
+}
+
+/**
+ * Report settings bubblewrap could not honour, once per session.
+ *
+ * The caller owns the `reported` set rather than this helper, because the same setting would otherwise be
+ * announced on every command an agent runs.
+ */
+function reportSandboxWarnings(
+    warnings: readonly string[],
+    reported: Set<string>,
+    ctx: ExtensionContext,
+): void {
+    for (const warning of warnings) {
+        if (reported.has(warning)) {
+            continue;
+        }
+
+        reported.add(warning);
+        ctx.ui.notify(`pi-bash-sandbox: ${warning}`, "warning");
+    }
 }
 
 interface PromptResult {
@@ -174,10 +196,23 @@ async function promptForPermission(options: {
     return { permission, prompt, ...(result?.message ? { note: result.message } : {}) };
 }
 
-export default function registerBashToolHook(pi: ExtensionAPI) {
+/**
+ * The bash gate: decides *whether* a command runs, and leaves *where* it runs to the backend.
+ *
+ * `container` is the backend's shared flag, not the environment: the backend resolves per session now (a
+ * build may be accepted at session start), and the environment is process-wide, so reading it here would let
+ * a session that stayed on bubblewrap believe it had a container.
+ */
+export default function registerBashToolHook(pi: ExtensionAPI, container?: ContainerState) {
+    const isContainerized = (): boolean => container?.active === true;
+
     // Runtime-local state must not leak into another parent or child extension
     // instance. Remembered rules are still cleared on each session start.
     let hasSupport = process.platform === "linux" || process.platform === "freebsd";
+
+    // A setting bubblewrap cannot honour is a property of the session, not of each command: report it once and
+    // stay quiet, so the warning does not repeat on every line an agent runs.
+    const reportedSandboxWarnings = new Set<string>();
 
     let bwrap: string = "";
     const localPermissionState = createPermissionState();
@@ -186,6 +221,7 @@ export default function registerBashToolHook(pi: ExtensionAPI) {
 
     pi.on("session_start", async (event, ctx) => {
         resetBashPermissionState(permissionStateFor(ctx));
+        reportedSandboxWarnings.clear();
 
         if (!hasSupport) {
             ctx.ui.notify(
@@ -222,17 +258,22 @@ export default function registerBashToolHook(pi: ExtensionAPI) {
             return;
         }
 
-        bwrap = (await lookpath("bwrap")) ?? "";
+        // One sandbox is enough: when the container backend runs every command itself, `bwrap` on the host is
+        // neither needed nor probed, and its absence must not switch sandboxing off — being in the container is
+        // the sandbox.
+        if (!isContainerized()) {
+            bwrap = (await lookpath("bwrap")) ?? "";
 
-        if (bwrap.length === 0) {
-            hasSupport = false;
+            if (bwrap.length === 0) {
+                hasSupport = false;
 
-            ctx.ui.notify(
-                "pi-bash-sandbox: bubblewrap package is required for linux sandboxing\n",
-                "warning",
-            );
+                ctx.ui.notify(
+                    "pi-bash-sandbox: bubblewrap package is required for linux sandboxing\n",
+                    "warning",
+                );
 
-            return;
+                return;
+            }
         }
     });
 
@@ -273,7 +314,20 @@ Pay attention to these notes as they provide context about the user's preference
         };
     });
 
-    if (!hasSupport) {
+    /**
+     * Whether a sandboxed command is actually available. The container backend executes every command
+     * itself, so it needs neither the platform check nor the `bwrap` binary.
+     */
+    const sandboxReady = (): boolean => isContainerized() || (hasSupport && bwrap.length > 0);
+
+    /** Whether the command string still needs the bubblewrap wrapper before pi executes it. */
+    const needsBubblewrapWrapper = (sandboxed: boolean): boolean => sandboxed && !isContainerized();
+
+    // No backend at all: registering the gate would only block every `allow:sandbox` command, which is a worse
+    // outcome than the host-shell fallback this has always been. A session that resolves to the container is
+    // already active by the time this runs — the backend registers before this hook — so this cannot skip a
+    // gate that is about to matter. (A container adopted later, mid-session, takes effect on the next session.)
+    if (!hasSupport && !isContainerized()) {
         return;
     }
 
@@ -316,6 +370,9 @@ Pay attention to these notes as they provide context about the user's preference
                     additionalRoots,
                     sensitiveAdditionalRoots,
                     readOnlyAdditionalRoots,
+                    // Inside the container the mount set is the boundary, so reads are not re-checked against
+                    // the cwd. Writes are unaffected: this option is only consulted for read-only commands.
+                    readConfinement: isContainerized() ? "runtime" : "cwd",
                 },
             );
             permission = details.permission;
@@ -381,7 +438,7 @@ Pay attention to these notes as they provide context about the user's preference
 
         switch (permission) {
             case "allow:sandbox":
-                if (!hasSupport || bwrap.length === 0) {
+                if (!sandboxReady()) {
                     blocked = true;
                     blockReason =
                         "Command execution blocked due to lack of sandboxing. If this is the first execution, you can ask the user to run the command without sandboxing and try again.";
@@ -461,12 +518,17 @@ Pay attention to these notes as they provide context about the user's preference
             ...(decisionNote && { userMessage: decisionNote }),
         });
 
-        if (sandboxed) {
+        if (needsBubblewrapWrapper(sandboxed)) {
+            const sandboxWarnings: string[] = [];
+
             event.input.command = sandbox(bwrap, event.input.command, {
                 cwd: ctx.cwd,
                 additionalRoots,
                 readOnlyAdditionalRoots,
+                warnings: sandboxWarnings,
             });
+
+            reportSandboxWarnings(sandboxWarnings, reportedSandboxWarnings, ctx);
         }
 
         return { block: false };

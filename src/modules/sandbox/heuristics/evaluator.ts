@@ -22,6 +22,7 @@ import {
     isSensitivePath,
     isRealPathConfined,
     isPathWithinAdditionalRoot,
+    isPathWithinDirectory,
     isExistingDirectoryOperand,
     isHardLinkedFileOperand,
     resolvePath,
@@ -394,8 +395,20 @@ function areCommandPathsConfined(
     home: string,
     options: ConfinementOptions,
     diagnostics?: ConfinementDiagnostics,
+    unconfinedReads = false,
 ): boolean {
     return paths.every((value) => {
+        if (unconfinedReads) {
+            // The mount set is the boundary; only a sensitive name still refuses, so an opt-in credential
+            // mount (`~/.config/gh`) cannot be read just because it is mounted.
+            if (isSensitivePath(value, cwd, home, options)) {
+                addUnsafeReason(diagnostics, UnsafeReason.SENSITIVE_PATH);
+                return false;
+            }
+
+            return true;
+        }
+
         if (!isAllowedPath(value, cwd, home, options, rootCwd)) {
             addUnsafeReason(diagnostics, UnsafeReason.OUTSIDE_CWD);
             return false;
@@ -496,15 +509,30 @@ function allowsAdditionalRootContainment(
     } else if (spec.additionalRootLastPositional && destination !== undefined) {
         paths = [destination];
     }
-    if (
-        options.additionalRoots.length === 0 ||
-        paths.length === 0 ||
-        !paths.every((value) => isPathWithinAdditionalRoot(value, cwd, home, options))
-    ) {
-        addUnsafeReason(diagnostics, UnsafeReason.OUTSIDE_CWD);
+    if (paths.length === 0) {
+        addUnsafeReason(diagnostics, UnsafeReason.NOT_IN_WRITABLE_ROOT);
+
         return false;
     }
-    return true;
+
+    const unwritable = paths.filter(
+        (value) => !isPathWithinAdditionalRoot(value, cwd, home, options),
+    );
+
+    if (unwritable.length === 0) {
+        return true;
+    }
+
+    // Only claim "outside the working directory" when a target really is outside it. For `touch ./x` the
+    // path is exactly where it looks, and the reason it was refused is that no writable root covers it.
+    const outsideCwd = unwritable.some((value) => !isPathWithinDirectory(value, cwd, cwd));
+
+    addUnsafeReason(
+        diagnostics,
+        outsideCwd ? UnsafeReason.OUTSIDE_CWD : UnsafeReason.NOT_IN_WRITABLE_ROOT,
+    );
+
+    return false;
 }
 
 /**
@@ -601,7 +629,21 @@ export function isCommandConfined(
 
     const home = resolveHomeDirectory();
     const allPaths = [...environment.values, ...access.paths];
-    if (!areCommandPathsConfined(allPaths, cwd, rootCwd, home, options, diagnostics)) {
+    // Reads are unconfined in a runtime whose view is the sandbox, but only for a command that cannot write:
+    // a mutator's operands stay checked, which is the conservative direction.
+    const unconfinedReads =
+        options.readConfinement === "runtime" && !access.writes && !environment.writes;
+    if (
+        !areCommandPathsConfined(
+            allPaths,
+            cwd,
+            rootCwd,
+            home,
+            options,
+            diagnostics,
+            unconfinedReads,
+        )
+    ) {
         return undefined;
     }
     if (!allowsReadOnlyAdditionalRoots(access, allPaths, cwd, home, options, diagnostics)) {

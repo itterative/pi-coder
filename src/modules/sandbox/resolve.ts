@@ -20,6 +20,7 @@ import {
     isSafeHeuristic,
     isNonPersistentChainOperator,
     restoreCwdConfinementState,
+    type ReadConfinement,
 } from "./heuristics";
 
 export interface ResolvePermissionOptions {
@@ -33,6 +34,12 @@ export interface ResolvePermissionOptions {
     sensitiveAdditionalRoots?: readonly string[];
     /** Exact command patterns that extend the safe-Bash heuristic. */
     safeBashCommands?: readonly string[];
+    /**
+     * How read operands are confined; defaults to `"cwd"`. A container-backed runtime passes `"runtime"`,
+     * because its own mount set is the boundary and re-checking reads against the cwd adds nothing. Never
+     * keyed on a backend name, and never applied to writes.
+     */
+    readConfinement?: ReadConfinement;
 }
 
 /** Where a single chain segment's permission came from. */
@@ -304,6 +311,7 @@ function resolveSegment(
         sensitiveAdditionalRoots: options?.sensitiveAdditionalRoots,
         readOnlyAdditionalRoots: options?.readOnlyAdditionalRoots,
         customSafeBashCommands: options?.safeBashCommands,
+        readConfinement: options?.readConfinement,
     });
     const match = getBashCommandPermissionMatch(command, options?.permissions);
 

@@ -8,6 +8,21 @@ category: architecture
 
 The sandbox permission flow is implemented in `src/modules/sandbox/resolve.ts` and used by `src/tools/bash/index.ts`. Direct read/write path checks are implemented in `src/modules/sandbox/heuristics/` and used by `src/tools/file-permissions.ts`; callers still import through the public `src/modules/sandbox/heuristics/index.ts` facade (formerly a single file). path checks classify read access as `SAFE_READONLY`, write access as `SAFE_EDIT`, and rejected access as `UNSAFE`. Runtime-managed temporary scratchpads are supplied as additional cwd-confinement roots; scratchpad filenames bypass sensitive-name filtering, but canonical/symlink containment remains enforced. That bypass is a deliberate policy, not the "unset means exempt" default: the parent bash gate passes `sensitiveAdditionalRoots` explicitly for the scratchpad **and** the user-memory directory, because the agent gets leeway in its own scratchpad and is meant to read and write user memories (writes mostly belong to the parent). Child gates exempt only their scratchpad roots.
 
+## Read confinement follows the runtime, not the backend name
+
+Reads are confined to the cwd **only when the host filesystem is what the command sees**. A container-backed
+runtime passes `readConfinement: "runtime"` (`src/modules/sandbox/read-confinement.ts`,
+`readConfinementFor(containerBash)`), which skips the cwd containment and symlink checks for read operands —
+the mount set already decided what a path can be — and lets a dynamic read operand keep its literal instead of
+failing with `DYNAMIC_PATH`. Two things never relax: **any write** (cwd plus declared roots, still
+`OUTSIDE_CWD`/`NOT_IN_WRITABLE_ROOT`, because mounts widen reads, never writes) and **`SENSITIVE_PATH`**, so a
+credential directory mounted on purpose (`~/.config/gh`) still needs a prompt. The flag is threaded from the
+per-runtime predicate (`ContainerState.active` / `options.containerBash`), never from `process.env`, and it is
+a property of the runtime's filesystem view rather than of the backend's name: bubblewrap under a
+containerized parent keeps cwd-confined reads. The runtime's own roots (scratchpad, memory directory, and the
+pi sessions directory from `runtimeRootsFor`) arrive as *mounts*, so they need no confinement entry — the
+sessions directory is read-only for every role, since the runtime reads transcripts it did not write.
+
 ## Direct file access roots
 
 `src/modules/sandbox/file-roots.ts` is the single place that turns the user's declarations into the roots
@@ -35,6 +50,10 @@ surface still comes only from its definition. See `docs/file-access-gates.md`.
 - It also returns the structured breakdown that decision logging consumes: `source` (`policy`/`heuristic`/`unresolved`), the deciding `pattern` (`null` when the `"**"` default, a heuristic grant, or an uncovered gap decided it), and one `segments` entry per chain command carrying unwrapped `tokens`, its own `source`/`permission`/`pattern`, and `coveredBy` (`segment`/`whole-line` for a rule match, `null` otherwise). `unresolved` is derived from those segments, so the breakdown and the suggestion input cannot drift apart. The `permissions.ts` match functions likewise report the matched `pattern` (last match wins; for a multi-statement line, the pattern of the statement that decided the most-restrictive combination).
 - Otherwise it resolves each chain segment independently: explicit segment pattern, then cwd-confinement heuristic only when the segment would otherwise be `ask`.
 - A non-`ask` `**` default is authoritative: heuristics do not relax `deny` or downgrade `allow`.
+- A refused write says why it was refused: `NOT_IN_WRITABLE_ROOT` when the target is inside the cwd but no
+  writable root covers it (every mutator spec is `additionalRootOnly`, and a read-only child has no writable
+  root at all), `OUTSIDE_CWD` only when a target really is outside. A live scout probe showed the old single
+  reason telling an agent "a path is outside the working directory" about `touch ./probe`.
 - `deny` dominates; unresolved segments force `ask`; policy permissions combine most-restrictively; heuristic-only chains resolve to the configured heuristic permission (normally `allow:sandbox`). The heuristic classifiers return `Heuristic.SAFE_READONLY`, `Heuristic.SAFE_EDIT`, or `Heuristic.UNSAFE`; the resolver only treats the two SAFE variants as grants and maps them to the configured execution permission. `getCwdConfinementAssessment()`, `getArgsConfinementAssessment()`, and `getPathConfinementAssessment()` additionally return structured `UnsafeReason` codes and deduplicated semantic `CommandTag`s for future scout/review agents. Tags are emitted only by successfully classified command specs and let runtime policy apply contextual safeguards without reparsing shell text; `CommandTag.GIT_STATUS` currently drives the child fsmonitor check.
 - Chain operators remain parser arguments and must be present in whole-command patterns.
 - Bash parsing is implemented in `src/modules/sandbox/bash.ts`: `parseBashAst()` returns a structured `BashAst` with statement/command nodes, lexer roles/provenance, chain operators, redirections/heredocs, recursive substitutions with delimiter-completeness metadata, ordered command parts, and convenience command views for command name, environment assignments, flags, arguments, and positional arguments. `BashAst.substitutionFor()` is the centralized lookup for whole or inline substitution values. Sandbox callers use AST nodes directly; unresolved command displays use an AST-derived ordered token view. Standalone parsed-argument compatibility values are reparsed conservatively because they lack original provenance.

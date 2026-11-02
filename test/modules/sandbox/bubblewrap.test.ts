@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -13,9 +13,30 @@ describe("bubblewrap", () => {
         tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-test-"));
         projectDir = path.join(tempDir, "project");
         fs.mkdirSync(path.join(projectDir, ".pi"), { recursive: true });
+
+        // `config.load` merges the *global* file with the project one, and falls back to `defaultConfig()`
+        // (which sets `inheritEnv: {}`) when no global file exists. Left to the machine, a developer's
+        // ~/.pi file decides what these assertions see. So the global config is pinned per test, and the
+        // one test that cares about the no-file default removes it explicitly.
+        pinGlobalConfig({ sandbox: { mounts: {} }, permissions: {} });
     });
 
+    function pinGlobalConfig(cfg: object | undefined): void {
+        const globalPath = path.join(tempDir, "global-config.json");
+
+        // Remove first: `undefined` means "no global config", and a file left by `beforeEach` would otherwise
+        // make that case indistinguishable from a config that simply omits `inheritEnv`.
+        fs.rmSync(globalPath, { force: true });
+
+        if (cfg !== undefined) {
+            fs.writeFileSync(globalPath, JSON.stringify(cfg));
+        }
+
+        vi.stubEnv("SANDBOX_CONFIG_PATH_GLOBAL", globalPath);
+    }
+
     afterEach(() => {
+        vi.unstubAllEnvs();
         fs.rmSync(tempDir, { recursive: true, force: true });
     });
 
@@ -26,6 +47,115 @@ describe("bubblewrap", () => {
         );
         return config.load(projectDir);
     }
+
+    it("binds the workspace read-only and drops the network for a read-only runtime", () => {
+        const result = sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            role: "readonly",
+            config: { sandbox: { mounts: {} }, permissions: {} },
+        });
+
+        expect(result).toContain(`--ro-bind '${projectDir}' '${projectDir}'`);
+        expect(result).toContain("--unshare-net");
+        expect(result).not.toContain(`--bind '${projectDir}' '${projectDir}'`);
+
+        const writable = sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            config: { sandbox: { mounts: {} }, permissions: {} },
+        });
+
+        expect(writable).toContain(`--bind '${projectDir}' '${projectDir}'`);
+        expect(writable).not.toContain("--unshare-net");
+    });
+
+    it("downgrades a declared writable mount for a read-only runtime", () => {
+        const cache = path.join(tempDir, "cache");
+        fs.mkdirSync(cache);
+
+        const result = sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            role: "readonly",
+            config: { sandbox: { mounts: { [cache]: "readwrite" } }, permissions: {} },
+        });
+
+        expect(result).toContain(`--ro-bind-try '${cache}' '${cache}'`);
+        expect(result).not.toContain(`--bind-try '${cache}' '${cache}'`);
+    });
+
+    it("honours a declared writable mount for a write runtime", () => {
+        // The container has always honoured `readwrite`; bubblewrap resolving every configured entry
+        // read-only meant the same config produced two different sandboxes.
+        const cache = path.join(tempDir, "cache");
+        fs.mkdirSync(cache);
+
+        const result = sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            config: { sandbox: { mounts: { [cache]: "readwrite" } }, permissions: {} },
+        });
+
+        expect(result).toContain(`--bind-try '${cache}' '${cache}'`);
+    });
+
+    it("unshares the network only when the plan says none, for either role", () => {
+        const result = sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            config: { sandbox: { mounts: {}, network: "none" }, permissions: {} },
+        });
+
+        expect(result).toContain("--unshare-net");
+
+        const egress = sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            config: { sandbox: { mounts: {}, network: "egress" }, permissions: {} },
+        });
+
+        expect(egress).not.toContain("--unshare-net");
+    });
+
+    it("passes configured devices through and invents no GPU access of its own", () => {
+        const device = path.join(tempDir, "fake-device");
+        fs.writeFileSync(device, "");
+
+        const configured = sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            config: { sandbox: { mounts: {}, devices: [device] }, permissions: {} },
+        });
+
+        expect(configured).toContain(`--dev-bind-try '${device}' '${device}'`);
+
+        const plain = sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            config: { sandbox: { mounts: {} }, permissions: {} },
+        });
+
+        expect(plain).not.toContain("/dev/kfd");
+        expect(plain).not.toContain("/dev/dri");
+    });
+
+    it("reports settings it cannot honour instead of pretending they took effect", () => {
+        const ports: string[] = [];
+
+        sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            warnings: ports,
+            config: {
+                sandbox: { mounts: {}, network: { mode: "egress", ports: [3000] } },
+                permissions: {},
+            },
+        });
+
+        expect(ports.join("\n")).toContain("published ports are unnecessary under bubblewrap");
+
+        const host: string[] = [];
+
+        sandbox("bwrap", "cat notes.txt", {
+            cwd: projectDir,
+            warnings: host,
+            config: { sandbox: { mounts: {}, network: "host" }, permissions: {} },
+        });
+
+        expect(host.join("\n")).toContain('"host" is bubblewrap\'s own behaviour');
+    });
 
     it("binds read-only additional roots read-only", () => {
         const memory = path.join(tempDir, "memory");
@@ -272,6 +402,22 @@ describe("bubblewrap", () => {
             const result = sandbox("bwrap", "echo hello", options);
 
             expect(result).not.toContain("--clearenv");
+        });
+
+        // Pins the built-in default rather than leaving it to whatever a machine happens to have: no config
+        // file anywhere means `defaultConfig()`, whose `inheritEnv: {}` is what puts `--clearenv` there.
+        it("should include --clearenv when no config file exists at all", () => {
+            pinGlobalConfig(undefined);
+
+            const testConfig = writeProjectConfig({ sandbox: { mounts: {} }, permissions: {} });
+
+            const result = sandbox("bwrap", "echo hello", {
+                env: { HOME: "/home/testuser", PATH: "/usr/bin", USER: "testuser" },
+                cwd: projectDir,
+                config: testConfig,
+            });
+
+            expect(result).toContain("--clearenv");
         });
     });
 

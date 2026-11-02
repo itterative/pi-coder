@@ -1,5 +1,5 @@
 import { getPiPackageDirectory } from "../../common/constants";
-import type { SandboxConfig } from "../../common/config";
+import { mountAccessOf, type SandboxConfig } from "../../common/config";
 
 /**
  * The roots the direct file tools may use beyond the working directory.
@@ -71,7 +71,7 @@ export function getFileAccessRoots(config: SandboxConfig | null | undefined): Fi
     if (files?.honorMounts ?? DEFAULT_HONOR_MOUNTS) {
         for (const [source, mode] of Object.entries(config?.sandbox?.mounts ?? {})) {
             read.push(source);
-            if (mode === "readwrite") {
+            if (mountAccessOf(mode) === "readwrite") {
                 write.push(source);
             }
         }

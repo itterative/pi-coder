@@ -20,7 +20,10 @@ The config keys named below (`resolveSymlinks`, `denyPaths`, `blockDotfiles`, `g
 
 ## Sensitive paths and folder approvals
 
-- **Sensitive segments and the user memory directory.** Sensitive path segments include `.env*`, `.git`, credential directories/files, private-key extensions, `*.tfvars`, and `credentials`; `denyPaths` extends the list and `blockDotfiles` enables paranoid mode. Direct read/write paths use the same sensitive and symlink checks; the parent read hook additionally permits the user memory directory (`~/.pi/agent/memory`) as a read root, while the parent write/edit hook does not. Parent Bash also receives that directory as a read-only additional root and mounts it read-only when sandboxed. Explicit session folder approvals remain scoped to the selected operation and are restored from `pi-file-sandbox:allowed-file-folder` custom session entries.
+- **Sensitive segments and the user memory directory.** Sensitive path segments include `.env*`, `.git`, credential directories/files, private-key extensions, `*.tfvars`, and `credentials`; `denyPaths` extends the list and `blockDotfiles` enables paranoid mode. Direct read/write paths use the same sensitive and symlink checks; the parent read hook additionally permits the user memory directory (`getUserMemoryDirectory()`, `<agent dir>/memory`, `~/.pi/agent/memory` by default) as a read root, while the parent write/edit hook does not. Parent Bash also receives that directory as a read-only additional root and mounts it read-only when
+sandboxed. The pi **sessions** directory is the other read-only mount (`<agent dir>/sessions`, read-only even
+for a write role); unlike the memory root it is not an additional confinement root on the host, and
+`sessions` is not a sensitive path segment, so inside a container a transcript is an ordinary read. Explicit session folder approvals remain scoped to the selected operation and are restored from `pi-file-sandbox:allowed-file-folder` custom session entries.
 
 ## Shell expansion in filesystem path slots
 
@@ -64,4 +67,7 @@ The config keys named below (`resolveSymlinks`, `denyPaths`, `blockDotfiles`, `g
 
 ## Design history and open gaps
 
-Design history and remaining gaps for path expansion live in `src/modules/sandbox/PLAN.md`; read it before touching `hasDynamicShellExpansion()` / `hasUnmodeledPathExpansion()` / `resolveSlotOperands()`. Still open there: mutator scope, `find -name`/`-path` pattern slots treated as paths, tilde-plus-glob words, and `cd ~/x` in the directory-state model.
+Design history and remaining gaps for path expansion live in `src/modules/sandbox/PLAN.md`; read it before touching `hasDynamicShellExpansion()` / `hasUnmodeledPathExpansion()` / `resolveSlotOperands()`. Still open there: mutator scope, tilde-plus-glob words, and `cd ~/x` in the directory-state model.
+`find -name`/`-path` patterns are **fixed** (they are `VALUE`, not path slots, and a single-dash flag whose
+whole name is a spec key now consumes its value — `inspectShortFlagValue`), as is `rg --files`, whose
+positionals are paths because the flag removes the pattern (`patternBypassFlags`).

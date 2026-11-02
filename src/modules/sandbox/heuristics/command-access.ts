@@ -428,6 +428,7 @@ function inspectShellSubstitution(
     diagnostics?: ConfinementDiagnostics,
     context?: CommandAccessContext,
     word?: BashWordNode,
+    readUnconfined = false,
 ): ShellSubstitutionAccess | null | undefined {
     const substitution = word === undefined ? undefined : BashAst.substitutionFor(word, value);
     const valueSubstitution =
@@ -439,6 +440,12 @@ function inspectShellSubstitution(
         valueSubstitution?.kind === "command" || valueSubstitution?.kind === "backtick";
 
     if (valueSubstitution !== undefined && !valueSubstitution.complete) {
+        // An unparseable expansion into a read operand names a path the gate cannot know; with unconfined
+        // reads that is harmless, because no check would have used it. A write operand keeps the refusal.
+        if (readUnconfined) {
+            return undefined;
+        }
+
         addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
         return null;
     }
@@ -448,6 +455,10 @@ function inspectShellSubstitution(
             (word !== undefined && word.substitutions.length > 0) ||
             (word === undefined && hasShellSubstitution(value))
         ) {
+            if (readUnconfined) {
+                return undefined;
+            }
+
             addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
             return null;
         }
@@ -588,6 +599,12 @@ function resolveSlotOperands(
         return operands;
     }
 
+    if (!slotWrites && options.readConfinement === "runtime") {
+        // A glob into a read operand would have been checked against the cwd; with unconfined reads there is
+        // nothing left to resolve it for, so keep it as the literal the shell expands.
+        return [value];
+    }
+
     addUnsafeReason(diagnostics, UnsafeReason.DYNAMIC_PATH);
     return null;
 }
@@ -718,6 +735,37 @@ class CommandPathExtractor {
         return this.commandWords?.[index];
     }
 
+    /** Consume the values of a single-dash flag whose whole name is a spec key, e.g. `find -newer file`. */
+    private inspectShortFlagValue(index: number, arg: string, flagSpec: FlagSpec): number | null {
+        const values = flagSpec.values ?? 0;
+        if (values !== 1) {
+            return null;
+        }
+        if (flagSpec.writes) {
+            this.writes = true;
+        }
+        if (flagSpec.requiresAdditionalRoot) {
+            this.requiresAdditionalRoot = true;
+        }
+
+        const value = this.args[index + 1];
+        if (value === undefined) {
+            return null;
+        }
+        if (
+            !this.inspectValue(
+                value,
+                hasPathSlot(flagSpec, 0),
+                this.wordAt(index + 1),
+                flagSpec.writes === true,
+            )
+        ) {
+            return null;
+        }
+
+        return index + 2;
+    }
+
     private adoptSpec(spec: CommandSpec): void {
         this.activeSpec = spec;
         spec.tags?.forEach((tag) => this.tags.add(tag));
@@ -759,6 +807,7 @@ class CommandPathExtractor {
             this.diagnostics,
             this.context,
             word,
+            !slotWrites && this.options.readConfinement === "runtime",
         );
         if (substitution === null) {
             return false;
@@ -904,6 +953,14 @@ class CommandPathExtractor {
         if (this.activeSpec.flags?.[arg]?.unsafe) {
             addUnsafeReason(this.diagnostics, UnsafeReason.UNSAFE_FLAG);
             return null;
+        }
+
+        // A whole-argument key that takes a value is a GNU-style long flag written with one dash (`find
+        // -name`, `-maxdepth`). Reading it as a cluster of one-letter booleans would drop its value into the
+        // positional path check, which is how `find src -name '*.ts'` refused with DYNAMIC_PATH.
+        const wholeArgSpec = this.activeSpec.flags?.[arg];
+        if (wholeArgSpec !== undefined && (wholeArgSpec.values ?? 0) > 0) {
+            return this.inspectShortFlagValue(index, arg, wholeArgSpec);
         }
 
         const cluster = arg.slice(1);

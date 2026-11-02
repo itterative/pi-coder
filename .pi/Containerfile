@@ -1,0 +1,60 @@
+# Sandbox image for working on pi-coder itself.
+#
+# pi-coder reads this recipe, prepends a stage that copies a Node runtime into the image, and appends a
+# verification step — so the file podman builds is this text with a prologue in front of it. An `auto` session
+# offers to build it once (`/sandbox build` does it on demand); the tag it produces
+# (`pi-coder-sandbox:<hash>`) is what a container session runs. Editing this file changes the tag, so a stale
+# image cannot be mistaken for a fresh one.
+#
+# Base choice: the dispatcher needs glibc (Alpine is rejected outright), and a Node base puts `node`,
+# `npm`, and `npx` on PATH for the *commands* as well as for the dispatcher — the injected runtime under
+# /opt/pi/node serves the dispatcher alone. Debian 13 rather than 12 because `vendor/sqlite3` is built
+# against glibc >= 2.38, and Node 24 to match the host toolchain.
+FROM node:24-trixie-slim
+
+# git        the repository's tests and most of its work drive real git
+# ripgrep    searching; faster and less noisy than grep for this codebase
+# procps     `ps`/`pgrep` — an image without them makes its own process behaviour look broken
+# python3    scripted edits and one-off data work
+# jq, curl   JSON on the command line, and network checks over https
+# bubblewrap only so this repository's *tests* can exercise the real sandbox path in here. pi-coder never
+#            wraps commands in bwrap when the container backend is the sandbox; without the binary those
+#            suites skip (test/helpers/host-tools.ts), which is the portable default everywhere else.
+# ca-certificates is not optional: without it every https clone and fetch fails verification.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      git \
+      ripgrep \
+      procps \
+      python3 \
+      jq \
+      curl \
+      bubblewrap \
+      ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Repair two alternatives the slim base leaves pointing at nothing.
+#
+# `node:24-trixie-slim` ships `/var/lib/dpkg/alternatives/{awk,which,pager}` with *no registered candidates*,
+# so `/usr/bin/awk` and `/usr/bin/which` are dangling symlinks into `/etc/alternatives`: `awk --version`
+# answers "command not found" while `/usr/bin/mawk` works. Agents write awk pipelines and `which node`
+# constantly, and a missing command reads as a broken sandbox rather than an image gap. Registering the
+# candidates is idempotent and costs nothing when a base already has them.
+RUN update-alternatives --install /usr/bin/awk awk /usr/bin/mawk 10 \
+      --slave /usr/bin/nawk nawk /usr/bin/mawk \
+ && update-alternatives --install /usr/bin/which which /usr/bin/which.debianutils 10 \
+ && update-alternatives --install /usr/bin/pager pager /bin/more 10
+
+# Nothing from the repository is copied in: the checkout and its `node_modules` arrive as a bind mount at
+# their real paths. That is also why no compiler toolchain is installed — add `build-essential` to the list
+# above if a dependency ever has to be compiled.
+
+# Installing *inside* a running session is not possible: the container runs as the host user
+# (`--userns=keep-id`), so it cannot write root-owned image paths and `apt-get` fails. This file is the only
+# provisioning path, which is the point — every change to the toolchain is a reviewable diff.
+
+# Known gaps, left visible rather than papered over:
+# - No git identity baked in, on purpose. The session's `$HOME` is a fresh per-session directory seeded with
+#   the host's user.name/user.email, and `sandbox.mounts` / `sandbox.homeMounts` can bring the user's own
+#   `~/.gitconfig` (and `~/.config`) back read-only, so a commit is attributed like a commit outside.
+# - No ssh agent or keys. Fetching over ssh will not work; https does.

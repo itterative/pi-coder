@@ -31,6 +31,11 @@ export interface ChildExtensionOptions {
     safeBashCommands?: readonly string[];
     /** Default timeout applied to Bash calls when the caller sets one, for example workspace setup. */
     defaultBashTimeoutSeconds?: number;
+    /**
+     * Whether this runtime's bash tool runs in a container. Asked lazily because the container extension
+     * installs alongside this one; when it is absent the child falls back to `bwrap` exactly as before.
+     */
+    containerBash?: () => boolean;
 }
 
 /**

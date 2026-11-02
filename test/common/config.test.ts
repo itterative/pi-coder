@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import config from "../../src/common/config";
+import config, {
+    resolveProjectConfigPath,
+    updateSandboxConfigField,
+} from "../../src/common/config";
 import getPermission from "../../src/modules/sandbox/permissions";
 
 describe("config merging", () => {
@@ -530,5 +533,249 @@ describe("config merging", () => {
                 process.env.SANDBOX_CONFIG_PATH_GLOBAL = originalGlobal;
             }
         });
+    });
+
+    describe("backend field", () => {
+        it("reads sandbox.backend and the declined recipe tag", () => {
+            writeProjectConfig({
+                sandbox: { backend: "container", containerDeclinedTag: "localhost/x:1" },
+            });
+            clearConfigCache();
+
+            const loaded = config.load(projectDir);
+
+            expect(loaded.sandbox.backend).toBe("container");
+            expect(loaded.sandbox.containerDeclinedTag).toBe("localhost/x:1");
+        });
+
+        it("ignores a value it does not understand", () => {
+            writeProjectConfig({ sandbox: { backend: "docker" } });
+            clearConfigCache();
+
+            expect(config.load(projectDir).sandbox.backend).toBeUndefined();
+        });
+
+        it("lets the project answer win over the global one", () => {
+            writeGlobalConfig({ sandbox: { backend: "container" } });
+            writeProjectConfig({ sandbox: { backend: "bwrap" } });
+
+            const originalGlobal = process.env.SANDBOX_CONFIG_PATH_GLOBAL;
+            process.env.SANDBOX_CONFIG_PATH_GLOBAL = globalConfigPath;
+
+            try {
+                clearConfigCache();
+
+                expect(config.load(projectDir).sandbox.backend).toBe("bwrap");
+            } finally {
+                process.env.SANDBOX_CONFIG_PATH_GLOBAL = originalGlobal;
+            }
+        });
+    });
+
+    describe("writing a field back", () => {
+        function target(): string {
+            return path.join(projectDir, ".pi", "bash-sandbox-config.json");
+        }
+
+        it("creates the project file when the answer is the first thing it holds", () => {
+            updateSandboxConfigField(target(), { backend: "bwrap" });
+
+            expect(JSON.parse(fs.readFileSync(target(), "utf8"))).toEqual({
+                sandbox: { backend: "bwrap" },
+            });
+        });
+
+        it("preserves every other key, including ones this version does not know", () => {
+            writeProjectConfig({
+                sandbox: { enabled: false, mounts: { "/data": "readonly" } },
+                permissions: { "git *": "allow:sandbox" },
+                futureKey: { nested: true },
+            });
+
+            updateSandboxConfigField(target(), { backend: "container" });
+
+            expect(JSON.parse(fs.readFileSync(target(), "utf8"))).toEqual({
+                sandbox: {
+                    enabled: false,
+                    mounts: { "/data": "readonly" },
+                    backend: "container",
+                },
+                permissions: { "git *": "allow:sandbox" },
+                futureKey: { nested: true },
+            });
+        });
+
+        it("removes the declined tag when the answer is cleared", () => {
+            writeProjectConfig({ sandbox: { containerDeclinedTag: "localhost/x:1" } });
+
+            updateSandboxConfigField(target(), { containerDeclinedTag: null });
+
+            expect(JSON.parse(fs.readFileSync(target(), "utf8"))).toEqual({ sandbox: {} });
+        });
+
+        it("refuses to overwrite a file that is not valid JSON", () => {
+            fs.writeFileSync(target(), "{ this is not json");
+
+            expect(() => updateSandboxConfigField(target(), { backend: "bwrap" })).toThrow(
+                /not valid JSON/,
+            );
+            expect(fs.readFileSync(target(), "utf8")).toBe("{ this is not json");
+        });
+
+        it("adds, updates, and removes one mount without touching the others", () => {
+            writeProjectConfig({
+                sandbox: { mounts: { "/data": "readonly", "/cache": "readonly" } },
+            });
+
+            updateSandboxConfigField(target(), {
+                mounts: [{ source: "/cache", value: { mode: "readwrite", create: true } }],
+            });
+            updateSandboxConfigField(target(), {
+                mounts: [{ source: "/data", value: null }],
+            });
+
+            expect(JSON.parse(fs.readFileSync(target(), "utf8"))).toEqual({
+                sandbox: { mounts: { "/cache": { mode: "readwrite", create: true } } },
+            });
+        });
+
+        it("creates the mounts object when a file has none", () => {
+            writeProjectConfig({ sandbox: { enabled: false } });
+
+            updateSandboxConfigField(target(), {
+                mounts: [{ source: "/data", value: "readonly" }],
+            });
+
+            expect(JSON.parse(fs.readFileSync(target(), "utf8"))).toEqual({
+                sandbox: { enabled: false, mounts: { "/data": "readonly" } },
+            });
+        });
+
+        it("sets and clears network and devices", () => {
+            updateSandboxConfigField(target(), {
+                network: { mode: "none", ports: [3000] },
+                devices: "gpu",
+            });
+
+            expect(JSON.parse(fs.readFileSync(target(), "utf8"))).toEqual({
+                sandbox: { network: { mode: "none", ports: [3000] }, devices: "gpu" },
+            });
+
+            updateSandboxConfigField(target(), { network: null, devices: null });
+
+            expect(JSON.parse(fs.readFileSync(target(), "utf8"))).toEqual({ sandbox: {} });
+        });
+    });
+});
+
+describe("project config path", () => {
+    it("finds the config already in use", () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-config-path-"));
+        const configPath = path.join(directory, ".pi", "bash-sandbox-config.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, "{}");
+
+        try {
+            expect(resolveProjectConfigPath(directory)).toBe(configPath);
+        } finally {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+
+    it("proposes a new project file when there is none", () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-config-path-empty-"));
+
+        try {
+            expect(resolveProjectConfigPath(directory)).toBe(
+                path.join(directory, ".pi", "bash-sandbox-config.json"),
+            );
+        } finally {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+});
+
+describe("sandbox settings schema", () => {
+    let tempDir: string;
+    let projectDir: string;
+    let globalConfigPath: string;
+
+    beforeEach(() => {
+        tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-schema-"));
+        projectDir = path.join(tempDir, "project");
+        fs.mkdirSync(path.join(projectDir, ".pi"), { recursive: true });
+        globalConfigPath = path.join(tempDir, "global-config.json");
+        process.env.SANDBOX_CONFIG_PATH_GLOBAL = globalConfigPath;
+    });
+
+    afterEach(() => {
+        delete process.env.SANDBOX_CONFIG_PATH_GLOBAL;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    function writeProject(cfg: object): void {
+        fs.writeFileSync(
+            path.join(projectDir, ".pi", "bash-sandbox-config.json"),
+            JSON.stringify(cfg),
+        );
+    }
+
+    function writeGlobal(cfg: object): void {
+        fs.writeFileSync(globalConfigPath, JSON.stringify(cfg));
+    }
+
+    function load() {
+        (config as unknown as { _config: unknown })._config = null;
+
+        return config.load(projectDir);
+    }
+
+    it("keeps the long form and drops entries this version cannot read", () => {
+        writeProject({
+            sandbox: {
+                mounts: {
+                    "/cache": { mode: "rw", create: true },
+                    "/shared": { target: "/workspace/shared" },
+                    "/broken": 42,
+                    "/empty": {},
+                },
+            },
+        });
+
+        expect(load().sandbox.mounts).toEqual({
+            "/cache": { mode: "rw", create: true },
+            "/shared": { target: "/workspace/shared" },
+        });
+    });
+
+    it("parses network modes, ports, and the gpu shorthand", () => {
+        writeProject({
+            sandbox: {
+                mounts: {},
+                network: { mode: "host", ports: [3000, "8080:80"] },
+                devices: "gpu",
+            },
+        });
+
+        const loaded = load();
+
+        expect(loaded.sandbox.network).toEqual({ mode: "host", ports: [3000, "8080:80"] });
+        expect(loaded.sandbox.devices).toBe("gpu");
+    });
+
+    it("lets the project answer for the network and extends the device list", () => {
+        writeGlobal({
+            sandbox: {
+                mounts: {},
+                network: { mode: "none", ports: [4000] },
+                devices: ["/dev/dri"],
+            },
+        });
+        writeProject({ sandbox: { mounts: {}, network: "egress", devices: ["/dev/kfd"] } });
+
+        const loaded = load();
+
+        expect(loaded.sandbox.network).toBe("egress");
+        expect(loaded.sandbox.devices).toEqual(["/dev/dri", "/dev/kfd"]);
     });
 });

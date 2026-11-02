@@ -33,8 +33,10 @@ export function createChildHandle(request: {
     tracker: ChildProgressTracker;
     unsubscribe: () => void;
     onTrace?: (type: string, data?: AgentTraceData) => void;
+    /** Releases resources the run owns outside the session, such as a sandbox container. */
+    onDispose?: () => void;
 }): ChildAgentHandle {
-    const { session, sessionManager, tracker, unsubscribe, onTrace } = request;
+    const { session, sessionManager, tracker, unsubscribe, onTrace, onDispose } = request;
     let disposed = false;
 
     return {
@@ -49,6 +51,7 @@ export function createChildHandle(request: {
             onTrace?.("session.dispose_called");
             unsubscribe();
             session.dispose();
+            onDispose?.();
         },
         takeParentQuestion() {
             const question = tracker.pendingQuestion;

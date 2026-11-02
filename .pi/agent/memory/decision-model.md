@@ -48,7 +48,13 @@ Read this memory first; go there only for the numbers behind a decision.
   subject, state and questions together, so a changed key or question is a snapshot diff rather than an
   inference from types. `decision-model/state-policy.md`.
 - **Opt-in**: nothing consults the model until an endpoint is configured and `enabled` is set; `surfaces` and
-  `fileSurfaces` choose which gates ask. `decision-model/wiring-config.md`.
+  `fileSurfaces` choose which gates ask. `decision-model/wiring-config.md`. `DEFAULT_SURFACES` is
+  `["parent"]` and `DEFAULT_FILE_SURFACES` is `[]`, so children consult nothing until a config says so; this
+  repo carries `.pi/decision-model-config.json` with `enabled`, `apply`, and `surfaces: [parent, child]`, which
+  is what lets a read-only child's allowlist miss (`findmnt`, any tool the curated spec does not know) be
+  judged instead of refused. `apply` is one global toggle for both gates: with `fileSurfaces` empty (the
+  default) it grants no file access, but it *does* let a classifier verdict resolve the parent's own
+  unresolved Bash prompts, so it is not a child-only switch.
 
 ## Targeted references
 

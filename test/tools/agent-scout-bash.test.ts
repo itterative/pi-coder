@@ -20,6 +20,7 @@ import type { AgentDefinition } from "../../src/tools/agent/definitions/types";
 import { getPermissionState } from "../../src/modules/sandbox/permission-state";
 import { partialTracker } from "../helpers/agent-doubles";
 import { KEY, mockTheme } from "../helpers";
+import { hasBwrap } from "../helpers/host-tools";
 import {
     createPiStub,
     stubContext,
@@ -88,6 +89,7 @@ function setup(
         safeBashCommands = [],
         modelRegistry,
         agentName = "scout",
+        containerBash,
     }: {
         safeBash?: boolean;
         commandRunner?: boolean;
@@ -99,6 +101,8 @@ function setup(
         safeBashCommands?: string[];
         modelRegistry?: ExtensionContext["modelRegistry"];
         agentName?: string;
+        /** Stands in for the container backend having installed in this runtime. */
+        containerBash?: () => boolean;
     } = {},
 ) {
     const stub = createPiStub();
@@ -140,7 +144,10 @@ function setup(
         onProgress: () => {},
     };
     const grant = resolveChildGrant(context, parentContext);
-    registerChildExtension(tracker, parentContext, cwd, grant.extensionOptions)(stub.pi);
+    registerChildExtension(tracker, parentContext, cwd, {
+        ...grant.extensionOptions,
+        ...(containerBash === undefined ? {} : { containerBash }),
+    })(stub.pi);
 
     // Read off the stub after every gate has registered, so each list stays in registration order. These
     // are the recorded handlers themselves rather than a `handlerView`: several assertions below call a
@@ -202,6 +209,8 @@ interface ChildDecisionRun {
     state: ClassifierContext["state"] | undefined;
     records: BashDecisionRecord[];
     dialogs: ReturnType<typeof stubUiWithDialogs>["dialogs"];
+    /** The command as the gate left it: wrapped in `sandbox(...)` only when a wrapper is needed. */
+    command: string;
 }
 
 /**
@@ -221,6 +230,8 @@ async function runChildDecision(options: {
     command?: string;
     /** The probability the suggestion question answers with, when the hook asks it. */
     suggestion?: number;
+    /** Stands in for a container-backed runtime, where no wrapper is needed. */
+    containerBash?: () => boolean;
 }): Promise<ChildDecisionRun> {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-"));
     tempDirs.push(cwd);
@@ -241,14 +252,12 @@ async function runChildDecision(options: {
         modelRegistry: classifierModelRegistry(answeringRegistry([DECISION_MODEL], classify)),
         ...(options.agentName === undefined ? {} : { agentName: options.agentName }),
         ...(options.isolated === undefined ? {} : { isolated: options.isolated }),
+        ...(options.containerBash === undefined ? {} : { containerBash: options.containerBash }),
     });
 
+    const input = { command: options.command ?? "npm run test:run" };
     const pending = runtime.handlers.tool_call[0]!(
-        {
-            toolName: "bash",
-            toolCallId: "bash-decision-1",
-            input: { command: options.command ?? "npm run test:run" },
-        },
+        { toolName: "bash", toolCallId: "bash-decision-1", input },
         runtime.ctx,
     );
 
@@ -266,6 +275,7 @@ async function runChildDecision(options: {
         state: classify.mock.calls[0]?.[1]?.state,
         records: readDecisionLog(logPath),
         dialogs: runtime.dialogs,
+        command: input.command,
     };
 }
 
@@ -286,27 +296,30 @@ describe("child decision-model wiring", () => {
         expect(record?.prompt).toBeDefined();
     });
 
-    it("records a dry-run verdict but still prompts when apply is off", async () => {
-        const run = await runChildDecision({
-            section: decisionSection({ apply: false, surfaces: ["parent", "child"] }),
-            criterion: "privileged",
-            confidence: 0.9,
-            answerPrompt: true,
-        });
+    it.skipIf(!hasBwrap())(
+        "records a dry-run verdict but still prompts when apply is off",
+        async () => {
+            const run = await runChildDecision({
+                section: decisionSection({ apply: false, surfaces: ["parent", "child"] }),
+                criterion: "privileged",
+                confidence: 0.9,
+                answerPrompt: true,
+            });
 
-        expect(run.classify).toHaveBeenCalledTimes(1);
-        expect(run.dialogs).toHaveLength(1);
+            expect(run.classify).toHaveBeenCalledTimes(1);
+            expect(run.dialogs).toHaveLength(1);
 
-        const [record] = run.records;
-        expect(record?.classifier).toMatchObject({
-            criterion: "privileged",
-            action: "sandbox",
-            outcome: "sandbox",
-            status: "applied",
-            applied: false,
-        });
-        expect(record?.prompt).toBeDefined();
-    });
+            const [record] = run.records;
+            expect(record?.classifier).toMatchObject({
+                criterion: "privileged",
+                action: "sandbox",
+                outcome: "sandbox",
+                status: "applied",
+                applied: false,
+            });
+            expect(record?.prompt).toBeDefined();
+        },
+    );
 
     it("offers the table's wider rule when the model sees data for an unrecognized package", async () => {
         const run = await runChildDecision({
@@ -325,46 +338,89 @@ describe("child decision-model wiring", () => {
         });
     });
 
-    it("applies a sandbox verdict without a prompt when apply is on", async () => {
+    it.skipIf(!hasBwrap())(
+        "applies a sandbox verdict without a prompt when apply is on",
+        async () => {
+            const run = await runChildDecision({
+                section: decisionSection({ apply: true, surfaces: ["parent", "child"] }),
+                criterion: "privileged",
+                confidence: 0.9,
+            });
+
+            expect(run.classify).toHaveBeenCalledTimes(1);
+            expect(run.dialogs).toHaveLength(0);
+            expect(run.result).toEqual({ block: false });
+
+            const [record] = run.records;
+            expect(record?.classifier).toMatchObject({ applied: true, outcome: "sandbox" });
+            expect(record?.decision).toBe("allow:sandbox");
+            expect(record?.sandboxed).toBe(true);
+            expect(record?.prompt).toBeUndefined();
+        },
+    );
+
+    it("leaves a sandbox verdict unwrapped when this runtime's bash is container-backed", async () => {
+        // The flag is the whole point: the environment describes the *parent*, this describes the runtime whose
+        // bash tool the gate is deciding about. A container-backed child needs neither a wrapper nor a probe.
         const run = await runChildDecision({
             section: decisionSection({ apply: true, surfaces: ["parent", "child"] }),
             criterion: "privileged",
             confidence: 0.9,
+            containerBash: () => true,
         });
 
-        expect(run.classify).toHaveBeenCalledTimes(1);
-        expect(run.dialogs).toHaveLength(0);
         expect(run.result).toEqual({ block: false });
-
-        const [record] = run.records;
-        expect(record?.classifier).toMatchObject({ applied: true, outcome: "sandbox" });
-        expect(record?.decision).toBe("allow:sandbox");
-        expect(record?.sandboxed).toBe(true);
-        expect(record?.prompt).toBeUndefined();
+        expect(run.records[0]?.decision).toBe("allow:sandbox");
+        expect(run.records[0]?.sandboxed).toBe(true);
+        expect(run.command).toBe("npm run test:run");
     });
 
-    it("keeps a destructive verdict behind the prompt when apply is on", async () => {
-        const run = await runChildDecision({
-            section: decisionSection({ apply: true, surfaces: ["parent", "child"] }),
-            criterion: "destructive",
-            confidence: 0.9,
-            answerPrompt: true,
-        });
+    it.skipIf(!hasBwrap())(
+        "still wraps a child sandbox verdict when a container backend is configured",
+        async () => {
+            // The environment switch says a container backend exists, but this runtime did not install it, so
+            // the gate must keep wrapping. Reading the switch instead of the runtime predicate is exactly the
+            // bug that left a sandboxed child command unconfined on the host.
+            vi.stubEnv("PI_SANDBOX_BACKEND", "container");
 
-        expect(run.classify).toHaveBeenCalledTimes(1);
-        expect(run.dialogs).toHaveLength(1);
-        expect(run.result).toEqual({ block: false });
+            const run = await runChildDecision({
+                section: decisionSection({ apply: true, surfaces: ["parent", "child"] }),
+                criterion: "privileged",
+                confidence: 0.9,
+            });
 
-        const [record] = run.records;
-        expect(record?.classifier).toMatchObject({
-            criterion: "destructive",
-            action: "refuse",
-            outcome: "abstain",
-            applied: false,
-            reason: "refuse requires confirmation",
-        });
-        expect(record?.prompt).toBeDefined();
-    });
+            expect(run.result).toEqual({ block: false });
+            expect(run.records[0]?.decision).toBe("allow:sandbox");
+            expect(run.command).not.toBe("npm run test:run");
+            expect(run.command).toContain("bwrap");
+        },
+    );
+
+    it.skipIf(!hasBwrap())(
+        "keeps a destructive verdict behind the prompt when apply is on",
+        async () => {
+            const run = await runChildDecision({
+                section: decisionSection({ apply: true, surfaces: ["parent", "child"] }),
+                criterion: "destructive",
+                confidence: 0.9,
+                answerPrompt: true,
+            });
+
+            expect(run.classify).toHaveBeenCalledTimes(1);
+            expect(run.dialogs).toHaveLength(1);
+            expect(run.result).toEqual({ block: false });
+
+            const [record] = run.records;
+            expect(record?.classifier).toMatchObject({
+                criterion: "destructive",
+                action: "refuse",
+                outcome: "abstain",
+                applied: false,
+                reason: "refuse requires confirmation",
+            });
+            expect(record?.prompt).toBeDefined();
+        },
+    );
 
     it("runs a confident none unsandboxed with no prompt", async () => {
         const run = await runChildDecision({
@@ -439,6 +495,8 @@ async function runReadOnlyDecision(options: {
     surfaces?: string[];
     agentName?: string;
     files?: Record<string, string>;
+    /** Stands in for a container-backed child, whose own mount set is the read boundary. */
+    containerBash?: boolean;
 }): Promise<ReadOnlyDecisionRun> {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-readonly-"));
     tempDirs.push(cwd);
@@ -487,6 +545,9 @@ async function runReadOnlyDecision(options: {
         sessionManager,
         modelRegistry: classifierModelRegistry(answeringRegistry([DECISION_MODEL], classify)),
         ...(options.agentName === undefined ? {} : { agentName: options.agentName }),
+        ...(options.containerBash === undefined
+            ? {}
+            : { containerBash: () => options.containerBash === true }),
     });
 
     const result = await runtime.handlers.tool_call[0]!(
@@ -627,6 +688,39 @@ describe("read-only child decision consult", () => {
         expect(run.records).toHaveLength(0);
     });
 
+    it("consults an allowlist miss on a path this runtime's own view allows", async () => {
+        // The bug this pins: only the guard received `readConfinement`. The consult re-derived the relaxed
+        // assessment without it, found the absolute path outside the cwd, called the command unconsultable, and
+        // the child read a plain allowlist refusal for a read its own container mount set permits. Seen live as
+        // `findmnt -no TARGET,OPTIONS <abs path>` blocked while `findmnt --version` was judged and allowed.
+        // `lsns` keeps that shape now that `findmnt` is curated: a read-only command the spec does not know.
+        const command = "lsns -o TARGET,NS /home/sd/.pi/agent/sessions";
+
+        const containerized = await runReadOnlyDecision({ command, containerBash: true });
+        expect(containerized.result).toBeUndefined();
+        expect(containerized.classify).toHaveBeenCalled();
+        expect(containerized.records[0]).toMatchObject({ readOnlyGate: true, decision: "allow" });
+
+        // The same command under bubblewrap keeps the deterministic refusal: there the path is a real escape.
+        const confined = await runReadOnlyDecision({ command, containerBash: false });
+        expect(confined.result).toMatchObject({ block: true });
+        expect(confined.classify).not.toHaveBeenCalled();
+        expect(confined.records).toHaveLength(0);
+    });
+
+    it("runs a curated command on the fast path, without a consult", async () => {
+        // `findmnt` earned a spec entry because the fallback costs ~480 ms and ~870 input tokens per judged
+        // call. The entry has to classify the container shape on its own: the same absolute read, no model.
+        const run = await runReadOnlyDecision({
+            command: "findmnt -no TARGET,OPTIONS /home/sd/.pi/agent/sessions",
+            containerBash: true,
+        });
+
+        expect(run.result).toBeUndefined();
+        expect(run.classify).not.toHaveBeenCalled();
+        expect(run.records).toHaveLength(0);
+    });
+
     it("holds a module run whose body the model never read", async () => {
         const run = await runReadOnlyDecision({
             command: "python3 -m json.tool package.json",
@@ -731,7 +825,37 @@ describe("child Bash permissions", () => {
         });
     });
 
-    it("records an automatic child gate outcome without a prompt", async () => {
+    it("does not confine reads when this runtime's own view is the boundary", async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-container-reads-"));
+        tempDirs.push(cwd);
+        fs.writeFileSync(path.join(cwd, "safe.txt"), "safe");
+        const runtime = setup(cwd, { containerBash: () => true });
+        const check = runtime.handlers.tool_call[0]!;
+
+        // Inside a container the mount set is the boundary, so a read outside the cwd needs no prompt.
+        await expect(
+            check({ toolName: "bash", input: { command: "cat /etc/hostname" } }, runtime.ctx),
+        ).resolves.toBeUndefined();
+        await expect(
+            check({ toolName: "bash", input: { command: "rg --files /etc" } }, runtime.ctx),
+        ).resolves.toBeUndefined();
+
+        // Writes keep the host rule, and a sensitive name is still refused under a mounted credential dir.
+        await expect(
+            check(
+                { toolName: "bash", input: { command: "echo changed > /etc/motd" } },
+                runtime.ctx,
+            ),
+        ).resolves.toMatchObject({ block: true });
+        await expect(
+            check({ toolName: "bash", input: { command: "cat ~/.ssh/id_rsa" } }, runtime.ctx),
+        ).resolves.toMatchObject({
+            block: true,
+            reason: expect.stringContaining("SENSITIVE_PATH"),
+        });
+    });
+
+    it.skipIf(!hasBwrap())("records an automatic child gate outcome without a prompt", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-log-"));
         const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-log-home-"));
         tempDirs.push(cwd, home);
@@ -765,42 +889,45 @@ describe("child Bash permissions", () => {
         expect(record?.blocked).toBe(false);
     });
 
-    it("records a rule remembered from a child prompt answered by the parent", async () => {
-        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-prompt-"));
-        const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-prompt-home-"));
-        tempDirs.push(cwd, home);
-        const logPath = path.join(home, "decisions.jsonl");
-        vi.stubEnv("SANDBOX_DECISION_LOG", "1");
-        vi.stubEnv("SANDBOX_DECISION_LOG_PATH", logPath);
+    it.skipIf(!hasBwrap())(
+        "records a rule remembered from a child prompt answered by the parent",
+        async () => {
+            const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-prompt-"));
+            const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-decision-prompt-home-"));
+            tempDirs.push(cwd, home);
+            const logPath = path.join(home, "decisions.jsonl");
+            vi.stubEnv("SANDBOX_DECISION_LOG", "1");
+            vi.stubEnv("SANDBOX_DECISION_LOG_PATH", logPath);
 
-        const runtime = setup(cwd, { commandRunner: true, background: false });
-        const pending = runtime.handlers.tool_call[0]!(
-            {
-                toolName: "bash",
-                toolCallId: "bash-remember-log-1",
-                input: { command: "npm run test:run" },
-            },
-            runtime.ctx,
-        );
+            const runtime = setup(cwd, { commandRunner: true, background: false });
+            const pending = runtime.handlers.tool_call[0]!(
+                {
+                    toolName: "bash",
+                    toolCallId: "bash-remember-log-1",
+                    input: { command: "npm run test:run" },
+                },
+                runtime.ctx,
+            );
 
-        await vi.waitFor(() => expect(runtime.dialogs).toHaveLength(1));
-        await new Promise((resolve) => setTimeout(resolve, 260));
-        runtime.dialogs[0].handleInput(KEY.down);
-        runtime.dialogs[0].handleInput(KEY.enter);
-        await expect(pending).resolves.toEqual({ block: false });
+            await vi.waitFor(() => expect(runtime.dialogs).toHaveLength(1));
+            await new Promise((resolve) => setTimeout(resolve, 260));
+            runtime.dialogs[0].handleInput(KEY.down);
+            runtime.dialogs[0].handleInput(KEY.enter);
+            await expect(pending).resolves.toEqual({ block: false });
 
-        const [record] = readDecisionLog(logPath);
-        expect(record?.surface).toBe("child");
-        expect(record?.resolution.source).toBe("unresolved");
-        expect(record?.resolution.segments[0]?.tokens).toEqual(["npm", "run", "test:run"]);
-        expect(record?.prompt).toEqual({
-            outcome: "remember",
-            suggestion: "npm run test:run",
-            suggestionSource: "table",
-            rule: "npm run test:run",
-        });
-        expect(record?.blocked).toBe(false);
-    });
+            const [record] = readDecisionLog(logPath);
+            expect(record?.surface).toBe("child");
+            expect(record?.resolution.source).toBe("unresolved");
+            expect(record?.resolution.segments[0]?.tokens).toEqual(["npm", "run", "test:run"]);
+            expect(record?.prompt).toEqual({
+                outcome: "remember",
+                suggestion: "npm run test:run",
+                suggestionSource: "table",
+                rule: "npm run test:run",
+            });
+            expect(record?.blocked).toBe(false);
+        },
+    );
 
     it("allows exact custom safe-Bash patterns while retaining path checks", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-custom-bash-"));
@@ -827,42 +954,53 @@ describe("child Bash permissions", () => {
         ).resolves.toMatchObject({ block: true, reason: expect.stringContaining("OUTSIDE_CWD") });
     });
 
-    it("allows configured additional paths for direct reads and safe Bash", async () => {
-        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
-        const additionalDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-additional-"));
-        tempDirs.push(cwd, additionalDirectory);
-        const additionalPath = path.join(additionalDirectory, "memory.md");
-        const sensitivePath = path.join(additionalDirectory, ".env");
-        fs.writeFileSync(additionalPath, "memory");
-        fs.writeFileSync(sensitivePath, "secret");
-        const runtime = setup(cwd, { additionalPaths: [additionalDirectory] });
-        const check = runtime.handlers.tool_call[0]!;
+    it.skipIf(!hasBwrap())(
+        "allows configured additional paths for direct reads and safe Bash",
+        async () => {
+            const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
+            const additionalDirectory = fs.mkdtempSync(
+                path.join(os.tmpdir(), "pi-scout-additional-"),
+            );
+            tempDirs.push(cwd, additionalDirectory);
+            const additionalPath = path.join(additionalDirectory, "memory.md");
+            const sensitivePath = path.join(additionalDirectory, ".env");
+            fs.writeFileSync(additionalPath, "memory");
+            fs.writeFileSync(sensitivePath, "secret");
+            const runtime = setup(cwd, { additionalPaths: [additionalDirectory] });
+            const check = runtime.handlers.tool_call[0]!;
 
-        expect(
-            check({ toolName: "read", input: { path: additionalPath } }, runtime.ctx),
-        ).toBeUndefined();
-        await expect(
-            check({ toolName: "bash", input: { command: `cat ${additionalPath}` } }, runtime.ctx),
-        ).resolves.toBeUndefined();
-        expect(
-            check({ toolName: "read", input: { path: sensitivePath } }, runtime.ctx),
-        ).toMatchObject({ block: true });
-        await expect(
-            check({ toolName: "bash", input: { command: `cat ${sensitivePath}` } }, runtime.ctx),
-        ).resolves.toMatchObject({ block: true });
+            expect(
+                check({ toolName: "read", input: { path: additionalPath } }, runtime.ctx),
+            ).toBeUndefined();
+            await expect(
+                check(
+                    { toolName: "bash", input: { command: `cat ${additionalPath}` } },
+                    runtime.ctx,
+                ),
+            ).resolves.toBeUndefined();
+            expect(
+                check({ toolName: "read", input: { path: sensitivePath } }, runtime.ctx),
+            ).toMatchObject({ block: true });
+            await expect(
+                check(
+                    { toolName: "bash", input: { command: `cat ${sensitivePath}` } },
+                    runtime.ctx,
+                ),
+            ).resolves.toMatchObject({ block: true });
 
-        const commandRunner = setup(cwd, {
-            commandRunner: true,
-            background: false,
-            additionalPaths: [additionalDirectory],
-        });
-        await expect(
-            commandRunner.handlers.tool_call[0]!(
-                { toolName: "bash", input: { command: `cat ${additionalPath}` } },
-                commandRunner.ctx,
-            ),
-        ).resolves.toEqual({ block: false });
-    });
+            const commandRunner = setup(cwd, {
+                commandRunner: true,
+                background: false,
+                additionalPaths: [additionalDirectory],
+            });
+            await expect(
+                commandRunner.handlers.tool_call[0]!(
+                    { toolName: "bash", input: { command: `cat ${additionalPath}` } },
+                    commandRunner.ctx,
+                ),
+            ).resolves.toEqual({ block: false });
+        },
+    );
 
     it("allows reading a current child Bash output file without allowing general temp access", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));
@@ -1011,55 +1149,61 @@ describe("child Bash permissions", () => {
         ).toMatchObject({ block: true });
     });
 
-    it("routes command-runner commands through the permission gate", async () => {
-        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-command-runner-"));
-        tempDirs.push(cwd);
-        const runtime = setup(cwd, { commandRunner: true, background: false });
-        const check = runtime.handlers.tool_call[0]!;
-        const pending = check(
-            {
-                toolName: "bash",
-                toolCallId: "bash-1",
-                input: { command: "npm run test:run" },
-            },
-            runtime.ctx,
-        );
+    it.skipIf(!hasBwrap())(
+        "routes command-runner commands through the permission gate",
+        async () => {
+            const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-command-runner-"));
+            tempDirs.push(cwd);
+            const runtime = setup(cwd, { commandRunner: true, background: false });
+            const check = runtime.handlers.tool_call[0]!;
+            const pending = check(
+                {
+                    toolName: "bash",
+                    toolCallId: "bash-1",
+                    input: { command: "npm run test:run" },
+                },
+                runtime.ctx,
+            );
 
-        await vi.waitFor(() => expect(runtime.dialogs).toHaveLength(1));
-        await new Promise((resolve) => setTimeout(resolve, 260));
-        runtime.dialogs[0].handleInput(KEY.enter);
+            await vi.waitFor(() => expect(runtime.dialogs).toHaveLength(1));
+            await new Promise((resolve) => setTimeout(resolve, 260));
+            runtime.dialogs[0].handleInput(KEY.enter);
 
-        await expect(pending).resolves.toEqual({ block: false });
-    });
+            await expect(pending).resolves.toEqual({ block: false });
+        },
+    );
 
-    it("propagates an explicitly remembered isolated Bash rule to the parent session", async () => {
-        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-isolated-bash-"));
-        tempDirs.push(cwd);
-        const sessionManager = stubSessionManager();
-        const runtime = setup(cwd, {
-            commandRunner: true,
-            background: false,
-            isolated: true,
-            sessionManager,
-        });
-        const pending = runtime.handlers.tool_call[0]!(
-            {
-                toolName: "bash",
-                toolCallId: "bash-remember-1",
-                input: { command: "npm run test:run" },
-            },
-            runtime.ctx,
-        );
+    it.skipIf(!hasBwrap())(
+        "propagates an explicitly remembered isolated Bash rule to the parent session",
+        async () => {
+            const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-isolated-bash-"));
+            tempDirs.push(cwd);
+            const sessionManager = stubSessionManager();
+            const runtime = setup(cwd, {
+                commandRunner: true,
+                background: false,
+                isolated: true,
+                sessionManager,
+            });
+            const pending = runtime.handlers.tool_call[0]!(
+                {
+                    toolName: "bash",
+                    toolCallId: "bash-remember-1",
+                    input: { command: "npm run test:run" },
+                },
+                runtime.ctx,
+            );
 
-        await vi.waitFor(() => expect(runtime.dialogs).toHaveLength(1));
-        await new Promise((resolve) => setTimeout(resolve, 260));
-        runtime.dialogs[0].handleInput(KEY.down);
-        runtime.dialogs[0].handleInput(KEY.enter);
+            await vi.waitFor(() => expect(runtime.dialogs).toHaveLength(1));
+            await new Promise((resolve) => setTimeout(resolve, 260));
+            runtime.dialogs[0].handleInput(KEY.down);
+            runtime.dialogs[0].handleInput(KEY.enter);
 
-        await expect(pending).resolves.toEqual({ block: false });
-        const parentRule = getPermissionState(sessionManager).bashRules["npm run test:run"];
-        expect(["allow", "allow:sandbox"]).toContain(parentRule);
-    });
+            await expect(pending).resolves.toEqual({ block: false });
+            const parentRule = getPermissionState(sessionManager).bashRules["npm run test:run"];
+            expect(["allow", "allow:sandbox"]).toContain(parentRule);
+        },
+    );
 
     it("permits built-in fsmonitor but blocks an external status hook", async () => {
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-scout-bash-"));

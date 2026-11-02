@@ -25,9 +25,12 @@ import {
     suggestRuleForPrompt,
 } from "../../decision-model";
 import { scratchpadRoots } from "./roots";
+import { readConfinementFor } from "../../../modules/sandbox/read-confinement";
 import { CHILD_CONFINEMENT } from "./policy";
 import { PERMISSION_PROMPT_CONFIRMATION_DELAY_MS } from "../../../common/constants";
 import sandbox from "../../../modules/sandbox/bubblewrap";
+import type { AgentAuthority } from "../definitions/types";
+import { sandboxRoleFor } from "./sandbox-role";
 import {
     getPathConfinementAssessment,
     getPathConfinementPermission,
@@ -67,6 +70,8 @@ interface CommandPermissionOptions extends CommandPermissionCallbacks {
     runId: string;
     runTitle?: string;
     agentName: string;
+    /** Where this child sits on the gate ladder; decides whether its sandbox can be read-only. */
+    authority: AgentAuthority;
     /** Whether this child runs in a dedicated isolated worktree. */
     isolated: boolean;
     /** Additional read-only paths from the agent definition. */
@@ -78,6 +83,12 @@ interface CommandPermissionOptions extends CommandPermissionCallbacks {
      * needs a long default because installs run unattended, and that policy belongs to setup.
      */
     defaultBashTimeoutSeconds?: number;
+    /**
+     * Whether this runtime's bash tool is the container-backed one. Read at call time, because the container
+     * extension installs alongside this gate. It replaces the old env-based guess, which was about the *parent*
+     * runtime and left a sandboxed child command unwrapped on the host.
+     */
+    containerBash?: () => boolean;
     permissionState?: PermissionState;
 }
 
@@ -480,6 +491,10 @@ export function registerCommandPermissionHooks(
                 sensitiveAdditionalRoots: sensitiveRoots,
                 readOnlyAdditionalRoots: options.additionalReadRoots,
                 safeBashCommands: options.safeBashCommands,
+                // This runtime's own mount set is the boundary when its bash runs in a container, so reads
+                // are not re-checked against the cwd. Per runtime, never the environment: a child can stay
+                // on bubblewrap while its parent is containerized.
+                readConfinement: readConfinementFor(options.containerBash),
             });
             permission = details.permission;
             unresolved = details.unresolved;
@@ -494,23 +509,37 @@ export function registerCommandPermissionHooks(
 
         const sandboxEnabled = sandboxConfig.current?.sandbox.enabled !== false;
         const supported = process.platform === "linux" || process.platform === "freebsd";
+        const containerized = options.containerBash?.() === true;
+        // The predicate is per runtime, never the environment: a child loads the same backend as its parent,
+        // but the two can disagree (a child resolves readiness itself and may stay on bubblewrap), and the
+        // switch is process-wide. Reading it here would drop the wrapper for a child whose bash is pi's
+        // host-side bash — which is exactly the bug that once ran a sandboxed command unconfined.
         let bwrap: string;
         try {
-            bwrap = sandboxEnabled && supported ? ((await lookpath("bwrap")) ?? "") : "";
+            // A container-backed runtime needs no wrapper and no binary: being in the container is the sandbox,
+            // and wrapping there would nest one sandbox in another for no gain.
+            bwrap =
+                !containerized && sandboxEnabled && supported
+                    ? ((await lookpath("bwrap")) ?? "")
+                    : "";
         } catch (error) {
             release();
             throw error;
         }
+        /** Whether a sandboxed command can actually run: the container, or a real bubblewrap binary. */
+        const sandboxReady = containerized || bwrap.length > 0;
+        /** Whether the command string still needs the bubblewrap wrapper before the child executes it. */
+        const needsBubblewrapWrapper = (sandboxed: boolean): boolean => sandboxed && !containerized;
+
         let sandboxedModeValue = false;
         if (permission === "allow:sandbox") {
             sandboxedModeValue = sandboxEnabled;
         } else if (permission === "ask") {
-            sandboxedModeValue =
-                permissionState.bashSandboxed && sandboxEnabled && bwrap.length > 0;
+            sandboxedModeValue = permissionState.bashSandboxed && sandboxEnabled && sandboxReady;
         }
         const sandboxedMode = { value: sandboxedModeValue };
         const sandboxed = sandboxedMode.value;
-        if (sandboxed && !bwrap) {
+        if (sandboxed && !sandboxReady) {
             logDecision(permission, false, true);
             release();
             return {
@@ -518,7 +547,7 @@ export function registerCommandPermissionHooks(
                 reason: "Agent bash requires sandboxing, but bubblewrap is unavailable.",
             };
         }
-        const sandboxAvailable = sandboxEnabled && bwrap.length > 0;
+        const sandboxAvailable = sandboxEnabled && sandboxReady;
         let needsPrompt = permission === "ask";
         let classifier: BashClassifierRecord | undefined;
 
@@ -552,7 +581,8 @@ export function registerCommandPermissionHooks(
             }
         }
 
-        const canToggle = needsPrompt && sandboxEnabled && bwrap.length > 0;
+        // Toggling sandbox/direct is meaningless when the container is the sandbox: both modes run there.
+        const canToggle = needsPrompt && sandboxEnabled && sandboxReady && !containerized;
         let result: {
             allowed: boolean;
             permission: Permission;
@@ -606,12 +636,13 @@ export function registerCommandPermissionHooks(
             permissionState.bashSandboxed = sandboxedMode.value;
         }
         options.bashApproved();
-        if (sandboxedMode.value) {
+        if (needsBubblewrapWrapper(sandboxedMode.value)) {
             try {
                 input.command = sandbox(bwrap, input.command, {
                     cwd: ctx.cwd,
                     additionalRoots,
                     readOnlyAdditionalRoots: options.additionalReadRoots,
+                    role: sandboxRoleFor(options.authority),
                 });
             } catch (error) {
                 release();

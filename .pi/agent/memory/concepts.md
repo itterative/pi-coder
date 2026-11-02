@@ -17,6 +17,12 @@ assistant response plus its tool calls (`turn_end`), a **message** is one messag
 (`message_end`). Only `before_agent_start` can ride with the prompt; `turn_end` and `agent_before_settle` inject
 by appending entries; `pi.sendMessage(..., { deliverAs: "steer" })` reaches a running loop.
 
+Two lifecycle facts bite extension state: `session_shutdown` fires on a session *switch*, fork, and reload as
+well as on quit (`AgentSessionRuntime.teardownCurrent`), so it means "this session ended", not "this process
+ended"; and extension *factories* run once per process — `pi.registerTool` from a session hook adds a tool for
+the life of the process, and there is no unregister. A module that installs tools per session must therefore
+either gate them on a runtime flag or accept that its choice is sticky (see `sandbox/session-sandbox.md`).
+
 ## Targeted references
 
 Load only the detail needed for the task; these nested documents are on-demand and are not listed in the memory

@@ -273,9 +273,11 @@ guess for shells other than bash/sh. Worth an explicit decision below.
 
 ## Adjacent fixes (independent mechanism, do not bundle silently)
 
-- `find -name/-iname/-lname/-path/-regex` values are match patterns, never opened, yet are treated
-  as path slots today — `find . -name '*.sqlite*' -not -path ./node_modules/*` prompts. Fix is a
-  spec change (those flags become `VALUE`), not expansion. Evidence: 2 gaps.
+- ~~`find -name/-iname/-lname/-path/-regex` values are match patterns, never opened, yet are treated
+  as path slots~~ — done: those flags are `VALUE` (patterns, names, numbers), `-newer`/`-samefile` stay
+  `PATH_VALUE` because they open a file, and a single-dash flag whose whole name is a spec key now consumes its
+  value (`inspectShortFlagValue`). `rg --files` got the same treatment through `patternBypassFlags`, because the
+  flag removes the pattern and makes every positional a path.
 - Bare assignment segments (`SID=01a0…`, 30 gaps, currently `EMPTY_INPUT`/unknown) can run nothing;
   modeling them as inert is a separate resolver question.
 - Session rules never persist, so `npx prettier *` (63 gaps), `npx tsc *` (14), `npm run test:run`

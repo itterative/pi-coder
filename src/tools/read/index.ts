@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { getUserMemoryDirectory } from "../../common/constants";
+import type { ContainerState } from "../../modules/sandbox/container/state";
 import registerFileToolHook from "../file-permissions";
 
 /**
@@ -10,9 +11,10 @@ import registerFileToolHook from "../file-permissions";
  * the decision-model wiring says which outside-root reads may be resolved without asking. `events` is the
  * parent's own bus, which is what makes the footer's auto badge animate while a check is in flight.
  */
-export default function registerReadToolHook(pi: ExtensionAPI): void {
+export default function registerReadToolHook(pi: ExtensionAPI, container?: ContainerState): void {
     registerFileToolHook(pi, "read", {
         additionalReadRoots: () => [getUserMemoryDirectory()],
         decision: { surface: "parent", events: pi.events },
+        containerBash: () => container?.active === true,
     });
 }

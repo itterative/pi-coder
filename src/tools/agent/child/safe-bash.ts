@@ -7,6 +7,7 @@ import {
     KNOWN_COMMANDS,
     UnsafeReason,
     type HeuristicAssessment,
+    type ReadConfinement,
 } from "../../../modules/sandbox/heuristics";
 import {
     BashCommand,
@@ -36,6 +37,8 @@ export interface SafeBashOptions {
     additionalRoots?: readonly string[];
     sensitiveAdditionalRoots?: readonly string[];
     safeBashCommands?: readonly string[];
+    /** `"runtime"` when this child's bash runs in a container, whose mount set is its own boundary. */
+    readConfinement?: ReadConfinement;
 }
 
 /**
@@ -254,6 +257,9 @@ function isConsultableSubjectConfinement(
             additionalRoots: options.additionalRoots,
             sensitiveAdditionalRoots: options.sensitiveAdditionalRoots,
             customSafeBashCommands: [...(options.safeBashCommands ?? []), ...patterns],
+            ...(options.readConfinement === undefined
+                ? {}
+                : { readConfinement: options.readConfinement }),
         },
     );
     if (assessment.classification !== Heuristic.SAFE_READONLY) {
@@ -269,6 +275,9 @@ function isConsultableSubjectConfinement(
                 access: "read",
                 additionalRoots: options.additionalRoots,
                 sensitiveAdditionalRoots: options.sensitiveAdditionalRoots,
+                ...(options.readConfinement === undefined
+                    ? {}
+                    : { readConfinement: options.readConfinement }),
             }) === Heuristic.SAFE_READONLY,
     );
 }
@@ -339,7 +348,12 @@ export function getSafeBashAssessment(
     cwd: string,
     options: SafeBashOptions = {},
 ): HeuristicAssessment {
-    const { additionalRoots = [], sensitiveAdditionalRoots, safeBashCommands = [] } = options;
+    const {
+        additionalRoots = [],
+        sensitiveAdditionalRoots,
+        safeBashCommands = [],
+        readConfinement,
+    } = options;
 
     return getCwdConfinementAssessment(command, {
         cwd,
@@ -347,6 +361,7 @@ export function getSafeBashAssessment(
         additionalRoots,
         sensitiveAdditionalRoots,
         customSafeBashCommands: safeBashCommands,
+        ...(readConfinement === undefined ? {} : { readConfinement }),
     });
 }
 
@@ -392,8 +407,14 @@ export async function guardSafeBashCommand(
     cwd: string,
     options: SafeBashGuardOptions,
 ): Promise<SafeBashBlock | undefined> {
-    const { safeBash, onTrace, additionalRoots, sensitiveAdditionalRoots, safeBashCommands } =
-        options;
+    const {
+        safeBash,
+        onTrace,
+        additionalRoots,
+        sensitiveAdditionalRoots,
+        safeBashCommands,
+        readConfinement,
+    } = options;
 
     if (!safeBash) {
         return {
@@ -406,6 +427,7 @@ export async function guardSafeBashCommand(
         additionalRoots,
         sensitiveAdditionalRoots,
         safeBashCommands,
+        ...(readConfinement === undefined ? {} : { readConfinement }),
     });
     const consult =
         assessment.classification === Heuristic.SAFE_READONLY ||

@@ -11,6 +11,7 @@ import {
 } from "../../src/tools/agent/definitions/discovery";
 import type { AgentDefinition } from "../../src/tools/agent/definitions/types";
 import { buildChildRun, probeDefinition, type ChildRunMode } from "./child-run-fixture";
+import { hasBwrap } from "../helpers/host-tools";
 
 /**
  * The decision each installed gate returns for a fixed set of calls, per run profile.
@@ -221,21 +222,26 @@ function normalizeSync(result: unknown, cwd: string): unknown {
 }
 
 describe("child gate decisions", () => {
-    it("blocks and allows the same calls for every run profile", async () => {
-        const blocks: string[] = [];
-        for (const testCase of CASES) {
-            blocks.push(`### ${testCase.label}`, ...(await rowsFor(testCase)));
-        }
+    // The `sandbox(...)` rows need bwrap; without it the command gate fails closed by design (see above).
+    it.skipIf(!hasBwrap())(
+        "blocks and allows the same calls for every run profile",
+        async () => {
+            const blocks: string[] = [];
+            for (const testCase of CASES) {
+                blocks.push(`### ${testCase.label}`, ...(await rowsFor(testCase)));
+            }
 
-        // Guard the normalization itself, not only the snapshot: a wrapper regex that stops matching would
-        // let the whole bwrap argv (PATH, SHELL, USER included) into the file, and the snapshot would then
-        // pass only on the machine that generated it — exactly the failure this file already had once.
-        const rendered = blocks.join("\n");
-        expect(rendered).not.toContain("bwrap");
-        expect(rendered).toContain('bash "sandbox(cat ');
+            // Guard the normalization itself, not only the snapshot: a wrapper regex that stops matching would
+            // let the whole bwrap argv (PATH, SHELL, USER included) into the file, and the snapshot would then
+            // pass only on the machine that generated it — exactly the failure this file already had once.
+            const rendered = blocks.join("\n");
+            expect(rendered).not.toContain("bwrap");
+            expect(rendered).toContain('bash "sandbox(cat ');
 
-        await expect(blocks.join("\n")).toMatchFileSnapshot(
-            "__snapshots__/agent-child-decisions.txt",
-        );
-    }, 60_000);
+            await expect(blocks.join("\n")).toMatchFileSnapshot(
+                "__snapshots__/agent-child-decisions.txt",
+            );
+        },
+        60_000,
+    );
 });

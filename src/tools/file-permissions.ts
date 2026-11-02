@@ -20,6 +20,7 @@ import {
     getPermissionState,
     type PermissionState,
 } from "../modules/sandbox/permission-state";
+import { readConfinementFor } from "../modules/sandbox/read-confinement";
 import { fileRootsForOperation } from "../modules/sandbox/file-roots";
 import { ALLOWED_FILE_ENTRY_TYPE, type AllowedFileEntry } from "../common/audit";
 import {
@@ -265,6 +266,13 @@ export interface FilePermissionHookOptions {
     decision?: FileDecisionWiring;
     /** Agent name recorded on the decision log line for a child surface. */
     agentName?: string;
+    /**
+     * Whether this runtime's own filesystem view is the boundary (a container-backed session). Reads are then
+     * not re-checked against the cwd, because the mount set already decided what the path can be; writes keep
+     * the host rule. A predicate rather than a boolean so a backend that adopts a container mid-session is
+     * read at call time, and per runtime so a bubblewrap child is unaffected by a containerized parent.
+     */
+    containerBash?: () => boolean;
 }
 
 /** One access that left every trusted root, with everything the log line needs to say what happened. */
@@ -336,6 +344,7 @@ export default function registerFileToolHook(
             // Stated rather than left to the "unset means exempt" default: the agent gets leeway inside its
             // own scratchpad, while a declared host root keeps sensitive-name filtering.
             sensitiveAdditionalRoots: scratchpadRoots,
+            readConfinement: readConfinementFor(options.containerBash),
         };
 
         const assessment = getPathConfinementAssessment(filePath, pathOptions);

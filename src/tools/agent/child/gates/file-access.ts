@@ -20,7 +20,13 @@ export const FILE_ACCESS_GATE: ChildGate = {
     applies: (runtime) => runtime.options.authority === "mutate",
     install(runtime) {
         const { options, parentContext, bashOutputs, runLabel } = runtime;
-        const { agentName, additionalPaths = [], isolated = false, events } = options;
+        const {
+            agentName,
+            additionalPaths = [],
+            isolated = false,
+            events,
+            containerBash,
+        } = options;
         const permissionState = runtime.permissionState;
         // A worker only prompts for outside-cwd access when it actually shares the parent's approval
         // state, and that state exists for exactly the same-checkout case (see `runtime.permissionState`).
@@ -37,6 +43,9 @@ export const FILE_ACCESS_GATE: ChildGate = {
             persistSession: false,
             childAccess: true,
             confinement: CHILD_CONFINEMENT,
+            // This runtime's own view is the boundary when its bash runs in a container; per runtime, so a
+            // bubblewrap child keeps cwd-confined reads even under a containerized parent.
+            containerBash,
             permissionPending: runtime.reportPermissionPending,
             // The child consults with its own runner and isolation, the parent's registry (pi's registry is
             // process-wide and the provider was registered there), and the parent's bus, so a worker's check

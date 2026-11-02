@@ -42,6 +42,7 @@ export type {
     PathConfinementOptions,
     CwdConfinementOptions,
     ArgsConfinementOptions,
+    ReadConfinement,
 } from "./types";
 export { isNonPersistentChainOperator } from "./evaluator";
 export { isPathWithinDirectory } from "./path-policy";
@@ -84,12 +85,18 @@ export function getPathConfinementPermission(
         access = "read",
         additionalRoots = [],
         sensitiveAdditionalRoots,
+        readConfinement = "cwd",
     } = options;
     const confinement = resolveConfinementConfig(config);
 
     if (confinement?.enabled === false || filePath.trim() === "") {
         return Heuristic.UNSAFE;
     }
+
+    // A runtime whose filesystem view is the boundary needs no containment check for a read: the mount set
+    // already decided what this path can be. Sensitive names still refuse, because the mounts widen reads and
+    // a credential directory can be one of them; writes keep the host rule, because mounts widen reads only.
+    const unconfined = access === "read" && readConfinement === "runtime";
 
     const resolvedCwd = path.resolve(cwd);
     const home = resolveHomeDirectory();
@@ -100,7 +107,10 @@ export function getPathConfinementPermission(
         sensitiveAdditionalRoots,
     );
 
-    if (!isAllowedPath(filePath, resolvedCwd, home, confinementOptions, resolvedCwd)) {
+    if (
+        !unconfined &&
+        !isAllowedPath(filePath, resolvedCwd, home, confinementOptions, resolvedCwd)
+    ) {
         return Heuristic.UNSAFE;
     }
 
@@ -109,6 +119,7 @@ export function getPathConfinementPermission(
     }
 
     if (
+        !unconfined &&
         (confinement?.resolveSymlinks ?? true) &&
         !isRealPathConfined(filePath, resolvedCwd, home, confinementOptions)
     ) {
@@ -182,6 +193,7 @@ export function getCwdConfinementAssessment(
         sensitiveAdditionalRoots,
         readOnlyAdditionalRoots = [],
         customSafeBashCommands = [],
+        readConfinement = "cwd",
     } = options;
     const confinement = resolveConfinementConfig(config);
 
@@ -206,6 +218,7 @@ export function getCwdConfinementAssessment(
                 sensitiveAdditionalRoots,
                 readOnlyAdditionalRoots,
                 customSafeBashCommands,
+                readConfinement,
             ),
             diagnostics,
         ) ?? Heuristic.UNSAFE;
@@ -248,6 +261,7 @@ export function getArgsConfinementAssessment(
         sensitiveAdditionalRoots,
         readOnlyAdditionalRoots = [],
         customSafeBashCommands = [],
+        readConfinement = "cwd",
     } = options;
     const confinement = resolveConfinementConfig(config);
 
@@ -273,6 +287,7 @@ export function getArgsConfinementAssessment(
                 sensitiveAdditionalRoots,
                 readOnlyAdditionalRoots,
                 customSafeBashCommands,
+                readConfinement,
             ),
             confinementState,
             diagnostics,
@@ -300,6 +315,7 @@ export function getBashCommandConfinementAssessment(
         sensitiveAdditionalRoots,
         readOnlyAdditionalRoots = [],
         customSafeBashCommands = [],
+        readConfinement = "cwd",
     } = options;
     const confinement = resolveConfinementConfig(config);
 
@@ -322,6 +338,7 @@ export function getBashCommandConfinementAssessment(
                 sensitiveAdditionalRoots,
                 readOnlyAdditionalRoots,
                 customSafeBashCommands,
+                readConfinement,
             ),
             confinementState,
             diagnostics,

@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import registerConfigCommand from "./commands/config";
 import registerStatsCommand from "./commands/stats";
 import { registerCompactionExtension } from "./modules/compaction";
+import registerContainerSandbox from "./modules/sandbox/container";
 import registerMemoryExtension from "./modules/memory";
 import registerRemindersExtension from "./modules/reminders";
 import registerScratchpadExtension from "./modules/scratchpad";
@@ -34,7 +35,10 @@ export default function (pi: ExtensionAPI) {
     registerStatsCommand(pi);
     registerAgentTool(pi);
     registerAskUserTool(pi);
-    registerBashToolHook(pi);
-    registerReadToolHook(pi);
-    registerWriteToolHook(pi);
+    // The backend registers first so its `session_start` resolves the backend before the bash hook decides
+    // whether a `bwrap` binary is needed at all; the resulting state is what the hook reads.
+    const container = registerContainerSandbox(pi);
+    registerBashToolHook(pi, container);
+    registerReadToolHook(pi, container);
+    registerWriteToolHook(pi, container);
 }

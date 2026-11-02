@@ -28,6 +28,25 @@ The five rules most often gotten wrong; the rest are in the detail docs below.
   direct state or interaction assertions.
 - **Never write the developer's home or `.state/` state from a suite** — use explicit temporary state/workspaces
   dirs.
+- **Never read the developer's setup either.** Three ambient inputs have made the suite pass only on one machine:
+  the global sandbox config (`config.load` merges `~/.pi/bash-sandbox-config.json` and falls back to
+  `defaultConfig()`, whose `inheritEnv: {}` is what emits `--clearenv`), the process environment
+  (`PI_SANDBOX_BACKEND` decides whether prompts show `sandbox(...)`), and installed binaries (`bwrap`). Pin the
+  config path with `vi.stubEnv("SANDBOX_CONFIG_PATH_GLOBAL", <temp file>)`, pin the backend once for the whole
+  suite (`process.env.PI_SANDBOX_BACKEND = "bwrap"` in `test/setup.ts`, so running the suite inside the container
+  still exercises bwrap wrapping), and guard a genuinely bwrap-driven
+  test with `it.skipIf(!hasBwrap())` from `test/helpers/host-tools.ts`. Skipped is visible; red is misleading.
+  The pi-coder sandbox image bakes `bubblewrap` in, so those guards do not fire there and the whole suite runs
+  inside the container (3171 tests); on an image without it they skip instead of failing.
+- **The container backend is testable without podman**, which matters because the suite runs *inside* the
+  sandbox image where podman is unreachable. Three techniques cover it: (1) drive `dispatch.mjs` as a child
+  process and speak its NDJSON protocol (`test/modules/sandbox-container-dispatch.test.ts`) — it is plain JS on
+  purpose; (2) a session double that implements `fs`/`spawn` over the local filesystem, which is legitimate
+  because the checkout is bind-mounted at its real path, so the host is a faithful stand-in for the container
+  (`grep-tool.test.ts`); (3) run pi's own tool definition beside the container one over the same tree and
+  compare output — a parity oracle for reimplemented behaviour, which is how `grep`'s deliberate duplication is
+  guarded. `rg`'s parallel walk makes match order nondeterministic, so parity cases compare sorted lines unless
+  they are scoped to a single file.
 - **Run the touched suite even when typechecking passes.**
 
 Manual agent/provider/rendering validation is documented in `src/tools/agent/README.md`; the permission-prompt and

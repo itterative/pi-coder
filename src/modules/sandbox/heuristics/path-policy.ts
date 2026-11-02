@@ -5,6 +5,7 @@ import { resolveHomeDirectory } from "../../../common/home-directory";
 import sandboxConfig, { type SandboxConfigCwdConfinement } from "../../../common/config";
 import { DEFAULT_GLOB_MAX_DEPTH } from "./glob-expansion";
 import { parseCustomSafeBashCommands } from "./command-access";
+import type { ReadConfinement } from "./types";
 
 /** Hard ceiling on a configured `globMaxDepth`, so a typo cannot unbound the walk. */
 const GLOB_MAX_DEPTH_LIMIT = 64;
@@ -140,6 +141,8 @@ export interface ConfinementOptions {
     realCwd: string | null;
     /** Paired lexical/canonical runtime roots such as scratchpads. */
     additionalRoots: AdditionalRoot[];
+    /** How read operands are confined; see {@link ReadConfinement}. Defaults to `"cwd"`. */
+    readConfinement: ReadConfinement;
 }
 
 export function resolvePath(p: string, cwd: string, home: string): string {
@@ -490,6 +493,7 @@ export function buildConfinementOptions(
     sensitiveAdditionalRoots?: readonly string[],
     readOnlyAdditionalRoots: readonly string[] = [],
     customSafeBashCommands: readonly string[] = [],
+    readConfinement: ReadConfinement = "cwd",
 ): ConfinementOptions {
     const resolveSymlinks = confinement?.resolveSymlinks ?? true;
     let realCwd: string | null = null;
@@ -544,5 +548,6 @@ export function buildConfinementOptions(
         globMaxDepth: resolveGlobMaxDepth(confinement?.globMaxDepth),
         realCwd,
         additionalRoots: pairedAdditionalRoots,
+        readConfinement,
     };
 }

@@ -35,6 +35,8 @@ keep_updated: true
   `toolResultEntry`, `textPart`, `toolCall`, `cleanupBranches`
 - child extension wired as production wires it → `test/tools/child-run-fixture.ts` → `buildChildRun`,
   `probeDefinition`, `mode.decision`
+- a **host capability** a suite needs (e.g. the `bwrap` binary) → `test/helpers/host-tools.ts` → `hasBwrap()`,
+  used as `it.skipIf(!hasBwrap())(...)` so a machine without it skips instead of failing
 - compaction event, summarized span, or provider summary → `test/helpers/compaction-doubles.ts` → `compactEvent`,
   `compactionPreparation`, the six message builders, `messageChain`, `fileOperations`, `summaryResponse`,
   `toolCallResponse`

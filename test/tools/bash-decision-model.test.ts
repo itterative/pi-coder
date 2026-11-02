@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { lookpath } from "lookpath";
 import type { ClassifierContext } from "@earendil-works/pi-ai";
 
 import decisionConfig from "../../src/modules/decision/config";
@@ -26,6 +27,13 @@ import {
  * when `apply` licenses it. The model config lives in the temporary workspace the hook is invoked with, and
  * the workspace's sandbox config enables the sandbox the `sandbox` verdict needs.
  */
+
+// Delegates to the real lookup by default; a case can queue `undefined` to stand in for a machine without the
+// binary. The container-backend cases must not probe for it at all.
+vi.mock("lookpath", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("lookpath")>();
+    return { ...actual, lookpath: vi.fn(actual.lookpath) };
+});
 
 const MODEL_ID = "test-classifier";
 const MODEL = classifier(DECISION_PROVIDER_ID, MODEL_ID);
@@ -72,6 +80,8 @@ interface HookResult {
     records: BashDecisionRecord[];
     classifyCalls: number;
     notify: Mock;
+    /** The command as the hook left it: wrapped in `sandbox(...)` only when a wrapper is needed. */
+    command: string;
 }
 
 async function runHookCommand(options: {
@@ -81,6 +91,8 @@ async function runHookCommand(options: {
     confidence?: number;
     /** The probability the suggestion question answers with, when the hook asks it. */
     suggestion?: number;
+    /** Whether this runtime's bash is the container-backed tool, which needs no wrapper and no probe. */
+    containerized?: boolean;
 }): Promise<HookResult> {
     writeDecisionFile(options.decision);
     decisionConfig.load(workspace);
@@ -98,7 +110,7 @@ async function runHookCommand(options: {
     const notify = vi.fn();
     const ui = stubUi({ notify });
     const stub = createPiStub();
-    registerBashToolHook(stub.pi);
+    registerBashToolHook(stub.pi, { active: options.containerized === true });
     const handlers = handlerView(stub, "session_start", "tool_call");
 
     const sessionManager = SessionManager.create(workspace, path.join(workspace, "sessions"));
@@ -117,8 +129,9 @@ async function runHookCommand(options: {
     });
 
     await handlers.session_start[0]({}, ctx);
+    const input = { command: options.command };
     const result = (await handlers.tool_call[0](
-        { toolCallId: "call-1", toolName: "bash", input: { command: options.command } },
+        { toolCallId: "call-1", toolName: "bash", input },
         ctx,
     )) as { block?: boolean; reason?: string };
 
@@ -128,6 +141,7 @@ async function runHookCommand(options: {
         records: readRecords(),
         classifyCalls: classify.mock.calls.length,
         notify,
+        command: input.command,
     };
 }
 
@@ -239,6 +253,44 @@ describe("bash decision-model wiring", () => {
             expect.stringContaining("decision model resolved"),
             "info",
         );
+    });
+
+    it("does not probe for bwrap when the container is already the sandbox", async () => {
+        const probesBefore = vi.mocked(lookpath).mock.calls.length;
+
+        const { block, command, records, notify } = await runHookCommand({
+            command: unresolved,
+            decision: modelSection({ apply: true }),
+            criterion: "privileged",
+            containerized: true,
+        });
+
+        const [record] = records;
+        expect(record?.decision).toBe("allow:sandbox");
+        expect(record?.sandboxed).toBe(true);
+        expect(block).toBe(false);
+        expect(command).toBe(unresolved);
+        // Being in the container is the sandbox: no binary lookup, and no warning that one is missing.
+        expect(vi.mocked(lookpath).mock.calls.length).toBe(probesBefore);
+        expect(notify).not.toHaveBeenCalledWith(
+            expect.stringContaining("bubblewrap package is required"),
+            "warning",
+        );
+    });
+
+    it("still probes and wraps when only the environment claims a container", async () => {
+        // The environment is process-wide, the backend is per session: a session that stayed on bubblewrap
+        // must keep its wrapper even when something else in the process is containerized.
+        vi.stubEnv("PI_SANDBOX_BACKEND", "container");
+
+        const { command, records } = await runHookCommand({
+            command: unresolved,
+            decision: modelSection({ apply: true }),
+            criterion: "privileged",
+        });
+
+        expect(records[0]?.decision).toBe("allow:sandbox");
+        expect(command.startsWith("/usr/bin/bwrap ")).toBe(true);
     });
 
     it("keeps a refuse verdict behind the prompt when apply is on", async () => {

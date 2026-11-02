@@ -801,6 +801,98 @@ image carrying the toolchain, a second isolation model alongside `bwrap`, and a 
 | credentials | pi stays on the host, so model keys stay out; `git push` needs an agent socket or `gh` config — a deliberate, visible hole                           |
 | degradation | fall back to today's per-command `bwrap` when the runtime is missing                                                                                 |
 
+### Measured: Shape A on this machine
+
+Measured 2026-10-28 with `.pi/local/probe-podman-sandbox.ts` (rootless `podman` 5.8.7, SELinux
+Enforcing, 232 MB `node:22-bookworm-slim`). **Shape A** is the posture where the real checkout is
+bind-mounted at its real absolute path: the host `read`/`edit`/`grep` tools and in-container `bash`
+see the same bytes, `.git` worktree pointers need no rewrite, and the container buys a mutable
+toolchain plus an egress and process boundary — not protection of the checkout.
+
+| What                                                        | Measured                  |
+| ----------------------------------------------------------- | ------------------------- |
+| `sh -c true` on the host                                    | 2.8 ms                    |
+| full-profile `bwrap`, per command, real builder             | 24.8 ms                   |
+| `podman exec` + `sh -c true`, one-shot                      | 148 ms                    |
+| persistent `podman exec -i`, one frame per command          | 0.6 ms                    |
+| container create + start, image local                       | ~135 ms                   |
+| image pull (first ever session)                             | 4.5 s                     |
+| `apt-get install git` into the writable layer               | 4.6 s                     |
+| teardown with `rm -f` (SIGTERM ignored, SIGKILL after 10 s) | 10 s → 240 ms with `-t 0` |
+
+The latency fork is the outcome that shapes everything else. One-shot `exec` costs **+125 ms per
+command over `bwrap`**, which turns a per-command backend into a visible regression once a task runs
+forty commands. A single long-lived `podman exec -i` shell driven over its stdin costs **0.6 ms** per
+command, cheaper than `bwrap`, and needs no unix socket, no in-sandbox runtime, and no protocol beyond
+a framing marker. That is Backend A's capability, at a fraction of Backend A's cost, but it adds a
+dispatcher: shell state leaks between commands (`cd` persists, and `sh -c` inherits it), so the
+dispatcher must restore cwd per command and decide what to do about exported environment; a command
+that calls `exit` kills the session, so framing has to survive that; and parallel tool calls need a
+small pool of sessions rather than one. Backend B's mutable image layer is what the persistent
+session makes usable.
+
+Verified behaviours that the design depends on:
+
+- **`--userns=keep-id` is the user model**, now that provisioning is a build rather than `apt-get` inside
+  the session. Every file written inside arrives host-owned (`1241:1241`) either way — rootless podman
+  maps container-root onto the user — but keep-id also means no process inside holds privilege over the
+  image, and the bind mounts are reached as the same uid the host uses. The cost is that `apt-get` inside
+  fails with `EACCES` on `/var/lib/apt/lists`, which is the intended trade: the recipe is the only way to
+  install anything. `--user <uid>` is _not_ a substitute: rootless maps it to a subuid, so the checkout
+  becomes unwritable and files land as `590xxx`.
+- **A mounted `$HOME` comes with it.** Keep-id leaves the image's `/root` unwritable, and the first `npm`
+  or `git config --global` write fails without a home it owns, so the session mounts the shared
+  `.state/container/home` at the _real_ home path and exports `HOME`, so `~` resolves the same
+  inside and outside. The dispatcher layers per-request
+  env over the container's own, so that value survives into every command.
+- **SELinux needs `label=disable`** (or `:Z`, which relabels the user's checkout). Both were tested;
+  `label=disable` is the one that leaves host labels alone.
+- **Git works, including a linked worktree at its real path**: `git status`, `git log`, and a
+  `.state/probe-wt-*` worktree all worked through the repo-root mount, confirming that no `.git`
+  pointer rewrite is needed.
+- **The mount set is frozen, and a widened cwd fails loudly**: `exec -w <unmounted dir>` exits 127
+  with `chdir ... No such file or directory`, so podman does not silently run in an empty world.
+  Widening means recreate: stop + start ≈ 375 ms, plus any install replay.
+- **The runtime `TMPDIR` mount works**: pi's truncated-output files land in a host-visible directory,
+  which is layer 1's runtime-roots goal, unchanged by the backend.
+- **No `--die-with-parent` equivalent, but no watchdog needed either.** Verified 2026-10-28: start the
+  container _attached_ with `podman run -i … sh -c 'cat >/dev/null'` and never write its stdin. The
+  container's PID 1 blocks on pi's pipe, so pi's death (clean, SIGINT, or SIGKILL) closes the write end,
+  PID 1 gets EOF and exits, the pid namespace dies, and the orphaned `podman` client exits too. PID 1
+  exiting also reaps every stray process, so a `nohup`'d dev server survives across `exec` calls but not
+  past pi — the semantics decision 9 wanted. A bind-mounted FIFO (`sh -c 'exec cat "$FIFO"'` as PID 1) is
+  the equivalent if the container must be detached. Set `--sig-proxy=false` so a terminal interrupt is not
+  proxied into PID 1. The fd must be process-global rather than owned by a module instance (an extension
+  reload would otherwise kill live sessions), and no other child may inherit that write end.
+- **Stop without `--rm`, and resume works — verified.** A stopped container keeps its writable layer and
+  its frozen mount set, and `podman start -ai` re-attaches a fresh stdin pipe, so the lifetime trick above
+  survives the cycle (`Exited` → `Up` → stdin EOF → `Exited`) with `/usr/local/bin` state and `/tmp` both
+  intact. That makes the writable layer a persistent cache, not a disposable one, and moves the costs
+  elsewhere: crash-consistent state persists (`/tmp` keeps stale sockets and pid files, so mount `--tmpfs
+/tmp`; a `SIGKILL` during `apt-get` leaves dpkg's journal, so resume needs a best-effort `dpkg
+--configure -a`); profile drift is invisible because image, mounts, and env are frozen, so a label
+  carrying a hash of (image digest, mounts, env) must force recreate on mismatch — the same check that
+  detects a widened mount set; stopped containers accumulate disk, so prune label- and age-scoped
+  (`podman container prune --filter label=pi.session --force`, never a global prune); and `Running` on
+  resume is ambiguous (this session alive under another pi, or a leaked write end), so a session-keyed
+  name turns it into a checked assertion instead of an attach. Cross-session warmth then needs a
+  committed image (`podman commit` on graceful exit, labelled by repo+profile hash) or named volumes for
+  `/usr/local` and package caches — not a shared container, which would re-break the per-session `/tmp`,
+  pid, and port isolation. The `pi.session=<id>` label plus a startup reap pass remains the backstop for
+  creation races, a killed pause process, or host OOM.
+- **Network**: default NAT resolves DNS and reaches host services through
+  `host.containers.internal`; the container's own `127.0.0.1` is not the host's loopback;
+  `--network=none` has no DNS. NAT is therefore the exfiltration path, and the default for a
+  container-backed session is a decision, not an inherited default.
+- **Rootless podman cannot be started from inside the `bwrap` sandbox.** `newuidmap` fails with
+  `write to uid_map failed: Operation not permitted`, and the failed attempt leaves a pause process
+  that breaks later host `podman` until `podman system migrate`. The backend must be invoked from the
+  extension's own unsandboxed process; a sandboxed bash call that reaches `podman` corrupts the
+  user's runtime state and needs repair.
+
+The probe also demonstrated the reaping hazard directly: a crashed probe run left
+`pi-probe-*` containers running, found by the label filter, as designed.
+
 ### Worktree mounting and the Git reference problem
 
 A Git worktree stores absolute paths in three places. On this machine:
@@ -829,6 +921,60 @@ Two consequences worth naming:
   they see the same worktree files, so no file RPC and no overlay is needed for coherence. Only `.git`
   and the worktree directory need mounting; the rest of the repository root can be an empty directory
   inside the container.
+
+### Isolated workers: a shared clone beats a linked worktree
+
+Measured and verified 2026-10-28. A linked worktree forces the whole rw `.git` into the worker's
+container, which is the authority surface above. A **shared clone** (`git clone --shared`) removes it:
+the clone borrows the parent's objects through `objects/info/alternates` and keeps its own small store,
+so the parent's object store is only ever read.
+
+```
+$CLONE                       rw   # the worker's own repo; .git/objects is ~4 KB
+$REPO/.git/objects           ro   # the alternates target
+$REPO/.git/refs              ro   # optional: lets the worker fetch upstream (plus packed-refs, ro)
+```
+
+Verified inside such a container: 406 commits readable through the alternates, 4.0 KB of own objects,
+commit lands in the clone's store, parent `.git/objects` not writable, parent repo otherwise not
+reachable at all, `git fetch origin` works with `refs` mounted read-only (615 commits visible, branch
+from `origin/main` succeeds), `git push` fails and creates no ref in the parent, and the transfer still
+works across the two stores — `git diff --binary base..workerHead` then `git apply --check --binary` in
+the parent.
+
+What this buys over "rw `.git` plus read-only `config` and `hooks`": no path to `.git/config`,
+`.git/hooks`, `.git/worktrees/<other>`, `.git/HEAD`, or the parent checkout exists at all. The
+config/hooks hardening is a narrowing; this is a removal, and it also ends the cross-worker hazard
+(worker A could otherwise rewrite worker B's `gitdir`). Note what it does not buy: the worker can still
+move its _own_ refs, which is harmless, and the parent's history is safe because nothing can write it.
+
+Overlaying the worktree instead is possible — rootless overlayfs works here (`podman volume create
+--opt type=overlay --opt o=lowerdir=…,upperdir=…,workdir=…`, writes land in the upper dir, lower
+untouched) — but it is the wrong tool once `.git` is shared rw: git's index records the overlay's stat
+data, so the host (or a later container without the overlay) sees every file as modified, and a
+whiteout in the upper dir can disagree with a committed delete in `.git`. Overlay is right for
+`probe.ts`, which never applies anything back; a worker's tree is already the disposable copy.
+
+Costs and caveats:
+
+- **The workspace model changes**, not just the mounts: `.state/workspaces/<slug>` becomes a shared
+  clone rather than a linked worktree. That touches workspace allocation and recycling, run persistence
+  and resume, `buildGitWorktreeMountCmd` (no longer needed for workers), the durable `RESULT_REF_PREFIX`
+  anchor (still needed, now in the clone's store), host-side apply (`prepareAgentWorkspaceApplication`'s
+  `git add -A` + commit works unchanged), and agent/prompt wording that calls the workspace a worktree
+  (prompt snapshots are tested). Two layouts — worktree for the `bwrap` fallback, clone for the container
+  backend — would be a maintenance trap; make it one layout for both.
+- **Alternates couple the worker to the parent's object store.** Git's own documentation warns that a
+  clone sharing objects breaks if the source is deleted or has its objects pruned. In practice the worker
+  borrows only history reachable from parent refs, so the exposure is a mid-run rewrite plus
+  `gc --prune`, and the failure is loud (`git diff` errors on the missing object) rather than silent.
+  `--dissociate`, or fetching the base, copies what is borrowed at the cost of the property that made this
+  cheap.
+- **Pushes fail with a confusing message** (`Please make sure you have the correct access rights`), which
+  invites retries. `git remote set-url --push origin no_push` in the clone turns it into an explicit one.
+- `--shared` needs a local path and the alternates path is absolute, which works only because Shape A
+  mounts at real paths. Submodule objects are not shared, so a submodule checkout becomes a network
+  operation.
 
 ### Bringing changes back
 
@@ -877,24 +1023,397 @@ A's protocol above is a starting point; Backend B needs no protocol of its own.
 
 ---
 
+## Implemented: the container backend
+
+Selected by `sandbox.backend` in `bash-sandbox-config.json` — `auto` (default), `container`, or `bwrap` — with
+`PI_SANDBOX_BACKEND` as an override for tests and CI, and `PI_SANDBOX_IMAGE` / `PI_SANDBOX_SHELL` as the image
+escape hatches.
+
+`auto` is the state that makes the environment variable unnecessary: the image tag is content-addressed, so
+"the recipe has never been built" is a normal state, and the session offers to build it once
+(`Build the image now` / `Keep using bubblewrap`) rather than asking the user to know about `/sandbox build`.
+The answer is remembered in the project's config; a dismissed dialog records only the declined recipe tag, so
+a later recipe edit asks again. Children, `pi -p`, and CI never prompt — they resolve silently and stay on
+`bwrap`, which is why `test/setup.ts` can keep pinning `PI_SANDBOX_BACKEND=bwrap` for the whole suite.
+
+A rebuild changes the tag, so the running container describes a recipe that no longer exists. `/sandbox build`
+therefore marks the session stale and replaces its container at the next command boundary instead of asking
+for a reload — "reuse" was never an option, since the old container's image _is_ the old recipe.
+
+### The seam is pi's `BashOperations`, not a wrapper script
+
+`exec(command, cwd, { onData: (Buffer) => void, signal, timeout (seconds), env })` returning
+`{ exitCode }`. `createBashToolDefinition(cwd, { operations })` builds pi's normal bash tool — timeouts,
+truncation, streaming, rendering are pi's, not ours — and `pi.on("user_bash") => { operations }` covers
+`!` commands. Registering a tool named `bash` overrides the built-in: extension tools are written into
+the registry _after_ the built-ins, which is how pi's own Gondolin example reroutes `ls`/`find`/`grep`.
+
+This is why no host-side client shim exists. A session cannot be reached by rewriting the command string,
+so the alternative was a per-command client connecting to a socket, which costs a process start
+(~28 ms for Node) and lands right back at the `bwrap` latency the persistent session was meant to beat.
+With the operations seam the command goes straight from pi's bash tool into the session's stdin, so the
+measured 0.6 ms round trip survives.
+
+That also means permissions and execution are finally separate concerns: the existing `tool_call` hook
+still resolves and records the permission, but when the container backend is active it no longer rewrites
+the command with `sandbox(bwrap, …)`. `allow:sandbox` also stops requiring the `bwrap` binary, because
+the container executes every command regardless of the permission's verdict.
+
+**Child runtimes get the same backend.** The rule is the one the parent already follows: the verdict decides
+permission, the backend decides location. A child therefore loads the backend as a hidden `pi-coder-container`
+extension (`childExtensionEntries` in `src/tools/agent/child/index.ts`), which resolves the same config and
+registers the container-backed `bash`, `user_bash`, and file tools through `registerContainerBackend` when the
+image is ready. It receives `prompt: undefined` — a build dialog in the middle of a delegated run would be
+attributed to whoever is watching — so a child without a built image simply stays on `bwrap`. A command the gates
+allowed directly — a model `host` action, a remembered rule — then runs in a container instead of on the literal
+host, which is what makes a child's file tools and commands describe the same place.
+
+The differences between the two runtimes are presentation, not policy: a child registers with
+`{ notify: false, eagerStart: false }`, so it announces nothing into the parent's transcript and pays no
+container start for a run that never executes a command. The run reaps its container through the handle's
+`dispose`, and `close()` makes a late command fail rather than start a container nothing will collect.
+
+Because the switch is process-wide, the child gate cannot read it: it asks `options.containerBash()`, a
+per-run predicate the container extension sets when it installs. With that predicate the gate skips the `bwrap`
+probe, skips the wrapper, and hides the sandbox/direct toggle; without it (switch off, or an image that failed to
+resolve) it behaves exactly as before. `test/tools/agent-scout-bash.test.ts` pins both directions, and
+`test/modules/sandbox/container/backend.test.ts` pins what each runtime registers.
+
+A container mounts the working tree and nothing else, so `gitSupportMounts` adds what git needs outside it: a
+linked worktree's git directory and its `commondir` target read-write, and a shared clone's
+`objects/info/alternates` target read-only. This also fixes the parent when pi itself runs inside a worktree,
+which was previously left with an unreadable `HEAD`.
+
+One diagnostic lesson is worth keeping from the earlier attempt: a sandbox claim needs
+`.state/bash-log.jsonl`, not only `ps`. Two delegated probes looked like proof of a broken gate — host
+`pid 1`, Fedora `os-release`, readable `~/.ssh`, no `bwrap` in the ancestry — and the log showed every
+command was `action: host` from the decision model (`criterion: none`, confidence 0.71–0.87) and therefore
+`allow`/`sandboxed: false` by design. They never exercised the wrapper at all.
+
+Tests are the deliberate exception: `test/setup.ts` pins `PI_SANDBOX_BACKEND=bwrap` for the whole suite, so a
+run _inside_ the container still asserts bwrap wrapping, and the bwrap-executing tests keep using the real
+binary. Only a live session stops using it.
+
+**The verdict decides permission; the backend decides location.** A row in `.state/bash-log.jsonl` saying
+`decision: allow`, `sandboxed: false` does not mean the command ran on the host: in a container session the
+parent's bash tool _is_ the container-backed tool (`container/bash-tool.ts`), so a model `host` action or a
+remembered rule runs in the container without an extra wrapper. That is the intended meaning of "host" here —
+"no additional sandbox", not "outside the backend" — and it is pinned by
+`test/modules/sandbox/container/bash-tool.test.ts`. A child gets the same treatment because it loads the same
+backend, so "host" never falls back to a literal host command in either runtime.
+
+### One posture, two backends
+
+Permission rules must not branch on which backend is running. The container and bubblewrap bind the same
+checkout at the same path, so "allow it, we are in a container" would grant there what it asks for under
+bubblewrap while both can write the same files. What a rule may branch on is _enforcement_, so
+`src/modules/sandbox/posture.ts` turns one mount plan into one `SandboxPosture`:
+`{ role, enforcement, network, entries, writableRoots, readOnlyRoots, warnings }`. `writableRoots` is derived
+from the entries, never declared — a rule that trusts it can only be as sound as the derivation.
+
+Both backends resolve their configurable mounts through `resolveConfiguredMounts`, which is also where a
+misconfigured mount stops being a silent `--volume`: `~` is expanded, relative paths are dropped with a
+warning, a path that does not exist is dropped rather than left for podman to satisfy by creating an empty
+directory, duplicates collapse to the most permissive mode, and parents are ordered before children so a later
+mount cannot shadow a deeper one. A mount that reaches a credential path (`.ssh`, `.aws`, `.gnupg`, …) is
+allowed — `~/.config/gh` is a legitimate opt-in that happens to hold a token — but it is reported once.
+
+A migration note that cost a live session: until this layer, the container silently ignored `sandbox.mounts`,
+so a config written under bubblewrap assumptions can now push host paths into an image built to contain its
+own. `"/etc": "readonly"` is the example worth knowing — redundant for bubblewrap (its profile already
+read-only-binds a fixed list that includes `/etc`) and wrong for the container, where it puts a Fedora `/etc`
+under a Debian image. It appears to work only because Fedora ships
+`/etc/ssl/certs/ca-certificates.crt` as a compat symlink.
+
+`homeMounts` is gone, and the container's `$HOME` is one shared directory
+(`.state/container/home`) mounted at the _real_ home path, so `~` means the same thing in and out and the
+caches a session fills survive into the next one. The host home is never mounted; `sandbox.mounts` is what
+puts specific parts of it back, read-only unless the entry asks for `readwrite`. (The first version made the
+home per session, which threw the caches away and left a directory per session behind.)
+
+The posture also carries a **role**. A child whose authority cannot run a build is `readonly`: its checkout,
+its worktree git data, and the memory directory are mounted read-only, and it gets no network. That is
+enforcement rather than another prompt, and it is what would let its Bash gate relax later without becoming a
+hole. The rung matters: `command` children run test suites that write `coverage/`, so only `read` and
+`inspect` are read-only (`src/tools/agent/child/sandbox-role.ts`).
+
+Network is posture, not a per-command question: a per-command ask has no enforcement behind it, so it is
+advice. `readonly` means `--network=none` in the container (no route, no resolver — DNS included, because DNS
+is the search channel) and `--unshare-net` under bubblewrap. Egress stays the default for a mutating runtime,
+because a build needs it; the proxied middle ground is deferred.
+
+**Reads follow the runtime's own view (decided 2026-10-29).** A container-backed runtime may be _less strict about
+reads_: its mount set is the boundary, so re-checking a read against the cwd adds nothing, and a scout's `find`,
+`rg`, or `cat` outside the checkout should not need a prompt. Writes are unchanged, and sensitive names still
+refuse, so a credential directory mounted on purpose stays behind a prompt. The switch is the runtime predicate
+(`readConfinement: "runtime"`), never the backend's name: under bubblewrap the same path is the host's and stays
+confined. This is the one place where the two backends legitimately differ, and the difference is what the
+filesystem view _is_, not what the backend is called.
+
+Deliberately not done yet: letting a rule _spend_ `writableRoots` (a `SAFE_EDIT` command whose operands all
+miss the writable set could be allowed, since the kernel answers `EROFS`). That needs per-operand read/write
+knowledge the heuristics do not expose today — `UnsafeReason` is per reason, not per operand — so it stays a
+follow-up rather than a half-sound rule.
+
+### Protocol
+
+`src/modules/sandbox/container/dispatch.mjs` is plain JavaScript on purpose: it runs inside the image,
+where no TypeScript exists. It is mounted read-only from the extension's own path at `/run/pi/dispatch.mjs`
+and is the container's main process. It is deliberately _not_ baked into the image: it is the counterpart of
+the host client and carries the protocol version, so a copy could only drift from the extension that is
+running (and the default and `PI_SANDBOX_IMAGE` images have no build step to bake it into anyway).
+
+```
+host -> container   exec   { id, params: { command, cwd, env, timeoutMs } }
+                    cancel { params: { id } }                            (notification)
+                    ping   { id }
+container -> host   ready  { protocol, pid, node, shell, cwd }
+                    output { id, stream, data }                          (base64)
+                    result { id, { exitCode, signal, timedOut, cancelled, wallTimeMs } }
+                    error  { id | null, { code, message } }
+```
+
+`spawn` is `exec` without a shell (argv in, no quoting, stdout and stderr kept apart), and `fs` answers one
+file operation per request: `readFile` (optionally a byte prefix), `writeFile`, `mkdir`, `access`, `stat`,
+`readdir`, `exists`, `glob`. They exist for the [file tools](#file-tools-run-in-the-container), so a tool call
+cannot read or write a file that a command would not see.
+
+### File tools run in the container
+
+Annotations were the wrong answer to the divergence question. A sandbox is coherent only if a tool call and a
+command answer from the same place, and Shape A makes that cheap to achieve: the checkout and the scratchpad are
+mounted at their real paths, so pi's file tools can be rebuilt over the container with no path mapping at all.
+
+pi exports the whole family with an operations seam — `createReadToolDefinition`, `createWriteToolDefinition`,
+`createEditToolDefinition`, `createLsToolDefinition`, `createFindToolDefinition`, `createGrepToolDefinition`
+— and registering a tool by a built-in's name shadows it, the same mechanism the bash override uses. So
+`src/modules/sandbox/container/file-operations.ts` implements `ReadOperations`, `WriteOperations`,
+`EditOperations`, `LsOperations`, and `FindOperations` over the session's `fs` protocol, while truncation,
+image resizing, the diff preview, the mutation queue, renderers, and system-prompt metadata stay pi's.
+
+`grep` is the exception that needed its own implementation. Its seams cover only the directory check and the
+context-line reads; the `rg` process is spawned inside pi's implementation
+(`dist/core/tools/grep.js`, `spawn(rgPath, …)`), so an operations-only override would list the host's files
+and read the container's lines. `src/modules/sandbox/container/grep-tool.ts` therefore reproduces pi's execute
+and registers it against pi's own definition object (schema, description, renderers). Duplication is a drift
+risk, so `test/modules/sandbox/container/grep-tool.test.ts` runs pi's implementation and this one over the same
+checkout and compares output, details, and behaviour on the truncation and match-limit edges — a legitimate
+oracle precisely because the checkout is shared.
+
+What the overrides change, beyond the view:
+
+- **Only active, genuine built-ins are taken over.** `pi.getActiveTools()` keeps a disabled `ls`/`find`/`grep`
+  disabled (registering would activate it), and `ToolInfo.sourceInfo.path` must say `builtin:<name>`, so a
+  same-named tool from another extension keeps its own backend and the user sees a warning instead.
+- **User memory is mounted read-write** (`~/.pi/agent/memory`). It was read-only while only commands could
+  write; now that `edit` runs inside too, a read-only mount would make the memory workflow fail on both paths.
+- **The host's git identity is seeded** into the sandbox home as `.gitconfig` (only `user.name` and
+  `user.email`, read with `git config --global`). Without it a command in the sandbox cannot commit at all,
+  and the host file's credential helper, `hooksPath`, and LFS filters point at paths the image does not have.
+- **A runtime without a container gets nothing.** Both the backend switch and a failed start leave pi's
+  built-ins in place rather than half-sandboxing the tools.
+
+Newline-delimited JSON, base64 for anything that can carry arbitrary bytes. Request-id multiplexing is
+what replaces the session pool: parallelism is a protocol property, not N exec sessions. Command
+semantics mirror pi's `createLocalShellOperations` deliberately — own process group per command, merged
+stdout/stderr, `128 + signum` for signal deaths, and the drain rule where `exit` is followed by reading
+until both pipes end with a 100 ms idle re-arm. That last one is why `cmd &` neither hangs the request nor
+truncates a descendant's tail; it is the single most load-bearing behaviour copied from pi.
+
+Lifetime is unchanged from decision 10: attached `podman run --interactive`, stdin EOF on host shutdown
+translates to "exit", `--rm` removes the container. No watchdog, no heartbeat, no timeout guess.
+
+### Flags that are not optional
+
+`--init` (the dispatcher is long-lived and backgrounded grandchildren are reparented to PID 1, so a real
+reaper has to be PID 1), `--sig-proxy=false` (a terminal Ctrl-C must cancel the running command through
+the protocol instead of tearing the session down), `--security-opt label=disable` (SELinux Enforcing, and
+`:Z` would relabel the checkout), and `--userns=keep-id` (the container runs as the host user, so nothing
+inside is privileged over the image; affordable only because a `Containerfile` provisions the image, not
+the session). Starting podman from inside `bwrap` is refused before the first spawn, because that
+corrupts the rootless pause process and needs `podman system migrate` to repair.
+
+### What the repository's own suite says about the image
+
+Running `npm run test:run` _inside_ the sandbox is the harshest smoke test the image can face, and the
+first attempt failed in three ways that say nothing about the sandbox backend:
+
+- `vendor/sqlite3` requires `GLIBC_2.38`; Debian 12 bookworm ships 2.36, so `sqlite` and the session-store
+  suites fail to load. The default image and this repo's recipe are now `node:24-trixie-slim` (Debian 13,
+  glibc 2.41), which also matches the host's Node 24.
+- Some tests silently require a developer machine: `defaultConfig()` sets `inheritEnv: {}`, so a test that
+  asserts "no `--clearenv` when `inheritEnv` is undefined" only passes when a _global_ config file exists.
+  A fresh `$HOME` — the container's mounted home — flips it. Same shape for the user-memory path in
+  `file-permissions` and for `agent-child-decisions`.
+- `agent-scout-bash` drives `bwrap`, which does not exist inside the container by design.
+
+The focused `container/` suite (104 tests) does pass inside. Making the rest pass there would mean removing
+those `$HOME`/`bwrap` dependencies from the tests, which is a separate piece of work.
+
+### Keep-id, verified against the recipe image
+
+`--userns=keep-id` runs the container as the host user, and the probe (`.pi/local/probe-keep-id.ts`)
+checks the things it can break. Measured on `localhost/pi-coder-sandbox:af6a6cfc98a9`:
+
+| What                   | Result                                                                                       |
+| ---------------------- | -------------------------------------------------------------------------------------------- |
+| identity               | `id -u` = `1241`, the host uid, with `HOME` at the real home path                            |
+| home                   | writable; `git config --global` and `npm`/`npx` both work                                    |
+| checkout               | writable; `git` reads it and writes a loose object into `.git`                               |
+| metadata ownership     | `.git/index`, `.git/HEAD`, `package.json` all `1241:1241` inside and out                     |
+| read-only memory mount | still refuses writes, despite the uid matching — the mount flag is what holds                |
+| dispatcher runtime     | `/opt/pi/node` v22.23.4, plus `ps`, `rg`, `python3` from the recipe                          |
+| installing inside      | `sudo` absent, `apt-get` cannot write the image — the recipe is the only path                |
+| identity guard         | `/proc/self/uid_map` inside is the remapped range, so podman still refuses to start in there |
+
+Two failure modes came out of building this, both worth keeping:
+
+- **Short image names are a registry lookup.** `pi-coder-sandbox:<hash>` unqualified made podman try to
+  resolve it against the search registries when the tag was missing locally, which fails without a TTY
+  (`short-name resolution enforced but cannot prompt`) and, with permissive short-name mode, would _pull_
+  whatever a registry served. The tag is now `localhost/pi-coder-sandbox:<hash>`: an unbuilt image is a
+  clean "not found" instead.
+- **`--tmpfs /tmp` needs no mode hint.** Podman's default tmpfs options (`rw,noexec,nosuid,nodev`) leave the
+  kernel's default 1777, so a non-root user can still write `/tmp`.
+
+### Environment got a second policy
+
+Bubblewrap inherits the host environment because it _is_ the host filesystem view; a container cannot, so
+`src/modules/sandbox/env.ts` now holds both rules. `resolveSandboxEnv` is the old bubblewrap ordering,
+extracted unchanged. `resolveContainerEnv` is new and narrow: the image supplies `PATH`, `HOME`, and the
+rest, so host values for those keys are dropped instead of shadowed, and what crosses is explicit intent
+(`sandbox.env`, `inheritEnv: "allow"`) plus terminal/locale/`PI_*` variables. Credential-shaped names are
+excluded unless `inheritEnv` names them, since an explicit allow is a decision the user made. This is a
+provisional answer to decision 13, not the finished profile.
+
+### Validated where
+
+67 unit tests drive the real dispatcher and the real client over pipes — protocol, concurrency, cancel,
+timeout, missing cwd, `cmd &`, byte-exact output, teardown, and typed failures — with no podman and no
+image in the loop. `.pi/local/probe-container-backend.ts` (`npm run scratch -- …`, **unsandboxed**) adds
+the container-level checks.
+
+Measured against real rootless podman, `node:22-bookworm-slim`, warm image (2026-10-28):
+
+| What                     | Value                                                             |
+| ------------------------ | ----------------------------------------------------------------- |
+| container start          | ~175 ms                                                           |
+| warm command (`true`)    | **1.9–2.3 ms** (vs 24.8 ms for a full-profile `bwrap` call)       |
+| two overlapping commands | 303 ms (a 0.3 s sleep dominates)                                  |
+| `cmd &` round trip       | ~104 ms (the drain grace, by design)                              |
+| cancel                   | exit 143, `cancelled: true`, 300 ms, **0 survivors** in the group |
+| timeout of 200 ms        | reported `timedOut` at 201 ms                                     |
+| stop, idle session       | 45 ms; the 250 ms kill grace is only paid with commands running   |
+| PID 1                    | `podman-init`; `zombies=0` after a backgrounded grandchild        |
+| identity                 | same inode inside and out at the real checkout path               |
+| `command -v node`        | `/usr/local/bin/node` — the image's PATH, not the host's nvm path |
+
+Two probe findings worth keeping: `node:22-bookworm-slim` ships no `procps`, so in-container introspection
+must read `/proc` (a `node -e` scan, not `ps`/`pgrep`); and a bundler rewrites `import.meta.url`, so
+`ContainerSessionOptions.dispatcherPath` exists to name the dispatcher when the sibling `.mjs` is not
+next to the module. A third is about the probe rather than the backend: argv is NUL-separated, so a
+survivor check must join and compare the command exactly — a prefix match also counts a scan that mentions
+the command, and any unrelated backgrounded child.
+
+Still missing, all deferred on purpose: TUI footer state, `sandbox.backend` in the config file and its
+`/config` UI, mount widening when a permission grants a new root, per-worker containers with the shared
+clone from decision 14, `podman commit` warmth across sessions, and routing the file tools inward (they
+stay host-side).
+
+The test count above is the first slice's; the recipe flow adds 35 more (see below), for 102 in the
+`container/` suite.
+
+## The sandbox image is a recipe, not a mutated container
+
+A session's image is described by a `Containerfile`, at `.pi/Containerfile` for the project or
+`~/.pi/Containerfile` globally. No recipe means the default image, so nothing changes for a
+checkout that has not adopted one.
+
+The alternative — `apt-get install` inside a live session and `podman commit` — was rejected: a committed
+layer is unreviewable (the diff you would want to read does not exist), unreproducible on another machine,
+and it turns root's writes inside the container into _persistent_ state. A recipe is text in the repo, it
+is layer-cached, and the only privileged step is a build that a human approves.
+
+### The prologue: a Node runtime for a base image that has none
+
+The dispatcher is a Node program, so the image needs Node. Requiring `FROM node:*` would constrain every
+recipe, so the effective Containerfile is generated instead: the user's text stays verbatim, with a stage
+prepended and two lines appended.
+
+```dockerfile
+FROM node:22-bookworm-slim AS pi-dispatcher-node
+<the recipe, verbatim>
+COPY --from=pi-dispatcher-node /usr/local/bin/node /opt/pi/node
+RUN /opt/pi/node --version
+```
+
+Three choices inside that:
+
+- **Appended after the recipe**, so a later `apt-get remove` in the recipe cannot take the dispatcher with
+  it. The appended lines land in the recipe's final stage, which is also the image podman produces.
+- **A verification step**, because a glibc-linked Node in a musl base fails with `Exec format error` at
+  session start, which reads like a pi-coder bug. `RUN /opt/pi/node --version` turns it into a failed build
+  naming the real cause. Alpine/musl `FROM` lines are also rejected before podman is invoked.
+- **The dispatcher runs from `/opt/pi/node`**, not `PATH`, so the runtime is the one the build verified.
+
+### Tagging, triggers, and what a build may not do
+
+The tag is `pi-coder-sandbox:<12-hex>` over the effective Containerfile plus the base image, so a stale
+image is detectable without bookkeeping and an unchanged recipe never rebuilds. `PI_SANDBOX_IMAGE` wins
+over a recipe (the escape hatch), and `PI_SANDBOX_BASE_IMAGE` changes which image the runtime is copied
+from.
+
+`/sandbox status` reports the recipe, the tag, and whether it is built; `/sandbox build` shows the recipe
+in a confirmation dialog and builds it. The command is registered whether or not the container backend is
+active, because building ahead of time is the useful case. There is **no auto-build**, and a session whose
+recipe image is missing **refuses to start** with the tag, the recipe path, and the command to run.
+
+That refusal replaced an earlier warn-and-fall-back, on evidence: after a base-image change made the
+effective Containerfile hash differ from the built image, a session silently ran in the bare default image
+and produced 56 test failures that looked like product bugs (`spawn git ENOENT`, no `rg`, no `ps`) instead
+of one actionable message. A content-addressed tag is always a "build me" state, never something to absorb
+at runtime.
+
+A build is **host code execution**: `RUN curl … | sh` runs as the user, with network. That is the same
+class as writing `.git/config`, so the approval prompt showing the recipe is the boundary, and a mode
+without dialogs refuses to build rather than building unasked.
+
+### Measured (2026-10-28, rootless podman, `debian:bookworm-slim` + `git`)
+
+| What                        | Value                                                 |
+| --------------------------- | ----------------------------------------------------- |
+| first build (apt install)   | 9.6–10.1 s                                            |
+| second ensure (cache hit)   | 66–73 ms                                              |
+| image contents              | injected `node` v22.23.4 · recipe's `git` 2.39.5      |
+| session start on that image | 163 ms, dispatcher ran from `/opt/pi/node` (v22.23.4) |
+| command through it          | `git --version` and the real checkout path            |
+
+That run also proved the copy survives the recipe's own package management, which is the ordering rule
+above — and that a recipe can therefore be as small as a `FROM` line plus the tools the work needs.
+
+---
+
 ## Cross-cutting decisions needed
 
-| #   | Decision                     | Options                                                                   | Recommendation                                                                                                      |
-| --- | ---------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| 0   | pi dev-dependency version    | stay on 0.84.1 · bump to 1.3.0                                            | bump to 1.3.0: `classify()` does not exist earlier                                                                  |
-| 1   | Order of layers              | layer 1 first · go straight to layer 2                                    | layer 1 first: independently useful and de-risks layer 2                                                            |
-| 2   | Runtime dir location         | reuse scratchpad · dedicated `.state/runtime/<session>`                   | dedicated dir with cleanup; keeps the scratchpad scope narrow                                                       |
-| 3   | Temp-dir approach            | redirect `TMPDIR` · declare `os.tmpdir()` as a read root                  | redirect `TMPDIR`; the alternative broadens `/tmp` reads                                                            |
-| 4   | Decision model authority     | auto-sandbox/refuse only · also auto-host behind a flag                   | auto-sandbox/refuse; auto-host opt-in + threshold                                                                   |
-| 5   | Decision model surfaces      | parent only · parent + child                                              | parent first, child behind a config flag                                                                            |
-| 6   | Context shape / question set | single/decomposed/risk; five context shapes                               | start `single` + `request_history`, keep configurable                                                               |
-| 7   | `audit` config fate          | rename to `decisionModel` · keep and extend                               | rename to `decisionModel`                                                                                           |
-| 8   | Sandbox networking           | full (today) · loopback-only · none, opt-in per command                   | loopback-only needs the persistent sandbox; until then isolate by default and let a command opt into the host netns |
-| 9   | Long-lived processes         | leak as today · reap at call end · persistent sandbox                     | reap at call end; the persistent sandbox is what buys them back                                                     |
-| 10  | Session sandbox backend      | persistent `bwrap` daemon · rootless container · stay per-command         | open; the container serves the installable-tool goal Backend A cannot serve; decide the posture below first         |
-| 11  | Session workspace posture    | per-session worktree (propose) · real checkout in container (live)        | open; live avoids the transfer problem and the project-state split, worktree buys destructive-write isolation       |
-| 12  | Change-transfer contract     | patch-apply into a clean parent (reuse worker) · branch-per-session merge | open; the worker contract fits a terminal result, not a live session                                                |
-| 13  | Profile strengthening        | unshare net/pid/ipc/uts · drop `~/.pi` rw and `/etc` ro · filter env      | prerequisite for any "free inside the box" model; the current profile is a path view, not a boundary                |
+| #   | Decision                     | Options                                                                                            | Recommendation                                                                                                                                                                                                                       |
+| --- | ---------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0   | pi dev-dependency version    | stay on 0.84.1 · bump to 1.3.0                                                                     | bump to 1.3.0: `classify()` does not exist earlier                                                                                                                                                                                   |
+| 1   | Order of layers              | layer 1 first · go straight to layer 2                                                             | layer 1 first: independently useful and de-risks layer 2                                                                                                                                                                             |
+| 2   | Runtime dir location         | reuse scratchpad · dedicated `.state/runtime/<session>`                                            | dedicated dir with cleanup; keeps the scratchpad scope narrow                                                                                                                                                                        |
+| 3   | Temp-dir approach            | redirect `TMPDIR` · declare `os.tmpdir()` as a read root                                           | redirect `TMPDIR`; the alternative broadens `/tmp` reads                                                                                                                                                                             |
+| 4   | Decision model authority     | auto-sandbox/refuse only · also auto-host behind a flag                                            | auto-sandbox/refuse; auto-host opt-in + threshold                                                                                                                                                                                    |
+| 5   | Decision model surfaces      | parent only · parent + child                                                                       | parent first, child behind a config flag                                                                                                                                                                                             |
+| 6   | Context shape / question set | single/decomposed/risk; five context shapes                                                        | start `single` + `request_history`, keep configurable                                                                                                                                                                                |
+| 7   | `audit` config fate          | rename to `decisionModel` · keep and extend                                                        | rename to `decisionModel`                                                                                                                                                                                                            |
+| 8   | Sandbox networking           | full (today) · loopback-only · none, opt-in per command                                            | loopback-only needs the persistent sandbox; until then isolate by default and let a command opt into the host netns                                                                                                                  |
+| 9   | Long-lived processes         | leak as today · reap at call end · persistent sandbox                                              | reap at call end; the persistent sandbox is what buys them back                                                                                                                                                                      |
+| 10  | Session sandbox backend      | persistent `bwrap` daemon · rootless container · stay per-command                                  | **decided: rootless container**, selected by `sandbox.backend` (`auto` prompts once for a missing image); a per-command `exec` measured +125 ms over `bwrap`, so it rides one attached session (0.6 ms)                              |
+| 11  | Session workspace posture    | per-session worktree (propose) · real checkout in container (live)                                 | **decided: live (Shape A)** — real checkout at its real path; no transfer problem, no project-state split, `.git` worktree pointers stay valid                                                                                       |
+| 12  | Change-transfer contract     | patch-apply into a clean parent (reuse worker) · branch-per-session merge                          | n/a for Shape A (live checkout, no transfer); it returns only if Shape B's overlay is added                                                                                                                                          |
+| 15  | Execution seam               | command-string rewriting · pi's `BashOperations`                                                   | **decided: `BashOperations`** for the container (and the target for `bwrap` in layer 2); a session cannot be expressed as a rewritten command string, and a socket client would re-add process-start latency                         |
+| 14  | Worker workspace model       | linked worktree sharing the rw `.git` · shared clone with object alternates                        | **decided: shared clone** — `$CLONE` rw + `.git/objects` ro (+ `refs` ro); no path to `.git` config/hooks/worktrees or the parent checkout, transfer still `diff` + `apply`                                                          |
+| 13  | Profile strengthening        | unshare net/pid/ipc/uts · drop `~/.pi` rw and `/etc` ro · filter env                               | prerequisite for any "free inside the box" model; the current profile is a path view, not a boundary                                                                                                                                 |
+| 16  | Image provisioning           | live `apt-get` in the session + `podman commit` · `Containerfile` recipe with a generated prologue | **decided: `Containerfile`** — reviewable text, layer-cached, reproducible; the prologue copies `node` into the user's base so a recipe need not be `FROM node:*`, and the build (never the session) is the approved privileged step |
 
 ## Implementation order (proposed)
 

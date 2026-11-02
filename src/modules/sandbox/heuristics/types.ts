@@ -17,6 +17,18 @@ export enum Heuristic {
 
 export type FileAccess = "read" | "write";
 
+/**
+ * How read operands are confined.
+ *
+ * `"cwd"` is the host rule: a read must land inside the working directory (plus declared roots).
+ * `"runtime"` says this runtime's own filesystem view *is* the boundary — a container mounts what it
+ * mounts — so re-checking reads against the cwd adds nothing. Writes are unaffected either way.
+ *
+ * Keyed on enforcement, never on a backend name: a rule that granted because the backend is a container
+ * would grant under bubblewrap too, where the same path is the host's.
+ */
+export type ReadConfinement = "cwd" | "runtime";
+
 /** Named options for direct file-path confinement checks. */
 export interface PathConfinementOptions {
     cwd: string;
@@ -24,6 +36,8 @@ export interface PathConfinementOptions {
     access?: FileAccess;
     additionalRoots?: readonly string[];
     sensitiveAdditionalRoots?: readonly string[];
+    /** Defaults to `"cwd"`; `"runtime"` skips read confinement, never write confinement. */
+    readConfinement?: ReadConfinement;
 }
 
 /** Named options for parsed command-string confinement checks. */
@@ -34,6 +48,7 @@ export interface CwdConfinementOptions {
     sensitiveAdditionalRoots?: readonly string[];
     readOnlyAdditionalRoots?: readonly string[];
     customSafeBashCommands?: readonly string[];
+    readConfinement?: ReadConfinement;
 }
 
 /** Named options for already-parsed command-argument confinement checks. */
@@ -45,6 +60,7 @@ export interface ArgsConfinementOptions {
     sensitiveAdditionalRoots?: readonly string[];
     readOnlyAdditionalRoots?: readonly string[];
     customSafeBashCommands?: readonly string[];
+    readConfinement?: ReadConfinement;
 }
 
 export enum UnsafeReason {
@@ -56,6 +72,16 @@ export enum UnsafeReason {
     COMMAND_NOT_ALLOWED = "COMMAND_NOT_ALLOWED",
     DANGEROUS_ENVIRONMENT = "DANGEROUS_ENVIRONMENT",
     OUTSIDE_CWD = "OUTSIDE_CWD",
+    /**
+     * A write whose target is inside the working directory but not inside any writable root.
+     *
+     * Distinct from {@link OUTSIDE_CWD} because it is the truth for `touch ./x": the path is exactly where
+     * it appears to be, and what stopped it is that this runtime has no writable root for it — a read-only
+     * child, or a command the heuristic only grants under the agent's own scratchpad. An agent told "outside
+     * the working directory" about a path in the working directory retries with other paths instead of
+     * stopping.
+     */
+    NOT_IN_WRITABLE_ROOT = "NOT_IN_WRITABLE_ROOT",
     SENSITIVE_PATH = "SENSITIVE_PATH",
     SYMLINK_ESCAPE = "SYMLINK_ESCAPE",
     DYNAMIC_CWD = "DYNAMIC_CWD",
@@ -85,6 +111,7 @@ const UNSAFE_REASON_DESCRIPTIONS: Record<UnsafeReason, string> = {
     [UnsafeReason.DANGEROUS_ENVIRONMENT]:
         "an environment assignment could alter command behavior unsafely",
     [UnsafeReason.OUTSIDE_CWD]: "a path is outside the working directory",
+    [UnsafeReason.NOT_IN_WRITABLE_ROOT]: "the write target is not inside a writable root",
     [UnsafeReason.SENSITIVE_PATH]: "a path is sensitive",
     [UnsafeReason.SYMLINK_ESCAPE]:
         "a symlink escapes the working directory or cannot be resolved safely",

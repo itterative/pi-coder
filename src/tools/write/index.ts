@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import type { ContainerState } from "../../modules/sandbox/container/state";
 import registerFileToolHook from "../file-permissions";
 
 /**
@@ -10,6 +11,9 @@ import registerFileToolHook from "../file-permissions";
  * folder-wide grant would make it a side effect of the last edit. The decision wiring lets an outside write be
  * resolved without a prompt only when the request named it and writing it loses nothing.
  */
-export default function registerWriteToolHook(pi: ExtensionAPI): void {
-    registerFileToolHook(pi, "write", { decision: { surface: "parent", events: pi.events } });
+export default function registerWriteToolHook(pi: ExtensionAPI, container?: ContainerState): void {
+    registerFileToolHook(pi, "write", {
+        decision: { surface: "parent", events: pi.events },
+        containerBash: () => container?.active === true,
+    });
 }
