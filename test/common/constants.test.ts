@@ -8,6 +8,7 @@ import {
     PI_CODER_AGENT_SESSIONS_DIR,
     PI_CODER_EXTENSION_DIR,
     PI_CODER_STATE_DIR,
+    getScratchpadDirectory,
     getUserMemoryDirectory,
     getUserSessionsDirectory,
 } from "../../src/common/constants";
@@ -21,6 +22,12 @@ describe("pi agent directories", () => {
 
     it("resolves the user memory directory the same way, so both move with the agent dir", () => {
         expect(getUserMemoryDirectory()).toBe(path.join(getAgentDir(), "memory"));
+    });
+
+    it("puts the durable scratchpad store under the agent dir, not in the OS temp dir", () => {
+        // Scratchpads used to live in `os.tmpdir()`, which a tmpfs-backed `/tmp` wipes on every host or
+        // dev-environment restart. They must follow `PI_CODING_AGENT_DIR` and stay out of the checkout.
+        expect(getScratchpadDirectory()).toBe(path.join(getAgentDir(), "scratchpad"));
     });
 });
 

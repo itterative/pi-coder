@@ -48,6 +48,17 @@ export function getUserSessionsDirectory(): string {
 }
 
 /**
+ * Root for the per-runtime temporary scratchpads.
+ *
+ * Resolved through pi's agent dir like sessions and memories, so a moved config (`PI_CODING_AGENT_DIR`) moves the
+ * scratchpads too, and deliberately outside the project checkout. Unlike `/tmp`, this directory outlives a host,
+ * container, or dev-environment restart, so pi-coder owns its cleanup (age and size) rather than the OS.
+ */
+export function getScratchpadDirectory(): string {
+    return path.join(getAgentDir(), "scratchpad");
+}
+
+/**
  * User-level pi agent memories shared by the parent and delegated agents.
  *
  * Resolved through pi's own agent dir, like {@link getUserSessionsDirectory}, so a session that moved its config

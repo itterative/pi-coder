@@ -147,7 +147,9 @@ argv), `protocol.ts`, `config.ts` (env switch + host guards), `index.ts` (wiring
 - `pid1=podman-init`, `uid_map` = `0 1241 1`, `containerenv` present; cwd is the real checkout and a file
   written inside is the same inode the host-side file tools read (bind mount, not a copy).
 - The mount set is exactly: repo rw, `/run/pi/dispatch.mjs` ro, scratchpad rw mounted into the container's own
-  `/tmp` tmpfs, and `~/.pi/agent/memory` ro (a write is refused with `Read-only file system`).
+  `/tmp` tmpfs, and `~/.pi/agent/memory` ro (a write is refused with `Read-only file system`). The scratchpad
+  moved out of `/tmp` because a tmpfs `/tmp` is wiped by a host or dev-environment restart while the transcript-backed
+  `TODO.md` comes back, which silently lost every other scratchpad file; pi-coder now prunes the store by age and size itself.
   `~/.ssh`, `~/.gitconfig`, `/run/user/<uid>` are absent. `/home/sd/.pi` existing is *not* a leak: podman
   creates the parent directories of a bind-mounted path, so it is an empty scaffold.
 - **`$HOME` is a host directory mounted at the real home path** (`.state/container/home` →

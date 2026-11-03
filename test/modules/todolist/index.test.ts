@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
     createEventBus,
@@ -22,10 +22,21 @@ type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
 const temporaryDirectories: string[] = [];
 
+// The scratchpad module now stores scratchpads under pi's agent dir, so point it at a throwaway one instead of
+// polluting the real `~/.pi/agent/scratchpad` with test TODO documents.
+let agentDirectory = "";
+
+beforeEach(() => {
+    agentDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-todo-agent-"));
+    vi.stubEnv("PI_CODING_AGENT_DIR", agentDirectory);
+});
+
 afterEach(() => {
+    vi.unstubAllEnvs();
     for (const directory of temporaryDirectories.splice(0)) {
         fs.rmSync(directory, { recursive: true, force: true });
     }
+    fs.rmSync(agentDirectory, { recursive: true, force: true });
 });
 
 function harness(entries: unknown[] = []): {

@@ -57,8 +57,9 @@ the write log, already deduplicated and content-addressed.
 
 - **No network.** A command needing it fails inside the bubble. Deliberate: the alternative is letting a
   probe exfiltrate.
-- **`/tmp` is a tmpfs**, so the session scratchpad is only visible when passed in `additionalRoots` (bound
-  read-only); a command writing its output there fails.
+- **`/tmp` is a tmpfs**, and the session scratchpad is not there (it lives under `~/.pi/agent/scratchpad`),
+  so a command sees it only when it is passed in `additionalRoots` (bound read-only); a command writing its
+  output there fails.
 - **Worktree git dirs are read-only**, so git commands that write fail rather than reaching the real object
   store.
 - **Toolchains outside the mount profile** (`npx` under `~/.nvm` when home is not mounted) are absent.

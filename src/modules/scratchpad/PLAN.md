@@ -24,28 +24,51 @@ A scratchpad is deliberately **not**:
 
 The first version has one kind of scratchpad: **session-scoped temporary**.
 
-- The directory is created with `fs.mkdtemp` below `os.tmpdir()` when the
-  runtime's `session_start` event runs, unless the session contains a valid
-  scratchpad path marker whose directory still exists.
+- The directory is created with `fs.mkdtemp` below the agent dir's
+  `scratchpad/` root (`getScratchpadDirectory()`, `~/.pi/agent/scratchpad` by
+  default) when the runtime's `session_start` event runs, unless the session
+  contains a valid scratchpad path marker whose directory still exists.
 - The marker is a custom session entry and does not participate in LLM
   context. It lets reloads and returning to the same session reuse the same
   directory.
-- `os.tmpdir()` may be a RAM-backed `tmpfs` or ordinary disk-backed storage;
-  pi-coder does not promise that the contents are held in RAM. The guarantee is
-  temporary session ownership, not storage medium.
+- The store is deliberately **not** under `os.tmpdir()`. A tmpfs-backed `/tmp`
+  (the default on Fedora hosts and in this container) is wiped by a host or
+  container rebuild, which silently lost every scratchpad file while the
+  transcript-backed `TODO.md` came back. The store is durable instead, so
+  pi-coder owns cleanup:
+  - **age** — a scratchpad whose directory has not changed for the retention
+    window (7 days) is removed on `session_start`;
+  - **size** — once the whole store exceeds its budget (1 GiB), the oldest
+    scratchpad that is not the active one and has been idle for at least a day
+    is removed until the store fits;
+  - an active scratchpad is never pruned, and the runtime touches its
+    directory on resume and after every settled agent run so the age rule does
+    not treat a live session as idle;
+  - measurement is bounded by an entry budget, and a truncated scan never
+    drives size eviction.
+- A single active scratchpad is bounded **softly**: crossing the per-scratchpad
+  threshold (256 MiB) produces one `ui.notify` warning per runtime and the
+  prompt names the threshold. A hard write-time quota is not attempted because
+  a shell redirect can write into the directory without passing through any
+  pi-coder hook, so the only honest guarantees are the store-level bounds above
+  plus the warning.
 - The directory is mode `0700` and is never placed in the project checkout.
+  The store root follows `PI_CODING_AGENT_DIR`, like sessions and memories.
 - The extension does not remove the directory during `session_shutdown` or
-  process exit.
-- There is no scratchpad database, manual release operation, or pi-coder
-  garbage collector in this version. The host OS's normal `/tmp` cleanup policy
-  is solely responsible for eventual removal.
+  process exit; pruning belongs to the next `session_start`.
+- A legacy marker whose directory is still inside `os.tmpdir()` is reused as-is
+  so an upgrade does not orphan a running session; new runtimes get the durable
+  store. No migration or copy is attempted.
+- If the durable root cannot be prepared (read-only agent dir, full disk), the
+  runtime falls back to the old temp-dir behaviour rather than failing
+  `session_start`, and pruning is skipped for that store.
 - Scratchpad contents may survive session shutdown, process restart, or a
   session switch while the marked directory remains available. They are not
-  guaranteed to survive OS cleanup or manual deletion; a missing marked
-  directory causes a new scratchpad and marker to be created.
+  guaranteed to survive pruning or manual deletion; a missing marked directory
+  causes a new scratchpad and marker to be created.
 
-The implementation should call this `ephemeral` or `temporary` internally and
-in documentation rather than claiming it is truly "in-memory".
+The implementation calls this `temporary` internally and in documentation
+rather than claiming it is truly "in-memory".
 
 ## User-facing behavior
 
@@ -56,8 +79,9 @@ At session startup, the parent receives a system-prompt appendix explaining:
   session while the marked directory exists;
 - that it is intended for notes and intermediate artifacts;
 - that ordinary `read`, `write`, `edit`, and `bash` tools may use it;
-- that pi-coder does not remove it when the session ends and the OS owns
-  eventual `/tmp` cleanup;
+- that pi-coder removes it after being idle for the retention window, that it
+  warns past the per-scratchpad size threshold, and that anything worth keeping
+  belongs in the project or memory;
 - that the scratchpad is confined like the current working directory.
 
 A scratchpad-capable child session receives the same appendix from the same
@@ -144,9 +168,9 @@ scratchpad root. Access within that root is automatically accepted for both
 read and write operations, without changing the parent session's `ctx.cwd`.
 
 For sandboxed Bash, the scratchpad is explicitly bind-mounted read-write by
-default. The current sandbox already exposes `/tmp`; the explicit bind is still
-important documentation and protects the design if the broad `/tmp` mount is
-restricted later.
+default. The container's `/tmp` is its own tmpfs and does not contain the
+scratchpad; the explicit bind at the store path is what makes the directory
+visible inside the sandbox.
 
 ### Child tools
 
@@ -338,8 +362,8 @@ parent-owned attachment with read/write access modes and run-lifetime leases.
 - Verify runtime registry teardown during parent shutdown, child abort, and
   child disposal without deleting scratchpad directories.
 - Ensure separate parent/child runtimes cannot share registry state accidentally.
-- Document that `/tmp` storage medium is platform-dependent and that eventual
-  deletion is controlled only by the host OS.
+- Document that the scratchpad store is durable and that pruning is controlled
+  by pi-coder's age and size policy, not by the host OS.
 - Update relevant project memories after behavior is implemented.
 
 ## Tests
@@ -383,13 +407,15 @@ npx tsc --noEmit
 6. Exercise symlink escapes from the scratchpad and confirm they remain
    blocked.
 7. Shut down normally and verify pi-coder does not attempt to delete the
-   parent or child temporary directories; the OS owns their eventual cleanup.
+   parent or child scratchpad directories; pruning belongs to the next
+   `session_start`.
 8. Repeat in print/non-TUI mode and verify no UI-only behavior is required.
 
 ## Non-goals and future refinements
 
 - persistent or user-named scratchpads;
 - manual scratchpad management tools;
+- a hard per-scratchpad write-time quota (see the soft-cap note above);
 - explicit parent/child scratchpad sharing;
 - replacing the current cwd or project checkout;
 - a scratchpad-only OS sandbox profile;
