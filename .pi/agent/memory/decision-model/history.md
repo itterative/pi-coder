@@ -980,3 +980,40 @@ Live re-check (scout, 2026-10-19 12:49): `python3 -c '…{"ok": True}…' && cat
 `readOnlyGate` + host + `applied` (inline `read_only` @ 0.958); `python3 -c "$(cat package.json)"` and
 `node -e 'main()' $DYN` both blocked with no consult record, as intended. The dynamic-data file-subject shape
 (`python3 run.py $DYN`) is covered by integration tests only.
+
+## Non-text bodies and the cooldown streak (implemented 2026-11-03)
+
+A live C++ session (`bash-log.jsonl`, 47 rows, `vllm-d3-flash`, 5 s timeout) showed the script subject
+reading compiled binaries as code:
+
+| time | command | body | result |
+| --- | --- | --- | --- |
+| 11:04:46 | `./build/rel/bin/vibes-op-bench --list` | 2,374,500 chars | timeout 5057 ms |
+| 11:06:30 | `vibes-op-bench --quick` | 2,413,925 chars | timeout 5056 ms |
+| 11:07:30 | `/usr/bin/clang-format` | 88,734 chars | 500 `input (204762 tokens) is too large` |
+| 11:08:32 | `/opt/rocm/.../clang-tidy` | 17,335,258 chars | timeout 5314 ms |
+| 11:10:10 | `vibes-op-bench --dtype=all` | 2,414,134 chars | timeout 5050 ms |
+
+Each timeout was followed within ~10 s by `model cooling down` rows at ~50 ms, so one binary body disabled the
+model for 30 s of unrelated prompts. The same class appears in this repo's `.state/bash-log.jsonl`: `/usr/bin/git`
+(4,877,744 chars → timeout), `.cpuprofile` files (1.2–2.5 M chars → 500), and a 220 MB session `.jsonl` (413).
+The resolver's `pathFileProbe` accepts any literal path containing `/`, `fileArtifacts` reads every literal
+interpreter positional, and `readScriptFile` decoded each with `readFileSync(path, "utf8")` — which never
+fails on an ELF, only produces replacement characters.
+
+The fix is a content rule, not a bigger timeout: a body is text (no NUL, no `U+FFFD`) and at most 64 KiB
+(`MAX_SCRIPT_BODY_BYTES`). `readFileBody` distinguishes `body` / `not_code` / `absent`; a real file that is not
+a body resolves to `kind: "binary"` (so the decision log still shows the body was unavailable) while a missing
+path still resolves to nothing. `fileArtifacts` skips not-code operands, so `node report.mjs trace.cpuprofile`
+keeps only the `.mjs`. `readScriptFile` refuses an over-cap file before reading, so the 32-entry read cache
+cannot hold megabytes.
+
+The cooldown was changed in the same pass: `FailureCooldown` (`src/modules/decision/cooldown.ts`) opens after
+`CONSECUTIVE_FAILURES_BEFORE_COOLDOWN = 2` consecutive failed requests and any answered request resets the
+streak. A deterministic size rejection counts as an answer for this purpose (the endpoint is alive; the size
+memo stops the payload being sent again). The same breaker now backs the suggestion and reminder evaluators,
+which previously also paused on a single failure.
+
+No question, criterion, `ACTION_TABLE` row, or config key changed. New tests: `cooldown.test.ts`, the
+`not_code` / over-cap cases in `script.test.ts`, and the updated two-failure cooldown tests in the four
+evaluator suites.

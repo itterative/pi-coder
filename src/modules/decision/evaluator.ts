@@ -7,6 +7,7 @@ import type {
     Usage,
 } from "@earendil-works/pi-ai";
 
+import { FailureCooldown } from "./cooldown";
 import { resolveClassifier, type ClassifierRegistry } from "./model";
 import {
     FILE_ACCESS_STRATEGY,
@@ -121,16 +122,18 @@ export interface DecisionEvaluatorOptions {
  * subject; what differs is the state and the questions, which `file-access.ts` owns.
  *
  * Script bodies run in waves of {@link MAX_CONCURRENT_FORMS}, preserving their order; the command runs after
- * them because its state carries their summaries. One instance owns the cooldown and both caches, so a
- * failed request skips the model for `cooldownMs` instead of adding the timeout to every prompt, and an
- * unchanged body or command is not sent twice. `classify` is documented never to reject, but a thrown error
+ * them because its state carries their summaries. One instance owns the cooldown and both caches, so repeated
+ * failures skip the model for `cooldownMs` instead of adding the timeout to every prompt, and an unchanged
+ * body or command is not sent twice. The cooldown opens only after two consecutive failures
+ * (`CONSECUTIVE_FAILURES_BEFORE_COOLDOWN`), because one timeout — often one oversized body — must not pause
+ * every other prompt. `classify` is documented never to reject, but a thrown error
  * is caught and treated as a failure rather than escaping into the permission flow. A script without an
  * answer makes the whole verdict abstain before the command is even asked: an unread body is a body the
  * command would run unchecked, and the bodies that did answer stay cached for the retry.
  */
 export class DecisionEvaluator {
-    private cooldownUntil = 0;
     private readonly now: () => number;
+    private readonly cooldown: FailureCooldown;
 
     /**
      * Successful answers for both subjects, in one bounded map.
@@ -155,6 +158,7 @@ export class DecisionEvaluator {
 
     constructor(private readonly options: DecisionEvaluatorOptions) {
         this.now = options.now ?? Date.now;
+        this.cooldown = new FailureCooldown(this.now);
     }
 
     async evaluate(context: DecisionContext): Promise<DecisionVerdict> {
@@ -301,7 +305,7 @@ export class DecisionEvaluator {
             };
         }
 
-        if (this.now() < this.cooldownUntil) {
+        if (this.cooldown.active) {
             return {
                 subject,
                 source,
@@ -318,6 +322,8 @@ export class DecisionEvaluator {
         if (classified.result.stopReason !== "stop") {
             return this.formFailure(classified, cacheKey, request, subject, source);
         }
+
+        this.cooldown.answered();
 
         const answer: CachedAnswer = {
             answered: form.readAnswer(classified.result.answers),
@@ -478,10 +484,13 @@ export class DecisionEvaluator {
         source: string | undefined,
     ): FormOutcome {
         const { result, timedOut } = classified;
-        this.cooldownUntil = this.now() + (this.options.config.cooldownMs ?? DEFAULT_COOLDOWN_MS);
 
         if (!timedOut && isSizeRejection(result.errorMessage)) {
+            // The endpoint answered; the payload is the problem, and the memo keeps it from being sent again.
             this.rememberRejection(rejectionKey(cacheKey, request));
+            this.cooldown.answered();
+        } else {
+            this.cooldown.failed(this.options.config.cooldownMs ?? DEFAULT_COOLDOWN_MS);
         }
 
         return {

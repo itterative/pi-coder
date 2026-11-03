@@ -9,6 +9,7 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import { SUGGESTION_QUESTION_ID, type SuggestionState } from "./contract";
+import { FailureCooldown } from "./cooldown";
 import { resolveClassifier, type ClassifierRegistry } from "./model";
 import type { DecisionModelConfig } from "./types";
 
@@ -134,10 +135,11 @@ type Classifier = ClassifierModel<ClassifierApi>;
 export class SuggestionEvaluator {
     private readonly now: () => number;
     private readonly cache = new Map<string, SuggestionRole>();
-    private cooldownUntil = 0;
+    private readonly cooldown: FailureCooldown;
 
     constructor(private readonly options: SuggestionEvaluatorOptions) {
         this.now = options.now ?? Date.now;
+        this.cooldown = new FailureCooldown(this.now);
     }
 
     async evaluate(context: SuggestionContext): Promise<SuggestionConsult> {
@@ -157,7 +159,7 @@ export class SuggestionEvaluator {
             return { role: cached, status: "cached", latencyMs: 0 };
         }
 
-        if (this.now() < this.cooldownUntil) {
+        if (this.cooldown.active) {
             return { status: "cooldown", latencyMs: 0 };
         }
 
@@ -170,7 +172,7 @@ export class SuggestionEvaluator {
         const latencyMs = this.now() - started;
 
         if (result.stopReason !== "stop") {
-            this.cooldownUntil = this.now() + (config.cooldownMs ?? DEFAULT_COOLDOWN_MS);
+            this.cooldown.failed(config.cooldownMs ?? DEFAULT_COOLDOWN_MS);
             const status = classified.timedOut ? "timeout" : "error";
 
             return {
@@ -179,6 +181,8 @@ export class SuggestionEvaluator {
                 ...(result.usage === undefined ? {} : { usage: result.usage }),
             };
         }
+
+        this.cooldown.answered();
 
         const role = suggestionRoleFrom(result.answers);
         if (role === undefined) {

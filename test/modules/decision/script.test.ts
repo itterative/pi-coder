@@ -579,6 +579,59 @@ describe("file script runs", () => {
         expect(run?.artifacts[1]?.text.length).toBeGreaterThan(4096);
         expect(state.scripts).toEqual(["python3 run.py", content]);
     });
+
+    it("resolves a compiled path to the binary kind, not to a body", () => {
+        const binary = "\u007fELF\u0000\u0000\u0001\u0002";
+
+        expect(resolve("./build/tool --list", { files: { "/repo/build/tool": binary } })).toEqual({
+            kind: "binary",
+            artifacts: [],
+        });
+        expect(resolve("./build/tool", { files: { "/repo/build/tool": "a\uFFFDb" } })).toEqual({
+            kind: "binary",
+            artifacts: [],
+        });
+    });
+
+    it("skips a binary argument to an interpreter instead of naming it a script", () => {
+        expect(
+            resolve("python3 run.py", { files: { "/repo/run.py": "\u0000\u0001\u0002" } }),
+        ).toBeUndefined();
+        expect(
+            resolve("node run.mjs trace.bin", {
+                files: { "/repo/run.mjs": "main()", "/repo/trace.bin": "\u0000\u0001" },
+            }),
+        ).toEqual({
+            kind: "file",
+            artifacts: [{ source: "run.mjs", path: "/repo/run.mjs", text: "main()" }],
+        });
+    });
+
+    it("refuses a file over the body cap, by size and by text length", () => {
+        const oversized = "x".repeat(64 * 1024 + 1);
+
+        expect(
+            resolve("./build/data", {
+                files: { "/repo/build/data": oversized },
+                identities: {
+                    "/repo/build/data": { mtimeMs: 1, size: oversized.length },
+                },
+            }),
+        ).toEqual({ kind: "binary", artifacts: [] });
+
+        // A reader that reports no identity still enforces the cap on the text it returned.
+        expect(resolve("./build/data", { files: { "/repo/build/data": oversized } })).toEqual({
+            kind: "binary",
+            artifacts: [],
+        });
+
+        // A large data operand is skipped while the small script beside it survives.
+        expect(
+            resolve("node run.mjs data.json", {
+                files: { "/repo/run.mjs": "main()", "/repo/data.json": oversized },
+            }),
+        ).toMatchObject({ kind: "file", artifacts: [{ source: "run.mjs" }] });
+    });
 });
 
 describe("inline script runs", () => {
@@ -702,5 +755,11 @@ describe("script body read cache", () => {
         fs.utimesSync(file, new Date(2_000_000), new Date(2_000_000));
 
         expect(readScriptFile(file)).toBe("other");
+    });
+
+    it("refuses a file over the body cap before reading or caching it", () => {
+        const file = temporaryFile("x".repeat(64 * 1024 + 1));
+
+        expect(() => readScriptFile(file)).toThrow(/too large/);
     });
 });

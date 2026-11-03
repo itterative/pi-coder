@@ -14,6 +14,7 @@ import {
     type ReminderChoiceState,
     type ReminderPhaseState,
 } from "./contract";
+import { FailureCooldown } from "./cooldown";
 import { resolveClassifier, type ClassifierRegistry } from "./model";
 import type { SessionWindow } from "./session-context";
 import type { DecisionModelConfig, DecisionRecentMessage, ReminderQuestionForm } from "./types";
@@ -605,10 +606,11 @@ export class ReminderEvaluator {
     private readonly now: () => number;
     private readonly cache = new Map<string, CachedReminderAnswer>();
     private readonly stateCache = new Map<string, CachedStateAnswer>();
-    private cooldownUntil = 0;
+    private readonly cooldown: FailureCooldown;
 
     constructor(private readonly options: ReminderEvaluatorOptions) {
         this.now = options.now ?? Date.now;
+        this.cooldown = new FailureCooldown(this.now);
     }
 
     /**
@@ -635,7 +637,7 @@ export class ReminderEvaluator {
             return stateConsultFrom(cached, "cached", 0);
         }
 
-        if (this.now() < this.cooldownUntil) {
+        if (this.cooldown.active) {
             return { status: "cooldown", latencyMs: 0, state: {} };
         }
 
@@ -648,7 +650,7 @@ export class ReminderEvaluator {
         const latencyMs = this.now() - started;
 
         if (result.stopReason !== "stop") {
-            this.cooldownUntil = this.now() + (config.cooldownMs ?? DEFAULT_COOLDOWN_MS);
+            this.cooldown.failed(config.cooldownMs ?? DEFAULT_COOLDOWN_MS);
 
             return {
                 status: classified.timedOut ? "timeout" : "error",
@@ -657,6 +659,8 @@ export class ReminderEvaluator {
                 ...(result.usage === undefined ? {} : { usage: result.usage }),
             };
         }
+
+        this.cooldown.answered();
 
         const phase = result.answers[REMINDER_PHASE_QUESTION];
         const answer: CachedStateAnswer = {
@@ -691,7 +695,7 @@ export class ReminderEvaluator {
             return consultFrom(cached, "cached", 0);
         }
 
-        if (this.now() < this.cooldownUntil) {
+        if (this.cooldown.active) {
             return { status: "cooldown", latencyMs: 0 };
         }
 
@@ -701,11 +705,13 @@ export class ReminderEvaluator {
         const latencyMs = this.now() - started;
 
         if (result.stopReason !== "stop") {
-            this.cooldownUntil = this.now() + (config.cooldownMs ?? DEFAULT_COOLDOWN_MS);
+            this.cooldown.failed(config.cooldownMs ?? DEFAULT_COOLDOWN_MS);
             const status = classified.timedOut ? "timeout" : "error";
 
             return consultFrom({}, status, latencyMs, result.usage);
         }
+
+        this.cooldown.answered();
 
         const scores = reminderScoresFrom(result.answers, context.options);
         const decision = reminderDecisionFrom(

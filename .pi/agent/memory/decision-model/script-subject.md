@@ -14,11 +14,14 @@ folds with it is in [scope-suggestion.md](scope-suggestion.md).
 
 - `resolveScriptRun` walks indirection rather than the first line: a package script line is parsed with the
   same `parseBashAst` + wrapper unwrap as the top-level command, nested package invocations are chased
-  transitively (depth cap 5, visited-set cycle guard), and each local file an interpreter invokes is read.
-  Kinds: `package` and `file` carry bodies; `inline` (`-c`/`-e`/`--eval`, heredoc) carries the literal code as
-  a body too (`inline:<interpreter> <flag>` / `inline:heredoc`), while a dynamically assembled operand and
-  `binary` (npx family, `uv run`/`uvx`, interpreter `-m`) contribute none. Omissions (`cycle:`/`depth:`) are
-  recorded, never shortened silently.
+  transitively (depth cap 5, visited-set cycle guard), and each local file an interpreter invokes is read as
+  a **small text body** (≤ 64 KiB, no NUL byte and no UTF-8 replacement character). `readFileSync` decodes an
+  ELF rather than failing, so the reader checks the content: a real path that is a compiled binary or over the
+  cap resolves to `binary` (logged, nothing sent), while a missing/unreadable path resolves to nothing. Kinds:
+  `package` and `file` carry bodies; `inline` (`-c`/`-e`/`--eval`, heredoc) carries the literal code as a body
+  too (`inline:<interpreter> <flag>` / `inline:heredoc`), while a dynamically assembled operand and `binary`
+  (npx family, `uv run`/`uvx`, interpreter `-m`, a non-text or oversized path) contribute none. Omissions
+  (`cycle:`/`depth:`) are recorded, never shortened silently.
 - A script verdict is a **property of the code**, not the invocation: `scriptRequest(body)` sends `{code}`
   alone under one `script` choice with capability criteria, cached by `sha256(body)` — a rename or touch hits,
   any byte edit misses.
@@ -36,5 +39,7 @@ folds with it is in [scope-suggestion.md](scope-suggestion.md).
   any key (the request and recent were measured nearly inert; history moved 0 of 80).
 - Failure policy: an error, timeout, or rejected payload on any form abstains the whole verdict and reaches the
   prompt, never an allow — even with `apply: true` — and failures are never cached as verdicts (forms that
-  answered stay cached). One flaky body also starts the global cooldown, so a command with N bodies has N
-  chances to pause the model.
+  answered stay cached). Failures feed the shared `FailureCooldown` (`cooldown.ts`), which opens only after
+  two **consecutive** failed requests; a single timeout (one oversized body, a cold model) no longer pauses
+  every later consult, and any answered request resets the streak. A size rejection is an answer for this
+  purpose — the endpoint is alive, and the size memo keeps that payload from being sent again.

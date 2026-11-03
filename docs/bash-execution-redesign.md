@@ -525,16 +525,18 @@ caller that knows the child's declared rung (a read-only child's `inspect`) pass
 a custom definition is scope-checked at its real rung even though its name maps to the `agent` baseline. A body with
 no answer (error, timeout, size
 rejection, an unrecognized capability) abstains the whole verdict before the command is even asked: an unread
-script is one the command would run unchecked. Bodies are sent **whole** — no clipping and no budget guard —
-so a script too large for the endpoint fails its own request rather than being silently trimmed into a
-different script. Recognition (`src/modules/decision/script.ts`, reusing the sandbox's own `parseBashAst` and
-`unwrapWrapperCommand`, and the same `timeout` unwrapping the permission pipeline uses) covers the `npm
-run`-family package scripts, interpreter file runs, and any command that is itself a literal path to a
-readable file (`./scripts/deploy.sh`); `inline` forms (`-c`/`-e`/`--eval`, a heredoc feeding an interpreter)
-carry the literal code as a body too — a capability is a property of the code, not the invocation — while a
-dynamically assembled operand (`-c "$(cat file)"`) and `binary` forms (`npx`-family, `uv run`/`uvx`) add
-nothing, because the bytes are not known here or not in the repository. The decision log still records both
-kinds, so a body that was unavailable is visible.
+script is one the command would run unchecked. Bodies are sent **whole** — no clipping — so a body is judged
+as the file it is; a body must instead be a small text file (≤ 64 KiB, no NUL byte, valid UTF-8), and a
+compiled binary or an oversized file is never read into a body at all (`kind: "binary"`, logged with nothing
+sent). That is deliberate: an ELF decoded as UTF-8 is not code a classifier can judge, and the timeout it
+would earn also pauses the model for later prompts. Recognition (`src/modules/decision/script.ts`, reusing
+the sandbox's own `parseBashAst` and `unwrapWrapperCommand`, and the same `timeout` unwrapping the permission
+pipeline uses) covers the `npm run`-family package scripts, interpreter file runs, and any command that is
+itself a literal path to a readable file (`./scripts/deploy.sh`); `inline` forms (`-c`/`-e`/`--eval`, a
+heredoc feeding an interpreter) carry the literal code as a body too — a capability is a property of the
+code, not the invocation — while a dynamically assembled operand (`-c "$(cat file)"`) and `binary` forms
+(`npx`-family, `uv run`/`uvx`) add nothing, because the bytes are not known here or not in the repository.
+The decision log still records both kinds, so a body that was unavailable is visible.
 
 The resolver does not stop at the first line. A package script line is itself shell text, so the chase parses
 it with the same machinery and follows every package-script invocation it finds (`npm run`, `run-script`, the
@@ -667,8 +669,10 @@ notifies through `ctx.ui.notify`, so a silent allow/deny is still visible.
   id for the registered one; a built-in classifier can be named instead). When `model` is omitted, the first
   classifier of the configured provider is used, or the first available one overall when `provider` is also
   omitted.
-- `cooldownMs`: `classify` does not reject, but an answer with `stopReason !== "stop"` (error, aborted,
-  timeout) puts the model in cooldown so a down service does not add latency to every prompt.
+- `cooldownMs`: `classify` does not reject, but a request with `stopReason !== "stop"` (error, aborted,
+  timeout) counts toward a consecutive-failure streak; after two of them the model is put in cooldown so a
+  down service does not add latency to every prompt. One failure does not pause anything, and any answered
+  request resets the streak (`src/modules/decision/cooldown.ts`).
 - `surfaces`: `["parent"]`, `["child"]`, or both. Children cannot prompt in headless runs, so enabling
   the model for children is the highest-value case (it converts "uncovered without a prompt" into a
   decision) and the highest-risk, so it is opt-in. The child gate can only produce `allow`/`allow:sandbox`;

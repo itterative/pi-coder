@@ -220,7 +220,7 @@ export interface DecisionModelConfig {
     strategy?: DecisionStrategyId;
     /** Abort the classifier request after this long (default 5000 ms). */
     timeoutMs?: number;
-    /** After a failed request, skip the model for this long (default 30000 ms). */
+    /** After consecutive failed requests, skip the model for this long (default 30000 ms). */
     cooldownMs?: number;
     /** Minimum confidence for a `host` verdict to resolve a prompt (default 0.8). */
     minConfidence?: number;
@@ -258,8 +258,9 @@ export interface DecisionRecentMessage {
  * Which form of script run a command is.
  *
  * `package` and `file` have a body on disk; `inline` carries the literal code from the command itself; `binary`
- * runs code from outside the repository, where there is no body to read. All but `binary` can carry artifacts,
- * and the kind alone tells the log when no body was available.
+ * runs code the resolver cannot read — out-of-repository runners, a compiled executable, or a file too large to
+ * be a script body. All but `binary` can carry artifacts, and the kind alone tells the log when no body was
+ * available.
  */
 export type ScriptKind = "package" | "file" | "inline" | "binary";
 
@@ -279,9 +280,9 @@ export interface ScriptFileIdentity {
  * One body the resolver read for a command, with where it came from.
  *
  * `source` is provenance, not a semantic label: `package.json#deploy` for a package script line and the
- * repo-relative path for a file body. The text is captured whole — no clipping and no budget guard — because
- * a body too large for the endpoint is meant to fail the consult (which prompts) rather than be silently
- * trimmed into something the model would judge as a different script.
+ * repo-relative path for a file body. The text is captured whole — no clipping — because a body is one file of
+ * code and a shortened one would be judged as a different script. A file that is not a small text body (a
+ * compiled binary, or one over the resolver's cap) is never read into an artifact at all: the run is `binary`.
  */
 export interface ScriptArtifact {
     /**

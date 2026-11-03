@@ -512,7 +512,7 @@ describe("ReminderEvaluator", () => {
         expect(consult.decision).toBeUndefined();
     });
 
-    it("cools down after a failed request and recovers", async () => {
+    it("cools down after consecutive failed requests and recovers", async () => {
         const clock = { t: 0 };
         const { evaluator, classify } = harness({
             clock,
@@ -521,12 +521,14 @@ describe("ReminderEvaluator", () => {
             },
         });
 
+        // One timeout is not evidence the endpoint is down; the next consult asks again.
+        expect((await evaluator.evaluate(context)).status).toBe("error");
         expect((await evaluator.evaluate(context)).status).toBe("error");
         expect((await evaluator.evaluate(context)).status).toBe("cooldown");
 
         clock.t += 30_001;
         expect((await evaluator.evaluate(context)).status).toBe("error");
-        expect(classify).toHaveBeenCalledTimes(2);
+        expect(classify).toHaveBeenCalledTimes(3);
     });
 });
 

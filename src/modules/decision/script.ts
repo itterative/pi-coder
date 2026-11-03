@@ -17,14 +17,22 @@ import type { ScriptArtifact, ScriptFileIdentity, ScriptOmission, ScriptRun } fr
  *
  * - **package**: `npm run|run-script <name>`, `npm test`, `npm start`, and the same `run` form for pnpm,
  *   yarn, and bun. The body is the script string in the nearest `package.json`.
- * - **file**: a known interpreter followed by literal path arguments that exist and are readable, or a
- *   command that is itself a literal path to such a file (`node scripts/deploy.js`, `./scripts/deploy.sh`).
- *   The body is the whole file.
+ * - **file**: a known interpreter followed by literal path arguments that exist and read as a text body, or
+ *   a command that is itself a literal path to such a file (`node scripts/deploy.js`,
+ *   `./scripts/deploy.sh`). The body is the whole file.
  * - **inline**: an interpreter with `-c`/`-e`/`--eval`, or a heredoc feeding one. The literal code is a body
  *   like any other, so a capability verdict is a property of the code and not of the invocation; a dynamically
  *   built operand (`-c "$(cat file)"`) carries the kind only, because its bytes are not known here.
- * - **binary**: `npx`-family runners and `uv run`/`uvx`, whose code lives outside the repository. Kind only:
- *   the decision log then shows that the body was unavailable.
+ * - **binary**: `npx`-family runners and `uv run`/`uvx`, whose code lives outside the repository, and a
+ *   literal path that is a real file but not a small text one (a compiled executable, or a file over
+ *   {@link MAX_SCRIPT_BODY_BYTES}). Kind only: the decision log then shows that the body was unavailable.
+ *
+ * A body must be **text**, and small enough to be one file of code. `readFileSync` never fails on a compiled
+ * binary — it decodes the ELF into replacement characters — so the reader checks the content rather than the
+ * mode. Sending megabytes of mojibake to a classifier is not a capability verdict about code: it is a request
+ * the endpoint cannot answer, and the timeout it earns also pauses the model for every later prompt. A file
+ * that is not a small text body therefore resolves to `binary`, and the invocation is judged as an invocation.
+ * A missing or unreadable path still resolves to nothing, because there is no body to report either way.
  *
  * A package script line is shell text, so the chase parses it with the same `parseBashAst` and
  * `unwrapWrapperCommand` machinery as the top-level command — never by re-tokenizing the string — and follows
@@ -57,6 +65,16 @@ const READ_CACHE_LIMIT = 32;
  * and it never shortens a body that was resolved.
  */
 const MAX_SCRIPT_DEPTH = 5;
+
+/**
+ * The largest file that can be a script body.
+ *
+ * A body is one file of source code, and the endpoint's prefill batch is measured in thousands of tokens, so
+ * a larger file is either data the command reads (`node report.mjs trace.cpuprofile`) or a compiled binary
+ * decoded as text. Neither is a script this subject can judge, and sending one costs a timeout that also
+ * pauses the model for every later prompt. The cap is a rejection, not a clip: a body over it is not read.
+ */
+const MAX_SCRIPT_BODY_BYTES = 64 * 1024;
 
 const INTERPRETERS = new Set([
     "python",
@@ -421,12 +439,18 @@ function pathFileProbe(
         return undefined;
     }
 
-    const artifact = readFileArtifact(path.resolve(cwd, name), options);
-    if (artifact === undefined) {
+    const reading = readFileBody(path.resolve(cwd, name), options);
+    if (reading.kind === "absent") {
         return undefined;
     }
 
-    return { kind: "file", artifacts: [artifact] };
+    if (reading.kind === "not_code") {
+        // The path is a real file, but not one whose body this module can read. The kind still tells the
+        // decision log that the command runs something no request was made about.
+        return { kind: "binary" };
+    }
+
+    return { kind: "file", artifacts: [reading.artifact] };
 }
 
 /** Add the bodies a probe resolved, skipping bodies that were already collected from an earlier line. */
@@ -452,18 +476,58 @@ function collectArtifacts(
     }
 }
 
-/** Read a literal path as a file body, or nothing when it is missing, unreadable, or a directory. */
-function readFileArtifact(filePath: string, options: ScriptRunOptions): ScriptArtifact | undefined {
+/** What reading one candidate path found. */
+type FileBodyReading =
+    | { kind: "body"; artifact: ScriptArtifact }
+    /** The file exists, but it is not a body this subject can judge: a compiled binary or a file too large. */
+    | { kind: "not_code" }
+    /** The path could not be read at all: missing, a directory, or unreadable. */
+    | { kind: "absent" };
+
+/** Read a literal path as a file body, and say why when it is not one. */
+function readFileBody(filePath: string, options: ScriptRunOptions): FileBodyReading {
+    const identity = options.statFile?.(filePath);
+    if (identity !== undefined && identity.size > MAX_SCRIPT_BODY_BYTES) {
+        return { kind: "not_code" };
+    }
+
     let text: string;
     try {
         text = options.readFile(filePath);
     } catch {
         // The path is gone, unreadable, or a directory. Without a body there is no `file` run to report;
         // guessing here would label commands such as `tsx watch` or `php -r 'code'` as file runs.
-        return undefined;
+        return { kind: "absent" };
     }
 
-    return scriptArtifact(relativeSource(options.cwd, filePath), filePath, text, options.statFile);
+    // The length check is the same cap for a reader that reports no identity, and a second guard against a
+    // file that grew between the stat and the read.
+    if (text.length > MAX_SCRIPT_BODY_BYTES || !isTextBody(text)) {
+        return { kind: "not_code" };
+    }
+
+    return {
+        kind: "body",
+        artifact: scriptArtifact(
+            relativeSource(options.cwd, filePath),
+            filePath,
+            text,
+            options.statFile,
+        ),
+    };
+}
+
+/**
+ * Whether a body reads as text at all.
+ *
+ * A NUL byte is the marker a compiled binary cannot avoid, and a replacement character is what the UTF-8
+ * decoder emits for bytes that are not valid UTF-8 — which is what an ELF becomes under
+ * `readFileSync(…, "utf8")`. A source file is valid UTF-8 and contains no NUL, so either signal means this is
+ * not code this module can judge. Erring toward `binary` costs one unjudged body; erring the other way costs
+ * a timeout that pauses every later consult.
+ */
+function isTextBody(text: string): boolean {
+    return !text.includes("\u0000") && !text.includes("\uFFFD");
 }
 
 /** The positional arguments that could be a script path, skipping a leading flag or a `deno run` subcommand. */
@@ -497,13 +561,14 @@ function fileArtifacts(
             continue;
         }
 
-        const artifact = readFileArtifact(filePath, options);
-        if (artifact === undefined) {
+        const reading = readFileBody(filePath, options);
+        if (reading.kind !== "body") {
+            // A data operand (`node report.mjs trace.cpuprofile`) or a compiled one is not a body of code.
             continue;
         }
 
         seen.add(filePath);
-        artifacts.push(artifact);
+        artifacts.push(reading.artifact);
     }
 
     return artifacts;
@@ -679,6 +744,12 @@ const bodyCache = new Map<string, string>();
  */
 export function readScriptFile(absolutePath: string): string {
     const identity = scriptFileIdentity(absolutePath);
+    if (identity !== undefined && identity.size > MAX_SCRIPT_BODY_BYTES) {
+        // Refuse before reading: a file over the cap is not a script body, and the cache is a bounded map of
+        // whole bodies, so reading it would keep megabytes alive for a request that can never be sent.
+        throw new Error(`script body too large (${identity.size} bytes): ${absolutePath}`);
+    }
+
     const key =
         identity === undefined
             ? absolutePath

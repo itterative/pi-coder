@@ -181,7 +181,7 @@ describe("suggestion evaluator", () => {
         expect(classify).toHaveBeenCalledTimes(2);
     });
 
-    it("cools down after a failure and calls again once it expires", async () => {
+    it("cools down after consecutive failures and calls again once it expires", async () => {
         let failing = true;
         const { evaluator, classify, clock } = harness({
             behavior: async (model) =>
@@ -190,9 +190,11 @@ describe("suggestion evaluator", () => {
                     : suggestionResult(model, 0.2),
         });
 
+        // One failure is not enough to pause the question; the next consult asks again.
+        await expect(evaluator.evaluate(segment)).resolves.toMatchObject({ status: "error" });
         await expect(evaluator.evaluate(segment)).resolves.toMatchObject({ status: "error" });
         await expect(evaluator.evaluate(segment)).resolves.toMatchObject({ status: "cooldown" });
-        expect(classify).toHaveBeenCalledTimes(1);
+        expect(classify).toHaveBeenCalledTimes(2);
 
         failing = false;
         clock.t = 60_000;
@@ -200,7 +202,7 @@ describe("suggestion evaluator", () => {
             role: "data",
             status: "answered",
         });
-        expect(classify).toHaveBeenCalledTimes(2);
+        expect(classify).toHaveBeenCalledTimes(3);
     });
 
     it("reports a timeout from the abort signal", async () => {

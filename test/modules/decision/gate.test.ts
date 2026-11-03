@@ -337,28 +337,30 @@ describe("consultDecisionModel", () => {
             command: "second",
             sandboxAvailable: true,
         });
-        expect(second).toMatchObject({ reason: "model cooling down" });
-        expect(classify).toHaveBeenCalledTimes(1);
+        // One failure is not evidence the endpoint is down, so the second consult still asks.
+        expect(second.status).toBe("error");
+        expect(classify).toHaveBeenCalledTimes(2);
+
+        // Two consecutive failures open the breaker on the third consult.
+        const cooled = await consultDecisionModel({
+            ctx,
+            config: modelConfig({ cooldownMs: 60_000 }),
+            command: "third",
+            sandboxAvailable: true,
+        });
+        expect(cooled).toMatchObject({ reason: "model cooling down" });
+        expect(classify).toHaveBeenCalledTimes(2);
 
         // A changed setting is a different evaluator, so the cooldown does not carry over.
         await consultDecisionModel({
             ctx,
             config: modelConfig({ cooldownMs: 10_000 }),
-            command: "third",
-            sandboxAvailable: true,
-        });
-        expect(classify).toHaveBeenCalledTimes(2);
-
-        // Sandbox availability is part of the same key.
-        await consultDecisionModel({
-            ctx,
-            config: modelConfig({ cooldownMs: 10_000 }),
             command: "fourth",
-            sandboxAvailable: false,
+            sandboxAvailable: true,
         });
         expect(classify).toHaveBeenCalledTimes(3);
 
-        resetDecisionEvaluator();
+        // Sandbox availability is part of the same key.
         await consultDecisionModel({
             ctx,
             config: modelConfig({ cooldownMs: 10_000 }),
@@ -366,6 +368,15 @@ describe("consultDecisionModel", () => {
             sandboxAvailable: false,
         });
         expect(classify).toHaveBeenCalledTimes(4);
+
+        resetDecisionEvaluator();
+        await consultDecisionModel({
+            ctx,
+            config: modelConfig({ cooldownMs: 10_000 }),
+            command: "sixth",
+            sandboxAvailable: false,
+        });
+        expect(classify).toHaveBeenCalledTimes(5);
     });
 
     it("drops cached verdicts on reset", async () => {

@@ -42,6 +42,14 @@ shape or the sandbox changed. Full probe numbers and the rejected arms are in
 - **Known inconsistency, unmeasured fix**: under the scout's rules `npx tsc --noEmit` reads as `remote_code`
   while `npx vitest run` does not, because the read-only template has no positive "run the project's own
   commands" line.
+- **A body is a small text file, not any readable path.** Sending a compiled binary decoded as UTF-8 (2.4 M
+  chars of ELF → 5 s timeout) or a 17 M-char tool binary to the endpoint is not a capability verdict about
+  code; the timeout it earns plus a single-failure cooldown then disables the model for every later prompt.
+  A path that is not small text is `kind: "binary"` (logged, nothing sent), and the invocation is judged as
+  an invocation. See `history.md`, "Non-text bodies and the cooldown streak".
+- **One failed request must not open the cooldown.** The breaker counts consecutive failures
+  (`CONSECUTIVE_FAILURES_BEFORE_COOLDOWN = 2`) and an answered request resets it, so one slow request or one
+  oversized payload cannot pause unrelated prompts for `cooldownMs`.
 
 ## Next
 

@@ -27,13 +27,14 @@ unusable answer.
 | `session-context.ts` | the session half: `request` + up to 4 recent items |
 | `workspace.ts` | `workspaceStatusFor` / `parseGitStatus` (`MAX_WORKSPACE_CHANGES = 10`) |
 | `state.ts` | `buildState` for both shapes |
-| `evaluator.ts` | one request per form via the configured strategy; verdict carries `strategy` + `criterion`; caches + cooldown |
+| `evaluator.ts` | one request per form via the configured strategy; verdict carries `strategy` + `criterion`; caches + the circuit breaker |
+| `cooldown.ts` | `FailureCooldown`: the shared consecutive-failure breaker every surface uses (`CONSECUTIVE_FAILURES_BEFORE_COOLDOWN = 2`) |
 | `scope.ts` | the deterministic capability × runner-rung gate |
 | `script.ts` / `script-classification.ts` | body resolution and the capability verdict |
 | `strategies/` | `types.ts`, `veto.ts` (default), `history.ts`, `classification.ts` (criteria + table), `index.ts` |
 | `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify, under the shared check count), the suggestion bridge (`suggestRuleForPrompt`, `consultSuggestionForPrompt`), and the runner-facing block sentences (`attributedBashBlockReason`, `readOnlyGateSentence`, `permissionAllowsCall`) |
-| `decision/suggestion.ts` | the suggestion subject: the `executes_code` bool, `buildSuggestionState`, `suggestionRoleFrom` (probability ≥ 0.5 → code), and the separate `SuggestionEvaluator` with its own cache/cooldown |
-| `decision/reminder.ts` | the reminder subject: `reminderChoiceRequest` / `reminderDecisionFrom` over one question per caller-supplied id (score or bool form), its state the one conversation the consult sent, and the separate `ReminderEvaluator` with a cache keyed on that state and its own cooldown |
+| `decision/suggestion.ts` | the suggestion subject: the `executes_code` bool, `buildSuggestionState`, `suggestionRoleFrom` (probability ≥ 0.5 → code), and the separate `SuggestionEvaluator` with its own cache and breaker |
+| `decision/reminder.ts` | the reminder subject: `reminderChoiceRequest` / `reminderDecisionFrom` over one question per caller-supplied id (score or bool form), its state the one conversation the consult sent, and the separate `ReminderEvaluator` with a cache keyed on that state and its own breaker |
 | `tools/bash/index.ts` | parent hook: consult on `ask`, record, prompt unless `apply` resolves it |
 | `tools/agent/child/command-permissions.ts` | child hook: consult with the child's own session, runner/isolation, and the parent's registry |
 | `tools/agent/child/safe-bash.ts` | read-only assessment; the relaxed (generic-spec) re-check `isRelaxedConfinementSafe` |

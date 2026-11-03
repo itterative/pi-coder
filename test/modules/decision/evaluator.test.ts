@@ -255,7 +255,7 @@ describe("decision evaluator", () => {
         expect(verdict.strategy).toBe("history");
     });
 
-    it("abstains and cools down after an error result", async () => {
+    it("abstains and cools down after consecutive errors", async () => {
         const clock = { t: 0 };
         const { evaluator, classify } = harness({
             clock,
@@ -271,13 +271,19 @@ describe("decision evaluator", () => {
         expect(first).toMatchObject({ outcome: "abstain", status: "error" });
         expect(first.reason).toContain("boom");
 
-        const second = await evaluator.evaluate(request);
-        expect(second.reason).toBe("model cooling down");
-        expect(classify).toHaveBeenCalledTimes(1);
+        // One failure is not evidence the endpoint is down, so the next consult tries again.
+        const retried = await evaluator.evaluate(request);
+        expect(retried).toMatchObject({ outcome: "abstain", status: "error" });
+        expect(classify).toHaveBeenCalledTimes(2);
+
+        // Two consecutive failures open the breaker.
+        const cooled = await evaluator.evaluate(request);
+        expect(cooled.reason).toBe("model cooling down");
+        expect(classify).toHaveBeenCalledTimes(2);
 
         clock.t = 1000;
         await evaluator.evaluate(request);
-        expect(classify).toHaveBeenCalledTimes(2);
+        expect(classify).toHaveBeenCalledTimes(3);
     });
 
     it("abstains with timeout status when the request exceeds timeoutMs", async () => {

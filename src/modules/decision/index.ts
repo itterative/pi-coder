@@ -3,6 +3,7 @@ export {
     MAX_CONCURRENT_FORMS,
     type DecisionEvaluatorOptions,
 } from "./evaluator";
+export { CONSECUTIVE_FAILURES_BEFORE_COOLDOWN, FailureCooldown } from "./cooldown";
 export {
     default as decisionConfig,
     defaultGlobalConfigPath,
