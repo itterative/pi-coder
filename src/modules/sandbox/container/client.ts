@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PI_CODER_EXTENSION_DIR } from "../../../common/constants";
 import { buildPodmanArgs, containerNameFor, type ContainerMount } from "./args";
 import { gitConfigFile, type GitIdentity } from "./git-identity";
+import { ensureHomeMountPoints } from "./home-mountpoints";
 import { NdjsonDecoder } from "./ndjson";
 import {
     CONTAINER_ERROR_CODES,
@@ -177,7 +178,12 @@ export class ContainerSession {
         // mount target is the real home path, so `~` means the same thing inside and outside. It is shared
         // across sessions on purpose: caches then survive a session instead of being thrown away with it.
         const home = options.homeDir;
+        const homeTarget = os.homedir();
         await fs.promises.mkdir(home, { recursive: true });
+
+        // Before podman runs: a missing mountpoint under the home is created by podman as container-root, which
+        // leaves directories the session cannot write into and the host user cannot remove. See the module.
+        await ensureHomeMountPoints({ home, homeTarget, mounts: options.mounts ?? [] });
         await seedGitConfig(home, options.gitIdentity);
 
         const args = buildPodmanArgs({
@@ -186,7 +192,7 @@ export class ContainerSession {
             sessionId: options.sessionId,
             cwd: options.cwd,
             dispatcherPath: resolveDispatcherPath(options.dispatcherPath),
-            home: { source: home, target: os.homedir() },
+            home: { source: home, target: homeTarget },
             mounts: options.mounts ?? [],
             nodePath: options.nodePath,
             shell: options.shell,

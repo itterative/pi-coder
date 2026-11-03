@@ -251,6 +251,22 @@ describe("container session", () => {
         await expect(running).rejects.toMatchObject({ kind: "container-exited" });
     });
 
+    it("pre-creates the home mountpoints podman would otherwise create as container-root", async () => {
+        const home = homeDir();
+        const target = path.join(os.homedir(), "Repos", "pi-coder");
+
+        await startSession({
+            homeDir: home,
+            mounts: [{ source: target, target, mode: "rw" }],
+        });
+
+        const scaffold = path.join(home, "Repos", "pi-coder");
+        const stat = fs.statSync(scaffold);
+
+        expect(stat.isDirectory()).toBe(true);
+        expect(stat.mode & 0o200).toBe(0o200);
+    });
+
     it("reports a launcher that cannot start anything", async () => {
         await expect(
             ContainerSession.start({

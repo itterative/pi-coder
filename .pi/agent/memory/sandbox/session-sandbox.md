@@ -61,6 +61,17 @@ request-id multiplexing, not a framed `sh` loop — per-command `sh -c` removes 
   `<state>/container/home` at the *real* home path and exports `HOME`, so `~` resolves the same
   inside and outside. `dispatch.mjs` layers per-request
   env over the container's own, so the value survives into every command.
+  **Podman creates a missing mountpoint as container-root, and that is a bug, not a scaffold.** Every mount
+  inside the home (the checkout at `~/Repos/…`, `~/.pi/agent/memory`, `~/.config/gh`, …) must exist before
+  `podman run`: podman creates the missing destination inside the home *bind source*, as container-root — on
+  the host a subuid (`589824` on one machine), mode `1755` (sticky, podman's shared-parent mode). The session
+  then cannot write below `~/.config`, `~/.pi`, `~/Repos`, `~/.local` (verified: `touch ~/.config/x` →
+  `EACCES`), and the host user cannot delete the state root without `sudo` (removing a child needs write on the
+  subuid-owned parent). `container/home-mountpoints.ts` pre-creates every home-relative target as the host user
+  at `0755` (ancestors included; parents only for a file source; a target another mount covers is skipped), so
+  podman finds them and creates nothing. A home written by an older version keeps its root-owned scaffold; it
+  must be removed once with `sudo rm -rf <state>/container/home` (it holds only the scaffold, the npm cache, and
+  the seeded `.gitconfig`).
 - **The sessions directory is mounted read-only, for every role.** `getUserSessionsDirectory()` mirrors pi's
   own resolver (`<agent dir>/sessions`, i.e. `~/.pi/agent/sessions`), passed through
   `runtimeRootsFor(role, { ..., sessionsDir })` as `extraReadOnlyRoots` — the one root a *write* role also gets
@@ -160,8 +171,9 @@ argv), `protocol.ts`, `config.ts` (env switch + host guards), `index.ts` (wiring
   `/tmp` tmpfs, and `~/.pi/agent/memory` ro (a write is refused with `Read-only file system`). The scratchpad
   moved out of `/tmp` because a tmpfs `/tmp` is wiped by a host or dev-environment restart while the transcript-backed
   `TODO.md` comes back, which silently lost every other scratchpad file; pi-coder now prunes the store by age and size itself.
-  `~/.ssh`, `~/.gitconfig`, `/run/user/<uid>` are absent. `/home/sd/.pi` existing is *not* a leak: podman
-  creates the parent directories of a bind-mounted path, so it is an empty scaffold.
+  `~/.ssh`, `~/.gitconfig`, `/run/user/<uid>` are absent. `/home/sd/.pi` existing is *not* a leak: podman creates
+  the parent directories of a bind-mounted path, so it is an empty scaffold — but until `home-mountpoints.ts`
+  pre-created them they were owned by a subuid, which is the permission bug described under `$HOME` above.
 - **`$HOME` is a host directory mounted at the real home path** (`<state>/container/home` →
   `/home/<user>`, `--env HOME=…`), because with keep-id the image's `/root` is not writable and the first
   `npm` cache or `git config --global` write would fail. Mounting it at the *real* path matters: an earlier
