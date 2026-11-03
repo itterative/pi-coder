@@ -4,13 +4,25 @@ import { fileURLToPath } from "node:url";
 
 import { getAgentDir, getPackageDir } from "@earendil-works/pi-coding-agent";
 
+import { resolveStateDirectory } from "./state-dir";
+
 /** Root of this installed pi-coder extension, for both source and compiled layouts. */
 export const PI_CODER_EXTENSION_DIR = path.resolve(
     fileURLToPath(new URL("../..", import.meta.url)),
 );
 
-/** Extension-local, gitignored runtime state. */
-export const PI_CODER_STATE_DIR = path.join(PI_CODER_EXTENSION_DIR, ".state");
+/**
+ * pi-coder's durable runtime state: delegated agent transcripts, isolated worktrees, the decision log and
+ * compaction trace, container state, and profiles.
+ *
+ * Under pi's agent directory, deliberately **not** inside {@link PI_CODER_EXTENSION_DIR}. A git-installed
+ * extension is updated with `git reset --hard` followed by `git clean -fdx`, and `-x` deletes ignored files
+ * too, so anything this package writes inside its own checkout is destroyed by the next update. The agent
+ * directory is pi's durable location for the same kind of data (`sessions/`, `memory/`, `scratchpad/`) and
+ * follows `PI_CODING_AGENT_DIR`. A non-blank `PI_CODER_STATE_DIR` relocates it, e.g. to keep a development
+ * checkout's state apart from the installed extension's; a relative value resolves against the process cwd.
+ */
+export const PI_CODER_STATE_DIR = resolveStateDirectory(process.env, getAgentDir());
 export const PI_CODER_AGENT_SESSIONS_DIR = path.join(PI_CODER_STATE_DIR, "agent-sessions");
 export const PI_CODER_WORKSPACES_DIR = path.join(PI_CODER_STATE_DIR, "workspaces");
 
@@ -22,16 +34,15 @@ export const SANDBOX_CONFIG_PATH_GLOBAL = path.join(
 export const SANDBOX_CONFIG_PATH = process.env.SANDBOX_CONFIG_PATH;
 
 /**
- * Development bash permission decision log. Extension-local runtime state like the
- * other `.state/` files; relocate with `SANDBOX_DECISION_LOG_PATH` and disable with
- * `SANDBOX_DECISION_LOG=0`.
+ * Development bash permission decision log. pi-coder runtime state like the other state files; relocate
+ * with `SANDBOX_DECISION_LOG_PATH` and disable with `SANDBOX_DECISION_LOG=0`.
  */
 export const BASH_DECISION_LOG_PATH = path.join(PI_CODER_STATE_DIR, "bash-log.jsonl");
 
 /**
  * Development trace of what each compaction actually sent and got back: one JSONL record per stage, so the
- * raw model response and the composed summary can be read side by side. Extension-local runtime state like
- * the bash decision log; relocate with `COMPACTION_TRACE_PATH` and disable with `COMPACTION_TRACE=0`.
+ * raw model response and the composed summary can be read side by side. pi-coder runtime state like the
+ * bash decision log; relocate with `COMPACTION_TRACE_PATH` and disable with `COMPACTION_TRACE=0`.
  */
 export const COMPACTION_TRACE_PATH = path.join(PI_CODER_STATE_DIR, "compaction-trace.jsonl");
 

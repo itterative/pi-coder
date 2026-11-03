@@ -79,12 +79,12 @@ export interface SandboxConfigAudit {
 /**
  * Development diagnostics: an append-only JSONL log of every bash permission
  * decision (see `src/modules/sandbox/decision-log.ts`). Enabled by default; the
- * log is extension-local runtime state under `.state/`, and can be disabled here,
+ * log is pi-coder runtime state under its state root, and can be disabled here,
  * through `SANDBOX_DECISION_LOG`, or relocated with `SANDBOX_DECISION_LOG_PATH`.
  */
 export interface SandboxConfigDecisionLog {
     enabled?: boolean; // default: true
-    path?: string; // default: .state/bash-log.jsonl next to this extension
+    path?: string; // default: <agent-dir>/pi-coder/bash-log.jsonl
     maxBytes?: number; // rotate once the live file passes this size (default: 8 MiB)
     generations?: number; // rotated copies kept, live file excluded: `.1` ... `.N` (default: 10)
 }

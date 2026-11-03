@@ -11,7 +11,7 @@ Detail companion to the `compaction` memory.
 
 ## The file
 
-`trace.ts` appends one JSONL record per stage to `<pi-coder-install>/.state/compaction-trace.jsonl` (`0600`, dir `0700`,
+`trace.ts` appends one JSONL record per stage to `<agent-dir>/pi-coder/compaction-trace.jsonl` (`0600`, dir `0700`,
 rotated at `traceMaxBytes`, keeping `traceGenerations` numbered generations), all records of one compaction sharing an
 `id`. Order for a successful two-stage run: `prefix`, `attempt(native)`, `model_response(native)`, `attempt(serialized)`,
 `model_response(serialized)`, `final_summary`, `outcome`.
@@ -27,7 +27,7 @@ Every trace record and every persisted chain row carries `instance` — a random
 chains, config, and handlers were never the same; without the field, joining a live answer to a recorded one is
 guesswork. The report names the newest load and how many older ones contributed.
 
-`.state/` contains private runtime state and is not source code — and is **never a test input** (see `fixtures.md`).
+The state root contains private runtime state and is not source code — and is **never a test input** (see `fixtures.md`).
 
 ## The records
 

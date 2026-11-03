@@ -1,12 +1,13 @@
 ---
 name: state-isolation
-description: test/setup.ts pins the best-effort global logs off; suites use temporary state/workspaces dirs and never mutate .state/ or home state.
+description: test/setup.ts pins the best-effort global logs off; suites use temporary state/workspaces dirs and never mutate the pi-coder state root or home state.
 category: workflow
 ---
 
 # Keeping suite state out of the developer's machine
 
-**State stays out of the repo:** explicit temporary state/workspaces directories, and never mutate `.state/`.
+**State stays out of the repo:** explicit temporary state/workspaces directories, and never mutate pi-coder's real
+state root (`<agent-dir>/pi-coder`, `PI_CODER_STATE_DIR` overrides it).
 
 ## Never write the developer's home state from a suite
 
@@ -25,8 +26,9 @@ category: workflow
 
 - Database-backed agent tests must use an explicit temporary state/workspaces directory.
 - Integration tests that only exercise agent action presentation should **mock catalog access** rather than
-  allowing the default `.state/meta.sqlite` path.
-- The project-local `.state/` directory is runtime state and must not be mutated by the test suite.
+  allowing the default `<agent-dir>/pi-coder/meta.sqlite` path.
+- The pi-coder state root is runtime state and must not be mutated by the test suite; the legacy in-checkout
+  `.state/` directory, when it still exists, is equally off limits.
 
 Related: the e2e scaffolding that provides those directories (`createE2EPaths`, `withE2EMetadataDatabase`) is
 in `../test-doubles/tui-e2e.md`; reading a recorded log from a fixture is

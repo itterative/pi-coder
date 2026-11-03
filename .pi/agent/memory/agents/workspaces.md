@@ -9,7 +9,7 @@ keep_updated: true
 
 ## Pool and setup
 
-- Isolated workers use a persistent user-managed pool of up to three Git worktrees under project-local `.state/workspaces/`. Selection is stable and requires a compatible ready workspace that is not leased; capacity is reported instead of silently creating a fourth. `listAgentWorkspaces(cwd, options)` names its optional workspace-directory and missing-worktree inclusion controls.
+- Isolated workers use a persistent user-managed pool of up to three Git worktrees under `<agent-dir>/pi-coder/workspaces/` (`PI_CODER_WORKSPACES_DIR`, the state root outside both the project and the extension checkout). Selection is stable and requires a compatible ready workspace that is not leased; capacity is reported instead of silently creating a fourth. `listAgentWorkspaces(cwd, options)` names its optional workspace-directory and missing-worktree inclusion controls.
 - Leases transfer from setup provisioning to the task run and do not expire automatically. A safely checkpointed inactive physical slot may be recycled for another logical worker while its older result remains durable; active and uncheckpointed leases remain excluded from automatic reuse.
 - If no ready workspace exists, an internal setup worker prepares the new worktree with permission-gated, non-interactive Bash (default timeout ten minutes). Setup is visible in Current/browser activity but is not a normal collectable run or mailbox result.
 
@@ -54,6 +54,6 @@ hazards for any parent that lands isolated results, so verify rather than trust 
   claims, and check `git diff --name-status <base>..HEAD` is scoped to the expected paths. If the recorded base is
   wrong, land with `git cherry-pick -n <workerHead>` after that verification and then `discard` the prepared
   result — applying it would drag unrelated history into the checkout.
-- **The live workspace store is `.state/meta.sqlite`.** `.state/workspaces/meta.sqlite` is a dead leftover whose
+- **The live workspace store is `<state>/meta.sqlite`.** `<state>/workspaces/meta.sqlite` is a dead leftover whose
   `workspaces` table reads empty, which is easy to mistake for "no workspaces exist" while diagnosing pool
-  behavior.
+  behavior. (Both paths were `<checkout>/.state/...` before the 2026-11 relocation.)

@@ -26,9 +26,9 @@ full argument, the decision table, and the measured numbers. Runnable probes liv
   container: the extension only *gates* pi's built-ins (`src/tools/read/index.ts` is a hook), and
   reimplementing their semantics risks the core loop. It also breaks the per-child capability split:
   a container is one world per `exec`, so children would see the union of all mounted roots.
-- **Per session, not per cwd.** Worker worktrees live inside the repo at `.state/workspaces/<slug>`,
-  so one repo-root mount covers parent and all workers; separate terminal sessions sharing one
-  container would share `/tmp`, ports, and the process table.
+- **Per session, not per cwd.** Worker worktrees live under the state root (`<agent-dir>/pi-coder/workspaces/<slug>`,
+  outside both the repo and the extension checkout), so a worker's container mounts that worktree as its own
+  workspace; separate terminal sessions sharing one container would share `/tmp`, ports, and the process table.
 
 ## Measured (2026-10-28, rootless podman 5.8.7, SELinux Enforcing, `node:22-bookworm-slim`)
 
@@ -58,7 +58,7 @@ request-id multiplexing, not a framed `sh` loop — per-command `sh -c` removes 
   a plain `--user <uid>` is *not* equivalent (subuid mapping, unwritable mounts).
 - **Keep-id needs a mounted `$HOME`.** The image's `/root` is unwritable for the container user, and the
   first `npm` cache or `git config --global` write fails, so the session mounts the shared
-  `.state/container/home` at the *real* home path and exports `HOME`, so `~` resolves the same
+  `<state>/container/home` at the *real* home path and exports `HOME`, so `~` resolves the same
   inside and outside. `dispatch.mjs` layers per-request
   env over the container's own, so the value survives into every command.
 - **The sessions directory is mounted read-only, for every role.** `getUserSessionsDirectory()` mirrors pi's
@@ -162,7 +162,7 @@ argv), `protocol.ts`, `config.ts` (env switch + host guards), `index.ts` (wiring
   `TODO.md` comes back, which silently lost every other scratchpad file; pi-coder now prunes the store by age and size itself.
   `~/.ssh`, `~/.gitconfig`, `/run/user/<uid>` are absent. `/home/sd/.pi` existing is *not* a leak: podman
   creates the parent directories of a bind-mounted path, so it is an empty scaffold.
-- **`$HOME` is a host directory mounted at the real home path** (`.state/container/home` →
+- **`$HOME` is a host directory mounted at the real home path** (`<state>/container/home` →
   `/home/<user>`, `--env HOME=…`), because with keep-id the image's `/root` is not writable and the first
   `npm` cache or `git config --global` write would fail. Mounting it at the *real* path matters: an earlier
   `/home/pi` target made `~` expand differently inside than outside (a footer rendered
@@ -188,7 +188,7 @@ argv), `protocol.ts`, `config.ts` (env switch + host guards), `index.ts` (wiring
   sandbox too: the full suite passes there (163 files, 3171 tests, nothing skipped). pi-coder itself never
   wraps commands in bwrap when the container backend is the sandbox.
 - **The verdict decides permission; the backend decides location.** `decision: allow`, `sandboxed: false`
-  in `.state/bash-log.jsonl` does NOT mean the command ran on the host in a container session: the parent's bash
+  in `<state>/bash-log.jsonl` does NOT mean the command ran on the host in a container session: the parent's bash
   tool *is* the container-backed tool (`container/bash-tool.ts`), so a model `host` action or a remembered
   rule runs in the container with no extra wrapper. Verified: a parent row recorded `allow`/`sandboxed=False`/
   `model=host` whose output was Debian with `pid1=podman-init`. `test/modules/sandbox/container/bash-tool.test.ts`
@@ -222,7 +222,7 @@ argv), `protocol.ts`, `config.ts` (env switch + host guards), `index.ts` (wiring
 - **The container's `$HOME` is one shared directory at the real home path**, with `.gitconfig` seeded from the
   host identity (rewritten only when the identity differs). It was per session until 2026-11-02, which meant
   every session threw its caches away and left a directory nothing removed — 25 of them in `.state/container`
-  on one machine. Sharing makes `~/.npm`, `~/.cache`, `~/.local` and anything else an agent writes persist,
+  on one machine (the path was in the extension checkout before the 2026-11 state-root relocation). Sharing makes `~/.npm`, `~/.cache`, `~/.local` and anything else an agent writes persist,
   and makes the home *not* a boundary between sessions: a scout running alongside another session can read
   what that session wrote there. That is acceptable because it is the same user and the same checkout, but it
   is the reason the real host home is still never mounted. `sandbox.mounts`
@@ -253,13 +253,13 @@ argv), `protocol.ts`, `config.ts` (env switch + host guards), `index.ts` (wiring
   reload after narrowing the global config mounts `~/.pi/agent/memory` rw only (no `~/.pi`, no sessions), and
   `/etc` is the image's own Debian again.
 - **Verified live (2026-10-28): the container's `$HOME` is the session home, not the host home.**
-  `stat /home/sd` and `stat .state/container/<id>/home` report the same inode; `touch ~/.bashrc` and
+  `stat /home/sd` and `stat <state>/container/<id>/home` report the same inode; `touch ~/.bashrc` and
   `touch ~/.config/x` answer `Read-only file system` (they are `sandbox.mounts` binds);
   `touch ~/.probe` in `$HOME` succeeds, because that directory is disposable. `sandbox.mounts` is honoured by
   the container, so a global `~/.pi: readwrite` mount really is writable inside — including
   `~/.pi/agent/sessions` and the settings that decide whether the sandbox is on, which the posture warns about.
-  The check was made while the home was per session; since 2026-11-02 the same path is `.state/container/home`,
-  shared, and the rest of the observation is unchanged.
+  The check was made while the home was per session; since 2026-11-02 the same path is `<state>/container/home`
+  (then `<checkout>/.state/container/home`), shared, and the rest of the observation is unchanged.
 - **A child below the `command` rung is `readonly`** (`src/tools/agent/child/sandbox-role.ts`): checkout,
   worktree git data, and the memory dir mount read-only, and the runtime gets no network. `command` and
   `mutate` stay `write`, because a reviewer's test suite writes `coverage/` and `node_modules/.cache`.
@@ -299,7 +299,7 @@ argv), `protocol.ts`, `config.ts` (env switch + host guards), `index.ts` (wiring
   **Do not diagnose this with `ps` alone.** Two scout probes looked like proof (host `pid 1`, Fedora,
   readable `~/.ssh`, no bwrap) and were not: the decision log showed every command was `action: host` from
   the decision model (confidence 0.71–0.87, `criterion: none`) and therefore `decision: allow`,
-  `sandboxed: false` by design. A sandbox claim needs `.state/bash-log.jsonl` (900+ parent rows and 240 child
+  `sandboxed: false` by design. A sandbox claim needs `<state>/bash-log.jsonl` (900+ parent rows and 240 child
   rows there, including wrapped child runs), not a process listing. Same log shows the model downgrading
   `python3 -c` that reads `/proc` and `~/.ssh` to host — a classifier-threshold question, not a gate bug.
 - **File tools run in the container too** (`container/file-operations.ts`, `container/file-tools.ts`,

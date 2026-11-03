@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
     PI_CODER_AGENT_SESSIONS_DIR,
@@ -32,9 +32,38 @@ describe("pi agent directories", () => {
 });
 
 describe("pi-coder installation constants", () => {
-    it("resolves runtime data relative to the installed extension root", () => {
+    afterEach(() => {
+        vi.unstubAllEnvs();
+        vi.resetModules();
+    });
+
+    it("keeps runtime state outside the installed extension root", () => {
+        // pi updates a git-installed package with `git reset --hard` + `git clean -fdx`, and `-x` removes
+        // ignored files too: anything inside the checkout is destroyed by the next update. The agent dir is
+        // pi's own durable location, and it follows `PI_CODING_AGENT_DIR`.
         expect(fs.existsSync(path.join(PI_CODER_EXTENSION_DIR, "package.json"))).toBe(true);
-        expect(PI_CODER_STATE_DIR).toBe(path.join(PI_CODER_EXTENSION_DIR, ".state"));
+        expect(PI_CODER_STATE_DIR).toBe(path.resolve(getAgentDir(), "pi-coder"));
+        expect(PI_CODER_STATE_DIR.startsWith(`${PI_CODER_EXTENSION_DIR}${path.sep}`)).toBe(false);
         expect(PI_CODER_AGENT_SESSIONS_DIR).toBe(path.join(PI_CODER_STATE_DIR, "agent-sessions"));
+    });
+
+    it("lets PI_CODER_STATE_DIR relocate the whole state tree", async () => {
+        vi.resetModules();
+        vi.stubEnv("PI_CODER_STATE_DIR", "/tmp/pi-coder-test-state");
+
+        const relocated = await import("../../src/common/constants");
+
+        expect(relocated.PI_CODER_STATE_DIR).toBe("/tmp/pi-coder-test-state");
+        expect(relocated.PI_CODER_WORKSPACES_DIR).toBe("/tmp/pi-coder-test-state/workspaces");
+        expect(relocated.BASH_DECISION_LOG_PATH).toBe("/tmp/pi-coder-test-state/bash-log.jsonl");
+    });
+
+    it("treats a blank PI_CODER_STATE_DIR as unset", async () => {
+        vi.resetModules();
+        vi.stubEnv("PI_CODER_STATE_DIR", "   ");
+
+        const resolved = await import("../../src/common/constants");
+
+        expect(resolved.PI_CODER_STATE_DIR).toBe(path.resolve(getAgentDir(), "pi-coder"));
     });
 });

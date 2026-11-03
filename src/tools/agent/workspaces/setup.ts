@@ -239,7 +239,7 @@ export async function createAgentWorkspaceManually(
         {
             title: "Create isolated workspace?",
             contentLines: [
-                "A detached Git worktree will be created under pi-coder's .state/workspaces directory.",
+                "A detached Git worktree will be created under pi-coder's workspaces directory in its runtime state.",
                 "Choose whether a limited setup worker should prepare it before the task worker starts.",
             ],
             items: [
@@ -563,7 +563,7 @@ export async function prepareIsolatedWorkspace(
                   ]
                 : [
                       "No ready isolated workspace exists for this project.",
-                      "A detached Git worktree will be created under pi-coder's .state/workspaces directory.",
+                      "A detached Git worktree will be created under pi-coder's workspaces directory in its runtime state.",
                       "Choose whether a limited setup worker should prepare it before the task.",
                   ],
             items: [

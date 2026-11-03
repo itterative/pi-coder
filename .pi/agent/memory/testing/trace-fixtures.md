@@ -1,6 +1,6 @@
 ---
 name: trace-fixtures
-description: Read recorded trace and decision-log fixtures through their JSONL reader, filter by session, never at live .state/ or home paths.
+description: Read recorded trace and decision-log fixtures through their JSONL reader, filter by session, never at the live state root or home paths.
 category: workflow
 ---
 
@@ -15,13 +15,14 @@ compaction trace, and `scripts/*-report.ts` share the same reader — never `rea
 - **Rotation.** A hand-rolled read sees only the live segment, so a rotated fixture silently loses its oldest
   runs.
 - **Torn lines.** One torn line throws instead of counting a gap.
-- **Cross-session ids.** Filter by the session the paired fixture names: `.state/compaction-trace.jsonl` holds
-  every session of a checkout, and an unfiltered read matches one session's ids against another's records.
+- **Cross-session ids.** Filter by the session the paired fixture names: the live `compaction-trace.jsonl`
+  (under `<agent-dir>/pi-coder`) holds every session of a checkout, and an unfiltered read matches one session's
+  ids against another's records.
 
 ## Fixture policy
 
-- **Never point a suite at `.state/` or a home-directory path.** Commit the pair (fixture plus the session it
-  names) to the repo instead.
+- **Never point a suite at the live state root (`<agent-dir>/pi-coder`), the legacy in-checkout `.state/`, or a
+  home-directory path.** Commit the pair (fixture plus the session it names) to the repo instead.
 - **Keep a few foreign-session rows in the trace fixture**, so the filter is a tested property rather than an
   assumption.
 

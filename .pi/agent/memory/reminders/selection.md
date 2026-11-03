@@ -141,9 +141,9 @@ re-deriving writes from the command text. The capability verdict already exists 
 answers `writes_files` / `writes_outside` for the code a command runs (`decision/script.ts` chases package scripts,
 file bodies, and inline `-c`/heredocs), and the command form's own verdict sits beside it - so a bash write is a
 verdict the model has already reached, not something the scan needs to infer. The catch is where to read it: the
-verdict is only *recorded* by the permission gate that consulted (`sandbox/decision-log.ts`, `.state/bash-log.jsonl`,
+verdict is only *recorded* by the permission gate that consulted (`sandbox/decision-log.ts`, `<state>/bash-log.jsonl`,
 memory `sandbox/decision-log.md`), so a log-only fix still misses an auto-allowed or sandbox-resolved command that
-never consulted, and the log is extension-local while the scan reads the session branch. A complete fix needs the
+never consulted, and the log lives in the shared state root while the scan reads the session branch. A complete fix needs the
 signal where the gate runs, carried to the scan the way the other best-effort signals are (an entry like
 `pi-coder:todo-snapshot`, or the branch's own bash tool call), with the parsed `parseBashAst` command as the cheap
 fallback for the shapes that never reach the model. `session-signals.ts` is where the produced-work fields are built.
@@ -346,7 +346,7 @@ and the `scheduler` snapshot showing the cooldown the decline left behind - the 
 `scores`, a `consult` summary (status, latency, usage), the labels in force, `contextTokens`, and the
 pre-decision `scheduler` snapshot. Debug recording is on by default for now (`reminderDebugEnabled` in
 `settings.ts`, temporarily ignoring `PI_CODER_REMINDER_DEBUG` like `isAgentTraceEnabled`); it uses session
-entries rather than a `.state/` JSONL because the reminder state is per-session and the replay already reads
+entries rather than a state-root JSONL because the reminder state is per-session and the replay already reads
 the session file. Separate from the debug entry, every delivered reminder message carries `details: { id,
  turn }`; that always-present marker is what `reminderResumeState` reads to resume the rotation pointer, the
 shown history, and the turn count after a tree move or reload, so resume never depends on debug being on.

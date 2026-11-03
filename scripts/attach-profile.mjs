@@ -12,12 +12,14 @@
  *   node scripts/attach-profile.mjs [seconds] [--pid <pid>]
  *
  * Run it on the host (a pi container cannot see the host's processes). While it profiles, reproduce the
- * stall in pi. The profile is written to `.state/perf/` so it is readable from a sandboxed session too, and
- * importing it into Chrome DevTools shows the full flame graph.
+ * stall in pi. The profile is written to `<agent-dir>/pi-coder/perf/` (or `$PI_CODER_STATE_DIR/perf/`) so it
+ * is readable from a sandboxed session too, and importing it into Chrome DevTools shows the full flame graph.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 const INSPECTOR_PORT = 9229;
 const DEFAULT_SECONDS = 20;
@@ -409,10 +411,18 @@ function report(profile, durationSeconds) {
     return lines.join("\n");
 }
 
+/** pi-coder's state root: the same resolution as `src/common/constants.ts`, which this plain-JS script cannot import. */
+function stateDirectory() {
+    const override = process.env.PI_CODER_STATE_DIR?.trim();
+
+    return override ? path.resolve(override) : path.join(getAgentDir(), "pi-coder");
+}
+
 function profilePath(durationSeconds) {
-    // Anchored to the script, not the caller's cwd: the profile has to land in the repository this session can
-    // see, or it is written somewhere nobody reads.
-    const directory = path.join(import.meta.dirname, "..", ".state", "perf");
+    // pi-coder's state root, not the caller's cwd and never the extension checkout: the next update of a
+    // git-installed extension runs `git clean -fdx`, and the state root is the one place a sandboxed session
+    // can also read it from.
+    const directory = path.join(stateDirectory(), "perf");
     fs.mkdirSync(directory, { recursive: true });
 
     const stamp = new Date().toISOString().replaceAll(":", "-").replace(/\..*$/, "");

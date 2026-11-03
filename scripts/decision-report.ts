@@ -17,8 +17,8 @@
  * Usage:
  *   npm run decision-report -- [options]
  *
- *   --path <file>      log file (default: $SANDBOX_DECISION_LOG_PATH or the extension's
- *                      .state/bash-log.jsonl; every retained generation is read, oldest first)
+ *   --path <file>      log file (default: $SANDBOX_DECISION_LOG_PATH or
+ *                      <agent-dir>/pi-coder/bash-log.jsonl; every retained generation is read, oldest first)
  *   --since <dur>      only records newer than this age, e.g. 90m, 24h, 7d
  *   --criterion <id>   only records whose model verdict named this criterion (none, destructive,
  *                      privileged, exfiltration, remote_code, loses_content, out_of_scope, asked_for,
@@ -37,6 +37,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveStateDirectory } from "../src/common/state-dir";
 import { createJsonlRecordLog, discoverGenerations } from "../src/common/record-log";
 import type {
     BashClassifierRecord,
@@ -50,7 +51,7 @@ const USAGE = `usage: npm run decision-report -- [options]\n${describeOptions()}
 
 function describeOptions(): string {
     return [
-        "  --path <file>      log file (default $SANDBOX_DECISION_LOG_PATH or .state/bash-log.jsonl)",
+        "  --path <file>      log file (default $SANDBOX_DECISION_LOG_PATH or <agent-dir>/pi-coder/bash-log.jsonl)",
         "  --since <dur>      only newer than 90m | 24h | 7d",
         "  --criterion <id>   only this criterion (none, destructive, privileged, ...)",
         "  --applied          only verdicts that resolved the prompt",
@@ -169,9 +170,9 @@ function defaultLogPath(): string {
         return fromEnv;
     }
 
-    // The writer's default: PI_CODER_STATE_DIR, resolved from the extension root so source and compiled
-    // layouts agree.
-    return path.join(fileURLToPath(new URL("..", import.meta.url)), ".state", "bash-log.jsonl");
+    // The writer's own resolved state root, so a relocated state dir (PI_CODER_STATE_DIR) keeps report and
+    // writer on the same file.
+    return path.join(resolveStateDirectory(), "bash-log.jsonl");
 }
 
 export interface ConsultedRecord {

@@ -16,7 +16,7 @@ windows of it, so restoring one span does not cost the whole session.
   defaults to it (falling back to the newest transcript for the working directory).
 - **Parent sessions**: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<session-id>.jsonl`. `--session <id>`
   searches them by id; `--session <path>` reads any file directly.
-- **Delegated child sessions**: the same format under `.state/agent-sessions/<encoded-cwd>/<runId>/`. Pass one
+- **Delegated child sessions**: the same format under `<agent-dir>/pi-coder/agent-sessions/<encoded-cwd>/<runId>/`. Pass one
   with `--session <path>` when a parent transcript shows a child run whose work matters.
 
 ## The script

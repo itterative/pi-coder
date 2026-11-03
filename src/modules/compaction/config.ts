@@ -41,7 +41,7 @@ export interface CompactionConfig {
     retryBaseDelayMs: number;
     /** Reserved for the planned side-model strategy; unused by the current cascade. */
     model?: string;
-    /** Write the per-stage compaction trace under `.state/`. `isAgentTraceEnabled()` gates it as well. */
+    /** Write the per-stage compaction trace under pi-coder's state root. `isAgentTraceEnabled()` gates it as well. */
     traceEnabled: boolean;
     /**
      * Persist the observed request chain into the trace file so a restart, reload, or resume can still verify

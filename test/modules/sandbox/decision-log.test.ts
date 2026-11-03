@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import sandboxConfig from "../../../src/common/config";
-import { BASH_DECISION_LOG_PATH, PI_CODER_STATE_DIR } from "../../../src/common/constants";
+import {
+    BASH_DECISION_LOG_PATH,
+    PI_CODER_EXTENSION_DIR,
+    PI_CODER_STATE_DIR,
+} from "../../../src/common/constants";
 import {
     getDecisionLogConfig,
     logBashDecision,
@@ -93,14 +97,15 @@ describe("getDecisionLogConfig", () => {
         expect(config.maxBytes).toBeGreaterThan(0);
     });
 
-    it("falls back to gitignored extension state when nothing chooses a path", () => {
+    it("falls back to pi-coder's runtime state when nothing chooses a path", () => {
         vi.stubEnv("SANDBOX_DECISION_LOG_PATH", "");
         useConfig(undefined);
 
-        // The default must stay inside `.state/`, never the repository tree or the
-        // user's pi config directory.
+        // The default must stay in pi-coder's state root - never the repository tree, and never inside the
+        // extension checkout, which pi's `git clean -fdx` wipes on every update of a git-installed package.
         expect(getDecisionLogConfig().filePath).toBe(BASH_DECISION_LOG_PATH);
         expect(path.dirname(BASH_DECISION_LOG_PATH)).toBe(PI_CODER_STATE_DIR);
+        expect(PI_CODER_STATE_DIR.startsWith(`${PI_CODER_EXTENSION_DIR}${path.sep}`)).toBe(false);
     });
 
     it("lets the environment switch override an enabled config", () => {

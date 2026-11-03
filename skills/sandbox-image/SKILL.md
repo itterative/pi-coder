@@ -34,7 +34,7 @@ From inside a command, `/run/.containerenv` exists in the container and not on t
   it — and only that directory.
 - pi-coder prepends a stage that copies a Node runtime into `/opt/pi/node` and appends
   `RUN /opt/pi/node --version`, so the recipe does not have to be Node-based. The built file is at
-  `.state/container/Containerfile.<hash>` if the user wants to see exactly what podman was given.
+  `<agent-dir>/pi-coder/container/Containerfile.<hash>` if the user wants to see exactly what podman was given.
 - The image tag is a content hash: `localhost/pi-coder-sandbox:<12 hex>`. Editing the recipe produces a new
   tag, so a stale image can never be mistaken for a fresh one, and retention keeps only the 3 newest.
 - Alpine and other musl bases are rejected before podman runs, because the injected runtime is glibc-linked.

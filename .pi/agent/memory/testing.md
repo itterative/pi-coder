@@ -26,8 +26,8 @@ The five rules most often gotten wrong; the rest are in the detail docs below.
 - **Add no new `no-explicit-any`** and leave `npx eslint test/<file>` clean on files you touched.
 - **TUI rendering: assert distinct projected states** via `snapshotText(...)` + `toMatchFileSnapshot(...)`, plus
   direct state or interaction assertions.
-- **Never write the developer's home or `.state/` state from a suite** — use explicit temporary state/workspaces
-  dirs.
+- **Never write the developer's home or pi-coder state root (`<agent-dir>/pi-coder`) from a suite** — use explicit
+  temporary state/workspaces dirs.
 - **Never read the developer's setup either.** Three ambient inputs have made the suite pass only on one machine:
   the global sandbox config (`config.load` merges `~/.pi/bash-sandbox-config.json` and falls back to
   `defaultConfig()`, whose `inheritEnv: {}` is what emits `--clearenv`), the process environment
@@ -59,7 +59,7 @@ index.
 
 - `testing/doubles-and-any.md` — double reuse, the 28-duplicate/199-`any` history, the zero baseline, eslint.
 - `testing/trace-fixtures.md` — reading recorded traces/decision logs through `createJsonlRecordLog`, rotation and
-  torn-line hazards, session filtering, no live `.state/` reads.
+  torn-line hazards, session filtering, no live state-root reads.
 - `testing/state-isolation.md` — `test/setup.ts` env pins, the decision-log/compaction-trace escape hatches,
   temporary state and workspaces dirs.
 - `testing/decision-gates.md` — the two keys needed to reach a decision-model gate from a fixture.

@@ -113,13 +113,13 @@ only the parent reminder module publishes that state, so a child's session canno
 ## Reading what happened
 
 Every access that reached the model or a human is appended to the same development log as the Bash decisions
-(`.state/bash-log.jsonl`) with `gate: "file"`; see `docs/bash-decision-log.md`. `resolvedBy` says which of
+(`<agent-dir>/pi-coder/bash-log.jsonl`) with `gate: "file"`; see `docs/bash-decision-log.md`. `resolvedBy` says which of
 the three resolved it — `classifier`, `prompt`, or `unavailable` — and the `classifier` block carries the
 criterion, the confidence, and whether it acted. `npm run permission-report` reads Bash records only.
 
 ```sh
 jq -c 'select(.gate=="file") | {operation, resolvedBy, criterion: .classifier.criterion,
-  confidence: .classifier.confidence, path}' .state/bash-log.jsonl
+  confidence: .classifier.confidence, path}' ~/.pi/agent/pi-coder/bash-log.jsonl
 ```
 
 ## Not done, on purpose

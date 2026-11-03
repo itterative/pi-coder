@@ -139,6 +139,35 @@ describe("standardAgentResourceRoots", () => {
             }),
         ).toEqual([extensionDir]);
     });
+
+    it("includes pi-coder's state root once it exists, because the prompt names files inside it", () => {
+        const root = workspace();
+        const { agentDir, home, extensionDir, piPackageDir } = standardOptions(root);
+        const stateDir = makeDirectory(path.join(agentDir, "pi-coder"));
+
+        expect(
+            standardAgentResourceRoots({
+                agentDir,
+                env: { HOME: home },
+                extensionDir,
+                piPackageDir,
+            }),
+        ).toEqual([extensionDir, piPackageDir, stateDir]);
+    });
+
+    it("follows an explicit state root and lets a caller omit the state tree", () => {
+        const root = workspace();
+        const { agentDir, home, extensionDir } = standardOptions(root);
+        makeDirectory(path.join(agentDir, "pi-coder"));
+        const relocated = makeDirectory(path.join(root, "relocated-state"));
+        const options = { agentDir, env: { HOME: home }, extensionDir, piPackageDir: null };
+
+        expect(standardAgentResourceRoots({ ...options, stateDir: relocated })).toEqual([
+            extensionDir,
+            relocated,
+        ]);
+        expect(standardAgentResourceRoots({ ...options, stateDir: null })).toEqual([extensionDir]);
+    });
 });
 
 describe("agentResourceRoots", () => {

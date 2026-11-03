@@ -7,12 +7,13 @@ plan are implemented, so scenarios A–D apply now and E–F do not yet.
 
 ## Safety rules
 
-- This repository's `.state/meta.sqlite` is real developer state. Copy it before any scenario that writes, and
-  never delete the copy until every result is recorded. Use `VACUUM INTO`, not `cp`, whenever a parent session is
-  attached: committed frames can still be sitting in `-wal`, and a plain file copy can miss them.
+- The pi-coder state database (`$HOME/.pi/agent/pi-coder/meta.sqlite`) is real developer state. `PI_CODER_STATE_DIR`
+  relocates the whole tree, so derive the path from it when it is set. Copy the database before any scenario that
+  writes, and never delete the copy until every result is recorded. Use `VACUUM INTO`, not `cp`, whenever a parent
+  session is attached: committed frames can still be sitting in `-wal`, and a plain file copy can miss them.
 
   ```bash
-  sqlite3 .state/meta.sqlite "VACUUM INTO '.state/meta.sqlite.before-gc-validation-$(date -u +%Y%m%dT%H%M%SZ).bak';"
+  sqlite3 $HOME/.pi/agent/pi-coder/meta.sqlite "VACUUM INTO '$HOME/.pi/agent/pi-coder/meta.sqlite.before-gc-validation-$(date -u +%Y%m%dT%H%M%SZ).bak';"
   ```
 - Open the database with an ordinary connection, never `file:…?mode=ro`: a read-only connection cannot build the
   WAL index against a live `-shm` and fails with `SQLITE_IOERR`. WAL gives concurrent readers already.
@@ -28,8 +29,8 @@ plan are implemented, so scenarios A–D apply now and E–F do not yet.
 1. Back up the metadata database and record the starting state.
 
    ```bash
-   cp .state/meta.sqlite .state/meta.sqlite.before-gc-validation.bak
-   sqlite3 'file:.state/meta.sqlite?mode=ro' "PRAGMA integrity_check;
+   cp $HOME/.pi/agent/pi-coder/meta.sqlite $HOME/.pi/agent/pi-coder/meta.sqlite.before-gc-validation.bak
+   sqlite3 "file:$HOME/.pi/agent/pi-coder/meta.sqlite?mode=ro" "PRAGMA integrity_check;
      SELECT count(*), sum(length(payload_json)) FROM agent_run_snapshots;
      SELECT count(*) FROM agent_run_snapshots WHERE status IN ('running','starting');
      SELECT count(*) FROM agent_run_working_state;"
@@ -50,7 +51,7 @@ Step 6 ran here by hand, so scenarios A–E all apply; F always does. Measured r
 
 | | before | after |
 | --- | --- | --- |
-| `.state/meta.sqlite` | 82.7 MiB | 8.75 MiB |
+| `$HOME/.pi/agent/pi-coder/meta.sqlite` | 82.7 MiB | 8.75 MiB |
 | `agent_run_snapshots` | 12,795 rows / 67.3 MiB | 502 rows / 6.6 MiB |
 | `running`/`starting` rows | 12,293 | 0 |
 
@@ -66,7 +67,7 @@ This is the change's purpose, so measure it rather than assume it.
 1. Record `snapshot rows`, `working rows`, and the transcript's marker count (section Setup, plus):
 
    ```bash
-   sqlite3 'file:.state/meta.sqlite?mode=ro' "SELECT count(*) FROM agent_run_snapshots;"
+   sqlite3 "file:$HOME/.pi/agent/pi-coder/meta.sqlite?mode=ro" "SELECT count(*) FROM agent_run_snapshots;"
    ```
 
 2. Start a background `worker` long enough to produce many tool calls and at least one file change:
@@ -82,7 +83,7 @@ This is the change's purpose, so measure it rather than assume it.
    ```bash
    SESSION=$(ls -t ~/.pi/agent/sessions/--home-sd-Repos-pi-coder--/*.jsonl | head -1)
    grep -c agent-run-snapshot-v2 "$SESSION"
-   sqlite3 'file:.state/meta.sqlite?mode=ro' \
+   sqlite3 "file:$HOME/.pi/agent/pi-coder/meta.sqlite?mode=ro" \
      "SELECT status, count(*) FROM agent_run_snapshots GROUP BY status;
       SELECT count(*), max(updated_at) FROM agent_run_working_state;"
    ```
@@ -113,7 +114,7 @@ The only scenario that proves the overlay is correct against a real transcript a
 2. Confirm the last durable checkpoint is unclean before reopening:
 
    ```bash
-   sqlite3 'file:.state/meta.sqlite?mode=ro' \
+   sqlite3 "file:$HOME/.pi/agent/pi-coder/meta.sqlite?mode=ro" \
      "SELECT h.run_instance_id, s.status, s.child_session_leaf_id, w.child_session_leaf_id, w.updated_at > s.updated_at
       FROM agent_run_continuation_heads h
       JOIN agent_run_snapshots s ON s.snapshot_id = h.snapshot_id
@@ -130,7 +131,7 @@ The only scenario that proves the overlay is correct against a real transcript a
 4. Confirm the lease was left behind correctly:
 
    ```bash
-   sqlite3 'file:.state/meta.sqlite?mode=ro' "SELECT run_instance_id, owner_pid, lease_until FROM agent_run_continuation_leases;"
+   sqlite3 "file:$HOME/.pi/agent/pi-coder/meta.sqlite?mode=ro" "SELECT run_instance_id, owner_pid, lease_until FROM agent_run_continuation_leases;"
    ```
 
    Expected: either no row, or a row whose `owner_pid` is the dead process — the documented dead-PID fast path
@@ -154,7 +155,7 @@ writes one new checkpoint.
 2. While it is parked, check the table:
 
    ```bash
-   sqlite3 'file:.state/meta.sqlite?mode=ro' \
+   sqlite3 "file:$HOME/.pi/agent/pi-coder/meta.sqlite?mode=ro" \
      "SELECT s.run_instance_id, s.status,
              (SELECT count(*) FROM agent_run_working_state w
                WHERE w.run_instance_id = s.run_instance_id) AS working_rows

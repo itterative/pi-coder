@@ -15,7 +15,7 @@ import type { SummarizationStrategy } from "./summarize";
 import type { EstimateSource, SummarizationReason } from "./types";
 
 /**
- * The compaction trace: one JSONL record per stage, under the extension's gitignored `.state/`.
+ * The compaction trace: one JSONL record per stage, under pi-coder's state root (`<agent-dir>/pi-coder`).
  *
  * Two questions can only be answered by what actually went over the wire, and neither is answerable from
  * the session transcript: what the model *said* to the summarization request, and what the harness then

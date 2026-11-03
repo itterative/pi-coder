@@ -58,10 +58,10 @@ it once for both.
 
 ## Location and configuration
 
-Default: `.state/bash-log.jsonl` next to the installed extension
-(`PI_CODER_STATE_DIR`), mode `0600`, enabled by default. It is gitignored runtime
-state like the agent session database, so it lives with the checkout that recorded
-it — an isolated worker worktree under `.state/workspaces/` gets its own file.
+Default: `<agent-dir>/pi-coder/bash-log.jsonl` (`PI_CODER_STATE_DIR`), mode `0600`, enabled by default. It is
+private runtime state, kept outside the extension checkout because pi's `git clean -fdx` deletes everything
+untracked there on update, and outside the project tree, so an isolated worker worktree under
+`<state>/workspaces/` records into the same file unless `SANDBOX_DECISION_LOG_PATH` relocates it.
 
 | Control                            | Effect                                                                    |
 | ---------------------------------- | ------------------------------------------------------------------------- |

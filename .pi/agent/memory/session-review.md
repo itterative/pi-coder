@@ -21,7 +21,7 @@ change in `src/index.ts`.
 ## Invariants
 
 - **Raw JSONL is deliberate, not `SessionManager`.** That keeps the script zero-dependency and lets the same
-  code read parent sessions and delegated child transcripts under `.state/agent-sessions/<encoded-cwd>/<runId>/`.
+  code read parent sessions and delegated child transcripts under `<agent-dir>/pi-coder/agent-sessions/<encoded-cwd>/<runId>/`.
   `/stats` (see `stats-command.md`) made the same raw-JSONL choice for the same portability reason.
 - **Session directory encoding strips the leading separator first**: `--` + cwd with `/`, `\`, `:` replaced by
   `-` + `--` (`/tmp/proj` → `--tmp-proj--`). Omitting the strip produced `---tmp-proj--` and silently broke the

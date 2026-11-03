@@ -7,7 +7,11 @@ import {
     getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 
-import { PI_CODER_EXTENSION_DIR, getPiPackageDirectory } from "../../common/constants";
+import {
+    PI_CODER_EXTENSION_DIR,
+    PI_CODER_STATE_DIR,
+    getPiPackageDirectory,
+} from "../../common/constants";
 import { resolveHomeDirectory } from "../../common/home-directory";
 
 /**
@@ -17,7 +21,13 @@ import { resolveHomeDirectory } from "../../common/home-directory";
  * could not read `SKILL.md` or run a script the skill names, and bubblewrap asked for approval and then still
  * could not open the file. The install location is machine-specific, so it is derived rather than hardcoded:
  * this extension's package root (`PI_CODER_EXTENSION_DIR`), the running pi package, pi's managed package
- * stores, and the user-level skill directories.
+ * stores, the user-level skill directories, and pi-coder's own runtime state.
+ *
+ * The state root is here because it is runtime data the agent is told to read: the session-review skill
+ * names delegated transcripts under it, and the report scripts read the decision log and compaction trace
+ * from it. It used to sit inside the extension package root, which is already a resource root — moving it
+ * out of the checkout (pi's `git clean -fdx` wipes a git-installed package's untracked files) would have
+ * silently taken that readability away.
  *
  * The standard roots are a superset that is cheap to compute and covers every managed install. They are
  * widened by {@link agentResourceRoots}, which asks pi's package manager for the exact resources it loaded so
@@ -33,6 +43,11 @@ export interface AgentResourceRootOptions {
     extensionDir?: string;
     /** `null` omits the running pi package; `undefined` resolves it. */
     piPackageDir?: string | null;
+    /**
+     * pi-coder's runtime state root. Defaults to the running state dir, or `<agentDir>/pi-coder` when the
+     * agent dir is injected; `null` omits it.
+     */
+    stateDir?: string | null;
 }
 
 export interface AgentResourceRootsRequest extends AgentResourceRootOptions {
@@ -56,11 +71,16 @@ export function standardAgentResourceRoots(options: AgentResourceRootOptions = {
         options.piPackageDir === null
             ? undefined
             : (options.piPackageDir ?? getPiPackageDirectory());
+    const stateDir =
+        options.stateDir === null
+            ? undefined
+            : (options.stateDir ?? defaultStateDir(options.agentDir));
 
     const extensionDir = options.extensionDir ?? PI_CODER_EXTENSION_DIR;
     const candidates = [
         isPackageRoot(extensionDir) ? extensionDir : undefined,
         isPackageRoot(piPackageDir) ? piPackageDir : undefined,
+        stateDir,
         path.join(agentDir, "skills"),
         path.join(agentDir, "git"),
         path.join(agentDir, "npm"),
@@ -73,6 +93,11 @@ export function standardAgentResourceRoots(options: AgentResourceRootOptions = {
             (candidate): candidate is string => candidate !== undefined && isDirectory(candidate),
         ),
     );
+}
+
+/** An injected agent dir carries its own state root, so a temp agent dir stays a temp machine. */
+function defaultStateDir(agentDir: string | undefined): string {
+    return agentDir === undefined ? PI_CODER_STATE_DIR : path.join(agentDir, "pi-coder");
 }
 
 /**

@@ -10,8 +10,8 @@
  * Usage:
  *   npm run permission-report -- [options]
  *
- *   --path <file>      log file (default: $SANDBOX_DECISION_LOG_PATH or the
- *                      extension's .state/bash-log.jsonl; every retained
+ *   --path <file>      log file (default: $SANDBOX_DECISION_LOG_PATH or
+ *                      <agent-dir>/pi-coder/bash-log.jsonl; every retained
  *                      generation is read automatically, oldest first
  *                      rotation file is included automatically)
  *   --since <dur>      only records newer than this age, e.g. 90m, 24h, 7d
@@ -25,8 +25,8 @@
  */
 
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
+import { resolveStateDirectory } from "../src/common/state-dir";
 import { createJsonlRecordLog, discoverGenerations } from "../src/common/record-log";
 
 // ---------------------------------------------------------------- arg parsing
@@ -35,7 +35,7 @@ const USAGE = `usage: npm run permission-report -- [options]\n${describeOptions(
 
 function describeOptions() {
     return [
-        "  --path <file>       log file (default $SANDBOX_DECISION_LOG_PATH or .state/bash-log.jsonl)",
+        "  --path <file>       log file (default $SANDBOX_DECISION_LOG_PATH or <agent-dir>/pi-coder/bash-log.jsonl)",
         "  --since <dur>       only newer than 90m | 24h | 7d",
         "  --surface <name>    parent | child",
         "  --agent <name>      filter by delegated agent name",
@@ -129,9 +129,9 @@ function defaultLogPath() {
         return fromEnv;
     }
 
-    // The writer's default: PI_CODER_STATE_DIR, resolved from the installed
-    // extension root so source and compiled layouts agree.
-    return path.join(fileURLToPath(new URL("..", import.meta.url)), ".state", "bash-log.jsonl");
+    // The writer's own resolved state root, so a relocated state dir (PI_CODER_STATE_DIR) keeps the report
+    // and the writer pointed at the same file in source and installed layouts alike.
+    return path.join(resolveStateDirectory(), "bash-log.jsonl");
 }
 
 /** Treat an unset or blank value as absent so the default can apply. */

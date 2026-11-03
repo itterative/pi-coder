@@ -13,8 +13,8 @@
  */
 
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
+import { resolveStateDirectory } from "../src/common/state-dir";
 import { createJsonlRecordLog, discoverGenerations } from "../src/common/record-log";
 
 // ---------------------------------------------------------------- arg parsing
@@ -37,7 +37,7 @@ const DUMP_STAGES = new Set(["all", "native", "serialized", "final"]);
 
 function describeOptions() {
     return [
-        "  --path <file>       log (default $COMPACTION_TRACE_PATH or .state/compaction-trace.jsonl; a",
+        "  --path <file>       log (default $COMPACTION_TRACE_PATH or <agent-dir>/pi-coder/compaction-trace.jsonl; a",
         "                      every retained generation is read automatically, oldest first)",
         "  --since <dur>       only newer than 90m | 24h | 7d",
         "  --session <prefix>  only runs whose session id starts with this",
@@ -178,13 +178,9 @@ function defaultLogPath() {
         return fromEnv;
     }
 
-    // The writer's default: PI_CODER_STATE_DIR, resolved from the installed extension root so source and
-    // compiled layouts agree.
-    return path.join(
-        fileURLToPath(new URL("..", import.meta.url)),
-        ".state",
-        "compaction-trace.jsonl",
-    );
+    // The writer's own resolved state root, so a relocated state dir (PI_CODER_STATE_DIR) keeps report and
+    // writer on the same file.
+    return path.join(resolveStateDirectory(), "compaction-trace.jsonl");
 }
 
 /** Treat an unset or blank value as absent so the default can apply. */

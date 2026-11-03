@@ -107,7 +107,8 @@ for them.
 `firstKeptEntryId` names the *kept* entry, so when that entry is an assistant with usable usage, its prompt is the
 **fixed prefix plus the span** — no estimation of the body at all, but not a span-only number either:
 `countedFoldTokens` subtracts `fixedPrefixTokens` before treating it as what a fold removed (fixture: 32,308,
-asserted as equality). Measured 3 of 3 real compactions in `.state/agent-sessions/**` cut on an assistant with
+asserted as equality). Measured 3 of 3 real compactions in `.state/agent-sessions/**` (before the 2026-11
+state-root relocation; they are now under `<agent-dir>/pi-coder/agent-sessions/`) cut on an assistant with
 usable usage, for a structural reason: `findCutPoint` snaps forward to the first *valid* cut point at or after the
 entry that crossed the keep budget, and a `toolResult` is not valid (`compaction.js:227-240`) — so a mid-turn
 crossing lands on the assistant that consumed it. `skippedEntries > 0` disqualifies the tier, because a row stage 1

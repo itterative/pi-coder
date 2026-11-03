@@ -19,8 +19,8 @@ records **filtered to that session**; `nativeAttempts`/`chainRequests`/`prefixRe
 `requireAttemptForFold` are the typed selectors. Two defects this ended: three suites hand-rolled
 `readFileSync().split("\n")` (a rotated fixture silently lost its oldest runs, a torn line threw instead of counting a
 gap), and the ledger's capture test read the **live** `.state/compaction-trace.jsonl` — five sessions in one file, no
-filter, machine-local absolute paths, so it was neither portable nor reproducible. **`.state/` is never a test input:
-commit the pair.**
+filter, machine-local absolute paths, so it was neither portable nor reproducible. (That live trace now sits under
+`<agent-dir>/pi-coder/`.) **The live state root is never a test input: commit the pair.**
 
 ## The captured pairs
 

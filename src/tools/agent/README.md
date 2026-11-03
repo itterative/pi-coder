@@ -96,7 +96,7 @@ extension list, run the manual pass:
    `.pi/settings.json`, or pick a small-context model — and start a scout whose task reads many files.
 2. Open `/agents`, select the run, and confirm its trace records `session.compaction_start` and
    `session.compaction_end` with a reason, and that the run keeps going afterward.
-3. Read `.state/compaction-trace.jsonl` (see [Diagnostic traces](#diagnostic-traces) for the switch). A
+3. Read `<agent-dir>/pi-coder/compaction-trace.jsonl` (see [Diagnostic traces](#diagnostic-traces) for the switch). A
    successful run writes seven records sharing one `id`: `prefix`, `attempt(native)`,
    `model_response(native)`, `attempt(serialized)`, `model_response(serialized)`, `final_summary`, `outcome`.
    The two `model_response` records are the stage outputs; `final_summary` is the exact text persisted. Check

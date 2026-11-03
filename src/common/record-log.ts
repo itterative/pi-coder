@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * One append-only record store, shared by every producer that writes development evidence to `.state/`.
+ * One append-only record store, shared by every producer that writes development evidence to pi-coder's
+ * runtime state root (`<agent-dir>/pi-coder`).
  *
  * Producers keep their own record shapes: the only thing a log insists on is a `ts` to order by and a `v` to
  * migrate by. Rotation, generation naming, and torn-line tolerance live here rather than in each module because

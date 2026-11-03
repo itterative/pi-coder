@@ -8,9 +8,10 @@ import type { SandboxMountEntry } from "../posture";
  *
  * A container mounts the working tree and nothing else, so two very common layouts break inside it:
  *
- * - **A worktree** (`.state/worktrees/<name>` or a user's linked worktree): its `.git` is a *file* naming
- *   `<main>/.git/worktrees/<name>`, which lives outside the mounted cwd. Git cannot even read HEAD there.
- * - **An isolated child's shared clone** (`.state/workspaces/<id>`): history comes from
+ * - **A worktree** (a user's linked worktree, or pi-coder's own `<state>/workspaces/<id>`): its `.git` is a
+ *   *file* naming `<main>/.git/worktrees/<name>`, which lives outside the mounted cwd. Git cannot even read
+ *   HEAD there.
+ * - **An isolated child's shared clone** (`<state>/workspaces/<id>`): history comes from
  *   `objects/info/alternates` pointing into the parent repository, which is likewise outside the mount.
  *
  * This mirrors what the bwrap profile auto-detects (`buildGitWorktreeMountCmd`), written as a mount list
