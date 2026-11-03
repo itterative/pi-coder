@@ -13,6 +13,9 @@ state root (`<agent-dir>/pi-coder`, `PI_CODER_STATE_DIR` overrides it).
 
 `test/setup.ts` (vitest `setupFiles`) pins the best-effort global writers off:
 
+- `PI_CODER_ENV_FILE ??= "0"`, so a developer's checkout `.env` (which may pin the state root) cannot change
+  what a suite asserts. Tests that exercise the file call `applyDevEnvFile` with their own temporary path.
+
 - `SANDBOX_DECISION_LOG ??= "0"`, so the bash decision log is off for every suite unless a file re-enables it
   with `vi.stubEnv("SANDBOX_DECISION_LOG", "1")` plus a temporary `SANDBOX_DECISION_LOG_PATH` (or a
   `decisionLog.path` in a temporary project config).

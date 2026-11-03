@@ -14,8 +14,12 @@
 
 import path from "node:path";
 
+import { applyDevEnvFromExtension } from "../src/common/dev-env";
 import { resolveStateDirectory } from "../src/common/state-dir";
 import { createJsonlRecordLog, discoverGenerations } from "../src/common/record-log";
+
+// A checkout `.env` may pin the state root; apply it before any default path is computed.
+applyDevEnvFromExtension();
 
 // ---------------------------------------------------------------- arg parsing
 

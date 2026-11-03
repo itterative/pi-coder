@@ -15,7 +15,7 @@ For a persisted parent session, child transcripts live under pi-coder's private 
 <agent-dir>/pi-coder/agent-sessions/--<encoded-cwd>--/<parent-session-id>/
 ```
 
-The state root comes from `src/common/constants.ts` (`PI_CODER_STATE_DIR`): `<agent-dir>/pi-coder`, never inside the extension checkout, because pi's `git clean -fdx` on a git-installed package update deletes everything untracked there. The cwd encoding is centralized in `normalizeCwdForSessionDirectory()`. Private directories use mode `0700`.
+The state root comes from `src/common/constants.ts` (`PI_CODER_STATE_DIR`): `<agent-dir>/pi-coder`, never inside the extension checkout, because pi's `git clean -fdx` on a git-installed package update deletes everything untracked there. A development checkout pins its own root — and any other pi-coder setting — in a gitignored `<checkout>/.env` (see `.env.example`); that file is untracked, so an installed copy never has it. The cwd encoding is centralized in `normalizeCwdForSessionDirectory()`. Private directories use mode `0700`.
 
 SQLite run-state is scoped to the exact parent session and active parent-tree branch. Child transcripts do not contain the parent run ID, task/status, pending question, usage checkpoint, or retention state. Three kinds of durable run state exist, and only the first two are authoritative for restoration:
 

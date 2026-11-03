@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -65,5 +66,29 @@ describe("pi-coder installation constants", () => {
         const resolved = await import("../../src/common/constants");
 
         expect(resolved.PI_CODER_STATE_DIR).toBe(path.resolve(getAgentDir(), "pi-coder"));
+    });
+
+    it("lets a checkout .env pin the state root, relative to that checkout", async () => {
+        // The development split: `<checkout>/.env` says `.state`, so this copy keeps its state in the checkout
+        // while an installed copy (which has no `.env`) uses the agent dir.
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-coder-env-"));
+        const file = path.join(directory, ".env");
+        fs.writeFileSync(file, "PI_CODER_STATE_DIR=.state\n", "utf-8");
+
+        try {
+            vi.resetModules();
+            // Stub blank rather than relying on deletion: the loader writes into process.env, and unstubbing
+            // restores a stubbed key to "unset" while a plain mutation would survive into later tests.
+            vi.stubEnv("PI_CODER_STATE_DIR", "");
+            vi.stubEnv("PI_CODER_ENV_FILE", file);
+
+            const local = await import("../../src/common/constants");
+
+            expect(local.PI_CODER_STATE_DIR).toBe(
+                path.join(local.PI_CODER_EXTENSION_DIR, ".state"),
+            );
+        } finally {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
     });
 });

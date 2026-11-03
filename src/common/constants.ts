@@ -1,15 +1,19 @@
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { getAgentDir, getPackageDir } from "@earendil-works/pi-coding-agent";
 
+import { applyDevEnvFromExtension } from "./dev-env";
 import { resolveStateDirectory } from "./state-dir";
 
-/** Root of this installed pi-coder extension, for both source and compiled layouts. */
-export const PI_CODER_EXTENSION_DIR = path.resolve(
-    fileURLToPath(new URL("../..", import.meta.url)),
-);
+export { PI_CODER_EXTENSION_DIR } from "./extension-dir";
+
+/**
+ * A development checkout may pin pi-coder's own settings in `<extension>/.env`; apply it before any constant
+ * below reads the environment. An installed copy has no such file, so this is a no-op there. See `dev-env.ts`
+ * for the prefixes and precedence.
+ */
+applyDevEnvFromExtension();
 
 /**
  * pi-coder's durable runtime state: delegated agent transcripts, isolated worktrees, the decision log and
@@ -20,7 +24,9 @@ export const PI_CODER_EXTENSION_DIR = path.resolve(
  * too, so anything this package writes inside its own checkout is destroyed by the next update. The agent
  * directory is pi's durable location for the same kind of data (`sessions/`, `memory/`, `scratchpad/`) and
  * follows `PI_CODING_AGENT_DIR`. A non-blank `PI_CODER_STATE_DIR` relocates it, e.g. to keep a development
- * checkout's state apart from the installed extension's; a relative value resolves against the process cwd.
+ * checkout's state apart from the installed extension's; a relative value resolves against the extension
+ * checkout. A checkout's gitignored `.env` may set it too (see `dev-env.ts`), which is how the development
+ * copy keeps its state in `<checkout>/.state` while an installed copy uses the default.
  */
 export const PI_CODER_STATE_DIR = resolveStateDirectory(process.env, getAgentDir());
 export const PI_CODER_AGENT_SESSIONS_DIR = path.join(PI_CODER_STATE_DIR, "agent-sessions");

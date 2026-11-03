@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { PI_CODER_EXTENSION_DIR } from "./extension-dir";
 import { resolveHomeDirectory } from "./home-directory";
 
 /**
@@ -13,7 +14,8 @@ import { resolveHomeDirectory } from "./home-directory";
  * each script into one ESM file, and importing `@earendil-works/pi-coding-agent` there dies with
  * `Dynamic require of "child_process" is not supported`.
  *
- * A relative override resolves against the process cwd, so the state root is always absolute.
+ * A relative override resolves against the extension checkout, not the caller's cwd: `<extension>/.env` (see
+ * `dev-env.ts`) can say `.state`, and pi may be started from any project directory.
  */
 export function resolveStateDirectory(
     env: NodeJS.ProcessEnv = process.env,
@@ -21,7 +23,7 @@ export function resolveStateDirectory(
 ): string {
     const override = nonEmpty(env.PI_CODER_STATE_DIR);
     if (override !== undefined) {
-        return path.resolve(expandTilde(override, env));
+        return path.resolve(PI_CODER_EXTENSION_DIR, expandTilde(override, env));
     }
 
     return path.resolve(agentDir ?? agentDirFromEnvironment(env), "pi-coder");

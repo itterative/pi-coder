@@ -2,13 +2,14 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { PI_CODER_EXTENSION_DIR } from "../../src/common/extension-dir";
 import { agentDirFromEnvironment, resolveStateDirectory } from "../../src/common/state-dir";
 
 /**
  * The state root is resolved twice: by the extension through pi's `getAgentDir()`, and by the report scripts
  * through this env-only mirror (they are bundled into one ESM file by their CLI tests, so they cannot import
  * the CommonJS pi package). These cases pin the mirror to pi's rule for the two inputs that move the agent
- * directory: `PI_CODING_AGENT_DIR` and `$HOME`.
+ * directory — `PI_CODING_AGENT_DIR` and `$HOME` — plus the override and its checkout-relative base.
  */
 describe("resolveStateDirectory", () => {
     it("puts the state root under pi's default agent directory", () => {
@@ -47,9 +48,11 @@ describe("resolveStateDirectory", () => {
         ).toBe("/mnt/fast/pi-coder-state");
     });
 
-    it("resolves a relative PI_CODER_STATE_DIR against the process cwd", () => {
+    it("resolves a relative PI_CODER_STATE_DIR against the extension checkout, not the cwd", () => {
+        // So `<checkout>/.env` can say `.state`: pi may be started from any project directory, and the state
+        // root still belongs to the copy of pi-coder that reads the file.
         expect(resolveStateDirectory({ HOME: "/home/dev", PI_CODER_STATE_DIR: "state" })).toBe(
-            path.resolve("state"),
+            path.join(PI_CODER_EXTENSION_DIR, "state"),
         );
     });
 

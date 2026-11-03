@@ -35,7 +35,7 @@ pi-coder is a pi extension providing coding-oriented memory, sandbox, TUI, and d
 - TUI rendering tests must use file snapshots via `snapshotText(...)` and `toMatchFileSnapshot(...)`; prefer updating snapshots through Vitest rather than editing snapshot files by hand, and review the resulting snapshots to ensure they match the intended expectations. Use direct assertions for state or interaction outcomes in addition to, not instead of, rendering snapshots.
 - Linux sandbox and worker behavior requires the `bwrap` executable. Sandbox config is project-local at `.pi/bash-sandbox-config.json` or global at `~/.pi/bash-sandbox-config.json`; `SANDBOX_CONFIG_PATH` and `SANDBOX_CONFIG_PATH_GLOBAL` can override those locations.
 - npm uses `.npmrc` with `ignore-scripts=true` and a 7-day package release age policy; do not bypass these casually.
-- Runtime state lives in `<agent-dir>/pi-coder/` (`$PI_CODER_STATE_DIR` relocates it), never inside the extension checkout: pi updates a git-installed package with `git reset --hard` + `git clean -fdx`, which deletes untracked files including ignored ones. It is private runtime data and is not source code.
+- Runtime state lives in `<agent-dir>/pi-coder/` (`$PI_CODER_STATE_DIR` relocates it), never inside the extension checkout: pi updates a git-installed package with `git reset --hard` + `git clean -fdx`, which deletes untracked files including ignored ones. A development checkout pins its own state (and other pi-coder settings) in the gitignored `<checkout>/.env` — see `.env.example`; a git-installed copy never has that file, so it uses the default. It is private runtime data and is not source code.
 
 ## Architecture
 

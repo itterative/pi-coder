@@ -3,6 +3,11 @@
 // SANDBOX_DECISION_LOG plus SANDBOX_DECISION_LOG_PATH pointed at a temporary file.
 process.env.SANDBOX_DECISION_LOG ??= "0";
 
+// A developer's checkout `.env` pins pi-coder's own settings (the state root included). A suite must not
+// inherit it, or assertions about defaults would describe one machine; tests that exercise the file pass
+// their own temporary path to applyDevEnvFile.
+process.env.PI_CODER_ENV_FILE ??= "0";
+
 // Same for the compaction trace in the state root: it records raw summary text, so a suite only writes it
 // where COMPACTION_TRACE_PATH points at its own temporary file.
 process.env.COMPACTION_TRACE ??= "0";

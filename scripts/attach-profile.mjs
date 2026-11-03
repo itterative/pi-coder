@@ -12,11 +12,13 @@
  *   node scripts/attach-profile.mjs [seconds] [--pid <pid>]
  *
  * Run it on the host (a pi container cannot see the host's processes). While it profiles, reproduce the
- * stall in pi. The profile is written to `<agent-dir>/pi-coder/perf/` (or `$PI_CODER_STATE_DIR/perf/`) so it
- * is readable from a sandboxed session too, and importing it into Chrome DevTools shows the full flame graph.
+ * stall in pi. The profile is written under pi-coder's state root — `<agent-dir>/pi-coder/perf/` by default,
+ * or wherever `PI_CODER_STATE_DIR` / this checkout's `.env` points — so it is readable from a sandboxed
+ * session too, and importing it into Chrome DevTools shows the full flame graph.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -411,11 +413,71 @@ function report(profile, durationSeconds) {
     return lines.join("\n");
 }
 
-/** pi-coder's state root: the same resolution as `src/common/constants.ts`, which this plain-JS script cannot import. */
+/**
+ * pi-coder's state root, mirroring `src/common/state-dir.ts`, which this plain-JS script cannot import (an
+ * installed copy has no devDependencies, so no tsx either). A checkout `.env` may pin it; that is how the
+ * development checkout keeps using `<checkout>/.state` while an installed extension uses the agent dir.
+ */
 function stateDirectory() {
-    const override = process.env.PI_CODER_STATE_DIR?.trim();
+    const extensionDirectory = path.join(import.meta.dirname, "..");
+    const override =
+        process.env.PI_CODER_STATE_DIR?.trim() ||
+        envFileValue(extensionDirectory, "PI_CODER_STATE_DIR");
 
-    return override ? path.resolve(override) : path.join(getAgentDir(), "pi-coder");
+    if (!override) {
+        return path.join(getAgentDir(), "pi-coder");
+    }
+
+    const expanded =
+        override === "~"
+            ? os.homedir()
+            : override.startsWith("~/")
+              ? path.join(os.homedir(), override.slice(2))
+              : override;
+
+    // A relative override belongs to the extension checkout, not the caller's cwd.
+    return path.resolve(extensionDirectory, expanded);
+}
+
+/** One key from `<checkout>/.env`, under the same `PI_CODER_ENV_FILE` switch the extension honours. */
+function envFileValue(extensionDirectory, key) {
+    const configured = process.env.PI_CODER_ENV_FILE?.trim();
+
+    if (configured && ["0", "false", "no", "off"].includes(configured.toLowerCase())) {
+        return "";
+    }
+
+    const file = configured ? path.resolve(configured) : path.join(extensionDirectory, ".env");
+
+    let text;
+    try {
+        text = fs.readFileSync(file, "utf-8");
+    } catch {
+        return "";
+    }
+
+    for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.replace(/^\s*export\s+/, "").trim();
+        const separator = line.indexOf("=");
+
+        if (line.startsWith("#") || separator <= 0) {
+            continue;
+        }
+
+        if (line.slice(0, separator).trim() !== key) {
+            continue;
+        }
+
+        const value = line.slice(separator + 1).trim();
+        const quoted =
+            value.length >= 2 &&
+            ((value.startsWith('"') && value.endsWith('"')) ||
+                (value.startsWith("'") && value.endsWith("'")));
+
+        return quoted ? value.slice(1, -1) : value.replace(/\s#.*$/, "").trim();
+    }
+
+    return "";
 }
 
 function profilePath(durationSeconds) {
