@@ -7,11 +7,15 @@ import { fileRootsForOperation, getFileAccessRoots } from "../../../src/modules/
 /**
  * `getFileAccessRoots` is the one place that decides what the direct file tools may touch beyond the working
  * directory, so the cases here are the policy: explicit lists always apply, a mount list only widens when the
- * user opts into it, the pi package is readable by default, and nothing about a read grant touches writes.
+ * user opts into it, the runtime resource roots are readable by default, and nothing about a read grant
+ * touches writes.
  *
- * The pi-package root is asserted through `honorPiPackage: false` cases plus a prefix check, because its
- * resolved value depends on the running install and a test that hardcodes it would fail on the next machine.
+ * The derived resource roots are injected as `[]` wherever an assertion is about the declared list, so the
+ * test does not depend on the packages installed on the machine. The default derivation is covered by
+ * `resource-roots.test.ts`.
  */
+
+const NO_RESOURCE_ROOTS = { resourceRoots: [] as const };
 
 function config(overrides: Partial<SandboxConfig> = {}): SandboxConfig {
     return {
@@ -36,6 +40,7 @@ describe("file access roots", () => {
                 writeRoots: ["/srv/outbox"],
                 honorPiPackage: false,
             }),
+            NO_RESOURCE_ROOTS,
         );
 
         expect(roots.read).toEqual(["/srv/docs"]);
@@ -45,12 +50,16 @@ describe("file access roots", () => {
     it("ignores the mount list until it is declared as a file-access source", () => {
         const mounts = { "/home/user/.nvm": "readonly", "/home/user/.pi": "readwrite" } as const;
 
-        const off = getFileAccessRoots(filesConfig({ honorPiPackage: false }, mounts));
+        const off = getFileAccessRoots(
+            filesConfig({ honorPiPackage: false }, mounts),
+            NO_RESOURCE_ROOTS,
+        );
         expect(off.read).toEqual([]);
         expect(off.write).toEqual([]);
 
         const on = getFileAccessRoots(
             filesConfig({ honorPiPackage: false, honorMounts: true }, mounts),
+            NO_RESOURCE_ROOTS,
         );
         expect(on.read).toEqual(["/home/user/.nvm", "/home/user/.pi"]);
     });
@@ -60,17 +69,26 @@ describe("file access roots", () => {
 
         const honoured = getFileAccessRoots(
             filesConfig({ honorPiPackage: false, honorMounts: true }, mounts),
+            NO_RESOURCE_ROOTS,
         );
 
         expect(honoured.write).toEqual(["/home/user/.cache/uv"]);
         expect(honoured.read).toContain("/etc");
     });
 
-    it("adds the running pi package to the read list by default and never to the write list", () => {
+    it("adds the runtime resource roots to reads and never to writes", () => {
+        const roots = getFileAccessRoots(config(), {
+            resourceRoots: ["/opt/pi/skills", "/opt/pi/package"],
+        });
+
+        expect(roots.read).toEqual(["/opt/pi/skills", "/opt/pi/package"]);
+        expect(roots.write).toEqual([]);
+    });
+
+    it("derives absolute resource roots by default", () => {
         const roots = getFileAccessRoots(config());
 
         expect(roots.write).toEqual([]);
-        expect(roots.read.length).toBeGreaterThanOrEqual(0);
         for (const root of roots.read) {
             expect(path.isAbsolute(root)).toBe(true);
         }
@@ -86,17 +104,27 @@ describe("file access roots", () => {
                 },
                 { "/a": "readonly" },
             ),
+            NO_RESOURCE_ROOTS,
         );
 
         expect(roots.read).toEqual(["/a", "/b"]);
         expect(roots.write).toEqual(["/b", "/c"]);
     });
 
-    it("treats a missing config as no declared roots", () => {
-        const roots = getFileAccessRoots(null);
+    it("drops duplicate resource roots already declared explicitly", () => {
+        const roots = getFileAccessRoots(filesConfig({ readRoots: ["/skills"] }), {
+            resourceRoots: ["/skills", "/other"],
+        });
 
+        expect(roots.read).toEqual(["/skills", "/other"]);
+    });
+
+    it("treats a missing config as no declared roots", () => {
+        const roots = getFileAccessRoots(null, NO_RESOURCE_ROOTS);
+
+        expect(roots.read).toEqual([]);
         expect(roots.write).toEqual([]);
-        expect(fileRootsForOperation(undefined, "write")).toEqual([]);
+        expect(fileRootsForOperation(undefined, "write", NO_RESOURCE_ROOTS)).toEqual([]);
     });
 
     it("selects the operation's own list", () => {
@@ -106,7 +134,9 @@ describe("file access roots", () => {
             honorPiPackage: false,
         });
 
-        expect(fileRootsForOperation(candidate, "read")).toEqual(["/only-read"]);
-        expect(fileRootsForOperation(candidate, "write")).toEqual(["/only-write"]);
+        expect(fileRootsForOperation(candidate, "read", NO_RESOURCE_ROOTS)).toEqual(["/only-read"]);
+        expect(fileRootsForOperation(candidate, "write", NO_RESOURCE_ROOTS)).toEqual([
+            "/only-write",
+        ]);
     });
 });

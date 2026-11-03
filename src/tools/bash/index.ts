@@ -18,6 +18,7 @@ import { getScratchpadPath } from "../../modules/scratchpad";
 import { ALLOWED_COMMAND_ENTRY_TYPE, type AllowedCommandEntry } from "../../common/audit";
 import sandbox from "../../modules/sandbox/bubblewrap";
 import type { ContainerState } from "../../modules/sandbox/container/state";
+import { agentResourceRoots } from "../../modules/sandbox/resource-roots";
 import { Permission } from "../../modules/sandbox/permissions";
 import {
     resolvePermissionDetails,
@@ -223,6 +224,14 @@ export default function registerBashToolHook(pi: ExtensionAPI, container?: Conta
         resetBashPermissionState(permissionStateFor(ctx));
         reportedSandboxWarnings.clear();
 
+        // Warm the resource-root resolution before the first tool call: it asks pi's package manager for the
+        // exact skill directories, which is shared with the container backend and the file gates. A failure
+        // is already contained (the standard roots remain), so it must not fail the session.
+        await agentResourceRoots({
+            cwd: ctx.cwd,
+            projectTrusted: ctx.isProjectTrusted?.() === true,
+        });
+
         if (!hasSupport) {
             ctx.ui.notify(
                 `pi-bash-sandbox: platform ${process.platform} is not supported\n`,
@@ -350,12 +359,21 @@ Pay attention to these notes as they provide context about the user's preference
         const permissionState = permissionStateFor(ctx);
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
         const userMemoryDirectory = getUserMemoryDirectory();
-        const additionalRoots = [...(scratchpadPath ? [scratchpadPath] : []), userMemoryDirectory];
-        const readOnlyAdditionalRoots = [userMemoryDirectory];
+        // Skills, skill scripts, and pi's docs are advertised by the prompt but live outside the checkout.
+        // They are readable roots, not writable ones: a command that could edit them could change the
+        // instructions a later turn follows.
+        const runtimeRoots = await agentResourceRoots({
+            cwd: ctx.cwd,
+            projectTrusted: ctx.isProjectTrusted?.() === true,
+        });
+        const workspaceRoots = [...(scratchpadPath ? [scratchpadPath] : []), userMemoryDirectory];
+        const additionalRoots = [...workspaceRoots, ...runtimeRoots];
+        const readOnlyAdditionalRoots = [userMemoryDirectory, ...runtimeRoots];
         // Stated rather than left to the "unset means exempt" default: the agent gets leeway inside
         // its own scratchpad, and user-level memories are runtime data it is meant to read and write,
-        // so sensitive-name filtering does not apply under either root.
-        const sensitiveAdditionalRoots = additionalRoots;
+        // so sensitive-name filtering does not apply under either root. A resource root keeps the
+        // filter, because it is a view of package code rather than runtime-owned data.
+        const sensitiveAdditionalRoots = workspaceRoots;
         try {
             details = resolvePermissionDetails(
                 event.input.command,

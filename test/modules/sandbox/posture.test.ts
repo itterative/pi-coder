@@ -69,6 +69,18 @@ describe("resolveSandboxPosture", () => {
         expect(readonly.writableRoots).toEqual([scratchpad]);
     });
 
+    it("mounts the resource roots read-only, never as writable roots", () => {
+        const skills = path.join(root, "skills");
+        fs.mkdirSync(skills);
+
+        const resolved = posture({
+            ...runtimeRootsFor("write", { resourceRoots: [skills] }),
+        });
+
+        expect(resolved.readOnlyRoots).toContain(skills);
+        expect(resolved.writableRoots).not.toContain(skills);
+    });
+
     it("keeps the network for a mutating runtime and takes it away from a read-only one", () => {
         expect(posture().network).toEqual({ mode: "egress", publish: [] });
         expect(posture({ role: "readonly" }).network).toEqual({ mode: "none", publish: [] });
@@ -382,6 +394,21 @@ describe("runtimeRootsFor", () => {
             extraWritableRoots: [],
             extraReadOnlyRoots: ["/sessions"],
         });
+    });
+
+    it("mounts the resources the prompt advertises read-only, for either role", () => {
+        const resource = "/skills";
+
+        const write = runtimeRootsFor("write", {
+            scratchpadPath: "/scratch",
+            resourceRoots: [resource],
+        });
+        expect(write.extraReadOnlyRoots).toEqual([resource]);
+        expect(write.extraWritableRoots).toEqual(["/scratch"]);
+
+        const readonly = runtimeRootsFor("readonly", { resourceRoots: [resource] });
+        expect(readonly.extraReadOnlyRoots).toEqual([resource]);
+        expect(readonly.extraWritableRoots).toEqual([]);
     });
 
     it("omits roots the session does not have", () => {

@@ -66,8 +66,9 @@ request-id multiplexing, not a framed `sh` loop — per-command `sh -c` removes 
   `runtimeRootsFor(role, { ..., sessionsDir })` as `extraReadOnlyRoots` — the one root a *write* role also gets
   read-only, because pi writes transcripts on the host and a runtime only reads one to review it (session
   review, `/stats`). Read-only rather than absent: it is not a credential the posture hides, it is the runtime's
-  own data, and a scout that cannot read it cannot review a session. `.pi/agent/sessions` stays in
-  `CREDENTIAL_PATHS`, which only feeds the warning for user-configured `sandbox.mounts`.
+  own data, and a scout that cannot read it cannot review a session. `.pi/agent/sessions` is deliberately not in
+  `CREDENTIAL_PATHS`; `.pi/agent/auth.json` is, so mounting `~/.pi` still warns. `CREDENTIAL_PATHS` only feeds
+  the warning for user-configured `sandbox.mounts`.
 - **SELinux hosts need `--security-opt label=disable`** (or `:Z`, which relabels the user's checkout).
   Without one of them, reads inside the container fail with `Permission denied` despite matching uids.
 - **Rootless podman cannot run inside the `bwrap` sandbox.** `newuidmap` fails with
@@ -146,6 +147,15 @@ argv), `protocol.ts`, `config.ts` (env switch + host guards), `index.ts` (wiring
 
 - `pid1=podman-init`, `uid_map` = `0 1241 1`, `containerenv` present; cwd is the real checkout and a file
   written inside is the same inode the host-side file tools read (bind mount, not a copy).
+- **Resource roots are read-only mounts in both backends.** `src/modules/sandbox/resource-roots.ts` derives
+  the files the prompt advertises: `PI_CODER_EXTENSION_DIR`, `getPiPackageDirectory()`, `<agentDir>/skills`,
+  `<agentDir>/git`, `<agentDir>/npm`, `<agentDir>/tmp/extensions`, `~/.agents/skills`, plus the exact package
+  roots `DefaultPackageManager.resolve()` reports, so a local package or an explicit skill path outside the
+  managed stores is covered too. The container receives them through `runtimeRootsFor`'s `resourceRoots`; the
+  bwrap profile receives the same list as `additionalRoots` + `readOnlyAdditionalRoots`. Without them a skill's
+  `SKILL.md` and the scripts it names are advertised by the system prompt but invisible to a sandboxed command.
+  The resolved set is pruned to roots not already inside a standard one, and it is memoized per
+  cwd/agent-dir/trust because the bash hook, container start, and file gates all ask.
 - The mount set is exactly: repo rw, `/run/pi/dispatch.mjs` ro, scratchpad rw mounted into the container's own
   `/tmp` tmpfs, and `~/.pi/agent/memory` ro (a write is refused with `Read-only file system`). The scratchpad
   moved out of `/tmp` because a tmpfs `/tmp` is wiped by a host or dev-environment restart while the transcript-backed
@@ -456,7 +466,7 @@ containers. The config surface itself (long-form mount entries with `target`/`cr
 `homeMounts`) is implemented — see `sandbox/configuration.md` and `docs/sandbox-config-redesign.md`; retiring
 the bwrap backend is the remaining decision there. The rw host binds beyond the checkout are now enumerated: the scratchpad, the user memory
 directory (rw since the file tools moved inside), and the checkout itself; everything else is ro or the
-sandbox's own. Cross-session warmth is largely answered by the recipe: preparation is a cached build, so a
+sandbox's own — including the resource roots for skills and the extension/pi packages. Cross-session warmth is largely answered by the recipe: preparation is a cached build, so a
 session either finds `pi-coder-sandbox:<hash>` or asks to build it; warmth would only still matter for
 *runtime* installs, which the recipe makes unnecessary. Profile strengthening (decision 13) remains open,
 as does the default session network (NAT is the exfiltration path; `network: "none"` and port publishing are

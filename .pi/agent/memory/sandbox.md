@@ -45,7 +45,10 @@ a podman-created empty directory, duplicates collapsed to the most permissive mo
 children. Config surface (`sandbox.mounts` long form with `target`/`create`, `sandbox.network` with ports,
 `sandbox.devices`, and the removal of `homeMounts`) is in `sandbox/configuration.md`. The container's `$HOME`
 is one shared directory at the real home path (`.state/container/home`), so package caches survive a session;
-`sandbox.mounts` is what puts specific host parts back. A
+`sandbox.mounts` is what puts specific host parts back. Both backends also mount the runtime
+**resource roots** read-only — this extension and the pi package, pi's managed package stores, user-level skill
+directories, and the exact package roots pi resolved — from `src/modules/sandbox/resource-roots.ts`, so a skill
+advertised by the prompt can be read and its scripts run inside the sandbox. A
 child below the `command` rung is `readonly`: checkout, worktree git data, and memory mounted read-only, no
 network (`--network=none` / `--unshare-net`), and no devices. Details in `sandbox/session-sandbox.md`.
 

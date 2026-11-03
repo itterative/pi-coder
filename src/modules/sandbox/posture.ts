@@ -104,7 +104,7 @@ const CREDENTIAL_PATHS = [
     ".netrc",
     ".npmrc",
     ".password-store",
-    ".pi/agent/sessions",
+    ".pi/agent/auth.json",
 ];
 
 export function resolveSandboxPosture(request: PostureRequest): SandboxPosture {
@@ -168,17 +168,34 @@ export function resolveSandboxPosture(request: PostureRequest): SandboxPosture {
  */
 export function runtimeRootsFor(
     role: SandboxRole,
-    roots: { scratchpadPath?: string; memoryDir?: string; sessionsDir?: string },
+    roots: {
+        scratchpadPath?: string;
+        memoryDir?: string;
+        sessionsDir?: string;
+        /**
+         * Resources the prompt advertises: skills, skill scripts, and pi's own docs. Read-only for every
+         * role because nothing in the runtime needs to write them, and a command that can would be able to
+         * change the instructions a later turn is told to follow.
+         */
+        resourceRoots?: readonly string[];
+    },
 ): { extraWritableRoots: string[]; extraReadOnlyRoots: string[] } {
     const memory = roots.memoryDir === undefined ? [] : [roots.memoryDir];
     const scratchpad = roots.scratchpadPath === undefined ? [] : [roots.scratchpadPath];
     const sessions = roots.sessionsDir === undefined ? [] : [roots.sessionsDir];
+    const resources = roots.resourceRoots === undefined ? [] : [...roots.resourceRoots];
 
     if (role === "readonly") {
-        return { extraWritableRoots: scratchpad, extraReadOnlyRoots: [...memory, ...sessions] };
+        return {
+            extraWritableRoots: scratchpad,
+            extraReadOnlyRoots: [...memory, ...sessions, ...resources],
+        };
     }
 
-    return { extraWritableRoots: [...scratchpad, ...memory], extraReadOnlyRoots: sessions };
+    return {
+        extraWritableRoots: [...scratchpad, ...memory],
+        extraReadOnlyRoots: [...sessions, ...resources],
+    };
 }
 
 /** A posture with no sandbox behind it: every path is writable because nothing stops a write. */
@@ -620,8 +637,8 @@ function credentialMatch(source: string, homeDir: string | undefined): string | 
         (candidate) =>
             normalised === candidate ||
             normalised.startsWith(`${candidate}/`) ||
-            // A parent mount reaches everything below it: `~/.pi` hands over `~/.pi/agent/sessions` and the
-            // settings that decide whether the sandbox is on at all, and `$HOME` hands over `.ssh`.
+            // A parent mount reaches everything below it: `~/.pi` hands over the settings and auth that decide
+            // whether the sandbox is on at all, and `$HOME` hands over `.ssh`.
             normalised.length === 0 ||
             candidate.startsWith(`${normalised}/`),
     );

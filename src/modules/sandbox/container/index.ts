@@ -41,6 +41,7 @@ import {
     type SandboxPosture,
     type SandboxRole,
 } from "../posture";
+import { agentResourceRoots } from "../resource-roots";
 
 /**
  * Container sandbox backend: the whole `bash` surface of a session runs inside one long-lived rootless
@@ -481,6 +482,12 @@ export function registerContainerBackend(
         const sessionId = ctx.sessionManager.getSessionId();
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
         const role = options.role ?? "write";
+        // Skills and pi's docs live outside the checkout. The mount set is frozen at create, so resolve
+        // them before the posture is built rather than discovering on the first read that they are absent.
+        const resourceRoots = await agentResourceRoots({
+            cwd: ctx.cwd,
+            projectTrusted: ctx.isProjectTrusted?.() === true,
+        });
         const posture = resolveSandboxPosture({
             cwd: ctx.cwd,
             config: loadSessionConfig(ctx.cwd),
@@ -489,6 +496,7 @@ export function registerContainerBackend(
                 ...(scratchpadPath === undefined ? {} : { scratchpadPath }),
                 memoryDir: getUserMemoryDirectory(),
                 sessionsDir: getUserSessionsDirectory(),
+                resourceRoots,
             }),
             gitMounts: gitSupportMounts(ctx.cwd),
         });

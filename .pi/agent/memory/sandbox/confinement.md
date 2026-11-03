@@ -27,9 +27,12 @@ sessions directory is read-only for every role, since the runtime reads transcri
 
 `src/modules/sandbox/file-roots.ts` is the single place that turns the user's declarations into the roots
 `src/tools/file-permissions.ts` trusts beyond the cwd and the scratchpad: `files.readRoots` / `files.writeRoots`,
-the `sandbox.mounts` sources when `files.honorMounts` is set (default **false**), and the running pi package for
-reads unless `files.honorPiPackage` says otherwise (default true, because the harness instructs agents to read
-pi's docs and examples). Two asymmetries are the whole design and must not be "tidied" into symmetry:
+the `sandbox.mounts` sources when `files.honorMounts` is set (default **false**), and the runtime resource roots
+for reads — the running pi package unless `files.honorPiPackage` says otherwise (default true), this extension's
+package, pi's managed package stores, the user-level skill directories, and the exact package roots pi's package
+manager resolved (`src/modules/sandbox/resource-roots.ts`). The parent read hook awaits that resolver so a local
+package outside the managed stores is included; `getFileAccessRoots` itself stays synchronous and uses the
+standard set. Two asymmetries are the whole design and must not be "tidied" into symmetry:
 
 - **A declared root is not a sensitive-name exemption.** Roots go in as `additionalRoots`; only the runtime
   scratchpad is passed as `sensitiveAdditionalRoots`, so a `.env`, `.git`, key, or credential path under a

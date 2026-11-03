@@ -22,6 +22,7 @@ import {
 } from "../modules/sandbox/permission-state";
 import { readConfinementFor } from "../modules/sandbox/read-confinement";
 import { fileRootsForOperation } from "../modules/sandbox/file-roots";
+import { agentResourceRoots } from "../modules/sandbox/resource-roots";
 import { ALLOWED_FILE_ENTRY_TYPE, type AllowedFileEntry } from "../common/audit";
 import {
     getPathConfinementAssessment,
@@ -330,9 +331,19 @@ export default function registerFileToolHook(
             operation === "write" && options.childAccess
                 ? []
                 : fileRootsForOperation(sandboxConfig.current, operation);
+        // The standard resource roots come from `file-roots`; this adds the exact skill/package directories
+        // pi resolved, which may live outside the managed stores (a local package, an explicit skill path).
+        const resourceRoots =
+            operation === "read"
+                ? await agentResourceRoots({
+                      cwd: ctx.cwd,
+                      projectTrusted: ctx.isProjectTrusted?.() === true,
+                  })
+                : [];
         const additionalRoots = [
             ...scratchpadRoots,
             ...declaredRoots,
+            ...resourceRoots,
             ...(operation === "read" ? (options.additionalReadRoots?.(ctx) ?? []) : []),
         ];
 

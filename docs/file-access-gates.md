@@ -18,7 +18,10 @@ A root is a path an access may resolve inside without a prompt. The set is, in o
 2. `files.readRoots` / `files.writeRoots` from the sandbox config — explicit, `~/…` expanded by the
    confinement checks themselves;
 3. the `sandbox.mounts` sources, **only** when `files.honorMounts` is true (default false);
-4. the running pi package's directory, for reads, unless `files.honorPiPackage: false`.
+4. the runtime resource roots, for reads: the running pi package unless `files.honorPiPackage: false`,
+   this extension's package root, pi's managed package stores (`git`, `npm`, `tmp/extensions`), the
+   user-level `skills` and `~/.agents/skills` directories, and the exact package roots pi's package
+   manager resolved for the loaded skills.
 
 ```json
 "files": {
@@ -40,9 +43,11 @@ The three rules that shape it, each earned:
   let an agent edit its own memory and settings files silently, which every gate has always prompted for.
   The reason `honorMounts` defaults to false is the same class of case: `~/.config/gh: readonly` exists so
   `gh` works in a sandbox and holds a token in a file no name filter catches.
-- **The pi package is the one derived default**, because this harness's own instructions tell every agent
-  to read pi's docs and examples. On the measured corpus that single root covered 51 of the 111 accesses
-  that were reaching a prompt, and it costs no tokens and no round trip.
+- **The runtime resource roots are the derived default**, because this harness's own instructions tell
+  every agent to read pi's docs, examples, and the skills the prompt advertises. On the measured corpus
+  the pi package alone covered 51 of the 111 accesses that were reaching a prompt, and it costs no tokens
+  and no round trip. The same set is what the sandbox mounts, so a read that the gate allows does not fail
+  later because the file is absent from the container's view (`src/modules/sandbox/resource-roots.ts`).
 
 Read-only children get the same read roots through `createChildGateRuntime`'s `readRoots`: below the
 `command` rung a child has no prompt to fall back on, so the confinement check _is_ its reach, and a scout
