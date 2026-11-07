@@ -18,7 +18,10 @@ where the decision-model gate lives.
   entry stays in the catalog but is filtered out of the rotation and the model's offer by
   `ACTIVE_ROTATION_REMINDERS`; `sandbox` is disabled until it keys on a real gated event rather than rotating
   context-free. Catalog texts stay extension-generic: they never name one repository's commands, which live in
-  that project's instructions and memories.
+  that project's instructions and memories. `COMPACTION_REMINDER` leads with the room the fold reclaimed, not
+  with its loss, and tells the model to keep going: a "you nearly ran out / the summary is lossy" frame makes
+  models wrap up, hand off, or re-plan (user, 2026-03). The session-JSONL pointer stays, framed as a fallback
+  for one missing pre-fold detail rather than an invitation to re-read the transcript.
 - `scheduler.ts` — pure `ReminderScheduler`: the armed change-point reminder first; otherwise rotation due
   after `everyTurns` user turns since the last emission or `thresholdTokens` new context tokens, whichever comes
   first. A model answer naming an offered id is chosen and advances the rotation past it; a deliberate `none`

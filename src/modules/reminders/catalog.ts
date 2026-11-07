@@ -23,11 +23,13 @@ export const MEMORY_READ_REMINDER: ReminderDefinition = {
 /**
  * The reminder a compaction arms in place of `MEMORY_READ_REMINDER`. A fold is not just a changed memory
  * list: the TODO state lives in a file the summary does not carry and the summary is lossy in a way the
- * original transcript is not. Kept out of the rotation - it fires once, at the first turn after the fold.
+ * original transcript is not. The text leads with the room the fold reclaimed and not with its loss: models
+ * that read a fold as "nearly out of context" start wrapping up or re-planning. Kept out of the rotation - it
+ * fires once, at the first turn after the fold.
  */
 export const COMPACTION_REMINDER: ReminderDefinition = {
     id: "compaction",
-    text: "The conversation was just compacted: the summary replaces the folded transcript and is lossy - check the session JSONL if you need pre-fold detail. The memory list and the runtime `TODO.md` from your prompt were not part of the fold: re-read the relevant memories and the TODO before continuing multi-step work.",
+    text: "The transcript was compacted to reclaim context: room is available again, so continue the same task rather than wrapping up, handing off, or starting over. The summary is condensed - treat it as the account of what happened, and read the session JSONL only if a specific pre-fold detail is missing or contradicted. Memory files and the runtime `TODO.md` live outside the transcript and were not folded: re-read them before continuing multi-step work.",
     guidance:
         "A compaction just folded the transcript; memory and TODO state live in files it did not fold.",
 };
