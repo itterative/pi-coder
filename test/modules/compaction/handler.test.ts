@@ -251,8 +251,8 @@ describe("compaction stages", () => {
         expect(payload?.summary).toContain('- "fix the compaction module"');
         expect(payload?.summary).toContain("## Tool Ledger");
         expect(payload?.summary).toContain("read x1");
-        expect(payload?.summary).toContain("## Dropped Context");
-        expect(payload?.summary).toContain("context resumes at entry kept-1");
+        expect(payload?.summary).toContain("## Context Fold");
+        expect(payload?.summary).toContain("the conversation continues at entry kept-1");
         expect(payload?.summary).toContain("<read-files>\nsrc/index.ts\n</read-files>");
         expect(payload?.summary).toContain(
             "<modified-files>\nsrc/modules/compaction/index.ts\n</modified-files>",

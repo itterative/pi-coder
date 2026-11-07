@@ -72,7 +72,7 @@ describe("deterministic summary sections", () => {
         expect(sections).not.toContain("## Tool Ledger");
         expect(sections).not.toContain("## Delegated Runs");
         expect(sections).toContain("## Verbatim Recent Requests");
-        expect(sections).not.toContain("older message blocks were left out");
+        expect(sections).not.toContain("older message blocks were omitted");
     });
 
     it("reports the blocks the serializer itself dropped", () => {
@@ -81,7 +81,7 @@ describe("deterministic summary sections", () => {
             firstKeptEntryId: "kept-1",
             droppedBlocks: 2,
         });
-        expect(sections).toContain("2 older message blocks were left out");
+        expect(sections).toContain("2 older message blocks were omitted");
     });
 
     it("ignores non-agent tool calls when collecting runs", () => {

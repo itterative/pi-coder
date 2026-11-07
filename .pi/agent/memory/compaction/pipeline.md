@@ -54,7 +54,7 @@ does not fit — true of the live context, false of a shorter prefix of it, whic
 ## Summary and details contract
 
 `summary` = model text + `buildSupplementarySections()` (`## Verbatim Recent Requests`, `## Tool Ledger`,
-`## Delegated Runs`, `## Dropped Context`, all computed by `analyzeSpan` rather than recalled) + pi's
+`## Delegated Runs`, `## Context Fold`, all computed by `analyzeSpan` rather than recalled) + pi's
 `<read-files>`/`<modified-files>` tail. The model is told to write pi's section skeleton **only** and to skip the
 harness-owned ones, so `CompactionSummaryMessageComponent` and the `/agents` transcript keep rendering.
 

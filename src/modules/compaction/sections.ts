@@ -198,19 +198,19 @@ export interface SupplementarySectionInput {
 }
 
 export function buildSupplementarySections(input: SupplementarySectionInput): string {
-    const dropped =
-        `## Dropped Context\n- ${String(input.analysis.messageCount)} messages were summarized ` +
-        `into this checkpoint; context resumes at entry ${input.firstKeptEntryId}.`;
+    const folded =
+        `## Context Fold\n- ${String(input.analysis.messageCount)} messages were folded ` +
+        `into this checkpoint; the conversation continues at entry ${input.firstKeptEntryId}.`;
     const omitted =
         input.droppedBlocks > 0
-            ? `\n- ${String(input.droppedBlocks)} older message blocks were left out of the summarization ` +
-              "request itself, so they are not represented here."
+            ? `\n- ${String(input.droppedBlocks)} older message blocks were omitted from the summarization ` +
+              "input, so this checkpoint may not reflect them."
             : "";
     const sections = [
         verbatimRequests(input.analysis),
         ledgerLines(input.analysis),
         delegatedRuns(input.analysis),
-        `${dropped}${omitted}`,
+        `${folded}${omitted}`,
     ];
     return sections.filter((section) => section.length > 0).join("\n\n");
 }
