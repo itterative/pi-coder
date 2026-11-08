@@ -12,7 +12,7 @@ import path from "node:path";
  * `apt-get` inside a session and commit the result — produces an opaque layer nobody reviews, which is
  * the same failure mode as trusting a mutated `.git`.
  *
- * Two consequences shape this module:
+ * Three consequences shape this module:
  *
  * - **The dispatcher needs a Node runtime, and a user's base image probably has none.** Rather than
  *   forcing `FROM node:*` on every recipe, the effective Containerfile prepends a stage that copies
@@ -23,6 +23,10 @@ import path from "node:path";
  *   (Alpine) base fails with `Exec format error` at startup, which reads like a pi-coder bug. A trailing
  *   `RUN /opt/pi/node --version` turns that into a failed build naming the real cause, and Alpine bases
  *   are rejected before podman is even invoked.
+ * - **Commands and skills type `node`, not an absolute path.** The dispatcher knows to run `/opt/pi/node`,
+ *   but a skill's script says `node scripts/…`, so a non-Node base breaks it. The prologue therefore
+ *   registers the runtime as the distribution's `node` alternative — only when the base has no `node` on
+ *   `PATH`, so a project that pins its own Node is never shadowed by the injected runtime.
  */
 
 /** Project-local recipe location, relative to the checkout root. */
@@ -30,6 +34,23 @@ export const RECIPE_RELATIVE_PATH = path.join(".pi", "Containerfile");
 
 /** The in-image path the prologue installs the dispatcher runtime at. */
 export const RECIPE_NODE_PATH = "/opt/pi/node";
+
+/**
+ * Where the prologue puts the `node` command it registers when the base image has none.
+ *
+ * `/usr/local/bin` precedes `/usr/bin` in the default `PATH` on every supported base, so the link is
+ * found without touching a distribution-owned directory. It stays a single managed link: the alternatives
+ * entry is what makes the runtime visible to `update-alternatives --display node` instead of hiding it.
+ */
+const NODE_LINK_PATH = "/usr/local/bin/node";
+
+/**
+ * Priority of that alternatives entry.
+ *
+ * Only used when nothing else provides `node`, so it must merely be high enough to be selected if the
+ * base happens to have a candidate registered without a link on `PATH`.
+ */
+const NODE_LINK_PRIORITY = 100;
 
 /**
  * Name prefix for images built from a recipe; the tag carries the recipe hash.
@@ -122,6 +143,21 @@ export function effectiveContainerfile(recipe: SandboxRecipe, baseImage: string)
         `COPY --from=${RUNTIME_STAGE} /usr/local/bin/node ${RECIPE_NODE_PATH}`,
         `# Fail the build, not the session, when the base cannot run that binary (e.g. a musl base).`,
         `RUN ${RECIPE_NODE_PATH} --version`,
+        `# Commands and skills call \`node\`, and a non-Node base has none. Register the runtime the`,
+        `# dispatcher already uses as the distribution's \`node\` alternative; a base that ships \`node\``,
+        `# on PATH is left alone, so a pinned toolchain is never shadowed by the injected runtime.`,
+        `RUN if ! command -v node >/dev/null 2>&1; then \\`,
+        `      mkdir -p ${path.dirname(NODE_LINK_PATH)} && \\`,
+        `      if command -v update-alternatives >/dev/null 2>&1; then \\`,
+        `        update-alternatives --install ${NODE_LINK_PATH} node ${RECIPE_NODE_PATH} ${NODE_LINK_PRIORITY} || \\`,
+        `          ln -sf ${RECIPE_NODE_PATH} ${NODE_LINK_PATH}; \\`,
+        `      elif command -v alternatives >/dev/null 2>&1; then \\`,
+        `        alternatives --install ${NODE_LINK_PATH} node ${RECIPE_NODE_PATH} ${NODE_LINK_PRIORITY} || \\`,
+        `          ln -sf ${RECIPE_NODE_PATH} ${NODE_LINK_PATH}; \\`,
+        `      else \\`,
+        `        ln -sf ${RECIPE_NODE_PATH} ${NODE_LINK_PATH}; \\`,
+        `      fi; \\`,
+        `    fi`,
         "",
     ].join("\n");
 }

@@ -104,7 +104,25 @@ describe("effectiveContainerfile", () => {
     });
 
     it("verifies the runtime at build time, so a musl base fails the build instead of the session", () => {
-        expect(lines.at(-2)).toBe(`RUN ${RECIPE_NODE_PATH} --version`);
+        expect(lines).toContain(`RUN ${RECIPE_NODE_PATH} --version`);
+    });
+
+    it("registers the runtime as `node` when the base has none, so skills can call it", () => {
+        const register = lines.findIndex((line) => line.startsWith("RUN if ! command -v node"));
+
+        expect(register).toBeGreaterThan(-1);
+        expect(text).toContain(
+            `update-alternatives --install /usr/local/bin/node node ${RECIPE_NODE_PATH}`,
+        );
+        expect(text).toContain(`alternatives --install /usr/local/bin/node node`);
+        expect(text).toContain(`ln -sf ${RECIPE_NODE_PATH} /usr/local/bin/node`);
+    });
+
+    it("registers `node` only after the runtime it links to was verified", () => {
+        const verify = lines.indexOf(`RUN ${RECIPE_NODE_PATH} --version`);
+        const register = lines.findIndex((line) => line.startsWith("RUN if ! command -v node"));
+
+        expect(register).toBeGreaterThan(verify);
     });
 });
 
