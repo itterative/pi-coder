@@ -234,9 +234,11 @@ function sameLabels(left: ReminderStateLabels, right: ReminderStateLabels): bool
  *
  * The memory reminder is tied to the memory list changing at a session start; a tree navigation only
  * resumes the schedule, and a compaction arms its own reminder for the fold. The rest rotate on a turn
- * cadence or a context-growth threshold. The two delivery paths are deliberately
- * separate from the one-per-turn rule: a long autonomous run may receive a mid-run steer, but only while the
- * streaming assistant message has called a tool, so a reminder never follows a run that is about to end.
+ * cadence or a context-growth threshold. The two delivery paths share one rotation slot per user turn: a
+ * deferred turn decision yields to a mid-run point that took the slot first, and a mid-run point yields to a
+ * rotation reminder the turn already decided. Only a step that ran a tool can steer - a steer polled after a
+ * text-only turn is itself the reason a new turn happens - so the deferred path holds its payload for such a
+ * step. The armed reminders are change points outside that slot and may share a turn with a mid-run steer.
  *
  * The activity gate narrows the rotation: `memory-hygiene` is unavailable until mutating work happened, and
  * a model pick the gate disallows is dropped rather than replaced. When the decision model is configured
@@ -246,10 +248,11 @@ function sameLabels(left: ReminderStateLabels, right: ReminderStateLabels): bool
  *
  * The rotation judgement is deferred. Its consult is a model call, and pi builds the user message only after
  * `before_agent_start` handlers resolve, so waiting there withholds the user's own message until the model has
- * answered; instead the boundary advances the turn and queues the judgement, and the reminder it picks is
- * steered into the run at the next opportunity (or carried by the next user message if the run already
- * settled). The armed reminders are unaffected because they never consult: the memory and compaction reminders
- * are decided at the boundary and still ride the message they belong to.
+ * answered; instead the boundary advances the turn and queues the judgement, and the reminder it picks is held
+ * until a step that ran a tool (so the run has already committed to another inference), steered into that run,
+ * or carried by the next user message when the run settles first. The armed reminders are unaffected because
+ * they never consult: the memory and compaction reminders are decided at the boundary and still ride the
+ * message they belong to.
  */
 export default function registerRemindersExtension(
     pi: ExtensionAPI,
@@ -297,6 +300,34 @@ export default function registerRemindersExtension(
 
     /** Whether an agent run is in flight, which is what decides how a deferred reminder is delivered. */
     let runActive = false;
+
+    /**
+     * A rotation reminder the turn judged but has not delivered yet.
+     *
+     * A deferred judgement resolves before pi knows whether the run continues. `steer` queues the message for
+     * the next inference and pi polls that queue after *every* turn, including one with no tool call - where the
+     * steer is then the only reason another inference happens at all, so the reminder would land after the
+     * run's final answer and wake a turn of its own. Holding it until a step that ran a tool proves the run is
+     * going to ask again; a run that settles first hands it to the next prompt instead.
+     */
+    const pendingSteers: Array<ReturnType<typeof reminderPayload>> = [];
+
+    /**
+     * The user turn whose rotation reminder was already decided.
+     *
+     * The deferred turn and the mid-run gate are one slot per user turn: the deferred decide already yields
+     * when a mid-run point took the slot, and this is the other direction, so a step later in the same turn
+     * does not show a second rotation reminder. Armed reminders do not set it - they belong to the catalog's
+     * change points, not to the rotation.
+     */
+    let rotationReminderTurn: number | undefined;
+
+    /** Queue the reminders held for a continuing run at the step boundary that proved it continues. */
+    const flushPendingSteers = (): void => {
+        for (const payload of pendingSteers.splice(0)) {
+            pi.sendMessage(payload, { deliverAs: "steer" });
+        }
+    };
 
     /** The activity gate for the step being judged, computed lazily once per assistant message. */
     let midRunAvailable: ReadonlySet<ReminderId> | undefined;
@@ -672,12 +703,21 @@ export default function registerRemindersExtension(
                 return;
             }
 
-            // The request the decision was made for is already in flight, so the reminder cannot ride it: it
-            // joins the run at the run's next step, or - when the run has already settled - the next user
-            // message, which is the only delivery that still reaches the model.
-            pi.sendMessage(reminderPayload(ctx, reminder, emitTurn), {
-                deliverAs: runActive ? "steer" : "nextTurn",
-            });
+            // The turn's rotation slot is taken whether or not the delivery below can happen yet.
+            rotationReminderTurn = emitTurn;
+
+            const payload = reminderPayload(ctx, reminder, emitTurn);
+            // The request the decision was made for is already in flight, so the reminder cannot ride it. A run
+            // in flight does not yet promise another inference either: its current turn may be the last, so a
+            // steer queued now would be polled after the final answer and be the only reason for another turn.
+            // Hold it for the first step that ran a tool; a settled run hands it to the next prompt, which is
+            // the only delivery that still reaches the model.
+            if (runActive) {
+                pendingSteers.push(payload);
+                return;
+            }
+
+            pi.sendMessage(payload, { deliverAs: "nextTurn" });
         });
     };
 
@@ -738,9 +778,11 @@ export default function registerRemindersExtension(
         options: { resume?: boolean; armed?: ReminderDefinition } = {},
     ) => {
         // A change point: a judgement still in the air belongs to the session that is being left, so it drops
-        // its answer instead of recording it here.
+        // its answer instead of recording it here, and a held reminder has no run left to join.
         epoch += 1;
         growth.reset();
+        pendingSteers.length = 0;
+        rotationReminderTurn = undefined;
         const branch = ctx.sessionManager.getBranch();
         labels = reminderLabelsFromEntries(branch);
 
@@ -784,6 +826,12 @@ export default function registerRemindersExtension(
     });
     pi.on("agent_settled", () => {
         runActive = false;
+
+        // No step proved the run would continue, so the held reminders never had a steer destination. Hand
+        // them to the next user prompt rather than waking a turn of their own after the final answer.
+        for (const payload of pendingSteers.splice(0)) {
+            pi.sendMessage(payload, { deliverAs: "nextTurn" });
+        }
     });
 
     const midRunEnabled =
@@ -810,6 +858,11 @@ export default function registerRemindersExtension(
      */
     const maybeEmitMidRun = async (ctx: ExtensionContext): Promise<void> => {
         if (!midRunEnabled) {
+            return;
+        }
+
+        // The turn's rotation reminder already holds the slot, delivered or still held for this run.
+        if (rotationReminderTurn === scheduler.snapshot().userTurns) {
             return;
         }
 
@@ -1074,6 +1127,10 @@ export default function registerRemindersExtension(
             // queued here would arrive as a stray message after the final answer.
             return;
         }
+
+        // A step that ran a tool is the first point the run guarantees another inference, so the reminders
+        // held for it have a destination now.
+        flushPendingSteers();
 
         const at = epoch;
         // Queued first, because the mid-run gate reads the labels this checkpoint produces and waits for it.

@@ -755,14 +755,65 @@ describe("deferred rotation turns", () => {
         expect(String(stub.sentMessages[0]?.message.content)).toContain("scout");
     });
 
-    it("steers the deferred reminder into the run it was judged for", async () => {
+    it("holds the deferred reminder until a step that ran a tool", async () => {
         const stub = harness();
         await startSession(stub);
         await stub.requireHandler("agent_start")({}, ctx);
         await userTurn(stub);
 
-        expect((await userTurn(stub))?.message?.content).toContain("scout");
+        await userTurn(stub);
 
+        // Nothing guarantees another inference yet: a steer queued here would be polled after a terminal
+        // answer and become the only reason for a new turn.
+        expect(stub.sentMessages).toEqual([]);
+
+        await toolResponse(stub);
+
+        expect(stub.sentMessages).toHaveLength(1);
+        expect(String(stub.sentMessages[0]?.message.content)).toContain("scout");
+        expect(stub.sentMessages[0]?.options).toEqual({ deliverAs: "steer" });
+    });
+
+    it("hands the deferred reminder to the next prompt when the answer is terminal", async () => {
+        const stub = harness();
+        await startSession(stub);
+        await stub.requireHandler("agent_start")({}, ctx);
+        await userTurn(stub);
+        await userTurn(stub);
+
+        // The regression this pins: a text-only answer may be the run's last, yet a steer queued before it
+        // still woke another turn just to deliver the reminder after the final answer.
+        await stub.requireHandler("turn_end")({ message: {}, toolResults: [] }, ctx);
+        expect(stub.sentMessages).toEqual([]);
+
+        await stub.requireHandler("agent_settled")({}, ctx);
+
+        expect(stub.sentMessages).toHaveLength(1);
+        expect(stub.sentMessages[0]?.options).toEqual({ deliverAs: "nextTurn" });
+    });
+
+    it("does not show a mid-run reminder in a turn that already showed a rotation one", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "1");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "100");
+        const entries = exploringEntries();
+        ctx = stubContext({
+            cwd: "/tmp/reminder-project",
+            sessionManager: stubSessionManager({ getBranch: () => entries }),
+            getContextUsage: () => ({ tokens: 500, contextWindow: 200_000, percent: 0.0025 }),
+        });
+        const stub = harness();
+        await startSession(stub);
+        await stub.requireHandler("agent_start")({}, ctx);
+        await userTurn(stub);
+        await userTurn(stub);
+
+        // The turn's deferred reminder is still held, and the crossing at the step below is past the
+        // threshold; the turn already owns the slot, so it must not ask the model a second time.
+        await midRunCrossing(stub);
+        await midRunCrossing(stub);
+
+        expect(mocks.consult).toHaveBeenCalledTimes(1);
+        expect(stub.sentMessages).toHaveLength(1);
         expect(stub.sentMessages[0]?.options).toEqual({ deliverAs: "steer" });
     });
 

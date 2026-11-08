@@ -203,9 +203,18 @@ exists. The armed path (below) calls plain `decide`, which runs `beginTurn` itse
   that needs the settled state waits on it. `maybeEmitMidRun` awaits it before reading the pool, `judgeTurn`
   and `judgeStateCheckpoint` read `labels` inside their own task, and `registerRemindersExtension` returns
   `{ idle }` for anyone (or any test) that needs to wait for the queue.
-- Delivery follows `runActive` (`agent_start` .. `agent_settled`): a reminder whose run is still in flight is
-  `steer`ed into that run's next step, and one whose run already settled goes out as `nextTurn` - a `steer`
-  sent while nothing streams is appended to the transcript without ever reaching the model.
+- Delivery follows `runActive` (`agent_start` .. `agent_settled`), but a run in flight is not enough: a
+  deferred rotation reminder is **held** until a `turn_end` with a tool result, because that is the first
+  point pi is committed to another inference, and a `steer` polled after a text-only turn is itself the only
+  reason a new turn happens. Held reminders are flushed as `steer` at that step; if the run settles first they
+  go out as `nextTurn` from `agent_settled` - a `steer` sent while nothing streams is appended to the
+  transcript without ever reaching the model. `restart()` drops the held queue, since a change point has no
+  run left to join.
+- The delivered-after-the-final-answer bug: a deferred turn reminder used to `steer` as soon as its consult
+  resolved, so on a run whose one assistant turn was text-only the reminder was appended after the answer and
+  pi woke another inference just to deliver it. The mid-run path always had the `toolResults.length === 0`
+  guard; `test/modules/reminders/model-policy.test.ts` now pins the deferred path's equivalent (held until a
+  tool step, `nextTurn` on settle), and the mid-run gate shares the turn's slot with it.
 - The measured motivation: a live tier-1 ask costs ~525ms and the escalated full-window ask ~480ms on this
   endpoint, so a rotation turn's judgement is ~1s of work that used to sit between the user hitting enter and
   seeing their own message. Deferring removed exactly that, which is what the feedback says it feels like.
@@ -217,9 +226,12 @@ exists. The armed path (below) calls plain `decide`, which runs `beginTurn` itse
   reminder arrives after the user's message" is therefore only ever true of a rotation turn.
 - Writes are stamped with an epoch that `restart()` (session start, tree move, fold) bumps: a consult that
   outlived its session drops its answer instead of recording it into the branch that replaced it.
-- One reminder per turn still holds across both paths: the deferred `decide` is skipped when a mid-run
-  emission already took the turn's slot (`lastEmitTurn >= turn`). A mid-run point the model *declines* does not
-  take that slot - nothing was shown - so the turn's own reminder can still arrive.
+- One reminder per turn holds across both paths in both directions: the deferred `decide` is skipped when a
+  mid-run emission already took the turn's slot (`lastEmitTurn >= turn`), and `maybeEmitMidRun` is skipped
+  while `rotationReminderTurn` is the current user turn - whether that deferred reminder was delivered already
+  or is still held. Armed reminders do not set `rotationReminderTurn`, so the memory/fold reminder and a
+  mid-run steer can still share a turn. A mid-run point the model *declines* does not take the slot - nothing
+  was shown - so the turn's own reminder can still arrive.
 - `turn_end` no longer awaits the checkpoint: it queues it and returns, which removes the per-step consult tax
   (~0.27s, +~0.47s escalated) from every tool-using response.
 

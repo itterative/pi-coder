@@ -53,8 +53,9 @@ purpose while the tier-2 measurements ran.
 ## Tests
 
 `test/modules/reminders/{scheduler,emission,model-policy,session-signals,catalog,settings}.test.ts` cover the
-pure schedule, the hidden-message emission, the decision-model wiring (the cascade and the `turn_end`
-checkpoints), the signal builder and state gate, the catalog filter, and the settings defaults;
+pure schedule, the hidden-message emission (including the text-only step that must not steer), the decision-model
+wiring (the cascade, the `turn_end` checkpoints, and a deferred turn reminder held until a tool step or handed
+to the next prompt), the signal builder and state gate, the catalog filter, and the settings defaults;
 `.../reminder-window.test.ts` pins the tier-2 conversation - the allocator's rendering the selection consult
 sends - to `__snapshots__/reminder-window.*.txt`;
 `test/modules/decision/reminder.test.ts` covers the subject, both tiers, the carried window, and prompt

@@ -53,6 +53,12 @@ where the decision-model gate lives.
 Both append at the end of the conversation, so the system-prompt prefix stays stable:
 
 - **User turns** (`before_agent_start`): the session reminder, the turn-based rotation, and the model policy.
+  The armed session/fold reminders are returned synchronously and ride the user message. A rotation pick is
+  deferred, and when the run is in flight the payload is **held in `pendingSteers`** rather than steered at
+  once: it is flushed on the first `turn_end` with a tool result, or sent as `nextTurn` from `agent_settled` if
+  the run's answer was terminal. Steering earlier let pi poll the queue after a text-only turn and start a new
+  inference just to deliver the reminder after the final answer. `rotationReminderTurn` records the turn whose
+  rotation slot is taken, so the mid-run gate cannot show a second reminder in that same turn.
 - **Mid-run** (`turn_end` with tool results, when the context-growth estimate crosses
   `PI_CODER_REMINDER_THRESHOLD`): `pi.sendMessage(..., { deliverAs: "steer" })` queues the next rotation
   reminder into the running loop, so a long autonomous stretch does not wait for the user to speak again. The
