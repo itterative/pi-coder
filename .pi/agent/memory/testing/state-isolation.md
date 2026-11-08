@@ -1,6 +1,6 @@
 ---
 name: state-isolation
-description: test/setup.ts pins the best-effort global logs off; suites use temporary state/workspaces dirs and never mutate the pi-coder state root or home state.
+description: test/setup.ts pins the best-effort global logs off; suites use temporary state/workspaces dirs and never mutate the pi-coder state root, the developer's home, or the SDK credential store.
 category: workflow
 ---
 
@@ -25,6 +25,20 @@ state root (`<agent-dir>/pi-coder`, `PI_CODER_STATE_DIR` overrides it).
 - **Follow the same pattern for any future best-effort global log:** pin it off in `test/setup.ts`, and give a
   suite an explicit env-var escape hatch pointing at its own temporary path.
 
+## The SDK writes its credential store under `~/.pi/agent`
+
+A suite that constructs a real `ModelRuntime` or `createAgentSession` must not inherit the developer's agent
+directory. `ModelRuntime.create()` creates `$HOME/.pi/agent`, locks `auth.json`, and refreshes
+`models-store.json`; `createChildModelRuntime()` may copy the parent API key into the same store. Under an
+unwritable or missing `$HOME` — what a container frequently has — the SDK throws
+`ModelsError: Credential store read failed for <provider>: EACCES: permission denied, mkdir '.../.pi/agent'`, so
+unrelated assertions fail for an environment reason. `test/tools/agent-sdk-smoke.test.ts` demonstrates the fix:
+`fs.mkdtempSync` a throwaway directory, seed it with copies of the real `auth.json` / `models.json` when they are
+readable (so a conditional OAuth case still exercises a persisted credential), set `process.env.PI_CODING_AGENT_DIR`
+to it at module scope, and `fs.rmSync` it in `afterAll`. `getAgentDir()` reads that variable at call time, so the
+module-body assignment is early enough for everything built inside the tests, though not for constants
+(`PI_CODER_STATE_DIR`) resolved at import.
+
 ## Database-backed agent tests
 
 - Database-backed agent tests must use an explicit temporary state/workspaces directory.
@@ -35,4 +49,6 @@ state root (`<agent-dir>/pi-coder`, `PI_CODER_STATE_DIR` overrides it).
 
 Related: the e2e scaffolding that provides those directories (`createE2EPaths`, `withE2EMetadataDatabase`) is
 in `../test-doubles/tui-e2e.md`; reading a recorded log from a fixture is
-[`trace-fixtures.md`](trace-fixtures.md).
+[`trace-fixtures.md`](trace-fixtures.md). A fresh or unwritable `$HOME` also breaks two suites that assume a
+developer machine — the TUI footer snapshot shortens the checkout to `~/Repos/...` using `os.homedir()`, and
+`file-permissions` reads user memories under it — so a container run still shows those two red.

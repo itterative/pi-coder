@@ -1254,6 +1254,12 @@ first attempt failed in three ways that say nothing about the sandbox backend:
 The focused `container/` suite (104 tests) does pass inside. Making the rest pass there would mean removing
 those `$HOME`/`bwrap` dependencies from the tests, which is a separate piece of work.
 
+One of them is done. `agent-sdk-smoke` failed eight of its nine cases on an unwritable `$HOME`, because the SDK
+writes its credential store under `~/.pi/agent` and reports `ModelsError … EACCES` rather than "no credential";
+it now points `PI_CODING_AGENT_DIR` at a throwaway directory seeded from the real one when that is readable. Two
+suites still fail on a fresh `$HOME`: the `agent-tool` footer snapshot shortens the checkout with
+`os.homedir()`, and `file-permissions` expects to read user memories under it.
+
 ### Keep-id, verified against the recipe image
 
 `--userns=keep-id` runs the container as the host user, and the probe (`.pi/local/probe-keep-id.ts`)

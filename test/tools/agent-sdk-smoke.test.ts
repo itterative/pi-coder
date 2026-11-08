@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const memoryExtensionFactory = vi.hoisted(() => vi.fn());
 const todoExtensionFactory = vi.hoisted(() => vi.fn());
@@ -27,6 +27,34 @@ import {
 } from "../../src/tools/agent/definitions/discovery";
 import { capabilityTools } from "../../src/tools/agent/child/capabilities";
 import { ZERO_USAGE } from "../../src/tools/agent/runs/manager";
+
+/**
+ * A throwaway agent directory for the whole file.
+ *
+ * The SDK resolves its credential and model stores through pi's agent directory (`~/.pi/agent`) and *writes*
+ * there: `ModelRuntime.create()` creates the directory, locks `auth.json`, and refreshes its snapshot, and
+ * `createChildModelRuntime()` may copy the parent's API key into it. An unwritable or missing `$HOME` — which
+ * a container frequently has — answers that with `ModelsError: Credential store read failed for <provider>:
+ * EACCES`, failing eight of the nine cases below for a reason that says nothing about the code under test.
+ *
+ * Seeding the copy from the real directory keeps the last case honest on a machine that has a persisted OAuth
+ * credential; where there is none (or it cannot be read), that case keeps its existing "when available" early
+ * return. Nothing this file does reaches the developer's store.
+ */
+const realAgentDirectory =
+    process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
+const smokeAgentDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sdk-smoke-agent-"));
+for (const file of ["auth.json", "models.json"]) {
+    try {
+        fs.copyFileSync(path.join(realAgentDirectory, file), path.join(smokeAgentDirectory, file));
+    } catch {
+        // No such file, or no permission to read it: this machine has no persisted configuration to reuse.
+    }
+}
+process.env.PI_CODING_AGENT_DIR = smokeAgentDirectory;
+afterAll(() => {
+    fs.rmSync(smokeAgentDirectory, { recursive: true, force: true });
+});
 
 /**
  * Real construction needs a live model runtime plus a registry stub. The reopen tests below share

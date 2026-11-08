@@ -37,7 +37,10 @@ The five rules most often gotten wrong; the rest are in the detail docs below.
   still exercises bwrap wrapping), and guard a genuinely bwrap-driven
   test with `it.skipIf(!hasBwrap())` from `test/helpers/host-tools.ts`. Skipped is visible; red is misleading.
   The pi-coder sandbox image bakes `bubblewrap` in, so those guards do not fire there and the whole suite runs
-  inside the container (3171 tests); on an image without it they skip instead of failing.
+  inside the container (3171 tests); on an image without it they skip instead of failing. The SDK's agent
+  directory is a fourth: a suite that builds a real `ModelRuntime` writes `~/.pi/agent`, and an unwritable or
+  missing `$HOME` turns that into `ModelsError … EACCES` — see `testing/state-isolation.md` for the temporary
+  `PI_CODING_AGENT_DIR` pattern.
 - **The container backend is testable without podman**, which matters because the suite runs *inside* the
   sandbox image where podman is unreachable. Three techniques cover it: (1) drive `dispatch.mjs` as a child
   process and speak its NDJSON protocol (`test/modules/sandbox-container-dispatch.test.ts`) — it is plain JS on
