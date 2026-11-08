@@ -20,10 +20,12 @@ import { SerialQueue } from "../../common/async";
 import {
     ACTIVE_ROTATION_REMINDERS,
     COMPACTION_REMINDER,
+    MEMORY_AUDIT_REMINDER,
     MEMORY_READ_REMINDER,
     REMINDER_NOTICE,
 } from "./catalog";
 import { ContextGrowthTracker } from "./context-growth";
+import { createMemoryAuditTrigger } from "./memory-audit";
 import { ReminderScheduler, type ReminderModelChoice, type SchedulerSnapshot } from "./scheduler";
 import {
     REMINDER_CUSTOM_TYPE,
@@ -43,8 +45,9 @@ import type { ReminderDefinition, ReminderId } from "./types";
 export interface ReminderRegistrationOptions {
     /**
      * `full` is a parent session: the session reminder, the rotating catalog, and the model policy when
-     * `reminders` is enabled in the decision-model config. `memory` is a delegated child: only the memory
-     * reminder, which is what children received before the rotation existed.
+     * `reminders` is enabled in the decision-model config. `memory` is a delegated child: the session reminder
+     * and the automatic memory audit's findings, but nothing from the rotation - which is what children received
+     * before the rotation existed.
      */
     scope?: "full" | "memory";
 }
@@ -271,6 +274,16 @@ export default function registerRemindersExtension(
             : { everyTurns: 0, thresholdTokens: 0, maxMidRunPerTurn: 0 },
     );
     const growth = new ContextGrowthTracker();
+    /**
+     * The automatic memory audit, run at a step boundary whenever a memory file changed.
+     *
+     * Registered for both scopes: a delegated child writes memories too, and a memory that fails to parse is
+     * just as invisible from its prompt as from the parent's. `pendingSteers` is per registration, so the two
+     * scopes never contend for a queue.
+     */
+    const memoryAudit = createMemoryAuditTrigger({
+        enabled: settings.enabled && settings.memoryAudit,
+    });
     /** When each rotation reminder was shown, keyed by the user turn it was emitted on. */
     const shown = new Map<ReminderId, number>();
     /** The model-maintained labels, re-read from the branch at every change point. */
@@ -302,6 +315,70 @@ export default function registerRemindersExtension(
     let runActive = false;
 
     /**
+     * A reminder waiting for a delivery point.
+     *
+     * `text` is the reminder body without the wrapper, because held reminders are combined into one message and
+     * the wrapper's "automated" notice must appear once in it. The stamp is the threshold baseline the emission
+     * leaves in force, not the context at emission: a change-point reminder that rendered before the run's usage
+     * updated nothing (the branch seed or the run's first usage is still the anchor), while a rotation pick or a
+     * mid-run steer has just set it to its own context. Recording the baseline is what lets a later resume
+     * continue the cooldown consistently.
+     */
+    interface HeldReminder {
+        id: ReminderId;
+        text: string;
+        turn: number;
+        contextTokens: number;
+    }
+
+    /** Hold one reminder for the next delivery point. */
+    const heldReminder = (
+        ctx: ExtensionContext,
+        reminder: ReminderDefinition,
+        turn: number,
+    ): HeldReminder => ({
+        id: reminder.id,
+        text: reminderTextFor(reminder, ctx),
+        turn,
+        contextTokens: scheduler.snapshot().thresholdBaseline ?? 0,
+    });
+
+    /**
+     * The message a delivery point sends, for one held reminder or several.
+     *
+     * Everything a delivery point holds travels as **one** message. pi delivers a queued steer before the next
+     * inference, but two sends at one boundary cost a delivery each: the second arrived on the next user prompt,
+     * which put a memory audit finding a whole turn late. Combining also keeps the wrapper and its "automated"
+     * notice to a single occurrence, which is what the notice is for. Held entries are deduped by id, newest
+     * wins: a reminder re-decided while held supersedes the copy already waiting.
+     */
+    const heldMessage = (held: readonly HeldReminder[]) => {
+        const unique = [...new Map(held.map((entry) => [entry.id, entry])).values()];
+        const newest = unique[unique.length - 1]!;
+
+        return {
+            customType: REMINDER_CUSTOM_TYPE,
+            content: formatReminder(unique.map((entry) => entry.text).join("\n\n")),
+            display: false,
+            details: {
+                id: newest.id,
+                // The resume path needs every rotation id a combined message carried, not just the newest.
+                ...(unique.length > 1 ? { ids: unique.map((entry) => entry.id) } : {}),
+                turn: Math.max(...unique.map((entry) => entry.turn)),
+                contextTokens: newest.contextTokens,
+            },
+        };
+    };
+
+    const sendHeld = (held: readonly HeldReminder[], deliverAs: "steer" | "nextTurn"): void => {
+        if (held.length === 0) {
+            return;
+        }
+
+        pi.sendMessage(heldMessage(held), { deliverAs });
+    };
+
+    /**
      * A rotation reminder the turn judged but has not delivered yet.
      *
      * A deferred judgement resolves before pi knows whether the run continues. `steer` queues the message for
@@ -310,7 +387,7 @@ export default function registerRemindersExtension(
      * run's final answer and wake a turn of its own. Holding it until a step that ran a tool proves the run is
      * going to ask again; a run that settles first hands it to the next prompt instead.
      */
-    const pendingSteers: Array<ReturnType<typeof reminderPayload>> = [];
+    const pendingSteers: HeldReminder[] = [];
 
     /**
      * The user turn whose rotation reminder was already decided.
@@ -322,11 +399,9 @@ export default function registerRemindersExtension(
      */
     let rotationReminderTurn: number | undefined;
 
-    /** Queue the reminders held for a continuing run at the step boundary that proved it continues. */
+    /** Deliver the reminders held for a continuing run at the step boundary that proved it continues. */
     const flushPendingSteers = (): void => {
-        for (const payload of pendingSteers.splice(0)) {
-            pi.sendMessage(payload, { deliverAs: "steer" });
-        }
+        sendHeld(pendingSteers.splice(0), "steer");
     };
 
     /** The activity gate for the step being judged, computed lazily once per assistant message. */
@@ -588,34 +663,6 @@ export default function registerRemindersExtension(
     };
 
     /**
-     * The message one turn reminder travels as, whether it opens a turn or joins a running one.
-     *
-     * The stamp is the threshold baseline the emission leaves in force, not the context at emission: a
-     * change-point reminder that rendered before the run's usage updated nothing (the branch seed or the run's
-     * first usage is still the anchor), while a rotation pick or a mid-run steer has just set it to its own
-     * context. Recording the baseline is what lets a later resume continue the cooldown consistently.
-     */
-    const reminderPayload = (
-        ctx: ExtensionContext,
-        reminder: ReminderDefinition,
-        turn: number,
-    ): {
-        customType: string;
-        content: string;
-        display: boolean;
-        details: { id: ReminderId; turn: number; contextTokens: number };
-    } => ({
-        customType: REMINDER_CUSTOM_TYPE,
-        content: formatReminder(reminderTextFor(reminder, ctx)),
-        display: false,
-        details: {
-            id: reminder.id,
-            turn,
-            contextTokens: scheduler.snapshot().thresholdBaseline ?? 0,
-        },
-    });
-
-    /**
      * Judge one rotation turn off the boundary's critical path, then deliver whatever it picked.
      *
      * The queue keeps the consults in order, so this never lands before the judgement it followed; the epoch
@@ -706,7 +753,7 @@ export default function registerRemindersExtension(
             // The turn's rotation slot is taken whether or not the delivery below can happen yet.
             rotationReminderTurn = emitTurn;
 
-            const payload = reminderPayload(ctx, reminder, emitTurn);
+            const payload = heldReminder(ctx, reminder, emitTurn);
             // The request the decision was made for is already in flight, so the reminder cannot ride it. A run
             // in flight does not yet promise another inference either: its current turn may be the last, so a
             // steer queued now would be polled after the final answer and be the only reason for another turn.
@@ -717,7 +764,7 @@ export default function registerRemindersExtension(
                 return;
             }
 
-            pi.sendMessage(payload, { deliverAs: "nextTurn" });
+            sendHeld([payload], "nextTurn");
         });
     };
 
@@ -815,11 +862,19 @@ export default function registerRemindersExtension(
         }
     };
 
-    pi.on("session_start", (_event, ctx) =>
-        restart(ctx, { resume: true, armed: MEMORY_READ_REMINDER }),
-    );
-    pi.on("session_tree", (_event, ctx) => restart(ctx, { resume: true }));
-    pi.on("session_compact", (_event, ctx) => restart(ctx, { armed: COMPACTION_REMINDER }));
+    pi.on("session_start", async (_event, ctx) => {
+        restart(ctx, { resume: true, armed: MEMORY_READ_REMINDER });
+        // What is already on disk is not this run's doing, so it is the baseline and not a finding to report.
+        await memoryAudit.reseed(ctx.cwd);
+    });
+    pi.on("session_tree", async (_event, ctx) => {
+        restart(ctx, { resume: true });
+        await memoryAudit.reseed(ctx.cwd);
+    });
+    pi.on("session_compact", async (_event, ctx) => {
+        restart(ctx, { armed: COMPACTION_REMINDER });
+        await memoryAudit.reseed(ctx.cwd);
+    });
     pi.on("agent_start", () => {
         runActive = true;
         growth.reset();
@@ -829,9 +884,7 @@ export default function registerRemindersExtension(
 
         // No step proved the run would continue, so the held reminders never had a steer destination. Hand
         // them to the next user prompt rather than waking a turn of their own after the final answer.
-        for (const payload of pendingSteers.splice(0)) {
-            pi.sendMessage(payload, { deliverAs: "nextTurn" });
-        }
+        sendHeld(pendingSteers.splice(0), "nextTurn");
     });
 
     const midRunEnabled =
@@ -1070,7 +1123,7 @@ export default function registerRemindersExtension(
                 return;
             }
 
-            return { message: reminderPayload(ctx, reminder, emitTurn) };
+            return { message: heldMessage([heldReminder(ctx, reminder, emitTurn)]) };
         }
 
         // The held state is published before the consult resolves, so a turn whose judgement is slow still moves
@@ -1128,8 +1181,28 @@ export default function registerRemindersExtension(
             return;
         }
 
-        // A step that ran a tool is the first point the run guarantees another inference, so the reminders
-        // held for it have a destination now.
+        // A memory edit is audited here rather than asked for by a rule: the audit is keyed on the trees'
+        // fingerprint, so it costs a stat walk on a step that touched nothing and a parse only when a memory
+        // actually changed. A finding joins the held reminders and leaves with them, which means it arrives as
+        // a steer in the run that caused it instead of at the end of the task, when the memory is already
+        // unindexed. It does not need a delivery of its own: `flushPendingSteers` combines everything held into
+        // one message, so a held rotation reminder and a fresh finding share a steer rather than queueing two.
+        const auditFindings = await memoryAudit.check(ctx.cwd);
+        if (auditFindings !== undefined) {
+            pendingSteers.push(
+                heldReminder(
+                    ctx,
+                    {
+                        ...MEMORY_AUDIT_REMINDER,
+                        text: `${MEMORY_AUDIT_REMINDER.text}\n\n${auditFindings}`,
+                    },
+                    scheduler.snapshot().userTurns,
+                ),
+            );
+        }
+
+        // A step that ran a tool is the first point the run guarantees another inference, so the reminders held
+        // for it have a destination now.
         flushPendingSteers();
 
         const at = epoch;
@@ -1143,7 +1216,11 @@ export default function registerRemindersExtension(
         });
 
         // Awaited: the steer has to be queued before pi asks its next question.
-        await maybeEmitMidRun(ctx);
+        // One message per step: a defect report takes the slot the rotation would have used, and the rotation
+        // keeps its cadence for the next step.
+        if (auditFindings === undefined) {
+            await maybeEmitMidRun(ctx);
+        }
     });
 
     return { idle };

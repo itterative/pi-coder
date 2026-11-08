@@ -12,7 +12,46 @@ import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 
+import { getUserMemoryDirectory } from "../../common/constants";
 import { FrontmatterParseError, parseFrontmatter, type MemoryMeta } from "./frontmatter";
+
+/** Which tree an audit reads. `both` is what an agent means: a reference crosses the trees. */
+export type AuditScope = "project" | "user" | "both";
+
+/** The two memory roots `cwd` resolves to, shared by every audit surface. */
+export interface MemoryAuditDirectories {
+    projectDir: string;
+    userDir: string;
+}
+
+export function memoryAuditDirectories(cwd: string): MemoryAuditDirectories {
+    return {
+        projectDir: join(cwd, ".pi", "agent", "memory"),
+        userDir: getUserMemoryDirectory(),
+    };
+}
+
+/**
+ * Audit one or both trees for `cwd`. Every caller - the tool, the slash command, and the automatic check that
+ * runs after a memory edit - reads the trees through this, so they cannot disagree about what an audit is.
+ */
+export async function runMemoryAudit(
+    cwd: string,
+    scope: AuditScope = "both",
+): Promise<AuditResult[]> {
+    const dirs = memoryAuditDirectories(cwd);
+    const results = await auditMemoryTrees({
+        projectDir: dirs.projectDir,
+        userDir: dirs.userDir,
+        projectRoot: cwd,
+    });
+
+    if (scope === "both") {
+        return results;
+    }
+
+    return results.filter((result) => result.label === scope);
+}
 
 /**
  * Advisory budget for a top-level index: its whole body lands in each session prompt. This is a review

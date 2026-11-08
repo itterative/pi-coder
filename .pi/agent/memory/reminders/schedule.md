@@ -12,8 +12,9 @@ where the decision-model gate lives.
 
 ## Files
 
-- `catalog.ts` — the change-point reminders `MEMORY_READ_REMINDER` (session start) and
-  `COMPACTION_REMINDER` (a fold) plus `ROTATION_REMINDERS`
+- `catalog.ts` — the change-point reminders `MEMORY_READ_REMINDER` (session start),
+  `COMPACTION_REMINDER` (a fold), and `MEMORY_AUDIT_REMINDER` (an automatic-audit finding) plus
+  `ROTATION_REMINDERS`
   (memory-hygiene, sandbox, delegation, todo, validation), each with `text` and `guidance`. A `disabled: true`
   entry stays in the catalog but is filtered out of the rotation and the model's offer by
   `ACTIVE_ROTATION_REMINDERS`; `sandbox` is disabled until it keys on a real gated event rather than rotating
@@ -22,6 +23,16 @@ where the decision-model gate lives.
   with its loss, and tells the model to keep going: a "you nearly ran out / the summary is lossy" frame makes
   models wrap up, hand off, or re-plan (user, 2026-03). The session-JSONL pointer stays, framed as a fallback
   for one missing pre-fold detail rather than an invitation to re-read the transcript.
+- `memory-audit.ts` — the automatic memory-tree audit: a stat fingerprint (paths, sizes, mtimes, top-level and
+  nested) of both trees, a parse only when it moved, and a reminder text only when there is news. News is
+  keyed on a finding's **identity** - `tree path rule` - not its message, so a repair that spans steps is told
+  once: a still-broken file, or a failed attempt that only changes the YAML error text, is the same defect. The
+  reported set is *replaced* by what is still outstanding on every audit, so a fixed finding is pruned and is
+  news again if it comes back; the reminder lists only the new identities and counts the outstanding ones
+  without restating them. The baseline is reseeded at every restart point, so pre-existing findings are never
+  reported as the run's doing; `reseed` is generation-stamped so a late read from a session being left cannot
+  install its baseline. It is built and checked by the `turn_end` handler in `index.ts`, for both scopes, and
+  its finding is pushed into `pendingSteers` like a rotation pick, so both leave together as one message.
 - `scheduler.ts` — pure `ReminderScheduler`: the armed change-point reminder first; otherwise rotation due
   after `everyTurns` user turns since the last emission or `thresholdTokens` new context tokens, whichever comes
   first. A model answer naming an offered id is chosen and advances the rotation past it; a deliberate `none`
@@ -37,7 +48,8 @@ where the decision-model gate lives.
   point should arm.
 - `context-growth.ts` — the `message_start` usage baseline plus streamed `chars / 4` estimator lifted out of
   the memory module.
-- `settings.ts` — `PI_CODER_REMINDER=false` disables everything; `PI_CODER_REMINDER_EVERY_TURNS` (default 5)
+- `settings.ts` — `PI_CODER_REMINDER=false` disables everything; `PI_CODER_MEMORY_AUDIT=false` disables only the
+  automatic memory audit; `PI_CODER_REMINDER_EVERY_TURNS` (default 5)
   and `PI_CODER_REMINDER_THRESHOLD` (default 30000, alias `PI_MEMORY_REMINDER_THRESHOLD`) each disable their
   trigger at `0`, and both at `0` also removes the model consult; `PI_CODER_REMINDER_MIDRUN_MAX` (default 1)
   caps the mid-run steers one user turn may receive; `PI_CODER_REMINDER_DEBUG` records a
@@ -59,6 +71,12 @@ Both append at the end of the conversation, so the system-prompt prefix stays st
   the run's answer was terminal. Steering earlier let pi poll the queue after a text-only turn and start a new
   inference just to deliver the reminder after the final answer. `rotationReminderTurn` records the turn whose
   rotation slot is taken, so the mid-run gate cannot show a second reminder in that same turn.
+  **Everything a delivery point holds leaves as one message** (`heldMessage`/`sendHeld`): pi delivers a queued
+  steer before the next inference but two sends at one boundary cost a delivery each, and the second arrived on
+  the next *user prompt* - observed live, with a memory-audit finding a whole turn late. Held entries are
+  `{id, text, turn, contextTokens}`, deduped by id with the newest winning; the combined message records the
+  newest id as `details.id` and every id in `details.ids`, which `reminderResumeState` reads so a restart seeds
+  `shown` from all of them. One wrapper and one "automated" notice per message, by construction.
 - **Mid-run** (`turn_end` with tool results, when the context-growth estimate crosses
   `PI_CODER_REMINDER_THRESHOLD`): `pi.sendMessage(..., { deliverAs: "steer" })` queues the next rotation
   reminder into the running loop, so a long autonomous stretch does not wait for the user to speak again. The
@@ -73,7 +91,10 @@ Both append at the end of the conversation, so the system-prompt prefix stays st
   or unreadable consult leaves the pointer in charge. The per-turn cap is checked in `midRunDue` *before* the
   consult, so a spent budget costs a threshold comparison, and the in-flight flag only guards a re-entrant
   dispatch. Both paths share the emission bookkeeping, and full scope only - a memory-scoped child never steers
-  mid-run.
+  from the rotation. The one steer a child can receive mid-run is the automatic memory audit's (`memory-audit`):
+  it is event-driven rather than cadence-driven, and a memory the child just broke is missing from its own next
+  prompt. A step that carries an audit finding skips `maybeEmitMidRun` - the rotation keeps its cadence for the
+  next step - but its finding still travels in the same combined message as anything already held.
 
 ## Lifecycle: start, navigation, and the fold
 

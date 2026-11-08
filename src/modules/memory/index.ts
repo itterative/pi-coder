@@ -41,7 +41,7 @@ function buildNotIndexedSection(errors: FrontmatterParseError[]): string {
 
 ### Not Indexed
 
-These memory files exist but are absent from the lists above because their frontmatter failed to parse. An unquoted \`:\` in a \`description\` is the usual cause - quote the value. Run \`/memory-audit\` (or the \`memory_audit\` tool) after fixing them, and treat the lists above as incomplete until then.
+These memory files exist but are absent from the lists above because their frontmatter failed to parse. An unquoted \`:\` in a \`description\` is the usual cause - quote the value, and treat the lists above as incomplete until the audit reports the trees clean. The audit re-runs by itself after your next memory edit; \`memory_audit\` prints the full report on demand.
 
 ${lines.join("\n")}`;
 }
@@ -128,7 +128,7 @@ Indexed memories are stored directly in these directories. Detailed reference do
   - The \`name\` must match the filename without \`.md\` (e.g. \`name: conventions\` in \`conventions.md\`)
   - Keep \`description\` to one line; it appears in the system prompt to help future agents decide whether to load the memory
   - Quote a \`description\` that contains \`: \`. Unquoted, the frontmatter is invalid YAML, the file fails to parse, and the memory silently disappears from the list with only a startup warning
-- Use the standard built-in tools (\`read\`, \`write\`, \`edit\`, \`bash\`) to create and edit memories - there are no custom memory-writing tools. The \`memory_audit\` tool and \`/memory-audit\` command only validate the trees
+- Use the standard built-in tools (\`read\`, \`write\`, \`edit\`, \`bash\`) to create and edit memories - there are no custom memory-writing tools. The \`memory_audit\` tool and the \`/memory-audit\` command only validate the trees
 - Use the \`read\` tool to load specific memories as needed
 - Use \`write\` to create new memories (include frontmatter) or \`edit\` to update existing ones
 - Use \`bash\` with \`rm\` to delete a memory file
@@ -141,7 +141,7 @@ Indexed memories are stored directly in these directories. Detailed reference do
   - Before finishing your task, review what you have learned
   - Add new memories or edit existing ones to keep them consistent with any changes made
 - Memories marked with [high-churn] are high-churn — review and update them after relevant changes
-- After creating, moving, renaming, or splitting memory files, run \`/memory-audit\` (or the \`memory_audit\` tool). Its errors mean a memory is not indexed or a reference is broken; its warnings are review indicators, not defects - a deliberately large index or a long nested description needs no fix
+- Memory edits are audited automatically: both trees are checked after each step that changed a memory file, and a finding arrives as a reminder in that run. Do not run the audit after every edit - call the \`memory_audit\` tool only when a reminder points at more findings than it carried, or when the user asks for the full report. Errors mean a memory is not indexed or a reference is broken; warnings are review indicators, not defects - a deliberately large index or a long nested description needs no fix
 - The memory list below is a snapshot: it is read at session start and rebuilt after each compaction, and navigating back on the session tree to before a compaction restores the snapshot that was current on that branch. New or updated memories do not appear until one of those points
 
 ### Available Project Memories

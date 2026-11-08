@@ -9,12 +9,28 @@ keep_updated: true
 # Reminders
 
 `src/modules/reminders/` emits hidden pi-coder reminders as at most one custom message at the start of a user
-turn, plus threshold-driven mid-run steers (`customType: "pi-coder-reminder"`, `display: false`, wrapped in
+turn, plus threshold-driven mid-run steers and the automatic memory audit's finding steer
+(`customType: "pi-coder-reminder"`, `display: false`, wrapped in
 `<pi_coder_reminder>`). Every block opens with `REMINDER_NOTICE` ("Automated reminder (not from the user)...")
 because the message rides in the user role and a bare one would read as the user speaking.
 
 They leave by one of two paths - a user turn, or a mid-run steer - and the module's files, cadence, env
-switches and restart/fold lifecycle are `reminders/schedule.md`.
+switches and restart/fold lifecycle are `reminders/schedule.md`. **Everything held for one delivery point leaves
+as a single message**: `pendingSteers` holds `{id, text, turn, contextTokens}` entries, `heldMessage` dedupes
+them by id and joins the texts under one wrapper, and the combined message records every id in `details.ids` so
+a restart can resume from it. Sending two payloads at one boundary was a real defect: pi delivered the first to
+the next inference and the second on the next *user prompt*, which put a memory-audit finding a turn late.
+
+## The automatic memory audit
+
+One reminder is not advice but a defect report: `memory-audit`. `reminders/memory-audit.ts` stat-fingerprints both
+memory trees at each step boundary and parses them only when that fingerprint moved; a finding set that differs
+from the last one reported joins `pendingSteers` and is steered into the run that caused it. It bypasses the
+rotation, the judged pool, and the decision model entirely - a memory that no longer parses is missing from every
+later prompt, so the reminder is not something to weigh against relevance. A finding is announced once and deduped
+on `tree path rule`, not on its message, so a multi-step repair is not reminded on every step of it; the reported
+set shrinks to what is still outstanding, so a fixed finding is news again if it recurs. It also replaced the rule
+that told agents to run the audit after every memory edit (2026-11).
 
 ## The gate that picks one
 
@@ -56,6 +72,8 @@ purpose while the tier-2 measurements ran.
 pure schedule, the hidden-message emission (including the text-only step that must not steer), the decision-model
 wiring (the cascade, the `turn_end` checkpoints, and a deferred turn reminder held until a tool step or handed
 to the next prompt), the signal builder and state gate, the catalog filter, and the settings defaults;
+`.../memory-audit.test.ts` covers the automatic audit - fingerprint-keyed parse, dedupe of an unchanged finding
+set, the restart baseline, and the reminder text;
 `.../reminder-window.test.ts` pins the tier-2 conversation - the allocator's rendering the selection consult
 sends - to `__snapshots__/reminder-window.*.txt`;
 `test/modules/decision/reminder.test.ts` covers the subject, both tiers, the carried window, and prompt

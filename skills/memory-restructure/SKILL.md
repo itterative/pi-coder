@@ -40,7 +40,7 @@ regression.
    tree clean between landings.
 5. **Do the parent pass last**: cross-cluster references, link depth, `category`/`priority`/description
    normalization, and stale names in `AGENTS.md`, `docs/`, and source comments that pointed at renamed memories.
-6. **Close with the audit**: run `/memory-audit` (or the `memory_audit` tool) and report before/after indexed
+6. **Close with the audit**: call the `memory_audit` tool and report before/after indexed
    counts, prompt-visible bytes, and description characters. Repeat the check after any follow-up edit. Fix every
    error; treat each warning as an indicator and decide rather than obey it.
 

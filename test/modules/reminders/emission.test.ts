@@ -1,4 +1,7 @@
 import { SessionManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import registerRemindersExtension, { modelChoiceOf } from "../../../src/modules/reminders";
@@ -560,6 +563,174 @@ describe("reminder emission", () => {
             reminder: "memory-read",
             scope: "full",
         });
+    });
+});
+
+/**
+ * The automatic memory audit, driven through the hooks: an edit that leaves a memory unparseable has to reach
+ * the run that caused it, without the agent ever calling the tool.
+ */
+describe("automatic memory audit", () => {
+    const roots: string[] = [];
+
+    async function makeRoot(prefix: string): Promise<string> {
+        const root = await mkdtemp(join(tmpdir(), prefix));
+        roots.push(root);
+        return root;
+    }
+
+    function memoryText(description: string): string {
+        return `---\nname: a\ndescription: ${description}\n---\n\n# a\n\nBody.\n`;
+    }
+
+    /** A project whose memory tree holds one valid memory, plus an isolated user tree for the audit. */
+    async function projectWithMemory(): Promise<string> {
+        const projectRoot = await makeRoot("pi-reminder-audit-");
+        const agentDir = await makeRoot("pi-reminder-audit-agent-");
+        vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+        await mkdir(join(projectRoot, ".pi", "agent", "memory"), { recursive: true });
+        await writeFile(memoryPath(projectRoot), memoryText("A memory that parses."), "utf8");
+        return projectRoot;
+    }
+
+    function memoryPath(projectRoot: string): string {
+        return join(projectRoot, ".pi", "agent", "memory", "a.md");
+    }
+
+    afterEach(async () => {
+        await Promise.all(
+            roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+        );
+    });
+
+    it("steers the findings of a memory edit in the run that made it", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        const projectRoot = await projectWithMemory();
+        ctx = stubContext({
+            cwd: projectRoot,
+            sessionManager: stubSessionManager({ getBranch: () => [] }),
+        });
+        const stub = harness();
+        await startSession(stub);
+
+        await writeFile(memoryPath(projectRoot), memoryText("Breaks: the frontmatter"), "utf8");
+        await step(stub);
+
+        expect(stub.sentMessages).toHaveLength(1);
+        expect(stub.sentMessages[0]?.message).toMatchObject({
+            customType: "pi-coder-reminder",
+            display: false,
+            details: { id: "memory-audit" },
+        });
+        const content = String(stub.sentMessages[0]?.message.content);
+        expect(content).toContain("[frontmatter]");
+        expect(content).toContain("project/a.md");
+        expect(stub.sentMessages[0]?.options).toEqual({ deliverAs: "steer" });
+    });
+
+    it("says nothing for a step whose memory edit audited clean", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        const projectRoot = await projectWithMemory();
+        ctx = stubContext({
+            cwd: projectRoot,
+            sessionManager: stubSessionManager({ getBranch: () => [] }),
+        });
+        const stub = harness();
+        await startSession(stub);
+
+        await writeFile(memoryPath(projectRoot), memoryText("Still parses fine."), "utf8");
+        await step(stub);
+
+        expect(stub.sentMessages).toHaveLength(0);
+    });
+
+    it("does not repeat findings the agent has already been shown", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        const projectRoot = await projectWithMemory();
+        ctx = stubContext({
+            cwd: projectRoot,
+            sessionManager: stubSessionManager({ getBranch: () => [] }),
+        });
+        const stub = harness();
+        await startSession(stub);
+
+        await writeFile(memoryPath(projectRoot), memoryText("Breaks: the frontmatter"), "utf8");
+        await step(stub);
+        expect(stub.sentMessages).toHaveLength(1);
+
+        // An unchanged tree is not even parsed; another memory edit that adds no finding is parsed and
+        // silenced, because the news did not change.
+        await step(stub);
+        await writeFile(
+            join(projectRoot, ".pi", "agent", "memory", "b.md"),
+            "---\nname: b\ndescription: Another memory that parses.\n---\n\n# b\n",
+            "utf8",
+        );
+        await step(stub);
+
+        expect(stub.sentMessages).toHaveLength(1);
+    });
+
+    it("combines a held rotation reminder with an audit finding into one steer", async () => {
+        // The regression this pins: the audit used to be sent directly while a held rotation payload was flushed
+        // separately, so two messages left at one boundary. pi delivered the first to the next inference and
+        // carried the second to the next *user prompt*, which put a broken memory one turn late in a live run.
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "1");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "0");
+        const projectRoot = await projectWithMemory();
+        // A branch holding one read, so the inferred state is `exploring` and the rotation has a pool.
+        const manager = sessionManager(projectRoot);
+        manager.appendMessage(assistantEntry([toolCall("read", { path: "src/a.ts" }, "c1")], 1));
+        const entries = manager.getBranch();
+        ctx = stubContext({
+            cwd: projectRoot,
+            sessionManager: stubSessionManager({ getBranch: () => entries }),
+            getContextUsage: () => ({ tokens: 1_000, contextWindow: 200_000, percent: 0.005 }),
+        });
+        const stub = harness();
+        await startSession(stub);
+        // A run in flight, so the deferred rotation pick is held instead of sent as `nextTurn`.
+        await stub.requireHandler("agent_start")({}, ctx);
+        await userTurn(stub);
+        await userTurn(stub);
+
+        const sentBefore = stub.sentMessages.length;
+        await writeFile(memoryPath(projectRoot), memoryText("Breaks: the frontmatter"), "utf8");
+        await step(stub);
+
+        // One message, one wrapper, both reminders in it: the defect and the held rotation pick.
+        const atAudit = stub.sentMessages.slice(sentBefore);
+        expect(atAudit).toHaveLength(1);
+        const content = String(atAudit[0]?.message.content);
+        expect(content.match(/<pi_coder_reminder>/g)).toHaveLength(1);
+        expect(content).toContain("[frontmatter]");
+        expect(content).toContain("scout");
+        expect(atAudit[0]?.message).toMatchObject({ details: { id: "memory-audit" } });
+        expect((atAudit[0]?.message.details as { ids?: string[] }).ids).toEqual(
+            expect.arrayContaining(["delegation", "memory-audit"]),
+        );
+        expect(atAudit[0]?.options).toEqual({ deliverAs: "steer" });
+
+        // Nothing is left waiting: the combined message was the whole delivery.
+        await step(stub);
+        expect(stub.sentMessages.slice(sentBefore)).toHaveLength(1);
+    });
+
+    it("can be turned off without touching the tool", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_MEMORY_AUDIT", "false");
+        const projectRoot = await projectWithMemory();
+        ctx = stubContext({
+            cwd: projectRoot,
+            sessionManager: stubSessionManager({ getBranch: () => [] }),
+        });
+        const stub = harness();
+        await startSession(stub);
+
+        await writeFile(memoryPath(projectRoot), memoryText("Breaks: the frontmatter"), "utf8");
+        await step(stub);
+
+        expect(stub.sentMessages).toHaveLength(0);
     });
 });
 

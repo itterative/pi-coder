@@ -2,6 +2,10 @@
  * Memory-audit surfaces: the `memory_audit` tool for agents and the `/memory-audit` command for
  * people. Both read the same trees through the same functions that build the memory list, so a
  * file that fails to index is reported instead of silently missing.
+ *
+ * Neither surface is how an agent is expected to catch its own mistakes: the reminders module audits both
+ * trees automatically after a step that changed a memory file (see `reminders/memory-audit.ts`). These are
+ * the on-demand view of the same report.
  */
 import {
     type ExtensionAPI,
@@ -9,21 +13,20 @@ import {
     type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import { AutocompleteItem, matchesKey } from "@earendil-works/pi-tui";
-import { join } from "node:path";
 import { Type } from "typebox";
 
-import { getUserMemoryDirectory } from "../../common/constants";
 import { pager, type PagerItem } from "../../tui/pager";
 import {
-    auditMemoryTrees,
     formatAuditReport,
+    runMemoryAudit,
     summarizeAudit,
     WarningsLegend,
     type AuditFinding,
     type AuditResult,
+    type AuditScope,
 } from "./audit";
 
-export type AuditScope = "project" | "user" | "both";
+export type { AuditScope } from "./audit";
 
 const SCOPE_VALUES: AuditScope[] = ["both", "project", "user"];
 
@@ -38,18 +41,7 @@ function resolveScope(raw: string | undefined): AuditScope {
 }
 
 async function runAudit(cwd: string, scope: AuditScope): Promise<AuditResult[]> {
-    const projectDir = join(cwd, ".pi", "agent", "memory");
-    const results = await auditMemoryTrees({
-        projectDir,
-        userDir: getUserMemoryDirectory(),
-        projectRoot: cwd,
-    });
-
-    if (scope === "both") {
-        return results;
-    }
-
-    return results.filter((result) => result.label === scope);
+    return runMemoryAudit(cwd, scope);
 }
 
 function countBySeverity(results: AuditResult[]): { errors: number; warnings: number } {
@@ -77,14 +69,16 @@ export default function registerMemoryAudit(pi: ExtensionAPI) {
         description:
             "Validate the memory trees with the same parser that builds the memory list: frontmatter and name " +
             "rules, index size and description budget, nested docs no index names, and broken or stale " +
-            "references. Run it after creating, moving, renaming, or splitting memory files. Errors mean a " +
-            "memory is not indexed or a reference is broken; warnings are review indicators and may be " +
+            "references. The audit also runs automatically after a step that changed a memory file, and a " +
+            "finding arrives as a reminder, so this tool is for the full report: more findings than a reminder " +
+            "carried, a scope the automatic check does not cover, or a request for the current state. Errors " +
+            "mean a memory is not indexed or a reference is broken; warnings are review indicators and may be " +
             "deliberate - a dense index or a long nested description needs no fix.",
         promptSnippet:
-            "Use memory_audit after editing project or user memories to catch files that silently fail to index.",
+            "memory_audit prints the full memory-tree audit; findings are already reported automatically after a memory edit.",
         promptGuidelines: [
-            "Run memory_audit before finishing work that creates, moves, renames, or splits memory files; a memory that fails to parse is invisible to every later session, and only the extension's own parser reports it",
-            "Weigh warnings rather than obeying them: fix the ones that hide content (a nested doc no index names, a broken link, a stale memory name), leave deliberate ones (a dense index, a long nested description) alone and say why",
+            "Do not call memory_audit after every memory edit: the audit runs automatically after a step that changed a memory file and reports findings as a reminder. Call it for the full report when a reminder says there are more findings, or when the user asks",
+            "Weigh memory_audit warnings rather than obeying them: fix the ones that hide content (a nested doc no index names, a broken link, a stale memory name), leave deliberate ones (a dense index, a long nested description) alone and say why",
         ],
         parameters: Type.Object({
             scope: Type.Optional(

@@ -35,6 +35,18 @@ export const COMPACTION_REMINDER: ReminderDefinition = {
 };
 
 /**
+ * The instruction a memory-audit finding rides on. Kept out of the rotation because it is tied to an event -
+ * a memory edit the audit found something in - not to a cadence, and its facts (which finding, in which tree)
+ * are supplied at emission. The audit runs unasked, so this is the only place the agent hears about a memory
+ * that no longer parses.
+ */
+export const MEMORY_AUDIT_REMINDER: ReminderDefinition = {
+    id: "memory-audit",
+    text: "The automatic memory audit ran after this run's memory edits and found problems in the memory trees. Fix the errors - a memory whose frontmatter does not parse is dropped from every later system prompt, so the lists in the prompt are now incomplete - and fix or deliberately leave each warning, saying why for a deliberate one.",
+    guidance: "A memory edit in this run left the trees with indexing or reference problems.",
+};
+
+/**
  * The rotating catalog, in the order a deterministic schedule cycles it. A tuple so the non-empty invariant
  * the scheduler relies on is checked here rather than at each use.
  *
@@ -44,7 +56,7 @@ export const COMPACTION_REMINDER: ReminderDefinition = {
 export const ROTATION_REMINDERS = [
     {
         id: "memory-hygiene",
-        text: "Before finishing, review what you learned and update or add project memories; run `/memory-audit` after editing memory files, and review `[high-churn]` memories touched by the change.",
+        text: "Before finishing, review what you learned and update or add project memories, and review `[high-churn]` memories touched by the change.",
         guidance:
             "Work was completed and its learnings are not saved yet; never for a turn that only read or searched.",
         // Something has to have been produced before there is anything to record, and the hand-back states

@@ -382,9 +382,18 @@ export function reminderResumeState(
         }
 
         lastEmitTurn = Math.max(lastEmitTurn, turn);
-        if (isRotationId(id)) {
-            shown.set(id, turn);
-            lastRotationId = id;
+
+        // One message may carry several reminders, because a delivery point combines everything it holds. The
+        // aggregate records the newest id as `id` and every id in `ids`, and the rotation resumption needs them
+        // all: seeding `shown` from only the first would re-offer a reminder this session already saw.
+        const combined = Array.isArray(details.ids)
+            ? details.ids.filter((value): value is string => typeof value === "string")
+            : [];
+        for (const reminderId of combined.length > 0 ? combined : [id]) {
+            if (isRotationId(reminderId)) {
+                shown.set(reminderId, turn);
+                lastRotationId = reminderId;
+            }
         }
 
         // A 0 stamp means the context was not known when the reminder rendered, so the baseline comes from the

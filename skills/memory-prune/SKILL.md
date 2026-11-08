@@ -17,8 +17,8 @@ reference docs and are reachable only through an indexed memory's `## Targeted r
 
 ## Procedure
 
-1. **Get the structural state first, not by reading files.** Run the `/memory-audit` command (or the
-   `memory_audit` tool with `scope` `"project"`, `"user"`, or `"both"`). It reports memories that fail to
+1. **Get the structural state first, not by reading files.** Call the `memory_audit` tool with `scope`
+   `"project"`, `"user"`, or `"both"`. It reports memories that fail to
    index, oversized index files, over-budget descriptions, nested docs no index lists, dangling references, and
    broken links. Fix or note those before judging content. Errors mean something is broken (a memory that does
    not index, a reference that resolves nowhere); warnings are review indicators - a dense index or a long nested
@@ -40,7 +40,7 @@ reference docs and are reachable only through an indexed memory's `## Targeted r
     - **Demote**: `git mv <name>.md <group>/<name>.md`, add frontmatter (`name` equal to the filename stem, a
       one-line `description`, lowercase `category`, `status:` naming it an archive), add one `../` to every
       relative link it carries, and list it from the index that now owns it
-6. **Re-run `/memory-audit`** and report the before/after finding counts. Confirm the change with a final
+6. **Call `memory_audit` again** and report the before/after finding counts. Confirm the change with a final
    summary of what was updated, merged, demoted, or deleted.
 
 ## Guidelines
@@ -51,6 +51,6 @@ reference docs and are reachable only through an indexed memory's `## Targeted r
 - A recorded measurement (a byte count, a token figure, a percentage) is a claim. Re-measure before citing it,
   and keep the command that produced it next to the number.
 - Quote any frontmatter `description` that contains `: ` — unquoted, the memory fails to parse and disappears
-  from every system prompt with nothing but a startup warning. `/memory-audit` reports it; `memory_audit` is the
-  same check for an agent.
+  from every system prompt with nothing but a startup warning. `memory_audit` reports it, and the automatic
+  post-edit audit repeats the check by itself.
 - For splitting or restructuring the hierarchy rather than removing content, use the `memory-restructure` skill.

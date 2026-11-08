@@ -133,7 +133,9 @@ code: a worker validated `agents.md` with a generic YAML library, which accepted
 `parseFrontmatter` threw and `scanMemories` dropped the memory from every prompt. A second implementation of the
 reader is not a check on the first.
 
-- `src/modules/memory/audit.ts` — `auditMemoryTrees({ projectDir, userDir, projectRoot })` returns findings with
+- `src/modules/memory/audit.ts` — `runMemoryAudit(cwd, scope)` is the single entry point every surface uses;
+  `memoryAuditDirectories(cwd)` resolves the two roots;
+  `auditMemoryTrees({ projectDir, userDir, projectRoot })` returns findings with
   `severity` (`error` | `warning`), a memory-dir-relative `path`, a `rule`, and a message. Rules:
   `frontmatter`, `name`, `description`, `category`, `index-budget`, `reachability`, `dangling-reference`,
   `broken-link`, `stale-memory-reference`. Indexed failures are errors; the same problems in nested docs are
@@ -141,7 +143,15 @@ reader is not a check on the first.
   memory that exists only in the user tree is not reported as stale, and "former/old/previously `x` memory"
   framing is exempt as history.
 - `src/modules/memory/audit-ui.ts` — registers the `memory_audit` tool (`scope`: `"project"`/`"user"`/`"both"`) and
-  the `/memory-audit` command (a pager over the same report, with `AutocompleteItem` scope completions).
+  the `/memory-audit` command (a pager over the same report, with `AutocompleteItem` scope completions). Both are
+  the *on-demand* view: an agent is not expected to call them after an edit, because the audit runs by itself.
+- `src/modules/reminders/memory-audit.ts` — the automatic check. Keyed on a stat fingerprint of both trees (paths,
+  sizes, mtimes; top-level **and** nested), so a parse happens only when a memory file actually moved, and no
+  tool-call hook is needed - `edit`, `write`, a bash heredoc, and a renamed nested doc all read the same. It runs
+  at the `turn_end` step boundary, and a finding set that differs from the last one reported becomes a held
+  reminder (`pendingSteers`), steered into the run that caused it with `details.id: "memory-audit"`. Baseline is
+  taken at every restart point, so what was already on disk is never reported as this run's doing.
+  `PI_CODER_MEMORY_AUDIT=false` turns it off without touching the tool.
 - `src/modules/memory/index.ts` — when `scanMemories` reports parse errors, the prompt appendix gains a
   `### Not Indexed` section naming the files and why. It costs nothing when the tree is clean and makes the
   silent-drop case visible to every agent and to the user.
