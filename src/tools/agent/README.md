@@ -19,7 +19,7 @@ agent(action="continue", runId="worker-1", guidance="...")
 ```
 
 - `start` runs a child in the foreground by default; set `background=true` for asynchronous execution. While a foreground `start` or `continue` is running in the TUI, press Ctrl+Alt+B to move it to the background. Background results explain how to collect the eventual result.
-- `scout` is read-only, `reviewer` can run permission-gated commands, and only the built-in `worker` can edit.
+- `scout` is read-only, `reviewer` can run permission-gated commands, and only the built-in `worker` can edit. Before starting a `worker`, the parent confirms with the user when it could do the work itself; starting a read-only agent needs no confirmation.
 - Background `start` returns immediately. Collect terminal background results explicitly; do not poll or sleep while waiting. A collected result stays retrievable for repeated `collect` calls until the session's retained-result budget evicts it. A delegated response larger than 16,000 characters — foreground or collected — is truncated at the last complete line that fits, and the full text is spilled to `<scratchpad>/agents/<runId>-<sequence>.out`, named by a trailing note.
 - Isolated workers use persistent Git worktrees. Starting one from a dirty parent is allowed; the worktree is based on committed `HEAD`, and the start result warns that uncommitted parent changes are not visible in it. Changed results remain outside the parent checkout until an explicit `apply`, which requires a clean parent so the parent can commit or stash its own work first.
 - `/agents` browses delegated runs and isolated workspaces.
