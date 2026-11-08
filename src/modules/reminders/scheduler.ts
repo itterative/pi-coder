@@ -15,6 +15,15 @@ export interface SchedulerOptions {
      * another reminder into the same run.
      */
     maxMidRunPerTurn?: number;
+    /**
+     * The model's own floor: at least this many user turns between two reminders it picked (default 5); `0`
+     * disables the floor so a model pick may land on any due turn.
+     *
+     * The deterministic triggers cannot rate-limit the model on their own: a threshold the run keeps crossing
+     * leaves every turn due, and the judgement then re-sends the same reminder turn after turn. The floor is
+     * about *emissions*: `none` shows nothing, so it does not spend it.
+     */
+    modelEveryTurns?: number;
 }
 
 export interface DecideInput {
@@ -43,6 +52,8 @@ export interface SchedulerSnapshot {
     thresholdBaseline: number | undefined;
     sessionArmed: boolean;
     midRunThisTurn: number;
+    /** The model's floor: whether a pick may be emitted on this turn. */
+    modelTurnDue: boolean;
 }
 
 /**
@@ -62,6 +73,8 @@ export class ReminderScheduler {
     private thresholdBaseline: number | undefined;
     private armed: ReminderDefinition | undefined;
     private midRunThisTurn = 0;
+    /** The last user turn a model pick was emitted on, for {@link SchedulerOptions.modelEveryTurns}. */
+    private lastModelTurn = 0;
     private readonly maxMidRunPerTurn: number;
 
     constructor(private readonly options: SchedulerOptions) {
@@ -93,6 +106,13 @@ export class ReminderScheduler {
         }
 
         if (input.modelChoice !== undefined) {
+            // The floor is about what the model emits, not which path emits it: a threshold the run keeps
+            // crossing would otherwise let a mid-run point show the same reminder on every turn. The point is
+            // spent so the rest of this turn's steps do not re-ask it.
+            if (!this.modelTurnDue()) {
+                return this.decline(input.maxContextTokens);
+            }
+
             if (input.modelChoice === "none") {
                 return this.decline(input.maxContextTokens);
             }
@@ -113,6 +133,7 @@ export class ReminderScheduler {
                     return this.decline(input.maxContextTokens);
                 }
 
+                this.lastModelTurn = this.userTurns;
                 this.midRunThisTurn += 1;
                 return this.emit(chosen, input.maxContextTokens);
             }
@@ -178,6 +199,7 @@ export class ReminderScheduler {
         this.thresholdBaseline = undefined;
         this.armed = armed;
         this.midRunThisTurn = 0;
+        this.lastModelTurn = 0;
     }
 
     /**
@@ -209,6 +231,9 @@ export class ReminderScheduler {
                 : undefined;
         this.midRunThisTurn = 0;
         this.armed = armed;
+        // The branch's last emission anchors the model's floor too: a resume is not a fresh cadence, and the
+        // first judged turn should not re-send what the branch already showed.
+        this.lastModelTurn = state.lastEmitTurn;
     }
 
     /**
@@ -260,7 +285,21 @@ export class ReminderScheduler {
             return this.emit(armed, input.maxContextTokens);
         }
 
+        // The schedule gates the model as well as itself: a pick is only emitted on a turn that is due, so
+        // `everyTurns` and the context threshold stay the rotation's cadence instead of being bypassed by an
+        // answer the model gave eagerly.
+        if (!this.triggersDue(input.maxContextTokens)) {
+            return undefined;
+        }
+
         if (input.modelChoice !== undefined) {
+            // The model's own floor: a threshold the run keeps crossing leaves every turn due, and without this
+            // the same reminder came back on consecutive turns. `none` is not an emission, so it spends
+            // nothing and the next due turn may still be judged.
+            if (!this.modelTurnDue()) {
+                return undefined;
+            }
+
             if (input.modelChoice === "none") {
                 return undefined;
             }
@@ -281,12 +320,9 @@ export class ReminderScheduler {
                     return undefined;
                 }
 
+                this.lastModelTurn = this.userTurns;
                 return this.emit(chosen, input.maxContextTokens);
             }
-        }
-
-        if (!this.triggersDue(input.maxContextTokens)) {
-            return undefined;
         }
 
         const reminder = this.nextAvailableRotation(input.available);
@@ -305,7 +341,19 @@ export class ReminderScheduler {
             thresholdBaseline: this.thresholdBaseline,
             sessionArmed: this.armed !== undefined,
             midRunThisTurn: this.midRunThisTurn,
+            modelTurnDue: this.modelTurnDue(),
         };
+    }
+
+    /** Whether the rotation is due for this turn, without deciding which reminder it would be. */
+    turnDue(maxContextTokens: number): boolean {
+        return this.triggersDue(maxContextTokens);
+    }
+
+    /** Whether the model's floor allows a pick on this turn. */
+    modelTurnDue(): boolean {
+        const every = this.options.modelEveryTurns ?? 0;
+        return every <= 0 || this.userTurns - this.lastModelTurn >= every;
     }
 
     private thresholdDue(maxContextTokens: number): boolean {

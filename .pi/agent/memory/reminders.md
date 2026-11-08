@@ -39,8 +39,14 @@ the strongest answer at or above the gate - by default a helpfulness score (`rem
 `reminderMinScore` 1.25 on a 0-3 scale); the older per-reminder probability form (`"bool"`,
 `reminderMinProbability`) measured flat. It answers on a user turn **and** on a mid-run threshold crossing, so
 a mid-run point is decided rather than merely scheduled: a `none` there suppresses the steer the deterministic
-pointer would have emitted. The state it sends is one allocator-rendered conversation
-(`WINDOW_POLICY_REMINDER`), and the signals gate the pool instead of appearing in that state.
+pointer would have emitted. **A judgement is only made when the schedule is due**, and a reminder it picked may
+not be emitted more often than its own floor (`PI_CODER_REMINDER_MODEL_TURNS`, default 5). The floor exists
+because a threshold the run keeps crossing leaves every turn due: without it the model re-sent the same reminder
+on consecutive turns (observed live in a long validating session, 2026-11). It is about emissions - a `none`
+spends nothing - and a turn either gate skips calls no `decide` at all, because an absent answer must not fall
+back to the deterministic rotation; the turn's debug entry records `skipped: true`. The state it sends is one
+allocator-rendered conversation (`WINDOW_POLICY_REMINDER`), and the signals gate the pool instead of appearing
+in that state.
 
 **A mid-run decision point is a step boundary, not a streamed delta.** `turn_end` is where it is taken: pi
 awaits that dispatch, the run's tools have already run, and a steer therefore lands after the turn and before

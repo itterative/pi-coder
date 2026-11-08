@@ -109,6 +109,13 @@ interface DecisionEntryInput {
      * prompt: the report attributes a deferred turn by its own `scheduler.userTurns`, not the next turn's.
      */
     deferred?: boolean;
+    /**
+     * The turn was not decided: the schedule was not due, or the model's own floor blocked its emission.
+     *
+     * Recorded because the absence is otherwise indistinguishable from a decline, and this is the field that
+     * explained a live run where the same reminder came back on three consecutive turns.
+     */
+    skipped?: boolean;
     /** The window the consult was judged by, carried back on the consult rather than rebuilt here. */
     window?: SessionWindow;
     /**
@@ -143,6 +150,7 @@ function decisionEntry(input: DecisionEntryInput): Record<string, unknown> {
         trigger: input.trigger,
         reminder: input.reminder?.id ?? null,
         scope: input.scope,
+        ...(input.skipped === true ? { skipped: true } : {}),
         ...(input.state === undefined ? {} : { state: input.state }),
         ...(input.available === undefined ? {} : { available: [...input.available] }),
         ...(options.length === 0 ? {} : { options: options.map((option) => option.id) }),
@@ -270,8 +278,9 @@ export default function registerRemindersExtension(
                   everyTurns: settings.everyTurns,
                   thresholdTokens: settings.thresholdTokens,
                   maxMidRunPerTurn: settings.midRunMax,
+                  modelEveryTurns: settings.modelTurns,
               }
-            : { everyTurns: 0, thresholdTokens: 0, maxMidRunPerTurn: 0 },
+            : { everyTurns: 0, thresholdTokens: 0, maxMidRunPerTurn: 0, modelEveryTurns: 0 },
     );
     const growth = new ContextGrowthTracker();
     /**
@@ -461,6 +470,13 @@ export default function registerRemindersExtension(
         stateTranscript: string | undefined;
         todoMove: { id: string; probability: number } | undefined;
         todoScores: Record<string, number> | undefined;
+        /**
+         * The turn was not judged, because the schedule is not due or the model's own floor blocks it.
+         *
+         * The caller must then call no `decide`: the model being in charge means an absent answer is not a
+         * fallback to the deterministic rotation.
+         */
+        skipped: boolean;
     }> => {
         const config = decisionConfig.load(ctx.cwd ?? process.cwd());
         const consulting = reminderEnabled(config);
@@ -513,6 +529,34 @@ export default function registerRemindersExtension(
                 stateTranscript: undefined,
                 todoMove: undefined,
                 todoScores: undefined,
+                skipped: false,
+            };
+        }
+
+        // The schedule gates the judgement, and the model's floor gates the emissions it would produce. Both
+        // are checked before the consult: an answer that cannot be emitted is the expensive half of the turn,
+        // and a non-due turn has nothing to show either way. The state is still recorded - it is what the badge
+        // and the mid-run pool read.
+        if (!scheduler.turnDue(growth.maxTokens) || !scheduler.modelTurnDue()) {
+            if (at === epoch) {
+                rememberState(answeredState(escalated) ?? answeredState(short));
+            }
+
+            return {
+                signals,
+                available,
+                options,
+                modelChoice: undefined,
+                scores: undefined,
+                consult: undefined,
+                escalated: escalated !== undefined,
+                stateConfidence: short?.phaseConfidence,
+                statePhase: short?.answeredPhase,
+                stateLatencyMs: short?.latencyMs,
+                stateTranscript: (escalated ?? short)?.transcript,
+                todoMove: undefined,
+                todoScores: undefined,
+                skipped: true,
             };
         }
 
@@ -551,6 +595,7 @@ export default function registerRemindersExtension(
             stateTranscript: (escalated ?? short)?.transcript,
             todoMove: todo.move,
             todoScores: todo.scores,
+            skipped: false,
         };
     };
 
@@ -681,9 +726,10 @@ export default function registerRemindersExtension(
 
             const before = scheduler.snapshot();
             // A mid-run emission may have covered this turn while the consult ran; one reminder per turn holds
-            // whichever delivery path took the slot.
+            // whichever delivery path took the slot. A skipped judgement calls no `decide` at all: with the
+            // model in charge, no answer must not fall back to the deterministic rotation.
             const reminder =
-                before.lastEmitTurn >= turn
+                before.lastEmitTurn >= turn || judged.skipped
                     ? undefined
                     : scheduler.decide(
                           {
@@ -711,6 +757,7 @@ export default function registerRemindersExtension(
                     decisionEntry({
                         trigger: "turn",
                         deferred: true,
+                        ...(judged.skipped ? { skipped: true } : {}),
                         reminder,
                         scope,
                         state: judged.signals,

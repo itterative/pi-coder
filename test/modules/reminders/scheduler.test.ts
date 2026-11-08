@@ -19,8 +19,9 @@ function armed(options: {
     everyTurns: number;
     thresholdTokens: number;
     maxMidRunPerTurn?: number;
+    modelEveryTurns?: number;
 }): ReminderScheduler {
-    const scheduler = new ReminderScheduler(options);
+    const scheduler = new ReminderScheduler({ modelEveryTurns: 0, ...options });
     scheduler.reset(MEMORY_READ_REMINDER);
     return scheduler;
 }
@@ -416,5 +417,93 @@ describe("ReminderScheduler", () => {
         expect(scheduler.decideMidRun({ maxContextTokens: 200, modelChoice: undefined })).toBe(
             ACTIVE_ROTATION_REMINDERS[0],
         );
+    });
+});
+
+/**
+ * The model's own floor.
+ *
+ * The deterministic triggers cannot rate-limit a judgement: a threshold the run keeps crossing leaves every
+ * turn due, so a model that keeps naming the same reminder re-sent it turn after turn. The floor bounds what
+ * the model may *emit*, separately from the turn cadence, and `none` is not an emission.
+ */
+describe("the model's floor", () => {
+    it("does not emit a model pick on a turn the schedule has not reached", () => {
+        const scheduler = armed({ everyTurns: 2, thresholdTokens: 0 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        // Turn 2: one turn since the last emission, and the cadence is two.
+        expect(
+            scheduler.decide({ maxContextTokens: 0, modelChoice: "delegation" }),
+        ).toBeUndefined();
+
+        // Turn 3 is due, so the pick lands.
+        expect(scheduler.decide({ maxContextTokens: 0, modelChoice: "delegation" })).toBe(
+            ACTIVE_ROTATION_REMINDERS[1],
+        );
+    });
+
+    it("emits a model pick at most once per floor, even on consecutive due turns", () => {
+        const scheduler = armed({ everyTurns: 1, thresholdTokens: 0, modelEveryTurns: 5 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        for (let turn = 2; turn <= 4; turn += 1) {
+            expect(
+                scheduler.decide({ maxContextTokens: 0, modelChoice: "validation" }),
+            ).toBeUndefined();
+        }
+
+        expect(scheduler.decide({ maxContextTokens: 0, modelChoice: "validation" })).toBe(
+            ACTIVE_ROTATION_REMINDERS.find((reminder) => reminder.id === "validation"),
+        );
+
+        // Due again immediately, but the floor counts from the emission.
+        expect(
+            scheduler.decide({ maxContextTokens: 0, modelChoice: "validation" }),
+        ).toBeUndefined();
+    });
+
+    it("does not spend the floor on a decline", () => {
+        const scheduler = armed({ everyTurns: 1, thresholdTokens: 0, modelEveryTurns: 2 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        expect(scheduler.decide({ maxContextTokens: 0, modelChoice: "none" })).toBeUndefined();
+
+        // Nothing was shown, so the next due turn may still be judged.
+        expect(scheduler.decide({ maxContextTokens: 0, modelChoice: "delegation" })).toBe(
+            ACTIVE_ROTATION_REMINDERS[1],
+        );
+    });
+
+    it("holds a mid-run pick to the same floor", () => {
+        const scheduler = armed({ everyTurns: 0, thresholdTokens: 100, modelEveryTurns: 2 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        scheduler.noteContext(100);
+
+        // Turn 1: inside the floor, and the point is spent so the rest of the turn does not re-ask.
+        expect(
+            scheduler.decideMidRun({ maxContextTokens: 200, modelChoice: "delegation" }),
+        ).toBeUndefined();
+        expect(scheduler.snapshot().midRunThisTurn).toBe(1);
+
+        scheduler.beginTurn();
+        scheduler.beginTurn();
+        expect(scheduler.decideMidRun({ maxContextTokens: 300, modelChoice: "delegation" })).toBe(
+            ACTIVE_ROTATION_REMINDERS[1],
+        );
+    });
+
+    it("reports the floor on the snapshot, for the debug entry", () => {
+        const scheduler = armed({ everyTurns: 1, thresholdTokens: 0, modelEveryTurns: 5 });
+
+        expect(scheduler.decide({ maxContextTokens: 0 })).toBe(MEMORY_READ_REMINDER);
+        expect(scheduler.snapshot().modelTurnDue).toBe(false);
+        scheduler.decide({ maxContextTokens: 0, modelChoice: "validation" });
+        scheduler.beginTurn();
+        scheduler.beginTurn();
+        scheduler.beginTurn();
+        scheduler.beginTurn();
+        expect(scheduler.snapshot().modelTurnDue).toBe(true);
     });
 });

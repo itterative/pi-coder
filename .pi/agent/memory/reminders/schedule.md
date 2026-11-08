@@ -35,27 +35,32 @@ where the decision-model gate lives.
   its finding is pushed into `pendingSteers` like a rotation pick, so both leave together as one message.
 - `scheduler.ts` — pure `ReminderScheduler`: the armed change-point reminder first; otherwise rotation due
   after `everyTurns` user turns since the last emission or `thresholdTokens` new context tokens, whichever comes
-  first. A model answer naming an offered id is chosen and advances the rotation past it; a deliberate `none`
-  suppresses the fallback for that turn; a missing answer leaves the deterministic triggers in charge. The
-  optional `available` gate narrows the rotation: the scheduler scans to the next allowed id, and a model pick
-  outside the set is dropped with no fallback. Mid-run emissions are capped at `maxMidRunPerTurn` (default 1)
-  per user turn, reset by each `decide`; `decideMidRun` takes the same `modelChoice`, so a mid-run crossing is
-  decided rather than merely scheduled - a decline spends that budget and restarts the threshold cooldown
-  (leaving `lastEmitTurn` alone), which is what keeps an overdue threshold from re-asking on the next streamed
-  update. `reset()` starts a fresh schedule; `seed()` resumes a populated branch (a tree move, reload, resume,
-  or fork) with the user-turn count, the last emission turn, and the rotation pointer just past the last emitted
-  id, so a shown id is not repeated. Neither arms anything on its own: the caller passes the reminder a restart
-  point should arm.
+  first. **The schedule gates the model too**: a model pick is only emitted on a due turn, so the cadence is not
+  bypassed by an eager answer. On top of that the model has a floor of its own (`modelEveryTurns`, from
+  `PI_CODER_REMINDER_MODEL_TURNS`, default 5): at most one model-picked reminder per that many turns, on a turn
+  and on a mid-run point alike, because a sticky threshold leaves every turn due. The floor is about emissions,
+  so `none` spends nothing; `seed()` anchors it on the branch's `lastEmitTurn`. `turnDue()` and `modelTurnDue()`
+  are the read-only halves the caller uses to skip a consult it could not act on. A model answer naming an offered
+  id is chosen and advances the rotation past it; a deliberate `none` suppresses the fallback for that turn; a
+  missing answer leaves the deterministic triggers in charge. The optional `available` gate narrows the rotation:
+  the scheduler scans to the next allowed id, and a model pick outside the set is dropped with no fallback.
+  Mid-run emissions are capped at `maxMidRunPerTurn` (default 1) per user turn, reset by each `decide`;
+  `decideMidRun` takes the same `modelChoice`, so a mid-run crossing is decided rather than merely scheduled -
+  a decline spends that budget and restarts the threshold cooldown (leaving `lastEmitTurn` alone), which is what
+  keeps an overdue threshold from re-asking on the next streamed update. `reset()` starts a fresh schedule;
+  `seed()` resumes a populated branch (a tree move, reload, resume, or fork) with the user-turn count, the last
+  emission turn, and the rotation pointer just past the last emitted id, so a shown id is not repeated. Neither
+  arms anything on its own: the caller passes the reminder a restart point should arm.
 - `context-growth.ts` — the `message_start` usage baseline plus streamed `chars / 4` estimator lifted out of
   the memory module.
 - `settings.ts` — `PI_CODER_REMINDER=false` disables everything; `PI_CODER_MEMORY_AUDIT=false` disables only the
-  automatic memory audit; `PI_CODER_REMINDER_EVERY_TURNS` (default 5)
-  and `PI_CODER_REMINDER_THRESHOLD` (default 30000, alias `PI_MEMORY_REMINDER_THRESHOLD`) each disable their
-  trigger at `0`, and both at `0` also removes the model consult; `PI_CODER_REMINDER_MIDRUN_MAX` (default 1)
-  caps the mid-run steers one user turn may receive; `PI_CODER_REMINDER_DEBUG` records a
-  `pi-coder-reminder:debug` entry with the state and outcome of every selection decision (default on,
-  `reminderDebugEnabled`), including the window judged (the state ask's own `stateTranscript`), the tier-1
-  `stateConfidence`, and `escalated`.
+  automatic memory audit; `PI_CODER_REMINDER_MODEL_TURNS` (default 5) is the model's own floor, `0` for none;
+  `PI_CODER_REMINDER_EVERY_TURNS` (default 5) and `PI_CODER_REMINDER_THRESHOLD` (default 30000, alias
+  `PI_MEMORY_REMINDER_THRESHOLD`) each disable their trigger at `0`, and both at `0` also removes the model
+  consult; `PI_CODER_REMINDER_MIDRUN_MAX` (default 1) caps the mid-run steers one user turn may receive;
+  `PI_CODER_REMINDER_DEBUG` records a `pi-coder-reminder:debug` entry with the state and outcome of every
+  selection decision (default on, `reminderDebugEnabled`), including the window judged (the state ask's own
+  `stateTranscript`), the tier-1 `stateConfidence`, and `escalated`.
 - `index.ts` — `registerRemindersExtension(pi, { scope })`. `scope: "full"` is a parent session;
   `scope: "memory"` is for delegated children, registered by the `memories` capability factory beside the
   appendix, and emits only the session reminder. A full-scope session also publishes the judged phase.
@@ -65,7 +70,10 @@ where the decision-model gate lives.
 Both append at the end of the conversation, so the system-prompt prefix stays stable:
 
 - **User turns** (`before_agent_start`): the session reminder, the turn-based rotation, and the model policy.
-  The armed session/fold reminders are returned synchronously and ride the user message. A rotation pick is
+  The armed session/fold reminders are returned synchronously and ride the user message. A rotation turn is only
+  *judged* when `turnDue()` says the schedule is due and `modelTurnDue()` says the model's floor is open; either
+  gate failing skips the consult and calls no `decide` (`judged.skipped`, recorded on the debug entry), because
+  the model being in charge makes an absent answer non-authoritative for the fallback. A rotation pick is
   deferred, and when the run is in flight the payload is **held in `pendingSteers`** rather than steered at
   once: it is flushed on the first `turn_end` with a tool result, or sent as `nextTurn` from `agent_settled` if
   the run's answer was terminal. Steering earlier let pi poll the queue after a text-only turn and start a new

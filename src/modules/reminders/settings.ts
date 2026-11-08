@@ -7,6 +7,9 @@
  * may be set to `0` to disable that trigger on its own. `PI_CODER_REMINDER_MIDRUN_MAX` (default 1) caps how
  * many threshold-driven mid-run reminders one user turn may receive. `PI_CODER_MEMORY_AUDIT=false` turns off
  * the automatic audit that follows a memory edit, without touching the `memory_audit` tool.
+ * `PI_CODER_REMINDER_MODEL_TURNS` (default 5) is the decision model's own floor: at least that many user turns
+ * between two reminders it picked, `0` for none. It is separate from `everyTurns` because a threshold the run
+ * keeps crossing leaves every turn due, and the judgement would re-send the same reminder turn after turn.
  * `PI_CODER_REMINDER_DEBUG` records each selection decision, with the state it was made from, as a session
  * entry; it is on by default for now (see `reminderDebugEnabled`). `PI_MEMORY_REMINDER_THRESHOLD` keeps
  * working as an alias for the threshold.
@@ -16,6 +19,7 @@ export interface ReminderSettings {
     everyTurns: number;
     thresholdTokens: number;
     midRunMax: number;
+    modelTurns: number;
     memoryAudit: boolean;
     debug: boolean;
 }
@@ -23,6 +27,7 @@ export interface ReminderSettings {
 export const DEFAULT_REMINDER_TURNS = 5;
 export const DEFAULT_REMINDER_THRESHOLD = 30000;
 export const DEFAULT_REMINDER_MIDRUN_MAX = 1;
+export const DEFAULT_REMINDER_MODEL_TURNS = 5;
 
 function nonNegativeInt(value: string | undefined, fallback: number): number {
     if (value === undefined) {
@@ -45,6 +50,7 @@ export function loadReminderSettings(env: NodeJS.ProcessEnv = process.env): Remi
         everyTurns: nonNegativeInt(env.PI_CODER_REMINDER_EVERY_TURNS, DEFAULT_REMINDER_TURNS),
         thresholdTokens: nonNegativeInt(threshold, DEFAULT_REMINDER_THRESHOLD),
         midRunMax: nonNegativeInt(env.PI_CODER_REMINDER_MIDRUN_MAX, DEFAULT_REMINDER_MIDRUN_MAX),
+        modelTurns: nonNegativeInt(env.PI_CODER_REMINDER_MODEL_TURNS, DEFAULT_REMINDER_MODEL_TURNS),
         memoryAudit: env.PI_CODER_MEMORY_AUDIT !== "false",
         debug: reminderDebugEnabled(env.PI_CODER_REMINDER_DEBUG),
     };

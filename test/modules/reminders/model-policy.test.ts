@@ -209,6 +209,11 @@ function exploringContext(): ExtensionContext {
 }
 
 beforeEach(() => {
+    // These cases are about what the judgement does with an answer, not about when a turn is due, so the turn
+    // cadence is one turn and the model's floor is off; the gates themselves are covered below and in the
+    // scheduler suite.
+    vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "1");
+    vi.stubEnv("PI_CODER_REMINDER_MODEL_TURNS", "0");
     ctx = exploringContext();
     mocks.consult.mockReset();
     mocks.state.mockReset();
@@ -243,6 +248,50 @@ describe("decision-model reminder policy", () => {
 
         expect((await userTurn(stub))?.message?.content).toContain("memory_system");
         expect(mocks.consult).not.toHaveBeenCalled();
+    });
+
+    it("does not consult on a turn the schedule has not reached", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "5");
+        const stub = harness();
+        await startSession(stub);
+        expect((await userTurn(stub))?.message?.content).toContain("memory_system");
+
+        // Turn 2 of 5: nothing is due, so the answer could not be shown and the consult is not worth buying.
+        expect(await userTurn(stub)).toBeUndefined();
+
+        expect(mocks.consult).not.toHaveBeenCalled();
+    });
+
+    it("emits a model pick at most once per model floor", async () => {
+        // The live defect: a sticky threshold leaves every turn due, and the model answered `validation` on
+        // three consecutive turns. The schedule gate alone cannot stop that, so the model has a floor of its
+        // own - five turns here - separate from the turn cadence.
+        vi.stubEnv("PI_CODER_REMINDER_MODEL_TURNS", "5");
+        const stub = harness();
+        await startSession(stub);
+        expect((await userTurn(stub))?.message?.content).toContain("memory_system");
+
+        // Turns 2-4 are due (cadence 1) but inside the floor, so not even a consult happens.
+        for (let turn = 2; turn <= 4; turn += 1) {
+            expect(await userTurn(stub)).toBeUndefined();
+        }
+        expect(mocks.consult).not.toHaveBeenCalled();
+
+        // Turn 5 is the first one the floor allows.
+        expect((await userTurn(stub))?.message?.content).toContain("scout");
+        expect(mocks.consult).toHaveBeenCalledTimes(1);
+
+        // Turn 6 is due again and the model would still pick, but the floor now counts from turn 5.
+        expect(await userTurn(stub)).toBeUndefined();
+        expect(mocks.consult).toHaveBeenCalledTimes(1);
+
+        for (let turn = 7; turn <= 9; turn += 1) {
+            expect(await userTurn(stub)).toBeUndefined();
+        }
+
+        // Turn 10: ten minus the last model emission at five.
+        expect((await userTurn(stub))?.message?.content).toContain("scout");
+        expect(mocks.consult).toHaveBeenCalledTimes(2);
     });
 
     it("sends the live prompt, the signals, and emits the model's choice", async () => {

@@ -237,6 +237,12 @@ exists. The armed path (below) calls plain `decide`, which runs `beginTurn` itse
 
 ## Threshold accounting
 
+**The model's floor is separate from the threshold.** `PI_CODER_REMINDER_MODEL_TURNS` (default 5) bounds how
+often a reminder the model picked may be emitted, per user turn and per mid-run point alike, because the
+threshold accounting below cannot bound it: a run that keeps growing leaves `thresholdDue` true on every turn,
+so the judgement was free to name the same reminder every time. `none` does not spend the floor, and the floor
+gates the consult itself - a point inside it is not asked about at all, since its answer could not be shown.
+
 The rotation's context trigger is `thresholdTokens` *new* context tokens since the last emission, and the
 scheduler's `thresholdBaseline` is the context that emission counted from. The baseline is a **branch fact**:
 each delivered reminder stamps the baseline it leaves in force in its `details` (`contextTokens`, the
