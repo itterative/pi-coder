@@ -11,6 +11,10 @@
  * limitation instead of a preference: a guide that claims everything gets discounted, and an agent that
  * discovers the limitation through a wasted turn learns to prefer `rg`. The three literal invocations
  * carry the workflow, because an example is imitated more reliably than a rule that describes it.
+ *
+ * Every claim here tracks the implementation: `search` reads names *and* doc comments, `show` locates a
+ * symbol that lives in another file, and both `show` and `usages` take comma-joined symbol lists. A guide
+ * that keeps a capability the tool no longer has, or drops one it gained, teaches the wrong tool.
  */
 export function outlineGuidePrompt(): string {
     return [
@@ -21,11 +25,12 @@ export function outlineGuidePrompt(): string {
         "- About to `read` a long file, or `read` any file just to find one declaration. Run `outline digest`",
         "  first. It returns the declaration map with line ranges, so you go straight to the 30 lines you need",
         "  instead of pulling 900 into the conversation.",
-        "- About to `rg`/`grep` for a declaration. Run `outline search` instead: the same directory scan comes",
-        "  back with kinds, signatures, and line ranges rather than matching lines, and it tolerates a",
-        "  half-remembered name.",
-        "- Have a symbol name and want its body. `outline show` returns that block with its doc comment, not",
-        "  the file.",
+        "- About to `rg`/`grep` for a declaration, or for the code that does something. Run `outline search`",
+        "  instead: it matches declaration names and their doc comments and returns kinds, signatures, and line",
+        "  ranges rather than matching lines, so a half-remembered name or a remembered description both land.",
+        "- Need one symbol's body. `outline show` returns that block with its doc comment, not the file. The",
+        "  file does not have to be the right one: a symbol that lives elsewhere is reported with its real",
+        "  location.",
         "",
         "Unfamiliar code is usually `digest` the directory, `show` the symbol that matters, then `usages` before",
         "changing a signature:",
@@ -34,9 +39,13 @@ export function outlineGuidePrompt(): string {
         '    outline(action="show", symbols=["Auth::login"])',
         '    outline(action="usages", symbols=["Auth::login"], kind="call")',
         "",
-        "Stay with `rg`/`grep` while you still have no name: comments, strings, config, logs, prose, an error",
-        "message, a language `outline` does not parse. `search` matches declaration names, so it cannot answer a",
-        "concept you cannot name yet; a zero-hit search means no such name here, not no such behavior.",
+        'One call can carry several symbols (`symbols=["Auth::login", "Auth::logout"]`); a single',
+        "comma-joined entry is accepted too, and a leading parameter list (`Auth::login(string)`) is enough to",
+        "pick an overload.",
+        "",
+        "Stay with `rg`/`grep` while the target is not a declaration: strings, config, logs, prose, an error",
+        "message, a language `outline` does not parse. `search` reads names and doc comments and nothing else, so a",
+        "zero-hit search means no such name or description here, not that the behavior is absent.",
         "",
         "`usages` finds candidates, not a call graph: it is syntactic, so it does not resolve overloads, generics,",
         "macros, or dynamic dispatch. When output ends with `# next: offset=N`, call again with the same",

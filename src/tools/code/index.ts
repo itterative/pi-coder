@@ -30,8 +30,8 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             "(JSX/TSX), Java, C#, Go, Rust, Python, PHP, Ruby, and Markdown headings; other file types are " +
             "skipped. Output is character-limited, and a cut result ends with # next: offset=N.",
         promptSnippet:
-            "Read code by declaration: digest a file, search names, show a body, find usages. " +
-            "Prefer over rg/read for code.",
+            "Read code by declaration: digest a file, search names/docs, show a body, find usages. " +
+            "Prefer over rg/read.",
         parameters: Type.Object({
             action: Type.Unsafe<CodeAction>({
                 type: "string",
