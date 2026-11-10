@@ -11,17 +11,7 @@
     "scripts": [
       "# the body the model receives is read from this file\nprint(\"hello from example.py\")\n"
     ],
-    "request": "now run example.py",
-    "recent_messages": [
-      {
-        "role": "user",
-        "text": "what does example.py print?"
-      },
-      {
-        "role": "assistant",
-        "text": "I'll read it first."
-      }
-    ]
+    "conversation": "User: what does example.py print?\nAssistant: I'll read it first.\nUser: now run example.py"
   },
   "questions": {
     "veto": {

@@ -12,13 +12,7 @@
       "node scripts/deploy.js --prod",
       "deploy({ production: true });"
     ],
-    "request": "ship the current build",
-    "recent_messages": [
-      {
-        "role": "assistant",
-        "text": "Running the deploy script."
-      }
-    ]
+    "conversation": "Assistant: Running the deploy script.\nUser: ship the current build"
   },
   "questions": {
     "veto": {

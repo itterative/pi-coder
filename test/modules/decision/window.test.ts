@@ -153,6 +153,25 @@ describe("selectWindow", () => {
         expect(lines).toContain("Tool: read(src/a.ts)");
     });
 
+    it("renders a blocked command with its reason after the line", () => {
+        const selection = selectWindow(
+            [
+                item("user", "clean up", 1),
+                {
+                    role: "command",
+                    text: "rm -rf dist",
+                    turn: 1,
+                    blocked: "Command execution blocked by user. User message: not that one",
+                },
+            ],
+            { ...WINDOW_POLICY_CONVERSATION, markers: "drop" },
+        );
+
+        // The marker sits outside the command's own clip, so a budget that trims the command still says why
+        // it never ran.
+        expect(selection.lines).toContain("Tool: bash(rm -rf dist) [blocked: not that one]");
+    });
+
     it("keeps or drops the state markers exactly as the policy asks", () => {
         const items = [
             item("user", "start", 1),

@@ -22,7 +22,7 @@
  * transcript's caps and turn span so the phase ask can adopt the allocator later. `planSessionWindow` still
  * builds the command and file-access windows, and `fittedTranscript` the tier-1 state transcript.
  */
-import { ITEM_CHARS, ITEM_MIN, TOOL_ITEMS_KEPT } from "./session-context";
+import { ITEM_CHARS, blockedMarker, ITEM_MIN, TOOL_ITEMS_KEPT } from "./session-context";
 import type { DecisionRecentMessage } from "./types";
 
 /** The kinds the allocator scores separately. A state marker has its own weight and is never trimmed. */
@@ -241,7 +241,8 @@ function renderLine(item: DecisionRecentMessage, chars: number): string {
         return text;
     }
     if (item.role === "command") {
-        return `Tool: bash(${text})`;
+        const marker = item.blocked === undefined ? "" : ` ${blockedMarker(item.blocked)}`;
+        return `Tool: bash(${text})${marker}`;
     }
     if (item.role === "tool") {
         return `Tool: ${text}`;

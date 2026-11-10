@@ -44,11 +44,13 @@ numbers and the rejected alternatives are in `decision-model/window.md`.
   (each clipped to the chars its allocation bought, via `allocationText`) beside the drop count, built from the
   same single branch read and never rebuilt later. That is what the debug entry records and what the replay
   prints, and the rendered `conversation` is those items behind their `User:` / `Assistant:` / `Tool:` prefixes.
-- `planSessionWindow` still builds the command and file-access `recent_messages` window, and
-  `renderSessionWindow` still draws any window as a transcript for a test, a replay, or a log - the reminder
-  subject just no longer sends the planner's items. Flattening the request into the window is what measured
-  *worse* than no context for the command subject (`decision-model/state-policy.md`); for the reminder subject
-  the flattened conversation measured better than the structured fields, which is why the two now differ.
+- `planSessionWindow` still builds the command subject's window (the file-access subject carries no window), and
+  `renderSessionWindow` is what now puts it on the wire as one `conversation` text — with the request as its last
+  `User:` line and `[blocked: …]` on a command a gate refused (`decision-model/state-policy.md`). The reminder
+  subject just no longer sends the planner's items. The command subject's flatten is **not re-measured**: the
+  earlier flatten finding used a state that folded the request into the transcript, where this render keeps it
+  as the last line and keeps the plan's selection; for the reminder subject the flattened conversation measured
+  better than the structured fields.
 
 ## The signals
 

@@ -156,6 +156,7 @@ export function decisionContextFor(
         ...(script === undefined ? {} : { script }),
         ...(session.request === undefined ? {} : { request: session.request }),
         ...(session.recent.length === 0 ? {} : { recent: session.recent }),
+        ...(session.omitted === undefined ? {} : { omitted: session.omitted }),
     };
 }
 

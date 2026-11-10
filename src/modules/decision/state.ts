@@ -1,8 +1,15 @@
 import type { CommandState } from "./contract";
 import { runnerRulesFor } from "./runner-rules";
-import type { DecisionContext, DecisionContextShape, ScriptOmission, ScriptRun } from "./types";
+import { clipRequest, renderSessionWindow } from "./session-context";
+import type {
+    DecisionContext,
+    DecisionContextShape,
+    DecisionRecentMessage,
+    ScriptOmission,
+    ScriptRun,
+} from "./types";
 
-/** Whether a shape carries the request and the recent turns. */
+/** Whether a shape carries the session half. */
 export function hasRequestContext(shape: DecisionContextShape): boolean {
     return shape === "request_context";
 }
@@ -13,11 +20,11 @@ export function hasRequestContext(shape: DecisionContextShape): boolean {
  * Every shape carries the runner's generic rules: without them the model reads an authorized in-workspace
  * file rewrite as destruction. They are the same facts for every project, so they are not project context.
  *
- * `request_context` (the default) adds the `request` the command serves and the `recent_messages`, each as
- * its own labelled field rather than one flattened transcript. That distinction is measured, not cosmetic:
- * as separate fields it takes accidental-destruction detection from 1/6 to 5/6 and benign-edit false
- * positives from 1/6 to 0/6, for +38 tokens over `command_cwd`. Flattened into a transcript it did the
- * opposite, which is the finding that originally made `command_cwd` the default.
+ * `request_context` (the default) adds the session half as one rendered `conversation`: the planned window plus
+ * the request as its last `User:` line. The facts are the ones the measured arm sent as separate `request` and
+ * `recent_messages` fields — accidental-destruction detection 1/6 to 5/6 and benign-edit false positives 1/6 to
+ * 0/6 against `command_cwd`, for +38 tokens — sent as the line grammar the transcript already uses. That
+ * grammar is what lets a refused command say so on its own line instead of looking like a command that ran.
  *
  * The strategies choose the shape: `veto` sends `request_context`, and `history` is that state plus one
  * `command_history` field.
@@ -63,20 +70,35 @@ export function buildState(context: DecisionContext, shape: DecisionContextShape
         return state;
     }
 
-    const requestText = context.request?.trim();
-    if (requestText !== undefined && requestText !== "") {
-        state.request = requestText;
-    }
-
-    const recent = (context.recent ?? []).filter((message) => message.text.trim() !== "");
-    if (recent.length > 0) {
-        state.recent_messages = recent.map((message) => ({
-            role: message.role,
-            text: message.text,
-        }));
+    const conversation = commandConversation(context);
+    if (conversation !== "") {
+        state.conversation = conversation;
     }
 
     return state;
+}
+
+/**
+ * The session half as the one text the state sends: the planned window, then the request as its last line.
+ *
+ * `recent` excludes the request item, so it is appended here at its own clip rather than re-entering the plan;
+ * that is also what keeps the request last, where a reader takes it for the message the command serves. The
+ * append is skipped when the window already ends with the request, so a caller that passes branch items rather
+ * than the planned window cannot send it twice. The window's own omission note stays first, so a trimmed window
+ * never reads as a complete one.
+ */
+function commandConversation(context: DecisionContext): string {
+    const items: DecisionRecentMessage[] = (context.recent ?? []).filter(
+        (message) => message.text.trim() !== "",
+    );
+    const request = clipRequest(context.request ?? "");
+    const last = items.at(-1);
+    const carried = last?.role === "user" && last.text.slice(0, 40) === request.slice(0, 40);
+    if (request !== "" && !carried) {
+        items.push({ role: "user", text: request });
+    }
+
+    return renderSessionWindow(items, context.omitted ?? 0).join("\n");
 }
 
 /**

@@ -39,12 +39,6 @@ export const DECISION_REQUEST_SUBJECTS = [
 /** One of the requests the module can send to the classifier. */
 export type DecisionRequestSubject = (typeof DECISION_REQUEST_SUBJECTS)[number];
 
-/** One recent conversation turn as the command state sends it: no `turn` stamp, no message id. */
-export type RecentMessageState = {
-    role: string;
-    text: string;
-};
-
 /** The runner's uncommitted changes, clipped to a readable list. */
 export type WorkspaceStatusState = {
     /** One `status: path` line per changed file, as `git status` reported it. */
@@ -64,19 +58,23 @@ export type ScriptCapabilityState = {
  * The command state: what `state.ts` builds for a strategy.
  *
  * `command`, `cwd`, and `runner_rules` are in every shape. The rest depend on the shape and the facts the
- * caller gathered: `request` and `recent_messages` when the `request_context` shape is used, `workspace_status`
- * when the tree is dirty, `script_capabilities` when the command resolved a body, and `scripts` only when a
- * probe arm sends the bodies whole.
+ * caller gathered: `conversation` when the `request_context` shape is used, `workspace_status` when the tree
+ * is dirty, `script_capabilities` when the command resolved a body, and `scripts` only when a probe arm sends
+ * the bodies whole.
  */
 export type CommandState = {
     command: string;
     cwd: string;
     /** The runner's generic authority, not project instructions. */
     runner_rules: string[];
-    /** The request the command serves, in the `request_context` shape. */
-    request?: string;
-    /** The turns immediately before the command, in the `request_context` shape. */
-    recent_messages?: RecentMessageState[];
+    /**
+     * The session half, in the `request_context` shape: the recent conversation rendered as one text.
+     *
+     * `User:` / `Assistant:` lines and one `Tool: bash(…)` line per command, oldest first, with the request as
+     * the last `User:` line. A command a gate refused carries `[blocked: …]` after its line, so the output a
+     * later verdict reads never looks like a command that ran.
+     */
+    conversation?: string;
     /** The runner's dirty working tree, when there is one. */
     workspace_status?: WorkspaceStatusState;
     /** One summary per script body the command resolved; the bodies themselves are not re-sent. */

@@ -810,7 +810,7 @@ describe("consultReminderState", () => {
         const sent = classify.mock.calls[0]?.[1] as ClassifierContext;
         // Tier 1 is the state half of the cascade: one question, no per-reminder questions, because the pool it
         // decides does not exist yet. The state is the measured shape - the anchor and the transcript - and the
-        // transcript is fitted from the branch, so the request carries no `recent_messages` and no signals.
+        // transcript is fitted from the branch, so the request carries no conversation window and no signals.
         expect(Object.keys(sent.questions)).toEqual([REMINDER_PHASE_QUESTION]);
         expect(Object.keys(sent.state ?? {}).toSorted()).toEqual(["conversation", "current_state"]);
         expect(sent.state?.current_state).toBe("implementing");

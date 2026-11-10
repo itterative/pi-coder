@@ -96,11 +96,12 @@ export type DecisionQuestionSet = "single";
  * How the command and its context are shaped into the classifier `state`.
  *
  * `command_cwd` sends only the command, the directory, and the runner's rules. `request_context` adds the
- * request the command serves plus the recent turns, and it is the default: on a 25-case hand-labelled set it
- * took accidental-destruction detection from 1/6 to 5/6 while leaving benign-edit false positives unmoved,
- * for +38 tokens over `command_cwd`. The earlier finding that conversation "let the model rationalize
- * dangerous commands" was measured with the request flattened into a transcript; sent as its own `request`
- * field beside `recent_messages`, the effect reverses.
+ * session half as one rendered `conversation`: the planned window plus the request as its last `User:` line,
+ * and it is the default. The shape is the default because context moved accidental-destruction detection from
+ * 1/6 to 5/6 on a 25-case hand-labelled set while leaving benign-edit false positives unmoved, for +38 tokens
+ * over `command_cwd`. The measured arm sent the request and the recent turns as separate fields; the text
+ * render sends the same facts with the line grammar a blocked command needs, so state snapshots and the
+ * marker are what changed, not which facts reach the model.
  */
 export type DecisionContextShape = "command_cwd" | "request_context";
 
@@ -241,17 +242,25 @@ export interface DecisionModelConfig {
     veto?: DecisionVetoConfig;
 }
 
-/** A recent conversation turn included in the state. */
+/** A recent conversation turn included in the state's conversation. */
 export interface DecisionRecentMessage {
     role: string;
     text: string;
     /**
      * The user turn this item belongs to, oldest first, when the walk could tell them apart.
      *
-     * Only the state transcript reads it (the measured variant selected turns by turn); the pool's state sends
-     * `{role, text}` alone, so the stamp never reaches the model.
+     * Only the state transcript reads it (the measured variant selected turns by turn); the command state
+     * renders the planned window, which has no turn stamps of its own.
      */
     turn?: number;
+    /**
+     * Why this bash call never ran, when a gate blocked it: the gate's own reason sentence.
+     *
+     * The walk fills it from the call's error result, which is the only place the branch records a refusal. A
+     * renderer appends it as a `[blocked: …]` marker, so a later consult never reads a refused command as one
+     * the session ran.
+     */
+    blocked?: string;
 }
 
 /**
@@ -368,8 +377,10 @@ export interface DecisionContext {
     isolation?: DecisionIsolation;
     /** The request the command serves: the delegated task for a child, the current user request for the parent. */
     request?: string;
-    /** The items immediately before the command, sent as `recent_messages`; the current request is excluded. */
+    /** The items immediately before the command, which the command state renders as its conversation. */
     recent?: readonly DecisionRecentMessage[];
+    /** Items the planned window left out, named on the first line of the rendered conversation. */
+    omitted?: number;
     /**
      * The runner's uncommitted changes, read from git by the gate.
      *

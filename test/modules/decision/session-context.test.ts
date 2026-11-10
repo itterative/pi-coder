@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+    blockedMarker,
+    blockedReasonText,
+    BLOCK_REASON_CHARS,
     decisionSessionContext,
     SUGGESTION_HISTORY_COUNT,
     decisionSimilarCommands,
@@ -14,6 +17,7 @@ import {
 } from "../../../src/modules/decision";
 import {
     assistantEntry,
+    blockedBashResult,
     branch,
     cleanupBranches,
     sessionManager,
@@ -144,6 +148,108 @@ describe("decisionSessionContext", () => {
                 { role: "command", text: "git status", turn: 1 },
             ],
         });
+    });
+
+    it("marks a bash call the gate blocked, with the reason the branch recorded", () => {
+        const entries = branch([
+            userEntry("clean up the build", 1),
+            assistantEntry(
+                [
+                    textPart("Removing the build directory."),
+                    toolCall("bash", { command: "rm -rf dist" }, "call-blocked"),
+                ],
+                2,
+            ),
+            blockedBashResult(
+                "Command execution blocked by user. User message: not that one",
+                3,
+                "call-blocked",
+            ),
+            userEntry("try it another way", 4),
+        ]);
+
+        const { recent } = decisionSessionContext(entries);
+
+        expect(recent).toEqual([
+            { role: "user", text: "clean up the build" },
+            { role: "assistant", text: "Removing the build directory." },
+            {
+                role: "command",
+                text: "rm -rf dist",
+                blocked: "Command execution blocked by user. User message: not that one",
+            },
+        ]);
+        // The note a person typed is the part a later verdict needs, so it is what the line says.
+        expect(renderSessionWindow(recent)).toContain(
+            "Tool: bash(rm -rf dist) [blocked: not that one]",
+        );
+    });
+
+    it("does not mark a command that ran and failed, or an error from another tool", () => {
+        const entries = branch([
+            userEntry("try the tests", 1),
+            assistantEntry([toolCall("bash", { command: "npm test" }, "call-failed")], 2),
+            toolResultEntry(
+                "fatal: not a git repository\n\nCommand exited with code 128",
+                3,
+                "call-failed",
+                "bash",
+                { isError: true },
+            ),
+            assistantEntry([toolCall("read", { path: "missing.md" }, "call-read")], 4),
+            toolResultEntry("no such file", 5, "call-read", "read", { isError: true }),
+            userEntry("move on", 6),
+        ]);
+
+        const { recent } = decisionSessionContext(entries);
+
+        // Only a call the gate stopped is blocked: a nonzero exit still ran, and a read's error is not a
+        // bash outcome at all.
+        expect(recent.filter((item) => item.blocked !== undefined)).toEqual([]);
+    });
+
+    it("keeps the marker outside the command's share of the window", () => {
+        const entries = branch([
+            userEntry("deploy it", 1),
+            assistantEntry(
+                [
+                    toolCall(
+                        "bash",
+                        { command: `npm run deploy -- ${"a".repeat(400)}` },
+                        "call-blocked",
+                    ),
+                ],
+                2,
+            ),
+            blockedBashResult(
+                "Agent bash blocked by configured permission policy.",
+                3,
+                "call-blocked",
+            ),
+            userEntry("no deploy", 4),
+        ]);
+
+        const [line] = renderSessionWindow(decisionSessionContext(entries).recent).filter((text) =>
+            text.startsWith("Tool: bash("),
+        );
+
+        // The command is trimmed to its share; the marker is appended after the trim, where the budget cannot
+        // cut it away from the line it explains.
+        expect(line).toContain("…");
+        expect(
+            line?.endsWith("[blocked: Agent bash blocked by configured permission policy.]"),
+        ).toBe(true);
+    });
+
+    it("clips a long reason to the marker's own budget", () => {
+        const reason = `Command execution blocked; the decision model ${"x".repeat(400)}`;
+
+        expect(blockedMarker(reason)).toBe(
+            `[blocked: ${reason.slice(0, BLOCK_REASON_CHARS - 1)}…]`,
+        );
+        expect(blockedReasonText("Command execution blocked by user.")).toBe(
+            "Command execution blocked by user.",
+        );
     });
 
     it("stamps a turn per user prompt, folding a steer into the turn it joined", () => {

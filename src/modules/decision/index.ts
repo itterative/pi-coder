@@ -45,6 +45,9 @@ export {
     shouldRegisterDecisionProvider,
 } from "./provider";
 export {
+    BLOCK_REASON_CHARS,
+    blockedMarker,
+    blockedReasonText,
     clipRequest,
     decisionSessionContext,
     ITEM_CHARS,
@@ -105,7 +108,6 @@ export {
     type CommandState,
     type DecisionRequestSubject,
     type FileAccessState,
-    type RecentMessageState,
     type ReminderChoiceState,
     type ReminderPhaseState,
     type ScriptCapabilityState,

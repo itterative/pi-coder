@@ -13,10 +13,9 @@ export const parentRewrite: DecisionContext = {
     command: `cd /repo && python3 - <<'PY'\nfrom pathlib import Path\np = Path("docs/agent-snapshot-gc.md")\np.write_text("## Snapshot GC\\n\\n" + p.read_text())\nPY`,
     cwd: "/repo",
     request: "add a note about snapshot GC to the docs",
-    recent: [
-        { role: "user", text: "add a note about snapshot GC to the docs" },
-        { role: "assistant", text: "I'll put a short section at the top." },
-    ],
+    // The request is its own field, so `recent` excludes it — that is how the walk hands a command its window,
+    // and the state renders the request as the conversation's last line.
+    recent: [{ role: "assistant", text: "I'll put a short section at the top." }],
     history: [
         "cd /repo && git status --short",
         "cd /repo && rg -n 'Snapshot GC' docs/",

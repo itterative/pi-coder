@@ -41,22 +41,33 @@ and rejected; [findings.md](findings.md) has the numbers.
   where it is about *authority* (the read-only children). The rungs mirror the delegated-agent ladder in
   `RUNNER_AUTHORITY` (parent/worker `mutate`, reviewer/agent `command`, scout/advisor `inspect`) and must stay
   in step.
-- `request_context` (the default) adds `request` (current user message, clipped) and `recent_messages`: up to 4
-  items immediately before the command, oldest first — the current turn's own prose and commands first, earlier
-  turns when the turn is shorter. The request is its own field, so its item is dropped from the window rather
-  than ending it; ending there discarded the whole current turn, and that bug is what made two logged commands
-  abstain at 0.48/0.51 (the fix took them to 0.64/0.64). Tool output is excluded. The reminder subject is the
-  one state that *does* flatten, and deliberately: its measured winner is one `conversation` with no signal
-  fields beside it ([window.md](window.md)).
-- `decisionSessionContext` builds three things from one walk: `request`, `recent` (the planned window, in the
-  `{role, text}` shape above), and `items` — every item of the walk with a `turn` stamp, request included. The
-  turn stamps let a caller select turns the way the probe did; the state transcript (`decision/transcript.ts`)
-  and the tier-2 reminder conversation (`decision/window.ts`) are the two readers of `items`. A user message
-  starts a new turn unless it joined the running one (a steer: the previous message is a tool result or an
-  assistant message that called a tool), and a compaction or fold starts a fresh turn. The request is not added
-  to `items` twice — it is already there at its own turn — and the command/file-access contexts take
-  `request`/`recent` explicitly rather than spreading the whole context, so the transcript atoms never reach a
-  permission verdict.
+- `request_context` (the default) adds one `conversation` text: the planned window rendered as `User:` /
+  `Assistant:` / `Tool:` lines, oldest first, with the current request appended (clipped) as its **last** `User:`
+  line. The window is up to 4 items immediately before the command — the current turn's own prose and commands
+  first, earlier turns when the turn is shorter — and its item for the request is dropped rather than ending it;
+  ending there discarded the whole current turn, and that bug is what made two logged commands abstain at
+  0.48/0.51 (the fix took them to 0.64/0.64). Tool output is excluded, except as the `[blocked: …]` marker. The
+  facts are the ones the measured arm sent as separate `request` + `recent_messages` fields; the render is
+  newer and **not re-measured** — the earlier flatten finding used a state that folded the request into the
+  transcript, where this one keeps it last and keeps the plan's item selection (`state.ts`
+  `commandConversation`).
+- **A blocked command says so.** The walk pre-collects, per bash `toolCallId`, the reason of a result that is
+  an error carrying no pi execution status (a call the gate stopped: `blockedBashReasons`), and the command
+  item carries it as `blocked`. Every renderer appends `[blocked: <reason>]` after the command's own clip, so
+  truncation cannot cut off the marker; the reason is the person's `User message:` note when the gate recorded
+  one, else the gate's sentence, clipped to `BLOCK_REASON_CHARS` (160). A command that ran and exited nonzero
+  is never marked — pi's four status lines (`Command exited with code` / `aborted` / `timed out after` /
+  `terminated without an exit code`) are what tell a failed run from a refusal. `windowTranscript` (tier-1
+  reminders) and the tier-2 allocator render the same marker.
+- `decisionSessionContext` builds four things from one walk: `request`, `recent` (the planned window, in the
+  `{role, text}` shape above, plus `blocked` where a call never ran), `omitted` (how many items the plan
+  dropped), and `items` — every item of the walk with a `turn` stamp, request included. The turn stamps let a
+  caller select turns the way the probe did; the state transcript (`decision/transcript.ts`) and the tier-2
+  reminder conversation (`decision/window.ts`) are the two readers of `items`. A user message starts a new turn
+  unless it joined the running one (a steer: the previous message is a tool result or an assistant message that
+  called a tool), and a compaction or fold starts a fresh turn. The request is not added to `items` twice — it is
+  already there at its own turn — and the command/file-access contexts take `request`/`recent` explicitly rather
+  than spreading the whole context, so the transcript atoms never reach a permission verdict.
 - `workspace_status` rides in every shape when the tree is dirty: the clipped
   `git status --porcelain=v1 --untracked-files=normal` list (1 s timeout, ≤10 entries, absent when clean or git
   fails). It supplies "these are the runner's own uncommitted edits" and is part of the answer-cache key.

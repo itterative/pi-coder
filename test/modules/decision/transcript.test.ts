@@ -85,6 +85,29 @@ describe("window transcript", () => {
         ]);
     });
 
+    it("turns a blocked command into a tool line that says so", () => {
+        const atoms = transcriptItems([
+            { role: "user", text: "clean up", turn: 1 },
+            {
+                role: "command",
+                text: "rm -rf dist",
+                turn: 1,
+                blocked: "Command execution blocked by user. User message: not that one",
+            },
+        ]);
+
+        expect(atoms[1]).toEqual({
+            kind: "tool",
+            name: "bash",
+            arg: "rm -rf dist",
+            turn: 1,
+            blocked: "Command execution blocked by user. User message: not that one",
+        });
+
+        const transcript = windowTranscript(atoms, "clean up", false, 800);
+        expect(transcript.text).toContain("Tool: bash(rm -rf dist) [blocked: not that one]");
+    });
+
     it("keeps the newest turn's tools and the earlier turns' messages", () => {
         const items: TranscriptItem[] = [
             { kind: "user", text: "first", turn: 1 },

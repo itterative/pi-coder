@@ -121,8 +121,7 @@ describe("decision evaluator", () => {
         expect(context?.state).toMatchObject({
             command: "ls -la",
             cwd: "/repo",
-            request: "list files",
-            recent_messages: [{ role: "assistant", text: "checking the tree" }],
+            conversation: "Assistant: checking the tree\nUser: list files",
         });
 
         const question = context?.questions[VETO_QUESTION];
@@ -241,7 +240,7 @@ describe("decision evaluator", () => {
         const context = classify.mock.calls[0]?.[1];
         expect(context?.state).toMatchObject({
             command: "ls -la",
-            request: "list files",
+            conversation: "User: list files",
             command_history: [
                 { command: "cd /repo && git status" },
                 { command: "npm run test:run" },

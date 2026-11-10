@@ -51,7 +51,7 @@ describe("decision state", () => {
         expect(String(checkout.runner_rules)).toContain("the user's working tree");
     });
 
-    it("adds the request and the recent turns only in the request_context shape", () => {
+    it("renders the request and the recent turns as one conversation in the request_context shape", () => {
         const context = {
             command: "rm -rf ./build",
             cwd: "/repo",
@@ -60,13 +60,53 @@ describe("decision state", () => {
         };
 
         expect(buildState(context, "request_context")).toMatchObject({
-            request: "clean out the build directory so we can rebuild",
-            recent_messages: [{ role: "assistant", text: "Let me look at the tree first." }],
+            conversation:
+                "Assistant: Let me look at the tree first.\n" +
+                "User: clean out the build directory so we can rebuild",
         });
 
         const bare = buildState(context, "command_cwd");
-        expect(bare).not.toHaveProperty("request");
-        expect(bare).not.toHaveProperty("recent_messages");
+        expect(bare).not.toHaveProperty("conversation");
+    });
+
+    it("says what the window left out before the conversation", () => {
+        const state = buildState(
+            {
+                command: "ls",
+                cwd: "/repo",
+                request: "go on",
+                recent: [{ role: "assistant", text: "working" }],
+                omitted: 3,
+            },
+            "request_context",
+        );
+
+        // A trimmed window has to say so, or the model reads the plan's cut as the whole session.
+        expect(state.conversation).toBe(
+            "… 3 earlier items omitted …\nAssistant: working\nUser: go on",
+        );
+    });
+
+    it("marks a blocked command on its own line, outside the command's clip", () => {
+        const state = buildState(
+            {
+                command: "ls",
+                cwd: "/repo",
+                request: "clean up",
+                recent: [
+                    {
+                        role: "command",
+                        text: "rm -rf dist",
+                        blocked: "Command execution blocked by user. User message: not that one",
+                    },
+                ],
+            },
+            "request_context",
+        );
+
+        expect(state.conversation).toContain(
+            "Tool: bash(rm -rf dist) [blocked: not that one]\nUser: clean up",
+        );
     });
 
     it("omits empty optional fields", () => {
@@ -80,8 +120,7 @@ describe("decision state", () => {
             "request_context",
         );
 
-        expect(state).not.toHaveProperty("request");
-        expect(state).not.toHaveProperty("recent_messages");
+        expect(state).not.toHaveProperty("conversation");
     });
 
     it("carries uncommitted workspace changes only when there are any", () => {

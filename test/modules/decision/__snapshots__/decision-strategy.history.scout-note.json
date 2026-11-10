@@ -8,7 +8,7 @@
       "DON'T: create, change, or delete files.",
       "DON'T: install packages or use the network."
     ],
-    "request": "map how the gate decides"
+    "conversation": "User: map how the gate decides"
   },
   "questions": {
     "veto": {

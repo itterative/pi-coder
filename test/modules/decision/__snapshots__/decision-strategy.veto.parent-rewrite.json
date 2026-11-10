@@ -8,17 +8,7 @@
       "DO: run build, test, format, and package commands.",
       "DO: use the network, install packages, and start local processes."
     ],
-    "request": "add a note about snapshot GC to the docs",
-    "recent_messages": [
-      {
-        "role": "user",
-        "text": "add a note about snapshot GC to the docs"
-      },
-      {
-        "role": "assistant",
-        "text": "I'll put a short section at the top."
-      }
-    ]
+    "conversation": "Assistant: I'll put a short section at the top.\nUser: add a note about snapshot GC to the docs"
   },
   "questions": {
     "veto": {

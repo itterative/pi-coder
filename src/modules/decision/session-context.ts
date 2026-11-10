@@ -59,8 +59,8 @@ export interface DecisionSessionContext {
      * Every item of the branch walk, oldest first, the request item included - the atoms a window is allocated
      * from.
      *
-     * The planned `recent` is what the command and file-access states carry. The two model readers that count
-     * what is worth the budget - the state ask's transcript (`decision/transcript.ts`) and the reminder
+     * The planned `recent` is what the command state renders as its `conversation`. The two model readers that
+     * count what is worth the budget - the state ask's transcript (`decision/transcript.ts`) and the reminder
      * selection's conversation (`decision/window.ts`) - are built from these atoms instead, because each
      * measured variant fitted them itself and needs the items the plan drops.
      */
@@ -212,21 +212,78 @@ function toolSummary(name: string, args: unknown): string {
     return `${name}()`;
 }
 
+/**
+ * The reason a bash call never ran, when the walk can tell it was blocked.
+ *
+ * A gate answers a call's `tool_call` hook, so pi records an error result whose text is the gate's own
+ * sentence. An executed command fails differently: pi appends one of four terminal status lines to what the
+ * command printed, and a blocked call runs nothing to print. That is the only signal in the branch, which is
+ * why the walk correlates results to calls by `toolCallId`.
+ */
+const EXECUTED_STATUS =
+    /Command (?:exited with code|aborted|timed out after|terminated without an exit code)\b/u;
+
+/**
+ * The block reason of every bash call in the branch, keyed by the tool call it answered.
+ *
+ * This cannot be read while walking, because the result follows its call: the mark is collected first and the
+ * command items are built against it.
+ */
+function blockedBashReasons(entries: readonly SessionEntry[]): ReadonlyMap<string, string> {
+    const reasons = new Map<string, string>();
+
+    for (const entry of entries) {
+        if (entry.type !== "message") {
+            continue;
+        }
+
+        const { message } = entry;
+        if (
+            message.role !== "toolResult" ||
+            message.toolName !== "bash" ||
+            message.isError !== true
+        ) {
+            continue;
+        }
+
+        const reason = textOf(message.content);
+        if (reason === "" || EXECUTED_STATUS.test(reason)) {
+            continue;
+        }
+
+        reasons.set(message.toolCallId, reason);
+    }
+
+    return reasons;
+}
+
 /** The item one tool-call part contributes: bash as its command, every other tool as a named call. */
-function toolCallItem(part: unknown): DecisionRecentMessage | undefined {
+function toolCallItem(
+    part: unknown,
+    blockedReasons: ReadonlyMap<string, string>,
+): DecisionRecentMessage | undefined {
     if (!isRecord(part) || part.type !== "toolCall" || typeof part.name !== "string") {
         return undefined;
     }
 
     if (part.name === "bash") {
         const command = toolCallCommand(part);
-        return command === undefined ? undefined : { role: "command", text: command };
+        if (command === undefined) {
+            return undefined;
+        }
+
+        const blocked = typeof part.id === "string" ? blockedReasons.get(part.id) : undefined;
+
+        return { role: "command", text: command, ...(blocked === undefined ? {} : { blocked }) };
     }
 
     return { role: "tool", text: toolSummary(part.name, part.arguments) };
 }
 
-function itemsOf(message: { content: unknown }): DecisionRecentMessage[] {
+function itemsOf(
+    message: { content: unknown },
+    blockedReasons: ReadonlyMap<string, string>,
+): DecisionRecentMessage[] {
     const items: DecisionRecentMessage[] = [];
     const text = textOf(message.content);
     if (text !== "") {
@@ -238,7 +295,7 @@ function itemsOf(message: { content: unknown }): DecisionRecentMessage[] {
     }
 
     for (const part of message.content) {
-        const item = toolCallItem(part);
+        const item = toolCallItem(part, blockedReasons);
         if (item !== undefined) {
             items.push(item);
         }
@@ -394,6 +451,35 @@ export function decisionSimilarCommands(
 /** The item role that carries a state marker: its text is the whole line, never trimmed. */
 const STATE_ROLE = "state";
 
+/** Characters a block reason may spend inside a rendered line. */
+export const BLOCK_REASON_CHARS = 160;
+
+/** The note a person attached to their refusal, which the gate appends after its own sentence. */
+const USER_MESSAGE = /\bUser message:\s*(?<note>.+)$/su;
+
+/**
+ * Why a command is marked blocked, in the shortest form that is still the reason.
+ *
+ * A person's note is the useful part of a refusal, and the gate appends it to a sentence of its own; promoting
+ * it keeps the note from being clipped away behind boilerplate. Every other block keeps the gate's sentence.
+ */
+export function blockedReasonText(reason: string): string {
+    const note = USER_MESSAGE.exec(reason)?.groups?.note?.trim();
+    const text = note === undefined || note === "" ? reason : note;
+
+    return clip(text, BLOCK_REASON_CHARS);
+}
+
+/**
+ * The marker a blocked command's line carries, appended after the command's own clip.
+ *
+ * Outside the clip on purpose: a window trims the command to its share, and a marker inside that share could
+ * be cut off exactly when it is the whole point of the line.
+ */
+export function blockedMarker(reason: string): string {
+    return `[blocked: ${blockedReasonText(reason)}]`;
+}
+
 /** One item as its transcript line. */
 const WINDOW_LABELS: Record<string, string> = { user: "User", assistant: "Assistant" };
 
@@ -403,7 +489,8 @@ function itemLine(item: DecisionRecentMessage): string {
     }
 
     if (item.role === "command") {
-        return `Tool: bash(${item.text})`;
+        const marker = item.blocked === undefined ? "" : ` ${blockedMarker(item.blocked)}`;
+        return `Tool: bash(${item.text})${marker}`;
     }
 
     if (item.role === "tool") {
@@ -414,12 +501,12 @@ function itemLine(item: DecisionRecentMessage): string {
 }
 
 /**
- * The window as a transcript a human reads: `User:` / `Assistant:` lines and `Tool: name(arg)` per call, with
- * what the budget left out named first.
+ * The window as a transcript: `User:` / `Assistant:` lines and `Tool: name(arg)` per call, with what the
+ * budget left out named first.
  *
- * This is the shape the mid-run probe rendered (`session-midturn.py`), kept so a window can be read the same
- * way here - in a test, a replay, or a log. The model itself is sent the items, not this text: the render is
- * for the reviewer deciding whether the window carries what it should.
+ * This is both what the command state sends as its `conversation` and the shape the mid-run probe rendered
+ * (`session-midturn.py`), kept so a window can be read the same way here - in a test, a replay, or a log.
+ * The probe's render is why the line grammar is not free to change.
  */
 export function renderSessionWindow(
     items: readonly DecisionRecentMessage[],
@@ -475,6 +562,7 @@ export function decisionSessionContext(
     options: SessionContextOptions = {},
 ): DecisionSessionContext {
     const items: DecisionRecentMessage[] = [];
+    const blockedReasons = blockedBashReasons(entries);
     let request: string | undefined;
     // The turn stamps the transcript's turn selection reads: the probe's rule, a user message starts a turn
     // unless it joined a running one (a steer). Items before the first user message belong to no turn.
@@ -512,7 +600,7 @@ export function decisionSessionContext(
         }
 
         if (message.role === "assistant") {
-            items.push(...itemsOf(message).map((item) => ({ ...item, turn })));
+            items.push(...itemsOf(message, blockedReasons).map((item) => ({ ...item, turn })));
             previousMessage = hasToolCall(message.content) ? "assistantWithTools" : "assistant";
         }
 
@@ -531,8 +619,13 @@ export function decisionSessionContext(
     return {
         ...(request === undefined ? {} : { request }),
         // The planned window keeps the state shape the pool was measured with (`{role, text}`); the turn stamps
-        // are the transcript's, and only the atoms below carry them.
-        recent: window.items.map(({ role, text }) => ({ role, text })),
+        // are the transcript's, and only the atoms below carry them. A block reason rides with the item it
+        // explains, so a renderer can mark the line without another field.
+        recent: window.items.map((item) => ({
+            role: item.role,
+            text: item.text,
+            ...(item.blocked === undefined ? {} : { blocked: item.blocked }),
+        })),
         items,
         ...(window.omitted === 0 ? {} : { omitted: window.omitted }),
     };

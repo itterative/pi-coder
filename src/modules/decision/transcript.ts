@@ -7,6 +7,7 @@
  * (`test/fixtures/transcript-window.json` is generated from it). Do not "fix" the budget arithmetic here
  * without re-measuring: the ordering of allowance, musts, shares and tool share is what the runs used.
  */
+import { blockedMarker } from "./session-context";
 import type { DecisionRecentMessage } from "./types";
 
 /** One atom of a transcript: a message, a tool call, or a state marker inserted between them. */
@@ -16,6 +17,8 @@ export interface TranscriptItem {
     name?: string;
     arg?: string;
     turn?: number;
+    /** Why a bash call never ran, when a gate blocked it; rendered as `[blocked: …]` after the tool line. */
+    blocked?: string;
 }
 
 /** Cap on one tool line, applied before the budget is measured. */
@@ -57,7 +60,8 @@ function itemLine(item: TranscriptItem): string {
 
     if (item.kind === "tool") {
         const inner = typeof item.arg === "string" ? clip(item.arg, TOOL_LINE_CHARS) : "…";
-        return `Tool: ${item.name ?? "?"}(${inner})`;
+        const marker = item.blocked === undefined ? "" : ` ${blockedMarker(item.blocked)}`;
+        return `Tool: ${item.name ?? "?"}(${inner})${marker}`;
     }
 
     const label = MESSAGE_LABELS[item.kind] ?? item.kind;
@@ -316,7 +320,13 @@ export function transcriptItems(items: readonly DecisionRecentMessage[]): Transc
             continue;
         }
         if (item.role === "command") {
-            atoms.push({ kind: "tool", name: "bash", arg: item.text, turn });
+            atoms.push({
+                kind: "tool",
+                name: "bash",
+                arg: item.text,
+                turn,
+                ...(item.blocked === undefined ? {} : { blocked: item.blocked }),
+            });
             continue;
         }
         if (item.role === "tool") {

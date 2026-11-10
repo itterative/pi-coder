@@ -9,7 +9,7 @@
       "DO: use the network for package installs.",
       "DON'T: change files outside its own working copy."
     ],
-    "request": "commit the parser fix"
+    "conversation": "User: commit the parser fix"
   },
   "questions": {
     "veto": {

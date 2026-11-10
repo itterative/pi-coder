@@ -78,21 +78,37 @@ export function assistantEntry(content: AssistantContent, timestamp: number): Ap
 /**
  * A tool result. `toolCallId` and `toolName` point back at the call, which only the outcome-aware signals
  * read: everything else ignores tool output on purpose.
+ *
+ * `isError` is what pi records for a call that failed or was blocked, so a suite that builds either outcome
+ * sets it; `blockedBashResult` is the block case, which is the one that carries no execution status.
  */
 export function toolResultEntry(
     text: string,
     timestamp: number,
     toolCallId = "call-1",
     toolName = "read",
+    options: { isError?: boolean } = {},
 ): AppendedMessage {
     return {
         role: "toolResult",
         toolCallId,
         toolName,
         content: [{ type: "text", text }],
-        isError: false,
+        isError: options.isError === true,
         timestamp,
     };
+}
+
+/**
+ * The result pi records when a gate blocks a bash call: an error whose whole text is the gate's own reason,
+ * with none of the status lines an executed command appends.
+ */
+export function blockedBashResult(
+    reason: string,
+    timestamp: number,
+    toolCallId = "call-bash",
+): AppendedMessage {
+    return toolResultEntry(reason, timestamp, toolCallId, "bash", { isError: true });
 }
 
 /** A text content part of an assistant message. */

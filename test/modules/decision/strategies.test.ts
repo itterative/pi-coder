@@ -232,8 +232,7 @@ describe("history state", () => {
             "command",
             "cwd",
             "runner_rules",
-            "request",
-            "recent_messages",
+            "conversation",
             "command_history",
         ]);
     });
