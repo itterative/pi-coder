@@ -48,10 +48,15 @@ hooks; full design notes are in `src/tools/code/README.md`.
 - **`usages` is syntactic.** It matches the selector's last component on purpose (call sites say
   `socket.connect`, not `Socket::connect`). Overloads, generics, templates, macros, and dynamic dispatch are not
   resolved; clangd is the eventual provider for C++ references.
-- **`search` is declaration-name search, not grep.** Plain queries are case-insensitive simple-name substrings;
-  `::` or `.` matches the qualified name. Hits rank exact, prefix, substring. Only a zero-hit literal pass runs
-  `fuzzy.ts`'s bounded Damerau-Levenshtein over the full name and snake/camel tokens (never under three
-  characters); approximate rows are marked `~N`. Comments, strings, and config stay with `bash`/`rg`.
+- **`search` is name and doc-text search, not grep.** Tiers: exact name, name prefix, name substring, doc
+  comment, then approximate. Plain queries are case-insensitive simple-name substrings; `::` or `.` matches the
+  qualified name and skips the doc channel. Doc tokens match in any order, all required, against
+  `declaration.docRange` sliced from the original source and cached in a `WeakMap`, so `edit distance` reaches
+  `fuzzyLimit`. Only when neither name nor doc matches does `fuzzy.ts` run its bounded Damerau-Levenshtein over
+  the full name and snake/camel tokens (never under three characters); rows are capped at eight, nearest first,
+  with the withheld count in the footer. The ordering is the point: a plausible identifier guess is weaker
+  evidence than a documented description, and an uncapped fuzzy pass floods a concept query with near-miss
+  names. Comments outside a declaration's doc block, strings, and config stay with `bash`/`rg`.
 
 ## Defaults
 

@@ -424,7 +424,7 @@ public:
             query: "make_plna",
         });
 
-        expect(result.text).toContain("no exact matches");
+        expect(result.text).toContain("no name or doc matches");
         expect(result.text).toContain("engine::make_plan");
         expect(result.text).toContain("~1");
         expect(result.text).not.toContain("make_plan_cache");

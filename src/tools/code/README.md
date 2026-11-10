@@ -3,7 +3,7 @@
 One agent-facing tool, `outline`, with four actions:
 
 - `digest` — map a file or directory: namespaces/types, public signatures, line ranges, `[def]` tags.
-- `search` — declarations whose names match a query, with a conservative typo fallback.
+- `search` — declarations whose names or doc comments match a query, with a conservative typo fallback.
 - `show` — exact source for named symbols; a directory target pairs header declarations with source definitions.
 - `usages` — syntactic occurrences with `[def]` / `[decl]` / `[call]` / `[ref]` tags, plus `[launch]` for
   HIP/CUDA kernel launches.
@@ -167,17 +167,22 @@ output.
   shapes live on each `LanguageAdapter`, so adding a language does not add a switch to `usages`. A per-file
   identifier index is built on first use and reused for every requested symbol and later calls; the WASM tree is
   released after indexing. Files at or above 256 KiB build that index in the parser worker.
-- `search` is declaration-name search, not text search. A plain query is a case-insensitive substring of the
-  simple name; a query containing `::` or `.` is matched against the qualified name, so `CallList::` finds the
-  members. Exact names sort before prefixes, and prefixes before later substrings. It reports the qualified
-  name and signature, so the follow-up is `show` with an exact selector.
-  If the literal pass finds nothing, search falls back to a bounded Damerau-Levenshtein comparison against the
-  full name and its snake/camel-case tokens. Queries shorter than three characters are not fuzzed; longer
-  queries allow one or two edits. Approximate rows carry `~N`, and the output says how many edits were allowed.
-  Comments, strings, and arbitrary source text remain the job of `bash` + `rg`; searching them here would
-  duplicate the grep tool without structural value. Search hits are cached per parsed file and normalized
-  query (a few recent queries per file); a changed path + mtime + size creates a new `ParsedFile` and drops the
-  old hits with it.
+- `search` is declaration-name and doc-text search, not text search. A plain query is a case-insensitive
+  substring of the simple name; a query containing `::` or `.` is matched against the qualified name, so
+  `CallList::` finds the members. Exact names sort before prefixes, prefixes before later substrings, and a
+  doc-comment match sorts after every name match and above every approximate one; its word tokens are matched
+  in any order, all required, and the row carries `[doc]`. Qualified queries skip the doc channel, because the
+  qualifier already chose the scope. It reports the qualified name and signature, so the follow-up is `show`
+  with an exact selector.
+  Only when neither a name nor a doc comment matches does search fall back to a bounded Damerau-Levenshtein
+  comparison against the full name and its snake/camel-case tokens. Queries shorter than three characters are
+  not fuzzed; longer queries allow one or two edits. At most eight approximate rows are returned, nearest
+  first, and a footer reports how many were withheld. Approximate rows carry `~N`, and the output says how many
+  edits were allowed. A doc match outranking a near-miss name is the point: prose is where a concept lives when
+  no identifier spells it out, and a plausible identifier guess is the weaker evidence.
+  Strings, comments outside a declaration's adjacent doc block, config, and arbitrary source text remain the
+  job of `bash` + `rg`. Search hits are cached per parsed file and normalized query (a few recent queries per
+  file); a changed path + mtime + size creates a new `ParsedFile` and drops the old hits with it.
 - Files at or above 256 KiB are parsed in a lazy worker so a large source file cannot freeze the TUI. The
   worker loads the existing parser modules through jiti, keeps its tree-sitter parser warm, and terminates on
   cancellation; it falls back to inline parsing if the worker or loader is unavailable. Smaller files parse
