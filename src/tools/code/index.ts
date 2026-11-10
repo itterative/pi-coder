@@ -66,7 +66,7 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             ),
             limit: Type.Optional(
                 Type.Number({
-                    description: "Maximum result size in characters (default 16000)",
+                    description: `Maximum result size in characters (default ${DEFAULT_CHAR_LIMIT})`,
                     minimum: MIN_CHAR_LIMIT,
                     maximum: 1_000_000,
                 }),

@@ -23,7 +23,7 @@ export const MAX_FILE_BYTES = 1_000_000;
 export const MAX_FILES = 2_000;
 
 /** Default maximum rendered result size, in characters. */
-export const DEFAULT_CHAR_LIMIT = 16_000;
+export const DEFAULT_CHAR_LIMIT = 4_000;
 
 /** Lowest character limit worth honoring; below this the header alone is most of the output. */
 export const MIN_CHAR_LIMIT = 800;
