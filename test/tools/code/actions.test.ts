@@ -198,6 +198,18 @@ describe("outline show", () => {
         expect(result.text).not.toContain("# note:");
     });
 
+    it("splits a comma-joined symbol list into separate selectors", async () => {
+        const result = await runShow(source(), {
+            action: "show",
+            path: "src/net",
+            symbols: ["Socket::fd, Socket::connect(const Endpoint&)"],
+        });
+
+        expect(result.text).toContain("int fd() const");
+        expect(result.text).toContain("const Endpoint&");
+        expect(result.text).not.toContain("return addr.valid()");
+    });
+
     it("keeps class signatures public by default", async () => {
         const result = await runShow(source(), {
             action: "show",
@@ -485,6 +497,24 @@ describe("outline usages", () => {
         expect(result.text).toContain("[def]");
         expect(result.text).toContain("[call]");
         expect(result.text).toContain("socket_.connect(addr)");
+    });
+
+    it("splits a comma-joined symbol list", async () => {
+        const joined = await runUsages(source(), {
+            action: "usages",
+            path: "src/net",
+            symbols: ["Socket::connect, Socket::fd"],
+            kind: "call",
+        });
+        const separate = await runUsages(source(), {
+            action: "usages",
+            path: "src/net",
+            symbols: ["Socket::connect", "Socket::fd"],
+            kind: "call",
+        });
+
+        expect(joined.text).toBe(separate.text);
+        expect(joined.matches).toBe(separate.matches);
     });
 
     it("filters to calls", async () => {

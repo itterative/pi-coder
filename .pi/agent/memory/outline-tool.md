@@ -71,6 +71,9 @@ Cuts are resumable: every action takes `offset` in rendered body lines and a cut
 prefer block boundaries but can resume inside an oversized block; a line longer than the limit cannot be split,
 and the page reports the limit needed.
 
+`show`/`usages` split a comma-joined `symbols` entry at top level only (`splitSymbolList`), so an overload
+selector's parameter list survives; empty entries drop and repeats stay, because `usages` counts them.
+
 ## Extension points
 
 `@vscode/tree-sitter-wasm` bundles the runtime and grammars. A new language is a grammar id plus an extraction

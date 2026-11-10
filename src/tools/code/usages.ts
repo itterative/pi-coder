@@ -2,7 +2,7 @@ import type { Node as SyntaxNode } from "@vscode/tree-sitter-wasm";
 
 import { yieldToEventLoop } from "../../common/async";
 import { candidateFiles, lastComponent } from "./discovery";
-import { nextOffsetNote, renderWithinBudget, shortLine } from "./format";
+import { nextOffsetNote, renderWithinBudget, shortLine, splitSymbolList } from "./format";
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
 import { adapterForLanguage, type CallSiteSpec } from "./adapters";
@@ -86,7 +86,7 @@ export async function runUsages(
     params: CodeToolParams,
     signal?: AbortSignal,
 ): Promise<UsagesResult> {
-    const requested = (params.symbols ?? []).map((symbol) => symbol.trim()).filter(Boolean);
+    const requested = splitSymbolList(params.symbols ?? []);
 
     if (requested.length === 0) {
         return {

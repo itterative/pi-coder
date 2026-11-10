@@ -54,7 +54,7 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             symbols: Type.Optional(
                 Type.Array(Type.String(), {
                     description:
-                        'Symbols for show/usages, e.g. ["net::Socket::connect"] or ["Socket"]; append parameter types to select an overload',
+                        'Symbols for show/usages, e.g. ["net::Socket::connect"] or ["Socket"]; append parameter types to select an overload, and a comma-joined list in one entry is split at top level',
                     minItems: 1,
                 }),
             ),

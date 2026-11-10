@@ -11,6 +11,7 @@ import {
     nextOffsetNote,
     selectorMatches,
     sourceForDeclaration,
+    splitSymbolList,
     pairKey,
 } from "./format";
 import { DEFAULT_CHAR_LIMIT } from "./languages";
@@ -38,7 +39,7 @@ export async function runShow(
     params: CodeToolParams,
     signal?: AbortSignal,
 ): Promise<ShowResult> {
-    const requested = (params.symbols ?? []).map((symbol) => symbol.trim()).filter(Boolean);
+    const requested = splitSymbolList(params.symbols ?? []);
 
     if (requested.length === 0) {
         return {

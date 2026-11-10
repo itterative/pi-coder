@@ -65,6 +65,52 @@ export function normalizeSymbol(text: string): string {
     return text.replace(/\s+/g, "").replace(/\./g, "::");
 }
 
+/**
+ * Split a requested symbol list, including commas an agent folded into one element.
+ *
+ * Models habitually pass `"A::b, C::d"` as a single entry. A comma inside a parameter list belongs to an
+ * overload selector - `Socket::connect(const Address&, int)` - so only top-level commas split. Repeated
+ * symbols are kept: `usages` counts them separately, and collapsing them here would hide that from the caller.
+ */
+export function splitSymbolList(symbols: readonly string[]): string[] {
+    const requested: string[] = [];
+
+    for (const entry of symbols) {
+        for (const part of splitTopLevelCommas(entry)) {
+            const symbol = part.trim();
+
+            if (symbol.length > 0) {
+                requested.push(symbol);
+            }
+        }
+    }
+
+    return requested;
+}
+
+function splitTopLevelCommas(entry: string): string[] {
+    const parts: string[] = [];
+    let depth = 0;
+    let start = 0;
+
+    for (let index = 0; index < entry.length; index += 1) {
+        const character = entry[index];
+
+        if (character === "(") {
+            depth += 1;
+        } else if (character === ")") {
+            depth = Math.max(0, depth - 1);
+        } else if (character === "," && depth === 0) {
+            parts.push(entry.slice(start, index));
+            start = index + 1;
+        }
+    }
+
+    parts.push(entry.slice(start));
+
+    return parts;
+}
+
 export function pairKey(declaration: Declaration): string {
     return `${normalizeSymbol(declaration.qualifiedName)}\u0000${declaration.paramTypes
         .map(normalizeSymbol)

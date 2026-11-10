@@ -8,6 +8,11 @@ One agent-facing tool, `outline`, with four actions:
 - `usages` — syntactic occurrences with `[def]` / `[decl]` / `[call]` / `[ref]` tags, plus `[launch]` for
   HIP/CUDA kernel launches.
 
+`show` and `usages` take a `symbols` array, and an entry may itself be a comma-joined list
+(`"A::b, C::d"`): `format.ts`'s `splitSymbolList` splits on **top-level** commas only, so an overload
+selector's parameter list (`Socket::connect(const Address&, int)`) survives intact. Empty entries are
+dropped; repeated ones are kept, because `usages` counts them separately.
+
 The surface and defaults are documented in `index.ts`; this file records the invariants that are easy to break.
 
 ## Filesystem seam
