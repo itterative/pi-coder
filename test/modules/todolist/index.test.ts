@@ -9,7 +9,12 @@ import {
     type ExtensionContext,
     type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { stubContext, stubSessionManager, type SessionManagerLike } from "../../helpers/pi-stub";
+import {
+    beforeAgentStartEvent,
+    stubContext,
+    stubSessionManager,
+    type SessionManagerLike,
+} from "../../helpers/pi-stub";
 
 import { mockTheme, renderText } from "../../helpers";
 
@@ -111,13 +116,10 @@ describe("TODO runtime extension", () => {
         temporaryDirectories.push(scratchpadPath);
         const todoPath = path.join(scratchpadPath, "TODO.md");
 
-        const prompt = (await handler("before_agent_start")(
-            {
-                systemPrompt: "<project_context>\nProject\n</project_context>",
-            },
-            ctx,
-        )) as { systemPrompt: string };
-        await expect(prompt.systemPrompt.replace(todoPath, "<TODO_PATH>")).toMatchFileSnapshot(
+        const event = beforeAgentStartEvent();
+        await handler("before_agent_start")(event, ctx);
+        const prompt = event.systemPromptOptions.sections.todolist_system ?? "";
+        await expect(prompt.replace(todoPath, "<TODO_PATH>")).toMatchFileSnapshot(
             "./__snapshots__/todolist.prompt.txt",
         );
 

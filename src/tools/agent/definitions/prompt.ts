@@ -13,17 +13,35 @@ const agentContextSchema = Type.Optional(
             sections: Type.Array(
                 Type.Object(
                     {
-                        id: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,63}$" }),
-                        title: Type.String({ minLength: 1, maxLength: 200 }),
-                        content: Type.String({ minLength: 1, maxLength: 12_000 }),
-                        source: Type.String({ enum: ["parent", "repository", "workspace"] }),
+                        id: Type.String({
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            description: "Section id the child receives alongside its task",
+                        }),
+                        title: Type.String({
+                            minLength: 1,
+                            maxLength: 200,
+                            description: "Heading for the section",
+                        }),
+                        content: Type.String({
+                            minLength: 1,
+                            maxLength: 12_000,
+                            description:
+                                "The fact or excerpt itself, bounded to one section's worth",
+                        }),
+                        source: Type.String({
+                            enum: ["parent", "repository", "workspace"],
+                            description: "Where the content comes from",
+                        }),
                     },
                     { additionalProperties: false },
                 ),
-                { maxItems: 12 },
+                {
+                    maxItems: 12,
+                    description: "Supplemental context the child receives with the task",
+                },
             ),
         },
-        { additionalProperties: false },
+        { additionalProperties: false, description: "Supplemental context for this run" },
     ),
 );
 
@@ -46,23 +64,72 @@ export const parameters = Type.Object(
                 "status",
                 "collect",
             ],
+            description:
+                "start runs a task; list, status, collect, continue, and cancel manage retained runs; inspect, apply, and discard dispose of an isolated workspace's result",
         }),
-        agent: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9_-]{0,63}$", maxLength: 64 })),
-        task: Type.Optional(Type.String({ minLength: 1, maxLength: 16_000 })),
-        title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
-        isolation: Type.Optional(Type.Literal("worktree")),
-        runId: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
-        guidance: Type.Optional(Type.String({ minLength: 1, maxLength: 16_000 })),
+        agent: Type.Optional(
+            Type.String({
+                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                maxLength: 64,
+                description:
+                    "Agent name from the delegated-agents catalog, for example scout or worker",
+            }),
+        ),
+        task: Type.Optional(
+            Type.String({
+                minLength: 1,
+                maxLength: 16_000,
+                description:
+                    "The child's complete assignment: objective, relevant files and symbols, scope, constraints, and the expected result. Required for start",
+            }),
+        ),
+        title: Type.Optional(
+            Type.String({
+                minLength: 1,
+                maxLength: 80,
+                description: "Short display label for the run, shown in the agent list",
+            }),
+        ),
+        isolation: Type.Optional(
+            Type.Literal("worktree", {
+                description:
+                    'Set to "worktree" to run the worker in its own Git worktree; its changes reach this checkout only after apply',
+            }),
+        ),
+        runId: Type.Optional(
+            Type.String({
+                minLength: 1,
+                maxLength: 100,
+                description: "Run identifier returned by start or list",
+            }),
+        ),
+        guidance: Type.Optional(
+            Type.String({
+                minLength: 1,
+                maxLength: 16_000,
+                description: "Instructions delivered to the run's existing child session",
+            }),
+        ),
         context: agentContextSchema,
-        background: Type.Optional(Type.Boolean()),
+        background: Type.Optional(
+            Type.Boolean({
+                description:
+                    "Return without waiting; progress and the final result arrive as messages",
+            }),
+        ),
     },
     { additionalProperties: false },
 );
 
 export type AgentParameters = Static<typeof parameters>;
 
-export function availableAgentsPrompt(agents: AgentDefinition[]): string {
+/**
+ * The parent's guide to delegation: the discovered catalog, the permission model, and how to run and
+ * collect a delegation. Pi wraps this in an `agent_tool_guide` section while the `agent` tool is declared.
+ */
+export function agentGuidePrompt(agents: AgentDefinition[]): string {
     const lines = ["## Delegated agents"];
+
     for (const agent of agents.slice(0, 20)) {
         const description = agent.description.replace(/\s+/g, " ").slice(0, 300);
         const capabilities = agentCapabilities(agent).join(", ");
@@ -78,23 +145,29 @@ export function availableAgentsPrompt(agents: AgentDefinition[]): string {
             `- ${agent.name} (${agent.source}): [${mode}; ${capabilities}${context}] ${JSON.stringify(description)}`,
         );
     }
-    if (agents.length > 20) lines.push(`- …and ${agents.length - 20} more agents`);
+
+    if (agents.length > 20) {
+        lines.push(`- …and ${agents.length - 20} more agents`);
+    }
+
     lines.push(
-        'Use the agent tool with action="start" for foreground delegation, or action="start" with background=true to launch concurrent background work.',
-        "Write every delegation task as a self-contained brief for a child that cannot see the parent's conversation or infer unstated context. Include the objective, relevant files/symbols and current state, scope and non-goals, constraints, expected report or changes, and validation steps. Include all other details the child needs; do not optimize the task for brevity.",
-        "Delegation tasks may and should be multiline. A short title is only a display label and does not limit the task's length or detail. Put relevant parent, repository, or workspace facts explicitly in the task or in context.sections; context sections supplement the task and do not replace its instructions.",
-        'Use the agent tool with action="list" to recover delegated run IDs, titles, statuses, and next actions; this is preferable to polling each run.',
-        'Background-agent progress and results arrive asynchronously. Do not duplicate the same investigation in the parent unless you intentionally want overlapping work. If you have no other work to do, report your current progress to the user and end your turn; do not poll with the agent tool\'s action="status" or wait by sleeping; an automatic mailbox notification will arrive when the run finishes or needs parent guidance.',
-        'After a terminal agent notification, use the agent tool with action="collect" to retrieve the full result; mailbox markers never inject full child output automatically.',
-        "A waiting agent result is paused, not completed. Investigate or obtain guidance, then use the agent tool to continue it; cancel it if no longer needed. An interrupted durable run never resumes automatically; wait for explicit user direction before continuing or canceling it.",
-        "The parent agent may use its own active built-in tools (including read, edit, write, and bash) directly; delegation is optional and is for substantial, parallel, or isolated work.",
-        "Before starting the worker, judge whether you already have enough context to do the work yourself. If you do, use ask_user to confirm the user wants it delegated rather than done directly, and offer the same-checkout versus isolated-worktree choice in that question. Start a worker without asking only when delegation is genuinely needed, such as for parallel work or an isolated checkout, and skip the check when direct user interaction is unavailable. Starting a read-only agent needs no confirmation.",
-        "Start accepts an optional background flag and context.sections for concise parent, repository, or workspace context; every agent receives the sections it is given, a definition may narrow the section IDs it accepts, and context stays reference material rather than instructions.",
-        'Scout and advisor are read-only. Reviewer and custom agents with command-runner may execute Bash through the permission flow; they do not receive direct edit/write tools. Use advisor for explicit implementation guidance and tradeoff review. The built-in worker is the only direct edit-capable child. Without isolation="worktree", it edits the parent\'s current checkout: in-cwd edits use the parent\'s file access, outside-cwd file access uses the shared file prompt, already-allowed/session-approved bash runs without another prompt, and unmatched bash uses a parent-visible prompt. With isolation="worktree", it edits a separate worktree and uses independent permission prompts; changes reach the parent only after an explicit apply. Same-checkout workers are single-flight, while distinct isolated workers may run concurrently.',
-        'Use isolation="worktree" when the worker should run in a persistent isolated Git worktree; a new worktree may prompt for an optional setup worker.',
-        'For an isolated result, the parent can use agent action="inspect", "apply", or "discard" with the runId, or action="continue" with guidance to continue work in the same workspace; isolated continuation is available only while its prepared task lease is held.',
-        'Continue a terminal run — a same-checkout worker, a foreground isolated run, or a collected background run — with agent action="continue", its runId, and guidance; the existing child session is reopened in its original execution checkout.',
-        "Durable continuation resolution is limited to the exact persisted parent session and active parent-tree branch.",
+        "",
+        "Roles:",
+        "- scout and advisor are read-only; reviewer and command-capable custom agents run Bash through the permission flow without direct edit tools; worker is the only edit-capable built-in.",
+        "- A same-checkout worker edits this checkout under the parent's file access and its approved Bash rules, and asks the parent before running anything else.",
+        "- An isolated worker edits its own worktree under independent prompts, and only `apply` moves its changes into this checkout.",
+        "- Same-checkout workers are single-flight; distinct isolated workers may run concurrently.",
+        "",
+        "Delegating:",
+        "- Judge whether you already have enough context to do the work yourself. If you do, use ask_user to offer delegation instead, including the same-checkout versus isolated-worktree choice; start unasked only when it is genuinely needed, such as parallel work or an isolated checkout, and skip that check when no user can answer. Read-only agents need no confirmation.",
+        "- Every task is the child's complete assignment: objective, relevant files and symbols, current state, scope and non-goals, constraints, expected report or changes, and validation steps. A child cannot see this conversation or infer unstated context, so do not optimize the task for brevity, and do not treat a title as a substitute for it.",
+        "- Put supplemental parent, repository, or workspace context in `context.sections`; every agent receives the sections it is given, and a definition may narrow the ids it accepts.",
+        "- Prefer the foreground when you need the result before continuing; use `background=true` with a short title for independent work that can run alongside your own.",
+        "- Progress arrives on its own: do not poll `status` or sleep, and do not duplicate the same investigation while a run is working. A terminal notice means `collect`, and a mailbox update never carries the full result.",
+        "- A waiting run is paused, not finished: `continue` it with guidance, or `cancel` it. When a child asks for guidance, answer through `continue` rather than starting a new run.",
+        "- Start with `list` when resuming after compaction or a session switch: it recovers run IDs and statuses. Use the returned run ID exactly, keep in mind that runs are cwd-confined, and know that durable continuation is limited to this parent session and branch; an interrupted run never resumes on its own, so wait for the user before continuing it and treat its tool outcomes as uncertain.",
+        "- An isolated result is parent-controlled: `inspect` the workspace first, `apply` is the only way its changes reach this checkout, and `discard` or `continue` with guidance are the alternatives.",
     );
-    return `<delegated_agents>\n${lines.join("\n")}\n</delegated_agents>`;
+
+    return lines.join("\n");
 }

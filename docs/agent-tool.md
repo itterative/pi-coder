@@ -45,7 +45,7 @@ The built-in roles are:
 
 Custom definitions live in `~/.pi/agent/agents/*.md` or trusted project `.pi/agents/*.md` files. They always receive baseline read/search access. Optional capabilities are `memories`, `scratchpad`, `todolist`, `safe-bash`, and `command-runner`; `edit` is reserved for the built-in worker. Trusted project definitions override user definitions. Built-in names are reserved.
 
-Before starting the `worker`, the parent judges whether it already has enough context to do the work itself. If it does, it confirms with `ask_user` whether the user wants the work delegated rather than done directly, offering the same-checkout versus isolated-worktree choice in the same question; it starts the worker unasked only when delegation is genuinely needed (parallel work, an isolated checkout) and skips the check when direct user interaction is unavailable. Starting a read-only agent needs no confirmation. This is parent-facing guidance in `definitions/prompt.ts` and the tool's `promptGuidelines`, not an enforced gate: a model that skips the check still starts the worker.
+Before starting the `worker`, the parent judges whether it already has enough context to do the work itself. If it does, it confirms with `ask_user` whether the user wants the work delegated rather than done directly, offering the same-checkout versus isolated-worktree choice in the same question; it starts the worker unasked only when delegation is genuinely needed (parallel work, an isolated checkout) and skips the check when direct user interaction is unavailable. Starting a read-only agent needs no confirmation. This is a parent-facing guideline on the `agent` tool itself, not an enforced gate: a model that skips the check still starts the worker.
 
 Two capabilities imply others, because they are strengths of one axis rather than independent grants: `command-runner` implies `safe-bash`, and `todolist` implies `scratchpad`. Implications are applied where a definition is read, so the parent-facing catalog and the persisted definition fingerprint both describe the same effective grant.
 
@@ -83,6 +83,38 @@ The system prompt has two layers:
 The protocol comes from one of four profiles — isolated worker, same-checkout worker, command-capable, read-only — selected by the child's rung plus whether it owns a workspace, followed by the interaction paragraph and the profile's report expectation. Sentences that more than one profile needs live with the capability that warrants them (`prompt/bash.ts`, `prompt/paths.ts`), while each profile keeps its own paragraph order so the child reads one coherent mode description rather than a list of capability notes.
 
 Keep capability mechanics out of role text. Test complete rendered prompts with the file snapshots in `test/tools/agent-prompt.test.ts`, which resolve through `resolveChildGrant` exactly as a real child does; the older style of passing a hand-written prompt option bag let a fixture omit grants the child actually holds. Behavior that follows from the same grant is pinned in `test/tools/agent-child-decisions.test.ts`.
+
+### Tool prompt contributions
+
+A registered tool shapes the prompt pi builds for it through three fields, each with one job. Pi renders them into different places, so a fact put in the wrong field is either duplicated or never read at the moment it matters.
+
+| field              | answers                                  | rendered into                                                                                           | pi's own size                  |
+| ------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| `description`      | how to call it and what comes back       | the tool declaration: input format, output shape, truncation, and a pointer to on-demand reference docs | one sentence to one spec       |
+| `promptSnippet`    | what the tool is for                     | the `<tools>` list; a tool without one is left out of that list entirely                                | 3-11 words, a capability label |
+| `promptGuidelines` | what the model would otherwise get wrong | `<rules>` bullets, only while the tool is active                                                        | 0-4 imperative bullets         |
+
+Rules of thumb:
+
+- A preference, ordering rule, or "prefer A over B" is guidance. It is not a snippet and not a description; in this repo it belongs in the tool's guide section (below).
+- Reference material — output formats, per-definition behavior, capability tables — is a docs file named in the description and read on demand, not always-on prompt text.
+- A rule that only matters in one tool state, such as how to collect, resume, or apply a finished run, belongs with the reminder that announces that state or in the tool result, not in a guideline that is paid for on every turn.
+- State each fact once. When the description, the snippet, and a guide all say it, drop two of them.
+- Keep the snippet a label. `grep`, `find`, and `ls` ship no guidelines at all, and `codemode`, the most elaborate built-in tool, ships one short one and points at `docs/codemode.md`.
+
+Pi's own tool text is the only working spec for this split: the three fields are defined by a doc comment each, with no user-facing documentation. Match the built-ins rather than inventing a house style.
+
+### How pi-coder delivers guidance
+
+Guidance reaches the model through named sections, never through `promptGuidelines`. Pi validates the name, wraps the body in a tag of that name, and records only changed sections as a transcript delta, which keeps the recorded prompt identical to the one the model saw. Returning `systemPrompt` instead replaces the whole prompt for that run while the transcript keeps only the structured sections, so a block added that way is invisible when a session is exported.
+
+The shape is the same for every contributor:
+
+1. The body lives in a `prompt.ts` beside what it describes: `agentGuidePrompt()` in `tools/agent/definitions/prompt.ts`, `outlineGuidePrompt()` in `tools/code/prompt.ts`, `askUserGuidePrompt()` in `tools/ask_user/prompt.ts`, `memoryAuditGuidePrompt()` in `modules/memory/prompt.ts`.
+2. A tool guide is contributed with `contributeToolGuide(options, "<tool>", body)` from `src/common/prompt-section.ts`. It sets `<tool>_tool_guide` and does nothing while the tool is not declared, so a hidden or deselected tool leaves no guide behind.
+3. A module context block — the memory index, the scratchpad path, the TODO file, the bash notes — is set with `setPromptSection(options, "<name>", body)`, and its body also lives in that module's `prompt.ts`.
+
+Tool names, section names, and builders therefore line up mechanically: `outline` → `outlineGuidePrompt()` → `outline_tool_guide`. `test/tools/prompt-guides.test.ts` pins the naming, the declared-tool gate, and the empty-body skip.
 
 ## Safety boundary
 

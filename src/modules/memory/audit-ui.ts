@@ -15,7 +15,9 @@ import {
 import { AutocompleteItem, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
+import { contributeToolGuide } from "../../common/prompt-section";
 import { pager, type PagerItem } from "../../tui/pager";
+import { memoryAuditGuidePrompt } from "./prompt";
 import {
     formatAuditReport,
     runMemoryAudit,
@@ -67,19 +69,11 @@ export default function registerMemoryAudit(pi: ExtensionAPI) {
         name: "memory_audit",
         label: "Memory Audit",
         description:
-            "Validate the memory trees with the same parser that builds the memory list: frontmatter and name " +
-            "rules, index size and description budget, nested docs no index names, and broken or stale " +
-            "references. The audit also runs automatically after a step that changed a memory file, and a " +
-            "finding arrives as a reminder, so this tool is for the full report: more findings than a reminder " +
-            "carried, a scope the automatic check does not cover, or a request for the current state. Errors " +
-            "mean a memory is not indexed or a reference is broken; warnings are review indicators and may be " +
-            "deliberate - a dense index or a long nested description needs no fix.",
-        promptSnippet:
-            "memory_audit prints the full memory-tree audit; findings are already reported automatically after a memory edit.",
-        promptGuidelines: [
-            "Do not call memory_audit after every memory edit: the audit runs automatically after a step that changed a memory file and reports findings as a reminder. Call it for the full report when a reminder says there are more findings, or when the user asks",
-            "Weigh memory_audit warnings rather than obeying them: fix the ones that hide content (a nested doc no index names, a broken link, a stale memory name), leave deliberate ones (a dense index, a long nested description) alone and say why",
-        ],
+            "Report the state of the memory trees: frontmatter and name rules, index size and description " +
+            "budget, nested docs no index names, and broken or stale references. Errors mean a memory is not " +
+            "indexed or a reference is broken; warnings are review indicators. `scope` selects the `project` " +
+            "tree, the `user` tree, or `both` (the default).",
+        promptSnippet: "Print the full memory-tree audit.",
         parameters: Type.Object({
             scope: Type.Optional(
                 Type.String({
@@ -104,6 +98,10 @@ export default function registerMemoryAudit(pi: ExtensionAPI) {
                 details: { errors, warnings, results },
             };
         },
+    });
+
+    pi.on("before_agent_start", (event) => {
+        contributeToolGuide(event.systemPromptOptions, "memory_audit", memoryAuditGuidePrompt());
     });
 
     pi.registerCommand("memory-audit", {

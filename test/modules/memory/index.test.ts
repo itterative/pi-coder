@@ -6,7 +6,14 @@ import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-a
 
 import registerMemoryExtension from "../../../src/modules/memory";
 import { compactionMarker, customEntry } from "../../helpers/compaction-doubles";
-import { createPiStub, stubContext, stubSessionManager, type PiStub } from "../../helpers/pi-stub";
+import {
+    createPiStub,
+    handlerView,
+    stubContext,
+    stubSessionManager,
+    beforeAgentStartEvent,
+    type PiStub,
+} from "../../helpers/pi-stub";
 
 const MEMORY_INDEX_TYPE = "pi-memory:memory-index";
 
@@ -80,12 +87,13 @@ async function startSession(stub: PiStub, ctx: ExtensionContext): Promise<void> 
 }
 
 async function promptAfterRun(stub: PiStub, ctx: ExtensionContext): Promise<string> {
-    const result = (await stub.requireHandler("before_agent_start")(
-        { systemPrompt: "<project_context>\nProject\n</project_context>" },
-        ctx,
-    )) as { systemPrompt: string };
+    const event = beforeAgentStartEvent();
+    // The memory module and the audit tool each contribute a section, so every handler runs, as pi does.
+    for (const handler of handlerView(stub, "before_agent_start").before_agent_start) {
+        await handler(event, ctx);
+    }
 
-    return result.systemPrompt;
+    return event.systemPromptOptions.sections.memory_system ?? "";
 }
 
 describe("memory index snapshot lifecycle", () => {

@@ -3,6 +3,8 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import type { ContainerState } from "../../modules/sandbox/container/state";
+import { contributeToolGuide } from "../../common/prompt-section";
+import { outlineGuidePrompt } from "./prompt";
 import { runDigest } from "./digest";
 import { DEFAULT_CHAR_LIMIT, MIN_CHAR_LIMIT } from "./languages";
 import { runSearch } from "./search";
@@ -24,27 +26,16 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
         name: "outline",
         label: "Outline",
         description:
-            "Inspect code structure without reading whole files. " +
-            'action="digest" maps a file or directory: namespaces, types, signatures, and line ranges. ' +
-            'action="search" finds declarations by partial name, falling back to approximate names when there are no literal hits. ' +
-            'action="show" returns exact source for named symbols; class/struct/interface targets return member signatures unless detail="full"; when path is a directory it pairs header declarations with source definitions. ' +
-            'action="usages" finds syntactic references, calls, and launches; it is name-based, not type-resolved. ' +
-            'Symbols accept "ns::Type::member" or "Type.member"; append parameter types to select an overload. ' +
-            "Supports C/C++/HIP, JavaScript/TypeScript (JSX/TSX), Java, C#, Go, Rust, Python, PHP, Ruby, and Markdown headings. Paths are relative to the working directory, and output is character-limited. A cut result ends with # next: offset=N; pass offset to continue from there.",
-        promptSnippet:
-            'Use outline(action="search") to find a declaration by name, outline(action="digest") to map a module, and outline(action="show") to read one declaration before opening whole files. outline(action="usages") is syntactic, not clangd-accurate.',
-        promptGuidelines: [
-            "Prefer outline digest over reading every file in a directory, and outline show over reading a whole file for one function or class.",
-            "Use outline search when you know part of a declaration name but not its exact qualified name; search is name-based and does not search comments or strings.",
-            "Outline usages reports syntactic matches only; it does not resolve overloads, generics, macros, or dynamic dispatch.",
-            "When outline output ends with # next: offset=N, call it again with the same parameters and that offset to continue.",
-        ],
+            "Inspect code structure without reading whole files. Supports C/C++/HIP, JavaScript/TypeScript " +
+            "(JSX/TSX), Java, C#, Go, Rust, Python, PHP, Ruby, and Markdown headings; other file types are " +
+            "skipped. Output is character-limited, and a cut result ends with # next: offset=N.",
+        promptSnippet: "Inspect code structure without opening whole files.",
         parameters: Type.Object({
             action: Type.Unsafe<CodeAction>({
                 type: "string",
                 enum: ["digest", "search", "show", "usages"],
                 description:
-                    "digest maps a file or directory; search finds declarations by name; show extracts named symbols; usages finds syntactic occurrences",
+                    "digest maps a file or directory; search finds declarations by name, with a typo fallback; show extracts named symbols and pairs headers with definitions; usages lists syntactic occurrences",
             }),
             path: Type.Optional(
                 Type.String({
@@ -159,6 +150,10 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
                 };
             }
         },
+    });
+
+    pi.on("before_agent_start", (event) => {
+        contributeToolGuide(event.systemPromptOptions, "outline", outlineGuidePrompt());
     });
 }
 

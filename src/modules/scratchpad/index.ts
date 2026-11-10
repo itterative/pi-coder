@@ -5,15 +5,16 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { getScratchpadDirectory } from "../../common/constants";
+import { setPromptSection } from "../../common/prompt-section";
 import {
     DEFAULT_SCRATCHPAD_POLICY,
-    formatRetention,
     formatStorageSize,
     measureScratchpad,
     pruneScratchpads,
     SCRATCHPAD_PREFIX,
     type ScratchpadPolicy,
 } from "./policy";
+import { scratchpadPrompt } from "./prompt";
 
 export interface ScratchpadRuntime {
     /** Private temporary directory for one parent or child runtime. */
@@ -44,9 +45,6 @@ interface ScratchpadSizeWatch {
     warned: boolean;
 }
 
-const SCRATCHPAD_SYSTEM_TAG = "<scratchpad_system>";
-const SCRATCHPAD_SYSTEM_END_TAG = "</scratchpad_system>";
-
 // SessionManager instances identify a parent or child runtime. The marker in
 // the session transcript bridges reloads; the WeakMap holds only live handles.
 const runtimes = new WeakMap<object, ScratchpadRuntime>();
@@ -61,57 +59,6 @@ export function getScratchpadRuntime(
 
 export function getScratchpadPath(sessionManager: object | undefined): string | undefined {
     return getScratchpadRuntime(sessionManager)?.path;
-}
-
-export function scratchpadPrompt(
-    pathname: string,
-    policy: ScratchpadPolicy = DEFAULT_SCRATCHPAD_POLICY,
-): string {
-    return [
-        "## Temporary Scratchpad",
-        "",
-        "A private temporary scratchpad is available at:",
-        "",
-        `\`${pathname}\``,
-        "",
-        "Use it for notes, intermediate artifacts, generated reports, and other " +
-            "work that should not modify the project checkout.",
-        "Use this directory with the tools available in this runtime; access " +
-            "remains subject to the runtime's capability policy.",
-        "It is an additional confined root, equivalent to the current working " +
-            "directory for path safety.",
-        `Keep it small: pi-coder warns once it grows past ${formatStorageSize(policy.perScratchpadBytes)}, ` +
-            "and it is not a place for large datasets or bulk output.",
-        `Scratchpad contents are temporary: pi-coder removes a scratchpad that has been idle for ` +
-            `${formatRetention(policy.retentionMs)}. Copy anything you need to keep into the project or memory.`,
-        "When returning to this session, the recorded scratchpad path is reused while the directory still " +
-            "exists; do not rely on contents surviving pruning or manual deletion.",
-    ].join("\n");
-}
-
-function appendScratchpadPrompt(
-    systemPrompt: string,
-    pathname: string,
-    policy: ScratchpadPolicy,
-): string {
-    if (systemPrompt.includes(SCRATCHPAD_SYSTEM_TAG)) {
-        return systemPrompt;
-    }
-
-    const scratchpadBlock = `${SCRATCHPAD_SYSTEM_TAG}\n${scratchpadPrompt(pathname, policy)}\n${SCRATCHPAD_SYSTEM_END_TAG}`;
-    const projectContextEnd = "</project_context>";
-    const index = systemPrompt.indexOf(projectContextEnd);
-    if (index === -1) {
-        return `${systemPrompt}\n\n${scratchpadBlock}`;
-    }
-
-    return (
-        systemPrompt.slice(0, index + projectContextEnd.length) +
-        "\n\n" +
-        scratchpadBlock +
-        "\n" +
-        systemPrompt.slice(index + projectContextEnd.length)
-    );
 }
 
 function legacyScratchpadRoot(): string {
@@ -308,9 +255,11 @@ export default function registerScratchpadExtension(
         const pathname = getScratchpadPath(ctx.sessionManager);
         if (!pathname) return;
 
-        return {
-            systemPrompt: appendScratchpadPrompt(event.systemPrompt, pathname, policy),
-        };
+        setPromptSection(
+            event.systemPromptOptions,
+            "scratchpad_system",
+            scratchpadPrompt(pathname, policy),
+        );
     });
 
     pi.on("agent_settled", async (_event, ctx) => {

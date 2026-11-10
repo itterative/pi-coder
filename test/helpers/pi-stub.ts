@@ -8,6 +8,7 @@ import {
     type ExtensionContext,
     type ExtensionUIContext,
     type ProviderConfig,
+    type NormalizedBuildSystemPromptOptions,
     type ToolDefinition,
     type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
@@ -68,6 +69,70 @@ export type RecordedHandler = (event: unknown, ctx?: unknown) => Promise<unknown
 
 /** A handler exactly as recorded: no invented event or context shape. */
 export type StubHandler = (event: unknown, ctx: unknown) => unknown;
+
+/** A `before_agent_start` event with the run's prompt options, as pi hands one to a handler. */
+export interface StubPromptEvent {
+    readonly type: "before_agent_start";
+    readonly messageType: "user";
+    readonly prompt: string;
+    /** Rendered from the current sections, like pi's lazy getter. */
+    readonly systemPrompt: string;
+    systemPromptOptions: NormalizedBuildSystemPromptOptions;
+}
+
+/**
+ * A `before_agent_start` event whose prompt is assembled from named sections.
+ *
+ * Handlers contribute prompt text by naming a section instead of splicing the rendered prompt, so a suite
+ * asserts on `event.systemPromptOptions.sections`. `systemPrompt` stays a getter that renders those sections,
+ * because pi renders it lazily and a handler may read it.
+ */
+export function beforeAgentStartEvent(
+    options: {
+        sections?: Record<string, string>;
+        selectedTools?: string[];
+        hiddenTools?: string[];
+    } = {},
+): StubPromptEvent {
+    const systemPromptOptions: NormalizedBuildSystemPromptOptions = {
+        // A full session's active tools, which is what a suite contributing a tool guide expects; a test
+        // that hides one passes `hiddenTools`, and one checking the gate passes an explicit list.
+        selectedTools: [
+            ...(options.selectedTools ?? [
+                "read",
+                "bash",
+                "edit",
+                "write",
+                "memory_audit",
+                "agent",
+                "ask_user",
+                "outline",
+            ]),
+        ],
+        hiddenTools: [...(options.hiddenTools ?? [])],
+        toolSnippets: {},
+        toolGuidelines: {},
+        promptGuidelines: [],
+        appendSystemPrompt: "",
+        sections: { ...(options.sections ?? {}) },
+        cwd: process.cwd(),
+        contextFiles: [],
+        skills: [],
+    };
+
+    return {
+        type: "before_agent_start",
+        messageType: "user",
+        prompt: "",
+        systemPromptOptions,
+        get systemPrompt(): string {
+            // pi wraps each section in a tag of its own name, in insertion order.
+            return Object.entries(systemPromptOptions.sections)
+                .map(([name, text]) => `<${name}>\n${text}\n</${name}>`)
+                .join("\n\n");
+        },
+    };
+}
 
 /** Derived from the real API so a pi signature change surfaces here first. */
 type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];

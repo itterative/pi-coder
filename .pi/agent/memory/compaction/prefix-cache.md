@@ -162,9 +162,10 @@ diagnosis; the count alone is nothing. Recording a few scalars on both the chain
 
 **The short prompt.** A prompt of **12,817 chars** is pi's base prompt — pi's own instructions plus project context
 plus the frozen memory appendix, which is why it was byte-identical across two different sessions. The ~24.6-25.3k
-values are that plus the blocks `before_agent_start` installs, which vary by session (`<delegated_agents>`,
-`<todolist_system>`, `<scratchpad_system>`, `<bash_sandbox>` and the per-session scratchpad path), which is why they
-differ from each other by a few hundred chars. Two unrelated sessions growing by a near-identical block (+11,802 and
+values are that plus the sections `before_agent_start` installs, which vary by session (`<memory_system>`,
+`<agent_tool_guide>`, `<outline_tool_guide>`, `<ask_user_tool_guide>`, `<memory_audit_tool_guide>`,
+`<todolist_system>`, `<scratchpad_system>`, `<bash_sandbox>`, and the per-session scratchpad path), which is why
+they differ from each other by a few hundred chars. Two unrelated sessions growing by a near-identical block (+11,802 and
 +11,996, `toolsHash` and the frozen memory index unmoved) is what made this look like a duplicated prompt; nothing was
 duplicated. It means the compaction ran **outside an active agent run**; the live turns of these sessions carry ~24.8k.
 Two corollaries, read off the code rather than inferred from a trace:
@@ -174,13 +175,13 @@ Two corollaries, read off the code rather than inferred from a trace:
   _baseSystemPrompt` (`:286`). The override is set at `:902` and cleared in the `_runAgentPrompt` finally at `:753`,
   but `state.systemPrompt` is only written back to base at `:908` (a turn whose handlers returned no override) and
   `:1779`, so the accessor and the request path can disagree, and a compaction not inside a run sees base.
-- **The base prompt is not a prefix of the override.** All five pi-coder `before_agent_start` handlers insert at the
-  same interior anchor `</project_context>`, so the later handler lands *earlier*: base head, `<bash_sandbox>`,
-  `<delegated_agents>`, `<todolist_system>`, `<scratchpad_system>`, `<memory_system>`, then pi's base tail
-  (`<available_skills>` + the cwd line). Only the head up to the anchor and the tail survive, so "re-send base plus
-  our blocks" cannot reproduce a live turn's bytes — and `buildSystemPrompt` is not exported, so base is not
-  re-derivable from what we hold. Do not propose reconstructing the prompt on the strength of a size delta. The
-  scratchpad path inside `<scratchpad_system>`/`<todolist_system>` is **session**-stable, not per-load
+- **Was: the base prompt is not a prefix of the override.** At the time of this trace each handler spliced at the
+  interior anchor `</project_context>`, so later handlers landed *earlier* and "re-send base plus our blocks" could
+  not reproduce a live turn's bytes. That failure mode is gone: handlers now set named sections
+  (`src/common/prompt-section.ts`), pi appends custom sections after its own tail in registration order, and only
+  changed sections travel as a delta, so the recorded prompt and the request agree. The lesson outlives the
+  mechanism: never reconstruct a prompt from a size delta, and do not treat a changed prompt as a leaked duplicate.
+  The scratchpad path inside `<scratchpad_system>`/`<todolist_system>` is **session**-stable, not per-load
   (`restoreOrCreateScratchpad` replays the `pi-coder:scratchpad` entry), so it is not a cross-restart cache problem
   either.
 

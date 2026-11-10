@@ -10,17 +10,16 @@ import {
     type WriteToolInput,
 } from "@earendil-works/pi-coding-agent";
 
+import { setPromptSection } from "../../common/prompt-section";
 import { getScratchpadPath } from "../scratchpad";
 import { registerTodoBashGuard } from "./bash-guard";
 import { parseTodoList } from "./parser";
 import { summarizeTodoList, type TodoProgress } from "./progress";
 import { emitTodoStatus } from "./events";
 import { appendTodoSnapshot, getTodoSnapshot } from "./persistence";
+import { todoPrompt } from "./prompt";
 
 const EMPTY_TODO_DOCUMENT = "---\nversion: 1\ntodos: []\n---\n";
-
-const TODO_SYSTEM_TAG = "<todolist_system>";
-const TODO_SYSTEM_END_TAG = "</todolist_system>";
 
 interface TodoRuntimeState {
     persistedContent: string | undefined;
@@ -36,46 +35,6 @@ export interface TodoListExtensionOptions {
 
 function normalizeToLf(text: string): string {
     return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-function appendTodoPrompt(systemPrompt: string, pathname: string): string {
-    if (systemPrompt.includes(TODO_SYSTEM_TAG)) return systemPrompt;
-
-    const block = [
-        TODO_SYSTEM_TAG,
-        "## Temporary TODO list",
-        "",
-        `Your private runtime TODO list is at \`${pathname}\`.`,
-        "Use TODO.md for substantive, multi-step, or longer-running work. Skip TODO tracking for trivial, single-step tasks that do not need progress tracking. Keep its YAML frontmatter valid and update TODO statuses as work starts, completes, or becomes blocked.",
-        "When mutation tools are available, use the write or edit tool to change TODO.md and preserve the freeform Markdown body after the frontmatter.",
-        "The TODO file is temporary and private to this runtime, not a project TODO file. Keep it current.",
-        "Use this exact frontmatter shape: `version: 1` and a `todos` YAML sequence; each entry has a unique lowercase `id`, a non-empty `title`, and a `status`.",
-        "For example:",
-        "```yaml",
-        "---",
-        "version: 1",
-        "todos:",
-        "  - id: inspect",
-        "    title: Inspect the implementation",
-        "    status: in_progress",
-        "---",
-        "```",
-        "The Markdown body after the closing `---` is freeform and must be preserved. For large, multi-phase developments, you may use it for internal notes, plans, or other relevant information.",
-        "TODO.md is initialized for every runtime; deleting an existing TODO.md is treated as clearing it to `todos: []`, so use an empty list when no active tasks remain.",
-        "Allowed statuses are `pending`, `in_progress`, `completed`, and `blocked`.",
-        TODO_SYSTEM_END_TAG,
-    ].join("\n");
-    const projectContextEnd = "</project_context>";
-    const index = systemPrompt.indexOf(projectContextEnd);
-    if (index === -1) return `${systemPrompt}\n\n${block}`;
-
-    return (
-        systemPrompt.slice(0, index + projectContextEnd.length) +
-        "\n\n" +
-        block +
-        "\n" +
-        systemPrompt.slice(index + projectContextEnd.length)
-    );
 }
 
 function resolveToolPath(rawPath: string, cwd: string): string {
@@ -297,12 +256,11 @@ export default function registerTodoListExtension(
         const scratchpadPath = getScratchpadPath(ctx.sessionManager);
         if (!scratchpadPath) return;
 
-        return {
-            systemPrompt: appendTodoPrompt(
-                event.systemPrompt,
-                path.join(scratchpadPath, "TODO.md"),
-            ),
-        };
+        setPromptSection(
+            event.systemPromptOptions,
+            "todolist_system",
+            todoPrompt(path.join(scratchpadPath, "TODO.md")),
+        );
     });
 
     pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult> => {
@@ -362,7 +320,7 @@ export default function registerTodoListExtension(
     });
 }
 
-export { appendTodoPrompt, applyTodoEdits, isManagedTodoPath };
+export { applyTodoEdits, isManagedTodoPath };
 export { parseTodoList, type TodoItem, type TodoList, type TodoStatus } from "./parser";
 export { summarizeTodoList, type TodoProgress } from "./progress";
 export {

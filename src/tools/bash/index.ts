@@ -15,6 +15,8 @@ import {
     PERMISSION_PROMPT_CONFIRMATION_DELAY_MS,
 } from "../../common/constants";
 import { getScratchpadPath } from "../../modules/scratchpad";
+import { bashSandboxPrompt } from "./prompt";
+import { setPromptSection } from "../../common/prompt-section";
 import { ALLOWED_COMMAND_ENTRY_TYPE, type AllowedCommandEntry } from "../../common/audit";
 import sandbox from "../../modules/sandbox/bubblewrap";
 import type { ContainerState } from "../../modules/sandbox/container/state";
@@ -287,40 +289,8 @@ export default function registerBashToolHook(pi: ExtensionAPI, container?: Conta
     });
 
     // Add system prompt instructions about user notes
-    pi.on("before_agent_start", async (event) => {
-        const notes = `## Bash Sandbox User Notes
-
-When requesting to run bash commands, the user may attach a note explaining their decision. These notes appear:
-- For blocked commands: in the block reason
-- For allowed commands: inside \`<user_note>\` tags at the start of the command output
-
-Pay attention to these notes as they provide context about the user's preferences and concerns.
-`;
-
-        const notesBlock = `<bash_sandbox>\n${notes}\n</bash_sandbox>`;
-        let systemPrompt = event.systemPrompt;
-
-        // Don't add if our block is already in the system prompt
-        if (systemPrompt.includes("<bash_sandbox>")) {
-            return { systemPrompt };
-        }
-
-        const projectContextEnd = "</project_context>";
-        const idx = systemPrompt.indexOf(projectContextEnd);
-        if (idx !== -1) {
-            systemPrompt =
-                systemPrompt.slice(0, idx + projectContextEnd.length) +
-                "\n\n" +
-                notesBlock +
-                "\n" +
-                systemPrompt.slice(idx + projectContextEnd.length);
-        } else {
-            systemPrompt = systemPrompt + "\n\n" + notesBlock;
-        }
-
-        return {
-            systemPrompt,
-        };
+    pi.on("before_agent_start", (event) => {
+        setPromptSection(event.systemPromptOptions, "bash_sandbox", bashSandboxPrompt());
     });
 
     /**

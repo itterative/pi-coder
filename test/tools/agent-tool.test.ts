@@ -3,12 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TextContent } from "@earendil-works/pi-ai";
-import type {
-    AgentToolResult,
-    BeforeAgentStartEventResult,
-    Theme,
-    ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
 import { registerStatusFooter } from "../../src/tui/status";
@@ -44,6 +39,7 @@ import * as workspaceStore from "../../src/tools/agent/workspaces/store";
 import { executeParentWorkspaceAction } from "../../src/tools/agent/workspaces/parent-actions";
 import { AGENT_TRACE_ENV } from "../../src/tools/agent/observability/trace";
 import {
+    beforeAgentStartEvent,
     createPiStub,
     handlerView,
     stubContext,
@@ -93,15 +89,6 @@ function agentTool(stub: PiStub): AgentTool {
         renderResult: (result, options, theme) =>
             render(result, { ...options, isPartial: false }, theme, noRenderContext),
     };
-}
-
-/** The guidelines are optional in pi's type but this suite snapshots them. */
-function requirePromptGuidelines(definition: ToolDefinition): string[] {
-    if (!definition.promptGuidelines) {
-        throw new Error("the agent tool declares no prompt guidelines");
-    }
-
-    return definition.promptGuidelines;
 }
 
 /** The agent tool always answers with a single text block; pi types content as a text-or-image union. */
@@ -438,10 +425,9 @@ describe("agent extension registration", () => {
             ui: stubUi({ setWidget: () => {} }),
         });
         await handlers.session_start[0]({ reason: "startup" }, ctx);
-        const prompt = (await handlers.before_agent_start[0](
-            { systemPrompt: "Parent prompt" },
-            ctx,
-        )) as BeforeAgentStartEventResult;
+        const prompt = beforeAgentStartEvent();
+        await handlers.before_agent_start[0](prompt, ctx);
+        await handlers.before_agent_start[0](prompt, ctx);
         const result = await tool.execute(
             "call-1",
             { action: "start", agent: "scout", task: "Inspect" },
@@ -473,17 +459,12 @@ describe("agent extension registration", () => {
         expect(tool.definition.executionMode).toBe("sequential");
         expect(shortcut?.key).toBe("ctrl+alt+b");
         expect(shortcut?.options.description).toBe("Move foreground delegated agent to background");
-        await expect(
-            [tool.definition.description, ...requirePromptGuidelines(tool.definition)].join("\n"),
-        ).toMatchFileSnapshot("__snapshots__/agent-tool.delegation-guidance.txt");
-        await expect(prompt.systemPrompt).toMatchFileSnapshot(
+        await expect(tool.definition.description).toMatchFileSnapshot(
+            "__snapshots__/agent-tool.delegation-guidance.txt",
+        );
+        await expect(prompt.systemPromptOptions.sections.agent_tool_guide).toMatchFileSnapshot(
             "__snapshots__/agent-tool.parent-system-prompt.txt",
         );
-        const repeatedPrompt = (await handlers.before_agent_start[0](
-            prompt,
-            ctx,
-        )) as BeforeAgentStartEventResult;
-        expect(repeatedPrompt).toEqual(prompt);
         expect(result.details).toMatchObject({ status: "completed", agent: "scout" });
         expect(events).toContainEqual({
             channel: AGENT_EVENT_CHANNEL,
@@ -964,10 +945,8 @@ describe("agent extension registration", () => {
             undefined,
             ctx,
         );
-        const prompt = (await handlers.before_agent_start[0](
-            { systemPrompt: "Parent prompt" },
-            ctx,
-        )) as BeforeAgentStartEventResult;
+        const prompt = beforeAgentStartEvent();
+        await handlers.before_agent_start[0](prompt, ctx);
         expect(sentMessages).toEqual([]);
         await handlers.agent_settled[0]({}, { ...ctx, isIdle: () => true });
         expect(sentMessages).toHaveLength(1);
@@ -1008,11 +987,11 @@ describe("agent extension registration", () => {
         await expect(agentToolText(status)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.background-status.txt",
         );
-        const promptAfterSpawn = (await handlers.before_agent_start[0](
-            { systemPrompt: "Parent prompt" },
-            ctx,
-        )) as BeforeAgentStartEventResult;
-        expect(promptAfterSpawn).toEqual(prompt);
+        const promptAfterSpawn = beforeAgentStartEvent();
+        await handlers.before_agent_start[0](promptAfterSpawn, ctx);
+        expect(promptAfterSpawn.systemPromptOptions.sections.agent_tool_guide).toBe(
+            prompt.systemPromptOptions.sections.agent_tool_guide,
+        );
         await expect(agentToolText(listed)).toMatchFileSnapshot(
             "__snapshots__/agent-tool.agent.background-list.txt",
         );
@@ -1947,8 +1926,8 @@ describe("agent extension registration", () => {
             }),
         });
 
-        await handlers.before_agent_start[0]({ systemPrompt: "Parent" }, ctx);
-        await handlers.before_agent_start[0]({ systemPrompt: "Parent" }, ctx);
+        await handlers.before_agent_start[0](beforeAgentStartEvent(), ctx);
+        await handlers.before_agent_start[0](beforeAgentStartEvent(), ctx);
 
         const invalidOverlayNotifications = notifications.filter((message) =>
             message.includes("capabilities cannot be overridden"),

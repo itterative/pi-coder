@@ -7,7 +7,7 @@ import {
     BUILTIN_SCOUT,
     BUILTIN_WORKER,
 } from "../../src/tools/agent/definitions/discovery";
-import { availableAgentsPrompt } from "../../src/tools/agent/definitions/prompt";
+import { agentGuidePrompt } from "../../src/tools/agent/definitions/prompt";
 import { getUserMemoryDirectory } from "../../src/common/constants";
 import { childProtocolPrompt } from "../../src/tools/agent/child/prompt";
 import { resolveChildGrant } from "../../src/tools/agent/child/grant";
@@ -248,7 +248,7 @@ describe("delegated-agent prompt rendering", () => {
     });
 
     it("advertises a narrowing context policy in the parent agent catalog", async () => {
-        const prompt = availableAgentsPrompt([BUILTIN_ADVISOR]);
+        const prompt = agentGuidePrompt([BUILTIN_ADVISOR]);
 
         await expect(prompt).toMatchFileSnapshot("__snapshots__/agent-prompt.advisor-catalog.txt");
     });

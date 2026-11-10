@@ -47,6 +47,11 @@ partial name), `show` (exact source for named declarations), and `usages` (synta
 - **Loops yield.** `common/async.ts`'s referenced `yieldToEventLoop` is used between parsed files and at
   index/search boundaries, with `AbortSignal` checks, so a long scan does not starve the TUI. `stats/scan.ts`
   uses the same helper instead of a local timer.
+- **Routing lives in an `outline_tool_guide` section, not in the description.** The section carries the decision
+  trigger (reach for `outline` before `rg`, `grep`, or `read` for questions about code structure), the
+  boundary (declarations only; prose, config, and concept search belong to `rg`), and what each action
+  answers. It is set per run through `setPromptSection`, only while the tool is declared. The `description`
+  is the call contract instead: actions, symbol syntax, languages, output limits.
 - **`usages` is syntactic.** It matches the selector's last component on purpose (call sites say
   `socket.connect`, not `Socket::connect`). Overloads, generics, templates, macros, and dynamic dispatch are not
   resolved; clangd is the eventual provider for C++ references. The index resolves grammar, preprocessor,

@@ -4,8 +4,10 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 import { getUserMemoryDirectory } from "../../common/constants";
+import { setPromptSection } from "../../common/prompt-section";
 import { scanMemories, type MemoryMeta } from "./memories";
 import { FrontmatterParseError } from "./frontmatter";
+import { memoryPrompt } from "./prompt";
 import registerMemoryAudit from "./audit-ui";
 
 interface CachedMemoryIndex {
@@ -328,30 +330,9 @@ export default function registerMemoryExtension(pi: ExtensionAPI) {
 
     registerMemoryAudit(pi);
 
-    pi.on("before_agent_start", async (event, _ctx) => {
+    pi.on("before_agent_start", (event) => {
         if (!cachedAppendix) return;
 
-        let systemPrompt = event.systemPrompt;
-
-        // Skip if already injected (e.g. sub-agent inheriting parent's prompt)
-        if (systemPrompt.includes("<memory_system>")) {
-            return;
-        }
-
-        const memoryBlock = `<memory_system>\n${cachedAppendix}\n</memory_system>`;
-        const projectContextEnd = "</project_context>";
-        const idx = systemPrompt.indexOf(projectContextEnd);
-        if (idx !== -1) {
-            systemPrompt =
-                systemPrompt.slice(0, idx + projectContextEnd.length) +
-                "\n\n" +
-                memoryBlock +
-                "\n" +
-                systemPrompt.slice(idx + projectContextEnd.length);
-        } else {
-            systemPrompt = systemPrompt + "\n" + memoryBlock;
-        }
-
-        return { systemPrompt };
+        setPromptSection(event.systemPromptOptions, "memory_system", memoryPrompt(cachedAppendix));
     });
 }

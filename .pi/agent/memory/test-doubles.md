@@ -14,6 +14,9 @@ keep_updated: true
 - `pi` surface to register into → `test/helpers/pi-stub.ts` → `createPiStub()`
 - context a handler is invoked with → `pi-stub.ts` → `stubContext()`, `stubUi()`, `stubSessionManager()`
 - invoking a registered slash command → `pi-stub.ts` → `stubCommandContext()`, `stub.requireCommand(name)`
+- `before_agent_start` event carrying prompt options → `pi-stub.ts` → `beforeAgentStartEvent({ sections,
+  selectedTools, hiddenTools })`: sections are read back from `event.systemPromptOptions.sections`, the
+  default `selectedTools` is a full session, and `systemPrompt` stays a getter over the sections
 - domain object, most fields irrelevant → `test/helpers/agent-doubles.ts` → `partialRun`, `partialDetails`,
   `partialWorkspace`, `partialWorkspaceResult`, `partialTracker`, `zeroUsage`
 - event for `updateTracker` → `test/helpers/session-events.ts` → `messageStartEvent`,

@@ -1,27 +1,18 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
+import { contributeToolGuide } from "../../common/prompt-section";
 import { askUser } from "../../tui/ask-user";
+import { askUserGuidePrompt } from "./prompt";
 
 export default function registerAskUserTool(pi: ExtensionAPI) {
     pi.registerTool({
         name: "ask_user",
         label: "Ask User",
         description:
-            "Ask the user a question with predefined options and get their feedback. " +
-            "Use this when you need the user's input, preference, or decision. " +
-            "The user can select one of the provided options or type a custom reply. " +
-            "Proactively ask when you are uncertain about the user's intent, " +
-            "when multiple reasonable approaches exist, or when user guidance " +
-            "could improve the outcome. It is better to ask than to guess wrong.",
-        promptSnippet:
-            "Use ask_user to get feedback, preferences, or decisions from the user. " +
-            "Prefer asking over assuming when the task is ambiguous or " +
-            "multiple valid approaches exist.",
-        promptGuidelines: [
-            "When asking the user a question, indicate your recommendation in the option's `description` field with 'Recommended because …' or '(recommended)'",
-            "In questions to the user, include an 'Unsure' or 'You decide' option when the user may not have a strong preference, so you can fall back to your own judgment instead of stalling",
-        ],
+            "Ask the user a question with predefined options and get their feedback. `title` and `options` are " +
+            "required; an option may carry a `description` explaining what it means.",
+        promptSnippet: "Ask the user for a decision, preference, or missing detail.",
         parameters: Type.Object({
             title: Type.String({ description: "A short title for the question" }),
             description: Type.Optional(
@@ -123,5 +114,9 @@ export default function registerAskUserTool(pi: ExtensionAPI) {
                 },
             };
         },
+    });
+
+    pi.on("before_agent_start", (event) => {
+        contributeToolGuide(event.systemPromptOptions, "ask_user", askUserGuidePrompt());
     });
 }

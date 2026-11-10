@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
+    beforeAgentStartEvent,
     stubContext,
     stubSessionManager,
     stubUi,
@@ -99,16 +100,13 @@ describe("temporary scratchpad extension", () => {
         expect(path.basename(scratchpadPath!)).toMatch(new RegExp(`^${SCRATCHPAD_PREFIX}`));
         expect(fs.statSync(scratchpadPath!).mode & 0o777).toBe(0o700);
 
-        const result = handler("before_agent_start")(
-            {
-                systemPrompt: "<project_context>\nProject\n</project_context>",
-            },
-            runtimeContext,
-        ) as { systemPrompt: string };
-        expect(result.systemPrompt).toContain("<scratchpad_system>");
-        expect(result.systemPrompt).toContain(scratchpadPath!);
-        expect(result.systemPrompt).toContain("idle for 7 days");
-        expect(result.systemPrompt).toContain("256 MB");
+        const event = beforeAgentStartEvent();
+        handler("before_agent_start")(event, runtimeContext);
+        const prompt = event.systemPromptOptions.sections.scratchpad_system ?? "";
+        expect(prompt).toContain("Temporary Scratchpad");
+        expect(prompt).toContain(scratchpadPath!);
+        expect(prompt).toContain("idle for 7 days");
+        expect(prompt).toContain("256 MB");
     });
 
     it("reuses a marked directory when the runtime registry is recreated", async () => {

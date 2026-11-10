@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { contributeToolGuide } from "../../common/prompt-section";
 import { createAgentChild } from "./child";
 import agentConfig, { applyAgentConfig, shouldNotifyBusyWorkerChanges } from "./config";
 import { discoverAgents } from "./definitions/discovery";
@@ -11,7 +12,7 @@ import {
 } from "./observability/events";
 import { AgentMailbox } from "./presentation/mailbox";
 import { loadAgentRunPersistence } from "./runs/persistence";
-import { availableAgentsPrompt } from "./definitions/prompt";
+import { agentGuidePrompt } from "./definitions/prompt";
 import {
     AgentRunManager,
     ZERO_USAGE,
@@ -73,7 +74,7 @@ export class AgentLifecycle {
         this.pi.on("session_start", async (_event, ctx) => {
             this.activeContext = ctx;
             const discovered = this.discover(ctx);
-            this.cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
+            this.cachedAgentPrompt = agentGuidePrompt(discovered.agents);
             await this.restoreManager(ctx);
         });
 
@@ -85,27 +86,8 @@ export class AgentLifecycle {
             if (!this.cachedAgentPrompt) {
                 this.refreshAgentPrompt(ctx);
             }
-            const delegatedStart = event.systemPrompt.indexOf("<delegated_agents>");
-            const delegatedEndMarker = "</delegated_agents>";
-            const delegatedEnd = event.systemPrompt.indexOf(delegatedEndMarker);
-            if (delegatedStart !== -1 && delegatedEnd !== -1 && delegatedEnd > delegatedStart) {
-                const systemPrompt =
-                    event.systemPrompt.slice(0, delegatedStart) +
-                    this.cachedAgentPrompt +
-                    event.systemPrompt.slice(delegatedEnd + delegatedEndMarker.length);
-                return { systemPrompt };
-            }
-            const projectContextEnd = "</project_context>";
-            const idx = event.systemPrompt.indexOf(projectContextEnd);
-            const systemPrompt =
-                idx === -1
-                    ? `${event.systemPrompt}\n\n${this.cachedAgentPrompt}`
-                    : event.systemPrompt.slice(0, idx + projectContextEnd.length) +
-                      "\n\n" +
-                      this.cachedAgentPrompt +
-                      "\n" +
-                      event.systemPrompt.slice(idx + projectContextEnd.length);
-            return { systemPrompt };
+
+            contributeToolGuide(event.systemPromptOptions, "agent", this.cachedAgentPrompt);
         });
 
         this.pi.on("session_before_tree", (_event, ctx) => {
@@ -150,7 +132,7 @@ export class AgentLifecycle {
             this.managerValue = this.createManager();
             this.publishAgentStatus();
             const discovered = this.discover(ctx);
-            this.cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
+            this.cachedAgentPrompt = agentGuidePrompt(discovered.agents);
             await this.restoreManager(ctx);
         });
 
@@ -193,7 +175,7 @@ export class AgentLifecycle {
 
     refreshAgentPrompt(ctx: ExtensionContext): void {
         const discovered = this.discover(ctx);
-        this.cachedAgentPrompt = availableAgentsPrompt(discovered.agents);
+        this.cachedAgentPrompt = agentGuidePrompt(discovered.agents);
     }
 
     publishAgentStatus(): void {
