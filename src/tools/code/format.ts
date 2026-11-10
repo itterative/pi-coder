@@ -55,9 +55,19 @@ export function selectorMatches(declaration: Declaration, selector: SymbolSelect
 
     const parameters = declaration.paramTypes.map(normalizeSymbol);
 
+    // A leading hint is enough to pick an overload: an agent that remembered the first two parameters of a
+    // four-parameter function was naming that function, not asking a different question.
     return (
-        parameters.length === selector.signatureHint.length &&
-        parameters.every((parameter, index) => parameter === selector.signatureHint[index])
+        selector.signatureHint.length <= parameters.length &&
+        selector.signatureHint.every((parameter, index) => parameter === parameters[index])
+    );
+}
+
+/** True when a selector matched only because its parameter hint stopped short of the full list. */
+export function selectorHintIsPartial(declaration: Declaration, selector: SymbolSelector): boolean {
+    return (
+        selector.signatureHint.length > 0 &&
+        declaration.paramTypes.length > selector.signatureHint.length
     );
 }
 

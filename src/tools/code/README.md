@@ -13,6 +13,12 @@ One agent-facing tool, `outline`, with four actions:
 selector's parameter list (`Socket::connect(const Address&, int)`) survives intact. Empty entries are
 dropped; repeated ones are kept, because `usages` counts them separately.
 
+A `show` selector's parameter hint may be a **leading** subset: `Type::method(const X&)` selects the overload
+whose parameters start with those types, and the output says the hint was partial together with the full
+signature. When a requested symbol is absent from the target, `show` greps the containing directory and then
+the working directory for it and names the files it actually lives in, so pointing at the wrong file no longer
+reads like naming a symbol that does not exist.
+
 The surface and defaults are documented in `index.ts`; this file records the invariants that are easy to break.
 
 ## Filesystem seam

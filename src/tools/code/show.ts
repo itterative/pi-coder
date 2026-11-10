@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { candidateFiles } from "./discovery";
 import {
     declarationLine,
@@ -6,18 +8,20 @@ import {
     kindLabel,
     pathRange,
     parseSelector,
+    selectorHintIsPartial,
     shortLine,
     renderWithinBudget,
     nextOffsetNote,
     selectorMatches,
     sourceForDeclaration,
     splitSymbolList,
+    lineRange,
     pairKey,
 } from "./format";
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
 import type { CodeSource } from "./source";
-import type { CodeDetail, CodeToolParams, Declaration, ParsedFile } from "./types";
+import type { CodeDetail, CodeToolParams, Declaration, ParsedFile, SymbolSelector } from "./types";
 
 export interface ShowResult {
     text: string;
@@ -53,6 +57,7 @@ export async function runShow(
 
     const selectors = requested.map(parseSelector);
     const root = source.resolvePath(params.path ?? ".");
+    const matchedSelectors = new Set<number>();
 
     await source.assertReadable(root);
 
@@ -60,7 +65,12 @@ export async function runShow(
 
     if (discovery.files.length === 0) {
         return {
-            text: notFound(source, root, requested),
+            text: notFound(
+                source,
+                root,
+                requested,
+                await elsewhereNote(source, root, requested, signal),
+            ),
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -77,15 +87,24 @@ export async function runShow(
         for (const declaration of file.all) {
             fileOf.set(declaration, file);
 
-            if (selectors.some((selector) => selectorMatches(declaration, selector))) {
+            const selectorIndex = selectors.findIndex((selector) =>
+                selectorMatches(declaration, selector),
+            );
+
+            if (selectorIndex >= 0) {
                 matches.push(declaration);
+                matchedSelectors.add(selectorIndex);
             }
         }
     }
 
+    const missing = requested.filter((_, index) => !matchedSelectors.has(index));
+
     if (matches.length === 0) {
+        const elsewhere = await elsewhereNote(source, root, missing, signal);
+
         return {
-            text: notFound(source, root, requested),
+            text: notFound(source, root, requested, elsewhere),
             files: files.length,
             parseErrors: sumParseErrors(files),
             truncated: discovery.truncated,
@@ -134,8 +153,12 @@ export async function runShow(
         .filter((block): block is string => block !== undefined);
     const fitted = renderWithinBudget(header, blocks, limit, offset);
     const note = matchNote(groups);
+    const partial = partialHintNote(selectors, groups);
+    const elsewhere = await elsewhereNote(source, root, missing, signal);
     const next = nextOffsetNote(fitted.nextOffset);
-    const text = [fitted.text, note, next].filter((part) => part !== undefined).join("\n");
+    const text = [fitted.text, note, partial, ...elsewhere, next]
+        .filter((part) => part !== undefined)
+        .join("\n");
 
     return {
         text,
@@ -442,9 +465,125 @@ function sumParseErrors(parsed: readonly ParsedFile[]): number {
     return parsed.reduce((total, file) => total + file.parseErrors, 0);
 }
 
-function notFound(source: CodeSource, root: string, requested: readonly string[]): string {
+function notFound(
+    source: CodeSource,
+    root: string,
+    requested: readonly string[],
+    elsewhere: readonly string[],
+): string {
+    const next =
+        '# next: outline(action="digest", path=...) to see the available declarations, or outline(action="usages", ...) for references';
+
     return [
         `# not found: ${requested.join(", ")} in ${source.displayPath(root)}`,
-        '# next: outline(action="digest", path=...) to see the available declarations, or outline(action="usages", ...) for references',
+        ...elsewhere,
+        ...(elsewhere.length === 0 ? [next] : []),
     ].join("\n");
+}
+
+/** How many locations to name per missing symbol. */
+const ELSEWHERE_LOCATIONS = 3;
+
+/**
+ * Name the files a missing selector actually lives in.
+ *
+ * A symbol asked for in the wrong file used to read like a symbol that does not exist, which is the answer that
+ * sends an agent to `rg`. The containing directory is searched first and the working directory second, so
+ * `step.cpp` naming `Qwen35Model::attention_block` is answered with `blocks.cpp:35-153` and the next call can
+ * be right. Each root is grepped for the selector's last component before parsing, so the miss costs one
+ * narrowed scan rather than a full tree walk.
+ */
+async function elsewhereNote(
+    source: CodeSource,
+    root: string,
+    missing: readonly string[],
+    signal?: AbortSignal,
+): Promise<string[]> {
+    if (missing.length === 0) {
+        return [];
+    }
+
+    const cwd = source.resolvePath(".");
+    const candidates = root === cwd ? [] : [path.dirname(root), cwd];
+    const roots = Array.from(new Set(candidates)).filter((candidate) => candidate !== root);
+
+    for (const searchRoot of roots) {
+        const lines = await locateIn(source, searchRoot, missing, signal);
+
+        if (lines.length > 0) {
+            return [`# elsewhere — searched ${source.displayPath(searchRoot)}:`, ...lines];
+        }
+    }
+
+    return [];
+}
+
+async function locateIn(
+    source: CodeSource,
+    searchRoot: string,
+    missing: readonly string[],
+    signal?: AbortSignal,
+): Promise<string[]> {
+    const discovery = await candidateFiles(source, searchRoot, missing, signal);
+
+    if (discovery.files.length === 0) {
+        return [];
+    }
+
+    const batch = await loadParsedFiles(source, discovery.files, signal);
+    const selectors = missing.map(parseSelector);
+    const lines: string[] = [];
+
+    for (const [index, selector] of selectors.entries()) {
+        const found = batch.parsed.flatMap((file) =>
+            file.all
+                .filter((declaration) => selectorMatches(declaration, selector))
+                .map((declaration) => ({ file, declaration })),
+        );
+
+        if (found.length === 0) {
+            continue;
+        }
+
+        const definitions = found.filter((hit) => hit.declaration.isDefinition);
+        const pool = definitions.length > 0 ? definitions : found;
+        const chosen = pool.slice(0, ELSEWHERE_LOCATIONS);
+        const locations = chosen.map(
+            (hit) => `${source.displayPath(hit.file.path)}:${lineRange(hit.declaration.range)}`,
+        );
+        const withheld = pool.length - chosen.length;
+        const suffix = withheld > 0 ? ` (+${withheld} more)` : "";
+
+        lines.push(`#   ${missing[index]} → ${locations.join(", ")}${suffix}`);
+    }
+
+    return lines;
+}
+
+/** Say when a selector matched on a leading parameter list, so "matched" is not read as "exact". */
+function partialHintNote(
+    selectors: readonly SymbolSelector[],
+    groups: readonly MatchGroup[],
+): string | undefined {
+    for (const group of groups) {
+        for (const declaration of group.declarations) {
+            const selector = selectors.find(
+                (candidate) =>
+                    selectorMatches(declaration, candidate) &&
+                    selectorHintIsPartial(declaration, candidate),
+            );
+
+            if (selector === undefined) {
+                continue;
+            }
+
+            const parameters = declaration.paramTexts ?? declaration.paramTypes;
+            const full = shortLine(`${declaration.qualifiedName}(${parameters.join(", ")})`, 180);
+            const hint = selector.signatureHint.length;
+
+            return `# note: "${selector.raw}" matched the first ${hint} of ${parameters.length} parameters; full: ${full}`;
+        }
+    }
+
+    return undefined;
 }

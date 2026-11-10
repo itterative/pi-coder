@@ -72,7 +72,9 @@ prefer block boundaries but can resume inside an oversized block; a line longer 
 and the page reports the limit needed.
 
 `show`/`usages` split a comma-joined `symbols` entry at top level only (`splitSymbolList`), so an overload
-selector's parameter list survives; empty entries drop and repeats stay, because `usages` counts them.
+selector's parameter list survives; empty entries drop and repeats stay, because `usages` counts them. A `show`
+parameter hint may be a leading subset (the output notes it was partial), and a symbol missing from the target
+file is looked up in the enclosing directory then the cwd, naming the file it actually lives in.
 
 ## Extension points
 
