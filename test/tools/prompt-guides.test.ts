@@ -72,7 +72,7 @@ describe("tool guides contributed by the tools themselves", () => {
         }
 
         const sections = event.systemPromptOptions.sections;
-        expect(sections.outline_tool_guide).toContain("`digest` answers");
+        expect(sections.outline_tool_guide).toContain("## Outline");
         expect(sections.ask_user_tool_guide).toContain("You decide");
         expect(sections.memory_audit_tool_guide).toContain("Weigh warnings");
 

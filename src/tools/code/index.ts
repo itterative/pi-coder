@@ -29,7 +29,9 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             "Inspect code structure without reading whole files. Supports C/C++/HIP, JavaScript/TypeScript " +
             "(JSX/TSX), Java, C#, Go, Rust, Python, PHP, Ruby, and Markdown headings; other file types are " +
             "skipped. Output is character-limited, and a cut result ends with # next: offset=N.",
-        promptSnippet: "Inspect code structure without opening whole files.",
+        promptSnippet:
+            "Read code by declaration: digest a file, search names, show a body, find usages. " +
+            "Prefer over rg/read for code.",
         parameters: Type.Object({
             action: Type.Unsafe<CodeAction>({
                 type: "string",
