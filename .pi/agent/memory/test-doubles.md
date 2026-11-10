@@ -42,6 +42,7 @@ keep_updated: true
   `toolCallResponse`
 - **session entry** that is not a message → `compaction-doubles.ts` → `messageEntry`, `compactionMarker`,
   `modelChangeMarker`, `customMessageEntry`, `customEntry`
+- **in-memory code tree for `outline` actions** → `test/helpers/code-source.ts` → `MemoryCodeSource`
 - recorded compaction trace → `test/helpers/compaction-trace.ts` → `loadCapture`, `openTraceLog`, `sessionIdOf`
 - driving a TUI component → `test/helpers.ts` → `KEY`, `mockTheme`, `press`, `type`, `paste`, `interact`,
   `renderText`, `snapshotText`

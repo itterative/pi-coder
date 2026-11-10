@@ -25,6 +25,26 @@ export class SerialQueue {
     }
 }
 
+/**
+ * Yield to the event loop with a referenced timer.
+ *
+ * `sleep(0)` deliberately unrefs its timer, so a non-interactive run can exit while waiting on it. This
+ * helper is for work that wants the TUI or another timer to get a turn: the timer must keep the process
+ * alive. The optional signal is checked at the boundary; a long loop remains responsible for checking it
+ * between units of work.
+ */
+export function yieldToEventLoop(milliseconds = 0, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+        return Promise.reject(
+            signal.reason ?? new DOMException("The operation was aborted.", "AbortError"),
+        );
+    }
+
+    return new Promise((resolve) => {
+        setTimeout(resolve, milliseconds);
+    });
+}
+
 /** Wait for a duration, rejecting promptly when the optional signal aborts. */
 export function sleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) return Promise.reject(signal.reason);

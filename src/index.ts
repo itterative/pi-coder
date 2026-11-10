@@ -16,6 +16,7 @@ import { registerDecisionProvider } from "./modules/decision/provider";
 import { registerDecisionModelShortcut } from "./tools/decision-settings";
 import registerReadToolHook from "./tools/read";
 import registerWriteToolHook from "./tools/write";
+import registerCodeTool from "./tools/code";
 import { registerStatusFooter } from "./tui/status";
 
 export * from "./modules/sandbox/bash";
@@ -41,4 +42,5 @@ export default function (pi: ExtensionAPI) {
     registerBashToolHook(pi, container);
     registerReadToolHook(pi, container);
     registerWriteToolHook(pi, container);
+    registerCodeTool(pi, container);
 }

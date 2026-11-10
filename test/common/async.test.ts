@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { isAbortError } from "../../src/common/abort";
-import { SerialQueue, sleep } from "../../src/common/async";
+import { SerialQueue, sleep, yieldToEventLoop } from "../../src/common/async";
 
 describe("async helpers", () => {
     it("sleeps until the timer completes", async () => {
@@ -27,6 +27,24 @@ describe("async helpers", () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it("yields to other event-loop work", async () => {
+        let ran = false;
+        const pending = yieldToEventLoop().then(() => {
+            ran = true;
+        });
+
+        expect(ran).toBe(false);
+        await pending;
+        expect(ran).toBe(true);
+    });
+
+    it("rejects a yield when its signal is already aborted", async () => {
+        const controller = new AbortController();
+        controller.abort(new Error("cancelled"));
+
+        await expect(yieldToEventLoop(0, controller.signal)).rejects.toThrow("cancelled");
     });
 });
 

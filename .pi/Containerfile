@@ -16,6 +16,7 @@ FROM node:24-trixie-slim
 # ripgrep    searching; faster and less noisy than grep for this codebase
 # procps     `ps`/`pgrep` — an image without them makes its own process behaviour look broken
 # python3    scripted edits and one-off data work
+# time       /usr/bin/time for elapsed/RSS measurements; the shell builtin lacks `-f`
 # jq, curl   JSON on the command line, and network checks over https
 # bubblewrap only so this repository's *tests* can exercise the real sandbox path in here. pi-coder never
 #            wraps commands in bwrap when the container backend is the sandbox; without the binary those
@@ -27,6 +28,7 @@ RUN apt-get update \
       ripgrep \
       procps \
       python3 \
+      time \
       jq \
       curl \
       bubblewrap \

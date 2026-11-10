@@ -46,11 +46,12 @@ and rejected; [findings.md](findings.md) has the numbers.
   line. The window is up to 4 items immediately before the command — the current turn's own prose and commands
   first, earlier turns when the turn is shorter — and its item for the request is dropped rather than ending it;
   ending there discarded the whole current turn, and that bug is what made two logged commands abstain at
-  0.48/0.51 (the fix took them to 0.64/0.64). Tool output is excluded, except as the `[blocked: …]` marker. The
-  facts are the ones the measured arm sent as separate `request` + `recent_messages` fields; the render is
-  newer and **not re-measured** — the earlier flatten finding used a state that folded the request into the
-  transcript, where this one keeps it last and keeps the plan's item selection (`state.ts`
-  `commandConversation`).
+  0.48/0.51 (the fix took them to 0.64/0.64). Tool output is excluded, except as the `[blocked: …]` marker. A
+  non-bash call renders as `name(arg)`; `outline` keeps its action, path, query or symbols, and offset, because
+  a bare action alone is not the structural read the state needs. The facts are the ones the measured arm sent
+  as separate `request` + `recent_messages` fields; the render is newer and **not re-measured** — the earlier
+  flatten finding used a state that folded the request into the transcript, where this one keeps it last and
+  keeps the plan's item selection (`state.ts` `commandConversation`).
 - **A blocked command says so.** The walk pre-collects, per bash `toolCallId`, the reason of a result that is
   an error carrying no pi execution status (a call the gate stopped: `blockedBashReasons`), and the command
   item carries it as `blocked`. Every renderer appends `[blocked: <reason>]` after the command's own clip, so

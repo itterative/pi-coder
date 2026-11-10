@@ -50,14 +50,21 @@ export type ContainerFsRequest =
     | { op: "stat"; path: string }
     | { op: "readdir"; path: string }
     | { op: "exists"; path: string }
-    | { op: "glob"; path: string; pattern: string; ignore?: readonly string[]; limit?: number };
+    | {
+          op: "glob";
+          path: string;
+          pattern: string;
+          ignore?: readonly string[];
+          noIgnore?: boolean;
+          limit?: number;
+      };
 
 export interface ContainerFsResults {
     readFile: { data: string; size: number };
     writeFile: { bytes: number };
     mkdir: Record<string, never>;
     access: Record<string, never>;
-    stat: { isDirectory: boolean; isFile: boolean; size: number };
+    stat: { isDirectory: boolean; isFile: boolean; size: number; mtimeMs: number };
     readdir: { entries: string[] };
     exists: { exists: boolean };
     glob: { paths: string[] };

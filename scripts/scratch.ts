@@ -110,7 +110,9 @@ try {
         // Build-time half of the /tmp story: esbuild finds packages in the
         // repo's node_modules, wherever the script itself lives.
         nodePaths: [path.join(REPO_ROOT, "node_modules")],
-        external: ["@earendil-works/*"],
+        // The tree-sitter package is a UMD bundle that locates its own WASM files from `__filename`.
+        // Bundling it rewrites that self-location, so the scratch child loads the real package instead.
+        external: ["@earendil-works/*", "@vscode/tree-sitter-wasm"],
         outfile: bundle,
         logLevel: "warning",
     });
@@ -132,6 +134,12 @@ try {
         // relative imports resolve at build time. External resolution is
         // location-based and unaffected by cwd.
         cwd: path.dirname(script),
+        env: {
+            ...process.env,
+            // The bundle rewrites `import.meta.url`; name the checkout that the inlined pi-coder code belongs
+            // to. The extension-root resolver still verifies the package manifest before using it.
+            PI_CODER_EXTENSION_DIR: REPO_ROOT,
+        },
     });
     const forwardSignal = (signal: NodeJS.Signals): void => {
         child.kill(signal);

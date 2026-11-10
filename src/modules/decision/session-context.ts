@@ -191,6 +191,51 @@ const TOOL_ARGUMENT_KEYS: Record<string, readonly string[]> = {
     todolist: ["action"],
 };
 
+function stringArgument(value: unknown): string | undefined {
+    if (typeof value !== "string") {
+        return undefined;
+    }
+
+    const text = value.trim();
+
+    return text === "" ? undefined : text;
+}
+
+/**
+ * The identifying parts of an `outline` call: action, target, and the selector that narrows it.
+ *
+ * This tool is a structural read, so `outline(search)` says nothing the state needs; the action, path, and
+ * query or symbols are the facts that make the call legible beside a `read` or `edit`.
+ */
+function outlineSummary(record: Record<string, unknown>): string {
+    const action = stringArgument(record.action) ?? "digest";
+    const path = stringArgument(record.path) ?? ".";
+    const parts = [action, path];
+    const query = stringArgument(record.query);
+
+    if (query !== undefined) {
+        parts.push(`"${query}"`);
+    }
+
+    if (Array.isArray(record.symbols)) {
+        const symbols = record.symbols.flatMap((value) => {
+            const symbol = stringArgument(value);
+
+            return symbol === undefined ? [] : [symbol];
+        });
+        if (symbols.length > 0) {
+            parts.push(symbols.join(", "));
+        }
+    }
+
+    const offset = record.offset;
+    if (typeof offset === "number" && offset > 0) {
+        parts.push(`offset=${String(offset)}`);
+    }
+
+    return parts.join(" ");
+}
+
 /**
  * A one-line rendering of a non-bash tool call: the tool's name and the argument that identifies it.
  *
@@ -199,12 +244,17 @@ const TOOL_ARGUMENT_KEYS: Record<string, readonly string[]> = {
  */
 function toolSummary(name: string, args: unknown): string {
     const record = isRecord(args) ? args : {};
+
+    if (name === "outline") {
+        return `outline(${outlineSummary(record)})`;
+    }
+
     const preferred = TOOL_ARGUMENT_KEYS[name] ?? [];
     const keys = [...preferred, ...Object.keys(record).filter((key) => !preferred.includes(key))];
 
     for (const key of keys) {
-        const value = record[key];
-        if (typeof value === "string" && value.trim() !== "") {
+        const value = stringArgument(record[key]);
+        if (value !== undefined) {
             return `${name}(${value})`;
         }
     }

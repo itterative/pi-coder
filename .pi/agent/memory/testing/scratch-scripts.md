@@ -13,6 +13,8 @@ category: workflow
 - `./x` for sibling files.
 - `@pi-coder/...` for pi-coder source (`src/`, `test/`).
 - `@earendil-works/...` for the pi package (left external).
+- `@vscode/tree-sitter-wasm` (left external): its UMD runtime locates its WASM files from `__filename`, so
+  bundling it breaks that self-location.
 - Any package installed in the repo's `node_modules` (bundled via `nodePaths`), and a `node_modules` next to the
   script itself.
 - `node:*` builtins.
@@ -21,6 +23,10 @@ category: workflow
 
 The child runs with `cwd` set to the script's own directory, so relative file paths (`readFileSync("./data.json")`)
 resolve next to the script, like relative imports do.
+
+The child also receives `PI_CODER_EXTENSION_DIR` pointing at the checkout. A bundle rewrites `import.meta.url`, so
+the extension-root resolver cannot derive the checkout from it; the environment value is accepted only when the
+directory actually contains `package.json`.
 
 ## Where the bundle lives
 

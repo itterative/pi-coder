@@ -394,6 +394,51 @@ describe("decisionSessionContext", () => {
         ]);
     });
 
+    it("renders an outline call with its action, target, and selector", () => {
+        const entries = branch([
+            userEntry("inspect the parser", 1),
+            assistantEntry(
+                [
+                    toolCall(
+                        "outline",
+                        {
+                            action: "search",
+                            path: "src/tools/code",
+                            query: "parse",
+                            offset: 8,
+                        },
+                        "call-search",
+                    ),
+                    toolCall(
+                        "outline",
+                        {
+                            action: "show",
+                            path: "src/tools/code/parse.ts",
+                            symbols: ["parseSyntax", "parseFile"],
+                        },
+                        "call-show",
+                    ),
+                    toolCall("outline", { action: "digest" }, "call-digest"),
+                ],
+                2,
+            ),
+            userEntry("continue", 3),
+        ]);
+
+        expect(decisionSessionContext(entries).recent).toEqual([
+            { role: "user", text: "inspect the parser" },
+            {
+                role: "tool",
+                text: 'outline(search src/tools/code "parse" offset=8)',
+            },
+            {
+                role: "tool",
+                text: "outline(show src/tools/code/parse.ts parseSyntax, parseFile)",
+            },
+            { role: "tool", text: "outline(digest .)" },
+        ]);
+    });
+
     it("clips a recent item at ITEM_CHARS after collapsing whitespace", () => {
         const entries = branch([
             assistantEntry([{ type: "text", text: `alpha\n\nbeta ${"x".repeat(400)}` }], 1),

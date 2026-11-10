@@ -40,8 +40,11 @@ afterEach(() => {
     open.clear();
 });
 
-function startDispatcher(): Promise<Dispatcher> {
-    const child = spawn(process.execPath, [DISPATCHER], { stdio: ["pipe", "pipe", "pipe"] });
+function startDispatcher(cwd = process.cwd()): Promise<Dispatcher> {
+    const child = spawn(process.execPath, [DISPATCHER], {
+        cwd,
+        stdio: ["pipe", "pipe", "pipe"],
+    });
     const lines = readline.createInterface({ input: child.stdout });
     const pending = new Map<
         number,
@@ -159,6 +162,7 @@ describe("dispatcher fs operations", () => {
 
         const stat = await dispatcher.request("fs", { op: "stat", path: nested });
         expect(stat).toMatchObject({ isDirectory: true, isFile: false });
+        expect(stat.mtimeMs).toEqual(expect.any(Number));
 
         const listing = await dispatcher.request("fs", { op: "readdir", path: nested });
         expect((listing.entries as string[]).toSorted()).toEqual(["one.txt", "two.txt"]);
@@ -169,6 +173,33 @@ describe("dispatcher fs operations", () => {
         await expect(dispatcher.request("fs", { op: "exists", path: nested })).resolves.toEqual({
             exists: true,
         });
+    });
+
+    it("can bypass ignore files for an explicitly named target", async () => {
+        const dispatcher = await startDispatcher(root);
+        const ignored = path.join(root, "ignored");
+        const relative = path.relative(root, ignored);
+
+        fs.mkdirSync(ignored);
+        fs.writeFileSync(path.join(root, ".ignore"), "*\n");
+        fs.writeFileSync(path.join(ignored, "hidden.ts"), "");
+
+        const respected = await dispatcher.request("fs", {
+            op: "glob",
+            path: relative,
+            pattern: "",
+        });
+        expect(respected.paths).toEqual([]);
+
+        const explicit = await dispatcher.request("fs", {
+            op: "glob",
+            path: relative,
+            pattern: "",
+            noIgnore: true,
+        });
+        expect((explicit.paths as string[]).map((entry) => path.basename(entry))).toEqual([
+            "hidden.ts",
+        ]);
     });
 
     it("reports a failed syscall instead of a transport error", async () => {

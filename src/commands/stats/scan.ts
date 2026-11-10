@@ -14,6 +14,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { yieldToEventLoop } from "../../common/async";
 import type { FileStamp, TranscriptCache } from "./cache";
 import { toLocalDateString } from "./range";
 import type {
@@ -79,21 +80,6 @@ export async function scanSessions(options: ScanOptions): Promise<ScanResult> {
         ),
         totalFiles: total,
     };
-}
-
-/**
- * Yield with a referenced timer. The shared `sleep` helper unrefs its timer, which lets a scan run
- * exit early in non-interactive runs where no other handle keeps the event loop alive. Aborting is
- * picked up at the next file boundary.
- */
-function yieldToEventLoop(milliseconds: number, signal: AbortSignal | undefined): Promise<void> {
-    if (signal?.aborted) {
-        return Promise.reject(signal.reason ?? new Error("Session scan aborted"));
-    }
-
-    return new Promise((resolve) => {
-        setTimeout(resolve, milliseconds);
-    });
 }
 
 async function collectSessionFiles(root: string, source: StatsSource): Promise<SessionFile[]> {

@@ -386,7 +386,12 @@ async function runFs(op, params, target) {
         case "stat": {
             const stat = await fs.promises.stat(target);
 
-            return { isDirectory: stat.isDirectory(), isFile: stat.isFile(), size: stat.size };
+            return {
+                isDirectory: stat.isDirectory(),
+                isFile: stat.isFile(),
+                size: stat.size,
+                mtimeMs: stat.mtimeMs,
+            };
         }
         case "readdir":
             return { entries: await fs.promises.readdir(target) };
@@ -415,6 +420,10 @@ async function globFiles(root, params) {
         : [];
     const limit = positiveNumber(params.limit);
     const args = ["--files", "--hidden", "--color=never", "--no-messages"];
+
+    if (params.noIgnore === true) {
+        args.push("--no-ignore");
+    }
 
     if (pattern.length > 0) {
         args.push("--glob", pattern);

@@ -1,6 +1,9 @@
 import path from "node:path";
 
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
 import { PI_CODER_STATE_DIR } from "../../../common/constants";
+import type { ContainerSession } from "./client";
 
 /**
  * Whether this runtime's bash and file tools run inside the sandbox container.
@@ -15,6 +18,14 @@ import { PI_CODER_STATE_DIR } from "../../../common/constants";
  */
 export interface ContainerState {
     active: boolean;
+    /**
+     * Resolve this runtime's container session.
+     *
+     * Set by the backend that owns the state, so a tool that needs the same filesystem view as `bash` and
+     * `read` can ask for it without importing the backend or reading a process-wide flag. Undefined until a
+     * backend is registered, and never used when `active` is false.
+     */
+    sessionFor?: (ctx: ExtensionContext) => Promise<ContainerSession>;
 }
 
 export function createContainerState(): ContainerState {

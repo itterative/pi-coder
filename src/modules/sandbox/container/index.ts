@@ -148,6 +148,9 @@ export function registerContainerBackend(
     // pretend otherwise: that would leave the container tool installed while the config says bubblewrap.
     let toolsInstalled = false;
 
+    // The function declaration is hoisted; the state only exposes the resolver once a caller asks for it.
+    options.state.sessionFor = sessionFor;
+
     // Resolution runs before the bash hook's own `session_start` (the parent registers the backend first), so
     // the hook already knows whether this session has a container before it decides about `bwrap`.
     pi.on("session_start", async (_event, ctx) => {
