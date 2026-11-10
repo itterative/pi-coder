@@ -32,6 +32,14 @@ on `tree path rule`, not on its message, so a multi-step repair is not reminded 
 set shrinks to what is still outstanding, so a fixed finding is news again if it recurs. It also replaced the rule
 that told agents to run the audit after every memory edit (2026-11).
 
+## Measured context
+
+`context-usage.ts` puts a count the model can trust in front of it, because a model that assumes its own usage
+economizes against a limit it does not have, and the assumption is worst right after a fold. Only a reading
+anchored on a counted reply after the newest `changesCountBasis` row is shown as **Measured**. The 50%/75%
+thresholds and the post-fold fallback are change points outside the rotation and the decision model;
+`PI_CODER_REMINDER_CONTEXT=false` disables them. Details are `reminders/context-usage.md`.
+
 ## The gate that picks one
 
 With `decisionModel.reminders: true`, `consultReminderSelection` asks one question per offered reminder and shows
@@ -74,7 +82,7 @@ purpose while the tier-2 measurements ran.
 
 ## Tests
 
-`test/modules/reminders/{scheduler,emission,model-policy,session-signals,catalog,settings}.test.ts` cover the
+`test/modules/reminders/{scheduler,emission,model-policy,session-signals,catalog,settings,context-usage}.test.ts` cover the
 pure schedule, the hidden-message emission (including the text-only step that must not steer), the decision-model
 wiring (the cascade, the `turn_end` checkpoints, and a deferred turn reminder held until a tool step or handed
 to the next prompt), the signal builder and state gate, the catalog filter, and the settings defaults;
@@ -88,6 +96,8 @@ classifier plumbing this builds on.
 
 ## Targeted references
 
+- `reminders/context-usage.md` — the trust rule, the 50%/75% thresholds, the post-fold estimate, the model-change
+  fallback, and their state lifecycle.
 - `reminders/selection.md` — selection subject, signals, labels, calibration, threshold accounting.
 - `reminders/stage-gating.md` — the judged state and the cascade, the mid-run stage probe, the endpoint's cost
   shape, and the rejected two-tier cascade.

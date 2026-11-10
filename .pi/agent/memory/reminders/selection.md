@@ -79,6 +79,10 @@ spot**: the scan sees the `edit`/`write` tools only, so a change made through ba
 for it is the last note under "The pool is the judged state"). Every gate here
 is a quieting filter over the model's score, not a guarantee about relevance.
 
+The measured-context reminders (`context-half`, `context-tight`, `context-after-fold`) are not in this pool and
+never reach the model: they state a measured reading, so `context-usage.ts` decides them deterministically. See
+`context-usage.md`.
+
 The candidate list stays in the question criteria, never in the state. Every signal is best-effort: a missing
 entry or unreadable snapshot just drops its field.
 

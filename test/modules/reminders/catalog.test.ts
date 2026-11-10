@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
     ACTIVE_ROTATION_REMINDERS,
     COMPACTION_REMINDER,
+    CONTEXT_AFTER_FOLD_REMINDER,
+    CONTEXT_HALF_REMINDER,
+    CONTEXT_TIGHT_REMINDER,
     MEMORY_READ_REMINDER,
     ROTATION_REMINDERS,
 } from "../../../src/modules/reminders/catalog";
@@ -43,5 +46,18 @@ describe("reminder catalog", () => {
         expect(active).not.toContain("compaction");
         expect(MEMORY_READ_REMINDER.text.length).toBeGreaterThan(0);
         expect(COMPACTION_REMINDER.text.length).toBeGreaterThan(0);
+    });
+
+    it("keeps the context reminders out of the rotation", () => {
+        const active = ACTIVE_ROTATION_REMINDERS.map((reminder) => reminder.id);
+
+        // A measured percentage is an event, not a cadence, and a fact that can be shown is not offered to the
+        // selection model: the reader whose assumption is wrong is the one that would judge it.
+        expect(active).not.toContain("context-half");
+        expect(active).not.toContain("context-tight");
+        expect(active).not.toContain("context-after-fold");
+        expect(CONTEXT_HALF_REMINDER.text.length).toBeGreaterThan(0);
+        expect(CONTEXT_TIGHT_REMINDER.text.length).toBeGreaterThan(0);
+        expect(CONTEXT_AFTER_FOLD_REMINDER.text.length).toBeGreaterThan(0);
     });
 });

@@ -47,6 +47,46 @@ export const MEMORY_AUDIT_REMINDER: ReminderDefinition = {
 };
 
 /**
+ * The first measured reading past half the context window.
+ *
+ * The text is the anti-economizing half of the reminder: a model that believes it is near a limit starts skipping
+ * reads and shortening work that has room. The measured line is put in front of it at emission
+ * (`context-usage.ts`), so the catalog entry carries only the advice. Kept out of the rotation because a
+ * percentage is a real boundary and a cadence is not.
+ */
+export const CONTEXT_HALF_REMINDER: ReminderDefinition = {
+    id: "context-half",
+    text: "Half the context window is in use. That is normal for a working session, not a signal to economize: keep reading what the task needs, keep the work at the scope it needs, and do not shorten or defer steps on account of an assumed limit.",
+    guidance: "The measured context just crossed half the window.",
+};
+
+/**
+ * The first measured reading past three quarters of the context window.
+ *
+ * This is the one reminder that could talk a model into wrapping up, so the text counters that reading directly:
+ * a fold is a reset, not the end of the task. What it asks for is cheap fold preparation - the state files a
+ * summary cannot carry - not a narrower task. Kept out of the rotation for the same reason as `context-half`.
+ */
+export const CONTEXT_TIGHT_REMINDER: ReminderDefinition = {
+    id: "context-tight",
+    text: "Three quarters of the context window is in use. A fold may land soon, and a fold is a reset rather than the end of the task: keep the runtime `TODO.md` and any memories the next step needs current so nothing important lives only in the transcript, and continue the same task at the scope it needs instead of wrapping up or handing off.",
+    guidance: "The measured context just crossed three quarters of the window; a fold may be near.",
+};
+
+/**
+ * The measured count a fold reminder could not state at the time.
+ *
+ * The fold reminder rides the first turn after the fold, when the post-fold count is null and the estimate is
+ * refused (the model changed) or impossible. This one waits for the first measured reading and is delivered at a
+ * step boundary, which is why it exists as its own reminder rather than as a second fold reminder.
+ */
+export const CONTEXT_AFTER_FOLD_REMINDER: ReminderDefinition = {
+    id: "context-after-fold",
+    text: "The measured count is available again after the fold. Do not budget the work from the pre-fold number - continue the same task at the scope it needs.",
+    guidance: "A fold landed and its reminder could not state a measured number at the time.",
+};
+
+/**
  * The rotating catalog, in the order a deterministic schedule cycles it. A tuple so the non-empty invariant
  * the scheduler relies on is checked here rather than at each use.
  *

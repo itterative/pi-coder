@@ -1,4 +1,8 @@
-import { SessionManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+    SessionManager,
+    type ContextUsage,
+    type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,17 +13,21 @@ import {
     assistantEntry,
     cleanupBranches,
     sessionManager,
+    textPart,
     toolCall,
+    userEntry,
 } from "../../helpers/session-branch";
 import type { ReminderConsult, ReminderSignals } from "../../../src/modules/decision";
 import { ACTIVE_ROTATION_REMINDERS } from "../../../src/modules/reminders/catalog";
 import {
     createPiStub,
     stubContext,
+    stubModel,
     stubSessionContext,
     stubSessionManager,
     type PiStub,
 } from "../../helpers/pi-stub";
+import { countedUsage } from "../../helpers/agent-doubles";
 
 /**
  * The emission path: one hidden custom message per user turn, armed by the session lifecycle and suppressed
@@ -730,6 +738,158 @@ describe("automatic memory audit", () => {
         await writeFile(memoryPath(projectRoot), memoryText("Breaks: the frontmatter"), "utf8");
         await step(stub);
 
+        expect(stub.sentMessages).toHaveLength(0);
+    });
+});
+
+describe("context reminders", () => {
+    /** A branch whose newest row is a fold, optionally with the first post-fold reply already in it. */
+    function foldBranch(options: { model?: string; postFoldReply?: boolean } = {}): SessionManager {
+        const manager = sessionManager("/tmp/reminder-project");
+        manager.appendMessage(
+            assistantEntry(
+                [toolCall("read", { path: "src/a.ts" }, "c1")],
+                1,
+                countedUsage(5_000, 100),
+            ),
+        );
+        const keptId = manager.appendMessage(userEntry("keep going", 2));
+        manager.appendCompaction(
+            "a summary of the work",
+            keptId,
+            6_000,
+            { version: 1, provider: "anthropic", model: options.model ?? "stub-model" },
+            false,
+            countedUsage(1_500, 200),
+        );
+        if (options.postFoldReply === true) {
+            manager.appendMessage(
+                assistantEntry([textPart("continued")], 3, countedUsage(2_000, 40)),
+            );
+        }
+
+        return manager;
+    }
+
+    function contextWith(
+        manager: SessionManager,
+        usage: () => ContextUsage | undefined,
+        model = stubModel(),
+    ): ExtensionContext {
+        return stubSessionContext(manager, {
+            cwd: "/tmp/reminder-project",
+            model,
+            getContextUsage: usage,
+        });
+    }
+
+    it("states the measured context in the fold reminder", async () => {
+        ctx = contextWith(foldBranch({ postFoldReply: true }), () => ({
+            tokens: 12_345,
+            contextWindow: 200_000,
+            percent: 6.17,
+        }));
+        const stub = harness();
+        await startSession(stub);
+
+        const folded = await userTurn(stub);
+
+        expect(folded?.message?.content).toContain(
+            "Measured context after the fold: 12,345 of 200,000 tokens used (6%), 187,655 free.",
+        );
+        expect(folded?.message?.content).toContain(
+            "The token count from before the fold no longer applies",
+        );
+    });
+
+    it("estimates the post-fold context when nothing has replied yet", async () => {
+        ctx = contextWith(foldBranch(), () => undefined);
+        const stub = harness();
+        await startSession(stub);
+
+        const folded = await userTurn(stub);
+
+        expect(folded?.message?.content).toMatch(
+            /Estimated context after the fold: about [\d,]+ of 200,000 tokens used/u,
+        );
+    });
+
+    it("skips the estimate after a model change and steers the measured number later", async () => {
+        const manager = foldBranch();
+        const state: { usage?: ContextUsage } = {};
+        ctx = contextWith(manager, () => state.usage, stubModel({ id: "other-model" }));
+        const stub = harness();
+        await startSession(stub);
+
+        const folded = await userTurn(stub);
+        expect(folded?.message?.content).toContain("no longer applies");
+        expect(folded?.message?.content).not.toContain("Estimated context");
+
+        // The first reply under the new model is what makes a count trustworthy again.
+        manager.appendMessage(assistantEntry([textPart("continued")], 4, countedUsage(1_800, 30)));
+        state.usage = { tokens: 9_000, contextWindow: 200_000, percent: 4.5 };
+        await step(stub);
+
+        const steered = String(stub.sentMessages.at(-1)?.message.content);
+        expect(steered).toContain(
+            "Measured context: 9,000 of 200,000 tokens used (5%), 191,000 free.",
+        );
+        expect(steered).toContain("available again after the fold");
+    });
+
+    it("steers the 50% reminder at a step boundary and the 75% one later", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "0");
+        const manager = sessionManager("/tmp/reminder-project");
+        manager.appendMessage(
+            assistantEntry(
+                [toolCall("read", { path: "src/a.ts" }, "c1")],
+                1,
+                countedUsage(50_000, 100),
+            ),
+        );
+        let usage: ContextUsage = { tokens: 102_000, contextWindow: 200_000, percent: 51 };
+        ctx = contextWith(manager, () => usage);
+        const stub = harness();
+        await startSession(stub);
+        await userTurn(stub);
+
+        await step(stub);
+        expect(String(stub.sentMessages.at(-1)?.message.content)).toContain(
+            "Half the context window",
+        );
+
+        // The same threshold is not repeated on the next step.
+        await step(stub);
+        expect(stub.sentMessages).toHaveLength(1);
+
+        usage = { tokens: 152_000, contextWindow: 200_000, percent: 76 };
+        await step(stub);
+        expect(String(stub.sentMessages.at(-1)?.message.content)).toContain(
+            "Three quarters of the context window",
+        );
+        expect(String(stub.sentMessages.at(-1)?.message.content)).toContain(
+            "Measured context: 152,000 of 200,000 tokens used (76%), 48,000 free.",
+        );
+    });
+
+    it("can be turned off without touching the fold reminder", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_CONTEXT", "false");
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "0");
+        ctx = contextWith(foldBranch(), () => ({
+            tokens: 152_000,
+            contextWindow: 200_000,
+            percent: 76,
+        }));
+        const stub = harness();
+        await startSession(stub);
+
+        const folded = await userTurn(stub);
+        expect(folded?.message?.content).toContain("compacted");
+        expect(folded?.message?.content).not.toContain("token count from before the fold");
+
+        await step(stub);
         expect(stub.sentMessages).toHaveLength(0);
     });
 });

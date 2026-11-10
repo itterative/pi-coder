@@ -62,14 +62,18 @@ export function userEntry(text: string, timestamp: number): AppendedMessage {
     return { role: "user", content: text, timestamp };
 }
 
-export function assistantEntry(content: AssistantContent, timestamp: number): AppendedMessage {
+export function assistantEntry(
+    content: AssistantContent,
+    timestamp: number,
+    usage = zeroUsage(),
+): AppendedMessage {
     return {
         role: "assistant",
         content,
         api: "test",
         provider: "test",
         model: "test",
-        usage: zeroUsage(),
+        usage,
         stopReason: "stop",
         timestamp,
     };

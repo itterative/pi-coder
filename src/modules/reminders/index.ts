@@ -25,6 +25,7 @@ import {
     REMINDER_NOTICE,
 } from "./catalog";
 import { ContextGrowthTracker } from "./context-growth";
+import { ContextUsageReminders, foldContextNote, type FoldContextNote } from "./context-usage";
 import { createMemoryAuditTrigger } from "./memory-audit";
 import { ReminderScheduler, type ReminderModelChoice, type SchedulerSnapshot } from "./scheduler";
 import {
@@ -68,17 +69,29 @@ function formatReminder(text: string): string {
 
 /**
  * The text one emission carries. Only the compaction reminder differs from its catalog entry: the session's
- * own JSONL path is known at emission time and makes its "check the transcript" line actionable.
+ * own JSONL path is known at emission time and makes its "check the transcript" line actionable, and the
+ * measured (or estimated) post-fold context is what counters the stale number the model is still assuming.
  */
-function reminderTextFor(reminder: ReminderDefinition, ctx: ExtensionContext): string {
+function reminderTextFor(
+    reminder: ReminderDefinition,
+    ctx: ExtensionContext,
+    foldNote?: FoldContextNote,
+): string {
     if (reminder.id !== COMPACTION_REMINDER.id) {
         return reminder.text;
     }
 
+    const parts = [reminder.text];
+    if (foldNote !== undefined) {
+        parts.push(foldNote.text);
+    }
+
     const sessionFile = ctx.sessionManager.getSessionFile?.();
-    return sessionFile === undefined
-        ? reminder.text
-        : `${reminder.text}\nSession JSONL: \`${sessionFile}\`.`;
+    if (sessionFile !== undefined) {
+        parts.push(`Session JSONL: \`${sessionFile}\`.`);
+    }
+
+    return parts.join("\n\n");
 }
 
 /** Everything the debug entry records about one selection decision, however it was reached. */
@@ -284,6 +297,15 @@ export default function registerRemindersExtension(
     );
     const growth = new ContextGrowthTracker();
     /**
+     * The measured context reminders: the 50%/75% thresholds and the post-fold fallback.
+     *
+     * All of them are change points outside the rotation. They carry a fact, not advice, so the selection model
+     * is not asked to weigh them - the reader whose assumption is wrong is the one that would answer. The switch
+     * is separate from `enabled` so the numbers can be turned off without losing the rest of the module.
+     */
+    const context = new ContextUsageReminders();
+    const contextEnabled = settings.enabled && settings.context;
+    /**
      * The automatic memory audit, run at a step boundary whenever a memory file changed.
      *
      * Registered for both scopes: a delegated child writes memories too, and a memory that fails to parse is
@@ -345,12 +367,23 @@ export default function registerRemindersExtension(
         ctx: ExtensionContext,
         reminder: ReminderDefinition,
         turn: number,
-    ): HeldReminder => ({
-        id: reminder.id,
-        text: reminderTextFor(reminder, ctx),
-        turn,
-        contextTokens: scheduler.snapshot().thresholdBaseline ?? 0,
-    });
+    ): HeldReminder => {
+        const foldNote =
+            contextEnabled && reminder.id === COMPACTION_REMINDER.id
+                ? foldContextNote(ctx, pi)
+                : undefined;
+        if (foldNote !== undefined && !foldNote.stated) {
+            // The fold reminder could not state a number, so the first measured reading will carry it instead.
+            context.awaitAfterFold();
+        }
+
+        return {
+            id: reminder.id,
+            text: reminderTextFor(reminder, ctx, foldNote),
+            turn,
+            contextTokens: scheduler.snapshot().thresholdBaseline ?? 0,
+        };
+    };
 
     /**
      * The message a delivery point sends, for one held reminder or several.
@@ -879,6 +912,9 @@ export default function registerRemindersExtension(
         rotationReminderTurn = undefined;
         const branch = ctx.sessionManager.getBranch();
         labels = reminderLabelsFromEntries(branch);
+        // A restart is also a context epoch: a fold or a model change starts a new one, and a reload rebuilds
+        // what it already delivered from the branch. A due fallback is dropped - see `ContextUsageReminders`.
+        context.reset(branch);
 
         // A restart is a change point: publishing here means a reload, a tree move, or a fold shows the phase
         // at once instead of waiting for the first turn.
@@ -1248,6 +1284,25 @@ export default function registerRemindersExtension(
             );
         }
 
+        // The context reminders are event-driven and share this boundary with the audit: the measured reading is
+        // only worth taking once a reply exists, which is exactly what a step guarantees, and a steer queued here
+        // lands before the next inference. They are facts, so no selection consult gates them, and a step that
+        // carried one leaves the rotation its own step - two sends at this boundary would cost two deliveries.
+        let contextEmitted = false;
+        if (contextEnabled && !context.idle()) {
+            const due = context.due(ctx);
+            if (due !== undefined) {
+                contextEmitted = true;
+                pendingSteers.push(
+                    heldReminder(
+                        ctx,
+                        { ...due.reminder, text: due.text },
+                        scheduler.snapshot().userTurns,
+                    ),
+                );
+            }
+        }
+
         // A step that ran a tool is the first point the run guarantees another inference, so the reminders held
         // for it have a destination now.
         flushPendingSteers();
@@ -1263,9 +1318,9 @@ export default function registerRemindersExtension(
         });
 
         // Awaited: the steer has to be queued before pi asks its next question.
-        // One message per step: a defect report takes the slot the rotation would have used, and the rotation
-        // keeps its cadence for the next step.
-        if (auditFindings === undefined) {
+        // One message per step: a defect report or a context reminder takes the slot the rotation would have used,
+        // and the rotation keeps its cadence for the next step.
+        if (auditFindings === undefined && !contextEmitted) {
             await maybeEmitMidRun(ctx);
         }
     });

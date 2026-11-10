@@ -7,6 +7,8 @@
  * may be set to `0` to disable that trigger on its own. `PI_CODER_REMINDER_MIDRUN_MAX` (default 1) caps how
  * many threshold-driven mid-run reminders one user turn may receive. `PI_CODER_MEMORY_AUDIT=false` turns off
  * the automatic audit that follows a memory edit, without touching the `memory_audit` tool.
+ * `PI_CODER_REMINDER_CONTEXT=false` turns off the measured context reminders - the number on the fold reminder,
+ * the 50%/75% threshold reminders, and the post-fold fallback - without touching anything else.
  * `PI_CODER_REMINDER_MODEL_TURNS` (default 5) is the decision model's own floor: at least that many user turns
  * between two reminders it picked, `0` for none. It is separate from `everyTurns` because a threshold the run
  * keeps crossing leaves every turn due, and the judgement would re-send the same reminder turn after turn.
@@ -21,6 +23,7 @@ export interface ReminderSettings {
     midRunMax: number;
     modelTurns: number;
     memoryAudit: boolean;
+    context: boolean;
     debug: boolean;
 }
 
@@ -52,6 +55,7 @@ export function loadReminderSettings(env: NodeJS.ProcessEnv = process.env): Remi
         midRunMax: nonNegativeInt(env.PI_CODER_REMINDER_MIDRUN_MAX, DEFAULT_REMINDER_MIDRUN_MAX),
         modelTurns: nonNegativeInt(env.PI_CODER_REMINDER_MODEL_TURNS, DEFAULT_REMINDER_MODEL_TURNS),
         memoryAudit: env.PI_CODER_MEMORY_AUDIT !== "false",
+        context: env.PI_CODER_REMINDER_CONTEXT !== "false",
         debug: reminderDebugEnabled(env.PI_CODER_REMINDER_DEBUG),
     };
 }
