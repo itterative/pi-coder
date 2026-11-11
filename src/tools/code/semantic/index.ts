@@ -53,14 +53,18 @@ export interface SemanticDeps {
     autoRefresh?: boolean;
     /** Tests replace the artifact probe because the real files are ~211 MB. */
     artifactsReady?: () => boolean;
+    /** Tests lower the first-build bound instead of synthesizing a tree that large. */
+    initialBuildLimit?: number;
 }
 
 /** What a search found stale in the index for the files it just parsed. */
 export interface SemanticStaleness {
     /** Declarations whose content key has no vector yet. */
     missing: number;
-    /** Whether a background refresh was scheduled for them. */
+    /** Whether background work was scheduled for them. */
     refreshing: boolean;
+    /** True when the root had no usable index, so this is its first build rather than a catch-up. */
+    initial?: boolean;
 }
 
 /**
@@ -70,6 +74,17 @@ export interface SemanticStaleness {
  * explicit build with the estimate and progress, not a surprise background job.
  */
 const AUTO_REFRESH_LIMIT = 64;
+
+/**
+ * How large a first build one search may start on its own.
+ *
+ * A refresh is bounded by `AUTO_REFRESH_LIMIT` because a refactor that changed hundreds of declarations should be an
+ * explicit build. A root with *no* index has nothing to catch up with: refusing it means the root never becomes
+ * searchable at all, which is why a declared or explicitly searched tree (a memory directory, a package outside the
+ * repo) stayed lexical forever. The bound is a guard against pointing `path` at something enormous, not a policy:
+ * discovery already caps a tree at `MAX_FILES`, and the largest real case here — this repo — is ~11k declarations.
+ */
+const INITIAL_BUILD_LIMIT = 20_000;
 
 /**
  * Builds already running in this process, keyed by model dir + namespace.
@@ -163,14 +178,18 @@ export function createSemanticSearch(deps: SemanticDeps): SemanticSearch {
 
                 const coversRoot = ranked.refreshCoversRoot === true;
                 const compact = coversRoot && shouldCompact(ranked.dead, ranked.live);
+                const initial = ranked.initial === true;
+                const affordable = initial
+                    ? ranked.live <= (deps.initialBuildLimit ?? INITIAL_BUILD_LIMIT)
+                    : ranked.missing <= AUTO_REFRESH_LIMIT;
 
                 if (ranked.missing > 0 && ranked.refreshRoot !== undefined) {
                     const scheduled =
-                        deps.autoRefresh !== false && ranked.missing <= AUTO_REFRESH_LIMIT
+                        deps.autoRefresh !== false && affordable
                             ? scheduleBuild(deps, request, ranked.refreshRoot, coversRoot)
                             : false;
 
-                    deps.onStale?.({ missing: ranked.missing, refreshing: scheduled });
+                    deps.onStale?.({ missing: ranked.missing, refreshing: scheduled, initial });
                 } else if (compact && ranked.refreshRoot !== undefined) {
                     // Nothing to embed, but the index is carrying enough dead vectors to be worth compacting. The
                     // build has no jobs, so this is a manifest rewrite and a few unlinks: no model, no parse.
@@ -248,6 +267,8 @@ interface DenseResult {
     refreshRoot?: string;
     /** Whether `files` was the whole namespace root, which is what makes a compaction safe. */
     refreshCoversRoot: boolean;
+    /** The root had no usable index of its own, so the build would be its first rather than a catch-up. */
+    initial?: boolean;
 }
 
 interface ResolvedIndex {
@@ -345,6 +366,42 @@ function resolveIndex(modelDir: string, request: SemanticQuery): ResolvedIndex |
     return best ?? legacy;
 }
 
+/** Declarations a request covers, which is what a first build would embed. */
+function declarationCount(request: SemanticQuery): number {
+    return request.files.reduce((total, file) => total + file.all.length, 0);
+}
+
+/** Whether this exact namespace exists but was written by a model of another width. */
+function hasIncompatibleIndex(modelDir: string, request: SemanticQuery): boolean {
+    const manifest = readManifest(
+        indexDir(
+            modelDir,
+            namespaceFor(request.sourceKind, request.root, MODEL_ID, EMBED_TEXT_VERSION),
+        ),
+    );
+
+    return manifest !== undefined && manifest.dims !== MODEL_DIMS;
+}
+
+/**
+ * The result for a root that has no index of its own: every candidate is missing, and the build target is the root.
+ *
+ * `refreshRoot` is the searched root rather than an ancestor because a namespace is keyed by its root; building it
+ * here is what gives a declared tree (`.pi/agent/memory`, a package outside the checkout) its own refresh lane
+ * instead of making every search re-derive it from the parent index.
+ */
+function initialBuild(request: SemanticQuery, live: number): DenseResult {
+    return {
+        hits: [],
+        missing: live,
+        live,
+        dead: 0,
+        refreshRoot: request.root,
+        refreshCoversRoot: true,
+        initial: true,
+    };
+}
+
 async function denseRanking(
     request: SemanticQuery,
     modelDir: string,
@@ -361,7 +418,11 @@ async function denseRanking(
     const resolved = resolveIndex(modelDir, request);
 
     if (resolved === undefined) {
-        return empty;
+        // A namespace written by a model of another width is unusable, not absent: it is the user's explicit
+        // remedy (`/outline build`) that rewrites it, and silently rebuilding under it would mix two vector spaces.
+        return hasIncompatibleIndex(modelDir, request)
+            ? empty
+            : initialBuild(request, declarationCount(request));
     }
 
     const { dir, manifest } = resolved;
@@ -410,6 +471,15 @@ async function denseRanking(
     const live = candidates.length;
 
     if (vectors.size === 0) {
+        // An ancestor index that holds none of these declarations never covered this tree — a gitignored memory
+        // directory, or a package the walk cannot reach. Appending to it would bury a small tree in the parent's
+        // namespace and keep every later search there lexical, so the searched root gets its own.
+        const borrowed = resolved.root !== undefined && resolved.root !== request.root;
+
+        if (borrowed && candidates.length > 0) {
+            return initialBuild(request, live);
+        }
+
         return {
             hits: [],
             missing,
@@ -417,6 +487,7 @@ async function denseRanking(
             dead,
             refreshRoot: resolved.root,
             refreshCoversRoot: coversRoot,
+            initial: live > 0,
         };
     }
 

@@ -182,6 +182,34 @@ returns a 130-line body in one call, and the span in every header makes `read of
 route, so the fix was the tool description and the richer `# next` note rather than a new `lines` parameter (a
 character budget still cuts it). Resuming a `digest` was already covered by `offset.test.ts`.
 
+## Roots and their indexes (2026-11-11)
+
+`outline` was confined to the working directory while `read`/`grep`/`find` honoured the session's roots, so a
+declared root answered "path is outside the working directory". `codeReadRoots` in `src/tools/code/index.ts` now
+passes the same set (`getUserMemoryDirectory()` + `fileRootsForOperation(sandboxConfig.current, "read")`) into
+`createCodeSource` → `LocalCodeSource`, whose `assertReadable` realpaths each declared root (an unreadable
+declaration is skipped, not fatal) and expands `~` through `resolveInputPath`. The roots are read at call time, so a
+config reload applies without a new session.
+
+**Ancestor borrowing is what broke memory-tree indexing.** `resolveIndex` falls back to the longest ancestor index,
+which is right for `src/a` under a built `src` and wrong for a tree the ancestor's own walk never included: a
+gitignored `.pi/agent/memory` gets no vectors from the repo index, and the search then reported `missing` beyond
+`AUTO_REFRESH_LIMIT` (64) or, with no index at all, `missing: 0` and no `refreshRoot` — so nothing was ever
+scheduled and the tree stayed lexical forever. Now (`denseRanking` in `semantic/index.ts`):
+
+- no index for the searched root → `initialBuild(request, declarationCount(request))`: `missing` = every candidate,
+  `refreshRoot` = the searched root, `refreshCoversRoot` = true;
+- a borrowed ancestor that holds **none** of the search's vectors → the same initial build for the searched root, so
+  a 500-declaration memory tree never appends into the 11k repo namespace;
+- an ancestor holding *some* vectors keeps the additive refresh;
+- a namespace written by a model of another width (`hasIncompatibleIndex`) stays ignored — rebuilding under it would
+  mix two vector spaces, and `/outline build` is the remedy.
+
+`rank()` allows an initial build up to `INITIAL_BUILD_LIMIT` (20k declarations) instead of `AUTO_REFRESH_LIMIT`, and
+`SemanticStaleness.initial` makes the notice say "indexing" rather than "refreshing". `SemanticDeps.initialBuildLimit`
+is the test seam. Watch out: `initialBuild` must be given a **declaration** count, not `request.files.length` (that
+bug shipped for one test run and showed `missing: 1` for a four-declaration tree).
+
 ## Measured latency
 
 Measured 2026-11-11 on this checkout (warm session, `.state` state dir), with scratch scripts under the session

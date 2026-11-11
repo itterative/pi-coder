@@ -6,6 +6,9 @@ import { Type } from "typebox";
 
 import type { ContainerState } from "../../modules/sandbox/container/state";
 import { contributeToolGuide } from "../../common/prompt-section";
+import sandboxConfig from "../../common/config";
+import { getUserMemoryDirectory } from "../../common/constants";
+import { fileRootsForOperation } from "../../modules/sandbox/file-roots";
 import { outlineGuidePrompt } from "./prompt";
 import { discoverFiles } from "./discovery";
 import { runDigest } from "./digest";
@@ -20,7 +23,7 @@ import { buildWorkerCount } from "./semantic/runtime";
 import { readManifest } from "./semantic/store";
 import type { SemanticSearch } from "./semantic/types";
 import { runShow } from "./show";
-import { createCodeSource } from "./source";
+import { createCodeSource, type CodeReadRoots } from "./source";
 import { CallTiming } from "./timing";
 import type { CodeAction, CodeActionResult, CodeDetail, CodeToolParams, UsageKind } from "./types";
 import { runUsages } from "./usages";
@@ -127,7 +130,7 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             try {
                 const timing = new CallTiming();
                 const source = await timing.measure("source", () =>
-                    createCodeSource(ctx, container),
+                    createCodeSource(ctx, container, codeReadRoots),
                 );
                 const semantic =
                     params.action === "search"
@@ -258,6 +261,20 @@ async function runAction(
     }
 }
 
+/**
+ * Where `outline` may read, beyond the working directory.
+ *
+ * Exactly what `read`, `grep`, and `find` are allowed to open: the user memory directory (which the memory system
+ * tells the agent to load), the roots the user declared in `files.readRoots`, and the runtime resource roots. A
+ * declared root that worked for `read` failing here with "path is outside the working directory" was the tool
+ * disagreeing with the session about its own files; a memory tree at `.pi/agent/memory` is also the one tree an
+ * agent is expected to search. Read at call time, so a config edit or reload is picked up mid-session.
+ */
+const codeReadRoots: CodeReadRoots = () => [
+    getUserMemoryDirectory(),
+    ...fileRootsForOperation(sandboxConfig.current, "read"),
+];
+
 const SEMANTIC_HINT = "# semantic: /outline on downloads a ~211 MB model once and ranks by meaning";
 /** Footer status entry shared by background downloads and refreshes; one line, cleared when idle. */
 const OUTLINE_STATUS_KEY = "outline";
@@ -286,11 +303,15 @@ async function prepareSemantic(ctx: ExtensionContext): Promise<SemanticSearch | 
         mode,
         modelDir: root,
         hint: mode === "hybrid" || state.consent === "never" ? undefined : SEMANTIC_HINT,
-        onStale: ({ missing, refreshing }) => {
+        onStale: ({ missing, refreshing, initial }) => {
+            const count = `${missing} declaration${missing === 1 ? "" : "s"}`;
+
             if (refreshing) {
                 ctx.ui.setStatus(
                     OUTLINE_STATUS_KEY,
-                    `outline: refreshing ${missing} changed declaration${missing === 1 ? "" : "s"}`,
+                    initial === true
+                        ? `outline: indexing ${count}`
+                        : `outline: refreshing ${count}`,
                 );
             }
 
@@ -301,8 +322,10 @@ async function prepareSemantic(ctx: ExtensionContext): Promise<SemanticSearch | 
             staleNoticedAt = Date.now();
             ctx.ui.notify(
                 refreshing
-                    ? `outline semantic: refreshing ${missing} changed declaration${missing === 1 ? "" : "s"} in the background`
-                    : `outline semantic: ${missing} declarations are not indexed; /outline build <path>`,
+                    ? initial === true
+                        ? `outline semantic: indexing ${count} for this path in the background`
+                        : `outline semantic: refreshing ${count} in the background`
+                    : `outline semantic: ${count} are not indexed; /outline build <path>`,
                 "info",
             );
         },
@@ -566,7 +589,7 @@ async function buildSemanticIndex(
     root: string,
 ): Promise<void> {
     try {
-        const source = await createCodeSource(ctx, container);
+        const source = await createCodeSource(ctx, container, codeReadRoots);
         const resolved = source.resolvePath(target);
         const discovery = await discoverFiles(source, resolved);
         const batch = await loadParsedFiles(source, discovery.files);

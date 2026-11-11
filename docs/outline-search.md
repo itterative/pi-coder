@@ -176,6 +176,16 @@ Concurrent searches share a single in-flight build per model dir + namespace. A 
 (`N declarations are not indexed; /outline build <path>`), so a big refactor never queues an hour of hidden CPU.
 `builtAt` in the manifest is reporting metadata for `/outline status`; it is never part of a key.
 
+**A root without an index starts one.** The 64-declaration cap is a rule about _catching up_: a refactor that
+changed hundreds of declarations should be an explicit build. A root that has no index at all has nothing to catch
+up on, and refusing it means it never becomes searchable — which is what happened to every tree the repo-wide walk
+could not reach (a gitignored `.pi/agent/memory`, a package outside the checkout). So `denseRanking` reports the
+candidates as missing with `refreshRoot` set to the _searched_ root, and the first build is allowed up to
+`INITIAL_BUILD_LIMIT` (20k declarations). The same rule fires when a borrowed ancestor index holds none of the
+search's declarations: the searched root gets its own namespace instead of appending a handful of vectors into an
+11k-entry repo index. A namespace written by a model of another width is _not_ rebuilt this way — it is ignored, and
+`/outline build` is the explicit remedy, because rebuilding under it would mix two vector spaces.
+
 Query embedding costs ~0.65 s once a `--serve` child is warm; that is why the tail only runs on near-empty
 literal results. The query child is separate from the build children and exits after five idle minutes.
 

@@ -226,6 +226,32 @@ output.
   job of `bash` + `rg`. Search hits are cached per parsed file and normalized query (a few recent queries per
   file); a changed path + mtime + size creates a new `ParsedFile` and drops the old hits with it.
 
+### Roots, and the index a root owns
+
+`outline` reads the working directory plus the same roots `read`/`grep`/`find` are allowed: the user memory
+directory, the roots the user declared in `files.readRoots`, and the runtime resource roots
+(`codeReadRoots` in `index.ts` → `LocalCodeSource`). Without that, a root a human had already granted for `read`
+answered `outline search` with "path is outside the working directory" — the tool disagreeing with the session
+about its own files. A declared `~` is expanded once, by the same helper the confinement checks use.
+
+Naming a tree is also what makes it literal: ripgrep runs with `--no-ignore` for any target that is not the cwd
+itself, so a gitignored `tree` (`.pi/agent/memory`, a build output, a vendored copy) is searchable when the caller
+names it and invisible to a walk of its parent. That asymmetry is the point — the ignore rules belong to the
+parent's view, not to an explicit request.
+
+**A tree the parent index cannot reach gets its own namespace.** `resolveIndex` falls back to the longest ancestor
+index, which is right for a subdirectory of a built root and wrong for a gitignored tree: the parent's own walk
+never included it, so its vectors are absent. Two rules (`semantic/index.ts`):
+
+- no index at all for the searched root → its own first build, capped by `INITIAL_BUILD_LIMIT` (20k declarations)
+  rather than `AUTO_REFRESH_LIMIT`, because a root with nothing to catch up on would otherwise never become
+  searchable;
+- a borrowed ancestor index that holds *none* of the search's declarations → the searched root gets its own
+  namespace, so a small memory tree does not append a handful of vectors into an 11k-entry repo index.
+
+An ancestor that holds *some* of them keeps the additive refresh: the tree is partially covered, and appending is
+what fills the rest.
+
 ### Call timings
 
 Every call reports where it spent its time in `details.timing` (`timing.ts`), and the TUI renders it as one dim

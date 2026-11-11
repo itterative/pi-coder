@@ -357,7 +357,11 @@ describe("outline semantic build", () => {
 
         expect(ranked).toEqual([]);
         expect(stale).toEqual([
-            { missing: files.reduce((sum, file) => sum + file.all.length, 0), refreshing: false },
+            {
+                missing: files.reduce((sum, file) => sum + file.all.length, 0),
+                refreshing: false,
+                initial: false,
+            },
         ]);
     });
 
@@ -433,7 +437,7 @@ describe("outline semantic build", () => {
             files,
         });
 
-        expect(stale).toEqual([{ missing: files[0].all.length, refreshing: true }]);
+        expect(stale).toEqual([{ missing: files[0].all.length, refreshing: true, initial: false }]);
         await vi.waitFor(() => {
             expect(countEmbeddings(options).missing).toBe(0);
         });
@@ -474,7 +478,9 @@ describe("outline semantic build", () => {
         }
 
         // Reported as not indexed rather than as a background refresh that would immediately bounce off the lock.
-        expect(stale).toEqual([{ missing: files[0].all.length, refreshing: false }]);
+        expect(stale).toEqual([
+            { missing: files[0].all.length, refreshing: false, initial: false },
+        ]);
     });
 
     it("does not prune entries outside an incremental refresh", async () => {
@@ -597,5 +603,123 @@ describe("outline semantic build", () => {
         });
 
         expect(ranked[0]?.declaration.name).toBe("promote");
+    });
+});
+
+/**
+ * A tree the parent index never covered gets its own namespace.
+ *
+ * This is the memory-directory case: git ignores `.pi/agent/memory`, so a repo-wide build cannot include it, and
+ * the ancestor index therefore holds none of its vectors. Before these rules, such a search either appended a few
+ * vectors into the parent namespace or stayed lexical forever, because `resolveIndex` found no index and the
+ * "missing" count came back as zero.
+ */
+describe("outline semantic root ownership", () => {
+    it("schedules a first build for a root with no index at all", async () => {
+        const modelDir = tempDir();
+        const stale: Array<{ missing: number; refreshing: boolean; initial?: boolean }> = [];
+        const files = await parseBulk(4, "unindexed");
+        const semantic = createSemanticSearch({
+            mode: "hybrid",
+            modelDir,
+            runtime: fakeRuntime(vectorFor("query")),
+            artifactsReady: () => true,
+            onStale: (value) => stale.push(value),
+        });
+        const ranked = await semantic.rank({
+            // No lexical match, so the ranking is empty until the first build lands.
+            query: "zzz qqq",
+            root: "/project/memory",
+            sourceKind: "local",
+            files,
+        });
+
+        expect(ranked).toEqual([]);
+        expect(stale).toEqual([{ missing: 4, refreshing: true, initial: true }]);
+
+        await vi.waitFor(() => {
+            const namespace = namespaceFor(
+                "local",
+                "/project/memory",
+                MODEL_ID,
+                EMBED_TEXT_VERSION,
+            );
+
+            expect(
+                Object.keys(readManifest(indexDir(modelDir, namespace))?.entries ?? {}),
+            ).toHaveLength(4);
+        });
+    });
+
+    it("builds its own namespace instead of appending to an ancestor that holds none of its files", async () => {
+        const modelDir = tempDir();
+        const options = { sourceKind: "local", root: "/project", modelDir };
+        const parentFiles = await parseBulk(2, "parent");
+
+        // The parent index exists and is warm; it simply has nothing for the tree below it.
+        await buildIndex({
+            ...options,
+            files: parentFiles,
+            runtime: fakeRuntime(vectorFor("parent")),
+        });
+
+        const stale: Array<{ missing: number; refreshing: boolean; initial?: boolean }> = [];
+        const childFiles = await parseBulk(3, "child");
+        const semantic = createSemanticSearch({
+            mode: "hybrid",
+            modelDir,
+            runtime: fakeRuntime(vectorFor("query")),
+            artifactsReady: () => true,
+            onStale: (value) => stale.push(value),
+        });
+
+        await semantic.rank({
+            query: "zzz qqq",
+            root: "/project/memory",
+            sourceKind: "local",
+            files: childFiles,
+        });
+
+        expect(stale).toEqual([{ missing: 3, refreshing: true, initial: true }]);
+
+        await vi.waitFor(() => {
+            const namespace = namespaceFor(
+                "local",
+                "/project/memory",
+                MODEL_ID,
+                EMBED_TEXT_VERSION,
+            );
+
+            expect(
+                Object.keys(readManifest(indexDir(modelDir, namespace))?.entries ?? {}),
+            ).toHaveLength(3);
+        });
+
+        // The parent namespace is untouched: no churn, and no vectors that its own walk could never justify.
+        expect(manifestSize(options)).toBe(2);
+    });
+
+    it("still refuses a first build larger than the limit, and says it is not indexed", async () => {
+        const modelDir = tempDir();
+        const stale: Array<{ missing: number; refreshing: boolean; initial?: boolean }> = [];
+        const files = await parseBulk(4, "huge");
+        const semantic = createSemanticSearch({
+            mode: "hybrid",
+            modelDir,
+            runtime: fakeRuntime(vectorFor("query")),
+            artifactsReady: () => true,
+            // Pretend the tree is enormous: the point is the policy boundary, not the file count.
+            initialBuildLimit: 2,
+            onStale: (value) => stale.push(value),
+        });
+
+        await semantic.rank({
+            query: "zzz qqq",
+            root: "/project/huge",
+            sourceKind: "local",
+            files,
+        });
+
+        expect(stale).toEqual([{ missing: 4, refreshing: false, initial: true }]);
     });
 });

@@ -54,10 +54,20 @@ export class CodePathError extends Error {
     }
 }
 
+/**
+ * Extra roots this session may read, beyond the working directory.
+ *
+ * The same list `read`, `grep`, and `find` honour (`fileRootsForOperation`), so a root the user declared for the
+ * file tools — the user memory directory, a skills store, an explicitly listed host path — does not fail here with
+ * "path is outside the working directory". `~` is left unexpanded, exactly as the confinement checks expect.
+ */
+export type CodeReadRoots = () => readonly string[];
+
 /** Build the source for this call. A container session wins; it is the view `bash` and `read` already have. */
 export async function createCodeSource(
     ctx: ExtensionContext,
     container?: ContainerState,
+    readRoots?: CodeReadRoots,
 ): Promise<CodeSource> {
     if (container?.active === true) {
         if (container.sessionFor === undefined) {
@@ -71,14 +81,18 @@ export async function createCodeSource(
         return new ContainerCodeSource(session, ctx.cwd);
     }
 
-    return new LocalCodeSource(ctx.cwd);
+    return new LocalCodeSource(ctx.cwd, readRoots);
 }
 
 export class LocalCodeSource implements CodeSource {
     readonly kind = "local" as const;
     private realCwd: Promise<string> | undefined;
 
-    constructor(readonly cwd: string) {}
+    constructor(
+        readonly cwd: string,
+        /** Read roots beyond the working directory; read at call time so a config reload is picked up. */
+        private readonly readRoots?: CodeReadRoots,
+    ) {}
 
     async glob(root: string, options: { limit: number; signal?: AbortSignal }): Promise<string[]> {
         // Prefer ripgrep when it exists: it is the same walker the container's glob uses. The stdlib walker
@@ -202,11 +216,26 @@ export class LocalCodeSource implements CodeSource {
         const root = await this.realCwd;
         const real = await fs.promises.realpath(target);
 
-        if (!isWithin(root, real)) {
-            throw new CodePathError(
-                `path is outside the working directory: ${this.displayPath(target)}`,
-            );
+        if (isWithin(root, real)) {
+            return;
         }
+
+        // A declared root is a session statement about where reads may go, and `read` already honours it. Resolving
+        // the candidate too keeps a symlinked root from being accepted by name and refused by path; an unreadable
+        // declaration is skipped rather than fatal, the same way an absent declared root is for the file tools.
+        for (const candidate of this.readRoots?.() ?? []) {
+            const declared = await fs.promises
+                .realpath(resolveInputPath(this.cwd, candidate))
+                .catch(() => undefined);
+
+            if (declared !== undefined && isWithin(declared, real)) {
+                return;
+            }
+        }
+
+        throw new CodePathError(
+            `path is outside the working directory: ${this.displayPath(target)}`,
+        );
     }
 }
 
