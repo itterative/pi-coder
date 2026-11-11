@@ -10,6 +10,10 @@ import { DeclarationVisitor, cleanName } from "./visitor";
  * A heading is a declaration whose range runs to the next heading of the same or higher level, so `show`
  * returns the entire section. Nested headings are children, which makes `digest` read like a table of contents.
  * Markdown has no identifiers, so `usages` has nothing to index for these files.
+ *
+ * The frontmatter block is a declaration too, and that is deliberate: in a frontmatter-heavy tree the highest-signal
+ * text ("description: ceiling arithmetic over the tile budget") lives there and nowhere else, so leaving it out made
+ * `search` strictly weaker than `grep` on the one channel it is supposed to win.
  */
 export async function parseMarkdownFile(source: string, filePath: string): Promise<ParsedFile> {
     const visitor = new MarkdownVisitor(source);
@@ -47,6 +51,23 @@ class MarkdownVisitor extends DeclarationVisitor {
     }
 
     scan(): void {
+        const frontmatter = frontmatterRange(this.source, this.lineStarts);
+
+        if (frontmatter !== null) {
+            this.addDeclaration({
+                kind: "frontmatter",
+                name: "frontmatter",
+                scope: "",
+                startIndex: frontmatter.startIndex,
+                endIndex: frontmatter.endIndex,
+                // The delimiters are the only "signature" the block has; `declarationLine` prints the kind instead.
+                signatureEnd: frontmatter.openingEnd,
+                docRange: { startIndex: frontmatter.startIndex, endIndex: frontmatter.endIndex },
+                isDefinition: true,
+                dedupeKey: `frontmatter\u0000${frontmatter.startIndex}`,
+            });
+        }
+
         this.visitHeadings(scanHeadings(this.source, this.lineStarts));
     }
 
@@ -80,6 +101,42 @@ class MarkdownVisitor extends DeclarationVisitor {
             stack.push({ level: heading.level, declaration });
         }
     }
+}
+
+interface Frontmatter {
+    startIndex: number;
+    openingEnd: number;
+    endIndex: number;
+}
+
+/**
+ * The leading `---` block, or null when the file has none (or never closes it).
+ *
+ * Unterminated frontmatter is not treated as a block: a file that opens with `---` and never closes it is either
+ * broken or using the rule as a separator, and inventing a block that runs to EOF would swallow the document.
+ */
+function frontmatterRange(source: string, lineStarts: readonly number[]): Frontmatter | null {
+    const lines = source.split("\n");
+
+    if ((lines[0] ?? "").trim() !== "---") {
+        return null;
+    }
+
+    for (let index = 1; index < lines.length; index += 1) {
+        const line = withoutCarriageReturn(lines[index] ?? "").trim();
+
+        if (line !== "---" && line !== "...") {
+            continue;
+        }
+
+        return {
+            startIndex: 0,
+            openingEnd: lineEnd(source, lineStarts, 0),
+            endIndex: lineEnd(source, lineStarts, index),
+        };
+    }
+
+    return null;
 }
 
 function scanHeadings(source: string, lineStarts: readonly number[]): Heading[] {

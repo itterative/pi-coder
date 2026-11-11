@@ -12,6 +12,9 @@ keep_updated: true
 doc comment (all query tokens, any order), then the **relevance tail** — BM25 always, embeddings when enabled —
 then fuzzy identifier matching. Tail rows carry `[related]` and a footer saying they were ranked, not matched.
 
+Strings, comments outside a declaration's adjacent doc block, config, and arbitrary source text stay with
+`bash` + `rg`; this is a declaration index, not a text index.
+
 The tail runs only when the literal pass produced fewer than `TAIL_MIN_LITERAL` (3) rows, and never when a fuzzy
 match exists: an identifier typo is precise evidence, a relevance guess is not. BM25 and embedding lists are
 fused with reciprocal rank fusion (`k = 60`), which is where the measured gain came from — the channels' score
@@ -102,6 +105,19 @@ order, all required, so `Run npm install` hits a section whose prose says it, an
 title match any more. Before v2 the doc range was unset and only heading titles were searchable — do not reintroduce
 that; body text is the bulk of a memory.
 
+**Doc tokens are stemmed, names are not** (`src/tools/code/stem.ts`, 2026-11-11). An inflected query used to miss a
+comment that used the other inflection — the tier requires every token, and both sides compared literally. `stem`
+does plurals,
+`-ing`/`-ed`/`-ly`, doubled-consonant collapse (except `l`/`s`/`z`, so a doubled `l` survives) and Porter's
+silent-`e` restore, then drops a final `e` unconditionally so `cache`/`cached`/`caching` share one stem. It is
+applied in `docTokensOf` only: `literalTier` matches raw names (`list` ≠ `listing`), and BM25's query terms and
+`tokenize` stay exact. Doc matching is a **token-set** test, not `text.includes(token)`: substring matching made
+`page table` fire on `portable`, and a stem is not a substring of the word it came from.
+
+Phrase adjacency is a tier promotion, not a filter: `contiguous` in `docTier` checks the normalized doc text for the
+whole normalized query, and a *quoted* query (`"page table"`, detected in `parseQuery`) makes the phrase required.
+`quotedForMessage` keeps the message from rendering the caller's quotes twice.
+
 The doc tier's tokens come from `tokenize` in `semantic/bm25.ts`, stoplist included — not a second tokenizer. It
 used to normalize-and-split with no stoplist, so every `the`/`from`/`why`/`do` in a natural-language query became a
 *required* substring and the tier almost never fired: `strip comment markers from the doc text` returned 0 doc hits
@@ -114,8 +130,21 @@ at all. Setext underlines are excluded from the prose; a fenced block is prose (
 skips the comment-marker stripping the code path uses, or `*` bullets and `**bold**` would be eaten.
 
 `show` still prints a section exactly once: `sourceForDeclaration` renders a doc range only when it precedes the
-declaration range, so Markdown's in-range prose is not duplicated. Frontmatter `description:` is still *not*
-indexed — it lives outside every heading's prose.
+declaration range, so Markdown's in-range prose is not duplicated.
+
+**Frontmatter is a declaration** (`kind: "frontmatter"`, name `frontmatter`, range over the block, doc = the block),
+added 2026-11-11 from a C++/HIP user's feedback report. Before it, a memory tree whose `description:` carried the
+only mention of a phrase lost to plain `grep` on the channel search is supposed to win, and `[frontmatter]` rows did
+not exist at all. Three consequences worth keeping: discovery must treat `frontmatter` as a *synthetic* name
+(`SYNTHETIC_NAMES` in `discovery.ts`) because the word never appears in the file, so a grep-narrowed candidate list
+finds nothing and `show frontmatter` reports "not found"; `declarationLine` prints the kind instead of the source
+signature (the source is `---`); and search labels doc-tier hits on it `[frontmatter]` rather than `[doc]`.
+
+Tier order (all of them, best first): exact name, name prefix, name substring, **body phrase**, **frontmatter
+phrase**, **frontmatter tokens**, body tokens, approximate name, relevance tail. Frontmatter sits *below* a body
+phrase on purpose: `keep_updated` is a token pair in 82 memory files, while the section documenting the field states
+it in prose, and only the phrase tier can prefer the section. Putting frontmatter above everything made that query
+return 82 identical rows.
 
 Useful workflow: `search` a phrase, then `show` it (which returns the whole section) or `digest` the cluster — a
 9-file compaction cluster maps in ~3.3 KB. Point `path` at a memory tree directly; `.pi/agent` also walks `git/`
@@ -126,6 +155,32 @@ check (`resolveIndex` rejects a manifest with a different `textVersion`). Code d
 signature now, so nothing can be reused: ~515 declarations for the memory trees (≈5 min), 11.3k for this repo
 (≈1 h, background). Until a rebuild, `search` degrades to BM25 + doc tier, which for memories is now the good path
 anyway.
+
+## Feedback round (vibes.cpp, 2026-11-11)
+
+A C++23/HIP user filed nine defects after ~50 calls; the ones that were real and are now fixed:
+
+- `show` hid every symbol after a long first body. Fixed in `format.ts` (`# omitted N more block(s) after this
+  body` on the intra-block cut) plus a **legend** in `show.ts`: with more than one requested symbol, the header
+  carries one `path:span · kind name` line per resolved group before any body, so nothing can look "not found"
+  when it was merely not reached.
+- `# next: offset=N` did not say how much was left, and the page step is set by characters, not lines. It now reads
+  `# next: offset=19 · 111 of 130 line(s) left · raise limit to fit more per call` (`BudgetedText` gained
+  `first`/`shown`/`remaining`/`total`).
+- The best hit could sit on page two with no signal: search now ends a cut page with
+  `# more: 69 of 82 match(es) on later pages, next in <path>`.
+- `usages` discarded a qualifier and matched the last name component only, so `CallList::attention_paged` mixed in
+  calls through `Ops::attention_paged`. Occurrences inside the named type (or *declaring* it) now sort first and the
+  rest are marked `[name-only]`. The declaration case needs `qualifiedNameHasParent`, because a definition sits at
+  namespace scope and walking outward finds no enclosing type.
+- `limit`'s floor was 800 characters — more than a "confirm this signature" call wants. It is 200 now.
+- Frontmatter, phrase, and stemming are described above. The `[related]` label stayed, but its footer now says what
+  ranked: term overlap plus embeddings when the index is warm, never "by name or doc comment".
+
+Not changed, and why: `show` "cannot walk a body" is mostly a discoverability problem — `limit=20000` already
+returns a 130-line body in one call, and the span in every header makes `read offset=start limit=n` the cheaper
+route, so the fix was the tool description and the richer `# next` note rather than a new `lines` parameter (a
+character budget still cuts it). Resuming a `digest` was already covered by `offset.test.ts`.
 
 ## Measured latency
 

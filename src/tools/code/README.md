@@ -154,6 +154,13 @@ output.
 - ATX (`# Title`) and setext (`Title` + `---`) headings become `heading` declarations; ATX headings are limited
   to levels 1–6 and up to three spaces of indentation. Headings inside fenced code blocks and YAML front matter
   are ignored.
+- The **frontmatter block is a declaration** (`kind: "frontmatter"`, name `frontmatter`, range over the delimited
+  block, doc text the whole block). It is the densest text in a memory tree — a curated `description:` says what the
+  file is for — and leaving it out made `search` weaker than `grep` on the one channel that matters there. Rows that
+  match it carry `[frontmatter]` and rank above body-token matches (below a body *phrase*: a frontmatter `keep_updated`
+  key matches 82 files, while the section that explains the field should win). `digest` prints it as `frontmatter
+  :1-7` and `show frontmatter` prints the block, which is why discovery treats `frontmatter` as a synthetic name: it
+  never appears in the source, so a grep-based candidate list would miss every file.
 - Heading hierarchy is the declaration hierarchy, and each heading's range runs to the next heading of the same
   or higher level. `show Guide::Install` therefore returns the whole section, not just the heading line.
 - A heading's **doc text is its own prose**: from the end of the heading line to the next heading of *any* level,
@@ -172,6 +179,12 @@ output.
   only top-level declarations. `detail="full"` includes private/protected members, fields, enum members, and
   variables. Declaration rows show `:start-end` when the declaration spans lines, and `:line` for a one-liner;
   `search` locations and `show` headers use the same range convention.
+- **Paging.** A cut result ends with `# next: offset=N` *and* how many body lines remain, because the step between
+  pages is set by the character budget rather than a line count: `# next: offset=19 · 111 of 130 line(s) left · raise
+  limit to fit more per call`. When a page stops inside a block, `# omitted N more block(s) after this body` names the
+  blocks it never reached, and a multi-symbol `show` prints one index line per resolved symbol before any body, so a
+  cut body cannot make a symbol look missing. For a body over roughly 40 lines, the cheaper path is the span: every
+  header carries `path:start-end`, and `read offset=start limit=n` fetches it in one call.
 - `show` defaults to `full` for functions/fields and `signatures` for containers; `detail` overrides that.
   Containers in signatures mode show only public members. `show` keeps signatures intact, while digest shortens
   long ones. Extracted source is dedented by the declaration's own indentation so nested members read cleanly;
@@ -183,7 +196,10 @@ output.
 - `usages` matches by the selector's last component, because call sites normally say
   `socket.connect(...)`, not `Socket::connect(...)`. It is **syntactic**: overloads, generics, templates, macros,
   and dynamic dispatch are not resolved. clangd is the future provider for exact C++ references. The call-site
-  shapes live on each `LanguageAdapter`, so adding a language does not add a switch to `usages`. A per-file
+  shapes live on each `LanguageAdapter`, so adding a language does not add a switch to `usages`. A qualified
+  request (`CallList::attention_paged`) keeps its type: occurrences whose enclosing type is that class sort first,
+  and the rest are marked `[name-only]` with a footer note. The rows stay because an aliased or unqualified use is
+  still a real use — only the claim that they are the same symbol is dropped. A per-file
   identifier index is built on first use and reused for every requested symbol and later calls; the WASM tree is
   released after indexing. Files at or above 256 KiB build that index in the parser worker.
 - `search` is declaration-name and doc-text search, not text search. A plain query is a case-insensitive
@@ -193,6 +209,13 @@ output.
   in any order, all required, and the row carries `[doc]`. Qualified queries skip the doc channel, because the
   qualifier already chose the scope. It reports the qualified name and signature, so the follow-up is `show`
   with an exact selector.
+  The doc channel splits by evidence strength: a query that appears **contiguously** in the prose (`page table`) sorts
+  above one whose words are merely scattered through the section, and a quoted query (`"page table"`) requires the
+  phrase outright. Doc tokens are lightly stemmed (`spilling` finds `spilled`); names and signatures are not, so
+  `list` and `listing` stay distinct identifiers. The tiers, in order: exact name, name prefix, name substring, body
+  phrase, frontmatter phrase, frontmatter tokens, body tokens, approximate name, relevance tail.
+  A result cut by the limit also reports what is left: `# more: 69 of 82 match(es) on later pages, next in
+  <path>`, so a caller can tell that the answer is one page down instead of reformulating the query.
   Only when neither a name nor a doc comment matches does search fall back to a bounded Damerau-Levenshtein
   comparison against the full name and its snake/camel-case tokens. Queries shorter than three characters are
   not fuzzed; longer queries allow one or two edits. At most eight approximate rows are returned, nearest

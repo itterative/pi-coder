@@ -26,7 +26,7 @@ export const MAX_FILES = 2_000;
 export const DEFAULT_CHAR_LIMIT = 4_000;
 
 /** Lowest character limit worth honoring; below this the header alone is most of the output. */
-export const MIN_CHAR_LIMIT = 800;
+export const MIN_CHAR_LIMIT = 200;
 
 export const CXX_EXTENSIONS = new Set([
     ".h",

@@ -1,0 +1,79 @@
+import { beforeEach, describe, expect, it } from "vitest";
+
+import { clearCodeCache } from "../../../src/tools/code/load";
+import { runUsages } from "../../../src/tools/code/usages";
+import { MemoryCodeSource } from "../../helpers/code-source";
+
+beforeEach(() => {
+    clearCodeCache();
+});
+
+/**
+ * One member name, two types, both called from member functions of their own type.
+ *
+ * `Ops` is declared first on purpose: a request for `CallList::attention_paged` must surface the call inside
+ * `CallList`'s own member function above the one inside `Ops`, even though `Ops` comes first in the file.
+ */
+const FILES: Record<string, string> = {
+    "src/types.hpp": `struct Ops {
+    int attention_paged(int page);
+
+    int run() { return attention_paged(2); }
+};
+
+struct CallList {
+    int attention_paged(int page);
+
+    int run() { return attention_paged(1); }
+};
+`,
+};
+
+function source(): MemoryCodeSource {
+    return new MemoryCodeSource("/project", FILES);
+}
+
+describe("outline usages with a qualified symbol", () => {
+    it("puts the occurrences inside the named type first, even when the other type comes first in the file", async () => {
+        const result = await runUsages(source(), {
+            action: "usages",
+            path: "src",
+            symbols: ["CallList::attention_paged"],
+            kind: "call",
+        });
+        const rows = result.text.split("\n").filter((line) => line.trimStart().startsWith(":"));
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]).toContain("attention_paged(1)");
+        expect(rows[1]).toContain("attention_paged(2)");
+    });
+
+    it("marks the row that only shares the name, and only that row", async () => {
+        const result = await runUsages(source(), {
+            action: "usages",
+            path: "src",
+            symbols: ["CallList::attention_paged"],
+            kind: "call",
+        });
+        const groups = result.text.split("\n").filter((line) => /^ {2}\S/.test(line));
+
+        expect(groups).toHaveLength(2);
+        expect(groups[0]).toContain("CallList::run");
+        expect(groups[0]).not.toContain("[name-only]");
+        expect(groups[1]).toContain("Ops::run");
+        expect(groups[1]).toContain("[name-only]");
+        expect(result.text).toContain("the enclosing type is not the one you qualified");
+    });
+
+    it("adds neither mark nor note for an unqualified symbol", async () => {
+        const result = await runUsages(source(), {
+            action: "usages",
+            path: "src",
+            symbols: ["attention_paged"],
+            kind: "call",
+        });
+
+        expect(result.text).not.toContain("[name-only]");
+        expect(result.text).not.toContain("enclosing type");
+    });
+});

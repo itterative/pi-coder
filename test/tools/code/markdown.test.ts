@@ -53,13 +53,14 @@ beforeEach(() => {
 });
 
 describe("Markdown adapter", () => {
-    it("maps heading hierarchy and ignores fenced code and front matter", async () => {
+    it("maps heading hierarchy and ignores fenced code", async () => {
         const parsed = await parseCodeFile(MARKDOWN, "/project/docs/guide.md", "markdown");
         const names = parsed.all.map((declaration) => declaration.qualifiedName);
 
         expect(parsed.language).toBe("markdown");
         expect(parsed.parseErrors).toBe(0);
         expect(names).toEqual([
+            "frontmatter",
             "Guide",
             "Guide::Install",
             "Guide::Usage",

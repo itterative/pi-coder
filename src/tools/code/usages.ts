@@ -134,8 +134,11 @@ export async function runUsages(
     const truncated = discovery.truncated;
 
     for (const raw of requested) {
-        const targetName = lastComponent(raw);
-        const collected = await collectForFiles(files, targetName, params.kind, signal);
+        const target: UsageTarget = {
+            name: lastComponent(raw),
+            typeName: qualifierTypeOf(raw),
+        };
+        const collected = await collectForFiles(files, target, params.kind, signal);
 
         totalMatches += collected.total;
 
@@ -148,7 +151,7 @@ export async function runUsages(
         const section = sections[0] ?? "";
         const [header = "", ...blocks] = section.split("\n\n");
         const fitted = renderWithinBudget(header, blocks, limit, offset);
-        const next = nextOffsetNote(fitted.nextOffset);
+        const next = nextOffsetNote(fitted);
 
         return {
             text: [fitted.text, next].filter((part) => part !== undefined).join("\n"),
@@ -161,7 +164,7 @@ export async function runUsages(
 
     const header = `# usages ${requested.join(", ")} · ${languages} · syntactic (name-based)`;
     const fitted = renderWithinBudget(header, sections, limit, offset);
-    const next = nextOffsetNote(fitted.nextOffset);
+    const next = nextOffsetNote(fitted);
 
     return {
         text: [fitted.text, next].filter((part) => part !== undefined).join("\n"),
@@ -174,17 +177,29 @@ export async function runUsages(
 
 interface Collected {
     total: number;
-    files: Array<{ path: string; scopes: Array<{ name: string; occurrences: Occurrence[] }> }>;
+    /** The enclosing type the caller named, when it named one. */
+    qualifiedType?: string;
+    files: Array<{
+        path: string;
+        scopes: Array<{ name: string; matchedType: boolean; occurrences: Occurrence[] }>;
+    }>;
 }
 
 interface FileScan {
     total: number;
-    scopes: Map<string, Occurrence[]>;
+    scopes: Array<{ name: string; matchedType: boolean; occurrences: Occurrence[] }>;
+}
+
+/** A qualified request: the member name plus the type the caller asked for, when it named one. */
+interface UsageTarget {
+    name: string;
+    /** Last component of the qualifier: `A::B::run` asks for `run` on `B`. */
+    typeName?: string;
 }
 
 async function collectForFiles(
     parsedFiles: readonly ParsedFile[],
-    targetName: string,
+    target: UsageTarget,
     kindFilter: UsageKind | undefined,
     signal?: AbortSignal,
 ): Promise<Collected> {
@@ -195,14 +210,14 @@ async function collectForFiles(
     for (const file of parsedFiles) {
         signal?.throwIfAborted();
 
-        const scan = await scanFile(file, targetName, kindFilter, signal);
+        const scan = await scanFile(file, target, kindFilter, signal);
 
         total += scan.total;
 
-        if (scan.scopes.size > 0) {
+        if (scan.scopes.length > 0) {
             files.push({
                 path: file.path,
-                scopes: sortedScopes(scan.scopes),
+                scopes: scan.scopes,
             });
         }
 
@@ -213,19 +228,24 @@ async function collectForFiles(
         }
     }
 
-    return { total, files };
+    return { total, qualifiedType: target.typeName, files };
 }
 
 async function scanFile(
     file: ParsedFile,
-    targetName: string,
+    target: UsageTarget,
     kindFilter: UsageKind | undefined,
     signal?: AbortSignal,
 ): Promise<FileScan> {
     const index = await usageIndexFor(file, signal);
     const lines = file.source.split("\n");
-    const expected = normalizeText(targetName);
-    const scopes = new Map<string, Occurrence[]>();
+    const definitions = definitionMap(file);
+    const expected = normalizeText(target.name);
+    const expectedType = target.typeName?.toLowerCase();
+    const scopes = new Map<
+        string,
+        { name: string; matchedType: boolean; occurrences: Occurrence[] }
+    >();
     const seen = new Set<number>();
     let total = 0;
     let processed = 0;
@@ -253,19 +273,27 @@ async function scanFile(
         total += 1;
 
         const scope = scopeFor(index.scopes, entry.startIndex);
-        const occurrences = scopes.get(scope) ?? [];
+        // A declaration of the member itself is qualified by its own name, not by an enclosing scope: the definition
+        // of `CallList::attention_paged` sits at namespace scope, and walking outward would find no type at all.
+        const declared = definitions.get(entry.startIndex);
+        const matchedType =
+            declared === undefined
+                ? matchesEnclosingType(index.scopes, entry.startIndex, expectedType)
+                : qualifiedNameHasParent(declared.qualifiedName, expectedType);
+        const group = scopes.get(scope) ?? { name: scope, matchedType, occurrences: [] };
 
-        occurrences.push({
+        group.occurrences.push({
             line: entry.line,
             column: entry.column,
             text: shortLine(lines[entry.line - 1] ?? ""),
             tag: entry.tag,
         });
-        scopes.set(scope, occurrences);
+        group.matchedType ||= matchedType;
+        scopes.set(scope, group);
         seen.add(entry.startIndex);
     }
 
-    return { total, scopes };
+    return { total, scopes: sortedScopes(Array.from(scopes.values())) };
 }
 
 async function usageIndexFor(file: ParsedFile, signal?: AbortSignal): Promise<UsageIndex> {
@@ -370,13 +398,20 @@ function definitionMap(file: ParsedFile): Map<number, Declaration> {
     return definitions;
 }
 
+/**
+ * Order groups by evidence: the type the caller named first, then by position.
+ *
+ * A qualified request used to be matched on its last name component alone, so `CallList::attention_paged` mixed
+ * calls through a *different* struct's field into rows that look precise. Ordering and marking keep the rows (an
+ * aliased or unqualified use is still a real use) without pretending they are the same symbol.
+ */
 function sortedScopes(
-    scopes: ReadonlyMap<string, Occurrence[]>,
-): Array<{ name: string; occurrences: Occurrence[] }> {
-    return Array.from(scopes.entries())
-        .map(([name, occurrences]) => ({
-            name,
-            occurrences: occurrences.toSorted(
+    scopes: Array<{ name: string; matchedType: boolean; occurrences: Occurrence[] }>,
+): FileScan["scopes"] {
+    return scopes
+        .map((scope) => ({
+            ...scope,
+            occurrences: scope.occurrences.toSorted(
                 (left, right) => left.line - right.line || left.column - right.column,
             ),
         }))
@@ -384,8 +419,77 @@ function sortedScopes(
             const leftLine = left.occurrences[0]?.line ?? 0;
             const rightLine = right.occurrences[0]?.line ?? 0;
 
+            if (left.matchedType !== right.matchedType) {
+                return left.matchedType ? -1 : 1;
+            }
+
             return leftLine - rightLine || left.name.localeCompare(right.name);
         });
+}
+
+/** The last component of a request's qualifier, e.g. `CallList` from `A::CallList::run`. */
+function qualifierTypeOf(raw: string): string | undefined {
+    const doubleColon = raw.lastIndexOf("::");
+    const dot = raw.lastIndexOf(".");
+    const separator = Math.max(doubleColon, dot);
+
+    if (separator <= 0) {
+        return undefined;
+    }
+
+    const qualifier = raw.slice(0, separator);
+    const last = lastComponent(qualifier).toLowerCase();
+
+    return last.length === 0 ? undefined : last;
+}
+
+const TYPE_SCOPE_KINDS = new Set(["class", "struct", "union", "interface", "trait", "enum"]);
+
+/**
+ * Whether the nearest enclosing type is the one the caller asked for.
+ *
+ * Walks outward past the function that holds the use: `rig.ops.attention_paged(...)` inside
+ * `bench::run_attention_paged` belongs to the benchmark's own code, not to `CallList`, and only the enclosing
+ * *type* can tell the two apart.
+ */
+/** Whether a declaration's qualified name places it under the named type, e.g. `CallList::attention_paged`. */
+function qualifiedNameHasParent(qualifiedName: string, expectedType: string | undefined): boolean {
+    if (expectedType === undefined) {
+        return false;
+    }
+
+    const separator = qualifiedName.lastIndexOf("::");
+    const dot = qualifiedName.lastIndexOf(".");
+
+    if (Math.max(separator, dot) <= 0) {
+        return false;
+    }
+
+    const parent = qualifiedName.slice(0, Math.max(separator, dot));
+
+    return lastComponent(parent).toLowerCase() === expectedType;
+}
+
+function matchesEnclosingType(
+    scopes: readonly Declaration[],
+    index: number,
+    expectedType: string | undefined,
+): boolean {
+    if (expectedType === undefined) {
+        return false;
+    }
+
+    const enclosing = scopes.findLast(
+        (declaration) =>
+            TYPE_SCOPE_KINDS.has(declaration.kind) &&
+            declaration.range.startIndex <= index &&
+            index < declaration.range.endIndex,
+    );
+
+    return (
+        enclosing !== undefined &&
+        lastComponent(enclosing.qualifiedName).toLowerCase() === expectedType
+    );
 }
 
 function pushChildren(stack: SyntaxNode[], node: SyntaxNode): void {
@@ -419,12 +523,17 @@ function renderSection(
     }
 
     const body: string[] = [];
+    const mixed =
+        collected.qualifiedType !== undefined &&
+        collected.files.some((file) => file.scopes.some((scope) => !scope.matchedType));
 
     for (const file of collected.files) {
         body.push(source.displayPath(file.path));
 
         for (const scope of file.scopes) {
-            body.push(`  ${scope.name.length === 0 ? "<file scope>" : scope.name}`);
+            const mark = mixed && !scope.matchedType ? "  [name-only]" : "";
+
+            body.push(`  ${scope.name.length === 0 ? "<file scope>" : scope.name}${mark}`);
 
             for (const occurrence of scope.occurrences) {
                 body.push(`    :${occurrence.line}  ${occurrence.text}  [${occurrence.tag}]`);
@@ -435,6 +544,12 @@ function renderSection(
     if (body.length > 0) {
         body.push(
             "# note: overloads, generics, templates, macros, and dynamic dispatch are not resolved",
+        );
+    }
+
+    if (mixed) {
+        body.push(
+            "# name-only: the name matches but the enclosing type is not the one you qualified; these rows rank after the typed matches",
         );
     }
 

@@ -9,11 +9,13 @@ import {
     nextOffsetNote,
     renderWithinBudget,
     shortSignature,
+    type BudgetedText,
 } from "./format";
 import { fuzzyLimit, fuzzyNameDistance } from "./fuzzy";
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
 import { tokenize } from "./semantic/bm25";
+import { stem } from "./stem";
 import { TAIL_ROWS, declarationKey, wantsTail } from "./semantic/rank";
 import type { SemanticSearch } from "./semantic/types";
 import type { CodeSource } from "./source";
@@ -36,17 +38,29 @@ const SEARCH_YIELD_INTERVAL = 1_024;
 const FILE_SEARCH_CACHE_LIMIT = 4;
 
 /**
- * Ranking tiers, lowest first. A doc-comment match outranks every approximate name match: prose is where a
- * concept lives when no identifier spells it out, so a plausible guess at an identifier is worse evidence than
- * a documented description.
+ * Ranking tiers, lowest first. A doc match outranks every approximate name match: prose is where a concept lives
+ * when no identifier spells it out, so a plausible guess at an identifier is worse evidence than a documented
+ * description.
+ *
+ * The channels are split again by evidence strength. A contiguous phrase is stronger than the same words scattered
+ * through a section — "page table" appeared in 49 sections that merely mentioned pages and tables, and the sections
+ * that say "page table" were the answer.
+ *
+ * Frontmatter sits below a prose phrase and above prose tokens. It is the densest text in a memory tree (a curated
+ * `description:`), but its *keys* are boilerplate: query "keep updated" matches `keep_updated: true` in 82 files,
+ * so a frontmatter `description:` that explains the field has to outrank them, and only the prose-phrase tier can
+ * do that.
  */
 const TIER_EXACT = 0;
 const TIER_PREFIX = 1;
 const TIER_SUBSTRING = 2;
-const TIER_DOC = 3;
-const TIER_FUZZY = 4;
+const TIER_DOC_PHRASE = 3;
+const TIER_FRONTMATTER_PHRASE = 4;
+const TIER_FRONTMATTER = 5;
+const TIER_DOC = 6;
+const TIER_FUZZY = 7;
 /** Relevance-tail rows: real declarations, but ranked by meaning rather than by name. */
-const TIER_RELATED = 5;
+const TIER_RELATED = 8;
 
 /** Keep near-miss names from flooding the output when a concept word fuzzily matches many identifiers. */
 const FUZZY_ROW_LIMIT = 8;
@@ -66,8 +80,12 @@ interface ParsedQuery {
     name: string;
     /** Lowercase qualified prefix, when the query contains `::` or `.`. */
     qualifier?: string;
-    /** Lowercase content-word tokens, matched against doc text with every token required. */
+    /** Lowercase content-word stems, matched against doc text with every token required. */
     docTokens: string[];
+    /** The whole query as one normalized run of words, for phrase adjacency. */
+    phrase: string;
+    /** Set when the caller quoted the query, which makes the phrase required rather than merely preferred. */
+    quoted: boolean;
 }
 
 interface SearchHit {
@@ -108,7 +126,7 @@ export async function runSearch(
 
     if (discovery.unsupportedRoot) {
         return {
-            text: `# search "${query.raw}" · unsupported file\n# no supported declarations to search`,
+            text: `# search ${quotedForMessage(query)} · unsupported file\n# no supported declarations to search`,
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -118,7 +136,7 @@ export async function runSearch(
 
     if (discovery.files.length === 0) {
         return {
-            text: `# search "${query.raw}" in ${source.displayPath(root)} · no supported source files`,
+            text: `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · no supported source files`,
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -136,7 +154,7 @@ export async function runSearch(
     if (parsed.length === 0) {
         return {
             text: [
-                `# search "${query.raw}" in ${source.displayPath(root)} · no readable supported files`,
+                `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · no readable supported files`,
                 batch.tooLarge > 0
                     ? `# skipped: ${batch.tooLarge} file(s) above the size limit`
                     : "",
@@ -153,7 +171,7 @@ export async function runSearch(
 
     const languages = languagesOf(parsed);
     const literal = await timing.measure("search", () => collectLiteral(parsed, query, signal));
-    const docMatches = literal.reduce((count, hit) => count + (hit.tier === TIER_DOC ? 1 : 0), 0);
+    const docMatches = literal.reduce((count, hit) => count + (isDocTier(hit.tier) ? 1 : 0), 0);
     const fuzzy =
         literal.length === 0
             ? await timing.measure("search", () => collectFuzzy(parsed, query, signal))
@@ -189,7 +207,7 @@ export async function runSearch(
                 : "no declarations match";
 
         return {
-            text: `# ${kind} "${query.raw}" in ${source.displayPath(root)} · ${fileCount(parsed.length)} · ${languages}`,
+            text: `# ${kind} ${quotedForMessage(query)} in ${source.displayPath(root)} · ${fileCount(parsed.length)} · ${languages}`,
             files: parsed.length,
             parseErrors,
             truncated: discovery.truncated,
@@ -208,7 +226,8 @@ export async function runSearch(
         docMatches,
         tail.length,
     );
-    const body = hits.map((hit) => renderHit(source, hit)).join("\n");
+    const rows = hits.map((hit) => renderHit(source, hit));
+    const body = rows.join("\n");
     const fitted = renderWithinBudget(header, [body], limit, offset);
     const footer = footerFor(
         approximate,
@@ -217,9 +236,10 @@ export async function runSearch(
         total,
         fuzzy?.total ?? 0,
         tail.length,
+        moreNote(source, hits, rows, fitted),
     );
     const hint = tail.length > 0 && semantic?.hint !== undefined ? [semantic.hint] : [];
-    const next = nextOffsetNote(fitted.nextOffset);
+    const next = nextOffsetNote(fitted);
     const text = [fitted.text, next, ...footer, ...hint]
         .filter((part): part is string => part !== undefined && part.length > 0)
         .join("\n");
@@ -233,24 +253,35 @@ export async function runSearch(
     };
 }
 
+/** The query as the caller wrote it, quoted once: a phrase query already carries its own quotes. */
+function quotedForMessage(query: ParsedQuery): string {
+    return query.quoted ? query.raw : `"${query.raw}"`;
+}
+
 function parseQuery(raw: string): ParsedQuery {
     const trimmed = raw.trim();
-    const doubleColon = trimmed.lastIndexOf("::");
-    const dot = trimmed.lastIndexOf(".");
+    const quoted = trimmed.length > 1 && trimmed.startsWith('"') && trimmed.endsWith('"');
+    const text = quoted ? trimmed.slice(1, -1).trim() : trimmed;
+    const doubleColon = text.lastIndexOf("::");
+    const dot = text.lastIndexOf(".");
     const separator = Math.max(doubleColon, dot);
     const separatorLength = separator === doubleColon ? 2 : 1;
-    const normalized = normalizeSymbol(trimmed).toLowerCase();
+    const normalized = normalizeSymbol(text).toLowerCase();
+    const phrase = normalizeText(text);
+    const docTokens = docTokensOf(text);
 
     if (separator <= 0) {
-        return { raw: trimmed, normalized, name: trimmed, docTokens: docTokensOf(trimmed) };
+        return { raw: trimmed, normalized, name: text, docTokens, phrase, quoted };
     }
 
     return {
         raw: trimmed,
         normalized,
-        name: trimmed.slice(separator + separatorLength),
-        qualifier: normalizeSymbol(trimmed.slice(0, separator)).toLowerCase(),
-        docTokens: docTokensOf(trimmed),
+        name: text.slice(separator + separatorLength),
+        qualifier: normalizeSymbol(text.slice(0, separator)).toLowerCase(),
+        docTokens,
+        phrase,
+        quoted,
     };
 }
 
@@ -325,13 +356,21 @@ function literalTier(declaration: Declaration, query: ParsedQuery): number | und
     return name.includes(requested) ? TIER_SUBSTRING : undefined;
 }
 
+/** The doc channel's tiers are weaker evidence than a name match and stronger than a fuzzy one. */
+function isDocTier(tier: number): boolean {
+    return tier >= TIER_DOC_PHRASE && tier <= TIER_DOC;
+}
+
 /**
- * Tier for a match inside the declaration's doc comment.
+ * Tier for a match inside the declaration's doc text.
  *
  * This is the channel that answers "where is the thing that does X" when the identifier does not spell X out:
- * `fuzzyLimit` is reachable by "edit distance" only because its comment says so. Tokens are matched in any
- * order, all required, so word order in the query does not matter. Qualified queries skip this channel: their
- * qualifier already narrowed the scope, and prose would spend that precision.
+ * `fuzzyLimit` is reachable by "edit distance" only because its comment says so. Tokens are matched in any order,
+ * all required, so word order in the query does not matter; a query that also appears *contiguously* ranks above one
+ * whose words are merely scattered through the section. A quoted query requires the phrase outright.
+ *
+ * Qualified queries skip this channel: their qualifier already narrowed the scope, and prose would spend that
+ * precision.
  */
 function docTier(
     file: ParsedFile,
@@ -344,22 +383,46 @@ function docTier(
 
     const doc = docTextOf(file, declaration);
 
-    if (doc.length === 0) {
+    if (doc.normalized.length === 0) {
         return undefined;
     }
 
-    return query.docTokens.every((token) => doc.includes(token)) ? TIER_DOC : undefined;
+    const contiguous = query.phrase.length > 0 && doc.normalized.includes(query.phrase);
+
+    if (!contiguous && query.quoted) {
+        return undefined;
+    }
+
+    if (!contiguous && !query.docTokens.every((token) => doc.tokens.has(token))) {
+        return undefined;
+    }
+
+    const frontmatter = declaration.kind === "frontmatter";
+
+    if (contiguous) {
+        return frontmatter ? TIER_FRONTMATTER_PHRASE : TIER_DOC_PHRASE;
+    }
+
+    return frontmatter ? TIER_FRONTMATTER : TIER_DOC;
+}
+
+interface DocText {
+    /** Punctuation collapsed and lowercased, for phrase adjacency. */
+    normalized: string;
+    /** Stems, all-tokens-required, for the token test. */
+    tokens: Set<string>;
 }
 
 /**
- * Lowercased, punctuation-collapsed doc text, cached per declaration.
+ * Normalized doc text, cached per declaration.
  *
  * The declarations belong to a `ParsedFile`, so a reparse drops these with the file's other WeakMap entries.
- * Collapsing punctuation is what makes "edit distance" match "edit-distance budget" in a comment.
+ * Collapsing punctuation is what makes "edit distance" match "edit-distance budget" in a comment, and stemming is
+ * what makes "spilling" find a comment that says "spill".
  */
-const docTextCache = new WeakMap<Declaration, string>();
+const docTextCache = new WeakMap<Declaration, DocText>();
 
-function docTextOf(file: ParsedFile, declaration: Declaration): string {
+function docTextOf(file: ParsedFile, declaration: Declaration): DocText {
     const cached = docTextCache.get(declaration);
 
     if (cached !== undefined) {
@@ -367,10 +430,11 @@ function docTextOf(file: ParsedFile, declaration: Declaration): string {
     }
 
     const range = declaration.docRange;
-    const text = range === undefined ? "" : normalizeText(declarationDoc(file, declaration));
-    docTextCache.set(declaration, text);
+    const text = range === undefined ? "" : declarationDoc(file, declaration);
+    const doc = { normalized: normalizeText(text), tokens: new Set(docTokensOf(text)) };
+    docTextCache.set(declaration, doc);
 
-    return text;
+    return doc;
 }
 
 /** Lowercase and collapse punctuation so a word query matches hyphenated and spaced prose alike. */
@@ -384,12 +448,13 @@ function normalizeText(text: string): string {
 /**
  * The doc tiers' query tokens.
  *
- * The same tokenizer BM25 uses, deliberately: a stopword that is filtered from the lexical rank but kept here
- * would be *required* to appear in the prose, so "strip comment markers from the doc text" would miss a comment
- * that says exactly that. One tokenizer, one notion of a content word.
+ * The same tokenizer BM25 uses, then the light stemmer: a stopword that is filtered from the lexical rank but kept
+ * here would be *required* to appear in the prose, so "strip comment markers from the doc text" would miss a comment
+ * that says exactly that. Stemming applies only here, never to identifiers: `list` and `listing` are different names
+ * but the same concept in prose.
  */
 function docTokensOf(text: string): string[] {
-    return tokenize(text);
+    return tokenize(text).map(stem);
 }
 
 async function collectTail(
@@ -551,13 +616,32 @@ function compareHits(left: SearchHit, right: SearchHit): number {
 function renderHit(source: CodeSource, hit: SearchHit): string {
     const declaration = hit.declaration;
     const location = `${source.displayPath(hit.file.path)}:${lineRange(declaration.range)}`;
-    const signature = shortSignature(declaration.signature, 240);
+    const signature =
+        declaration.kind === "frontmatter" ? "" : shortSignature(declaration.signature, 240);
     const tag = declarationTag(declaration);
-    const channel =
-        hit.tier === TIER_DOC ? " [doc]" : hit.tier === TIER_RELATED ? " [related]" : "";
+    const channel = channelTag(hit);
     const approximate = hit.distance === undefined ? "" : ` ~${hit.distance}`;
 
-    return `${location}  ${kindLabel(declaration.kind)}  ${declaration.qualifiedName}  ${signature}${tag}${channel}${approximate}`;
+    const columns = [
+        location,
+        kindLabel(declaration.kind),
+        declaration.qualifiedName,
+        signature,
+    ].filter((column) => column.length > 0);
+
+    return `${columns.join("  ")}${tag}${channel}${approximate}`;
+}
+
+function channelTag(hit: SearchHit): string {
+    if (hit.declaration.kind === "frontmatter" && isDocTier(hit.tier)) {
+        return " [frontmatter]";
+    }
+
+    if (isDocTier(hit.tier)) {
+        return " [doc]";
+    }
+
+    return hit.tier === TIER_RELATED ? " [related]" : "";
 }
 
 function declarationTag(declaration: Declaration): string {
@@ -579,7 +663,7 @@ function headerFor(
     docMatches: number,
     relatedMatches: number,
 ): string {
-    return `# search "${query.raw}" in ${source.displayPath(root)} · ${fileCount(fileTotal)} · ${languages} · ${matchSummary(total, docMatches, approximate, relatedMatches)}`;
+    return `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · ${fileCount(fileTotal)} · ${languages} · ${matchSummary(total, docMatches, approximate, relatedMatches)}`;
 }
 
 /** Name, doc, and relevance channels are counted separately so a reader can tell which one produced a row. */
@@ -614,13 +698,18 @@ function footerFor(
     shown: number,
     approximateTotal: number,
     relatedMatches: number,
+    more: string | undefined,
 ): string[] {
     const footer: string[] = [];
 
     if (relatedMatches > 0) {
         footer.push(
-            "# related: ranked by relevance, not by name or doc comment; outline show to confirm",
+            "# related: ranked by term overlap and, when the embedding index is warm, similarity — not by name or doc comment · outline show to confirm",
         );
+    }
+
+    if (more !== undefined) {
+        footer.push(more);
     }
 
     if (approximate) {
@@ -638,6 +727,33 @@ function footerFor(
     }
 
     return footer;
+}
+
+/**
+ * Name what a cut page left behind.
+ *
+ * A row-paged result used to end at `# next: offset=N` with no hint that the best match — the file whose *section*
+ * answered the question — was on the next page. Naming the next row's file is enough to tell a caller to keep
+ * reading instead of reformulating the query.
+ */
+function moreNote(
+    source: CodeSource,
+    hits: readonly SearchHit[],
+    rows: readonly string[],
+    fitted: BudgetedText,
+): string | undefined {
+    const onPage = new Set(fitted.text.split("\n"));
+    const firstUnseen = rows.findIndex((row) => !onPage.has(row));
+
+    if (firstUnseen < 0) {
+        return undefined;
+    }
+
+    const unseen = rows.filter((row) => !onPage.has(row)).length;
+    const next = hits[firstUnseen];
+    const where = next === undefined ? "" : `, next in ${source.displayPath(next.file.path)}`;
+
+    return `# more: ${unseen} of ${rows.length} match(es) on later pages${where}`;
 }
 
 function languagesOf(files: readonly ParsedFile[]): string {

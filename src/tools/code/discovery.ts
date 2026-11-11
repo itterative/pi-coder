@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { MAX_FILES, isSupportedPath } from "./languages";
+import { MAX_FILES, isSupportedPath, languageForPath } from "./languages";
 import type { CodeSource } from "./source";
 
 export interface Discovery {
@@ -61,6 +61,18 @@ export async function discoverFiles(
  * `socket.connect(...)`, not `Socket::connect(...)`, so requiring the qualifier would miss the uses the
  * caller wants.
  */
+/**
+ * Names a parser emits that no grep can find, because the source says something else.
+ *
+ * `frontmatter` is one: the block is delimited by `---`, and the word itself appears only in the docs. Markdown
+ * headings are not in the list — their names are the heading text.
+ */
+const SYNTHETIC_NAMES = new Set(["frontmatter"]);
+
+function isSyntheticName(term: string): boolean {
+    return SYNTHETIC_NAMES.has(term.toLowerCase());
+}
+
 export async function candidateFiles(
     source: CodeSource,
     root: string,
@@ -82,8 +94,9 @@ export async function candidateFiles(
         ),
     );
     const hits = new Set<string>();
+    const synthetic = terms.filter(isSyntheticName);
 
-    for (const term of terms) {
+    for (const term of terms.filter((term) => !isSyntheticName(term))) {
         const found = await source.grepFiles(term, root, { limit: MAX_FILES, signal });
 
         if (found === undefined) {
@@ -92,6 +105,18 @@ export async function candidateFiles(
 
         for (const file of found) {
             hits.add(path.resolve(file));
+        }
+    }
+
+    if (synthetic.length > 0) {
+        // A synthetic declaration has no text of its own to grep for: the frontmatter block is `---` in the file, so
+        // `show frontmatter` has to look at the markdown files directly instead of quoting a name that never appears.
+        const all = await discoverFiles(source, root, signal);
+
+        for (const file of all.files) {
+            if (languageForPath(file) === "markdown") {
+                hits.add(path.resolve(file));
+            }
         }
     }
 

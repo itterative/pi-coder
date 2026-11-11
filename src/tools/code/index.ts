@@ -40,7 +40,9 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
         description:
             "Inspect code structure without reading whole files. Supports C/C++/HIP, JavaScript/TypeScript " +
             "(JSX/TSX), Java, C#, Go, Rust, Python, PHP, Ruby, and Markdown headings; other file types are " +
-            "skipped. Output is character-limited, and a cut result ends with # next: offset=N.",
+            "skipped. Output is character-limited, and a cut result ends with # next: offset=N and the lines it " +
+            "left. For a body over ~40 lines the span is cheaper: every header carries path:start-end, so digest " +
+            "or show locates it and one read offset=start limit=n fetches it.",
         promptSnippet:
             "Read code by declaration: digest a file, search names/docs, show a body, find usages. " +
             "Prefer over rg/read.",
@@ -60,7 +62,9 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             query: Type.Optional(
                 Type.String({
                     description:
-                        'search only: declaration name or partial name, e.g. "plan" or "CallList::execute"',
+                        'search only: declaration name or partial name, e.g. "plan" or "CallList::execute". ' +
+                        "Multiple words also match doc text and frontmatter in any order; wrap them in double " +
+                        'quotes ("page table") to require the words to be adjacent.',
                 }),
             ),
             symbols: Type.Optional(
@@ -80,7 +84,9 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             ),
             limit: Type.Optional(
                 Type.Number({
-                    description: `Maximum result size in characters (default ${DEFAULT_CHAR_LIMIT})`,
+                    description:
+                        `Maximum result size in characters (default ${DEFAULT_CHAR_LIMIT}); ` +
+                        `at least ${MIN_CHAR_LIMIT}, which is enough for one signature`,
                     minimum: MIN_CHAR_LIMIT,
                     maximum: 1_000_000,
                 }),
@@ -96,7 +102,7 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             offset: Type.Optional(
                 Type.Number({
                     description:
-                        "Body-line offset for continuing a result cut by the limit (default 0)",
+                        "Body-line offset for continuing a result cut by the limit (default 0); the previous page names it in # next",
                     minimum: 0,
                     maximum: 1_000_000,
                 }),

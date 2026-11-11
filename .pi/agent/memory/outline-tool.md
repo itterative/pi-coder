@@ -53,10 +53,10 @@ section prose, so sections are searchable by content (`outline-tool/search.md`).
 - **`usages` is syntactic.** It matches the selector's last component on purpose (call sites say
   `socket.connect`, not `Socket::connect`). Overloads, generics, templates, macros, and dynamic dispatch are not
   resolved; clangd is the eventual provider for C++ references.
-- **`search` ranks in tiers.** Exact name, name prefix, name substring, then doc-comment tokens (all required,
-  any order); below those a relevance tail (BM25 always, opt-in embeddings fused by RRF) and finally a capped
-  fuzzy identifier pass. A tail row is tagged `[related]`. Comments outside a declaration's doc block, strings,
-  and config stay with `bash`/`rg`. Details: `outline-tool/search.md`.
+- **`search` ranks in tiers.** Exact name, name prefix, name substring, doc *phrase*, then frontmatter and
+  doc-comment tokens (all required, any order, lightly stemmed); below those a relevance tail (BM25 always,
+  opt-in embeddings fused by RRF) and a capped fuzzy pass. Rows carry `[doc]`, `[frontmatter]`, or `[related]`;
+  a cut page ends with `# more: … next in <path>`. Details: `outline-tool/search.md`.
 
 ## Defaults
 

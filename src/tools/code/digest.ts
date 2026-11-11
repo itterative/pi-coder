@@ -115,7 +115,7 @@ export async function runDigest(
                 limit,
                 offset,
             );
-            const next = nextOffsetNote(fitted.nextOffset);
+            const next = nextOffsetNote(fitted);
 
             return {
                 text: [fitted.text, next, footer]
@@ -129,7 +129,7 @@ export async function runDigest(
     }
 
     const fitted = renderWithinBudget(header, [fullBody], limit, offset);
-    const next = nextOffsetNote(fitted.nextOffset);
+    const next = nextOffsetNote(fitted);
 
     return {
         text: [fitted.text, next, footer]

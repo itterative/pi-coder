@@ -34,7 +34,9 @@ export type DeclarationKind =
     | "variable"
     | "typeAlias"
     | "macro"
-    | "heading";
+    | "heading"
+    /** A Markdown frontmatter block: no name of its own, but the highest-signal prose in a memory tree. */
+    | "frontmatter";
 
 export type Access = "public" | "protected" | "private";
 

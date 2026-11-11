@@ -150,7 +150,11 @@ export function declarationLine(
 ): string {
     const includeLine = options.includeLine ?? true;
     const includeDefTag = options.includeDefTag ?? true;
-    const signature = shortSignature(declaration.signature, options.signatureLimit);
+    // A frontmatter block's source is just `---`; its own name is the only thing worth showing in a map.
+    const signature =
+        declaration.kind === "frontmatter"
+            ? declaration.name
+            : shortSignature(declaration.signature, options.signatureLimit);
     const tag =
         includeDefTag && declaration.isDefinition && isFunctionLike(declaration.kind)
             ? " [def]"
@@ -162,6 +166,8 @@ export function declarationLine(
 
 export function kindLabel(kind: Declaration["kind"]): string {
     switch (kind) {
+        case "frontmatter":
+            return "yaml";
         case "class":
         case "struct":
         case "union":
@@ -294,6 +300,10 @@ export interface BudgetedText {
     offset: number;
     /** Absolute body-line offset for the next page, when content remains. */
     nextOffset?: number;
+    /** Body lines this page did not reach. */
+    remaining: number;
+    /** Body lines in the whole result. */
+    total: number;
 }
 
 interface LaidBlock {
@@ -325,16 +335,17 @@ export function renderWithinBudget(
     const laid = layBlocks(blocks);
 
     if (laid.length === 0) {
-        return { text: header, truncated: startOffset > 0, offset: startOffset };
+        return noContent(header, startOffset);
     }
 
     const totalLines = bodyLineCount(laid);
 
     if (startOffset >= totalLines) {
         return {
+            ...noContent(header, startOffset),
             text: `${header}\n# offset ${startOffset} is beyond the end (${totalLines} body line(s))`,
             truncated: false,
-            offset: startOffset,
+            total: totalLines,
         };
     }
 
@@ -348,7 +359,7 @@ export function renderWithinBudget(
         const block = laid[index];
 
         if (block === undefined) {
-            return { text: header, truncated: false, offset: startOffset };
+            return noContent(header, startOffset);
         }
 
         const suffix = block.lines.slice(position.intra).join("\n");
@@ -358,12 +369,11 @@ export function renderWithinBudget(
         if (used + cost > limit) {
             parts.push(fitted.text);
 
-            return {
-                text: parts.join("\n\n"),
-                truncated: true,
-                offset: startOffset,
-                ...(fitted.kept > 0 ? { nextOffset: startOffset + fitted.kept } : {}),
-            };
+            return omittedAfter(parts, fitted.kept, laid.length - index - 1, {
+                startOffset,
+                endOffset: startOffset + fitted.kept,
+                total: totalLines,
+            });
         }
 
         parts.push(suffix);
@@ -386,12 +396,11 @@ export function renderWithinBudget(
                 const fitted = takeLines(block.text, Math.max(0, limit - used - 1), used);
                 parts.push(fitted.text);
 
-                return {
-                    text: parts.join("\n\n"),
-                    truncated: true,
-                    offset: startOffset,
-                    ...(fitted.kept > 0 ? { nextOffset: block.start + fitted.kept } : {}),
-                };
+                return omittedAfter(parts, fitted.kept, laid.length - index - 1, {
+                    startOffset,
+                    endOffset: block.start + fitted.kept,
+                    total: totalLines,
+                });
             }
 
             parts.push(`# omitted ${laid.length - index} more block(s) at the character limit`);
@@ -401,6 +410,8 @@ export function renderWithinBudget(
                 truncated: true,
                 offset: startOffset,
                 nextOffset: block.start,
+                remaining: totalLines - block.start,
+                total: totalLines,
             };
         }
 
@@ -409,12 +420,68 @@ export function renderWithinBudget(
         included += 1;
     }
 
-    return { text: parts.join("\n\n"), truncated: startOffset > 0, offset: startOffset };
+    return {
+        text: parts.join("\n\n"),
+        truncated: startOffset > 0,
+        offset: startOffset,
+        remaining: 0,
+        total: totalLines,
+    };
 }
 
-/** A one-line continuation hint for a character-limited result. */
-export function nextOffsetNote(nextOffset: number | undefined): string | undefined {
-    return nextOffset === undefined ? undefined : `# next: offset=${nextOffset}`;
+function noContent(header: string, offset: number): BudgetedText {
+    return {
+        text: header,
+        truncated: offset > 0,
+        offset,
+        remaining: 0,
+        total: 0,
+    };
+}
+
+/**
+ * Build a page that stopped inside a block.
+ *
+ * The trailing note names the blocks left after this one, because a page cut inside the first body otherwise hides
+ * every later block with no trace: a caller cannot tell "not found" from "not reached".
+ */
+function omittedAfter(
+    parts: readonly string[],
+    kept: number,
+    blocksLeft: number,
+    page: { startOffset: number; endOffset: number; total: number },
+): BudgetedText {
+    const lines = [...parts];
+
+    if (blocksLeft > 0) {
+        lines.push(`# omitted ${blocksLeft} more block(s) after this body`);
+    }
+
+    return {
+        text: lines.join("\n\n"),
+        truncated: true,
+        offset: page.startOffset,
+        ...(kept > 0 ? { nextOffset: page.endOffset } : {}),
+        remaining: Math.max(0, page.total - page.endOffset),
+        total: page.total,
+    };
+}
+
+/**
+ * A one-line continuation hint for a character-limited result.
+ *
+ * It names what is left in lines as well as the next offset, because the page step is set by the character budget,
+ * not by a line count: without the remaining count, a caller cannot tell whether one call or eight remain.
+ */
+export function nextOffsetNote(fitted: BudgetedText): string | undefined {
+    if (fitted.nextOffset === undefined) {
+        return undefined;
+    }
+
+    const scope =
+        fitted.remaining > 0 ? ` · ${fitted.remaining} of ${fitted.total} line(s) left` : "";
+
+    return `# next: offset=${fitted.nextOffset}${scope} · raise limit to fit more per call`;
 }
 
 function layBlocks(blocks: readonly string[]): LaidBlock[] {

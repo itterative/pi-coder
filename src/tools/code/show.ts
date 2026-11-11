@@ -12,6 +12,7 @@ import {
     shortLine,
     renderWithinBudget,
     nextOffsetNote,
+    type BudgetedText,
     selectorMatches,
     sourceForDeclaration,
     splitSymbolList,
@@ -121,13 +122,15 @@ export async function runShow(
 
     const groups = groupMatches(matches);
     const parseErrors = sumParseErrors(files);
+    const legend = legendFor(source, groups, fileOf);
     const header = [
         `# show ${source.displayPath(root)} ${requested.join(", ")}`,
         parseErrors > 0 ? `parse: ${parseErrors} error(s)` : "",
         discovery.truncated ? "file list truncated" : "",
     ]
         .filter((part) => part.length > 0)
-        .join(" · ");
+        .join(" · ")
+        .concat(legend.length === 0 ? "" : `\n${legend.join("\n")}`);
     const limit = params.limit ?? DEFAULT_CHAR_LIMIT;
     const offset = Math.max(0, Math.floor(params.offset ?? 0));
     const ambiguous = groups.length > AMBIGUITY_LIMIT || hasMultipleDefinitionFiles(groups, fileOf);
@@ -143,7 +146,7 @@ export async function runShow(
             offset,
             fileOf,
         );
-        const next = nextOffsetNote(text.nextOffset);
+        const next = nextOffsetNote(text);
 
         return {
             text: [text.text, next].filter((part) => part !== undefined).join("\n"),
@@ -162,7 +165,7 @@ export async function runShow(
     const note = matchNote(groups);
     const partial = partialHintNote(selectors, groups);
     const elsewhere = await elsewhereNote(source, root, missing, signal, timing);
-    const next = nextOffsetNote(fitted.nextOffset);
+    const next = nextOffsetNote(fitted);
     const text = [fitted.text, note, partial, ...elsewhere, next]
         .filter((part) => part !== undefined)
         .join("\n");
@@ -174,6 +177,37 @@ export async function runShow(
         truncated: fitted.truncated || discovery.truncated,
         matches: matches.length,
     };
+}
+
+/**
+ * One line per resolved symbol, printed before any body.
+ *
+ * A body that fills the character budget leaves `# next: offset=N` and nothing else, so without this index the
+ * second symbol of a two-symbol request is invisible: the caller cannot tell "not found" from "not reached". One
+ * line per symbol is cheap enough to pay on every multi-symbol call, and it is where the span for a `read` comes
+ * from.
+ */
+function legendFor(
+    source: CodeSource,
+    groups: readonly MatchGroup[],
+    fileOf: ReadonlyMap<Declaration, ParsedFile>,
+): string[] {
+    if (groups.length < 2) {
+        return [];
+    }
+
+    return groups.flatMap((group) => {
+        const declaration = group.declarations.toSorted(compareDeclarations)[0];
+        const file = declaration === undefined ? undefined : fileOf.get(declaration);
+
+        if (declaration === undefined || file === undefined) {
+            return [];
+        }
+
+        return [
+            `#   ${pathRange(source.displayPath(file.path), declaration.range)} · ${kindLabel(declaration.kind)} ${declaration.qualifiedName}`,
+        ];
+    });
 }
 
 /** A successful result can still need one more narrowing step; teach that only when it applies. */
@@ -353,7 +387,7 @@ function renderAmbiguous(
     limit: number,
     offset: number,
     fileOf: ReadonlyMap<Declaration, ParsedFile>,
-): { text: string; truncated: boolean; nextOffset?: number } {
+): BudgetedText {
     const shown = groups
         .flatMap((group) => {
             const definitions = group.declarations.filter(

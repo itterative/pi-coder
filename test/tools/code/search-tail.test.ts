@@ -64,7 +64,9 @@ describe("outline search relevance tail", () => {
         expect(result.matches).toBe(1);
         expect(result.text).toContain("[related]");
         expect(result.text).toContain("1 related");
-        expect(result.text).toContain("# related: ranked by relevance");
+        expect(result.text).toContain(
+            "# related: ranked by term overlap and, when the embedding index is warm, similarity",
+        );
         expect(result.text).toContain("# semantic: enable semantic search");
     });
 
