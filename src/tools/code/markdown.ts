@@ -33,6 +33,8 @@ interface Heading {
     title: string;
     startIndex: number;
     signatureEnd: number;
+    /** Where the section's own prose starts: after the heading line, or after a setext underline. */
+    bodyStart: number;
 }
 
 class MarkdownVisitor extends DeclarationVisitor {
@@ -51,7 +53,7 @@ class MarkdownVisitor extends DeclarationVisitor {
     private visitHeadings(headings: readonly Heading[]): void {
         const stack: Array<{ level: number; declaration: Declaration }> = [];
 
-        for (const heading of headings) {
+        for (const [index, heading] of headings.entries()) {
             while (stack.length > 0 && (stack.at(-1)?.level ?? 0) >= heading.level) {
                 stack.pop();
             }
@@ -65,6 +67,10 @@ class MarkdownVisitor extends DeclarationVisitor {
                     startIndex: heading.startIndex,
                     endIndex: sectionEnd(headings, heading, this.source.length),
                     signatureEnd: heading.signatureEnd,
+                    // A heading has no comment, so its doc text is its own prose. The doc tier, BM25, and the
+                    // embedding channel all read this field, which is what makes a memory findable by content
+                    // instead of by title.
+                    docRange: proseRange(this.source, headings, index),
                     isDefinition: true,
                     dedupeKey: `heading\u0000${heading.startIndex}`,
                 },
@@ -106,6 +112,8 @@ function scanHeadings(source: string, lineStarts: readonly number[]): Heading[] 
         headings.push(found.heading);
 
         if (found.setext) {
+            // The underline belongs to the heading, not to the prose that follows it.
+            found.heading.bodyStart = lineEnd(source, lineStarts, index + 1);
             index += 1;
         }
     }
@@ -184,7 +192,13 @@ function headingAt(
         return title.length === 0
             ? undefined
             : {
-                  heading: { level: (atx[1] ?? "").length, title, startIndex, signatureEnd },
+                  heading: {
+                      level: (atx[1] ?? "").length,
+                      title,
+                      startIndex,
+                      signatureEnd,
+                      bodyStart: signatureEnd,
+                  },
                   setext: false,
               };
     }
@@ -202,6 +216,7 @@ function headingAt(
             title,
             startIndex,
             signatureEnd,
+            bodyStart: signatureEnd,
         },
         setext: true,
     };
@@ -224,6 +239,37 @@ function sectionEnd(headings: readonly Heading[], heading: Heading, sourceLength
     );
 
     return next?.startIndex ?? sourceLength;
+}
+
+/**
+ * The section's own prose: from the end of the heading line to the next heading of *any* level.
+ *
+ * Not the whole section, which `range` already covers: a parent heading that carried its children's text would
+ * duplicate every subsection in the doc tier, the BM25 document, and the embedded vector. Surrounding blank
+ * lines are trimmed, and a heading with no prose gets no doc range at all.
+ */
+function proseRange(
+    source: string,
+    headings: readonly Heading[],
+    index: number,
+): { startIndex: number; endIndex: number } | null {
+    const heading = headings[index];
+    let start = heading?.bodyStart ?? 0;
+    let end = headings[index + 1]?.startIndex ?? source.length;
+
+    while (start < end && isWhitespace(source[start])) {
+        start += 1;
+    }
+
+    while (end > start && isWhitespace(source[end - 1])) {
+        end -= 1;
+    }
+
+    return end > start ? { startIndex: start, endIndex: end } : null;
+}
+
+function isWhitespace(character: string | undefined): boolean {
+    return character === undefined || /\s/.test(character);
 }
 
 function cleanHeading(text: string): string {

@@ -4,6 +4,7 @@ import { runDigest } from "../../../src/tools/code/digest";
 import { clearCodeCache } from "../../../src/tools/code/load";
 import { runSearch } from "../../../src/tools/code/search";
 import { runShow } from "../../../src/tools/code/show";
+import { CallTiming } from "../../../src/tools/code/timing";
 import { runUsages } from "../../../src/tools/code/usages";
 import { MemoryCodeSource } from "../../helpers/code-source";
 
@@ -553,5 +554,38 @@ describe("outline usages", () => {
         expect(result.text).toContain("[def]");
         expect(result.text).toContain("[launch]");
         expect(result.text).toContain("hipLaunchKernelGGL");
+    });
+});
+
+describe("outline timing", () => {
+    it("counts fresh parses, then reports the same files as cached", async () => {
+        const cold = new CallTiming();
+        await runSearch(
+            source(),
+            { action: "search", query: "connect" },
+            undefined,
+            undefined,
+            cold,
+        );
+        const first = cold.snapshot();
+
+        expect(first.files).toBeGreaterThan(0);
+        expect(first.parsed).toBe(first.files);
+        expect(first.cached).toBe(0);
+        expect(first.totalMs).toBeGreaterThan(0);
+
+        const warm = new CallTiming();
+        await runSearch(
+            source(),
+            { action: "search", query: "connect" },
+            undefined,
+            undefined,
+            warm,
+        );
+        const second = warm.snapshot();
+
+        expect(second.files).toBe(first.files);
+        expect(second.parsed).toBe(0);
+        expect(second.cached).toBe(second.files);
     });
 });

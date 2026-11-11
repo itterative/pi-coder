@@ -59,6 +59,30 @@ describe("outline search channels", () => {
         expect(result.text).toContain("[doc]");
     });
 
+    it("does not require a doc comment to contain the query's stopwords", async () => {
+        const source = sourceWith(
+            "src/text.ts",
+            [
+                "/** Comment markers are stripped from the doc text. */",
+                "export function declarationDoc(): string {",
+                '    return "";',
+                "}",
+                "",
+            ].join("\n"),
+        );
+
+        // The doc says exactly this, minus "from"/"the": the doc tier tokenizes with the BM25 stoplist, so
+        // filler words cannot make an otherwise perfect prose match fail.
+        const result = await runSearch(source, {
+            action: "search",
+            path: "src",
+            query: "strip comment markers from the doc text",
+        });
+
+        expect(result.text).toContain("declarationDoc");
+        expect(result.text).toContain("[doc]");
+    });
+
     it("prefers a doc match to an approximate name match", async () => {
         const source = sourceWith(
             "src/fuzzy.ts",

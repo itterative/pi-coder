@@ -7,6 +7,7 @@ import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
 import { adapterForLanguage, type CallSiteSpec } from "./adapters";
 import type { CodeSource } from "./source";
+import { CallTiming } from "./timing";
 import { parseSyntax } from "./tree-sitter";
 import type { CodeToolParams, Declaration, ParsedFile, UsageKind } from "./types";
 import { WORKER_PARSE_THRESHOLD_BYTES, buildUsageIndexInWorker } from "./worker";
@@ -85,6 +86,7 @@ export async function runUsages(
     source: CodeSource,
     params: CodeToolParams,
     signal?: AbortSignal,
+    timing: CallTiming = new CallTiming(),
 ): Promise<UsagesResult> {
     const requested = splitSymbolList(params.symbols ?? []);
 
@@ -104,7 +106,9 @@ export async function runUsages(
 
     await source.assertReadable(root);
 
-    const discovery = await candidateFiles(source, root, requested, signal);
+    const discovery = await timing.measure("discover", () =>
+        candidateFiles(source, root, requested, signal),
+    );
 
     if (discovery.files.length === 0) {
         return {
@@ -116,7 +120,10 @@ export async function runUsages(
         };
     }
 
-    const batch = await loadParsedFiles(source, discovery.files, signal);
+    const batch = await timing.measure("parse", () =>
+        loadParsedFiles(source, discovery.files, signal),
+    );
+    timing.recordLoad(batch, discovery.files.length);
     const files = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
     const parseErrors = sumParseErrors(files);
     const languages = Array.from(new Set(files.map((file) => file.language)))

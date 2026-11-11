@@ -116,6 +116,9 @@ export interface LoadBatch {
     parsed: ParsedFile[];
     tooLarge: number;
     errors: string[];
+    /** Files served from the parse cache, and files read and parsed in this call. */
+    cached: number;
+    fresh: number;
 }
 
 export async function loadParsedFiles(
@@ -127,6 +130,8 @@ export async function loadParsedFiles(
     const parsed: ParsedFile[] = [];
     const errors: string[] = [];
     let tooLarge = 0;
+    let cached = 0;
+    let fresh = 0;
     let next = 0;
 
     const worker = async (): Promise<void> => {
@@ -145,7 +150,11 @@ export async function loadParsedFiles(
                 case "parsed":
                     parsed.push(result.parsed);
 
-                    if (!result.fromCache) {
+                    if (result.fromCache) {
+                        cached += 1;
+                    } else {
+                        fresh += 1;
+
                         await yieldToEventLoop(0, signal);
                     }
 
@@ -168,7 +177,7 @@ export async function loadParsedFiles(
 
     await Promise.all(workers);
 
-    return { parsed, tooLarge, errors };
+    return { parsed, tooLarge, errors, cached, fresh };
 }
 
 function messageOf(error: unknown): string {

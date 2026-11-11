@@ -24,7 +24,8 @@ hooks; full design notes are in `src/tools/code/README.md`.
   HIP/CUDA qualifiers, `<<<>>>` launches, declaration macros, attributes, and `= {}` defaults with **same-length**
   replacements; directives are copied verbatim. `cpp.ts` parses that buffer but slices signatures and source from
   the original, so offsets and `__global__` survive, and `declarationStart()` recovers blanked prefix macros.
-  Every other language uses an identity preprocessor; Markdown is line-scanned.
+  Every other language uses an identity preprocessor; Markdown is line-scanned and a heading's doc text is its
+section prose, so sections are searchable by content (`outline-tool/search.md`).
 - **The declaration IR is not an AST.** Adapters emit `Declaration` (kind, qualified name, ranges, signature,
   parameter types, access, children) through `visitor.ts`; parser node types never reach an action or the
   formatter. Body walkers also extract inner functions and arrow/function constants (JS/TS), named lambdas (C++),
@@ -44,25 +45,24 @@ hooks; full design notes are in `src/tools/code/README.md`.
   invocations carry the `digest → show → usages` workflow; cheapness is stated, tidiness is not. **Intent-level
   triggers are the failure mode**: asked whether a question is "about code structure", an agent already heading
   for `rg` answers no. State the boundary as a real limitation, since a wasted turn teaches preference for `rg`.
+  **The limitation must be the literal one.** `search` still appends relevance-ranked `[related]` rows when
+  names and doc comments are thin, and `SEMANTIC_HINT` is suppressed once hybrid is active, so a guide saying
+  `search` reads "names and doc comments and nothing else" leaves the agent no in-band signal that a conceptual
+  query can land. The honest boundary is "no identifier or doc comment spells it out", not "no such code".
   `promptSnippet` is that per-turn surface, `description` the call contract; action glosses belong to the enum.
 - **`usages` is syntactic.** It matches the selector's last component on purpose (call sites say
   `socket.connect`, not `Socket::connect`). Overloads, generics, templates, macros, and dynamic dispatch are not
   resolved; clangd is the eventual provider for C++ references.
-- **`search` is name and doc-text search, not grep.** Tiers: exact name, name prefix, name substring, doc
-  comment, then approximate. Plain queries are case-insensitive simple-name substrings; `::` or `.` matches the
-  qualified name and skips the doc channel. Doc tokens match in any order, all required, against
-  `declaration.docRange` sliced from the original source and cached in a `WeakMap`, so `edit distance` reaches
-  `fuzzyLimit`. Only when neither name nor doc matches does `fuzzy.ts` run its bounded Damerau-Levenshtein over
-  the full name and snake/camel tokens (never under three characters); rows are capped at eight, nearest first,
-  with the withheld count in the footer. The ordering is the point: a plausible identifier guess is weaker
-  evidence than a documented description, and an uncapped fuzzy pass floods a concept query with near-miss
-  names. Comments outside a declaration's doc block, strings, and config stay with `bash`/`rg`.
+- **`search` ranks in tiers.** Exact name, name prefix, name substring, then doc-comment tokens (all required,
+  any order); below those a relevance tail (BM25 always, opt-in embeddings fused by RRF) and finally a capped
+  fuzzy identifier pass. A tail row is tagged `[related]`. Comments outside a declaration's doc block, strings,
+  and config stay with `bash`/`rg`. Details: `outline-tool/search.md`.
 
 ## Defaults
 
-8k-character `limit`, 1 MB file cap, 2k discovered files, and build/out/cmake-build/third_party/generated
+4,000-character `limit`, 1 MB file cap, 2k discovered files, and build/out/cmake-build/third_party/generated
 ignored; `[huge]` files render top-level declarations only, and digest degrades to a directory map over the
-limit. Rows and locations use `:start-end` or `:line`. With a directory `path`, `show` pairs headers with
+limit. With a directory `path`, `show` pairs headers with
 definitions and lists same-signature definitions across files. Extracted blocks are dedented to the
 declaration's indentation. Scanning `.` honors ignore files; an explicitly named subdirectory is scanned
 literally, so fixtures under an ignored path stay reachable.
@@ -85,6 +85,7 @@ PowerShell are deferred; resolved references would be a future provider.
 ## Targeted references
 
 - `src/tools/code/README.md` — action semantics, per-language behavior, preprocessor rules, limits, tests.
+- `outline-tool/search.md` — search tiers, BM25 parameters, the semantic tail, artifact/index layout, build cost.
 - `src/tools/code/adapters.ts` — language registry: grammar, preprocessor, parser, call sites.
 - `src/tools/code/visitor.ts` — shared declaration bookkeeping for new adapters.
 - `src/tools/code/parse.ts` — parse dispatch through the registry.

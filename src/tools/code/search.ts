@@ -13,7 +13,12 @@ import {
 import { fuzzyLimit, fuzzyNameDistance } from "./fuzzy";
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
+import { tokenize } from "./semantic/bm25";
+import { TAIL_ROWS, declarationKey, wantsTail } from "./semantic/rank";
+import type { SemanticSearch } from "./semantic/types";
 import type { CodeSource } from "./source";
+import { declarationDoc } from "./text";
+import { CallTiming } from "./timing";
 import type { CodeToolParams, Declaration, ParsedFile } from "./types";
 
 export interface SearchResult {
@@ -40,6 +45,8 @@ const TIER_PREFIX = 1;
 const TIER_SUBSTRING = 2;
 const TIER_DOC = 3;
 const TIER_FUZZY = 4;
+/** Relevance-tail rows: real declarations, but ranked by meaning rather than by name. */
+const TIER_RELATED = 5;
 
 /** Keep near-miss names from flooding the output when a concept word fuzzily matches many identifiers. */
 const FUZZY_ROW_LIMIT = 8;
@@ -59,7 +66,7 @@ interface ParsedQuery {
     name: string;
     /** Lowercase qualified prefix, when the query contains `::` or `.`. */
     qualifier?: string;
-    /** Lowercase word tokens, matched against doc text with every token required. */
+    /** Lowercase content-word tokens, matched against doc text with every token required. */
     docTokens: string[];
 }
 
@@ -76,6 +83,8 @@ export async function runSearch(
     source: CodeSource,
     params: CodeToolParams,
     signal?: AbortSignal,
+    semantic?: SemanticSearch,
+    timing: CallTiming = new CallTiming(),
 ): Promise<SearchResult> {
     const query = parseQuery(params.query ?? "");
 
@@ -95,7 +104,7 @@ export async function runSearch(
 
     await source.assertReadable(root);
 
-    const discovery = await discoverFiles(source, root, signal);
+    const discovery = await timing.measure("discover", () => discoverFiles(source, root, signal));
 
     if (discovery.unsupportedRoot) {
         return {
@@ -117,7 +126,10 @@ export async function runSearch(
         };
     }
 
-    const batch = await loadParsedFiles(source, discovery.files, signal);
+    const batch = await timing.measure("parse", () =>
+        loadParsedFiles(source, discovery.files, signal),
+    );
+    timing.recordLoad(batch, discovery.files.length);
     const parsed = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
     const parseErrors = parsed.reduce((total, file) => total + file.parseErrors, 0);
 
@@ -140,16 +152,41 @@ export async function runSearch(
     }
 
     const languages = languagesOf(parsed);
-    const literal = await collectLiteral(parsed, query, signal);
-    const approximate = literal.length === 0;
-    const fuzzy = approximate ? await collectFuzzy(parsed, query, signal) : undefined;
-    const hits = fuzzy === undefined ? literal : fuzzy.hits;
+    const literal = await timing.measure("search", () => collectLiteral(parsed, query, signal));
+    const docMatches = literal.reduce((count, hit) => count + (hit.tier === TIER_DOC ? 1 : 0), 0);
+    const fuzzy =
+        literal.length === 0
+            ? await timing.measure("search", () => collectFuzzy(parsed, query, signal))
+            : undefined;
+    const fuzzyHits = fuzzy?.hits ?? [];
+    // A typo of an identifier is precise evidence, so it keeps priority over a relevance tail; the tail is
+    // for a query whose words exist in prose but in no name or doc comment the literal pass could reach.
+    const tail =
+        fuzzyHits.length === 0
+            ? await timing.measure("tail", () =>
+                  collectTail(
+                      semantic,
+                      literal.length,
+                      docMatches,
+                      parsed,
+                      source,
+                      root,
+                      query,
+                      discovery.truncated,
+                      [...literal, ...fuzzyHits],
+                      signal,
+                  ),
+              )
+            : [];
+    const hits = [...literal, ...fuzzyHits, ...tail];
     const total = hits.length;
+    const approximate = fuzzyHits.length > 0;
 
     if (total === 0) {
-        const kind = approximate
-            ? "no declarations or approximate matches"
-            : "no declarations match";
+        const kind =
+            fuzzy !== undefined
+                ? "no declarations or approximate matches"
+                : "no declarations match";
 
         return {
             text: `# ${kind} "${query.raw}" in ${source.displayPath(root)} · ${fileCount(parsed.length)} · ${languages}`,
@@ -160,7 +197,6 @@ export async function runSearch(
         };
     }
 
-    const docMatches = hits.reduce((count, hit) => count + (hit.tier === TIER_DOC ? 1 : 0), 0);
     const header = headerFor(
         source,
         root,
@@ -170,12 +206,21 @@ export async function runSearch(
         total,
         approximate,
         docMatches,
+        tail.length,
     );
     const body = hits.map((hit) => renderHit(source, hit)).join("\n");
     const fitted = renderWithinBudget(header, [body], limit, offset);
-    const footer = footerFor(approximate, query, discovery.truncated, total, fuzzy?.total ?? 0);
+    const footer = footerFor(
+        approximate,
+        query,
+        discovery.truncated,
+        total,
+        fuzzy?.total ?? 0,
+        tail.length,
+    );
+    const hint = tail.length > 0 && semantic?.hint !== undefined ? [semantic.hint] : [];
     const next = nextOffsetNote(fitted.nextOffset);
-    const text = [fitted.text, next, ...footer]
+    const text = [fitted.text, next, ...footer, ...hint]
         .filter((part): part is string => part !== undefined && part.length > 0)
         .join("\n");
 
@@ -322,10 +367,7 @@ function docTextOf(file: ParsedFile, declaration: Declaration): string {
     }
 
     const range = declaration.docRange;
-    const text =
-        range === undefined
-            ? ""
-            : normalizeText(file.source.slice(range.startIndex, range.endIndex));
+    const text = range === undefined ? "" : normalizeText(declarationDoc(file, declaration));
     docTextCache.set(declaration, text);
 
     return text;
@@ -339,10 +381,62 @@ function normalizeText(text: string): string {
         .trim();
 }
 
+/**
+ * The doc tiers' query tokens.
+ *
+ * The same tokenizer BM25 uses, deliberately: a stopword that is filtered from the lexical rank but kept here
+ * would be *required* to appear in the prose, so "strip comment markers from the doc text" would miss a comment
+ * that says exactly that. One tokenizer, one notion of a content word.
+ */
 function docTokensOf(text: string): string[] {
-    return normalizeText(text)
-        .split(" ")
-        .filter((token) => token.length > 0);
+    return tokenize(text);
+}
+
+async function collectTail(
+    semantic: SemanticSearch | undefined,
+    literalCount: number,
+    docMatches: number,
+    parsed: readonly ParsedFile[],
+    source: CodeSource,
+    root: string,
+    query: ParsedQuery,
+    truncated: boolean,
+    shown: readonly SearchHit[],
+    signal?: AbortSignal,
+): Promise<SearchHit[]> {
+    if (semantic === undefined || !wantsTail(literalCount, docMatches)) {
+        return [];
+    }
+
+    const shownKeys = new Set(shown.map((hit) => declarationKey(hit.file, hit.declaration)));
+    const ranked = await semantic.rank(
+        {
+            query: query.raw,
+            root,
+            sourceKind: source.kind,
+            files: parsed,
+            truncated,
+        },
+        signal,
+    );
+    const tail: SearchHit[] = [];
+
+    for (const entry of ranked) {
+        const key = declarationKey(entry.file, entry.declaration);
+
+        if (shownKeys.has(key)) {
+            continue;
+        }
+
+        shownKeys.add(key);
+        tail.push({ file: entry.file, declaration: entry.declaration, tier: TIER_RELATED });
+
+        if (tail.length >= TAIL_ROWS) {
+            break;
+        }
+    }
+
+    return tail;
 }
 
 async function collectFuzzy(
@@ -459,7 +553,8 @@ function renderHit(source: CodeSource, hit: SearchHit): string {
     const location = `${source.displayPath(hit.file.path)}:${lineRange(declaration.range)}`;
     const signature = shortSignature(declaration.signature, 240);
     const tag = declarationTag(declaration);
-    const channel = hit.tier === TIER_DOC ? " [doc]" : "";
+    const channel =
+        hit.tier === TIER_DOC ? " [doc]" : hit.tier === TIER_RELATED ? " [related]" : "";
     const approximate = hit.distance === undefined ? "" : ` ~${hit.distance}`;
 
     return `${location}  ${kindLabel(declaration.kind)}  ${declaration.qualifiedName}  ${signature}${tag}${channel}${approximate}`;
@@ -482,19 +577,34 @@ function headerFor(
     total: number,
     approximate: boolean,
     docMatches: number,
+    relatedMatches: number,
 ): string {
-    return `# search "${query.raw}" in ${source.displayPath(root)} · ${fileCount(fileTotal)} · ${languages} · ${matchSummary(total, docMatches, approximate)}`;
+    return `# search "${query.raw}" in ${source.displayPath(root)} · ${fileCount(fileTotal)} · ${languages} · ${matchSummary(total, docMatches, approximate, relatedMatches)}`;
 }
 
-/** Name and doc channels are counted separately so a reader can tell which one produced a row. */
-function matchSummary(total: number, docMatches: number, approximate: boolean): string {
+/** Name, doc, and relevance channels are counted separately so a reader can tell which one produced a row. */
+function matchSummary(
+    total: number,
+    docMatches: number,
+    approximate: boolean,
+    relatedMatches: number,
+): string {
     if (approximate) {
         return `no name or doc matches · ${total} approximate`;
     }
 
     const matches = `${total} ${total === 1 ? "match" : "matches"}`;
+    const channels: string[] = [];
 
-    return docMatches > 0 ? `${matches} · ${docMatches} by doc text` : matches;
+    if (docMatches > 0) {
+        channels.push(`${docMatches} by doc text`);
+    }
+
+    if (relatedMatches > 0) {
+        channels.push(`${relatedMatches} related`);
+    }
+
+    return channels.length === 0 ? matches : `${matches} · ${channels.join(" · ")}`;
 }
 
 function footerFor(
@@ -503,8 +613,15 @@ function footerFor(
     discoveryTruncated: boolean,
     shown: number,
     approximateTotal: number,
+    relatedMatches: number,
 ): string[] {
     const footer: string[] = [];
+
+    if (relatedMatches > 0) {
+        footer.push(
+            "# related: ranked by relevance, not by name or doc comment; outline show to confirm",
+        );
+    }
 
     if (approximate) {
         const maxDistance = fuzzyLimit(query.name) ?? 0;

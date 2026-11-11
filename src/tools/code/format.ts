@@ -213,21 +213,19 @@ export function sourceForDeclaration(
     includeDocs: boolean,
 ): string[] {
     const lines: string[] = [];
-
-    const anchor = includeDocs
-        ? (declaration.docRange?.startIndex ?? declaration.range.startIndex)
-        : declaration.range.startIndex;
+    // A doc range normally precedes the declaration. A Markdown section keeps its prose *inside* its range, which
+    // the section slice already prints, so printing the doc too would duplicate it.
+    const doc =
+        includeDocs &&
+        declaration.docRange !== undefined &&
+        declaration.docRange.endIndex <= declaration.range.startIndex
+            ? declaration.docRange
+            : undefined;
+    const anchor = doc?.startIndex ?? declaration.range.startIndex;
     const indent = indentBefore(source, anchor);
 
-    if (includeDocs && declaration.docRange !== undefined) {
-        lines.push(
-            ...sliceSource(
-                source,
-                declaration.docRange.startIndex,
-                declaration.docRange.endIndex,
-                indent,
-            ),
-        );
+    if (doc !== undefined) {
+        lines.push(...sliceSource(source, doc.startIndex, doc.endIndex, indent));
     }
 
     lines.push(

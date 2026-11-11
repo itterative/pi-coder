@@ -12,9 +12,10 @@
  * discovers the limitation through a wasted turn learns to prefer `rg`. The three literal invocations
  * carry the workflow, because an example is imitated more reliably than a rule that describes it.
  *
- * Every claim here tracks the implementation: `search` reads names *and* doc comments, `show` locates a
- * symbol that lives in another file, and both `show` and `usages` take comma-joined symbol lists. A guide
- * that keeps a capability the tool no longer has, or drops one it gained, teaches the wrong tool.
+ * Every claim here tracks the implementation: `search` reads names *and* doc comments and can append a
+ * relevance-ranked tail, `show` locates a symbol that lives in another file, and both `show` and `usages` take
+ * comma-joined symbol lists. A guide that keeps a capability the tool no longer has, or drops one it gained,
+ * teaches the wrong tool.
  */
 export function outlineGuidePrompt(): string {
     return [
@@ -44,11 +45,15 @@ export function outlineGuidePrompt(): string {
         "pick an overload.",
         "",
         "Stay with `rg`/`grep` while the target is not a declaration: strings, config, logs, prose, an error",
-        "message, a language `outline` does not parse. `search` reads names and doc comments and nothing else, so a",
-        "zero-hit search means no such name or description here, not that the behavior is absent.",
+        "message, a language `outline` does not parse. `search` matches declaration names and their doc comments,",
+        "and when those are thin it appends ranked `[related]` rows, so a conceptual query can land without a literal",
+        "match; a literal zero-hit still means no identifier or doc comment spells it out.",
         "",
         "`usages` finds candidates, not a call graph: it is syntactic, so it does not resolve overloads, generics,",
         "macros, or dynamic dispatch. When output ends with `# next: offset=N`, call again with the same",
         "parameters and that offset.",
+        "",
+        "Rows tagged `[related]` were ranked by relevance because name and doc matches were thin; they are guesses,",
+        "so confirm with `outline show` before relying on one.",
     ].join("\n");
 }

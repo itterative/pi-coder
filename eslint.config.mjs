@@ -65,7 +65,11 @@ export default [
     {
         // Standalone Node scripts that ship inside the extension and run without TypeScript: the
         // container-side dispatcher executes inside the sandbox image, where only plain Node exists.
-        files: ["scripts/**/*.mjs", "src/modules/sandbox/container/*.mjs"],
+        files: [
+            "scripts/**/*.mjs",
+            "src/modules/sandbox/container/*.mjs",
+            "src/tools/code/semantic/*.mjs",
+        ],
         languageOptions: {
             globals: globals.node,
         },

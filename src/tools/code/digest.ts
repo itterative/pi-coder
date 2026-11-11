@@ -5,6 +5,7 @@ import { declarationLine, isFunctionLike, nextOffsetNote, renderWithinBudget } f
 import { DEFAULT_CHAR_LIMIT, MAX_FILES, languageForPath, sizeLabel } from "./languages";
 import { loadParsedFiles } from "./load";
 import type { CodeSource } from "./source";
+import { CallTiming } from "./timing";
 import type { CodeDetail, CodeToolParams, Declaration, ParsedFile } from "./types";
 
 export interface DigestResult {
@@ -18,6 +19,7 @@ export async function runDigest(
     source: CodeSource,
     params: CodeToolParams,
     signal?: AbortSignal,
+    timing: CallTiming = new CallTiming(),
 ): Promise<DigestResult> {
     const detail: CodeDetail = params.detail ?? "signatures";
     const limit = params.limit ?? DEFAULT_CHAR_LIMIT;
@@ -26,7 +28,7 @@ export async function runDigest(
 
     await source.assertReadable(root);
 
-    const discovery = await discoverFiles(source, root, signal);
+    const discovery = await timing.measure("discover", () => discoverFiles(source, root, signal));
 
     if (discovery.unsupportedRoot) {
         return {
@@ -46,7 +48,10 @@ export async function runDigest(
         };
     }
 
-    const batch = await loadParsedFiles(source, discovery.files, signal);
+    const batch = await timing.measure("parse", () =>
+        loadParsedFiles(source, discovery.files, signal),
+    );
+    timing.recordLoad(batch, discovery.files.length);
     const parsed = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
     const parseErrors = parsed.reduce((total, file) => total + file.parseErrors, 0);
 

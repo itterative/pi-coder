@@ -156,6 +156,14 @@ output.
   are ignored.
 - Heading hierarchy is the declaration hierarchy, and each heading's range runs to the next heading of the same
   or higher level. `show Guide::Install` therefore returns the whole section, not just the heading line.
+- A heading's **doc text is its own prose**: from the end of the heading line to the next heading of *any* level,
+  trimmed, and unset when the heading has no prose before its first child. That one field feeds the doc tier of
+  `search`, the BM25 document, and the embedded text, so a section is findable by its content. It is deliberately
+  not the whole section range, which would repeat every subsection in the parent's doc, BM25 document, and vector.
+  Setext underlines and fenced code belong to the heading/prose correctly: the underline is excluded, a fence is
+  prose. Markdown prose skips the comment-marker stripping the code path uses, or `*` bullets and `**bold**` would
+  be eaten. `show` prints the section once: a doc range that sits *inside* the declaration range is not rendered
+  separately (`sourceForDeclaration`).
 - `usages` has no identifier index for Markdown and reports zero matches. There is no code to resolve.
 
 ## Output and limits
@@ -194,12 +202,79 @@ output.
   Strings, comments outside a declaration's adjacent doc block, config, and arbitrary source text remain the
   job of `bash` + `rg`. Search hits are cached per parsed file and normalized query (a few recent queries per
   file); a changed path + mtime + size creates a new `ParsedFile` and drops the old hits with it.
+
+### Call timings
+
+Every call reports where it spent its time in `details.timing` (`timing.ts`), and the TUI renders it as one dim
+line under the result. The tool *text* never carries it: the agent pays tokens for text, and where a call spent its
+milliseconds is a question the human reading the session asks.
+
+    timing: 1948 ms · parse 1877 · search 58 · discover 11 · work 2 · files 737 · cached 44 · parsed 693
+
+`source` and `semantic` cover `createCodeSource` and the search channel's setup; `discover` wraps
+`discoverFiles`/`candidateFiles`; `parse` wraps `loadParsedFiles` and is where a cold cache shows up; `search` is
+the action's own selection work (literal and fuzzy matching, target resolution, the usage index); `tail` is the
+relevance tail. `work` is the remainder rather than another span, so the phases add up without instrumenting every
+early return. The counts are what make a slow number actionable: `parsed` above zero means a cold parse (a repo-wide
+first search is ~2 s against ~25 ms warm), and `all cached` beside a high total points somewhere else.
+
+## Relevance tail
+
+When the literal pass produces fewer than three rows, no doc-comment match, and no identifier typo matched, `search`
+appends a short tail of `[related]` rows. BM25 over name/doc/signature always backs it; an opt-in embedding
+channel joins once a model is downloaded and the index for the searched root is warm. The channels are fused with
+reciprocal rank fusion (k=60) so their score scales never have to agree. Every embedding failure degrades to BM25
+only, and the tail never fails the search.
+
+A doc-comment match suppresses the tail (`wantsTail` in `semantic/rank.ts`): the doc tier requires every content
+word of the query to appear in one declaration's prose, so it is the strongest cheap evidence there is, and the
+tail would cost a query embedding (0.6–3 s warm/cold) to append rows the agent never needed. Both gates count
+*evidence*, not just rows: three weak name hits buy a tail, one exact doc hit does not. The doc tier tokenizes with
+the same stopword-filtered tokenizer BM25 uses (`tokenize`), so filler words in a natural-language query cannot
+make an otherwise perfect prose match miss.
+
+Vectors are content-addressed (`embeddingKey` hashes the embedded text), so an edited declaration cannot match its
+old vector — the lookup would need the old text. Staleness is therefore *absence*, never a wrong answer, and the
+dead entries an edit leaves behind are bytes only. Width is the one property not covered by that key: a namespace is
+rejected unless `header.dims === MODEL_DIMS` (the namespace hash carries model id and text version, not dims), and a
+vector whose length differs from the query vector is treated as missing rather than scored — `cosine` truncates to
+the shorter length with `Math.min`, which would turn a width mismatch into plausible-looking noise. A search counts
+dead entries when its file set covers the whole namespace root and schedules a compaction once they clear both
+floors (`shouldCompact`: 64 entries and 10% of the live set): the build has no jobs, so it is a manifest rewrite and
+a few unlinks, no model and no parse. A subdirectory search never compacts — its live set is a fragment, and pruning
+then would delete the rest of the index.
+
+One embedding child per model directory is shared by every search (`sharedEmbedRuntime`), because the tool builds a
+fresh `SemanticSearch` per call for its config and consent and never disposes it. A per-call runtime would reload
+the ~197 MB model on every tail search — measured as 2.5 s per search instead of 0.64 s — and leave one resident
+copy of the weights per search until the child's idle timeout.
+
+The shared child is also why background refreshes are capped at `refreshWorkerCount()` (half the cores, at most
+four): refresh builds run in **separate** children, so they never block a query, but they do compete for cores.
+Measured on 16 cores with a 677 ms reference query: 4 build workers cost the query 9% of its latency, 8 workers
+20%, 16 workers 124% — and the extra workers buy little, because each child loads ~1.85 s of model before it
+embeds its first item. Explicit `/outline build` keeps the full scaling.
+
+**One writer per namespace.** A refresh, a foreground build, and another pi session on the same root all publish to
+the same manifest, and each build reads it once and writes its whole in-memory view at the end — so two overlapping
+builds drop each other's shard records, and a pruning one deletes shard files the other just wrote. `buildIndex`
+therefore takes `build.lock` in the namespace directory (pid + ownership token, taken over when the holder's pid is
+dead or the file is older than two hours), holds it across read → plan → embed → publish, and releases it in a
+`finally`. A build that finds it held throws; a search-triggered refresh checks first and reports "not indexed"
+instead of scheduling a refresh that would bounce. Readers never take the lock: `writeManifest` publishes with a
+randomly named temp file and a rename, and the journal replay tolerates a truncated final line, so a killed build
+loses at most its unfinished shard.
+
+The semantic half is downloaded, not installed: no npm dependency, ~211 MB of pinned and hash-verified artifacts
+under the pi-coder state directory, a wasm ort runtime, and a content-hash shard index. `docs/outline-search.md`
+records the artifact manifest, the three ort-web-in-Node constraints, the index layout, and the measured
+cold-build cost (~1.1 s per declaration on single-threaded wasm, parallelized across processes).
 - Files at or above 256 KiB are parsed in a lazy worker so a large source file cannot freeze the TUI. The
   worker loads the existing parser modules through jiti, keeps its tree-sitter parser warm, and terminates on
   cancellation; it falls back to inline parsing if the worker or loader is unavailable. Smaller files parse
   inline. Scans, `usages`, and the literal/fuzzy search loops yield to the event loop at file, node, or
   declaration boundaries, and honor the caller's abort signal at those boundaries.
-- Defaults: 16,000-character `limit`, 1 MB file cap, 2k-file discovery cap, build/third-party/generated
+- Defaults: 4,000-character `limit`, 1 MB file cap, 2k-file discovery cap, build/third-party/generated
   directories ignored, and a 2Q parsed-file cache (2,000 entries / 64 MiB) keyed by path + mtime + size.
 - Cut output is resumable. Every action accepts `limit` in characters and `offset` in rendered body lines
   (the header is repeated, not counted). A cut result ends with `# next: offset=N`; pass that offset with the

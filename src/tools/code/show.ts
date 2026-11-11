@@ -21,6 +21,7 @@ import {
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
 import type { CodeSource } from "./source";
+import { CallTiming } from "./timing";
 import type { CodeDetail, CodeToolParams, Declaration, ParsedFile, SymbolSelector } from "./types";
 
 export interface ShowResult {
@@ -42,6 +43,7 @@ export async function runShow(
     source: CodeSource,
     params: CodeToolParams,
     signal?: AbortSignal,
+    timing: CallTiming = new CallTiming(),
 ): Promise<ShowResult> {
     const requested = splitSymbolList(params.symbols ?? []);
 
@@ -61,7 +63,9 @@ export async function runShow(
 
     await source.assertReadable(root);
 
-    const discovery = await candidateFiles(source, root, requested, signal);
+    const discovery = await timing.measure("discover", () =>
+        candidateFiles(source, root, requested, signal),
+    );
 
     if (discovery.files.length === 0) {
         return {
@@ -69,7 +73,7 @@ export async function runShow(
                 source,
                 root,
                 requested,
-                await elsewhereNote(source, root, requested, signal),
+                await elsewhereNote(source, root, requested, signal, timing),
             ),
             files: 0,
             parseErrors: 0,
@@ -78,7 +82,10 @@ export async function runShow(
         };
     }
 
-    const batch = await loadParsedFiles(source, discovery.files, signal);
+    const batch = await timing.measure("parse", () =>
+        loadParsedFiles(source, discovery.files, signal),
+    );
+    timing.recordLoad(batch, discovery.files.length);
     const files = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
     const fileOf = new Map<Declaration, ParsedFile>();
     const matches: Declaration[] = [];
@@ -101,7 +108,7 @@ export async function runShow(
     const missing = requested.filter((_, index) => !matchedSelectors.has(index));
 
     if (matches.length === 0) {
-        const elsewhere = await elsewhereNote(source, root, missing, signal);
+        const elsewhere = await elsewhereNote(source, root, missing, signal, timing);
 
         return {
             text: notFound(source, root, requested, elsewhere),
@@ -154,7 +161,7 @@ export async function runShow(
     const fitted = renderWithinBudget(header, blocks, limit, offset);
     const note = matchNote(groups);
     const partial = partialHintNote(selectors, groups);
-    const elsewhere = await elsewhereNote(source, root, missing, signal);
+    const elsewhere = await elsewhereNote(source, root, missing, signal, timing);
     const next = nextOffsetNote(fitted.nextOffset);
     const text = [fitted.text, note, partial, ...elsewhere, next]
         .filter((part) => part !== undefined)
@@ -497,7 +504,8 @@ async function elsewhereNote(
     source: CodeSource,
     root: string,
     missing: readonly string[],
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
+    timing: CallTiming,
 ): Promise<string[]> {
     if (missing.length === 0) {
         return [];
@@ -508,7 +516,7 @@ async function elsewhereNote(
     const roots = Array.from(new Set(candidates)).filter((candidate) => candidate !== root);
 
     for (const searchRoot of roots) {
-        const lines = await locateIn(source, searchRoot, missing, signal);
+        const lines = await locateIn(source, searchRoot, missing, signal, timing);
 
         if (lines.length > 0) {
             return [`# elsewhere — searched ${source.displayPath(searchRoot)}:`, ...lines];
@@ -522,15 +530,21 @@ async function locateIn(
     source: CodeSource,
     searchRoot: string,
     missing: readonly string[],
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
+    timing: CallTiming,
 ): Promise<string[]> {
-    const discovery = await candidateFiles(source, searchRoot, missing, signal);
+    const discovery = await timing.measure("discover", () =>
+        candidateFiles(source, searchRoot, missing, signal),
+    );
 
     if (discovery.files.length === 0) {
         return [];
     }
 
-    const batch = await loadParsedFiles(source, discovery.files, signal);
+    const batch = await timing.measure("parse", () =>
+        loadParsedFiles(source, discovery.files, signal),
+    );
+    timing.recordLoad(batch, discovery.files.length);
     const selectors = missing.map(parseSelector);
     const lines: string[] = [];
 

@@ -13,6 +13,8 @@ export interface DeclarationInput {
     body?: SyntaxNode | null;
     nameNode?: SyntaxNode | null;
     docAnchor?: SyntaxNode | null;
+    /** A doc range the adapter computed itself, e.g. a Markdown section's prose; wins over `docAnchor`. */
+    docRange?: { startIndex: number; endIndex: number } | null;
     paramTypes?: readonly string[];
     paramTexts?: readonly string[];
     access?: Access;
@@ -66,7 +68,7 @@ export abstract class DeclarationVisitor {
                 input.nameNode === null || input.nameNode === undefined
                     ? undefined
                     : this.nameRangeOf(input.nameNode),
-            docRange: this.docRangeOf(input.docAnchor ?? null),
+            docRange: input.docRange ?? this.docRangeOf(input.docAnchor ?? null),
             paramTypes: [...(input.paramTypes ?? [])],
             paramTexts: input.paramTexts === undefined ? undefined : [...input.paramTexts],
             access: input.access,

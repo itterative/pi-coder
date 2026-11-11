@@ -1,3 +1,5 @@
+import type { CodeTiming } from "./timing";
+
 /** The questions the outline tool answers. */
 export type CodeAction = "digest" | "search" | "show" | "usages";
 
@@ -116,6 +118,8 @@ export interface CodeActionResult {
         matches?: number;
         parseErrors?: number;
         truncated?: boolean;
+        /** Filled by the registration, so a direct action call has no timings to report. */
+        timing?: CodeTiming;
     };
 }
 
