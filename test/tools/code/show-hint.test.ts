@@ -80,6 +80,38 @@ bool connect(const Address& target, int port) {
         expect(result.text).toContain("vibes::hip::choose_splits(std::int64_t, int)");
     });
 
+    it("does not advise narrowing when the caller asked for two different symbols", async () => {
+        const result = await runShow(source(), {
+            action: "show",
+            path: "src",
+            symbols: ["vibes::hip::choose_splits(int64_t, int)", "vibes::hip::split_ceiling"],
+        });
+
+        expect(result.matches).toBeGreaterThan(1);
+        expect(result.text).not.toContain("# note:");
+    });
+
+    it("still reports ambiguity when one selector reaches two groups", async () => {
+        const source = new MemoryCodeSource("/project", {
+            "src/holder.cpp": `struct Holder {
+    void run(int value);
+    void run(const Plan& plan);
+};
+
+void Holder::run(int value) {}
+
+void Holder::run(const Plan& plan) {}
+`,
+        });
+        const result = await runShow(source, {
+            action: "show",
+            path: "src",
+            symbols: ["Holder::run"],
+        });
+
+        expect(result.text).toContain("# note: 2 overloads match");
+    });
+
     it("reports a symbol that did not resolve while another one did", async () => {
         const result = await runShow(source(), {
             action: "show",

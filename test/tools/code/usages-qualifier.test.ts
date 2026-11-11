@@ -65,6 +65,37 @@ describe("outline usages with a qualified symbol", () => {
         expect(result.text).toContain("the enclosing type is not the one you qualified");
     });
 
+    it("keeps the type for a member defined out of line in another file", async () => {
+        // `CallList::run_one` lives at namespace scope in the .cpp, so no class declaration encloses the call; only
+        // the function's own qualified name says which class it belongs to.
+        const source = new MemoryCodeSource("/project", {
+            "src/call_list.cpp": `struct Ops {
+    int attention_paged(int page);
+};
+
+struct CallList {
+    int attention_paged(int page);
+    int run_one(const Ops& ops);
+};
+
+int CallList::run_one(const Ops& ops) {
+    return attention_paged(1) + ops.attention_paged(2);
+}
+`,
+        });
+        const result = await runUsages(source, {
+            action: "usages",
+            path: "src",
+            symbols: ["CallList::attention_paged"],
+            kind: "call",
+        });
+        const groups = result.text.split("\n").filter((line) => /^ {2}\S/.test(line));
+
+        expect(groups[0]).toContain("CallList::run_one");
+        expect(groups[0]).not.toContain("[name-only]");
+        expect(result.text).not.toContain("[name-only]");
+    });
+
     it("adds neither mark nor note for an unqualified symbol", async () => {
         const result = await runUsages(source(), {
             action: "usages",

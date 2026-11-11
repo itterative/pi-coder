@@ -168,7 +168,7 @@ export async function runShow(
         .map((group) => renderGroup(source, group, fileOf, detail))
         .filter((block): block is string => block !== undefined);
     const fitted = renderWithinBudget(header, blocks, limit, offset);
-    const note = matchNote(groups);
+    const note = matchNote(groups, selectors);
     const partial = partialHintNote(selectors, groups);
     const elsewhere = await elsewhereNote(source, root, missing, signal, timing);
     // Every requested symbol reports its outcome. A missing one used to vanish entirely as soon as another one
@@ -222,9 +222,35 @@ function legendFor(
     });
 }
 
-/** A successful result can still need one more narrowing step; teach that only when it applies. */
-function matchNote(groups: readonly MatchGroup[]): string | undefined {
+/**
+ * A successful result can still need one more narrowing step; teach that only when it applies.
+ *
+ * `groups.length > 1` is not the signal. A caller who asked for two different symbols gets two groups by design, and
+ * telling them to "use a qualified name or parameter types to select one" describes a problem that does not exist —
+ * the example it offers is a truncated eleven-parameter kernel signature. Ambiguity is *one selector* reaching more
+ * than one group, which is what this checks.
+ */
+function matchNote(
+    groups: readonly MatchGroup[],
+    selectors: readonly SymbolSelector[],
+): string | undefined {
     if (groups.length < 2) {
+        return undefined;
+    }
+
+    const ambiguous = selectors.some((selector) => {
+        const keys = new Set<string>();
+
+        for (const group of groups) {
+            if (group.declarations.some((declaration) => selectorMatches(declaration, selector))) {
+                keys.add(group.key);
+            }
+        }
+
+        return keys.size > 1;
+    });
+
+    if (!ambiguous) {
         return undefined;
     }
 

@@ -27,6 +27,8 @@ import {
 } from "./semantic/config";
 import { buildIndex, countEmbeddings, createSemanticSearch, ensureIndexMetadata } from "./semantic";
 import { buildWorkerCount } from "./semantic/runtime";
+import { nativeArtifactBytes } from "./semantic/artifacts";
+import { nativeRuntimePresent } from "./semantic/native";
 import { readManifest } from "./semantic/store";
 import type { SemanticSearch } from "./semantic/types";
 import { runShow } from "./show";
@@ -157,7 +159,7 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
                     content: [
                         {
                             type: "text" as const,
-                            text: `# outline ${params.action} failed\n${messageOf(error)}`,
+                            text: failureText(params, error),
                         },
                     ],
                     details: {
@@ -469,12 +471,31 @@ async function handleOutlineCommand(
         [
             `outline semantic: mode=${mode} (${source}) · consent=${state.consent}`,
             `artifacts: ${artifactsPresent(root) ? "ready" : `not downloaded (≈${megabytes} MB)`}`,
+            nativeStatusLine(root),
             ...indexStatusLines(root, ctx.cwd, sourceKind),
             `build workers: ${buildWorkerCount()}`,
             `state: ${root}`,
         ].join("\n"),
         "info",
     );
+}
+
+/**
+ * Whether the native runtime is installed, because its absence is invisible and expensive.
+ *
+ * The worker falls back to wasm without a word, and wasm's session start alone measured ~2.6 s per cold search here
+ * against ~0.2 s native (query embedding 670 ms warm against 27 ms). An install that predates the native artifacts
+ * never downloads them — `ensureArtifacts` tops up the native pair only when it runs, which `/outline on` does and an
+ * ordinary build does not — so the only way to notice was to read a timing footer.
+ */
+function nativeStatusLine(root: string): string {
+    if (nativeRuntimePresent(root)) {
+        return "native runtime: installed";
+    }
+
+    const megabytes = Math.round(nativeArtifactBytes() / 1_048_576);
+
+    return `native runtime: not installed — wasm fallback (slower queries); /outline on installs it (≈${megabytes} MB)`;
 }
 
 interface IndexedNamespace {
@@ -629,6 +650,30 @@ function parseOutlineArgs(args: string): { sub: string; target?: string } {
     }
 
     return { sub: words[0] ?? "status", target: words[1] };
+}
+
+/**
+ * A failure the tool can explain, in the tool's own words.
+ *
+ * `stat … ENOENT …` is a Node error, not an answer: an agent reads it as the tool being broken rather than as a path
+ * it spelled wrong, and the same call with a directory that exists costs one line. Everything else still reports the
+ * raw message, because an unexpected failure must not be dressed up as a normal result.
+ */
+function failureText(params: { action: string; path?: string }, error: unknown): string {
+    const message = messageOf(error);
+    const code = (error as { code?: unknown }).code;
+    // A local `fs` error carries `code: "ENOENT"`. The container protocol sends only the message, with the code inside
+    // it (`stat /x: ENOENT: no such file or directory, stat '/x'`), so both shapes have to be recognized — otherwise
+    // the friendly answer appears on a host checkout and the raw one appears in every container session.
+    const missing = code === "ENOENT" || message.includes("ENOENT");
+
+    if (missing) {
+        const requested = params.path ?? ".";
+
+        return `# no such path: ${requested} · check the spelling, or outline(action="digest", path=<its parent>)`;
+    }
+
+    return `# outline ${params.action} failed\n${message}`;
 }
 
 /** Above this many missing vectors, the build asks before spending minutes of CPU. */

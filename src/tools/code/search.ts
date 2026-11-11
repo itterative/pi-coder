@@ -172,6 +172,13 @@ export async function runSearch(
     const languages = languagesOf(parsed);
     const literal = await timing.measure("search", () => collectLiteral(parsed, query, signal));
     const docMatches = literal.reduce((count, hit) => count + (isDocTier(hit.tier) ? 1 : 0), 0);
+    // Counted apart from body doc text because the rows are labelled apart: a summary that calls a `[frontmatter]`
+    // row "by doc text" describes the same rows with two names.
+    const frontmatterMatches = literal.reduce(
+        (count, hit) =>
+            count + (hit.declaration.kind === "frontmatter" && isDocTier(hit.tier) ? 1 : 0),
+        0,
+    );
     const fuzzy =
         literal.length === 0
             ? await timing.measure("search", () => collectFuzzy(parsed, query, signal))
@@ -223,7 +230,8 @@ export async function runSearch(
         query,
         total,
         approximate,
-        docMatches,
+        docMatches - frontmatterMatches,
+        frontmatterMatches,
         tail.length,
     );
     const rows = hits.map((hit) => renderHit(source, hit));
@@ -661,15 +669,25 @@ function headerFor(
     total: number,
     approximate: boolean,
     docMatches: number,
+    frontmatterMatches: number,
     relatedMatches: number,
 ): string {
-    return `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · ${fileCount(fileTotal)} · ${languages} · ${matchSummary(total, docMatches, approximate, relatedMatches)}`;
+    const summary = matchSummary(
+        total,
+        docMatches,
+        frontmatterMatches,
+        approximate,
+        relatedMatches,
+    );
+
+    return `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · ${fileCount(fileTotal)} · ${languages} · ${summary}`;
 }
 
 /** Name, doc, and relevance channels are counted separately so a reader can tell which one produced a row. */
 function matchSummary(
     total: number,
     docMatches: number,
+    frontmatterMatches: number,
     approximate: boolean,
     relatedMatches: number,
 ): string {
@@ -682,6 +700,10 @@ function matchSummary(
 
     if (docMatches > 0) {
         channels.push(`${docMatches} by doc text`);
+    }
+
+    if (frontmatterMatches > 0) {
+        channels.push(`${frontmatterMatches} by frontmatter`);
     }
 
     if (relatedMatches > 0) {

@@ -479,16 +479,24 @@ function matchesEnclosingType(
         return false;
     }
 
+    const contains = (declaration: Declaration): boolean =>
+        declaration.range.startIndex <= index && index < declaration.range.endIndex;
     const enclosing = scopes.findLast(
-        (declaration) =>
-            TYPE_SCOPE_KINDS.has(declaration.kind) &&
-            declaration.range.startIndex <= index &&
-            index < declaration.range.endIndex,
+        (declaration) => TYPE_SCOPE_KINDS.has(declaration.kind) && contains(declaration),
     );
 
+    if (enclosing !== undefined) {
+        return lastComponent(enclosing.qualifiedName).toLowerCase() === expectedType;
+    }
+
+    // An out-of-line member definition has no enclosing type *declaration* in its file: `CallList::run_one` sits at
+    // namespace scope in `call_list.cpp`, so every call inside its body used to be tagged `[name-only]` even though
+    // the call is in the class the caller asked about. The function's own qualified name carries that fact.
+    const enclosingScope = scopes.findLast(contains);
+
     return (
-        enclosing !== undefined &&
-        lastComponent(enclosing.qualifiedName).toLowerCase() === expectedType
+        enclosingScope !== undefined &&
+        qualifiedNameHasParent(enclosingScope.qualifiedName, expectedType)
     );
 }
 

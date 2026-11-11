@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { effectiveSemanticMode } from "../../../src/tools/code/semantic/config";
 import { MODEL_DIMS, MODEL_ID } from "../../../src/tools/code/semantic/config";
+import { NATIVE_CPUS, nativeRuntimeDir } from "../../../src/tools/code/semantic/native";
 import {
     emptyManifest,
     indexDir,
@@ -157,6 +158,31 @@ describe("/outline status", () => {
 
         expect(text).toContain("this session: no local index for .");
         expect(text).toContain("container . · 5 vectors");
+    });
+
+    it("says when the native runtime is missing, since the wasm fallback is silent and slow", async () => {
+        const state = stateDir({ consent: "enabled", sourceKind: "local", root: cwd, vectors: 3 });
+        const text = (await statusLines({ cwd, state })).join("\n");
+
+        expect(text).toContain("native runtime: not installed");
+        expect(text).toContain("/outline on installs it");
+    });
+
+    it("reports the native runtime once both pinned files are there", async () => {
+        const state = stateDir({ consent: "enabled", sourceKind: "local", root: cwd, vectors: 3 });
+        const cpu = NATIVE_CPUS[0]!;
+        const dir = nativeRuntimeDir(state)!;
+
+        fs.mkdirSync(dir, { recursive: true });
+        // Sparse files: `nativeRuntimePresent` checks the pinned sizes, not the bytes.
+        fs.writeFileSync(path.join(dir, "onnxruntime_binding.node"), "");
+        fs.truncateSync(path.join(dir, "onnxruntime_binding.node"), cpu.binding.bytes);
+        fs.writeFileSync(path.join(dir, cpu.library), "");
+        fs.truncateSync(path.join(dir, cpu.library), cpu.libraryFile.bytes);
+
+        expect((await statusLines({ cwd, state })).join("\n")).toContain(
+            "native runtime: installed",
+        );
     });
 
     it("names the vectors this session's own root has", async () => {

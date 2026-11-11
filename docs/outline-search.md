@@ -189,6 +189,31 @@ search's declarations: the searched root gets its own namespace instead of appen
 Query embedding costs ~0.65 s once a `--serve` child is warm; that is why the tail only runs on near-empty
 literal results. The query child is separate from the build children and exits after five idle minutes.
 
+### Measured: what the dense channel actually adds
+
+Run on 2026-11-11 with the real artifacts (native runtime), on an 8-declaration C++ fixture, to answer the one claim
+the guide could not back: _does hybrid find a doc comment whose words differ from the query?_
+
+| query                                                                        | best declaration                                                                        | cosine | lexical (BM25 tail) | hybrid             |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------ | ------------------- | ------------------ |
+| "graphics card idle when work is split across thread blocks"                 | `schedule_window` ("Splits the window across workgroups so the last stage can overlap") | 0.747  | rank 1              | rank 1             |
+| "how much padding does a four-byte alignment need" (no answer in the corpus) | —                                                                                       | 0.680  | no match            | 8 `[related]` rows |
+| "how long did that step take"                                                | `log_duration`                                                                          | 0.719  | rank 1              | rank 1             |
+
+Two things follow, and both are worth knowing before trusting the label:
+
+- **Dense added nothing on the rows that mattered.** BM25 already ranked the answer first in every answered case,
+  because a partial term overlap is enough for a _tail_ (the tail does not require every token, only the doc tier
+  does). What hybrid reliably changes is the row _count_: the dense list scores every declaration, so RRF fills the
+  tail to `TAIL_ROWS` (8) where BM25 returned one row. That is the cost the `wantsTail` gate exists to contain.
+- **A score floor is not available.** Cosines are compressed into 0.6–0.75 for this model and corpus: the best row
+  for a query with _no_ answer (0.680) outscores the seventh row of a query that has one (0.622). Absolute thresholds
+  therefore cannot separate relevance here, and a relative margin is one fixture's guess. The honest signals stay the
+  ones already in the output: the `[related]` tag, the footer naming the channels, and the row cap.
+
+A comment **inside** a function body is invisible to all of it: promoting that comment to the adjacent doc block is
+what changes the outcome, which is the boundary the guide now states.
+
 ### Failure policy
 
 Every embedding failure degrades to BM25: absent artifacts, a missing index, a dead child, or a timeout all

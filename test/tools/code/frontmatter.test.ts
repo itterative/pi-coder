@@ -69,12 +69,27 @@ describe("markdown frontmatter indexing", () => {
 
         expect(result.text).toContain("mem/decode.md:1-5");
         expect(result.text).toContain("[frontmatter]");
+        // The summary counts the same rows with the same name the row label uses.
+        expect(result.text).toContain("1 by frontmatter");
+        expect(result.text).not.toContain("by doc text");
         // Ranked above the body sections that only carry one of the two words.
         expect(result.text.indexOf("[frontmatter]")).toBeLessThan(
             result.text.indexOf("[doc]") === -1
                 ? Number.POSITIVE_INFINITY
                 : result.text.indexOf("[doc]"),
         );
+    });
+
+    it("counts frontmatter and body doc text apart", async () => {
+        const result = await runSearch(source(), {
+            action: "search",
+            path: "mem",
+            query: "ceiling",
+        });
+
+        // `mem/decode.md` has the word in its description and in two body sections.
+        expect(result.text).toMatch(/\d+ by doc text/);
+        expect(result.text).toMatch(/\d+ by frontmatter/);
     });
 
     it("keeps the block printable by show and visible in a digest", async () => {

@@ -222,8 +222,9 @@ output.
   first, and a footer reports how many were withheld. Approximate rows carry `~N`, and the output says how many
   edits were allowed. A doc match outranking a near-miss name is the point: prose is where a concept lives when
   no identifier spells it out, and a plausible identifier guess is the weaker evidence.
-  Strings, comments outside a declaration's adjacent doc block, config, and arbitrary source text remain the
-  job of `bash` + `rg`. Search hits are cached per parsed file and normalized query (a few recent queries per
+  Strings, config, and arbitrary source text remain the job of `bash` + `rg` — and so do comments **inside** a
+  function body: the index holds declarations and their adjacent doc blocks, so a note between two statements is
+  not in it, and no amount of semantic ranking can retrieve text that was never embedded. Search hits are cached per parsed file and normalized query (a few recent queries per
   file); a changed path + mtime + size creates a new `ParsedFile` and drops the old hits with it.
 
 ### Roots, and the index a root owns
@@ -274,6 +275,13 @@ appends a short tail of `[related]` rows. BM25 over name/doc/signature always ba
 channel joins once a model is downloaded and the index for the searched root is warm. The channels are fused with
 reciprocal rank fusion (k=60) so their score scales never have to agree. Every embedding failure degrades to BM25
 only, and the tail never fails the search.
+
+Measured on an 8-declaration fixture with the real artifacts: the dense channel changed no *rank* that BM25 had not
+already got right (a tail needs only partial term overlap), and its visible effect was filling the tail to
+`TAIL_ROWS` because it scores every declaration. Cosines for this model sit in a 0.6–0.75 band — a query with no
+answer in the corpus scored 0.680, above the seventh row of a query that had one — so there is no usable absolute
+floor; the `[related]` tag, the footer, and the row cap are the honest signals. Details and the table:
+`docs/outline-search.md`.
 
 A doc-comment match suppresses the tail (`wantsTail` in `semantic/rank.ts`): the doc tier requires every content
 word of the query to appear in one declaration's prose, so it is the strongest cheap evidence there is, and the

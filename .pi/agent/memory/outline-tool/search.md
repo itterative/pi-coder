@@ -199,6 +199,58 @@ namespace (`kind root · N vectors`) plus a `this session: …` line that either
 says there is none and what to do. Any future "hybrid is on but results look lexical" report should start there —
 after checking that the status line and `prepareSemantic` still call the same function.
 
+## Dogfooding on the vibes tree (2026-11-11)
+
+Reloaded, embedded `.pi/local/code-tree-tests/vibes/` (29 MB of vectors, `sourceKind: container`, 337 files), and ran
+the tool against it. What worked with no change: legend + `# omitted` + `# next … line(s) left`, `# more: … next in
+<path>`, the short parameter hint (`choose_splits(int64_t, int64_t)`), mixed `# not found:`, frontmatter counted apart
+from doc text, quoted phrase on a real docs tree, and the round-3 boundary (`decode splits the window across blocks`
+returns the right *file*'s declarations, never the body comment at `attention_decode.hip:713-735`).
+
+Three defects the run found, all fixed:
+
+- **`matchNote` fired on every multi-symbol request.** Asking for two different symbols produced "2 declarations match;
+  use a qualified name or parameter types to select one, e.g." followed by a truncated eleven-parameter kernel
+  signature. Ambiguity is *one selector* reaching more than one group, which is what `matchNote` now tests.
+- **`[name-only]` was wrong for out-of-line member definitions.** `CallList::run_one` is defined at namespace scope in
+  `call_list.cpp`, so no type declaration encloses its body and every call inside it was tagged `[name-only]` even
+  though the caller asked about exactly that class. `matchesEnclosingType` now falls back to the innermost enclosing
+  *scope*'s qualified name (`qualifiedNameHasParent`), same as the definition path already did.
+- **A missing path surfaced `stat … ENOENT …`.** The tool-level catch now answers `# no such path: <path> · check the
+  spelling, or digest its parent`; anything else still reports the raw message.
+
+A second live pass after a reload confirmed all three fixes, and found that the missing-path fix needed one more
+shape: a **container** session's `fs` error carries no `code`, only `stat /x: ENOENT: …` in the message
+(`ContainerSessionError` from `failureFor`), so `failureText` matches the code *or* the message. Verified live: cold
+hybrid search `tailMs` 2628 ms (wasm session start) — hence the new `/outline status` line, `native runtime: not
+installed — wasm fallback; /outline on installs it`, which is the only place this was discoverable without reading a
+timing footer.
+
+Also: `/outline build` fabricated embeddings with the **wasm** runtime (`tailMs` 670 ms warm) because
+`ensureArtifacts` runs the native download only when the *base* artifacts are missing, so an install that predates the
+native work never gets it. `/outline on` re-runs `ensureArtifacts` and tops it up (48 MB). Worth remembering when a
+tail still costs ~0.7 s per query after a reload.
+
+## What hybrid adds, measured (2026-11-11)
+
+Ran the real artifacts (native) on an 8-declaration fixture, since round-3 feedback could not test dense at all.
+Answer: **almost nothing on rank, a lot on row count.** BM25 already ranked the right declaration first in every
+answered case (a *tail* only needs partial term overlap; the doc tier is the one that needs every token). Dense's
+observable effect is filling the tail to `TAIL_ROWS` (8), because it scores every declaration, where BM25 returned
+one row.
+
+Cosines are compressed into roughly 0.6–0.75 for this model: the best row for a query with *no answer in the corpus*
+(0.680) outscores the seventh row of a query that has one (0.622). So **do not add an absolute cosine floor** — it
+cannot separate relevance, and a relative margin would be one fixture's guess. The honest signals stay the tag, the
+footer, and the row cap (that is also why `wantsTail` gates on evidence rather than row count).
+
+Body comments remain invisible to dense too: promoting the body comment into the adjacent doc block is what changes
+the answer, which is the boundary the guide now states (round-3 item 1). Numbers and the table: `docs/outline-search.md`
+under "Measured: what the dense channel actually adds".
+
+**Frontmatter is counted apart from body doc text** in the summary (`N by doc text · M by frontmatter`), round-3 nit:
+the row label said `[frontmatter]` while the header counted those rows as "doc text".
+
 ## Round-2 feedback (2026-11-11)
 
 Three items from the second report (`src/tools/code/FEEDBACK_2.md`, which is itself indexed and wins the queries it
