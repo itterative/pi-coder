@@ -17,7 +17,14 @@ import { loadParsedFiles } from "./load";
 import { renderOutlineCall, renderOutlineResult } from "./render";
 import { runSearch } from "./search";
 import { artifactBytes, ensureArtifacts, artifactsPresent } from "./semantic/artifacts";
-import { MODEL_ID, readConsent, semanticMode, semanticRoot, writeConsent } from "./semantic/config";
+import {
+    effectiveSemanticMode,
+    MODEL_ID,
+    readConsent,
+    semanticMode,
+    semanticRoot,
+    writeConsent,
+} from "./semantic/config";
 import { buildIndex, countEmbeddings, createSemanticSearch, ensureIndexMetadata } from "./semantic";
 import { buildWorkerCount } from "./semantic/runtime";
 import { readManifest } from "./semantic/store";
@@ -291,9 +298,8 @@ async function prepareSemantic(ctx: ExtensionContext): Promise<SemanticSearch | 
 
     await maybeAskSemantics(ctx, root);
 
-    const configured = (process.env.PI_CODER_OUTLINE_SEMANTIC ?? "").trim().toLowerCase();
     const state = readConsent(root);
-    const mode = configured === "hybrid" || state.consent === "enabled" ? "hybrid" : semanticMode();
+    const { mode } = effectiveSemanticMode(process.env, state);
 
     if (mode === "off") {
         return undefined;
@@ -455,28 +461,103 @@ async function handleOutlineCommand(
     }
 
     const state = readConsent(root);
-    const indexRoot = path.join(root, "index");
-    const namespaces = fs.existsSync(indexRoot) ? fs.readdirSync(indexRoot) : [];
-    const built = namespaces
-        .flatMap((name) => {
-            const manifest = readManifest(path.join(indexRoot, name));
-
-            return manifest?.builtAt === undefined ? [] : [manifest.builtAt];
-        })
-        .toSorted()
-        .at(-1);
+    const { mode, source } = effectiveSemanticMode(process.env, state);
     const megabytes = Math.round(artifactBytes() / 1_048_576);
+    const sourceKind = container?.active === true ? "container" : "local";
 
     ctx.ui.notify(
         [
-            `outline semantic: mode=${semanticMode()} consent=${state.consent}`,
+            `outline semantic: mode=${mode} (${source}) · consent=${state.consent}`,
             `artifacts: ${artifactsPresent(root) ? "ready" : `not downloaded (≈${megabytes} MB)`}`,
-            `index namespaces: ${namespaces.length}${built === undefined ? "" : ` (last build ${built})`}`,
+            ...indexStatusLines(root, ctx.cwd, sourceKind),
             `build workers: ${buildWorkerCount()}`,
             `state: ${root}`,
         ].join("\n"),
         "info",
     );
+}
+
+interface IndexedNamespace {
+    sourceKind?: string;
+    root?: string;
+    vectors: number;
+    builtAt?: string;
+}
+
+/**
+ * What each namespace covers, and whether this session's own root is among them.
+ *
+ * `index namespaces: 2` cannot be acted on: a namespace is keyed by *root and source kind*, so an index built for
+ * this checkout from a container session is invisible to a local one, and a root with no namespace silently ranks by
+ * BM25 alone. Naming the root and the count turns "is hybrid actually on for the tree I am searching?" into a
+ * question the status output answers.
+ */
+function indexStatusLines(root: string, cwd: string, sourceKind: string): string[] {
+    const indexRoot = path.join(root, "index");
+    const namespaces = fs.existsSync(indexRoot) ? fs.readdirSync(indexRoot) : [];
+    const indexed: IndexedNamespace[] = namespaces.flatMap((name) => {
+        const manifest = readManifest(path.join(indexRoot, name));
+
+        if (manifest === undefined) {
+            return [];
+        }
+
+        return [
+            {
+                sourceKind: manifest.sourceKind,
+                root: manifest.root,
+                vectors: Object.keys(manifest.entries).length,
+                builtAt: manifest.builtAt,
+            },
+        ];
+    });
+    const built = indexed
+        .flatMap((entry) => (entry.builtAt === undefined ? [] : [entry.builtAt]))
+        .toSorted()
+        .at(-1);
+    const here = path.resolve(cwd);
+    const own = indexed.find((entry) => entry.root === here && entry.sourceKind === sourceKind);
+    const others = indexed.filter((entry) => entry !== own);
+    const lines = [
+        `index: ${indexed.length} namespace(s)${built === undefined ? "" : ` · last build ${built}`}`,
+    ];
+
+    if (own === undefined) {
+        lines.push(
+            `  this session: no ${sourceKind} index for ${displayRoot(here, here)} — the first search builds one, or /outline build .`,
+        );
+    } else {
+        lines.push(
+            `  this session: ${sourceKind} ${displayRoot(own.root ?? here, here)} · ${countLabel(own.vectors)} vectors`,
+        );
+    }
+
+    for (const entry of others.slice(0, 3)) {
+        lines.push(
+            `  ${entry.sourceKind ?? "unrecorded"} ${displayRoot(entry.root ?? "", here)} · ${countLabel(entry.vectors)} vectors`,
+        );
+    }
+
+    if (others.length > 3) {
+        lines.push(`  +${others.length - 3} more namespace(s)`);
+    }
+
+    return lines;
+}
+
+/** A root as a path the caller recognizes: relative when it is under the cwd, absolute when it is not. */
+function displayRoot(root: string, cwd: string): string {
+    if (root.length === 0) {
+        return "<unrecorded>";
+    }
+
+    const relative = path.relative(cwd, root);
+
+    return relative.length === 0 ? "." : relative.startsWith("..") ? root : relative;
+}
+
+function countLabel(count: number): string {
+    return count >= 1_000 ? `${(count / 1_000).toFixed(1)}k` : String(count);
 }
 
 const OUTLINE_SUBCOMMANDS: ReadonlyArray<{

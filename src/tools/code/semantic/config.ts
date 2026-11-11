@@ -5,6 +5,14 @@ import { PI_CODER_STATE_DIR } from "../../../common/constants";
 
 export type SemanticMode = "off" | "bm25" | "hybrid";
 
+/** Where the mode came from, so `/outline status` can explain a surprising answer instead of just printing one. */
+export type SemanticModeSource = "config" | "consent" | "default";
+
+export interface EffectiveSemanticMode {
+    mode: SemanticMode;
+    source: SemanticModeSource;
+}
+
 /** The model the artifact manifest is pinned to; part of every index namespace. */
 export const MODEL_ID = "embeddinggemma-2-q4";
 export const MODEL_DIMS = 768;
@@ -41,6 +49,35 @@ export function semanticRoot(env: NodeJS.ProcessEnv = process.env): string {
     }
 
     return path.join(PI_CODER_STATE_DIR, "outline", "semantic");
+}
+
+/**
+ * The mode a search will actually use, and why.
+ *
+ * `semanticMode()` reads only the environment, which defaults to `bm25`; a session where the user answered the
+ * consent dialog has `consent: enabled` and runs hybrid. Reporting the configured mode to the user was therefore
+ * wrong in the one case they asked about: `/outline status` printed `mode=bm25 consent=enabled`, which reads as
+ * "embeddings are off" while the search was already fusing them. One function decides, and both the search and the
+ * status line call it, so the two cannot disagree again.
+ *
+ * An explicit `PI_CODER_OUTLINE_SEMANTIC` always wins, including `off` over a stored consent: the environment is how
+ * a caller turns the channel off for one run regardless of what an earlier session answered.
+ */
+export function effectiveSemanticMode(
+    env: NodeJS.ProcessEnv = process.env,
+    consent: ConsentState = readConsent(),
+): EffectiveSemanticMode {
+    const configured = (env.PI_CODER_OUTLINE_SEMANTIC ?? "").trim().toLowerCase();
+
+    if (configured === "off" || configured === "hybrid" || configured === "bm25") {
+        return { mode: configured, source: "config" };
+    }
+
+    if (consent.consent === "enabled") {
+        return { mode: "hybrid", source: "consent" };
+    }
+
+    return { mode: "bm25", source: "default" };
 }
 
 export type Consent = "unset" | "enabled" | "not-now" | "never";

@@ -301,6 +301,17 @@ floors (`shouldCompact`: 64 entries and 10% of the live set): the build has no j
 a few unlinks, no model and no parse. A subdirectory search never compacts — its live set is a fragment, and pruning
 then would delete the rest of the index.
 
+**The mode is decided in one place.** `effectiveSemanticMode` (`semantic/config.ts`) returns the mode a search will
+use *and* why: an explicit `PI_CODER_OUTLINE_SEMANTIC` (`off`/`bm25`/`hybrid`) always wins, an answered consent
+dialog (`consent: enabled`) means hybrid, and otherwise hybrid is off. `/outline status` prints that same function's
+answer with its source (`mode=hybrid (consent)`), because printing the *configured* mode while the search already used
+embeddings — `mode=bm25 consent=enabled` — is how a working channel gets reported as broken.
+
+Status also names the namespaces and whether this session's own root is among them. A namespace is keyed by
+`sourceKind + root + model + text version`, and a container-built index is deliberately never borrowed by a local
+session, so "2 namespaces" can mean "none that this search may use". `this session: no local index for .` is the
+line that says so, and the fix is a first search there (which schedules the build) or `/outline build .`.
+
 **Native runtime first, wasm fallback.** On a platform with a verified native ONNX Runtime (`semantic/native.ts`,
 currently linux-x64) the child loads onnxruntime-node's CPU binding directly — two downloaded files, no npm
 dependency, no vendored JS wrapper. That matters because the wasm build cannot use threads in Node: it bootstraps

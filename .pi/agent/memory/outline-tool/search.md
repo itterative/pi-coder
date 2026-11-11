@@ -182,6 +182,23 @@ returns a 130-line body in one call, and the span in every header makes `read of
 route, so the fix was the tool description and the richer `# next` note rather than a new `lines` parameter (a
 character budget still cuts it). Resuming a `digest` was already covered by `offset.test.ts`.
 
+## Mode reporting, and why a hybrid index can look like BM25 (2026-11-11)
+
+A user with `consent: enabled`, artifacts ready, and two index namespaces reported "it only does bm25", quoting
+`/outline status` line `outline semantic: mode=bm25 consent=enabled`. **The line was the bug**: it printed
+`semanticMode()`, which reads only `PI_CODER_OUTLINE_SEMANTIC` (default `bm25`), while `prepareSemantic` had been
+using hybrid because consent was enabled. One function now decides, for both the search and the status line:
+`effectiveSemanticMode()` in `semantic/config.ts` returns `{mode, source}` where source is `config` | `consent` |
+`default`, and an explicit env value always wins (`off` included, which also overrides a stored consent).
+
+The second half is the index identity: a namespace hash covers **sourceKind + root + model + textVersion**, and
+`resolveIndex`'s ancestor scan skips manifests of another `sourceKind` on purpose (a container view and a host view
+are not the same files). So an index built in a container session is invisible to a local one, the dense channel
+returns nothing, and before the roots/initial-build work nothing said so. `/outline status` now lists each
+namespace (`kind root · N vectors`) plus a `this session: …` line that either names the local index for the cwd or
+says there is none and what to do. Any future "hybrid is on but results look lexical" report should start there —
+after checking that the status line and `prepareSemantic` still call the same function.
+
 ## Round-2 feedback (2026-11-11)
 
 Three items from the second report (`src/tools/code/FEEDBACK_2.md`, which is itself indexed and wins the queries it
