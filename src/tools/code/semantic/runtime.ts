@@ -443,9 +443,8 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
         const plan = native
             ? nativeBuildPlan({
                   declarations: total,
-                  // A refresh passes maxWorkers, and its budget is a share of the machine either way: one process of
-                  // at most four threads rather than four processes of one thread.
-                  maxProcesses: maxWorkers === undefined ? 2 : 1,
+                  // A refresh passes maxWorkers, and its budget is a share of the machine: four threads in the one
+                  // process, so an unattended build leaves the rest of the machine to the user's queries.
                   maxThreads: maxWorkers,
               })
             : {

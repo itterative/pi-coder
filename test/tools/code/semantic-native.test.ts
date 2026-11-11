@@ -90,43 +90,42 @@ describe("outline native runtime", () => {
         expect(nativeRuntimePresent(modelDir, "linux", "x64")).toBe(false);
     });
 
-    it("caps query threads at four and spreads build threads over processes", () => {
-        // Measured: 91 ms at one thread, 27 ms at four, 30 ms at sixteen.
+    it("caps query threads at four and build threads at the measured knee of eight", () => {
+        // Measured: a query is 91 ms at one thread, 27 ms at four, 30 ms at sixteen; a build declaration is 346 ms
+        // at one thread, 94 ms at four, 55 ms at eight, 88 ms at twelve, 97 ms at sixteen.
         expect(nativeThreadCount("query", 1)).toBe(1);
         expect(nativeThreadCount("query", 2)).toBe(2);
         expect(nativeThreadCount("query", 16)).toBe(4);
-        expect(nativeThreadCount("build", 16, 1)).toBe(8);
-        expect(nativeThreadCount("build", 16, 2)).toBe(8);
-        expect(nativeThreadCount("build", 4, 2)).toBe(2);
-        expect(nativeThreadCount("build", 1, 2)).toBe(1);
+        expect(nativeThreadCount("build", 1)).toBe(1);
+        expect(nativeThreadCount("build", 4)).toBe(4);
+        expect(nativeThreadCount("build", 16)).toBe(8);
+        expect(nativeThreadCount("build", 32)).toBe(8);
     });
 
-    it("keeps a refresh to one process and splits only a large build", () => {
+    it("builds in one process, because more processes only contend", () => {
+        // Measured over 400 declarations of this repo's own distribution on 16 cores: one process of eight threads
+        // took 55 ms each, two processes of eight 64 ms, two of four 97 ms, and one of four 94 ms.
         expect(nativeBuildPlan({ declarations: 1, cores: 16 })).toEqual({
             processes: 1,
             threads: 8,
         });
-        expect(nativeBuildPlan({ declarations: 128, cores: 16 })).toEqual({
-            processes: 1,
-            threads: 8,
-        });
-        expect(nativeBuildPlan({ declarations: 129, cores: 16 })).toEqual({
-            processes: 2,
-            threads: 8,
-        });
-        // A search-triggered refresh passes maxProcesses = 1: unattended work stays one process.
-        expect(nativeBuildPlan({ declarations: 5_000, cores: 16, maxProcesses: 1 })).toEqual({
+        expect(nativeBuildPlan({ declarations: 5_000, cores: 16 })).toEqual({
             processes: 1,
             threads: 8,
         });
         expect(nativeBuildPlan({ declarations: 5_000, cores: 4 })).toEqual({
-            processes: 2,
-            threads: 2,
+            processes: 1,
+            threads: 4,
         });
-        // A refresh's cap is a share of the machine: four threads in one process, not four processes.
-        expect(
-            nativeBuildPlan({ declarations: 500, cores: 16, maxProcesses: 1, maxThreads: 4 }),
-        ).toEqual({ processes: 1, threads: 4 });
+        // A refresh's cap is a share of the machine: four threads in the one process.
+        expect(nativeBuildPlan({ declarations: 500, cores: 16, maxThreads: 4 })).toEqual({
+            processes: 1,
+            threads: 4,
+        });
+        expect(nativeBuildPlan({ declarations: 500, cores: 1, maxThreads: 4 })).toEqual({
+            processes: 1,
+            threads: 1,
+        });
     });
 
     it("describes only platforms it has measured", () => {

@@ -135,42 +135,40 @@ export function nativeRuntimePresent(
  * Intra-op threads for one child process.
  *
  * A query is a single short sequence, so it stops scaling at four threads (27 ms at 4, 30 ms at 16) and should not
- * take a core from anything else. A build splits the cores between its processes, and a build process holds a copy
- * of the weights, so it gets whatever is left up to eight — also where the measurements flatten out.
+ * take a core from anything else. A build embeds one declaration at a time and parallizes inside that inference, where
+ * eight threads is the measured knee: on a 16-core machine, 400 declarations of this repo's own distribution took
+ * 346 ms each on one thread, 94 ms on four, and 55 ms on eight; twelve (88 ms) and sixteen (97 ms) are worse.
  */
-export function nativeThreadCount(kind: "query" | "build", cores: number, processes = 1): number {
+export function nativeThreadCount(kind: "query" | "build", cores: number): number {
     const available = Math.max(1, cores);
 
     if (kind === "query") {
         return Math.min(4, available);
     }
 
-    return Math.max(1, Math.min(8, Math.floor(available / Math.max(1, processes))));
+    return Math.max(1, Math.min(8, available));
 }
 
 /**
- * Processes and threads for a native build.
+ * Processes and threads for a native build: always one process, sized by threads.
  *
- * The wasm runtime needed one process per core and one process per ~8 declarations, because each child paid ~5 s to
- * load the model. Native loads in 0.2 s and shares threads inside one process, so a refresh is a single process and
- * only a large build splits into two.
+ * The wasm runtime needed one process per core, because each child paid ~5 s to load the model and ran one thread.
+ * Native shares threads inside one process, and adding processes is a *loss* on a 16-core machine: the same 400
+ * declarations took 55 ms each as one process of eight threads, 64 ms as two processes of eight, and 97 ms as two
+ * processes of four. The model is bandwidth-bound, so processes only contend — a declaration is embedded whole while
+ * the rest of that process's lines wait, which is why the planner splits job lines instead (`splitJobs`).
  */
 export function nativeBuildPlan(input: {
     declarations: number;
     cores?: number;
-    maxProcesses?: number;
     /** A background refresh passes its cap here too, so "at most four" means four cores of work. */
     maxThreads?: number;
 }): { processes: number; threads: number } {
     const cores = input.cores ?? os.availableParallelism();
-    const processes = Math.max(
-        1,
-        Math.min(input.maxProcesses ?? 2, Math.ceil(Math.max(1, input.declarations) / 128)),
-    );
     const threads = Math.min(
-        nativeThreadCount("build", cores, processes),
+        nativeThreadCount("build", cores),
         input.maxThreads ?? Number.POSITIVE_INFINITY,
     );
 
-    return { processes, threads: Math.max(1, threads) };
+    return { processes: 1, threads: Math.max(1, threads) };
 }
