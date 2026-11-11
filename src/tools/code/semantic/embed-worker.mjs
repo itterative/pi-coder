@@ -29,7 +29,7 @@ import { createRequire } from "node:module";
 const QUERY_PREFIX = "task: code retrieval | query:";
 const MODALITY_INPUTS = ["image_features", "video_features", "audio_features"];
 const MODALITY_WIDTH = 512;
-const MAX_TOKENS = 512;
+const MAX_TOKENS = 1024;
 
 const modelDir = process.env.PI_OUTLINE_MODEL_DIR;
 
@@ -182,8 +182,14 @@ function makeEmbedder({ inputNames, tensor, run, tokenizer }) {
 
     return async (text) => {
         const encoded = tokenizer.encode(text);
-        // The model card recommends truncating at 512 tokens: longer docs dilute mean pooling and cost time
-        // proportional to their length, and no declaration's doc comment needs more for retrieval.
+        // The graph accepts far more (`max_position_embeddings` is 262144, and only the sliding layers cap at 512), so
+        // this is a retrieval-and-cost choice, not a model limit. Cost is superlinear in the token count because every
+        // sixth layer attends fully: 512 tokens ~0.6 s, 1024 ~1.4 s, 2048 ~3.8 s, 4827 ~16 s per declaration.
+        //
+        // 1024, measured on `docs/` (166 declarations, 132 queries, sections up to 1976 tokens): top-1 55/45/41% for
+        // head/mid/tail windows against 39/16/11% at 512, with mean rank falling from ~16-21 to ~5. Going unbounded
+        // bought nothing further (45/45/32%) for ~2.5x the cost per long text, so this is the knee. Only 1.7% of
+        // declarations exceed 512 tokens, which is why the build cost barely moves; queries are short and unaffected.
         const ids = encoded.ids.slice(0, MAX_TOKENS);
         const mask = encoded.attention_mask.slice(0, MAX_TOKENS);
         const feed = {

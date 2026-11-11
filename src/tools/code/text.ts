@@ -8,8 +8,10 @@ import type { Declaration, ParsedFile } from "./types";
  *
  * v2: the doc text a Markdown heading embeds is now its section's own prose, not just the heading line, and a
  * documented declaration now embeds its signature alongside its doc comment instead of one *or* the other.
+ * v3: the embedder truncates at 1024 tokens instead of 512. The text is unchanged, so the version is what forces a
+ * rebuild — keys would otherwise keep a vector computed on the truncated text and quietly mix it with new ones.
  */
-export const EMBED_TEXT_VERSION = "code-retrieval-v2";
+export const EMBED_TEXT_VERSION = "code-retrieval-v3";
 
 /**
  * A declaration's doc text as plain prose: a doc comment, or a Markdown section's own prose.

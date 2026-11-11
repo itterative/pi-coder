@@ -92,6 +92,12 @@ Only the wasm fallback has them; all three were verified against the real model 
 
 - `namespace = sha256(source.kind \0 root \0 modelId \0 embed-text-version)` — a container view and the host
   view never share vectors.
+- Text is truncated at **1024 tokens** before embedding. The graph allows far more (`max_position_embeddings`
+  is 262144; only the sliding layers cap at 512), so this is a retrieval-and-cost choice: cost is superlinear
+  because every sixth layer attends fully (512 tokens ~0.6 s, 1024 ~1.4 s, 2048 ~3.8 s per declaration), and on
+  `docs/` (166 declarations, 132 queries, sections to 1976 tokens) 1024 roughly tripled top-1 against 512 for
+  head/mid/tail windows while unbounded bought nothing further at ~2.5× the per-text cost. Only 1.7% of
+  declarations exceed 512 tokens, so the build barely notices.
 - Entry key = `sha256(embed-text-version \0 modelId \0 embedText)`, where
   `embedText = "title: <path> | text: <kind> <qualifiedName>. <doc ?? signature>"`. Vectors are L2-normalized at
   write time, so cosine is a dot product.
