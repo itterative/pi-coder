@@ -8,18 +8,23 @@
  * It runs as a child process so a 200 MB wasm model never sits in the TUI's heap, and so a build can outlive
  * one tool call. `PI_OUTLINE_MODEL_DIR` points at a prepared artifact bundle (see artifacts.ts).
  *
- * Three constraints are load-bearing and were each verified against onnxruntime-web in Node:
- *  - the wasm build fetches its `.wasm` and the model, and Node's fetch rejects `file:` URLs, hence the shim;
- *  - worker threads bootstrap through a `blob:` module import, which Node's ESM loader refuses, hence
- *    `numThreads = 1`;
- *  - the q4 graph keeps its weights in `model_q4.onnx_data`, which the wasm backend only sees when it is
- *    mounted through `externalData`.
+ * Two runtimes, same vectors:
+ *  - **native** (`PI_OUTLINE_NATIVE_DIR` set and loadable): onnxruntime-node's CPU binding, driven directly. Real
+ *    intra-op threads, so a query embeds in ~27 ms instead of ~670 ms and session start is 0.2 s instead of 2.5 s.
+ *  - **wasm** (fallback): onnxruntime-web, single-threaded. Three constraints are load-bearing and were each
+ *    verified against it in Node: it fetches its `.wasm` and the model through a `file:`-rejecting fetch, hence the
+ *    shim; worker threads bootstrap through a `blob:` module import, which Node's ESM loader refuses, hence
+ *    `numThreads = 1`; and the q4 graph keeps its weights in `model_q4.onnx_data`, which the wasm backend only sees
+ *    when it is mounted through `externalData`.
+ *
+ * The two produce identical embeddings (cosine 1.0 on the same text), so an index built by either is valid for both.
  */
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 
 const QUERY_PREFIX = "task: code retrieval | query:";
 const MODALITY_INPUTS = ["image_features", "video_features", "audio_features"];
@@ -62,7 +67,47 @@ function fail(message) {
     process.exit(1);
 }
 
-async function loadModel() {
+/**
+ * A tensor for the native binding: it wraps outputs in this class and only reads these four fields.
+ *
+ * We do not ship `onnxruntime-node`'s JavaScript (229 modules of `onnxruntime-common` for `Tensor` and
+ * `InferenceSession`); the raw binding takes them as plain shapes, which is the whole reason the artifact is two
+ * files instead of ~230.
+ */
+class NativeTensor {
+    constructor(type, data, dims) {
+        this.type = type;
+        this.data = data;
+        this.dims = dims;
+        this.location = "cpu";
+    }
+}
+
+async function loadNative(nativeDir) {
+    const binding = createRequire(import.meta.url)(
+        path.join(nativeDir, "onnxruntime_binding.node"),
+    );
+
+    binding.initOrtOnce(3, NativeTensor, true);
+
+    const session = new binding.InferenceSession();
+
+    await session.loadModel(graph, {
+        executionProviders: ["cpu"],
+        intraOpNumThreads: Number.parseInt(process.env.PI_OUTLINE_THREADS ?? "4", 10) || 4,
+    });
+
+    return {
+        // The raw binding exposes metadata rather than name lists; the embedder needs the names to know whether this
+        // graph takes the three multimodal inputs.
+        inputNames: (session.inputMetadata ?? []).map((metadata) => metadata.name),
+        tensor: (type, data, dims) => new NativeTensor(type, data, dims),
+        // The native run takes an output map; the wasm one takes a plain feed.
+        run: async (feed) => session.run(feed, { sentence_embedding: null }, {}),
+    };
+}
+
+async function loadWasm() {
     const ort = await import(pathToFileURL(path.join(runtimeDir, "ort.wasm.bundle.min.mjs")).href);
 
     ort.env.wasm.wasmPaths = `${pathToFileURL(runtimeDir).href}/`;
@@ -78,6 +123,15 @@ async function loadModel() {
             },
         ],
     });
+
+    return {
+        inputNames: session.inputNames,
+        tensor: (type, data, dims) => new ort.Tensor(type, data, dims),
+        run: async (feed) => session.run(feed),
+    };
+}
+
+async function loadModel() {
     const { Tokenizer } = await import(pathToFileURL(path.join(runtimeDir, "tokenizers.mjs")).href);
     const tokenizerJson = JSON.parse(
         await fsp.readFile(path.join(modelDir, "model", "tokenizer.json"), "utf8"),
@@ -85,8 +139,22 @@ async function loadModel() {
     const tokenizerConfig = JSON.parse(
         await fsp.readFile(path.join(modelDir, "model", "tokenizer_config.json"), "utf8"),
     );
+    const tokenizer = new Tokenizer(tokenizerJson, tokenizerConfig);
+    const nativeDir = process.env.PI_OUTLINE_NATIVE_DIR;
+    let runtime;
 
-    return { ort, session, tokenizer: new Tokenizer(tokenizerJson, tokenizerConfig) };
+    if (nativeDir !== undefined && nativeDir.length > 0) {
+        try {
+            runtime = await loadNative(nativeDir);
+        } catch {
+            // A native payload that cannot load (wrong platform, missing library) must not cost the channel.
+            runtime = undefined;
+        }
+    }
+
+    runtime ??= await loadWasm();
+
+    return { ...runtime, tokenizer };
 }
 
 function normalize(vector) {
@@ -109,8 +177,8 @@ function normalize(vector) {
     return vector;
 }
 
-function makeEmbedder({ ort, session, tokenizer }) {
-    const inputs = new Set(session.inputNames);
+function makeEmbedder({ inputNames, tensor, run, tokenizer }) {
+    const inputs = new Set(inputNames);
 
     return async (text) => {
         const encoded = tokenizer.encode(text);
@@ -119,12 +187,12 @@ function makeEmbedder({ ort, session, tokenizer }) {
         const ids = encoded.ids.slice(0, MAX_TOKENS);
         const mask = encoded.attention_mask.slice(0, MAX_TOKENS);
         const feed = {
-            input_ids: new ort.Tensor(
+            input_ids: tensor(
                 "int64",
                 BigInt64Array.from(ids, (id) => BigInt(id)),
                 [1, ids.length],
             ),
-            attention_mask: new ort.Tensor(
+            attention_mask: tensor(
                 "int64",
                 BigInt64Array.from(mask, (value) => BigInt(value)),
                 [1, mask.length],
@@ -133,19 +201,18 @@ function makeEmbedder({ ort, session, tokenizer }) {
 
         for (const name of MODALITY_INPUTS) {
             if (inputs.has(name)) {
-                feed[name] = new ort.Tensor("float32", new Float32Array(0), [0, MODALITY_WIDTH]);
+                feed[name] = tensor("float32", new Float32Array(0), [0, MODALITY_WIDTH]);
             }
         }
 
-        const output = await session.run(feed);
+        const output = await run(feed);
 
         return normalize(Float32Array.from(output.sentence_embedding.data));
     };
 }
 
 async function serve() {
-    const { ort, session, tokenizer } = await loadModel();
-    const embed = makeEmbedder({ ort, session, tokenizer });
+    const embed = makeEmbedder(await loadModel());
 
     send({ type: "ready" });
 
@@ -208,8 +275,7 @@ async function build(jobFile) {
         .filter((line) => line.trim().length > 0);
     const header = JSON.parse(lines[0]);
     const files = lines.slice(1).map((line) => JSON.parse(line));
-    const { ort, session, tokenizer } = await loadModel();
-    const embed = makeEmbedder({ ort, session, tokenizer });
+    const embed = makeEmbedder(await loadModel());
     const total = files.reduce((sum, file) => sum + file.entries.length, 0);
     const shards = [];
     let done = 0;

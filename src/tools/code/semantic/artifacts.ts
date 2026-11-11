@@ -3,6 +3,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import { nativeArtifacts } from "./native";
+
 /** One downloaded file: where it goes, where it comes from, and the bytes it must hash to. */
 export interface ArtifactSpec {
     path: string;
@@ -83,6 +85,29 @@ export const ARTIFACTS: readonly ArtifactSpec[] = [
 ];
 
 export const TOTAL_ARTIFACT_BYTES = ARTIFACTS.reduce((sum, spec) => sum + spec.bytes, 0);
+
+/**
+ * Bytes this machine will download: the wasm runtime and model, plus the native runtime when the platform has one.
+ *
+ * The native payload is optional (the worker falls back to wasm), so it is counted separately rather than folded
+ * into `TOTAL_ARTIFACT_BYTES`, which stays the "is the channel usable at all" number.
+ */
+export function artifactBytes(
+    platform: NodeJS.Platform = process.platform,
+    arch: string = process.arch,
+): number {
+    return nativeArtifacts(platform, arch).reduce(
+        (sum, spec) => sum + spec.bytes,
+        TOTAL_ARTIFACT_BYTES,
+    );
+}
+
+export function nativeArtifactBytes(
+    platform: NodeJS.Platform = process.platform,
+    arch: string = process.arch,
+): number {
+    return nativeArtifacts(platform, arch).reduce((sum, spec) => sum + spec.bytes, 0);
+}
 
 /** A cheap "is it all here" check: sizes only, no hashing. */
 export function artifactsPresent(dir: string, specs: readonly ArtifactSpec[] = ARTIFACTS): boolean {
@@ -165,49 +190,78 @@ export async function ensureArtifacts(options: EnsureOptions): Promise<void> {
     fs.mkdirSync(dir, { recursive: true });
 
     for (const spec of specs) {
-        const target = path.join(dir, spec.path);
-        const stat = await fsp.stat(target).catch(() => undefined);
-        const recorded = verified.files[spec.path];
+        changed =
+            (await ensureOne(spec, { dir, verified, fetchImpl, onProgress, signal })) || changed;
+    }
 
-        if (stat !== undefined && stat.size === spec.bytes) {
-            const trusted =
-                recorded !== undefined &&
-                recorded.bytes === stat.size &&
-                recorded.mtimeMs === stat.mtimeMs &&
-                recorded.sha256 === spec.sha256;
-
-            if (trusted) {
-                continue;
-            }
-
-            onProgress?.(`verifying ${spec.path}`);
-            const digest = await sha256File(target);
-
-            if (digest === spec.sha256) {
-                verified.files[spec.path] = {
-                    bytes: stat.size,
-                    mtimeMs: stat.mtimeMs,
-                    sha256: digest,
-                };
-                changed = true;
+    // The native runtime is a speed-up, not a requirement: the worker falls back to wasm. A failed download here must
+    // therefore not fail the channel, and the base artifacts above are what "present" means.
+    if (options.specs === undefined) {
+        for (const spec of nativeArtifacts()) {
+            try {
+                changed =
+                    (await ensureOne(spec, { dir, verified, fetchImpl, onProgress, signal })) ||
+                    changed;
+            } catch {
                 continue;
             }
         }
-
-        onProgress?.(`downloading ${spec.path}`);
-        await download(spec, target, fetchImpl, signal);
-        const downloaded = await fsp.stat(target);
-        verified.files[spec.path] = {
-            bytes: downloaded.size,
-            mtimeMs: downloaded.mtimeMs,
-            sha256: spec.sha256,
-        };
-        changed = true;
     }
 
     if (changed) {
         writeVerified(dir, verified);
     }
+}
+
+interface EnsureOne {
+    dir: string;
+    verified: VerifiedFile;
+    fetchImpl: typeof fetch;
+    onProgress?: (message: string) => void;
+    signal?: AbortSignal;
+}
+
+/** One artifact, verified against the hash recorded the last time its size and mtime were unchanged. */
+async function ensureOne(spec: ArtifactSpec, ctx: EnsureOne): Promise<boolean> {
+    const target = path.join(ctx.dir, spec.path);
+    const stat = await fsp.stat(target).catch(() => undefined);
+    const recorded = ctx.verified.files[spec.path];
+
+    if (stat !== undefined && stat.size === spec.bytes) {
+        const trusted =
+            recorded !== undefined &&
+            recorded.bytes === stat.size &&
+            recorded.mtimeMs === stat.mtimeMs &&
+            recorded.sha256 === spec.sha256;
+
+        if (trusted) {
+            return false;
+        }
+
+        ctx.onProgress?.(`verifying ${spec.path}`);
+        const digest = await sha256File(target);
+
+        if (digest === spec.sha256) {
+            ctx.verified.files[spec.path] = {
+                bytes: stat.size,
+                mtimeMs: stat.mtimeMs,
+                sha256: digest,
+            };
+
+            return true;
+        }
+    }
+
+    ctx.onProgress?.(`downloading ${spec.path}`);
+    await download(spec, target, ctx.fetchImpl, ctx.signal);
+    const downloaded = await fsp.stat(target);
+    ctx.verified.files[spec.path] = {
+        bytes: downloaded.size,
+        mtimeMs: downloaded.mtimeMs,
+        sha256: spec.sha256,
+    };
+
+    return true;
 }
 
 async function download(

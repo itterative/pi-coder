@@ -244,16 +244,26 @@ floors (`shouldCompact`: 64 entries and 10% of the live set): the build has no j
 a few unlinks, no model and no parse. A subdirectory search never compacts — its live set is a fragment, and pruning
 then would delete the rest of the index.
 
+**Native runtime first, wasm fallback.** On a platform with a verified native ONNX Runtime (`semantic/native.ts`,
+currently linux-x64) the child loads onnxruntime-node's CPU binding directly — two downloaded files, no npm
+dependency, no vendored JS wrapper. That matters because the wasm build cannot use threads in Node: it bootstraps
+them through a `blob:` module import, which Node's ESM loader rejects, so it runs single-threaded and needed one
+process per core. Native takes real intra-op threads. Measured on 16 cores, same artifacts: query embedding 673 ms
+(wasm) → 27 ms, a 93-token document 1589 ms → 90 ms, session start 2.5 s → 0.2 s, resident 767 MB → 486 MB. Vectors
+are identical (cosine 1.000000), so switching runtimes never invalidates an index. The worker picks native whenever
+`PI_OUTLINE_NATIVE_DIR` points at a payload of the pinned sizes, and otherwise takes the wasm path unchanged.
+
 One embedding child per model directory is shared by every search (`sharedEmbedRuntime`), because the tool builds a
 fresh `SemanticSearch` per call for its config and consent and never disposes it. A per-call runtime would reload
 the ~197 MB model on every tail search — measured as 2.5 s per search instead of 0.64 s — and leave one resident
-copy of the weights per search until the child's idle timeout.
+copy of the weights per search until the child's idle timeout. With native, an idle tail search costs 27 ms of
+embedding on top of ~10 ms of lexical work.
 
-The shared child is also why background refreshes are capped at `refreshWorkerCount()` (half the cores, at most
-four): refresh builds run in **separate** children, so they never block a query, but they do compete for cores.
-Measured on 16 cores with a 677 ms reference query: 4 build workers cost the query 9% of its latency, 8 workers
-20%, 16 workers 124% — and the extra workers buy little, because each child loads ~1.85 s of model before it
-embeds its first item. Explicit `/outline build` keeps the full scaling.
+Background refreshes are capped at `refreshWorkerCount()` (half the cores, at most four), because refresh builds run
+in **separate** children and compete for cores. That cap was measured against the wasm runtime, where 4 build workers
+cost a concurrent query 9% of its latency, 8 workers 20%, 16 workers 124% — each child paying ~1.85 s to load the
+model. Under native the cap still applies, but it caps *threads* inside one or two processes, because a native build
+process is cheap to start and shares its weights across threads.
 
 **One writer per namespace.** A refresh, a foreground build, and another pi session on the same root all publish to
 the same manifest, and each build reads it once and writes its whole in-memory view at the end — so two overlapping
@@ -266,9 +276,10 @@ randomly named temp file and a rename, and the journal replay tolerates a trunca
 loses at most its unfinished shard.
 
 The semantic half is downloaded, not installed: no npm dependency, ~211 MB of pinned and hash-verified artifacts
-under the pi-coder state directory, a wasm ort runtime, and a content-hash shard index. `docs/outline-search.md`
-records the artifact manifest, the three ort-web-in-Node constraints, the index layout, and the measured
-cold-build cost (~1.1 s per declaration on single-threaded wasm, parallelized across processes).
+under the pi-coder state directory (plus ~48 MB for the native runtime where the platform has one), and a
+content-hash shard index. `docs/outline-search.md` records the artifact manifest, the ort-in-Node constraints, the
+index layout, and the measured cold-build cost (~1.1 s per declaration on single-threaded wasm, parallelized across
+processes; ~90 ms per declaration natively with four threads).
 - Files at or above 256 KiB are parsed in a lazy worker so a large source file cannot freeze the TUI. The
   worker loads the existing parser modules through jiti, keeps its tree-sitter parser warm, and terminates on
   cancellation; it falls back to inline parsing if the worker or loader is unavailable. Smaller files parse

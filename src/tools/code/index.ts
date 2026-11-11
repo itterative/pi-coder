@@ -13,7 +13,7 @@ import { DEFAULT_CHAR_LIMIT, MIN_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
 import { renderOutlineCall, renderOutlineResult } from "./render";
 import { runSearch } from "./search";
-import { ensureArtifacts, artifactsPresent, TOTAL_ARTIFACT_BYTES } from "./semantic/artifacts";
+import { artifactBytes, ensureArtifacts, artifactsPresent } from "./semantic/artifacts";
 import { MODEL_ID, readConsent, semanticMode, semanticRoot, writeConsent } from "./semantic/config";
 import { buildIndex, countEmbeddings, createSemanticSearch, ensureIndexMetadata } from "./semantic";
 import { buildWorkerCount } from "./semantic/runtime";
@@ -328,7 +328,7 @@ async function maybeAskSemantics(ctx: ExtensionContext, root: string): Promise<v
 
     askedThisSession = true;
 
-    const megabytes = Math.round(TOTAL_ARTIFACT_BYTES / 1_048_576);
+    const megabytes = Math.round(artifactBytes() / 1_048_576);
     let choice: string | undefined;
 
     try {
@@ -359,7 +359,7 @@ function startArtifactDownload(ctx: ExtensionContext, root: string): void {
         return;
     }
 
-    const megabytes = Math.round(TOTAL_ARTIFACT_BYTES / 1_048_576);
+    const megabytes = Math.round(artifactBytes() / 1_048_576);
     ctx.ui.notify(
         `outline semantic: downloading ~${megabytes} MB in the background; /outline build <path> when it finishes`,
         "info",
@@ -436,7 +436,7 @@ async function handleOutlineCommand(
         })
         .toSorted()
         .at(-1);
-    const megabytes = Math.round(TOTAL_ARTIFACT_BYTES / 1_048_576);
+    const megabytes = Math.round(artifactBytes() / 1_048_576);
 
     ctx.ui.notify(
         [
@@ -612,7 +612,7 @@ async function buildSemanticIndex(
 
         const work = (async () => {
             if (!artifactsPresent(root)) {
-                const megabytes = Math.round(TOTAL_ARTIFACT_BYTES / 1_048_576);
+                const megabytes = Math.round(artifactBytes() / 1_048_576);
 
                 progress(`downloading the model (~${megabytes} MB)`);
                 ctx.ui.notify(`outline semantic: downloading ~${megabytes} MB first`, "info");
@@ -734,7 +734,7 @@ async function confirmBuild(
 
     const workers = buildWorkerCount();
     const minutes = Math.max(1, Math.ceil((missing * SECONDS_PER_DECLARATION) / workers / 60));
-    const megabytes = cached ? 0 : Math.round(TOTAL_ARTIFACT_BYTES / 1_048_576);
+    const megabytes = cached ? 0 : Math.round(artifactBytes() / 1_048_576);
     const download = megabytes > 0 ? `, ≈${megabytes} MB download` : "";
     let choice: string | undefined;
 

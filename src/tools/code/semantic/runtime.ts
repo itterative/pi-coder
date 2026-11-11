@@ -6,6 +6,12 @@ import readline from "node:readline";
 
 import { PI_CODER_EXTENSION_DIR } from "../../../common/constants";
 import { MODEL_DIMS } from "./config";
+import {
+    nativeBuildPlan,
+    nativeRuntimeDir,
+    nativeRuntimePresent,
+    nativeThreadCount,
+} from "./native";
 
 const WORKER_SCRIPT = path.join(PI_CODER_EXTENSION_DIR, "src/tools/code/semantic/embed-worker.mjs");
 const READY_TIMEOUT_MS = 60_000;
@@ -106,6 +112,25 @@ interface PendingRequest {
 }
 
 /**
+ * Environment for a worker child.
+ *
+ * `PI_OUTLINE_NATIVE_DIR` is only set when this platform's native runtime is actually on disk, so the worker takes
+ * the native path when it can and the wasm one otherwise — the choice is made by what exists, not by a preference
+ * file that could disagree with it.
+ */
+function workerEnv(modelDir: string, threads: number): NodeJS.ProcessEnv {
+    const nativeDir = nativeRuntimeDir(modelDir);
+    const present = nativeDir !== undefined && nativeRuntimePresent(modelDir);
+
+    return {
+        ...process.env,
+        PI_OUTLINE_MODEL_DIR: modelDir,
+        PI_OUTLINE_THREADS: String(threads),
+        ...(present ? { PI_OUTLINE_NATIVE_DIR: nativeDir } : {}),
+    };
+}
+
+/**
  * A client for the embedding child process.
  *
  * The child holds the wasm session, because loading it takes seconds and 166 MB of weights; spawning it per
@@ -158,7 +183,7 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
         }
 
         const spawned = spawn(process.execPath, [WORKER_SCRIPT, "--serve"], {
-            env: { ...process.env, PI_OUTLINE_MODEL_DIR: options.modelDir },
+            env: workerEnv(options.modelDir, nativeThreadCount("query", os.availableParallelism())),
             stdio: ["pipe", "pipe", "pipe"],
         });
 
@@ -269,12 +294,13 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
     /** One `--build` child for one job file; the child writes its shards and reports progress. */
     const spawnBuild = (
         jobFile: string,
+        threads: number,
         onProgress: (done: number, total: number) => void,
         signal?: AbortSignal,
         onShard?: (shard: BuildShard) => void,
     ): Promise<BuildShard[]> => {
         const spawned = spawn(process.execPath, [WORKER_SCRIPT, "--build", jobFile], {
-            env: { ...process.env, PI_OUTLINE_MODEL_DIR: options.modelDir },
+            env: workerEnv(options.modelDir, threads),
             stdio: ["ignore", "pipe", "pipe"],
         });
         let jobStderr = "";
@@ -373,11 +399,30 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
         fs.mkdirSync(indexDir, { recursive: true });
 
         const total = files.reduce((sum, file) => sum + file.entries.length, 0);
-        // One worker per ~8 declarations: a refresh of three edited functions must not load four model copies.
-        const workers = Math.max(
-            1,
-            Math.min(maxWorkers ?? buildWorkerCount(), files.length, Math.ceil(total / 8)),
-        );
+        const native = nativeRuntimePresent(options.modelDir);
+        // Native threads live inside the process, so the split is few processes × several threads. The wasm runtime is
+        // single-threaded, so there it stays one process per ~8 declarations: a refresh of three edited functions must
+        // not load four model copies.
+        const plan = native
+            ? nativeBuildPlan({
+                  declarations: total,
+                  // A refresh passes maxWorkers, and its budget is a share of the machine either way: one process of
+                  // at most four threads rather than four processes of one thread.
+                  maxProcesses: maxWorkers === undefined ? 2 : 1,
+                  maxThreads: maxWorkers,
+              })
+            : {
+                  processes: Math.max(
+                      1,
+                      Math.min(
+                          maxWorkers ?? buildWorkerCount(),
+                          files.length,
+                          Math.ceil(total / 8),
+                      ),
+                  ),
+                  threads: 1,
+              };
+        const workers = plan.processes;
         const batches: BuildFile[][] = Array.from({ length: workers }, () => []);
         const loads = new Array<number>(workers).fill(0);
 
@@ -414,6 +459,7 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
                 shards.push(
                     ...(await spawnBuild(
                         jobFile,
+                        plan.threads,
                         (value) => {
                             done[index] = value;
                             onProgress(

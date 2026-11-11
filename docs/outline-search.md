@@ -48,21 +48,38 @@ pass. Total is ~211 MB, of which ~197 MB is the model and tokenizer.
 | -------------------------------------------------------- | -------- |
 | `ort.wasm.bundle.min.mjs` + `ort-wasm-simd-threaded.mjs` | 0.1 MB   |
 | `ort-wasm-simd-threaded.wasm`                            | 13.6 MB  |
+| `onnxruntime_binding.node` + `libonnxruntime.so.1`       | 48.1 MB  |
 | `tokenizers.mjs` (zero-dependency JS tokenizer)          | 0.1 MB   |
 | `model_q4.onnx` + `_data`                                | 166.5 MB |
 | `tokenizer.json`                                         | 30.7 MB  |
 | config/tokenizer_config                                  | 7 KB     |
 
+The native pair comes from the pinned `onnxruntime-node` tarball by way of unpkg (`semantic/native.ts`), into
+`native/<platform>-<arch>/`. It is optional: `artifactsPresent` only requires the wasm set, the download loop at the
+end of `ensureArtifacts` swallows a native failure, and the worker falls back to wasm whenever
+`PI_OUTLINE_NATIVE_DIR` is unset or the two files are not the pinned sizes. Only linux-x64 is measured; adding a
+platform means measuring its library name and hashes, not just listing it.
+
+### Two runtimes, one vector space
+
+Native (`onnxruntime-node`'s CPU binding, driven directly — `initOrtOnce`, `InferenceSession.loadModel`, `run`) is
+used when present. It cannot use `onnxruntime-web`'s JS layer, and does not need it: the binding's whole surface is
+those three calls plus a `Tensor` class it wraps outputs in, which is ~30 lines in `embed-worker.mjs`. Measured on 16
+cores, same artifacts: query 673 ms → 27 ms (4 threads), 93-token document 1589 ms → 90 ms, session start 2.5 s →
+0.2 s, resident 767 MB → 486 MB. Vectors are identical (cosine 1.000000).
+
 ### Three constraints of running ort-web wasm in Node
 
-All three were verified against the real model; each is load-bearing in `embed-worker.mjs`:
+Only the wasm fallback has them; all three were verified against the real model and each is load-bearing in
+`embed-worker.mjs`:
 
 1. **`file:` fetch shim.** ort-web is a browser build: it resolves the wasm and the model through `fetch`, and
    Node's fetch rejects `file:` URLs.
 2. **`numThreads = 1`.** Multithreading bootstraps a worker through a `blob:` module import, which Node's ESM
-   loader refuses.
+   loader refuses — verified again against `numThreads = 2`, which fails session creation outright.
 3. **`externalData` mount.** The q4 graph keeps its weights in `model_q4.onnx_data`; the wasm backend needs them
-   mounted explicitly, and the modality inputs (`image/video/audio_features`) still need `[0, 512]` dummies.
+   mounted explicitly, and the modality inputs (`image/video/audio_features`) still need `[0, 512]` dummies. The
+   native side reads the external data next to the graph and takes the same dummies.
 
 ### Index
 
@@ -114,12 +131,12 @@ so the `--build` processes die immediately and every shard already published sta
 keep the build running and report through notifications, and a closed custom area never cancels it.
 
 Embedding runs in child processes (`embed-worker.mjs --build`, one JSONL job file per worker: a header line,
-then one line per source file), because the wasm session
-is single-threaded: **the only way to use more than one core is more processes**. `buildWorkerCount()` defaults to
-cores capped by available memory (≈1 GiB per child, `MemAvailable` when Linux exposes it) and
-`PI_CODER_OUTLINE_WORKERS` overrides it. More cores means more parallel wasm processes, since one session is
-single-threaded. Files are assigned whole to the least-loaded worker, and the parent merges the shards into the
-manifest once every child finished.
+then one line per source file). **Native** splits work as one or two processes of up to eight intra-op threads each
+(`nativeBuildPlan`); a process costs 0.2 s to start and shares a single copy of the weights, so threads are cheaper
+than processes. The **wasm** fallback is single-threaded, so there the only way to use more than one core is more
+processes: `buildWorkerCount()` defaults to cores capped by available memory (≈1 GiB per child, `MemAvailable` when
+Linux exposes it) and `PI_CODER_OUTLINE_WORKERS` overrides it. Files are assigned whole to the least-loaded worker,
+and the parent merges the shards into the manifest once every child finished.
 
 **Builds are exclusive per namespace** (`semantic/lock.ts`). Every writer — a search refresh, a foreground
 `/outline build`, another pi session on the same root — reads the manifest once and publishes its whole in-memory

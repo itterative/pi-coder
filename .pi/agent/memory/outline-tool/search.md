@@ -73,6 +73,11 @@ search's file set is the whole namespace root (`resolved.root === request.root &
 `refreshCoversRoot`/`coversRoot` plumbing carries; a subdirectory search stays additive or it would delete the rest
 of the index.
 
+**Deferred: refreshes only run when a search reaches the dense channel.** The doc-tier gate means most queries never
+embed, so a high-churn tree (memories rewritten outside git) can drift indefinitely without a refresh. A sweep that
+does not need a search — at session start, or on idle — would keep such an index warm; it would have to respect the
+build lock and the refresh worker cap like any other background build.
+
 **Dead keys compact themselves now** (2026-11-11). Growth is per edit, not per query: a refresh embeds only keys
 the manifest lacks (`planEmbeddings` skips present ones), and it appends a shard per touched file while the old
 shard with the old keys survives — 3,072 B per vector (768 × 4, measured exact) plus ~70 B of manifest per entry.
@@ -184,6 +189,20 @@ search until the child's idle timeout. The runtime is now module-level, shared p
 (`sharedEmbedRuntime`), which is what makes the documented "kept warm" behaviour true: the same query went
 2.5 s → 0.64 s, cold 2.5 s only on the first tail search of a process (observed 704 ms warm in-session). The
 timing line is what made this visible — `tail 2525` twice in a row.
+
+**Native ORT replaced wasm as the primary runtime** (2026-11-11). `onnxruntime-web` cannot use threads in Node — its
+thread pool bootstraps a `blob:` module import, which Node's ESM loader refuses (re-verified: `numThreads = 2` fails
+session creation with `ERR_UNSUPPORTED_ESM_URL_SCHEME`), so it ran single-threaded and needed one process per core.
+`onnxruntime-node`'s CPU binding takes real intra-op threads and is drivable *without* its JS layer: `initOrtOnce(3,
+Tensor, true)` with `Tensor = {type, data, dims, location: "cpu"}`, `new InferenceSession()`,
+`loadModel(path, {executionProviders, intraOpNumThreads})`, `run(feed, {sentence_embedding: null}, {})` — output
+names come from `session.outputMetadata`/`inputMetadata`, not `inputNames`. That keeps the artifact at two files
+(48 MB) instead of ~230 JS modules. Measured, same artifacts: query 673 ms → 27 ms (4 threads; 91 at 1, 30 at 16),
+93-token document 1589 ms → 90 ms, session start 2.5 s → 0.2 s, RSS 767 MB → 486 MB, and **cosine 1.000000 against
+wasm** — so swapping runtimes never invalidates an index and needs no `EMBED_TEXT_VERSION` bump. `semantic/native.ts`
+holds the platform table (linux-x64 only; everything else falls back to wasm) plus the thread policy, and
+`ensureArtifacts` downloads the pair best-effort after the wasm set so a failed native download cannot cost the
+channel.
 
 **A refresh must not starve a query.** Separate children mean a refresh never *blocks* a query, but it competes for
 cores: measured 2026-11-11 on 16 cores (`measure-contention.ts`), reference query 677 ms idle — 64 declarations at
