@@ -106,13 +106,19 @@ export async function runShow(
         }
     }
 
+    // A hint that matches no signature must not silently pick one — a wrong overload is worse than a miss. It should
+    // not leave the caller guessing either: `choose_splits(int64_t, int64_t)` against a `std::int64_t` definition used
+    // to be an unexplained "not found", which makes the advertised parameter-list affordance a trap. So the miss is
+    // answered with the signatures that do exist, ready to copy.
+    const hintNotes = signaturesForUnmatchedHints(files, selectors, matchedSelectors);
+
     const missing = requested.filter((_, index) => !matchedSelectors.has(index));
 
     if (matches.length === 0) {
         const elsewhere = await elsewhereNote(source, root, missing, signal, timing);
 
         return {
-            text: notFound(source, root, requested, elsewhere),
+            text: notFound(source, root, requested, elsewhere, hintNotes),
             files: files.length,
             parseErrors: sumParseErrors(files),
             truncated: discovery.truncated,
@@ -165,8 +171,14 @@ export async function runShow(
     const note = matchNote(groups);
     const partial = partialHintNote(selectors, groups);
     const elsewhere = await elsewhereNote(source, root, missing, signal, timing);
+    // Every requested symbol reports its outcome. A missing one used to vanish entirely as soon as another one
+    // resolved, and the caller cannot tell that from "not reached".
+    const absent =
+        missing.length === 0
+            ? undefined
+            : `# not found: ${missing.join(", ")} in ${source.displayPath(root)}`;
     const next = nextOffsetNote(fitted);
-    const text = [fitted.text, note, partial, ...elsewhere, next]
+    const text = [fitted.text, note, partial, ...hintNotes, absent, ...elsewhere, next]
         .filter((part) => part !== undefined)
         .join("\n");
 
@@ -494,6 +506,52 @@ function showChildren(container: Declaration): Declaration[] {
     return container.children;
 }
 
+/**
+ * One note per selector whose parameter hint matched nothing, naming the signatures that do exist.
+ *
+ * The name is matched without the hint, so this reports the candidates the caller meant; when even that is empty the
+ * note would be pointless and is left out.
+ */
+function signaturesForUnmatchedHints(
+    files: readonly ParsedFile[],
+    selectors: readonly SymbolSelector[],
+    matched: ReadonlySet<number>,
+): string[] {
+    const notes: string[] = [];
+
+    for (const [index, selector] of selectors.entries()) {
+        if (matched.has(index) || selector.signatureHint.length === 0) {
+            continue;
+        }
+
+        const candidates = files.flatMap((file) =>
+            file.all.filter((declaration) =>
+                selectorMatches(declaration, { ...selector, signatureHint: [] }),
+            ),
+        );
+
+        if (candidates.length === 0) {
+            continue;
+        }
+
+        const shown = candidates.slice(0, 3).map((candidate) => signatureOf(candidate));
+        const withheld = candidates.length - shown.length;
+
+        notes.push(
+            `# hint: no signature matched "${selector.raw}"; ${selector.name}: ${shown.join(" · ")}${withheld > 0 ? ` (+${withheld} more)` : ""}`,
+        );
+    }
+
+    return notes;
+}
+
+/** A declaration's selector form, for a note the caller can copy. */
+function signatureOf(declaration: Declaration): string {
+    const parameters = declaration.paramTypes.join(", ");
+
+    return `${declaration.qualifiedName}(${parameters})`;
+}
+
 function compareDeclarations(left: Declaration, right: Declaration): number {
     if (left.isDefinition !== right.isDefinition) {
         return left.isDefinition ? 1 : -1;
@@ -511,12 +569,14 @@ function notFound(
     root: string,
     requested: readonly string[],
     elsewhere: readonly string[],
+    hintNotes: readonly string[] = [],
 ): string {
     const next =
         '# next: outline(action="digest", path=...) to see the available declarations, or outline(action="usages", ...) for references';
 
     return [
         `# not found: ${requested.join(", ")} in ${source.displayPath(root)}`,
+        ...hintNotes,
         ...elsewhere,
         ...(elsewhere.length === 0 ? [next] : []),
     ].join("\n");

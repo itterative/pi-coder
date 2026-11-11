@@ -282,6 +282,14 @@ tail would cost a query embedding (0.6–3 s warm/cold) to append rows the agent
 the same stopword-filtered tokenizer BM25 uses (`tokenize`), so filler words in a natural-language query cannot
 make an otherwise perfect prose match miss.
 
+**The gate has a cost worth knowing.** One doc or frontmatter row is enough to suppress the tail, so a query whose
+words land in a file's `description:` returns that one row *instead of* the section map the tail used to add: on a
+memory tree, `knob registry tune table` went from five spans in `tuning.md` to one `[frontmatter]` row, and
+`scripted edits assert the match count` from four loose sections to the frontmatter plus the one section that
+answers. The right file still comes first, and the workaround is a second call — `search path=<that file>` returns
+its sections — which is why the trade stands: a section list costs a query embedding, and it is not worth spending
+on an answer that already points at the right file.
+
 Vectors are content-addressed (`embeddingKey` hashes the embedded text), so an edited declaration cannot match its
 old vector — the lookup would need the old text. Staleness is therefore *absence*, never a wrong answer, and the
 dead entries an edit leaves behind are bytes only. Width is the one property not covered by that key: a namespace is

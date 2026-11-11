@@ -182,6 +182,34 @@ returns a 130-line body in one call, and the span in every header makes `read of
 route, so the fix was the tool description and the richer `# next` note rather than a new `lines` parameter (a
 character budget still cuts it). Resuming a `digest` was already covered by `offset.test.ts`.
 
+## Round-2 feedback (2026-11-11)
+
+Three items from the second report (`src/tools/code/FEEDBACK_2.md`, which is itself indexed and wins the queries it
+quotes — move it out of the repo root if that noise matters):
+
+- **Parameter hints are compared after normalization** (`normalizeParameterType` in `format.ts`). `show X(std::int64_t,
+  int)` used to be the only spelling that matched, because the hint was compared literally against
+  `declaration.paramTypes`. Now namespace qualifiers (`std::`, `Foo::`), cv-qualifiers (`const`/`volatile`), and
+  `&`/`*` decoration are stripped on both sides, so `int64_t`, `std::int64_t`, and `Address` vs `const Address&` all
+  reach the same declaration. It is **language-agnostic** on purpose: adapters hand over whitespace-squeezed types
+  (`constLayerPlan&`), which is why the keyword rule is a lookahead `(?:const|volatile)(?![a-z])` with two passes and
+  not `\b…\b` — a word boundary never fires in `constLayerPlan`, and `\b` would also eat a type named `constant`.
+  Dropping the namespace can conflate `A::Options` and `B::Options`; that is acceptable for a hint because the
+  ambiguous case is reported as candidates, whereas a literal comparison answered "not found" for a symbol the tool
+  could see.
+- **A hint that matches no signature lists the real ones** (`signaturesForUnmatchedHints`), and it does *not* fall
+  back to "show the only candidate": a wrong overload is worse than a miss, and `show-targeting.test.ts` encodes
+  that. The note is `# hint: no signature matched "<raw>"; name: sig · sig`.
+- **Every requested symbol reports its outcome.** `show symbols=[a, b]` with only `a` resolving used to print `a`'s
+  body and nothing about `b` — indistinguishable from "not reached". The mixed case now adds
+  `# not found: b in <path>` (plus `# elsewhere` when the symbol lives in a sibling root), the same line the
+  all-missing case already produced.
+
+**Tail-gate cost, documented rather than fixed.** One doc or frontmatter row suppresses the `[related]` tail by
+design, so a query whose words land in a `description:` returns one row instead of the section map. The workaround is
+a scoped second call (`search path=<file>`), which is now in the guide and the README; spending a query embedding to
+decorate a row that already names the right file is the worse trade.
+
 ## Roots and their indexes (2026-11-11)
 
 `outline` was confined to the working directory while `read`/`grep`/`find` honoured the session's roots, so a

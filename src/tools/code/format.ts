@@ -22,7 +22,7 @@ export function parseSelector(raw: string): SymbolSelector {
         raw,
         parts,
         name,
-        signatureHint: hint.length === 0 ? [] : splitParameters(hint).map(normalizeSymbol),
+        signatureHint: hint.length === 0 ? [] : splitParameters(hint).map(normalizeParameterType),
     };
 }
 
@@ -53,7 +53,7 @@ export function selectorMatches(declaration: Declaration, selector: SymbolSelect
         return true;
     }
 
-    const parameters = declaration.paramTypes.map(normalizeSymbol);
+    const parameters = declaration.paramTypes.map(normalizeParameterType);
 
     // A leading hint is enough to pick an overload: an agent that remembered the first two parameters of a
     // four-parameter function was naming that function, not asking a different question.
@@ -73,6 +73,33 @@ export function selectorHintIsPartial(declaration: Declaration, selector: Symbol
 
 export function normalizeSymbol(text: string): string {
     return text.replace(/\s+/g, "").replace(/\./g, "::");
+}
+
+/**
+ * A parameter type as an overload selector compares it.
+ *
+ * Spelling must not decide whether a caller can name an overload. The source says `std::int64_t`; an agent that
+ * has read the header, or remembers the type as `int64_t`, says `int64_t` — and a matcher that compares the literal
+ * text answers "not found" for a symbol it is showing. So qualifiers, cv-qualifiers, and reference/pointer
+ * decoration are dropped on both sides: `const Address&` and `address` are the same parameter.
+ *
+ * Dropping a namespace does conflate `A::Options` with `B::Options`. That is acceptable here because this is a
+ * *hint*, not an identity: an ambiguous result is reported as several candidates, and the caller then widens with a
+ * qualifier instead of getting a confident wrong answer.
+ */
+export function normalizeParameterType(text: string): string {
+    return (
+        text
+            .replace(/\s+/g, "")
+            // `std::int64_t` and `int64_t` are the same parameter; so are `Foo::Bar` and `Bar`.
+            .replace(/(?:[A-Za-z_]\w*::)+/g, "")
+            // Adapters hand over whitespace-squeezed types (`constLayerPlan&`), so a word-boundary rule never fires.
+            // Two passes handle a doubled qualifier, and the lookahead keeps a type named `constant` intact.
+            .replace(/(?:const|volatile)(?![a-z])/g, "")
+            .replace(/(?:const|volatile)(?![a-z])/g, "")
+            .replace(/[&*]/g, "")
+            .toLowerCase()
+    );
 }
 
 /**
