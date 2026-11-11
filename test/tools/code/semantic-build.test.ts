@@ -15,8 +15,11 @@ import {
 import { MODEL_DIMS, MODEL_ID } from "../../../src/tools/code/semantic/config";
 import { acquireIndexLock } from "../../../src/tools/code/semantic/lock";
 import {
+    MAX_JOB_ENTRIES,
     buildWorkerCount,
     refreshWorkerCount,
+    splitJobs,
+    type BuildFile,
     type EmbedRuntime,
 } from "../../../src/tools/code/semantic/runtime";
 import {
@@ -208,6 +211,89 @@ describe("outline semantic worker budget", () => {
         await vi.waitFor(() => {
             expect(recorded).toBe(refreshWorkerCount());
         });
+    });
+});
+
+describe("build job splitting", () => {
+    const job = (shard: string, count: number): BuildFile => ({
+        shard,
+        entries: Array.from({ length: count }, (_, index) => ({
+            key: `${shard}-${String(index)}`,
+            text: `title: src/x.cpp | text: function f${String(index)}.`,
+        })),
+    });
+
+    it("leaves a file that already fits one line alone", () => {
+        const files = [job("small", MAX_JOB_ENTRIES)];
+
+        expect(splitJobs(files)).toEqual(files);
+    });
+
+    it("splits a vendored header's 1587 declarations into balanced lines", () => {
+        const [only] = splitJobs([job("nlohmann", 1587)]);
+
+        expect(only).toBeDefined();
+        expect(only!.shard).toBe("nlohmann-p0");
+    });
+
+    it("keeps every entry, in order, and gives each part its own shard", () => {
+        const files = splitJobs([job("nlohmann", 1587)]);
+        const keys = files.flatMap((file) => file.entries.map((entry) => entry.key));
+
+        expect(files).toHaveLength(Math.ceil(1587 / MAX_JOB_ENTRIES));
+        expect(files.every((file) => file.entries.length <= MAX_JOB_ENTRIES)).toBe(true);
+        expect(new Set(files.map((file) => file.shard)).size).toBe(files.length);
+        expect(keys).toEqual(job("nlohmann", 1587).entries.map((entry) => entry.key));
+    });
+
+    it("splits a vendored header the build actually plans, not just the helper", async () => {
+        const root = tempDir();
+        const declarations = Array.from(
+            { length: 1587 },
+            (_, index) =>
+                `int vendored_${String(index)}(int value) { return value + ${String(index)}; }`,
+        ).join("\n");
+        const source = new MemoryCodeSource("/project", { "vendor/json.hpp": declarations });
+        const loaded = await loadParsedFile(source, "/project/vendor/json.hpp");
+
+        if (loaded.kind !== "parsed") {
+            throw new Error("expected a parsed file");
+        }
+
+        const planned: BuildFile[] = [];
+        const runtime: EmbedRuntime = {
+            ...fakeRuntime(vectorFor("query")),
+            build: async (indexDirPath, files, onProgress, _signal, onShard) => {
+                planned.push(...files);
+
+                return await fakeRuntime(vectorFor("query")).build(
+                    indexDirPath,
+                    files,
+                    onProgress,
+                    _signal,
+                    onShard,
+                );
+            },
+        };
+
+        await buildIndex({
+            sourceKind: "local",
+            root: "/project/vendor",
+            modelDir: root,
+            files: [loaded.parsed],
+            runtime,
+        });
+
+        expect(planned.length).toBeGreaterThan(1);
+        expect(planned.reduce((sum, file) => sum + file.entries.length, 0)).toBe(1587);
+        expect(planned.every((file) => file.entries.length <= MAX_JOB_ENTRIES)).toBe(true);
+        expect(new Set(planned.map((file) => file.shard)).size).toBe(planned.length);
+    });
+
+    it("keeps small files whole next to a split one", () => {
+        const files = splitJobs([job("nlohmann", 200), job("small", 3)]);
+
+        expect(files.at(-1)).toEqual(job("small", 3));
     });
 });
 

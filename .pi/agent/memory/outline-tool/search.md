@@ -231,6 +231,22 @@ Also: `/outline build` fabricated embeddings with the **wasm** runtime (`tailMs`
 native work never gets it. `/outline on` re-runs `ensureArtifacts` and tops it up (48 MB). Worth remembering when a
 tail still costs ~0.7 s per query after a reload.
 
+## What a declaration costs to embed (2026-11-11)
+
+An index entry is one **declaration**, never a file: `embedTextOf` composes `title: <path> | text: <kind> <name>. <doc>
+<signature>`, truncated at 512 tokens. Cost is tokens × params, so it tracks text length, not file size:
+
+- native, 4 threads: **77 ms** per declaration of `nlohmann/json.hpp` (mean 78 tokens), **138 ms** for a ~150-token
+  declaration with a doc comment, ~25 ms for a short query.
+- **Batching does not help**: grouping 4/8/16 texts into one `[B,T]` call is 0.62–0.74× *slower* than sequential
+  (vectors identical, cosine 1.000000). Quantized matmul is bandwidth-bound; do not "optimize" the worker by batching.
+- Parallelism is the lever: processes × threads, one inference at a time per process.
+
+The build's serial bottleneck was **scheduling**: a job line is one source file, and a child embeds its lines in order,
+so `nlohmann/json.hpp`'s 1587 declarations were one indivisible 123 s unit while the other child idled. `splitJobs`
+(planner-side, `MAX_JOB_ENTRIES = 64`, shard suffix `-p<part>`) turns that into 25 balanced 4.9 s lines; the vibes root
+now plans 390 lines over 9112 declarations. Shards are per line, not per file, so the manifest and pruning never see it.
+
 ## What hybrid adds, measured (2026-11-11)
 
 Ran the real artifacts (native) on an 8-declaration fixture, since round-3 feedback could not test dense at all.

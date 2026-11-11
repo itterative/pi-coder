@@ -8,6 +8,7 @@ import { TAIL_ROWS, fuseRankings, type RankedDeclaration } from "./rank";
 import {
     createEmbedRuntime,
     refreshWorkerCount,
+    splitJobs,
     type BuildFile,
     type EmbedRuntime,
 } from "./runtime";
@@ -659,10 +660,16 @@ function planEmbeddings(files: readonly ParsedFile[], manifest: IndexManifest): 
         missing += entries.length;
 
         if (entries.length > 0) {
-            jobs.push({
-                shard: `${Date.now().toString(36)}-${shardForFile(file.path)}`,
-                entries,
-            });
+            jobs.push(
+                // A job line is what one build child takes at a time, so a file whose declaration count dwarfs the
+                // rest of the tree (`nlohmann/json.hpp` has 1587) is split instead of becoming the build's serial tail.
+                ...splitJobs([
+                    {
+                        shard: `${Date.now().toString(36)}-${shardForFile(file.path)}`,
+                        entries,
+                    },
+                ]),
+            );
         }
     }
 

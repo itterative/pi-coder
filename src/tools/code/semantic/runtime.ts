@@ -70,6 +70,42 @@ export interface BuildShard {
 }
 
 /**
+ * Most declarations one build job line may carry.
+ *
+ * A job line is the unit a build child takes: it embeds its lines in order, so one line is as serial as its entry
+ * count. A source file used to be one indivisible line, and the largest file in the vibes tree
+ * (`third_party/nlohmann/.../json.hpp`) has 1587 declarations — that child kept grinding for minutes after the others
+ * finished, which is the tail the build showed. Shards are named per line rather than per file, so a split is
+ * invisible to the manifest and to pruning.
+ */
+export const MAX_JOB_ENTRIES = 64;
+
+/**
+ * Split entry lists too big to balance into parts, so no source file is a serial bottleneck.
+ *
+ * Splitting does not change what is embedded, only how evenly it divides: [keys] keep their order within each part,
+ * and every part gets its own shard name because two lines may touch the same file's directory in the shard store.
+ */
+export function splitJobs(files: BuildFile[]): BuildFile[] {
+    return files.flatMap((file) => {
+        if (file.entries.length <= MAX_JOB_ENTRIES) {
+            return [file];
+        }
+
+        const parts: BuildFile[] = [];
+
+        for (let start = 0; start < file.entries.length; start += MAX_JOB_ENTRIES) {
+            parts.push({
+                shard: `${file.shard}-p${parts.length.toString(36)}`,
+                entries: file.entries.slice(start, start + MAX_JOB_ENTRIES),
+            });
+        }
+
+        return parts;
+    });
+}
+
+/**
  * Most build workers a background refresh may use.
  *
  * A refresh runs unattended while the user keeps querying, and a query embedding competes with it for cores. Measured
@@ -379,13 +415,13 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
     /**
      * Embed the jobs across `buildWorkerCount()` children, or fewer when `maxWorkers` caps them.
      *
-     * Files stay whole, and each file is assigned to the least-loaded worker, so one big file cannot make a
-     * worker finish long after the others. Shard names already carry the file hash, so parallel children never
-     * collide; the manifest is written once by the caller after every child finished.
+     * A job line is the unit a worker takes, and lines are assigned to the least-loaded worker, so no line can make
+     * a worker finish long after the others. Shard names already carry the file hash and a part suffix, so parallel
+     * children never collide; the manifest is written once by the caller after every child finished.
      */
     const build = async (
         indexDir: string,
-        files: BuildFile[],
+        sourceFiles: BuildFile[],
         onProgress: (done: number, total: number) => void,
         signal?: AbortSignal,
         onShard?: (shard: BuildShard) => void,
@@ -398,6 +434,7 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
         signal?.throwIfAborted();
         fs.mkdirSync(indexDir, { recursive: true });
 
+        const files = sourceFiles;
         const total = files.reduce((sum, file) => sum + file.entries.length, 0);
         const native = nativeRuntimePresent(options.modelDir);
         // Native threads live inside the process, so the split is few processes × several threads. The wasm runtime is
