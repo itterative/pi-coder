@@ -11,12 +11,12 @@ export function memoryPrompt(appendix: string): string {
     return appendix;
 }
 
-/** When to run the audit, and how to read its findings. */
+/** When to call the audit, and how to read its findings. */
 export function memoryAuditGuidePrompt(): string {
     return [
         "## memory_audit",
         "",
-        "- Do not run the audit after every memory edit: it runs automatically after a step that changed a memory file and reports its findings as a reminder. Run it for the full report when a reminder says there are more findings, or when the user asks.",
+        "- Do not call `memory_audit` after every memory edit: the audit runs automatically after a step that changed a memory file and reports its findings as a reminder. Call the tool for the full report when a reminder says there are more findings, or when the user asks.",
         "- Weigh warnings rather than obeying them: fix the ones that hide content (a nested doc no index names, a broken link, a stale memory name), leave deliberate ones (a dense index, a long nested description) alone and say why.",
     ].join("\n");
 }

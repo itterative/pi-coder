@@ -130,21 +130,15 @@ Indexed memories are stored directly in these directories. Detailed reference do
   - The \`name\` must match the filename without \`.md\` (e.g. \`name: conventions\` in \`conventions.md\`)
   - Keep \`description\` to one line; it appears in the system prompt to help future agents decide whether to load the memory
   - Quote a \`description\` that contains \`: \`. Unquoted, the frontmatter is invalid YAML, the file fails to parse, and the memory silently disappears from the list with only a startup warning
-- Use the standard built-in tools (\`read\`, \`write\`, \`edit\`, \`bash\`) to create and edit memories - there are no custom memory-writing tools. The \`memory_audit\` tool and the \`/memory-audit\` command only validate the trees
-- Use the \`read\` tool to load specific memories as needed
-- Use \`write\` to create new memories (include frontmatter) or \`edit\` to update existing ones
-- Use \`bash\` with \`rm\` to delete a memory file
+- Use the standard built-in tools (\`read\`, \`write\`, \`edit\`, \`bash\`) to read and maintain memories.
 
 ### Guidelines
 
-- At the start of each task, proactively read any memories whose names or descriptions appear relevant to the user's request
-- Only write to user-level memories when the user explicitly asks
-- Proactively save project-level memories when you learn something useful about the project
-  - Before finishing your task, review what you have learned
-  - Add new memories or edit existing ones to keep them consistent with any changes made
-- Memories marked with [high-churn] are high-churn — review and update them after relevant changes
-- Memory edits are audited automatically: both trees are checked after each step that changed a memory file, and a finding arrives as a reminder in that run. Do not run the audit after every edit - call the \`memory_audit\` tool only when a reminder points at more findings than it carried, or when the user asks for the full report. Errors mean a memory is not indexed or a reference is broken; warnings are review indicators, not defects - a deliberately large index or a long nested description needs no fix
-- The memory list below is a snapshot: it is read at session start and rebuilt after each compaction, and navigating back on the session tree to before a compaction restores the snapshot that was current on that branch. New or updated memories do not appear until one of those points
+- Read relevant memories before starting work.
+- Write user-level memories only when the user asks.
+- Save a project memory only for a fact the diff cannot carry: an invariant, a failure mode, a non-obvious constraint, or a memory that is now wrong. Update in place, write nothing when nothing is wrong, and never record what you changed or that validation passed.
+- Review [high-churn] memories after relevant changes; update only a wrong one.
+- Audits run automatically after a memory edit and report findings as a reminder; call \`memory_audit\` only for the full report. Errors mean a memory is not indexed; warnings are review indicators — a dense index needs no fix, and a warning is not a reason to restructure mid-task.
 
 ### Available Project Memories
 
