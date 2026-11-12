@@ -87,6 +87,21 @@ export const CONTEXT_AFTER_FOLD_REMINDER: ReminderDefinition = {
 };
 
 /**
+ * The nudge that follows repeated `rg`/`grep` exploration without `outline`.
+ *
+ * Kept out of the rotation because a cadence cannot time it to the behavior it is about: it is delivered at
+ * the step boundary right after the search that crosses the threshold (`outline-nudge.ts`), which is the point
+ * where the model is choosing its next tool. The selection model gates the emission whenever the decision model
+ * is enabled; a deliberate `none` suppresses it, and an unavailable answer leaves the deterministic nudge in charge.
+ */
+export const OUTLINE_NUDGE_REMINDER: ReminderDefinition = {
+    id: "outline",
+    text: "Exploring code or docs with line-oriented searches or long reads is costing more than it needs to. `outline` can map a file or directory with signatures and line ranges (`digest`), find declarations by name or doc comment (`search`), show a symbol's exact source (`show`), or list call sites (`usages`). Keep `rg`/`grep` for strings, config, logs, prose, and comments inside a function body.",
+    guidance:
+        "The agent is exploring code or docs with line-oriented searches or long reads without `outline`, and one of its actions would be cheaper or more precise.",
+};
+
+/**
  * The rotating catalog, in the order a deterministic schedule cycles it. A tuple so the non-empty invariant
  * the scheduler relies on is checked here rather than at each use.
  *

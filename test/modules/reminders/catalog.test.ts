@@ -7,6 +7,7 @@ import {
     CONTEXT_HALF_REMINDER,
     CONTEXT_TIGHT_REMINDER,
     MEMORY_READ_REMINDER,
+    OUTLINE_NUDGE_REMINDER,
     ROTATION_REMINDERS,
 } from "../../../src/modules/reminders/catalog";
 import type { ReminderDefinition } from "../../../src/modules/reminders/types";
@@ -59,5 +60,15 @@ describe("reminder catalog", () => {
         expect(CONTEXT_HALF_REMINDER.text.length).toBeGreaterThan(0);
         expect(CONTEXT_TIGHT_REMINDER.text.length).toBeGreaterThan(0);
         expect(CONTEXT_AFTER_FOLD_REMINDER.text.length).toBeGreaterThan(0);
+    });
+
+    it("keeps the outline nudge out of the rotation", () => {
+        const active = ACTIVE_ROTATION_REMINDERS.map((reminder) => reminder.id);
+
+        // A cadence cannot time it to the search habit it is about; the step boundary can, so it is a change
+        // point rather than something the rotation or the selection model offers.
+        expect(active).not.toContain("outline");
+        expect(OUTLINE_NUDGE_REMINDER.text.length).toBeGreaterThan(0);
+        expect(OUTLINE_NUDGE_REMINDER.guidance.length).toBeGreaterThan(0);
     });
 });

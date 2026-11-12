@@ -6,6 +6,8 @@ import type {
     ClassifierModel,
     ClassifierQuestion,
     ClassifierResult,
+    JsonObject,
+    JsonValue,
     Usage,
 } from "@earendil-works/pi-ai";
 
@@ -315,6 +317,14 @@ export interface ReminderContext {
      */
     conversation?: string;
     /**
+     * Extra state fields the caller adds beside the conversation.
+     *
+     * The reminder-selection state is normally the conversation alone. A subject that needs one more fact -
+     * the outline nudge sends the triggering command and its clipped output - passes it here; the state stays
+     * one object, and the cache key includes these fields so two different facts cannot share an answer.
+     */
+    stateExtras?: Readonly<Record<string, JsonValue>>;
+    /**
      * Extra questions the caller wants answered in the same round trip, keyed by question id.
      *
      * A built-in id wins a collision, so an extra question can never replace a reminder or label question.
@@ -371,6 +381,7 @@ export function reminderChoiceRequest(
     options: readonly ReminderOption[],
     extraQuestions?: Readonly<Record<string, ClassifierQuestion>>,
     form: ReminderQuestionForm = DEFAULT_REMINDER_FORM,
+    stateExtras?: Readonly<Record<string, JsonValue>>,
 ): ClassifierContext {
     const questions: Record<string, ClassifierQuestion> = {};
 
@@ -388,7 +399,11 @@ export function reminderChoiceRequest(
         }
     }
 
-    return { state, questions };
+    const payload: JsonObject = {
+        ...(state.conversation === undefined ? {} : { conversation: state.conversation }),
+        ...(stateExtras ?? {}),
+    };
+    return { state: payload, questions };
 }
 
 /**
@@ -742,6 +757,7 @@ export class ReminderEvaluator {
             context.options,
             context.extraQuestions,
             form,
+            context.stateExtras,
         );
     }
 
@@ -882,6 +898,7 @@ function reminderCacheKey(
         form,
         context.options.map((option) => [option.id, option.guidance]),
         context.conversation ?? "",
+        context.stateExtras ?? null,
         context.extraQuestions ?? null,
     ]);
 }

@@ -608,6 +608,56 @@ describe("consultReminderSelection", () => {
         expect(sent.state.conversation).toBe("User: run the tests");
     });
 
+    it("merges the caller's extra state fields beside the conversation", async () => {
+        const { registry, classify } = harness();
+
+        await consultReminderSelection({
+            ctx: consultContext(registry),
+            config: {
+                enabled: true,
+                reminders: true,
+                provider: DECISION_PROVIDER_ID,
+                model: MODEL.id,
+            },
+            options: OPTIONS,
+            request: "run the tests",
+            stateExtras: {
+                command: "rg -n ContainerMount src",
+                output: "[14 lines, 877 chars] src/args.ts:45:export interface ContainerMount {",
+            },
+        });
+
+        const sent = classify.mock.calls[0]?.[1] as ClassifierContext;
+        expect(sent.state).toEqual({
+            conversation: "User: run the tests",
+            command: "rg -n ContainerMount src",
+            output: "[14 lines, 877 chars] src/args.ts:45:export interface ContainerMount {",
+        });
+    });
+
+    it("does not reuse an answer across different extra state fields", async () => {
+        const { registry, classify } = harness();
+        const config = {
+            enabled: true,
+            reminders: true,
+            provider: DECISION_PROVIDER_ID,
+            model: MODEL.id,
+        };
+
+        for (const command of ["rg a src", "rg b src"]) {
+            await consultReminderSelection({
+                ctx: consultContext(registry),
+                config,
+                options: OPTIONS,
+                request: "run the tests",
+                stateExtras: { command },
+            });
+        }
+
+        // The extra fields are part of the state, so they are part of the cache key.
+        expect(classify).toHaveBeenCalledTimes(2);
+    });
+
     it("sends no state at all when the branch has no conversation to render", async () => {
         const { registry, classify } = harness();
 

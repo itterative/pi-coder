@@ -34,7 +34,7 @@ unusable answer.
 | `strategies/` | `types.ts`, `veto.ts` (default), `history.ts`, `classification.ts` (criteria + table), `index.ts` |
 | `tools/decision-model.ts` | the shared bridge: `APPLIED_PERMISSIONS`, `appliedPermission`, `classifierRecord`, `consultForGate` (consult + map + notify, under the shared check count), the suggestion bridge (`suggestRuleForPrompt`, `consultSuggestionForPrompt`), and the runner-facing block sentences (`attributedBashBlockReason`, `readOnlyGateSentence`, `permissionAllowsCall`) |
 | `decision/suggestion.ts` | the suggestion subject: the `executes_code` bool, `buildSuggestionState`, `suggestionRoleFrom` (probability ≥ 0.5 → code), and the separate `SuggestionEvaluator` with its own cache and breaker |
-| `decision/reminder.ts` | the reminder subject: `reminderChoiceRequest` / `reminderDecisionFrom` over one question per caller-supplied id (score or bool form), its state the one conversation the consult sent, and the separate `ReminderEvaluator` with a cache keyed on that state and its own breaker |
+| `decision/reminder.ts` | the reminder subject: `reminderChoiceRequest` / `reminderDecisionFrom` over one question per caller-supplied id (score or bool form), its state the one conversation the consult sent, and the separate `ReminderEvaluator` with a cache keyed on that state and its own breaker. `ReminderContext.stateExtras` merges additional JSON fields beside the conversation (the outline gate's `command`/`output`), and `ReminderConsultOptions.windowPolicy` selects the allocator policy; both are part of the cache key. |
 | `tools/bash/index.ts` | parent hook: consult on `ask`, record, prompt unless `apply` resolves it |
 | `tools/agent/child/command-permissions.ts` | child hook: consult with the child's own session, runner/isolation, and the parent's registry |
 | `tools/agent/child/safe-bash.ts` | read-only assessment; the relaxed (generic-spec) re-check `isRelaxedConfinementSafe` |
@@ -57,7 +57,9 @@ unusable answer.
   "no file"** (which is what `test/setup.ts` pins, so a suite can never reach a live endpoint). A blank env
   value otherwise falls through to the config rather than clearing it.
 - Config keys: `enabled`, `suggestions` (default true; model-refined session-rule suggestions), `reminders`
-  (default false; model-chosen agent reminders, consulted by `src/modules/reminders`), `reminderMinProbability`
+  (default false; model-chosen agent reminders, consulted by `src/modules/reminders`; the outline nudge gate
+  consults on `enabled` alone),
+  `reminderMinProbability`
   (default 0.45; the probability a per-reminder answer must reach when `reminderForm` is `"bool"`),
   `reminderForm` (default `"score"`; the per-reminder question shape), `reminderMinScore` (default 1.25 - the
   level a per-reminder answer must reach when `reminderForm` is `"score"`; 1.0 is the "mild" rung and the median

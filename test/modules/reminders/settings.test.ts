@@ -18,4 +18,9 @@ describe("reminder settings", () => {
     it("ignores the debug switch while the default is on", () => {
         expect(reminderDebugEnabled("false")).toBe(true);
     });
+
+    it("enables the outline nudge by default and honours its switch", () => {
+        expect(loadReminderSettings({}).outline).toBe(true);
+        expect(loadReminderSettings({ PI_CODER_REMINDER_OUTLINE: "false" }).outline).toBe(false);
+    });
 });

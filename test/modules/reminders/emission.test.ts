@@ -149,7 +149,7 @@ function appendReminder(
  */
 async function step(
     stub: PiStub,
-    options: { growth?: number; toolResults?: boolean } = {},
+    options: { growth?: number; toolResults?: boolean; toolCalls?: unknown[] } = {},
 ): Promise<void> {
     const growth = options.growth ?? 400;
     await stub.requireHandler("message_start")({ message: { role: "assistant" } }, ctx);
@@ -164,7 +164,7 @@ async function step(
     }
     await stub.requireHandler("turn_end")(
         {
-            message: { role: "assistant", content: [] },
+            message: { role: "assistant", content: options.toolCalls ?? [] },
             toolResults: options.toolResults === false ? [] : [{ role: "toolResult" }],
         },
         ctx,
@@ -488,6 +488,87 @@ describe("reminder emission", () => {
         }
 
         expect(stub.sentMessages).toHaveLength(1);
+    });
+
+    it("steers the outline nudge after a second search in a run", async () => {
+        // The nudge is event-driven rather than a rotation entry, so both deterministic triggers are off and
+        // the only thing that can reach the agent here is the search habit itself.
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "0");
+        useExploringBranch();
+        const stub = harness();
+        await startSession(stub);
+        await userTurn(stub);
+
+        await step(stub, {
+            toolCalls: [toolCall("bash", { command: 'grep -rn "TODO" src' }, "c1")],
+        });
+        // One search can be a legitimate log, config, or string search: the threshold is the second one.
+        expect(stub.sentMessages).toHaveLength(0);
+
+        await step(stub, {
+            toolCalls: [toolCall("bash", { command: 'rg -n "outline" src' }, "c2")],
+        });
+
+        const steered = stub.sentMessages.findLast(
+            (entry) => entry.message.customType === "pi-coder-reminder",
+        );
+        expect(steered?.message.details).toMatchObject({ id: "outline" });
+        expect(String(steered?.message.content)).toContain("`digest`");
+    });
+
+    it("does not repeat the outline nudge in the same run", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "0");
+        useExploringBranch();
+        const stub = harness();
+        await startSession(stub);
+        await userTurn(stub);
+
+        for (let search = 0; search < 3; search += 1) {
+            await step(stub, {
+                toolCalls: [toolCall("bash", { command: "rg symbol src" }, `c${search}`)],
+            });
+        }
+
+        expect(stub.sentMessages).toHaveLength(1);
+    });
+
+    it("quietens the outline nudge while the tool was just used", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "0");
+        useExploringBranch();
+        const stub = harness();
+        await startSession(stub);
+        await userTurn(stub);
+
+        await step(stub, {
+            toolCalls: [
+                toolCall("outline", { action: "digest", path: "src" }, "c1"),
+                toolCall("bash", { command: "rg symbol src" }, "c2"),
+                toolCall("bash", { command: "grep -rn symbol src" }, "c3"),
+            ],
+        });
+
+        expect(stub.sentMessages).toHaveLength(0);
+    });
+
+    it("does not nudge the outline tool in a memory-scoped child", async () => {
+        vi.stubEnv("PI_CODER_REMINDER_EVERY_TURNS", "0");
+        vi.stubEnv("PI_CODER_REMINDER_THRESHOLD", "0");
+        useExploringBranch();
+        const stub = harness({ scope: "memory" });
+        await startSession(stub);
+        await userTurn(stub);
+
+        await step(stub, {
+            toolCalls: [
+                toolCall("bash", { command: "rg symbol src" }, "c1"),
+                toolCall("bash", { command: "grep -rn symbol src" }, "c2"),
+            ],
+        });
+
+        expect(stub.sentMessages).toHaveLength(0);
     });
 
     it("decides nothing while the message is still streaming", async () => {

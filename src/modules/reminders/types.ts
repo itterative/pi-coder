@@ -36,6 +36,7 @@ export type ReminderId =
     | "context-half"
     | "context-tight"
     | "context-after-fold"
+    | "outline"
     | "memory-hygiene"
     | "sandbox"
     | "delegation"

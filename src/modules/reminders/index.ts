@@ -1,4 +1,5 @@
 import type { EventBus, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { JsonValue } from "@earendil-works/pi-ai";
 
 import {
     consultReminderSelection,
@@ -7,6 +8,7 @@ import {
     reminderEnabled,
     PHASE_MOVE_CONFIDENCE,
     TRANSCRIPT_WINDOW_CHARS,
+    WINDOW_POLICY_CONVERSATION,
     type DecisionModelConfig,
     type ReminderConsult,
     type ReminderPhase,
@@ -14,6 +16,7 @@ import {
     type ReminderStateConsult,
     type ReminderStateLabels,
     type SessionWindow,
+    type WindowPolicy,
 } from "../decision";
 import { emitDecisionState } from "../decision/events";
 import { SerialQueue } from "../../common/async";
@@ -22,11 +25,21 @@ import {
     COMPACTION_REMINDER,
     MEMORY_AUDIT_REMINDER,
     MEMORY_READ_REMINDER,
+    OUTLINE_NUDGE_REMINDER,
     REMINDER_NOTICE,
 } from "./catalog";
 import { ContextGrowthTracker } from "./context-growth";
 import { ContextUsageReminders, foldContextNote, type FoldContextNote } from "./context-usage";
 import { createMemoryAuditTrigger } from "./memory-audit";
+import {
+    commandText,
+    isSearchCall,
+    OutlineNudgeTracker,
+    outlineUsageFromEntries,
+    summarizeToolOutput,
+    toolCallsOf,
+    type StepToolCall,
+} from "./outline-nudge";
 import { ReminderScheduler, type ReminderModelChoice, type SchedulerSnapshot } from "./scheduler";
 import {
     REMINDER_CUSTOM_TYPE,
@@ -96,7 +109,7 @@ function reminderTextFor(
 
 /** Everything the debug entry records about one selection decision, however it was reached. */
 interface DecisionEntryInput {
-    trigger: "session" | "turn" | "checkpoint" | "mid-run";
+    trigger: "session" | "turn" | "checkpoint" | "mid-run" | "outline";
     reminder: ReminderDefinition | undefined;
     scope: "full" | "memory";
     /** The state a model decision was made from; absent for the session reminder and mid-run steers. */
@@ -143,6 +156,12 @@ interface DecisionEntryInput {
     todoMove?: { id: string; probability: number };
     /** Every TODO query candidate's returned probability, for calibration. */
     todoScores?: Record<string, number>;
+    /**
+     * The outline nudge's gate state: the step's command and clipped output that were judged.
+     *
+     * Recorded so a debug entry holds what the model read, not a reconstruction from the branch.
+     */
+    outline?: { command: string; output: string };
     contextTokens: number;
     scheduler: SchedulerSnapshot;
 }
@@ -195,6 +214,7 @@ function decisionEntry(input: DecisionEntryInput): Record<string, unknown> {
               }),
         ...(input.todoMove === undefined ? {} : { todoMove: { ...input.todoMove } }),
         ...(input.todoScores === undefined ? {} : { todoScores: { ...input.todoScores } }),
+        ...(input.outline === undefined ? {} : { outline: { ...input.outline } }),
         contextTokens: input.contextTokens,
         scheduler: input.scheduler,
     };
@@ -230,6 +250,10 @@ async function consultModelFor(options: {
     /** The phase already accepted, which the accept rule holds unless the answer moves it confidently. */
     heldPhase?: ReminderPhase;
     todoQuery?: TodoQuery;
+    /** The window policy for the consult's conversation; the measured reminder policy by default. */
+    windowPolicy?: WindowPolicy;
+    /** Extra state fields beside the conversation, e.g. the outline nudge's command and output. */
+    stateExtras?: Readonly<Record<string, JsonValue>>;
 }): Promise<ReminderConsult> {
     return consultReminderSelection({
         ctx: options.ctx,
@@ -240,6 +264,8 @@ async function consultModelFor(options: {
         ...(options.events === undefined ? {} : { events: options.events }),
         ...(options.heldPhase === undefined ? {} : { heldPhase: options.heldPhase }),
         ...(options.todoQuery === undefined ? {} : { extraQuestions: options.todoQuery.questions }),
+        ...(options.windowPolicy === undefined ? {} : { windowPolicy: options.windowPolicy }),
+        ...(options.stateExtras === undefined ? {} : { stateExtras: options.stateExtras }),
         stateMarker: reminderStateMarker,
     });
 }
@@ -315,6 +341,15 @@ export default function registerRemindersExtension(
     const memoryAudit = createMemoryAuditTrigger({
         enabled: settings.enabled && settings.memoryAudit,
     });
+    /**
+     * The outline nudge: repeated `rg`/`grep` searches without `outline`, delivered at the step boundary.
+     *
+     * Event-driven like the memory audit and the measured-context reminders, so it bypasses the rotation and the
+     * selection model. Full scope only: a delegated child is not granted `outline`, so the advice could only be
+     * acted on by the parent.
+     */
+    const outlineNudge = new OutlineNudgeTracker();
+    const outlineNudgeEnabled = scope === "full" && settings.enabled && settings.outline;
     /** When each rotation reminder was shown, keyed by the user turn it was emitted on. */
     const shown = new Map<ReminderId, number>();
     /** The model-maintained labels, re-read from the branch at every change point. */
@@ -863,6 +898,93 @@ export default function registerRemindersExtension(
         });
 
     /**
+     * The step's triggering command and its clipped result, for the gate state.
+     *
+     * The step boundary already parsed the calls for the tracker; the result is paired by tool-call id, which
+     * `event.toolResults` carries. An absent result is written as `no output` rather than dropped: the state is
+     * about the step, and a call that returned nothing is still a fact about it.
+     */
+    const outlineGateState = (
+        calls: readonly StepToolCall[],
+        results: readonly { toolCallId: string; content?: unknown }[],
+    ): { command: string; output: string } | undefined => {
+        const call = calls.findLast(isSearchCall);
+        if (call === undefined) {
+            return undefined;
+        }
+
+        const result =
+            call.id === undefined
+                ? undefined
+                : results.find((entry) => entry.toolCallId === call.id);
+        return {
+            command: commandText(call),
+            output: result === undefined ? "no output" : summarizeToolOutput(result.content),
+        };
+    };
+
+    /**
+     * Let the selection model decide whether the outline nudge is emitted.
+     *
+     * The deterministic trigger has already established that the step is worth a nudge and a consult. The model
+     * scores the bounded state and a `none` answer suppresses the emission; a disabled, failed, timed-out, or
+     * unreadable answer fails open, matching the rotation's fallback (an absent answer must not silently stop
+     * reminders). The consult is awaited because the steer must land before the next inference; the trigger's
+     * rarity and the evaluator's cooldown keep that cost bounded.
+     */
+    const gateOutlineNudge = async (
+        ctx: ExtensionContext,
+        state: { command: string; output: string },
+    ): Promise<boolean> => {
+        const config = decisionConfig.load(ctx.cwd ?? process.cwd());
+        if (config.enabled !== true) {
+            return true;
+        }
+
+        // The gate asks the reminder evaluator one question. The subject is enabled for that consult only, so
+        // the rotation keeps its deterministic schedule unless `reminders` is separately on; the cache key
+        // includes the config, so the two never share an answer.
+        const gateConfig: DecisionModelConfig = { ...config, reminders: true };
+        const schedulerState = scheduler.snapshot();
+        const consult = await consultModelFor({
+            ctx,
+            config: gateConfig,
+            signals: {},
+            reminders: [OUTLINE_NUDGE_REMINDER],
+            ...(pi.events === undefined ? {} : { events: pi.events }),
+            windowPolicy: WINDOW_POLICY_CONVERSATION,
+            stateExtras: state,
+        });
+
+        // An absent decision is an unavailable or unreadable answer, not a deliberate `none`.
+        const emitted = consult.decision === undefined || consult.decision.kind === "reminder";
+
+        if (settings.debug) {
+            pi.appendEntry(
+                REMINDER_DEBUG_ENTRY_TYPE,
+                decisionEntry({
+                    trigger: "outline",
+                    reminder: emitted ? OUTLINE_NUDGE_REMINDER : undefined,
+                    scope,
+                    available: new Set<ReminderId>(["outline"]),
+                    options: [OUTLINE_NUDGE_REMINDER],
+                    ...(consult.decision === undefined
+                        ? {}
+                        : { modelChoice: emitted ? "outline" : "none" }),
+                    scores: consult.scores,
+                    consult,
+                    ...(consult.window === undefined ? {} : { window: consult.window }),
+                    outline: state,
+                    contextTokens: growth.maxTokens,
+                    scheduler: schedulerState,
+                }),
+            );
+        }
+
+        return emitted;
+    };
+
+    /**
      * Publish the judged session labels for the footer's badge.
      *
      * The state is derived from the branch alone - the model's persisted labels with the deterministic
@@ -915,6 +1037,9 @@ export default function registerRemindersExtension(
         // A restart is also a context epoch: a fold or a model change starts a new one, and a reload rebuilds
         // what it already delivered from the branch. A due fallback is dropped - see `ContextUsageReminders`.
         context.reset(branch);
+        if (outlineNudgeEnabled) {
+            outlineNudge.seed(outlineUsageFromEntries(branch));
+        }
 
         // A restart is a change point: publishing here means a reload, a tree move, or a fold shows the phase
         // at once instead of waiting for the first turn.
@@ -1303,6 +1428,24 @@ export default function registerRemindersExtension(
             }
         }
 
+        // A search-heavy step is where the outline nudge belongs: the model has just chosen `rg`/`grep`, and the
+        // steer lands before its next choice. The tracker counts this step's own calls, so the check costs no
+        // branch scan; the trigger's cooldown makes a run at most one nudge per user turn. A step that carries
+        // it takes the rotation's slot for this boundary, like the audit and context reminders.
+        const stepCalls =
+            event.message.role === "assistant" ? toolCallsOf(event.message.content) : [];
+        const outlineNudgeDue =
+            outlineNudgeEnabled && outlineNudge.noteStep(stepCalls, scheduler.snapshot().userTurns);
+        if (outlineNudgeDue) {
+            const state = outlineGateState(stepCalls, event.toolResults);
+            const emitted = state === undefined ? true : await gateOutlineNudge(ctx, state);
+            if (emitted) {
+                pendingSteers.push(
+                    heldReminder(ctx, OUTLINE_NUDGE_REMINDER, scheduler.snapshot().userTurns),
+                );
+            }
+        }
+
         // A step that ran a tool is the first point the run guarantees another inference, so the reminders held
         // for it have a destination now.
         flushPendingSteers();
@@ -1318,9 +1461,9 @@ export default function registerRemindersExtension(
         });
 
         // Awaited: the steer has to be queued before pi asks its next question.
-        // One message per step: a defect report or a context reminder takes the slot the rotation would have used,
-        // and the rotation keeps its cadence for the next step.
-        if (auditFindings === undefined && !contextEmitted) {
+        // One message per step: a defect report, a context reminder, or the outline nudge takes the slot the
+        // rotation would have used, and the rotation keeps its cadence for the next step.
+        if (auditFindings === undefined && !contextEmitted && !outlineNudgeDue) {
             await maybeEmitMidRun(ctx);
         }
     });

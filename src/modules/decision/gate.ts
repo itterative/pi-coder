@@ -1,5 +1,5 @@
 import type { EventBus, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ClassifierQuestion } from "@earendil-works/pi-ai";
+import type { ClassifierQuestion, JsonValue } from "@earendil-works/pi-ai";
 
 import { DecisionEvaluator } from "./evaluator";
 import { withDecisionCheck } from "./events";
@@ -23,7 +23,7 @@ import {
 import { transcriptItems, windowTranscript } from "./transcript";
 import { SuggestionEvaluator, type SuggestionConsult } from "./suggestion";
 import { workspaceStatusFor } from "./workspace";
-import { allocationText, selectWindow, WINDOW_POLICY_REMINDER } from "./window";
+import { allocationText, selectWindow, WINDOW_POLICY_REMINDER, type WindowPolicy } from "./window";
 import type { ClassifierRegistry } from "./model";
 import type { DecisionIsolation, DecisionRunner } from "./runner-rules";
 import type {
@@ -283,6 +283,21 @@ export interface ReminderConsultOptions extends ReminderEvaluatorSeed {
     /** Extra questions the caller wants answered in the same round trip; returned under `consult.extras`. */
     extraQuestions?: Readonly<Record<string, ClassifierQuestion>>;
     /**
+     * Extra state fields the caller adds beside the conversation.
+     *
+     * A subject that needs one more fact than the conversation carries - the outline nudge sends the triggering
+     * command and its clipped output - passes it here. The state stays one object, and the cache key includes
+     * these fields, so two different facts cannot share an answer.
+     */
+    stateExtras?: Readonly<Record<string, JsonValue>>;
+    /**
+     * The window policy the conversation is allocated with; the measured reminder policy by default.
+     *
+     * The outline gate uses `WINDOW_POLICY_CONVERSATION` because its question is about the recent step
+     * rather than the turn, and the replay showed that policy's message-heavy shape kept the current work.
+     */
+    windowPolicy?: WindowPolicy;
+    /**
      * The phase already accepted, when one is. The accept rule holds it unless the answer is confident enough
      * to move it, which is what keeps one low-confidence answer from being locked in by the next one.
      */
@@ -358,7 +373,7 @@ export async function consultReminderSelection(
             // shape is the plan policy at a 2000-char budget with none of the structured signal fields beside it.
             const selection = selectWindow(
                 reminderConversationAtoms(session.items, request, session.request),
-                WINDOW_POLICY_REMINDER,
+                options.windowPolicy ?? WINDOW_POLICY_REMINDER,
             );
             // Kept as the items the conversation actually shows, each at the length the allocator gave it, so a
             // debug entry records what was read rather than a window that was built and then thrown away.
@@ -379,6 +394,7 @@ export async function consultReminderSelection(
                 ...(options.extraQuestions === undefined
                     ? {}
                     : { extraQuestions: options.extraQuestions }),
+                ...(options.stateExtras === undefined ? {} : { stateExtras: options.stateExtras }),
             });
 
             return { ...consult, window };

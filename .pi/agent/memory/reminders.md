@@ -14,8 +14,8 @@ turn, plus threshold-driven mid-run steers and the automatic memory audit's find
 `<pi_coder_reminder>`). Every block opens with `REMINDER_NOTICE` ("Automated reminder (not from the user)...")
 because the message rides in the user role and a bare one would read as the user speaking.
 
-They leave by one of two paths - a user turn, or a mid-run steer - and the module's files, cadence, env
-switches and restart/fold lifecycle are `reminders/schedule.md`. **Everything held for one delivery point leaves
+They leave by a user turn or a mid-run steer; the module's files, cadence, env switches, and lifecycle are
+`reminders/schedule.md`. **Everything held for one delivery point leaves
 as a single message**: `pendingSteers` holds `{id, text, turn, contextTokens}` entries, `heldMessage` dedupes
 them by id and joins the texts under one wrapper, and the combined message records every id in `details.ids` so
 a restart can resume from it. Sending two payloads at one boundary was a real defect: pi delivered the first to
@@ -34,11 +34,11 @@ that told agents to run the audit after every memory edit (2026-11).
 
 ## Measured context
 
-`context-usage.ts` puts a count the model can trust in front of it, because a model that assumes its own usage
-economizes against a limit it does not have, and the assumption is worst right after a fold. Only a reading
-anchored on a counted reply after the newest `changesCountBasis` row is shown as **Measured**. The 50%/75%
-thresholds and the post-fold fallback are change points outside the rotation and the decision model;
-`PI_CODER_REMINDER_CONTEXT=false` disables them. Details are `reminders/context-usage.md`.
+`context-usage.ts` puts a count the model can trust in front of it: a model that assumes its own usage economizes
+against a limit it does not have, worst right after a fold. Only a reading anchored on a counted reply after the
+newest `changesCountBasis` row is shown as **Measured**. The 50%/75% thresholds and the post-fold fallback are
+change points outside the rotation and the decision model; `PI_CODER_REMINDER_CONTEXT=false` disables them.
+Details are `reminders/context-usage.md`.
 
 ## The gate that picks one
 
@@ -104,6 +104,7 @@ classifier plumbing this builds on.
 - `reminders/selection-corpus.md` — the S0-S11 state shapes and what each asked, the hindsight oracle and which
   half of it to trust, and what survived replication at 1.25.
 - `reminders/schedule.md` — the module's files, cadence, env switches, and restart/fold lifecycle.
+- `reminders/outline-nudge.md` — outline nudge trigger, quiet window, cooldown, seed.
 - `reminders/replay.md` — reminder-report flags, fold modeling, recorded view, module/export contract.
 - `reminders/model-comparison.md` — clef/d3/lfm2 speed and real-state decisions.
 - `reminders/state-experiments.md` — state-shape and question-form replays.

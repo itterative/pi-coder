@@ -13,8 +13,9 @@ where the decision-model gate lives.
 ## Files
 
 - `catalog.ts` — the change-point reminders `MEMORY_READ_REMINDER` (session start),
-  `COMPACTION_REMINDER` (a fold), `MEMORY_AUDIT_REMINDER` (an automatic-audit finding), and the measured-context
-  trio `CONTEXT_HALF_REMINDER` / `CONTEXT_TIGHT_REMINDER` / `CONTEXT_AFTER_FOLD_REMINDER`, plus `ROTATION_REMINDERS`
+  `COMPACTION_REMINDER` (a fold), `MEMORY_AUDIT_REMINDER` (an automatic-audit finding), the measured-context
+  trio `CONTEXT_HALF_REMINDER` / `CONTEXT_TIGHT_REMINDER` / `CONTEXT_AFTER_FOLD_REMINDER`, `OUTLINE_NUDGE_REMINDER`
+  (repeated searches without `outline`), plus `ROTATION_REMINDERS`
   (memory-hygiene, sandbox, delegation, todo, validation), each with `text` and `guidance`. A `disabled: true`
   entry stays in the catalog but is filtered out of the rotation and the model's offer by
   `ACTIVE_ROTATION_REMINDERS`; `sandbox` is disabled until it keys on a real gated event rather than rotating
@@ -56,12 +57,17 @@ where the decision-model gate lives.
 - `context-usage.ts` — the measured-context reminders: the trust rule (a counted reply after the newest
   `changesCountBasis` row), the 50%/75% threshold tracker, the post-fold estimate, and the model-changed one-shot.
   See `context-usage.md`.
+- `outline-nudge.ts` — the step-boundary nudge after repeated `rg`/`grep` searches without `outline`: the search
+  classifier (pipes and heredoc bodies excluded), the two-searches threshold, the 20-call quiet window, the
+  8-turn cooldown, the post-fold branch seed, and the bounded `{recent_conversation, command, output}` gate
+  state. The selection model gates the emission whenever the decision model is enabled; see `outline-nudge.md`.
 - `settings.ts` — `PI_CODER_REMINDER=false` disables everything; `PI_CODER_MEMORY_AUDIT=false` disables only the
   automatic memory audit; `PI_CODER_REMINDER_MODEL_TURNS` (default 5) is the model's own floor, `0` for none;
   `PI_CODER_REMINDER_EVERY_TURNS` (default 5) and `PI_CODER_REMINDER_THRESHOLD` (default 30000, alias
   `PI_MEMORY_REMINDER_THRESHOLD`) each disable their trigger at `0`, and both at `0` also removes the model
   consult; `PI_CODER_REMINDER_MIDRUN_MAX` (default 1) caps the mid-run steers one user turn may receive;
   `PI_CODER_REMINDER_CONTEXT=false` disables the measured-context reminders without touching the rest;
+  `PI_CODER_REMINDER_OUTLINE=false` disables the outline nudge alone;
   `PI_CODER_REMINDER_DEBUG` records a `pi-coder-reminder:debug` entry with the state and outcome of every
   selection decision (default on, `reminderDebugEnabled`), including the window judged (the state ask's own
   `stateTranscript`), the tier-1 `stateConfidence`, and `escalated`.
@@ -105,9 +111,13 @@ Both append at the end of the conversation, so the system-prompt prefix stays st
   dispatch. Both paths share the emission bookkeeping, and full scope only - a memory-scoped child never steers
   from the rotation. The steers a child can receive mid-run are the automatic memory audit's (`memory-audit`) and a
   measured-context one: both are event-driven rather than cadence-driven - a memory the child just broke is
-  missing from its own next prompt, and its own context assumption is as stale as a parent's. A step that carries
-  an audit finding or a context reminder skips `maybeEmitMidRun` - the rotation keeps its cadence for the next
-  step - but the finding still travels in the same combined message as anything already held.
+  missing from its own next prompt, and its own context assumption is as stale as a parent's. The outline nudge
+  (`outline`) is the third event-driven steer but parent-only, because a child is not granted `outline`; it is
+  keyed on the step's own search calls, so it needs no branch scan, and its model consult is awaited when the
+  model is enabled: a `none` suppresses the nudge and the point is recorded as a `trigger: "outline"` debug
+  entry. A step that carries an audit
+  finding, a context reminder, or the outline nudge skips `maybeEmitMidRun` - the rotation keeps its cadence for
+  the next step - but everything held still travels in one combined message.
 
 ## Lifecycle: start, navigation, and the fold
 
