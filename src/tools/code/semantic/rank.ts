@@ -1,21 +1,36 @@
 import type { Declaration, ParsedFile } from "../types";
 
-/** Below this many name/doc matches, the relevance tail may be worth rendering. */
+/** Below this many name/doc matches, a lexical-led answer may still want a related tail. */
 export const TAIL_MIN_LITERAL = 3;
 
 /**
- * Whether the relevance tail is worth its cost for this result.
+ * Whether the related channel is worth its cost when a *strong* lexical hit already leads.
  *
- * Two conditions, both about evidence rather than count. Fewer than `TAIL_MIN_LITERAL` matches means the literal
- * pass found little; a doc-text match *at all* means it found prose that mentions every content word of the query,
- * which is the strongest cheap signal there is. Each row the tail adds costs a query embedding (measured 0.6–3 s,
- * dominated by the model), so it must not be spent to decorate an answer that is already there.
+ * Only for the lexical-led case: a name or phrase match is an answer, so related rows may at most decorate it, and
+ * only when the literal pass found little (`TAIL_MIN_LITERAL`) and no prose matched every content word.
  */
 export function wantsTail(literalCount: number, docMatches: number): boolean {
     return literalCount < TAIL_MIN_LITERAL && docMatches === 0;
 }
 
-/** Rows the tail may add, kept small so a good literal answer is not buried. */
+/**
+ * Whether this query should be answered by similarity first, with the lexical rows after it.
+ *
+ * A strong lexical hit — a name match (exact, prefix, substring) or the query's own words found adjacent in prose
+ * (the doc-phrase and frontmatter-phrase tiers) — is precise evidence, and it stays first no matter what the embedding
+ * says. Everything weaker is a guess: a plain doc tier matches every content word *somewhere*, which is not the same
+ * as answering the question, and on 18 prose queries over `docs/` the lexical pass put the right section first 11% of
+ * the time where similarity ranking did it 61% (MRR 0.212 against 0.706). So for those queries the related rows lead
+ * and the lexical ones follow.
+ *
+ * This costs one query embedding per search with no strong lexical hit — measured 51–69 ms warm on the native runtime
+ * — which is why the dense channel is no longer only a tail.
+ */
+export function leadsWithRelated(strongMatch: boolean): boolean {
+    return !strongMatch;
+}
+
+/** Rows the related channel may add, which is also the page it leads with. */
 export const TAIL_ROWS = 8;
 
 /** Reciprocal-rank-fusion constant; 60 is the value the retrieval literature settles on. */

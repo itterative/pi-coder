@@ -201,7 +201,13 @@ export function createSemanticSearch(deps: SemanticDeps): SemanticSearch {
                 dense = [];
             }
 
-            return dense.length === 0 ? lexical : fuseRankings([lexical, dense]);
+            if (dense.length === 0) {
+                return lexical;
+            }
+
+            // A prose query is answered by similarity: fusing the lexical ranks in measured worse, because those rows
+            // matched a word or two rather than the meaning.
+            return request.similarityOnly === true ? dense : fuseRankings([lexical, dense]);
         },
     };
 }

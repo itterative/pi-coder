@@ -16,7 +16,7 @@ import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
 import { tokenize } from "./semantic/bm25";
 import { stem } from "./stem";
-import { TAIL_ROWS, declarationKey, wantsTail } from "./semantic/rank";
+import { TAIL_ROWS, declarationKey, leadsWithRelated, wantsTail } from "./semantic/rank";
 import type { SemanticSearch } from "./semantic/types";
 import type { CodeSource } from "./source";
 import { declarationDoc } from "./text";
@@ -184,26 +184,33 @@ export async function runSearch(
             ? await timing.measure("search", () => collectFuzzy(parsed, query, signal))
             : undefined;
     const fuzzyHits = fuzzy?.hits ?? [];
-    // A typo of an identifier is precise evidence, so it keeps priority over a relevance tail; the tail is
-    // for a query whose words exist in prose but in no name or doc comment the literal pass could reach.
-    const tail =
-        fuzzyHits.length === 0
-            ? await timing.measure("tail", () =>
-                  collectTail(
-                      semantic,
-                      literal.length,
-                      docMatches,
-                      parsed,
-                      source,
-                      root,
-                      query,
-                      discovery.truncated,
-                      [...literal, ...fuzzyHits],
-                      signal,
-                  ),
-              )
-            : [];
-    const hits = [...literal, ...fuzzyHits, ...tail];
+    // A name or doc-phrase hit is the precise answer and stays first. Anything weaker is prose, which the embedding
+    // channel answers better than a doc tier that merely saw every word somewhere, so there its rows lead.
+    const strongMatch = literal.some((hit) => hit.tier <= TIER_FRONTMATTER_PHRASE);
+    const leads = leadsWithRelated(strongMatch);
+    // A typo of an identifier is precise evidence too, so a fuzzy result keeps priority over related rows; a
+    // lexical-led answer still takes a related tail when it is thin, exactly as before.
+    const wantsRelated = fuzzyHits.length === 0 && (leads || wantsTail(literal.length, docMatches));
+    const related = wantsRelated
+        ? await timing.measure("tail", () =>
+              collectRelated(
+                  semantic,
+                  leads,
+                  parsed,
+                  source,
+                  root,
+                  query,
+                  discovery.truncated,
+                  [...literal, ...fuzzyHits],
+                  signal,
+              ),
+          )
+        : [];
+    const relatedKeys = new Set(related.map((hit) => declarationKey(hit.file, hit.declaration)));
+    const lexicalRest = [...literal, ...fuzzyHits].filter(
+        (hit) => !relatedKeys.has(declarationKey(hit.file, hit.declaration)),
+    );
+    const hits = leads ? [...related, ...lexicalRest] : [...lexicalRest, ...related];
     const total = hits.length;
     const approximate = fuzzyHits.length > 0;
 
@@ -232,7 +239,7 @@ export async function runSearch(
         approximate,
         docMatches - frontmatterMatches,
         frontmatterMatches,
-        tail.length,
+        related.length,
     );
     const rows = hits.map((hit) => renderHit(source, hit));
     const body = rows.join("\n");
@@ -243,10 +250,10 @@ export async function runSearch(
         discovery.truncated,
         total,
         fuzzy?.total ?? 0,
-        tail.length,
+        related.length,
         moreNote(source, hits, rows, fitted),
     );
-    const hint = tail.length > 0 && semantic?.hint !== undefined ? [semantic.hint] : [];
+    const hint = related.length > 0 && semantic?.hint !== undefined ? [semantic.hint] : [];
     const next = nextOffsetNote(fitted);
     const text = [fitted.text, next, ...footer, ...hint]
         .filter((part): part is string => part !== undefined && part.length > 0)
@@ -465,10 +472,9 @@ function docTokensOf(text: string): string[] {
     return tokenize(text).map(stem);
 }
 
-async function collectTail(
+async function collectRelated(
     semantic: SemanticSearch | undefined,
-    literalCount: number,
-    docMatches: number,
+    leads: boolean,
     parsed: readonly ParsedFile[],
     source: CodeSource,
     root: string,
@@ -477,11 +483,14 @@ async function collectTail(
     shown: readonly SearchHit[],
     signal?: AbortSignal,
 ): Promise<SearchHit[]> {
-    if (semantic === undefined || !wantsTail(literalCount, docMatches)) {
+    if (semantic === undefined) {
         return [];
     }
 
-    const shownKeys = new Set(shown.map((hit) => declarationKey(hit.file, hit.declaration)));
+    // A related-first page skips nothing: its own rows come first, and the lexical ones are filtered after it.
+    const shownKeys = new Set(
+        leads ? [] : shown.map((hit) => declarationKey(hit.file, hit.declaration)),
+    );
     const ranked = await semantic.rank(
         {
             query: query.raw,
@@ -489,6 +498,7 @@ async function collectTail(
             sourceKind: source.kind,
             files: parsed,
             truncated,
+            similarityOnly: leads,
         },
         signal,
     );

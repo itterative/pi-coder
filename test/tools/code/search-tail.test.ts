@@ -122,6 +122,75 @@ describe("outline search relevance tail", () => {
         expect(result.text).not.toContain("[related]");
     });
 
+    it("leads with related rows when the doc tier only saw the words somewhere", async () => {
+        const seen: boolean[] = [];
+        const semantic: SemanticSearch = {
+            hint: "# semantic: enable semantic search with /outline semantic on",
+            dispose: () => undefined,
+            async rank(request) {
+                seen.push(request.similarityOnly === true);
+
+                return await semanticRanking("other").rank(request);
+            },
+        };
+
+        // Both words are in the doc comment, but not as a phrase: the doc tier matches, the phrase tier does not.
+        const result = await runSearch(
+            source(),
+            { action: "search", path: "src", query: "entries cache" },
+            undefined,
+            semantic,
+        );
+        const rows = result.text.split("\n").filter((line) => line.includes(":"));
+
+        expect(seen).toEqual([true]);
+        expect(rows[0]).toContain("other");
+        expect(rows[0]).toContain("[related]");
+        expect(rows.findIndex((line) => line.includes("promote"))).toBeGreaterThan(0);
+    });
+
+    it("keeps a name match first and asks the ranker to fuse, not to replace it", async () => {
+        const seen: boolean[] = [];
+        const semantic: SemanticSearch = {
+            dispose: () => undefined,
+            async rank(request) {
+                seen.push(request.similarityOnly === true);
+
+                return await semanticRanking("other").rank(request);
+            },
+        };
+
+        const result = await runSearch(
+            source(),
+            { action: "search", path: "src", query: "promote" },
+            undefined,
+            semantic,
+        );
+
+        expect(seen).toEqual([false]);
+
+        // The name tier renders without a tag; what matters is that it still leads the related row.
+        const rows = result.text.split("\n");
+        const promoted = rows.findIndex((line) => line.includes("promote"));
+        const related = rows.findIndex((line) => line.includes("[related]"));
+
+        expect(promoted).toBeGreaterThanOrEqual(0);
+        expect(related).toBeGreaterThan(promoted);
+    });
+
+    it("shows a declaration once even when both channels find it", async () => {
+        const result = await runSearch(
+            source(),
+            { action: "search", path: "src", query: "entries cache" },
+            undefined,
+            semanticRanking("promote"),
+        );
+        const promotes = result.text.split("\n").filter((line) => line.includes("promote"));
+
+        expect(promotes).toHaveLength(1);
+        expect(promotes[0]).toContain("[related]");
+    });
+
     it("does not add a hint when the tail produced nothing", async () => {
         const result = await runSearch(source(), {
             action: "search",
