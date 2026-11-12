@@ -17,6 +17,8 @@ export class MemoryCodeSource implements CodeSource {
     constructor(
         readonly cwd: string,
         files: Record<string, string>,
+        /** Per-file mtimes, for callers that need to distinguish "written before the build" from "written after". */
+        private readonly mtimes: Record<string, number> = {},
     ) {
         this.directories.add(path.resolve(cwd));
 
@@ -42,7 +44,12 @@ export class MemoryCodeSource implements CodeSource {
         const file = this.files.get(target);
 
         if (file !== undefined) {
-            return { isDirectory: false, isFile: true, size: file.length, mtimeMs: 1 };
+            return {
+                isDirectory: false,
+                isFile: true,
+                size: file.length,
+                mtimeMs: this.mtimes[path.relative(this.cwd, target)] ?? this.mtimes[target] ?? 1,
+            };
         }
 
         if (this.directories.has(target)) {

@@ -26,7 +26,8 @@ import {
     writeConsent,
 } from "./semantic/config";
 import { buildIndex, countEmbeddings, createSemanticSearch, ensureIndexMetadata } from "./semantic";
-import { buildWorkerCount } from "./semantic/runtime";
+import { projectRoots, refreshOnce, scanRoot } from "./semantic/refresh";
+import { buildWorkerCount, refreshWorkerCount } from "./semantic/runtime";
 import { nativeArtifactBytes } from "./semantic/artifacts";
 import { nativeRuntimePresent } from "./semantic/native";
 import { readManifest } from "./semantic/store";
@@ -177,12 +178,141 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
         contributeToolGuide(event.systemPromptOptions, "outline", outlineGuidePrompt());
     });
 
+    // An idle refresh, so drift is caught while nothing waits on it: at session start (immediately, so the first
+    // search of the session is warm) and five minutes after the agent settles. Activity cancels the armed timer.
+    const refresh = idleRefresh((ctx) => createCodeSource(ctx, container, codeReadRoots));
+
+    pi.on("session_start", (_event, ctx) => {
+        void refresh.run(ctx);
+    });
+    pi.on("agent_settled", (_event, ctx) => {
+        refresh.arm(ctx);
+    });
+    pi.on("agent_start", () => {
+        refresh.cancel();
+    });
+    pi.on("message_start", () => {
+        refresh.cancel();
+    });
+    pi.on("session_shutdown", () => {
+        refresh.cancel();
+    });
+
     pi.registerCommand("outline", {
         description: "Outline search: semantic status, opt-in, index build, and purge",
         getArgumentCompletions: (prefix: string): AutocompleteItem[] =>
             completeOutlineArguments(prefix),
         handler: (args, ctx) => handleOutlineCommand(args, ctx, container),
     });
+}
+
+/**
+ * Background refresh driven by the session rather than by a search.
+ *
+ * A search only notices drift under the path it happened to look at, and only when it was asked — so a refactor could
+ * leave the index stale for a whole session. This arms a scan when the agent goes idle and runs one at session start.
+ *
+ * It never prompts, never downloads, and never runs when the mode is not `hybrid`: the consent dialog belongs to a
+ * turn, and an idle timer must not spend bandwidth. One scan at a time, and a build that is already running (from a
+ * search) simply means there is nothing for this to do.
+ */
+function idleRefresh(
+    sourceFor: (ctx: ExtensionContext) => Promise<Awaited<ReturnType<typeof createCodeSource>>>,
+): { run(ctx: ExtensionContext): Promise<void>; arm(ctx: ExtensionContext): void; cancel(): void } {
+    let timer: NodeJS.Timeout | undefined;
+    let running = false;
+    let latest: ExtensionContext | undefined;
+
+    const cancel = (): void => {
+        if (timer !== undefined) {
+            clearTimeout(timer);
+            timer = undefined;
+        }
+    };
+
+    const run = async (ctx: ExtensionContext): Promise<void> => {
+        if (running) {
+            return;
+        }
+
+        latest = ctx;
+        const root = semanticRoot();
+
+        if (effectiveSemanticMode(process.env, readConsent(root)).mode !== "hybrid") {
+            return;
+        }
+
+        if (!artifactsPresent(root)) {
+            return;
+        }
+
+        running = true;
+
+        try {
+            const source = await sourceFor(ctx);
+            let announced = false;
+            const outcome = await refreshOnce({
+                roots: projectRoots({ modelDir: root, cwd: ctx.cwd, sourceKind: source.kind }),
+                scan: (indexed) => scanRoot({ source, root: indexed.root, modelDir: root }),
+                build: async (indexed, files) => {
+                    if (!announced) {
+                        announced = true;
+                        ctx.ui.setStatus(
+                            OUTLINE_STATUS_KEY,
+                            "outline: refreshing in the background",
+                        );
+                    }
+
+                    const built = await buildIndex({
+                        sourceKind: source.kind,
+                        root: indexed.root,
+                        modelDir: root,
+                        files,
+                        // Only the changed files were parsed: pruning against them would delete the rest of the index.
+                        prune: false,
+                        maxWorkers: refreshWorkerCount(),
+                    }).catch(() => ({ embedded: 0 }));
+
+                    return built.embedded;
+                },
+            });
+
+            if (outcome.overBudget) {
+                ctx.ui.notify(
+                    `outline semantic: ${outcome.missing} declaration${outcome.missing === 1 ? "" : "s"} are not indexed; /outline build <path>`,
+                    "info",
+                );
+
+                return;
+            }
+
+            if (outcome.rebuilt > 0) {
+                ctx.ui.notify(
+                    `outline semantic: refreshed ${outcome.embedded} declaration${outcome.embedded === 1 ? "" : "s"} in the background`,
+                    "info",
+                );
+            }
+        } finally {
+            running = false;
+            ctx.ui.setStatus(OUTLINE_STATUS_KEY, undefined);
+        }
+    };
+
+    const arm = (ctx: ExtensionContext): void => {
+        cancel();
+        latest = ctx;
+        timer = setTimeout(() => {
+            timer = undefined;
+
+            if (latest !== undefined) {
+                void run(latest);
+            }
+        }, IDLE_REFRESH_DELAY_MS);
+        // A pending refresh must not keep pi alive after the last turn.
+        timer.unref?.();
+    };
+
+    return { run, arm, cancel };
 }
 
 async function dispatchAction(
@@ -287,6 +417,9 @@ const codeReadRoots: CodeReadRoots = () => [
 const SEMANTIC_HINT = "# semantic: /outline on downloads a ~211 MB model once and ranks by meaning";
 /** Footer status entry shared by background downloads and refreshes; one line, cleared when idle. */
 const OUTLINE_STATUS_KEY = "outline";
+
+/** How long the session may sit idle before an automatic scan; long enough not to race a follow-up question. */
+const IDLE_REFRESH_DELAY_MS = 5 * 60_000;
 
 /** One consent prompt per session at most: "not now" is per session, "never" persists. */
 let askedThisSession = false;
