@@ -96,9 +96,9 @@ export const CONTEXT_AFTER_FOLD_REMINDER: ReminderDefinition = {
  */
 export const OUTLINE_NUDGE_REMINDER: ReminderDefinition = {
     id: "outline",
-    text: "Exploring code or docs with line-oriented searches or long reads is costing more than it needs to. `outline` can map a file or directory with signatures and line ranges (`digest`), find declarations by name or doc comment (`search`), show a symbol's exact source (`show`), or list call sites (`usages`). Keep `rg`/`grep` for strings, config, logs, prose, and comments inside a function body.",
+    text: "Your native tool `outline` might help you navigate more efficiently: `digest` maps a file or directory with signatures and line ranges, `search` finds declarations by name or doc comment, `show` returns a symbol's exact source, and `usages` lists call sites. `rg`/`grep` still fit strings, config, logs, prose, and comments inside a function body.",
     guidance:
-        "The agent is exploring code or docs with line-oriented searches or long reads without `outline`, and one of its actions would be cheaper or more precise.",
+        "The agent is exploring code with line-oriented searches or long reads instead of the `outline` tool, which would locate the declarations, definitions, or call sites directly.",
 };
 
 /**
