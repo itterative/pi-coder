@@ -8,6 +8,12 @@ process.env.SANDBOX_DECISION_LOG ??= "0";
 // their own temporary path to applyDevEnvFile.
 process.env.PI_CODER_ENV_FILE ??= "0";
 
+// Switching the file off is not enough when the suite runs under pi: the extension has already applied the
+// checkout `.env` to `process.env`, so `PI_CODER_STATE_DIR` is inherited as an absolute `.state` path and the
+// default-resolution assertions fail on a development machine only. Blank means "unset" to the resolver, so
+// suites see the `<agent-dir>/pi-coder` default; tests that relocate the tree stub it themselves.
+process.env.PI_CODER_STATE_DIR = "";
+
 // Same for the compaction trace in the state root: it records raw summary text, so a suite only writes it
 // where COMPACTION_TRACE_PATH points at its own temporary file.
 process.env.COMPACTION_TRACE ??= "0";

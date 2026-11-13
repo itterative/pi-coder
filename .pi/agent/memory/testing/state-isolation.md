@@ -15,6 +15,10 @@ state root (`<agent-dir>/pi-coder`, `PI_CODER_STATE_DIR` overrides it).
 
 - `PI_CODER_ENV_FILE ??= "0"`, so a developer's checkout `.env` (which may pin the state root) cannot change
   what a suite asserts. Tests that exercise the file call `applyDevEnvFile` with their own temporary path.
+  Turning the file off does not undo a load that already happened: under pi, the extension applied the
+  checkout `.env` to `process.env` before the suite started, so `PI_CODER_STATE_DIR` arrives as an absolute
+  `.state` path. `test/setup.ts` therefore blanks it unconditionally (blank means unset to the resolver);
+  without that the default-root assertions pass outside pi and fail inside it.
 
 - `SANDBOX_DECISION_LOG ??= "0"`, so the bash decision log is off for every suite unless a file re-enables it
   with `vi.stubEnv("SANDBOX_DECISION_LOG", "1")` plus a temporary `SANDBOX_DECISION_LOG_PATH` (or a
