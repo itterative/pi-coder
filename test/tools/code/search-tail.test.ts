@@ -238,6 +238,55 @@ describe("outline search relevance tail", () => {
     });
 });
 
+describe("outline search related-led page", () => {
+    // A full tail of guesses must not push the query's only literal match onto the next page: the row that is
+    // evidence stays on the page the caller reads, and only the tail's weakest guess is deferred behind it.
+    const SLOT_FILES: Record<string, string> = {
+        "src/hint.ts": [
+            "/** Keeps recently used cache entries alive. */",
+            "export function promote(key: string): string {",
+            "    return key;",
+            "}",
+            "",
+        ].join("\n"),
+        "src/related.ts": Array.from(
+            { length: 8 },
+            (_, index) => `export function rel${index + 1}(): void {}`,
+        ).join("\n"),
+    };
+
+    function slotSource(): MemoryCodeSource {
+        return new MemoryCodeSource("/project", SLOT_FILES);
+    }
+
+    it("keeps a slot for the literal row when related rows would fill the page", async () => {
+        const semantic: SemanticSearch = {
+            hint: undefined,
+            dispose: () => undefined,
+            async rank(request) {
+                const file = request.files.find((candidate) =>
+                    candidate.path.endsWith("related.ts"),
+                )!;
+
+                return file.all.map((declaration) => ({ file, declaration }));
+            },
+        };
+        const result = await runSearch(
+            slotSource(),
+            { action: "search", path: "src", query: "cache alive" },
+            undefined,
+            semantic,
+        );
+        const literal = result.text.indexOf("promote");
+        const weakest = result.text.indexOf("rel8");
+
+        expect(literal).toBeGreaterThanOrEqual(0);
+        expect(weakest).toBeGreaterThanOrEqual(0);
+        expect(literal).toBeLessThan(weakest);
+        expect(result.text).toContain("[related]");
+    });
+});
+
 describe("outline semantic runtime", () => {
     it("shares one embedding runtime per model directory", () => {
         const model = path.join(os.tmpdir(), "pi-coder-shared-runtime");

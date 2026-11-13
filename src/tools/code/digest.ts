@@ -111,6 +111,7 @@ export async function runDigest(
         params.kind !== undefined && isDeclarationKind(params.kind) ? params.kind : undefined;
     const rendered = parsed.map((file) => renderFile(source, file, detail, kind));
     const kindHidden = rendered.reduce((total, entry) => total + entry.hidden, 0);
+    const accessHidden = rendered.reduce((total, entry) => total + entry.accessHidden, 0);
     const filter = filterNote({
         path: target.pattern,
         pathHidden: targeted.hidden,
@@ -143,7 +144,15 @@ export async function runDigest(
         parseErrors,
         filter,
     );
-    const fullText = [header, fullBody, footer].filter((part) => part.length > 0).join("\n");
+    // Not part of the footer: the directory map below shows no members, so the note would describe a filter that did
+    // not cost that result anything.
+    const visibilityNote =
+        accessHidden > 0
+            ? `# visibility: ${accessHidden} non-public member(s) hidden; detail=full lists all`
+            : "";
+    const fullText = [header, fullBody, footer, visibilityNote]
+        .filter((part) => part.length > 0)
+        .join("\n");
     const fits = fullText.length <= limit;
 
     if (fits && offset === 0) {
@@ -194,7 +203,7 @@ export async function runDigest(
     const next = nextOffsetNote(fitted);
 
     return {
-        text: [fitted.text, next, footer]
+        text: [fitted.text, next, footer, visibilityNote]
             .filter((part): part is string => part !== undefined && part.length > 0)
             .join("\n"),
         files: parsed.length,
@@ -218,6 +227,7 @@ function renderFile(
 
     const lines: string[] = [];
     const huge = sizeLabel(file.lineCount) === "huge" && detail !== "full";
+    const tally: RenderTally = { accessHidden: 0 };
 
     for (const declaration of visibleRoots(file, detail)) {
         if (huge) {
@@ -230,18 +240,23 @@ function renderFile(
             continue;
         }
 
-        lines.push(...renderDeclaration(declaration, 0, detail));
+        lines.push(...renderDeclaration(declaration, 0, detail, tally));
     }
 
     if (lines.length === 0) {
-        return { text: `${header}\n  # no declarations`, hidden: 0, total };
+        return { text: `${header}\n  # no declarations`, hidden: 0, total, accessHidden: 0 };
     }
 
     if (huge) {
         lines.push("  # huge file: member detail omitted; use outline show for a symbol");
     }
 
-    return { text: `${header}\n${lines.join("\n")}`, hidden: 0, total };
+    return {
+        text: `${header}\n${lines.join("\n")}`,
+        hidden: 0,
+        total,
+        accessHidden: tally.accessHidden,
+    };
 }
 
 interface RenderedFile {
@@ -249,6 +264,8 @@ interface RenderedFile {
     text: string;
     hidden: number;
     total: number;
+    /** Members signatures mode left out for their access, so the footer can say so. */
+    accessHidden: number;
 }
 
 /**
@@ -266,7 +283,7 @@ function renderKind(
     const matched = file.all.filter((declaration) => declaration.kind === kind);
 
     if (matched.length === 0) {
-        return { text: "", hidden: total, total };
+        return { text: "", hidden: total, total, accessHidden: 0 };
     }
 
     const lines = matched.map((declaration) =>
@@ -277,14 +294,25 @@ function renderKind(
         text: `${header}\n${lines.join("\n")}`,
         hidden: total - matched.length,
         total,
+        accessHidden: 0,
     };
 }
 
 function visibleRoots(file: ParsedFile, detail: CodeDetail): Declaration[] {
-    return file.roots.filter((declaration) => isVisible(declaration, detail, true));
+    return file.roots.filter((declaration) => hideReason(declaration, detail, true) === undefined);
 }
 
-function renderDeclaration(declaration: Declaration, depth: number, detail: CodeDetail): string[] {
+interface RenderTally {
+    /** Class, trait, struct, and union members that signatures mode dropped for their access. */
+    accessHidden: number;
+}
+
+function renderDeclaration(
+    declaration: Declaration,
+    depth: number,
+    detail: CodeDetail,
+    tally: RenderTally,
+): string[] {
     const lines = [
         declarationLine(declaration, depth, {
             includeLine: true,
@@ -293,53 +321,71 @@ function renderDeclaration(declaration: Declaration, depth: number, detail: Code
     ];
 
     for (const child of declaration.children) {
-        if (!isVisible(child, detail, false, declaration)) {
+        const reason = hideReason(child, detail, false, declaration);
+
+        if (reason !== undefined) {
+            if (reason === "access") {
+                tally.accessHidden += 1;
+            }
+
             continue;
         }
 
-        lines.push(...renderDeclaration(child, depth + 1, detail));
+        lines.push(...renderDeclaration(child, depth + 1, detail, tally));
     }
 
     return lines;
 }
 
-function isVisible(
+/**
+ * Why signatures mode leaves a declaration out, if it does.
+ *
+ * `access` is reported separately from `kind`: dropping a `variable` or an `enumMember` is the documented shape of a
+ * signature list, but dropping every non-public member is a visibility rule, and a caller reading the class's own
+ * extension points (`getItemPrefix`, `handleAction`) has no way to tell a class with no such members from a class
+ * whose members were filtered. The footer names that count.
+ */
+type HideReason = "access" | "kind";
+
+function hideReason(
     declaration: Declaration,
     detail: CodeDetail,
     isRoot: boolean,
     parent?: Declaration,
-): boolean {
+): HideReason | undefined {
     if (detail === "full") {
-        return true;
+        return undefined;
     }
 
     if (isRoot && declaration.kind === "variable") {
-        return false;
+        return "kind";
     }
 
     if (declaration.kind === "enumMember") {
-        return false;
+        return "kind";
     }
 
     if (declaration.kind === "field") {
-        return (
-            parent?.kind === "struct" || parent?.kind === "union" || parent?.kind === "interface"
-        );
+        return parent?.kind === "struct" || parent?.kind === "union" || parent?.kind === "interface"
+            ? undefined
+            : "kind";
     }
 
     if (declaration.kind === "variable") {
-        return false;
+        return "kind";
     }
 
     if (parent?.kind === "class" || parent?.kind === "trait") {
-        return declaration.access === "public";
+        return declaration.access === "public" ? undefined : "access";
     }
 
     if (parent?.kind === "struct" || parent?.kind === "union") {
-        return declaration.access !== "private" && declaration.access !== "protected";
+        return declaration.access === "private" || declaration.access === "protected"
+            ? "access"
+            : undefined;
     }
 
-    return true;
+    return undefined;
 }
 
 function digestHeader(
@@ -395,8 +441,11 @@ function renderDirectoryMap(
     files: readonly string[],
     limit: number,
 ): string | undefined {
-    const directories = new Map<string, { count: number; languages: Set<string> }>();
-    let rootFiles = 0;
+    const directories = new Map<
+        string,
+        { count: number; languages: Set<string>; names: string[] }
+    >();
+    const rootNames: string[] = [];
 
     for (const file of files) {
         const relative = path.relative(root, file);
@@ -408,7 +457,7 @@ function renderDirectoryMap(
         const parts = relative.split(path.sep);
 
         if (parts.length === 1) {
-            rootFiles += 1;
+            rootNames.push(path.basename(file));
 
             continue;
         }
@@ -419,9 +468,14 @@ function renderDirectoryMap(
             continue;
         }
 
-        const entry = directories.get(directory) ?? { count: 0, languages: new Set<string>() };
+        const entry = directories.get(directory) ?? {
+            count: 0,
+            languages: new Set<string>(),
+            names: [],
+        };
 
         entry.count += 1;
+        entry.names.push(parts.slice(1).join("/"));
 
         const language = languageForPath(file);
 
@@ -459,24 +513,92 @@ function renderDirectoryMap(
     const lines = [
         `# digest ${displayRoot} · ${files.length} files · over character limit (~${limit} chars)`,
     ];
+    const largest = sorted[0]?.[0];
+    const next =
+        largest === undefined
+            ? undefined
+            : `# next: outline digest ${joinDisplay(displayRoot, largest)}`;
 
-    if (rootFiles > 0) {
-        lines.push(`.  ${rootFiles} files`);
+    // A map of directory names answers "where is the code" but not "which file", and a caller who asked for
+    // `src/tui` is usually after one of the fifteen files sitting right there. So names are added while the budget
+    // allows, most informative first: the root's own files (no subdirectory to find them in), then each directory in
+    // size order. A truncated list says how many it left out, and the elided directories are one `digest` away.
+    let remaining = limit - lines[0].length - (next === undefined ? 1 : next.length + 2);
+
+    const addNames = (names: readonly string[]): void => {
+        let shown = 0;
+
+        for (const line of nameLines(names)) {
+            if (line.text.length + 1 > remaining) {
+                break;
+            }
+
+            lines.push(line.text);
+            remaining -= line.text.length + 1;
+            shown += line.count;
+        }
+
+        const more = `  # … ${names.length - shown} more`;
+
+        if (shown < names.length && more.length + 1 <= remaining) {
+            lines.push(more);
+            remaining -= more.length + 1;
+        }
+    };
+
+    if (rootNames.length > 0) {
+        const summary = `.  ${rootNames.length} files`;
+
+        lines.push(summary);
+        remaining -= summary.length + 1;
+        addNames(rootNames.toSorted());
     }
 
     for (const [directory, entry] of sorted) {
         const languages = Array.from(entry.languages).toSorted().join(",");
+        const summary = `${directory}/  ${entry.count} files  ${languages}`;
 
-        lines.push(`${directory}/  ${entry.count} files  ${languages}`);
+        lines.push(summary);
+        remaining -= summary.length + 1;
+        addNames(entry.names.toSorted());
     }
 
-    const largest = sorted[0]?.[0];
-
-    if (largest !== undefined) {
-        lines.push(`# next: outline digest ${joinDisplay(displayRoot, largest)}`);
+    if (next !== undefined) {
+        lines.push(next);
     }
 
     return lines.join("\n");
+}
+
+interface NameLine {
+    text: string;
+    /** Names on the line, so a truncated list can report how many it left out. */
+    count: number;
+}
+
+/** Indented, space-separated file names packed into lines of at most `width` characters. */
+function nameLines(names: readonly string[], width = 110): NameLine[] {
+    const lines: NameLine[] = [];
+    let current: string[] = [];
+
+    const flush = (): void => {
+        if (current.length > 0) {
+            lines.push({ text: `  ${current.join(" ")}`, count: current.length });
+            current = [];
+        }
+    };
+
+    for (const name of names) {
+        if (current.length > 0 && [...current, name].join(" ").length + 2 > width) {
+            flush();
+        }
+
+        current.push(name);
+    }
+
+    flush();
+
+    return lines;
 }
 
 function languagesOf(parsed: readonly ParsedFile[]): string {

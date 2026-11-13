@@ -126,7 +126,7 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             within: Type.Optional(
                 Type.String({
                     description:
-                        'search/usages only: limit the scan to one file\'s direct imports (`within="src/x.ts"`) or its direct importers (`within="dependents:src/x.ts"`). The anchor is relative to the literal prefix of `path`; it is always included, and the pattern still bounds the tree.',
+                        'search/usages only: limit the scan to one file\'s direct imports (`within="src/x.ts"`) or its direct importers (`within="dependents:src/x.ts"`). The anchor is relative to the literal prefix of `path`, and a cwd-relative path that only resolves there is accepted and reported; the anchor is always included, and the pattern still bounds the tree.',
                 }),
             ),
             offset: Type.Optional(

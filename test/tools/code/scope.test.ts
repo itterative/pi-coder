@@ -183,6 +183,54 @@ describe("outline search within a dependency neighbourhood", () => {
         expect(result.text).toContain("# within: imports of src/store/artifact.ts · 2 files");
     });
 
+    it("accepts the anchor as it reads from the cwd, and says which reading applied", async () => {
+        const result = await runSearch(source(), {
+            action: "search",
+            path: "src",
+            query: "download",
+            within: "src/store/artifact.ts",
+        });
+
+        // `<path>/src/store/artifact.ts` does not exist, so the cwd reading is used and named.
+        expect(result.files).toBe(2);
+        expect(result.text).toContain(
+            "# within: imports of src/store/artifact.ts (relative to cwd) · 2 files",
+        );
+    });
+
+    it("keeps the documented reading when both would resolve", async () => {
+        const ambiguous = new MemoryCodeSource("/project", {
+            "src/app.ts": APP,
+            "src/store/artifact.ts": ARTIFACT,
+            "src/src/store/artifact.ts": OTHER,
+        });
+        const anchored = await withinScope({
+            source: ambiguous,
+            root: "/project/src",
+            raw: "src/store/artifact.ts",
+            parsed: [],
+        });
+
+        expect(anchored).toEqual(
+            expect.objectContaining({
+                scope: expect.objectContaining({ anchor: "/project/src/src/store/artifact.ts" }),
+            }),
+        );
+        expect(anchored).not.toHaveProperty("scope.relativeTo");
+    });
+
+    it("names both readings when neither one resolves", async () => {
+        const result = await runSearch(source(), {
+            action: "search",
+            path: "src",
+            query: "download",
+            within: "src/nope.ts",
+        });
+
+        expect(result.text).toContain("# within: no such file: src/src/nope.ts");
+        expect(result.text).toContain("also tried src/nope.ts from the cwd");
+    });
+
     it("counts a neighbour hidden by the path pattern as outside the searched path", async () => {
         const result = await runSearch(source(), {
             action: "search",

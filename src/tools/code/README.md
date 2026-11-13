@@ -176,6 +176,19 @@ output.
   never appears in the source, so a grep-based candidate list would miss every file.
 - Heading hierarchy is the declaration hierarchy, and each heading's range runs to the next heading of the same
   or higher level. `show Guide::Install` therefore returns the whole section, not just the heading line.
+- **`show` matches a heading by a piece of its title.** A heading's name is prose, so the exact-name rule that
+  protects a code symbol (never guess between candidates) would leave most headings unreachable: a truncated or
+  reworded title still names the section the caller wants. A heading therefore also matches by normalized prefix
+  and substring — ignoring case, leading `#` marks, and the punctuation prose is quoted with, backticks included —
+  and *every* candidate is reported, so a loose match lists sections instead of returning a confident wrong one.
+  The result says which rows were loose (`# heading: 1 matched by title text, not the full title: … (substring of
+  the title)`). Identifier matching is untouched, which a test pins: `show viewport` still misses
+  `restoreViewport`.
+- **A comma inside a title is text, not a separator.** `query` splits at top-level commas so one call can name
+  several symbols (`login, logout`), which made `Framing, viewport restore, and the render cache` three selectors
+  that match nothing. When the split leaves a selector unmatched and the entry *as written* names a heading, the
+  entry wins and one selector is used; the result says so (`# comma: "…" matched as one heading title, not 3
+  selectors`). The rescue runs before the per-part heading pass, so the parts cannot each add a looser near-match.
 - A heading's **doc text is its own prose**: from the end of the heading line to the next heading of *any* level,
   trimmed, and unset when the heading has no prose before its first child. That one field feeds the doc tier of
   `search`, the BM25 document, and the embedded text, so a section is findable by its content. It is deliberately
@@ -218,7 +231,11 @@ job.
     outline(action="usages", query="retry", within="dependents:src/store/retry.ts")
 
 The bare form is `imports`; `dependents:` flips to the files that import the anchor. The anchor is resolved
-against the literal prefix of `path`. There is no depth knob: the scope is the anchor and its direct neighbours,
+against the literal prefix of `path`, which is what makes `within="pager.ts"` under `path=src/tui` the short form.
+A caller who writes the path as it reads from the cwd instead — `within="src/tui/pager.ts"` — would otherwise
+double-prefix into a file that does not exist, so that reading is tried when the documented one is *missing* (never
+when it resolved, never for another failure), and the footer says which reading applied (`# within: imports of
+src/tui/pager.ts (relative to cwd) · 2 files`). When neither reading resolves, the error names both. There is no depth knob: the scope is the anchor and its direct neighbours,
 because the useful question is "what can this file actually reach" rather than a transitive closure nobody can
 read. The anchor stays in scope even when the `path` pattern would exclude it, and a neighbour that exists but
 fell outside is counted in the `# within:` footer rather than silently dropped — the same honesty rule as
@@ -281,6 +298,16 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
   only top-level declarations. `detail="full"` includes private/protected members, fields, enum members, and
   variables. Declaration rows show `:start-end` when the declaration spans lines, and `:line` for a one-liner;
   `search` locations and `show` headers use the same range convention.
+- **Signatures mode says what it hid.** A class's non-public members are dropped in `signatures` detail, and a reader
+  cannot tell a class with no extension points from one whose extension points were filtered — so the footer counts
+  them: `# visibility: 13 non-public member(s) hidden; detail=full lists all`. Only *access* hides are counted:
+  fields, enum members, and variables are the documented shape of a signature list, not a visibility rule. A result
+  that shows no members at all (the directory map) carries no such note, because the filter cost it nothing.
+- **The directory map names files, within its budget.** A map of directory counts answers "where is the code" but
+  not "which file", which is what a caller who named one directory usually asked. Names are added per row while the
+  budget allows — the root's own files first, since they sit in no subdirectory, then each directory in size order
+  — under the summary line (`.  15 files` / `  ask-user.ts list-view.ts …`). A list that had to stop says so
+  (`# … 4 more`), and `# next: outline digest <dir>` still names the largest directory to open next.
 - **Paging.** A cut result ends with `# next: offset=N` *and* how many body lines remain, because the step between
   pages is set by the character budget rather than a line count: `# next: offset=19 · 111 of 130 line(s) left · raise
   limit to fit more per call`. When a page stops inside a block, `# omitted N more block(s) after this body` names the
@@ -296,7 +323,11 @@ costs what `usages` costs, and imports are cached per `ParsedFile` so an edited 
   `show` lists the locations instead of choosing one. When several overloads match, it appends a note with a
   concrete parameterized selector; narrowing to one overload removes the note.
 - `usages` matches by the selector's last component, because call sites normally say
-  `socket.connect(...)`, not `Socket::connect(...)`. It is **syntactic**: overloads, generics, templates, macros,
+  `socket.connect(...)`, not `Socket::connect(...)`. **A row is a line, not an occurrence**: `state.scrollOffset =
+  scrollOffset` names the symbol twice on one line and is one place to look, so repeats on the same line and tag
+  collapse into one row while the header keeps counting occurrences (`· 74 matches on 66 line(s) ·`); the `on N
+  line(s)` half appears only when the two differ. A definition and a call that share a line keep separate rows,
+  because the tag is part of the key. It is **syntactic**: overloads, generics, templates, macros,
   and dynamic dispatch are not resolved. clangd is the future provider for exact C++ references. The call-site
   shapes live on each `LanguageAdapter`, so adding a language does not add a switch to `usages`. A qualified
   request (`CallList::attention_paged`) keeps its type: occurrences whose enclosing type is that class sort first,
@@ -386,6 +417,13 @@ already got right (a tail needs only partial term overlap), and its visible effe
 answer in the corpus scored 0.680, above the seventh row of a query that had one — so there is no usable absolute
 floor; the `[related]` tag, the footer, and the row cap are the honest signals. Details and the table:
 `docs/outline-search.md`.
+
+**A related-led page keeps one slot for the strongest literal row.** When the lexical pass has no precise evidence
+the related rows lead, because a doc tier that merely saw every content word somewhere is not an answer. A full
+`TAIL_ROWS` of guesses could then fill the leading page and push the query's *only* literal match onto the next one,
+leaving a `# more:` note that points at the one row that was evidence. So the leading page keeps its slot: seven
+related rows, then the literal rows, then the tail's weakest guess (`relatedLedPage` in `search.ts`). A short tail
+changes nothing, since the literal rows already follow it.
 
 A doc-comment match suppresses the tail (`wantsTail` in `semantic/rank.ts`): the doc tier requires every content
 word of the query to appear in one declaration's prose, so it is the strongest cheap evidence there is, and the

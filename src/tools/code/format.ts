@@ -76,6 +76,55 @@ export function normalizeSymbol(text: string): string {
     return text.replace(/\s+/g, "").replace(/\./g, "::");
 }
 
+/** How a selector reached a heading: its title as written, or a remembered piece of it. */
+export type HeadingMatch = "exact" | "prefix" | "substring";
+
+/**
+ * Match a selector against a *heading*, whose name is prose rather than an identifier.
+ *
+ * The rule that protects a code symbol — never guess between candidates — would leave most headings unreachable:
+ * nobody reproduces `Framing, viewport restore, and the render cache` from memory, and a truncated title still names
+ * the section the caller wants. So a heading also matches by prefix and substring, and every candidate is reported,
+ * which turns a loose match into a list of sections instead of a confident wrong answer.
+ *
+ * Comparison ignores case, leading `#` marks, and the punctuation prose is quoted with — including the backticks
+ * around `code` spans, which is why `normalizeSymbol` is not reused here.
+ */
+export function headingMatch(
+    declaration: Declaration,
+    selector: SymbolSelector,
+): HeadingMatch | undefined {
+    if (declaration.kind !== "heading") {
+        return undefined;
+    }
+
+    const wanted = normalizeHeading(selector.parts.join(" "));
+
+    if (wanted.length === 0) {
+        return undefined;
+    }
+
+    const title = normalizeHeading(declaration.name);
+
+    if (title === wanted) {
+        return "exact";
+    }
+
+    if (title.startsWith(wanted)) {
+        return "prefix";
+    }
+
+    return title.includes(wanted) ? "substring" : undefined;
+}
+
+function normalizeHeading(text: string): string {
+    return text
+        .replace(/^#+\s*/, "")
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
+        .trim();
+}
+
 /**
  * A parameter type as an overload selector compares it.
  *
@@ -214,14 +263,19 @@ export function withinNote(options: {
     anchor: string;
     files: number;
     outside: number;
+    /** Set when the anchor was read from the cwd rather than from `path`'s literal prefix. */
+    relativeTo?: "cwd";
 }): string {
     const direction = options.direction === "dependents" ? "dependents of" : "imports of";
+    // Only said when the reading differed from the documented one; naming the same file twice would cost attention
+    // on every ordinary scoped call.
+    const resolved = options.relativeTo === "cwd" ? " (relative to cwd)" : "";
     const outside =
         options.outside > 0
             ? ` (${counted(options.outside, "file")} outside the searched path)`
             : "";
 
-    return `# within: ${direction} ${options.anchor} · ${counted(options.files, "file")}${outside}`;
+    return `# within: ${direction} ${options.anchor}${resolved} · ${counted(options.files, "file")}${outside}`;
 }
 
 function hiddenSuffix(count: number, noun: string): string {

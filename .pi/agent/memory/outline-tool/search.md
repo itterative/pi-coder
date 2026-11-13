@@ -16,12 +16,20 @@ ranked, not matched; body rows carry `[body]` and are exact evidence.
 The tool is still declaration-granular, so line-level work stays with `bash` + `rg`: regex, counts, `-C` context,
 config, logs, prose outside a parsed language, and any file `outline` does not parse.
 
+With no strong lexical hit the related rows **lead** (`leadsWithRelated`), which is measured, not incidental: a doc
+tier that saw every content word *somewhere* is not an answer. The leading page still keeps one slot for the
+strongest literal row (`relatedLedPage`): a full `TAIL_ROWS` of guesses otherwise pushes a query's only literal match
+onto the next page, so the caller reads `# more:` pointing at the one row that was evidence.
+
+
 Narrowing is a parameter, not an action. `path` is a literal file/directory or an rg-style pattern: the literal
 prefix bounds discovery, the walker applies the pattern so the 2k cap counts matches, a slash pattern is anchored,
 and a slash-free one matches the basename at any depth.
 `kind` keeps one declaration kind for `search`/`digest` and one occurrence class for `usages`. `within` keeps one
 file's direct imports — or, with a `dependents:` prefix in the same string, its direct importers (`scope.ts`). A
-relative anchor is resolved against the literal prefix of `path`, not against the cwd. `within` has no depth knob,
+relative anchor is resolved against the literal prefix of `path` first, and against the cwd only when the documented
+reading is missing (a cwd-relative path that resolves there is accepted, and the footer says `(relative to cwd)`);
+when neither resolves the error names both readings. `within` has no depth knob,
 always keeps the anchor in scope (even when the pattern excludes it), and intersects rather than replacing the tree
 filters; its resolution index covers the whole discovered root, so with an active pattern it performs a second
 unfiltered walk and a neighbour hidden by the pattern still counts as an edge and is reported as outside the

@@ -13,13 +13,12 @@ import {
     renderWithinBudget,
     shortLine,
     shortSignature,
-    withinNote,
     type BudgetedText,
 } from "./format";
 import { fuzzyLimit, fuzzyNameDistance } from "./fuzzy";
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
-import { withinResolution, withinScope, type WithinScope } from "./scope";
+import { withinLine, withinResolution, withinScope } from "./scope";
 import { tokenize } from "./semantic/bm25";
 import { stem } from "./stem";
 import type { CodeChunk } from "./semantic/chunks";
@@ -307,7 +306,7 @@ export async function runSearch(
     const lexicalRest = [...literal, ...bodyRows, ...fuzzyHits].filter(
         (hit) => !relatedKeys.has(declarationKey(hit.file, hit.declaration)),
     );
-    const hits = leads ? [...related, ...lexicalRest] : [...lexicalRest, ...related];
+    const hits = leads ? relatedLedPage(related, lexicalRest) : [...lexicalRest, ...related];
     const total = hits.length;
     const approximate = fuzzyHits.length > 0;
     const filter = filterNote({
@@ -576,6 +575,25 @@ function docTextOf(file: ParsedFile, declaration: Declaration): DocText {
  */
 function docTokensOf(text: string): string[] {
     return tokenize(text).map(stem);
+}
+
+/**
+ * A related-led page, with one slot kept for the strongest literal row.
+ *
+ * Similarity leads when the lexical pass has no precise evidence, because a doc tier that merely saw every content
+ * word somewhere is not an answer. But a full `TAIL_ROWS` of guesses can push the query's *only* literal match onto
+ * the next page, and the `# more:` note then points at the one row that was evidence. Reserving a slot costs the tail
+ * its weakest row and only applies when it would otherwise fill the leading page.
+ */
+function relatedLedPage(
+    related: readonly SearchHit[],
+    lexicalRest: readonly SearchHit[],
+): SearchHit[] {
+    if (lexicalRest.length === 0 || related.length < TAIL_ROWS) {
+        return [...related, ...lexicalRest];
+    }
+
+    return [...related.slice(0, TAIL_ROWS - 1), ...lexicalRest, ...related.slice(TAIL_ROWS - 1)];
 }
 
 async function collectRelated(
@@ -961,15 +979,6 @@ function languagesOf(files: readonly ParsedFile[]): string {
     return Array.from(new Set(files.map((file) => file.language)))
         .toSorted()
         .join(",");
-}
-
-function withinLine(source: CodeSource, scope: WithinScope): string {
-    return withinNote({
-        direction: scope.direction,
-        anchor: source.displayPath(scope.anchor),
-        files: scope.parsed.length,
-        outside: scope.outside,
-    });
 }
 
 function fileCount(count: number): string {

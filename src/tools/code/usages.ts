@@ -15,12 +15,11 @@ import {
     renderWithinBudget,
     shortLine,
     splitSymbolList,
-    withinNote,
 } from "./format";
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
 import { adapterForLanguage, type CallSiteSpec } from "./adapters";
-import { withinResolution, withinScope, type WithinScope } from "./scope";
+import { withinLine, withinResolution, withinScope } from "./scope";
 import type { CodeSource } from "./source";
 import { CallTiming } from "./timing";
 import { parseSyntax } from "./tree-sitter";
@@ -242,6 +241,8 @@ export async function runUsages(
 
 interface Collected {
     total: number;
+    /** Lines rendered, at most one row per line and tag; `total` still counts occurrences. */
+    lines: number;
     /** The enclosing type the caller named, when it named one. */
     qualifiedType?: string;
     files: Array<{
@@ -252,6 +253,7 @@ interface Collected {
 
 interface FileScan {
     total: number;
+    lines: number;
     scopes: Array<{ name: string; matchedType: boolean; occurrences: Occurrence[] }>;
 }
 
@@ -270,6 +272,7 @@ async function collectForFiles(
 ): Promise<Collected> {
     const files: Collected["files"] = [];
     let total = 0;
+    let lines = 0;
     let processed = 0;
 
     for (const file of parsedFiles) {
@@ -278,6 +281,7 @@ async function collectForFiles(
         const scan = await scanFile(file, target, kindFilter, signal);
 
         total += scan.total;
+        lines += scan.lines;
 
         if (scan.scopes.length > 0) {
             files.push({
@@ -293,7 +297,7 @@ async function collectForFiles(
         }
     }
 
-    return { total, qualifiedType: target.typeName, files };
+    return { total, lines, qualifiedType: target.typeName, files };
 }
 
 async function scanFile(
@@ -312,7 +316,9 @@ async function scanFile(
         { name: string; matchedType: boolean; occurrences: Occurrence[] }
     >();
     const seen = new Set<number>();
+    const seenRows = new Set<string>();
     let total = 0;
+    let rows = 0;
     let processed = 0;
 
     for (const entry of index.entries) {
@@ -337,6 +343,17 @@ async function scanFile(
 
         total += 1;
 
+        // A row is a line, not an occurrence: `state.scrollOffset = scrollOffset` is one place to look, and listing
+        // it twice inflates the page and the count. The tag stays in the key, so a definition and a call that share a
+        // line keep their own rows.
+        const rowKey = `${entry.line}\u0000${entry.tag}`;
+
+        if (seenRows.has(rowKey)) {
+            continue;
+        }
+
+        seenRows.add(rowKey);
+
         const scope = scopeFor(index.scopes, entry.startIndex);
         // A declaration of the member itself is qualified by its own name, not by an enclosing scope: the definition
         // of `CallList::attention_paged` sits at namespace scope, and walking outward would find no type at all.
@@ -356,9 +373,10 @@ async function scanFile(
         group.matchedType ||= matchedType;
         scopes.set(scope, group);
         seen.add(entry.startIndex);
+        rows += 1;
     }
 
-    return { total, scopes: sortedScopes(Array.from(scopes.values())) };
+    return { total, lines: rows, scopes: sortedScopes(Array.from(scopes.values())) };
 }
 
 async function usageIndexFor(file: ParsedFile, signal?: AbortSignal): Promise<UsageIndex> {
@@ -584,7 +602,7 @@ function renderSection(
     rootDisplay: string,
 ): string {
     const headerNotes = [
-        `# usages ${raw} · ${collected.total} matches · ${languages} · syntactic (name-based)`,
+        `# usages ${raw} · ${collected.total} matches${lineNote(collected)} · ${languages} · syntactic (name-based)`,
     ];
 
     if (parseErrors > 0) {
@@ -627,6 +645,16 @@ function renderSection(
     }
 
     return [headerNotes.join("\n"), body.join("\n")].filter((part) => part.length > 0).join("\n\n");
+}
+
+/**
+ * The line count behind the row list, only when it differs from the occurrence count.
+ *
+ * `74 matches · typescript` is the common case and stays as it is; repeating the same number twice would cost
+ * attention for nothing.
+ */
+function lineNote(collected: Collected): string {
+    return collected.lines === collected.total ? "" : ` on ${collected.lines} line(s)`;
 }
 
 function usageName(nodeType: string, text: string): string {
@@ -731,15 +759,6 @@ function matchesFilter(tag: UsageTag, filter: UsageKind): boolean {
 
 function normalizeText(text: string): string {
     return text.replace(/\s+/g, " ").trim();
-}
-
-function withinLine(source: CodeSource, scope: WithinScope): string {
-    return withinNote({
-        direction: scope.direction,
-        anchor: source.displayPath(scope.anchor),
-        files: scope.parsed.length,
-        outside: scope.outside,
-    });
 }
 
 function sumParseErrors(parsed: readonly ParsedFile[]): number {

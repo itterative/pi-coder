@@ -26,6 +26,14 @@ export interface WithinScope {
     parsed: ParsedFile[];
     /** Neighbours that are not among the searched files, so a caller can see why they are absent. */
     outside: number;
+    /**
+     * Set when the anchor resolved from the cwd instead of from `path`'s literal prefix.
+     *
+     * The documented reading is `path`-relative, and it is tried first; this only records that the caller wrote a
+     * path that reads naturally from the cwd (`within="src/tui/pager.ts"` under `path=src/tui`), so the footer can
+     * say which file was actually searched.
+     */
+    relativeTo?: "cwd";
 }
 
 export type WithinResult = { error: string } | { scope: WithinScope };
@@ -37,6 +45,7 @@ export function withinLine(source: CodeSource, scope: WithinScope): string {
         anchor: source.displayPath(scope.anchor),
         files: scope.parsed.length,
         outside: scope.outside,
+        relativeTo: scope.relativeTo,
     });
 }
 
@@ -94,41 +103,22 @@ export async function withinScope(options: {
         return request;
     }
 
-    const anchor = path.resolve(await withinBase(options.source, options.root), request.anchor);
+    const base = await withinBase(options.source, options.root);
+    const anchored = path.resolve(base, request.anchor);
+    const fromCwd = path.resolve(options.source.cwd, request.anchor);
+    const choice = await resolveWithinAnchor(
+        options.source,
+        anchored,
+        fromCwd,
+        options.parsed,
+        options.signal,
+    );
 
-    try {
-        await options.source.assertReadable(anchor);
-    } catch (error) {
-        // A missing anchor is the caller's typo, not an outline failure; a confinement error is rethrown so the
-        // normal failure text can explain it.
-        if (!isMissingPath(error)) {
-            throw error;
-        }
-
-        return {
-            error: `# within: no such file: ${options.source.displayPath(anchor)}`,
-        };
+    if ("error" in choice) {
+        return choice;
     }
 
-    const parsedAnchor = options.parsed.find((file) => file.path === anchor);
-    const anchorBatch =
-        parsedAnchor === undefined
-            ? await loadParsedFiles(options.source, [anchor], options.signal)
-            : undefined;
-    const anchorFile = parsedAnchor ?? anchorBatch?.parsed[0];
-
-    if (anchorFile === undefined) {
-        // A container source answers missing reads per file instead of throwing from `assertReadable`, so the
-        // reason has to come from the read errors: "not found" is a typo the caller can fix, and anything else
-        // (unsupported language, size cap) is a different answer.
-        const missing = (anchorBatch?.errors ?? []).some(isMissingPath);
-
-        return {
-            error: missing
-                ? `# within: no such file: ${options.source.displayPath(anchor)}`
-                : `# within: ${options.source.displayPath(anchor)} is not a supported source file`,
-        };
-    }
+    const anchorFile = choice.file;
 
     const searched = new Set(options.parsed.map((file) => file.path));
     const index = createResolveIndex({
@@ -165,8 +155,101 @@ export async function withinScope(options: {
             anchor: anchorFile.path,
             parsed,
             outside: outside.size,
+            ...(choice.relativeTo === undefined ? {} : { relativeTo: choice.relativeTo }),
         },
     };
+}
+
+type AnchorLoad = { file: ParsedFile } | { missing: true } | { unsupported: true };
+
+/**
+ * Resolve the `within` anchor, trying the documented reading before the cwd one.
+ *
+ * An anchor is documented as relative to `path`'s literal prefix, which is what makes `within="pager.ts"` the short
+ * form. A caller reasonably writes the path as it reads from the cwd instead — `within="src/tui/pager.ts"` under
+ * `path=src/tui` — and that used to double-prefix into a file that does not exist. The second reading is tried only
+ * when the first is *missing*: never when it resolved, and never when it failed for another reason, so the
+ * documented meaning still decides whenever both could apply.
+ */
+async function resolveWithinAnchor(
+    source: CodeSource,
+    anchored: string,
+    fromCwd: string,
+    parsed: readonly ParsedFile[],
+    signal?: AbortSignal,
+): Promise<{ file: ParsedFile; relativeTo?: "cwd" } | { error: string }> {
+    const first = await loadWithinAnchor(source, anchored, parsed, signal);
+
+    if ("file" in first) {
+        return { file: first.file };
+    }
+
+    const second =
+        "missing" in first && fromCwd !== anchored
+            ? await loadWithinAnchor(source, fromCwd, parsed, signal)
+            : undefined;
+
+    if (second !== undefined && "file" in second) {
+        return { file: second.file, relativeTo: "cwd" };
+    }
+
+    if ("unsupported" in first) {
+        return {
+            error: `# within: ${source.displayPath(anchored)} is not a supported source file`,
+        };
+    }
+
+    return { error: missingAnchorError(source, anchored, fromCwd) };
+}
+
+/**
+ * A missing anchor names both readings it was tried as.
+ *
+ * The doubled path in `src/tui/src/tui/pager.ts` is what teaches the rule, and a caller who sees `also tried …`
+ * knows their value is simply wrong rather than mis-anchored.
+ */
+function missingAnchorError(source: CodeSource, anchored: string, fromCwd: string): string {
+    const tried =
+        fromCwd === anchored ? "" : ` · also tried ${source.displayPath(fromCwd)} from the cwd`;
+
+    return `# within: no such file: ${source.displayPath(anchored)}${tried}`;
+}
+
+async function loadWithinAnchor(
+    source: CodeSource,
+    target: string,
+    parsed: readonly ParsedFile[],
+    signal?: AbortSignal,
+): Promise<AnchorLoad> {
+    try {
+        await source.assertReadable(target);
+    } catch (error) {
+        // A missing anchor is the caller's typo, not an outline failure; a confinement error is rethrown so the
+        // normal failure text can explain it.
+        if (!isMissingPath(error)) {
+            throw error;
+        }
+
+        return { missing: true };
+    }
+
+    const parsedAnchor = parsed.find((file) => file.path === target);
+
+    if (parsedAnchor !== undefined) {
+        return { file: parsedAnchor };
+    }
+
+    const batch = await loadParsedFiles(source, [target], signal);
+    const file = batch.parsed[0];
+
+    if (file !== undefined) {
+        return { file };
+    }
+
+    // A container source answers missing reads per file instead of throwing from `assertReadable`, so the reason has
+    // to come from the read errors: "not found" is a typo the caller can fix, and anything else (unsupported
+    // language, size cap) is a different answer.
+    return batch.errors.some(isMissingPath) ? { missing: true } : { unsupported: true };
 }
 
 /**

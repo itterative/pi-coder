@@ -9,6 +9,8 @@ import {
 import {
     declarationLine,
     filterNote,
+    headingMatch,
+    type HeadingMatch,
     isContainer,
     isFunctionLike,
     kindLabel,
@@ -125,6 +127,18 @@ export async function runShow(
         }
     }
 
+    // A heading's name is prose, so exact-name matching would make most of them unreachable. This pass runs only for
+    // the selectors the exact one left empty.
+    const headingTiers = new Map<Declaration, HeadingMatch>();
+    const commaNotes = matchHeadings(
+        files,
+        selectors,
+        params.query,
+        matchedSelectors,
+        matches,
+        headingTiers,
+    );
+
     // A hint that matches no signature must not silently pick one — a wrong overload is worse than a miss. It should
     // not leave the caller guessing either: `choose_splits(int64_t, int64_t)` against a `std::int64_t` definition used
     // to be an unexplained "not found", which makes the advertised parameter-list affordance a trap. So the miss is
@@ -148,6 +162,9 @@ export async function runShow(
     const groups = groupMatches(matches);
     const parseErrors = sumParseErrors(files);
     const legend = legendFor(source, groups, fileOf);
+    const notes = [...commaNotes, headingTextNote(source, headingTiers, fileOf)].filter(
+        (note): note is string => note !== undefined,
+    );
     const header = [
         `# show ${scope} ${requested.join(", ")}`,
         parseErrors > 0 ? `parse: ${parseErrors} error(s)` : "",
@@ -155,7 +172,8 @@ export async function runShow(
     ]
         .filter((part) => part.length > 0)
         .join(" · ")
-        .concat(legend.length === 0 ? "" : `\n${legend.join("\n")}`);
+        .concat(legend.length === 0 ? "" : `\n${legend.join("\n")}`)
+        .concat(notes.length === 0 ? "" : `\n${notes.join("\n")}`);
     const limit = params.limit ?? DEFAULT_CHAR_LIMIT;
     const offset = Math.max(0, Math.floor(params.offset ?? 0));
     const filter = filterNote({ path: target.pattern, pathHidden: targeted.hidden });
@@ -238,6 +256,125 @@ function legendFor(
             `#   ${pathRange(source.displayPath(file.path), declaration.range)} · ${kindLabel(declaration.kind)} ${declaration.qualifiedName}`,
         ];
     });
+}
+
+/**
+ * The heading pass, run for the selectors the exact pass left empty.
+ *
+ * A comma inside a prose selector is text, not a separator: `Framing, viewport restore, and the render cache` splits
+ * into three selectors that match nothing, while the entry as written names one heading. So the whole entry is tried
+ * first, and only when it names no heading do the split parts get their own prefix/substring pass.
+ */
+function matchHeadings(
+    files: readonly ParsedFile[],
+    selectors: readonly SymbolSelector[],
+    entry: string | undefined,
+    matchedSelectors: Set<number>,
+    matches: Declaration[],
+    tiers: Map<Declaration, HeadingMatch>,
+): string[] {
+    const unmatched = selectors
+        .map((_, index) => index)
+        .filter((index) => !matchedSelectors.has(index));
+
+    if (unmatched.length === 0) {
+        return [];
+    }
+
+    const add = (found: readonly FoundHeading[]): void => {
+        for (const [declaration, match] of found) {
+            if (matches.includes(declaration)) {
+                continue;
+            }
+
+            matches.push(declaration);
+            tiers.set(declaration, match);
+        }
+    };
+
+    const whole =
+        selectors.length > 1 && entry !== undefined
+            ? findHeadings(files, parseSelector(entry))
+            : [];
+
+    if (whole.length > 0) {
+        for (const index of selectors.keys()) {
+            matchedSelectors.add(index);
+        }
+
+        add(whole);
+
+        return [
+            `# comma: "${shortLine(entry ?? "", 80)}" matched as one heading title, not ${selectors.length} selectors`,
+        ];
+    }
+
+    for (const index of unmatched) {
+        const selector = selectors[index];
+
+        if (selector === undefined) {
+            continue;
+        }
+
+        const found = findHeadings(files, selector);
+
+        if (found.length === 0) {
+            continue;
+        }
+
+        matchedSelectors.add(index);
+        add(found);
+    }
+
+    return [];
+}
+
+type FoundHeading = readonly [Declaration, HeadingMatch];
+
+function findHeadings(files: readonly ParsedFile[], selector: SymbolSelector): FoundHeading[] {
+    const found: FoundHeading[] = [];
+
+    for (const file of files) {
+        for (const declaration of file.all) {
+            const match = headingMatch(declaration, selector);
+
+            if (match !== undefined) {
+                found.push([declaration, match]);
+            }
+        }
+    }
+
+    return found;
+}
+
+/**
+ * Name the headings that matched by a remembered piece of their title.
+ *
+ * Without the note a substring hit and an exact one render identically, and the caller has no way to tell that the
+ * title it is looking at is not the title it asked for.
+ */
+function headingTextNote(
+    source: CodeSource,
+    tiers: ReadonlyMap<Declaration, HeadingMatch>,
+    fileOf: ReadonlyMap<Declaration, ParsedFile>,
+): string | undefined {
+    const loose = Array.from(tiers.entries()).filter(([, match]) => match !== "exact");
+
+    if (loose.length === 0) {
+        return undefined;
+    }
+
+    const examples = loose.slice(0, 3).map(([declaration, match]) => {
+        const file = fileOf.get(declaration);
+        const where =
+            file === undefined
+                ? ""
+                : `${pathRange(source.displayPath(file.path), declaration.range)} `;
+
+        return `${where}${shortLine(declaration.name, 80)} (${match} of the title)`;
+    });
+
+    return `# heading: ${loose.length} matched by title text, not the full title: ${examples.join(" · ")}`;
 }
 
 /**
