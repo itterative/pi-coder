@@ -13,6 +13,8 @@ keep_updated: true
 
 - `pi` surface to register into → `test/helpers/pi-stub.ts` → `createPiStub()`
 - context a handler is invoked with → `pi-stub.ts` → `stubContext()`, `stubUi()`, `stubSessionManager()`
+  (`stubUi` no-ops `notify`, `setStatus`, and `setWidget`; a missing footer setter surfaces as an unhandled
+  rejection attributed to an unrelated test file, from a background refresh finishing after the body returned)
 - invoking a registered slash command → `pi-stub.ts` → `stubCommandContext()`, `stub.requireCommand(name)`
 - `before_agent_start` event carrying prompt options → `pi-stub.ts` → `beforeAgentStartEvent({ sections,
   selectedTools, hiddenTools })`: sections are read back from `event.systemPromptOptions.sections`, the

@@ -21,7 +21,7 @@ const log = process.env.FAKE_LLAMA_LOG;
 
 // A start line makes "how many servers did this run spawn" observable, which is what the transient-GPU rule is about.
 if (log !== undefined) {
-    fs.appendFileSync(log, JSON.stringify({ start: true }) + "\\n");
+    fs.appendFileSync(log, JSON.stringify({ start: true, args }) + "\\n");
 }
 
 if (process.env.FAKE_LLAMA_FAIL_START === "1") {
@@ -114,6 +114,8 @@ export interface LlamaDouble {
     starts(): number;
     /** Raw log lines, including the start markers. */
     lines(): string[];
+    /** Argument vector of each server start, in order, for asserting on flags like `-dev`. */
+    startArgs(): string[][];
     dir: string;
     cleanup(): void;
 }
@@ -149,6 +151,12 @@ export function createLlamaDouble(options: { dir?: string } = {}): LlamaDouble {
             return this.lines().filter(
                 (line) => (JSON.parse(line) as { start?: boolean }).start === true,
             ).length;
+        },
+        startArgs(): string[][] {
+            return this.lines()
+                .map((line) => JSON.parse(line) as { start?: boolean; args?: string[] })
+                .filter((entry) => entry.start === true)
+                .map((entry) => entry.args ?? []);
         },
         served(): string[] {
             if (!fs.existsSync(log)) {

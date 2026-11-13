@@ -32,6 +32,7 @@ import {
     devicePreference,
     llamaArtifacts,
     llamaSupported,
+    vulkanDevice,
     vulkanStatus,
     LLAMA_TAG,
 } from "./semantic/llamacpp";
@@ -711,14 +712,15 @@ function runtimeStatusLine(root: string): string {
         }
     });
     const probe = vulkanStatus();
+    const chosen = vulkanDevice();
     const build = devicePreference("build");
     const query = devicePreference("query");
     const resolved =
-        probe === undefined
-            ? "gpu not probed yet"
-            : probe
-              ? "hardware Vulkan device available"
-              : "no hardware Vulkan device (software rasteriser only)";
+        probe === undefined || chosen === undefined
+            ? probe === undefined
+                ? "gpu not probed yet"
+                : "no hardware Vulkan device (software rasteriser only)"
+            : `hardware Vulkan: ${chosen.id} ${chosen.name}`;
 
     return (
         `runtime: llama.cpp ${LLAMA_TAG} · ${present.length}/${archives.length} bundles on disk\n` +

@@ -14,6 +14,8 @@ import {
 import {
     devicePreference,
     extractTarGz,
+    parseVulkanDevices,
+    pickVulkanDevice,
     hasVulkanDevice,
     llamaArtifacts,
     llamaBinary,
@@ -286,6 +288,43 @@ describe("profiles", () => {
     });
 });
 
+const DEVICE_LIST = `WARNING: radv is not a conformant Vulkan implementation, testing use only.
+Available devices:
+  Vulkan0: AMD Radeon Graphics (RADV GFX1201) (16304 MiB, 1200 MiB free)
+  Vulkan1: NVIDIA GeForce RTX 4090 (24564 MiB, 22110 MiB free)
+  Vulkan2: llvmpipe (LLVM 15.0.7, 256 bits) (16304 MiB, 15000 MiB free)
+`;
+
+describe("vulkan devices", () => {
+    it("parses the listing and drops software rasterisers", () => {
+        const devices = parseVulkanDevices(DEVICE_LIST);
+
+        expect(devices.map((device) => device.id)).toEqual(["Vulkan0", "Vulkan1"]);
+        expect(devices[0]).toEqual({
+            id: "Vulkan0",
+            name: "AMD Radeon Graphics (RADV GFX1201)",
+            freeMiB: 1200,
+        });
+    });
+
+    it("returns nothing when the binary listed no devices", () => {
+        expect(parseVulkanDevices("no vulkan support compiled in")).toEqual([]);
+    });
+
+    it("picks the gpu with the most free memory, not the first one", () => {
+        // The first device is usually the integrated one on a two-GPU machine.
+        expect(pickVulkanDevice(parseVulkanDevices(DEVICE_LIST))?.id).toBe("Vulkan1");
+    });
+
+    it("honours a named device, and falls back when the name is unknown", () => {
+        const devices = parseVulkanDevices(DEVICE_LIST);
+
+        expect(pickVulkanDevice(devices, "vulkan0")?.id).toBe("Vulkan0");
+        expect(pickVulkanDevice(devices, "Vulkan7")?.id).toBe("Vulkan1");
+        expect(pickVulkanDevice([])).toBeUndefined();
+    });
+});
+
 describe("device preference", () => {
     it("keeps queries on the cpu and lets builds take a gpu", () => {
         expect(devicePreference("query", {} as NodeJS.ProcessEnv)).toBe("cpu");
@@ -498,6 +537,46 @@ describe("the embedding runtime", () => {
             await runtime.embedQuery("another query");
 
             expect(double.starts()).toBe(1);
+        } finally {
+            runtime.dispose();
+        }
+    });
+
+    it("pins a gpu server to one device instead of splitting across all of them", async () => {
+        process.env.PI_CODER_OUTLINE_BUILD_DEVICE = "auto";
+        process.env.PI_CODER_OUTLINE_VULKAN_DEVICE = "Vulkan3";
+        resetLlamaDevice();
+
+        const runtime = createEmbedRuntime({ modelDir: double.dir });
+
+        try {
+            await runtime.build(
+                tempDir(),
+                [{ shard: "g4", entries: [{ key: "k", text: "a document" }] }],
+                () => undefined,
+            );
+
+            const args = double.startArgs()[0] ?? [];
+
+            // `-ngl` alone offloads to every device and `--split-mode layer` pipelines the layers over PCIe.
+            expect(args[args.indexOf("-dev") + 1]).toBe("Vulkan3");
+            expect(args[args.indexOf("-sm") + 1]).toBe("none");
+            expect(args.filter((arg) => arg === "-dev")).toHaveLength(1);
+        } finally {
+            runtime.dispose();
+        }
+    });
+
+    it("leaves the cpu server unpinned", async () => {
+        process.env.PI_CODER_OUTLINE_QUERY_DEVICE = "cpu";
+        resetLlamaDevice();
+
+        const runtime = createEmbedRuntime({ modelDir: double.dir });
+
+        try {
+            await runtime.embedQuery("a query");
+
+            expect(double.startArgs()[0]).not.toContain("-dev");
         } finally {
             runtime.dispose();
         }

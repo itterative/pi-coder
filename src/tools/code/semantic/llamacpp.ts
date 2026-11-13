@@ -149,6 +149,77 @@ function isExecutable(file: string): boolean {
 /** Device names Mesa uses for its software rasteriser, which is a GPU only in the loosest sense. */
 const SOFTWARE_DEVICES = ["llvmpipe", "swiftshader", "softpipe", "lavapipe"];
 
+/** One row of `llama-server --list-devices`. */
+export interface VulkanDevice {
+    /** The backend's own name, e.g. `Vulkan0`; this is what `--device` takes. */
+    id: string;
+    /** Human description, e.g. `AMD Radeon Graphics (RADV GFX1201)`. */
+    name: string;
+    /** Free VRAM in MiB, or `Infinity` when the listing did not report it. */
+    freeMiB: number;
+}
+
+/**
+ * Parse `--list-devices` output.
+ *
+ * The shape is `  Vulkan0: AMD Radeon Graphics (RADV GFX1201) (16304 MiB, 3471 MiB free)`, one line per device below
+ * `Available devices:`. Free memory is parsed because it is what breaks a tie on a multi-GPU machine, where the first
+ * device in the list is usually the integrated one.
+ */
+export function parseVulkanDevices(text: string): VulkanDevice[] {
+    const from = text.indexOf("Available devices:");
+
+    if (from < 0) {
+        return [];
+    }
+
+    const devices: VulkanDevice[] = [];
+
+    for (const line of text.slice(from).split("\n").slice(1)) {
+        const match = /^\s*([A-Za-z]+\d+):\s*(.+?)\s*$/.exec(line);
+
+        if (match === null) {
+            continue;
+        }
+
+        const id = match[1] ?? "";
+        const description = match[2] ?? "";
+
+        if (
+            id.length === 0 ||
+            SOFTWARE_DEVICES.some((soft) => description.toLowerCase().includes(soft))
+        ) {
+            continue;
+        }
+
+        const free = /([\d.]+)\s*MiB free/i.exec(description)?.[1];
+
+        devices.push({
+            id,
+            name: description.replace(/\s*\([^()]*\)\s*$/, ""),
+            freeMiB: free === undefined ? Number.POSITIVE_INFINITY : Number(free),
+        });
+    }
+
+    return devices;
+}
+
+/** Ask a Vulkan binary what it can see. Empty for a missing binary, a broken driver, or a software-only list. */
+export async function listVulkanDevices(binary: string): Promise<VulkanDevice[]> {
+    const run = promisify(execFile);
+
+    try {
+        const { stdout, stderr } = await run(binary, ["--list-devices"], {
+            timeout: 30_000,
+            maxBuffer: 1 << 20,
+        });
+
+        return parseVulkanDevices(`${stdout}\n${stderr}`);
+    } catch {
+        return [];
+    }
+}
+
 /**
  * Whether the Vulkan bundle can see a hardware device.
  *
@@ -157,29 +228,34 @@ const SOFTWARE_DEVICES = ["llvmpipe", "swiftshader", "softpipe", "lavapipe"];
  * overhead than the CPU bundle — strictly worse, and silently so.
  */
 export async function hasVulkanDevice(binary: string): Promise<boolean> {
-    const run = promisify(execFile);
+    return (await listVulkanDevices(binary)).length > 0;
+}
 
-    try {
-        const { stdout, stderr } = await run(binary, ["--list-devices"], {
-            timeout: 30_000,
-            maxBuffer: 1 << 20,
-        });
-        const text = `${stdout}\n${stderr}`;
-        const listing = text.includes("Available devices:")
-            ? text.slice(text.indexOf("Available devices:"))
-            : "";
-        const devices = listing
-            .split("\n")
-            .slice(1)
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0 && !line.startsWith("WARNING"));
+/**
+ * Which device to pin.
+ *
+ * `PI_CODER_OUTLINE_VULKAN_DEVICE` names one (`Vulkan1`), and otherwise the device with the most free VRAM wins: on a
+ * machine with two GPUs the first in the list is usually the integrated one, and the model would land on it while the
+ * discrete card sat idle.
+ */
+export function pickVulkanDevice(
+    devices: readonly VulkanDevice[],
+    override?: string,
+): VulkanDevice | undefined {
+    const wanted = (override ?? "").trim().toLowerCase();
 
-        return devices.some(
-            (line) => !SOFTWARE_DEVICES.some((software) => line.toLowerCase().includes(software)),
-        );
-    } catch {
-        return false;
+    if (wanted.length > 0) {
+        const named = devices.find((device) => device.id.toLowerCase() === wanted);
+
+        if (named !== undefined) {
+            return named;
+        }
     }
+
+    return devices.reduce<VulkanDevice | undefined>(
+        (best, device) => (best === undefined || device.freeMiB > best.freeMiB ? device : best),
+        undefined,
+    );
 }
 
 /** What a caller will accept, before the probe decides whether the GPU is real. */
@@ -188,16 +264,29 @@ export type DevicePreference = "auto" | "cpu" | "vulkan";
 export interface DeviceChoice {
     device: LlamaDevice;
     binary: string;
+    /**
+     * The one Vulkan device to pin, e.g. `Vulkan0`.
+     *
+     * Present only for a GPU choice, and it is never absent by accident: `-ngl` on its own offloads to every visible
+     * device and splits the model's layers across them, which on a two-GPU machine pipelines a 640 MB model over PCIe
+     * and is slower than one card.
+     */
+    deviceId?: string;
     /** Why this device, for `/outline status` to say something better than "cpu". */
     reason: string;
 }
 
-/** Cached answer to "is there a hardware Vulkan device"; a broken driver makes the probe slow enough to notice. */
-let vulkanAvailable: boolean | undefined;
+/** Cached probe result; a broken driver makes `--list-devices` slow enough to notice being repeated. */
+let vulkanProbe: { devices: readonly VulkanDevice[]; chosen: VulkanDevice | undefined } | undefined;
 
-/** What the probe said, or `undefined` while no runtime has needed a device yet. */
+/** What the probe found, or `undefined` while no runtime has needed a device yet. */
 export function vulkanStatus(): boolean | undefined {
-    return vulkanAvailable;
+    return vulkanProbe === undefined ? undefined : vulkanProbe.chosen !== undefined;
+}
+
+/** The device a build would pin, once the probe has run. */
+export function vulkanDevice(): VulkanDevice | undefined {
+    return vulkanProbe?.chosen;
 }
 
 /**
@@ -245,41 +334,58 @@ export async function resolveDevice(
     const override = (env.PI_CODER_OUTLINE_LLAMA_SERVER ?? "").trim();
     const binaryFor = (device: LlamaDevice): string =>
         override.length > 0 ? path.resolve(override) : ensureLlamaBundle(modelDir, device);
+    const requestedId = (env.PI_CODER_OUTLINE_VULKAN_DEVICE ?? "").trim();
 
     if (preference === "cpu") {
         return { device: "cpu", binary: binaryFor("cpu"), reason: "cpu requested" };
     }
 
-    if (preference === "vulkan") {
-        return { device: "vulkan", binary: binaryFor("vulkan"), reason: "vulkan requested" };
-    }
-
-    // "auto" must not fail on a machine that simply never downloaded the GPU bundle.
     let probeBinary: string | undefined;
 
     try {
         probeBinary = binaryFor("vulkan");
-    } catch {
-        probeBinary = undefined;
+    } catch (error) {
+        // "auto" must not fail on a machine that simply never downloaded the GPU bundle.
+        if (preference === "vulkan") {
+            throw error;
+        }
+
+        return { device: "cpu", binary: binaryFor("cpu"), reason: "Vulkan bundle not installed" };
     }
 
-    const available =
-        probeBinary !== undefined &&
-        (override.length > 0 ? true : await hasVulkanDevice(probeBinary));
+    // A test double stands in for the binary, so it has no device list to offer and the override names the device.
+    const devices = override.length > 0 ? [] : await listVulkanDevices(probeBinary);
+    const chosen =
+        override.length > 0
+            ? {
+                  id: requestedId.length > 0 ? requestedId : "Vulkan0",
+                  name: override,
+                  freeMiB: Number.POSITIVE_INFINITY,
+              }
+            : pickVulkanDevice(devices, requestedId);
 
-    vulkanAvailable = available;
+    vulkanProbe = { devices, chosen };
 
-    if (available && probeBinary !== undefined) {
-        return { device: "vulkan", binary: probeBinary, reason: "hardware Vulkan device found" };
+    if (chosen !== undefined) {
+        return {
+            device: "vulkan",
+            binary: probeBinary,
+            deviceId: chosen.id,
+            reason:
+                chosen.freeMiB === Number.POSITIVE_INFINITY
+                    ? `hardware Vulkan device ${chosen.id}`
+                    : `hardware Vulkan device ${chosen.id} (${(chosen.freeMiB / 1024).toFixed(1)} GiB free)`,
+        };
+    }
+
+    if (preference === "vulkan") {
+        throw new Error("semantic: no hardware Vulkan device found");
     }
 
     return {
         device: "cpu",
         binary: binaryFor("cpu"),
-        reason:
-            probeBinary === undefined
-                ? "Vulkan bundle not installed"
-                : "no hardware Vulkan device (software rasteriser only)",
+        reason: "no hardware Vulkan device (software rasteriser only)",
     };
 }
 
@@ -293,7 +399,7 @@ export async function selectLlamaDevice(
 
 /** Test seam: forget the probe result. */
 export function resetLlamaDevice(): void {
-    vulkanAvailable = undefined;
+    vulkanProbe = undefined;
 }
 
 /**

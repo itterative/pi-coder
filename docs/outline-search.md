@@ -109,6 +109,11 @@ stays in RAM.
   `auto`; `PI_CODER_OUTLINE_DEVICE` pins both, and a role variable wins over it.
 - The Vulkan bundle is asked `--list-devices`, and a software-only answer (`llvmpipe`, `swiftshader`, …) falls back to
   the CPU bundle, because a software Vulkan device is strictly slower than the CPU backend.
+- **A GPU server is pinned to exactly one device** (`-dev Vulkan0 -sm none`). `-ngl` on its own offloads to _every_
+  visible device, and the default `--split-mode layer` splits the model's layers across them — so on a two-GPU machine a
+  640 MB embedding model is pipelined over PCIe and ends up slower than one card and slower than the CPU. The device is
+  the one with the most free VRAM, not the first in the list, because the first is usually the integrated GPU;
+  `PI_CODER_OUTLINE_VULKAN_DEVICE=Vulkan1` names one explicitly.
 - A Vulkan server that cannot start — VRAM already taken, a driver upgraded mid-session — is retried on the CPU bundle
   for that build, with one stderr line saying so. A machine whose VRAM is in use is a normal state, not a failure.
 - Mixing backends is safe: CPU and Vulkan vectors for the same text score cosine 0.9994–0.9998 (same weights, different

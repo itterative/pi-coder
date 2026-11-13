@@ -500,7 +500,9 @@ than mixing widths, and switching back finds the old one.
 server that is started for the import and killed when it ends — so VRAM is borrowed only while a build the user asked
 for is running, never at query time (measured: 1.76 GB appears and disappears around an import). The Vulkan bundle is
 asked `--list-devices` and a software-only answer falls back to the CPU bundle; a Vulkan start that fails on allocation
-is retried on the CPU for that build. `PI_CODER_OUTLINE_QUERY_DEVICE` / `PI_CODER_OUTLINE_BUILD_DEVICE` set a role
+is retried on the CPU for that build. A GPU server is pinned to one device (`-dev Vulkan0 -sm none`, chosen by free
+VRAM, or named by `PI_CODER_OUTLINE_VULKAN_DEVICE`): `-ngl` alone offloads to every device and splits layers across
+them, which is slower than one card on a multi-GPU machine. `PI_CODER_OUTLINE_QUERY_DEVICE` / `PI_CODER_OUTLINE_BUILD_DEVICE` set a role
 (`cpu|vulkan|auto`, defaults `cpu` and `auto`) and `PI_CODER_OUTLINE_DEVICE` pins both. CPU and Vulkan vectors score
 cosine 0.9994–0.9998 for the same text, so an index built on one is queried on the other without a penalty. Only
 linux-x64 has a measured bundle, so other platforms are BM25-only — where the ONNX path still had wasm.

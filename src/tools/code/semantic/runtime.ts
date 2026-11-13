@@ -224,6 +224,7 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
                 binary: choice.binary,
                 modelFile: modelFile(options.modelDir),
                 gpuLayers: choice.device === "vulkan" ? 999 : 0,
+                deviceId: choice.deviceId,
             });
             const slot = { choice, server };
 

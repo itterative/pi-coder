@@ -372,8 +372,20 @@ type UiStubOverrides = Partial<Omit<ExtensionUIContext, "custom">> & {
     custom?: (factory: StubComponentFactory, options: StubDialogOptions) => unknown;
 };
 
+/**
+ * A `ctx.ui` double: the footer setters are no-ops too.
+ *
+ * `setStatus`/`setWidget` are part of the surface, and an extension may touch them from a callback that lands after the
+ * test body returned (a background index refresh finishing, for instance). Leaving them out turns that into an
+ * unhandled rejection attributed to whichever file happened to be running, which is how it was found.
+ */
 export function stubUi(overrides: UiStubOverrides = {}): ExtensionUIContext {
-    return { notify: () => {}, ...overrides } as ExtensionUIContext;
+    return {
+        notify: () => {},
+        setStatus: () => {},
+        setWidget: () => {},
+        ...overrides,
+    } as ExtensionUIContext;
 }
 
 /**

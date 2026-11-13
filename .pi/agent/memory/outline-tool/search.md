@@ -131,7 +131,11 @@ cosine 0.9994–0.9998 for the same text, and entry keys are text hashes.
 llama.cpp has no in-process binding worth shipping and its server speaks OpenAI's shape, so the child is the
 supported interface, not a workaround. **Device selection is a probe**: the Vulkan bundle is unpacked and asked
 `--list-devices`; llvmpipe/swiftshader-only falls back to the CPU bundle
-(`PI_CODER_OUTLINE_LLAMA_SERVER` replaces the binary for tests, keeping the requested device). Only linux-x64 has a measured bundle, so other
+(`PI_CODER_OUTLINE_LLAMA_SERVER` replaces the binary for tests, keeping the requested device). A GPU server is always
+pinned to **one** device — `-dev <id> -sm none`, the id taken from the listing by most free VRAM or from
+`PI_CODER_OUTLINE_VULKAN_DEVICE`. Leaving it unpinned makes llama.cpp offload to every visible device and split layers
+across them (`--split-mode layer`), which on a multi-GPU machine pipelines the 640 MB model over PCIe and is *slower*
+than a single card. Only linux-x64 has a measured bundle, so other
 platforms are BM25-only — the ONNX path's wasm fallback is gone and cannot come back (llama.cpp has no wasm build).
 
 Consequences that shaped the rest: the model loads **once** instead of once per worker, so a build no longer

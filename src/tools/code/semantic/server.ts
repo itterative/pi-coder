@@ -27,6 +27,15 @@ export interface ServerOptions {
     modelFile: string;
     /** GPU layers: every layer on a Vulkan device, none for the CPU bundle. */
     gpuLayers: number;
+    /**
+     * The one Vulkan device to use, e.g. `Vulkan0`.
+     *
+     * Without it, `-ngl` offloads to every visible device and the default `--split-mode layer` splits the model's
+     * layers across them — on a two-GPU machine that pipelines a 640 MB embedding model over PCIe, which is slower than
+     * a single card and slower than the CPU. `--split-mode none` alone would use the *main* GPU, which is device 0 and
+     * may be the integrated one, so both are set: one named device, no splitting.
+     */
+    deviceId?: string;
     threads?: number;
     /** Diagnostics hook: llama-server's own log, line by line. */
     onOutput?: (text: string) => void;
@@ -146,6 +155,7 @@ export async function startEmbedServer(options: ServerOptions): Promise<EmbedSer
         "--port",
         String(port),
         "--no-webui",
+        ...(options.deviceId === undefined ? [] : ["-dev", options.deviceId, "-sm", "none"]),
     ];
 
     const child: ChildProcess = spawn(options.binary, args, { stdio: ["ignore", "pipe", "pipe"] });
