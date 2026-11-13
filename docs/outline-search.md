@@ -29,9 +29,8 @@ skipped because their prose is the doc channel already.
 The cap is a budget decision rather than an evidence one (`semantic/rank.ts`'s tail gate is about spending a query
 embedding; a body hit is a literal scan that has already run): `BODY_ROWS` (20) when the name and doc channels found
 less than three rows and no doc match, `BODY_ROWS_WHEN_LED` (3) when they already lead, and a footer naming what was
-withheld so the count never reads as complete. `body="all"` raises the cap to `BODY_ROWS_ALL`, `body="off"`
-disables the channel. Body rows count as literal evidence for the related gate, so a text-shaped query with body
-hits keeps the lexical rows first.
+withheld so the count never reads as complete. Body rows count as literal evidence for the related gate, so a
+text-shaped query with body hits keeps the lexical rows first.
 
 Cost: one lowercased pass over each parsed file rejects the files that cannot match, then each candidate declaration
 body is scanned for the query tokens. Per-file body hits are cached in a `WeakMap<ParsedFile, …>` keyed by query,
@@ -40,13 +39,14 @@ exactly like the lexical hits, so a cached parse pays once and pagination is fre
 ## Dependency scope
 
 `within` on `search`/`usages` intersects the candidate files with one file's direct imports
-(`within="src/x.ts"`) or direct importers (`within="dependents:src/x.ts"`); the anchor is relative to the searched
-path, like `glob`. The anchor is always kept, `path` and
-`glob` still bound the tree, and the `# within:` footer names the direction, the anchor, the file count, and any
-neighbour that fell outside the searched path. Edges come from `imports.ts` (`scope.ts` builds the index), so the
+(`within="src/x.ts"`) or direct importers (`within="dependents:src/x.ts"`); the anchor is relative to the literal
+prefix of `path`, the directory a scoped pattern starts in. The anchor is always kept, the `path` pattern still
+bounds the tree, and the `# within:` footer names the direction, the anchor, the file count, and any neighbour that
+fell outside the searched path. Edges come from `imports.ts` (`scope.ts` builds the index), so the
 scope is exactly the `deps` graph, one hop deep; a neighbour whose target the scan cannot see does not exist.
 Unlike `deps`, the scope does not change discovery: the searched root is parsed as usual, and the neighbourhood is
-an intersection over those parses plus the anchor.
+an intersection over those parses plus the anchor. With a `path` pattern, a second unfiltered discovery supplies the
+resolution index, because the pattern bounds what is searched, not which imports are real.
 
 ## BM25 (always on)
 

@@ -3,11 +3,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { runDigest } from "../../../src/tools/code/digest";
 import { clearCodeCache } from "../../../src/tools/code/load";
 import { runSearch } from "../../../src/tools/code/search";
+import { runShow } from "../../../src/tools/code/show";
 import { runUsages } from "../../../src/tools/code/usages";
 import { MemoryCodeSource } from "../../helpers/code-source";
 
 /**
- * Narrowing parameters: `glob` keeps a result to part of the tree, `declarationKind` to part of the declaration
+ * Narrowing parameters: a `path` pattern keeps a result to part of the tree, `kind` to part of the declaration
  * space. Both report what they removed, because a smaller result must not read as "nothing matched".
  */
 const FILES: Record<string, string> = {
@@ -32,6 +33,8 @@ const FILES: Record<string, string> = {
         "",
     ].join("\n"),
     "docs/guide.md": "# Guide\n\nSocket connect notes.\n",
+    // No heading and no frontmatter: matches a `*.md` pattern without adding a declaration kind tests must count.
+    "src/net/notes.md": "Plain notes with no heading.\n",
 };
 
 function source(): MemoryCodeSource {
@@ -42,99 +45,119 @@ beforeEach(() => {
     clearCodeCache();
 });
 
-describe("outline glob filter", () => {
+describe("outline path pattern filter", () => {
     it("keeps search rows inside the matched path and says what it hid", async () => {
         const result = await runSearch(source(), {
             action: "search",
-            path: ".",
+            path: "src/**/*.ts",
             query: "connect",
-            glob: "src/**/*.ts",
         });
 
         expect(result.text).toContain("src/net/socket.ts");
         expect(result.text).not.toContain("lib/legacy/port.ts");
         expect(result.text).not.toContain("docs/guide.md");
-        expect(result.text).toContain("# filter: glob=src/**/*.ts (2 files hidden)");
+        // The walker applies the pattern, so the cap counts matches and there is nothing to report as hidden.
+        expect(result.text).toContain("# filter: path=src/**/*.ts");
     });
 
-    it("matches a slash-free glob against the basename at any depth", async () => {
+    it("matches a slash-free pattern against the basename at any depth", async () => {
         const result = await runSearch(source(), {
             action: "search",
-            path: ".",
+            path: "*.ts",
             query: "connect",
-            glob: "*.ts",
         });
 
         expect(result.text).toContain("src/net/socket.ts");
         expect(result.text).toContain("lib/legacy/port.ts");
         expect(result.text).not.toContain("docs/guide.md");
-        expect(result.text).toContain("(1 file hidden)");
+        expect(result.text).toContain("# filter: path=*.ts");
+        expect(result.text).not.toContain("hidden)");
     });
 
     it("supports brace alternatives and still names the filter when it hid nothing", async () => {
         const result = await runSearch(source(), {
             action: "search",
-            path: ".",
+            path: "*.{ts,md}",
             query: "connect",
-            glob: "*.{ts,md}",
         });
 
         expect(result.text).toContain("lib/legacy/port.ts");
         expect(result.text).toContain("docs/guide.md");
-        expect(result.text).toContain("# filter: glob=*.{ts,md}");
+        expect(result.text).toContain("# filter: path=*.{ts,md}");
         expect(result.text).not.toContain("hidden)");
     });
 
-    it("says so when the glob matches no file", async () => {
+    it("says so when the pattern matches no file", async () => {
         const result = await runSearch(source(), {
             action: "search",
-            path: ".",
+            path: "*.rs",
             query: "connect",
-            glob: "*.rs",
         });
 
-        expect(result.text).toContain("no files match glob=*.rs");
+        expect(result.text).toContain('# search "connect" in *.rs · no files match');
         expect(result.matches).toBe(0);
     });
 
     it("filters digest to the matched files", async () => {
         const result = await runDigest(source(), {
             action: "digest",
-            path: ".",
-            glob: "src/net/*.ts",
+            path: "src/net/*.ts",
         });
 
         expect(result.text).toContain("src/net/socket.ts");
         expect(result.text).not.toContain("lib/legacy/port.ts");
-        expect(result.text).toContain("# filter: glob=src/net/*.ts (2 files hidden)");
+        expect(result.text).toContain("# filter: path=src/net/*.ts");
+        expect(result.text).not.toContain("hidden)");
+    });
+
+    it("filters show to the matched files", async () => {
+        const result = await runShow(source(), {
+            action: "show",
+            path: "src/net/*.ts",
+            query: "connect",
+        });
+
+        expect(result.text).toContain("src/net/socket.ts");
+        expect(result.text).not.toContain("lib/legacy/port.ts");
+        expect(result.text).toContain("# filter: path=src/net/*.ts");
+    });
+
+    it("matches an absolute pattern in absolute paths", async () => {
+        const result = await runSearch(source(), {
+            action: "search",
+            path: "/project/src/net/*.ts",
+            query: "connect",
+        });
+
+        expect(result.text).toContain("src/net/socket.ts");
+        expect(result.text).not.toContain("lib/legacy/port.ts");
     });
 
     it("filters usages to the matched files", async () => {
         const result = await runUsages(source(), {
             action: "usages",
-            path: ".",
-            symbols: ["connect"],
-            glob: "lib/**",
+            path: "lib/**",
+            query: "connect",
         });
 
         expect(result.text).toContain("lib/legacy/port.ts");
         expect(result.text).not.toContain("src/net/socket.ts");
-        expect(result.text).toContain("# filter: glob=lib/** (3 files hidden)");
+        expect(result.text).toContain("# filter: path=lib/**");
     });
 });
 
-describe("outline declarationKind filter", () => {
+describe("outline kind filter", () => {
     it("keeps only matching declaration rows in search", async () => {
         const result = await runSearch(source(), {
             action: "search",
             path: ".",
             query: "connect",
-            declarationKind: "method",
+            kind: "method",
         });
 
         expect(result.text).toContain("method  Port::connect");
         expect(result.text).not.toContain("function  connect ");
-        expect(result.text).toContain("# filter: declarationKind=method (3 declarations hidden)");
+        expect(result.text).toContain("# filter: kind=method (3 declarations hidden)");
     });
 
     it("does not fall back to approximate rows of another kind", async () => {
@@ -142,23 +165,23 @@ describe("outline declarationKind filter", () => {
             action: "search",
             path: ".",
             query: "connect",
-            declarationKind: "class",
+            kind: "class",
         });
 
         expect(result.matches).toBe(0);
         expect(result.text).toContain("no declarations or approximate matches");
-        expect(result.text).toContain("# filter: declarationKind=class (7 declarations hidden)");
+        expect(result.text).toContain("# filter: kind=class (7 declarations hidden)");
     });
 
     it("lists only matching declarations in digest and reports the rest as hidden", async () => {
         const result = await runDigest(source(), {
             action: "digest",
             path: "src/net",
-            declarationKind: "class",
+            kind: "class",
         });
 
         expect(result.text).toContain("no matching declarations");
-        expect(result.text).toContain("declarationKind=class");
+        expect(result.text).toContain("kind=class");
         expect(result.text).not.toContain("connectClient");
     });
 
@@ -166,7 +189,7 @@ describe("outline declarationKind filter", () => {
         const result = await runDigest(source(), {
             action: "digest",
             path: ".",
-            declarationKind: "function",
+            kind: "function",
         });
 
         expect(result.text).toContain("function");
@@ -189,7 +212,7 @@ describe("outline declarationKind filter", () => {
         const result = await runDigest(new MemoryCodeSource("/project", files), {
             action: "digest",
             path: ".",
-            declarationKind: "function",
+            kind: "function",
             limit: 600,
         });
 
@@ -197,6 +220,6 @@ describe("outline declarationKind filter", () => {
         expect(result.text).not.toContain("over character limit");
         expect(result.text).toContain("unit");
         expect(result.text).toContain("# next: offset=");
-        expect(result.text).toContain("declarationKind=function");
+        expect(result.text).toContain("kind=function");
     });
 });

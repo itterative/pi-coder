@@ -1,8 +1,9 @@
 import path from "node:path";
 
-import { applyGlobFilter, discoverFiles } from "./discovery";
+import { discoverFiles, filterPathTarget, parsePathTarget, patternWithinTarget } from "./discovery";
 import {
     declarationLine,
+    discoveryCapNote,
     filterNote,
     isFunctionLike,
     nextOffsetNote,
@@ -12,7 +13,14 @@ import { DEFAULT_CHAR_LIMIT, MAX_FILES, languageForPath, sizeLabel } from "./lan
 import { loadParsedFiles } from "./load";
 import type { CodeSource } from "./source";
 import { CallTiming } from "./timing";
-import type { CodeDetail, CodeToolParams, Declaration, DeclarationKind, ParsedFile } from "./types";
+import {
+    isDeclarationKind,
+    type CodeDetail,
+    type CodeToolParams,
+    type Declaration,
+    type DeclarationKind,
+    type ParsedFile,
+} from "./types";
 
 export interface DigestResult {
     text: string;
@@ -30,15 +38,19 @@ export async function runDigest(
     const detail: CodeDetail = params.detail ?? "signatures";
     const limit = params.limit ?? DEFAULT_CHAR_LIMIT;
     const offset = Math.max(0, Math.floor(params.offset ?? 0));
-    const root = source.resolvePath(params.path ?? ".");
+    const target = parsePathTarget(params.path);
+    const root = source.resolvePath(target.base);
+    const scope = target.pattern ?? source.displayPath(root);
 
     await source.assertReadable(root);
 
-    const discovery = await timing.measure("discover", () => discoverFiles(source, root, signal));
+    const discovery = await timing.measure("discover", () =>
+        discoverFiles(source, root, signal, patternWithinTarget(target)),
+    );
 
     if (discovery.unsupportedRoot) {
         return {
-            text: `# digest ${source.displayPath(root)} · unsupported file\n# no supported declarations to map`,
+            text: `# digest ${scope} · unsupported file\n# no supported declarations to map`,
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -47,18 +59,23 @@ export async function runDigest(
 
     if (discovery.files.length === 0) {
         return {
-            text: `# digest ${source.displayPath(root)} · no supported source files`,
+            text: `# digest ${scope} · ${target.pattern === undefined ? "no supported source files" : "no files match"}`,
             files: 0,
             parseErrors: 0,
             truncated: false,
         };
     }
 
-    const globbed = applyGlobFilter(discovery.files, root, params.glob);
+    const targeted = filterPathTarget(discovery.files, source, target);
 
-    if (globbed.files.length === 0) {
+    if (targeted.files.length === 0) {
         return {
-            text: `# digest ${source.displayPath(root)} · no files match glob=${params.glob ?? ""}`,
+            text: [
+                `# digest ${scope} · no files match`,
+                discovery.truncated ? discoveryCapNote() : "",
+            ]
+                .filter((line) => line.length > 0)
+                .join("\n"),
             files: 0,
             parseErrors: 0,
             truncated: discovery.truncated,
@@ -66,16 +83,16 @@ export async function runDigest(
     }
 
     const batch = await timing.measure("parse", () =>
-        loadParsedFiles(source, globbed.files, signal),
+        loadParsedFiles(source, targeted.files, signal),
     );
-    timing.recordLoad(batch, globbed.files.length);
+    timing.recordLoad(batch, targeted.files.length);
     const parsed = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
     const parseErrors = parsed.reduce((total, file) => total + file.parseErrors, 0);
 
     if (parsed.length === 0) {
         return {
             text: [
-                `# digest ${source.displayPath(root)} · no readable supported files`,
+                `# digest ${scope} · no readable supported files`,
                 batch.tooLarge > 0
                     ? `# skipped: ${batch.tooLarge} file(s) above the size limit`
                     : "",
@@ -90,20 +107,21 @@ export async function runDigest(
     }
 
     const languages = languagesOf(parsed);
-    const kind = params.declarationKind;
+    const kind =
+        params.kind !== undefined && isDeclarationKind(params.kind) ? params.kind : undefined;
     const rendered = parsed.map((file) => renderFile(source, file, detail, kind));
     const kindHidden = rendered.reduce((total, entry) => total + entry.hidden, 0);
     const filter = filterNote({
-        glob: params.glob,
-        globHidden: globbed.hidden,
-        declarationKind: kind,
+        path: target.pattern,
+        pathHidden: targeted.hidden,
+        kind,
         kindHidden,
     });
 
     if (kind !== undefined && rendered.every((entry) => entry.hidden === entry.total)) {
         return {
             text: [
-                `# digest ${source.displayPath(root)} · filter declarationKind=${kind} · no matching declarations`,
+                `# digest ${scope} · filter kind=${kind} · no matching declarations`,
                 filter ?? "",
             ]
                 .filter((line) => line.length > 0)
@@ -117,7 +135,7 @@ export async function runDigest(
     const fileBlocks = rendered.map((entry) => entry.text).filter((text) => text.length > 0);
 
     const fullBody = fileBlocks.join("\n");
-    const header = digestHeader(source, root, parsed, languages, fullBody);
+    const header = digestHeader(scope, parsed, languages, fullBody);
     const footer = digestFooter(
         batch.tooLarge,
         discovery.unsupportedFiles,
@@ -140,7 +158,7 @@ export async function runDigest(
     // A kind filter must not degrade to the directory map: the caller asked for declarations of one kind, and a map of
     // directory names answers a different question. Page the flat list instead, so `# next: offset=N` continues it.
     if (!fits && !discovery.rootIsFile && kind === undefined) {
-        const map = renderDirectoryMap(source, root, globbed.files, limit);
+        const map = renderDirectoryMap(source, root, targeted.files, limit);
 
         if (map !== undefined) {
             if (offset === 0) {
@@ -325,13 +343,12 @@ function isVisible(
 }
 
 function digestHeader(
-    source: CodeSource,
-    root: string,
+    scope: string,
     parsed: readonly ParsedFile[],
     languages: string,
     body: string,
 ): string {
-    return `# digest ${source.displayPath(root)} · ${parsed.length} files · ${languages} · ~${body.length} chars`;
+    return `# digest ${scope} · ${parsed.length} files · ${languages} · ~${body.length} chars`;
 }
 
 function digestFooter(

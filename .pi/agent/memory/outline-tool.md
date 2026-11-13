@@ -1,6 +1,6 @@
 ---
 name: outline-tool
-description: The `outline` tool in src/tools/code - digest/search/show/usages/deps across ten languages, with body-text search and glob/kind narrowing.
+description: The `outline` tool - digest/search/show/usages/deps across ten languages, with body text, path patterns, and kind filters.
 category: architecture
 priority: 7
 keep_updated: true
@@ -56,23 +56,22 @@ Registered from `src/index.ts`; design notes: `src/tools/code/README.md`.
   text (`[body]`), then the relevance tail and a capped fuzzy pass. Rows carry `[doc]`, `[frontmatter]`,
   `[body]`, `[related]`; body chunks (`semantic/chunks.ts`) make code inside a long declaration reachable from the
   vector channel. Tiers, caps, chunks: `outline-tool/search.md`.
-- **Narrowing is a parameter.** `glob` and `declarationKind` filter the discovered set; `# filter:` names the filter
-  and any hidden count (`outline-tool/search.md`).
+- **Narrowing is a parameter.** A `path` pattern and `kind` narrow the discovered set (`deps` takes a literal file);
+  `# filter:` names them and any hidden count (`outline-tool/search.md`).
 
 ## Defaults
 
-4,000-character `limit`, 1 MB file cap, 2k discovered files, and build/out/cmake-build/third_party/generated
-ignored; `[huge]` files render top-level declarations only, and digest degrades to a directory map over the
+4,000-character `limit`, 1 MB file cap, 2k mapped files (patterns are walker-applied, so the cap counts matches),
+and build/out/cmake-build/third_party/generated ignored; `[huge]` files render top-level declarations only, and digest degrades to a directory map over the
 limit. With a directory `path`, `show` pairs headers with
-definitions and lists same-signature definitions across files. Extracted blocks are dedented to the
-declaration's indentation. Scanning `.` honors ignore files; an explicitly named subdirectory is scanned
-literally, so fixtures under an ignored path stay reachable.
+definitions and lists same-signature definitions across files. Scanning `.` honors ignore files; an explicitly named subdirectory is literal,
+so ignored fixtures stay reachable.
 
 Cuts are resumable: every action takes `offset` in rendered body lines and a cut ends `# next: offset=N`. Pages
 prefer block boundaries but can resume inside an oversized block; a line longer than the limit cannot be split,
 and the page reports the limit needed.
 
-`show`/`usages` split a comma-joined `symbols` entry at top level only (`splitSymbolList`), so an overload
+`show`/`usages` split a comma-joined `query` entry at top level only (`splitSymbolList`), so an overload
 selector's parameter list survives; empty entries drop and repeats stay, because `usages` counts them. A `show`
 parameter hint may be a leading subset (the output notes it was partial), and a symbol missing from the target
 file is looked up in the enclosing directory then the cwd, naming the file it actually lives in.

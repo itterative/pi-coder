@@ -39,7 +39,7 @@ describe("outline show pagination", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src",
-            symbols: ["engine::attention_block", "engine::zzz_helper"],
+            query: ["engine::attention_block", "engine::zzz_helper"].join(", "),
             limit: 400,
         });
         const [header = ""] = result.text.split("\n\n");
@@ -55,7 +55,7 @@ describe("outline show pagination", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src",
-            symbols: ["engine::attention_block", "engine::zzz_helper"],
+            query: ["engine::attention_block", "engine::zzz_helper"].join(", "),
             limit: 400,
         });
 
@@ -66,7 +66,7 @@ describe("outline show pagination", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src",
-            symbols: ["engine::attention_block"],
+            query: "engine::attention_block",
             limit: 400,
         });
 
@@ -80,7 +80,7 @@ describe("outline show pagination", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src",
-            symbols: ["engine::zzz_helper"],
+            query: "engine::zzz_helper",
             limit: 400,
         });
         const [header = ""] = result.text.split("\n");

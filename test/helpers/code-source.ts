@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { shouldIgnorePath } from "../../src/tools/code/languages";
+import { matchesGlob, shouldIgnorePath } from "../../src/tools/code/languages";
 import type { CodeFileStat, CodeSource } from "../../src/tools/code/source";
 
 /**
@@ -30,12 +30,21 @@ export class MemoryCodeSource implements CodeSource {
         }
     }
 
-    async glob(root: string, options: { limit: number; signal?: AbortSignal }): Promise<string[]> {
+    async glob(
+        root: string,
+        options: { limit: number; signal?: AbortSignal; pattern?: string },
+    ): Promise<string[]> {
         const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
 
         return Array.from(this.files.keys())
             .filter((file) => file.startsWith(prefix))
             .filter((file) => !shouldIgnorePath(path.relative(root, file)))
+            .filter(
+                (file) =>
+                    options.pattern === undefined ||
+                    options.pattern.length === 0 ||
+                    matchesGlob(path.relative(root, file), options.pattern),
+            )
             .sort()
             .slice(0, options.limit);
     }

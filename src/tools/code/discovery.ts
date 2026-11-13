@@ -1,39 +1,98 @@
 import path from "node:path";
 
 import { MAX_FILES, isSupportedPath, languageForPath, matchesGlob } from "./languages";
-import type { CodeSource } from "./source";
+import { expandHomePath, type CodeSource } from "./source";
 
-export interface GlobFilter {
-    files: string[];
-    /** Files the glob removed, so a result never looks smaller than it is without saying why. */
-    hidden: number;
+/** The characters rg treats as making a path a pattern rather than a literal target. */
+const GLOB_META = /[*?[{]/;
+
+/**
+ * A `path` argument split into the literal prefix discovery scans and the rg-style pattern it matches.
+ *
+ * The pattern is matched as a whole against the workspace-relative path, exactly as `rg --glob` matches one: a
+ * pattern containing `/` is anchored (`*` is one level, `**` crosses), and a pattern without a slash matches the
+ * basename at any depth. `base` is only the discovery bound, so a scoped pattern does not scan the whole cwd.
+ */
+export interface PathTarget {
+    /** The literal prefix that bounds discovery, as the caller wrote it (before `resolvePath`). */
+    base: string;
+    /** The pattern, expanded when absolute, matched against the workspace path. */
+    pattern?: string;
+    /** Whether the pattern is absolute after `~` expansion, so files match in absolute paths. */
+    absolute: boolean;
+}
+
+export function parsePathTarget(input: string | undefined): PathTarget {
+    const requested = input?.trim() ?? "";
+    const value = requested.length === 0 ? "." : requested;
+
+    if (!GLOB_META.test(value)) {
+        return { base: value, absolute: false };
+    }
+
+    const expanded = expandHomePath(value);
+    const absolute = path.isAbsolute(expanded);
+    const segments = value.split("/");
+    const patternIndex = segments.findIndex((segment) => GLOB_META.test(segment));
+    const prefix = segments.slice(0, patternIndex).join("/");
+    const base = prefix.length === 0 ? (absolute ? "/" : ".") : prefix;
+
+    return { base, pattern: absolute ? expanded : value, absolute };
 }
 
 /**
- * Keep only the discovered files a `glob` selects, counted against the searched path.
+ * The pattern expressed relative to the literal root, for the source walker.
  *
- * A pattern without a slash matches the basename at any depth, which is what `rg --glob '*.ts'` does; a pattern
- * with one is matched against the path relative to the searched root, exactly as `rg --glob` does.
+ * `PathTarget.pattern` is workspace-relative, while a source's `glob` matches relative to the root it is given, so
+ * the literal prefix is stripped (`src/tools/**` under base `src` becomes `tools/**`). A pattern starting with `!`
+ * is left to the post-filter: rg would read it as an exclusion, and `matchesGlob` treats it literally.
  */
-export function applyGlobFilter(
+export function patternWithinTarget(target: PathTarget): string | undefined {
+    if (target.pattern === undefined || target.pattern.startsWith("!")) {
+        return undefined;
+    }
+
+    const pattern = expandHomePath(target.pattern);
+    const base = expandHomePath(target.base);
+
+    if (base === "." || base.length === 0) {
+        return pattern;
+    }
+
+    if (base === "/") {
+        return pattern.startsWith("/") ? pattern.slice(1) : pattern;
+    }
+
+    if (pattern === base) {
+        return undefined;
+    }
+
+    return pattern.startsWith(`${base}/`) ? pattern.slice(base.length + 1) : pattern;
+}
+
+export interface PathFilter {
+    files: string[];
+    /** Files the pattern removed, so a result never looks smaller than it is without saying why. */
+    hidden: number;
+}
+
+/** Keep only the discovered files the `path` pattern selects, counted against the whole discovery. */
+export function filterPathTarget(
     files: readonly string[],
-    root: string,
-    glob: string | undefined,
-): GlobFilter {
-    if (glob === undefined || glob.trim().length === 0) {
+    source: CodeSource,
+    target: PathTarget,
+): PathFilter {
+    if (target.pattern === undefined) {
         return { files: [...files], hidden: 0 };
     }
 
-    const kept = files.filter((file) => matchesGlob(relativeToRoot(root, file), glob));
+    const pattern = target.pattern;
+    const cwd = source.resolvePath(".");
+    const kept = files.filter((file) =>
+        matchesGlob(target.absolute ? file : path.relative(cwd, file), pattern),
+    );
 
     return { files: kept, hidden: files.length - kept.length };
-}
-
-function relativeToRoot(root: string, file: string): string {
-    const relative = path.relative(root, file);
-
-    // A file target is its own root: `path.relative` says "" and the glob then sees the basename.
-    return relative.length === 0 || relative.startsWith("..") ? file : relative;
 }
 
 export interface Discovery {
@@ -49,6 +108,7 @@ export async function discoverFiles(
     source: CodeSource,
     root: string,
     signal?: AbortSignal,
+    pattern?: string,
 ): Promise<Discovery> {
     const stat = await source.stat(root);
 
@@ -72,7 +132,7 @@ export async function discoverFiles(
         };
     }
 
-    const found = await source.glob(root, { limit: MAX_FILES + 1, signal });
+    const found = await source.glob(root, { limit: MAX_FILES + 1, signal, pattern });
     const supported = found
         .filter((file) => isSupportedPath(file))
         .map((file) => path.resolve(file))
@@ -111,11 +171,17 @@ export async function candidateFiles(
     root: string,
     selectors: readonly string[],
     signal?: AbortSignal,
+    pattern?: string,
 ): Promise<Discovery> {
     const stat = await source.stat(root);
 
     if (stat.isFile) {
-        return discoverFiles(source, root, signal);
+        return discoverFiles(source, root, signal, pattern);
+    }
+
+    // With a pattern, let the walker narrow the set so the cap counts matches instead of every candidate file.
+    if (pattern !== undefined && pattern.length > 0) {
+        return discoverFiles(source, root, signal, pattern);
     }
 
     const terms = Array.from(

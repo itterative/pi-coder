@@ -1,3 +1,4 @@
+import { MAX_FILES } from "./languages";
 import type { Declaration, DeclarationKind, DeclarationRange, SymbolSelector } from "./types";
 
 /** Parse `ns::Type::member(const X&)` into a name selector plus an optional parameter-type hint. */
@@ -177,23 +178,26 @@ export function indent(depth: number): string {
  * hid it", and the total is the number they will reason about — so it is stated rather than implied. The line names
  * an active filter even when it hid nothing, because a scoped result must not read as the whole tree.
  */
+/** One line when discovery hit its cap: the parse set is a prefix of the matches, not all of them. */
+export function discoveryCapNote(): string {
+    return `# note: file discovery was capped at ${MAX_FILES}; the scan covers the first matches only`;
+}
+
 export function filterNote(options: {
-    glob?: string;
-    globHidden: number;
-    declarationKind?: DeclarationKind;
+    path?: string;
+    pathHidden?: number;
+    kind?: DeclarationKind;
     kindHidden?: number;
 }): string | undefined {
     const parts: string[] = [];
-    const glob = options.glob?.trim() ?? "";
+    const target = options.path?.trim() ?? "";
 
-    if (glob.length > 0) {
-        parts.push(`glob=${glob}${hiddenSuffix(options.globHidden, "file")}`);
+    if (target.length > 0) {
+        parts.push(`path=${target}${hiddenSuffix(options.pathHidden ?? 0, "file")}`);
     }
 
-    if (options.declarationKind !== undefined) {
-        parts.push(
-            `declarationKind=${options.declarationKind}${hiddenSuffix(options.kindHidden ?? 0, "declaration")}`,
-        );
+    if (options.kind !== undefined) {
+        parts.push(`kind=${options.kind}${hiddenSuffix(options.kindHidden ?? 0, "declaration")}`);
     }
 
     return parts.length === 0 ? undefined : `# filter: ${parts.join(" · ")}`;

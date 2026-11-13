@@ -172,7 +172,7 @@ describe("outline output offsets", () => {
             const result = await runShow(source(), {
                 action: "show",
                 path: "big.cpp",
-                symbols: ["big_function"],
+                query: "big_function",
                 limit: 800,
                 offset,
             });
@@ -206,7 +206,7 @@ describe("outline output offsets", () => {
             const result = await runUsages(source(), {
                 action: "usages",
                 path: "uses.cpp",
-                symbols: ["target"],
+                query: "target",
                 limit: 800,
                 offset,
             });

@@ -106,7 +106,7 @@ describe("outline search body text", () => {
         expect(result.text).not.toContain("  class  Service");
     });
 
-    it("caps body rows when a doc match already leads, and honors body=all", async () => {
+    it("caps body rows when a doc match already leads", async () => {
         const files: Record<string, string> = {
             "src/retry.ts": [
                 "/** retry with backoff when a call fails. */",
@@ -134,29 +134,7 @@ describe("outline search body text", () => {
 
         expect(capped.text.match(/\[body\]/g)).toHaveLength(3);
         expect(capped.text).toContain("# body: 2 more declarations withheld");
-        expect(capped.text).toContain('body="all"');
-
-        const all = await runSearch(new MemoryCodeSource("/project", files), {
-            action: "search",
-            path: "src",
-            query: "retry with backoff",
-            body: "all",
-        });
-
-        expect(all.text.match(/\[body\]/g)).toHaveLength(5);
-        expect(all.text).not.toContain("withheld");
-    });
-
-    it("honors body=off", async () => {
-        const result = await runSearch(source(), {
-            action: "search",
-            path: "src",
-            query: "failed its checksum",
-            body: "off",
-        });
-
-        expect(result.matches).toBe(0);
-        expect(result.text).not.toContain("[body]");
+        expect(capped.text).toContain("the page keeps the strongest rows");
     });
 
     it("leaves Markdown prose to the doc channel", async () => {

@@ -10,7 +10,7 @@ import sandboxConfig from "../../common/config";
 import { getUserMemoryDirectory } from "../../common/constants";
 import { fileRootsForOperation } from "../../modules/sandbox/file-roots";
 import { outlineGuidePrompt } from "./prompt";
-import { discoverFiles } from "./discovery";
+import { discoverFiles, parsePathTarget } from "./discovery";
 import { runDeps } from "./deps";
 import { runDigest } from "./digest";
 import { DEFAULT_CHAR_LIMIT, MIN_CHAR_LIMIT } from "./languages";
@@ -36,14 +36,16 @@ import type { SemanticSearch } from "./semantic/types";
 import { runShow } from "./show";
 import { createCodeSource, type CodeReadRoots } from "./source";
 import { CallTiming } from "./timing";
-import type {
-    BodyMode,
-    CodeAction,
-    CodeActionResult,
-    CodeDetail,
-    CodeToolParams,
-    DeclarationKind,
-    UsageKind,
+import {
+    DECLARATION_KINDS,
+    USAGE_KINDS,
+    isDeclarationKind,
+    isUsageKind,
+    type CodeAction,
+    type CodeActionResult,
+    type CodeDetail,
+    type CodeToolParams,
+    type KindFilter,
 } from "./types";
 import { runUsages } from "./usages";
 
@@ -80,22 +82,19 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             path: Type.Optional(
                 Type.String({
                     description:
-                        "File or directory to inspect, relative to the working directory. Defaults to the working directory.",
+                        "File, directory, or rg-style glob pattern to inspect, relative to the working directory " +
+                        "(defaults to the working directory). A pattern with `/` is anchored (`*` is one level, " +
+                        "`**` crosses directories); without `/` it matches the file name at any depth. deps takes " +
+                        "a literal file.",
                 }),
             ),
             query: Type.Optional(
                 Type.String({
                     description:
-                        'search only: declaration name or partial name, e.g. "plan" or "CallList::execute". ' +
-                        "Multiple words also match doc text and frontmatter in any order; wrap them in double " +
-                        'quotes ("page table") to require the words to be adjacent.',
-                }),
-            ),
-            symbols: Type.Optional(
-                Type.Array(Type.String(), {
-                    description:
-                        'Symbols for show/usages, e.g. ["net::Socket::connect"] or ["Socket"]; append parameter types to select an overload, and a comma-joined list in one entry is split at top level',
-                    minItems: 1,
+                        'search: the phrase, e.g. "plan" or "CallList::execute". Multiple words match doc text ' +
+                        'and frontmatter in any order; quote them ("page table") to require adjacency. show/usages: ' +
+                        'one or more symbols separated by top-level commas, e.g. "net::Socket::connect, Socket"; ' +
+                        "append parameter types to select an overload.",
                 }),
             ),
             detail: Type.Optional(
@@ -116,59 +115,18 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
                 }),
             ),
             kind: Type.Optional(
-                Type.Unsafe<UsageKind>({
+                Type.Unsafe<KindFilter>({
                     type: "string",
-                    enum: ["def", "call", "ref"],
+                    enum: [...DECLARATION_KINDS, ...USAGE_KINDS],
                     description:
-                        "usages only: narrow to definitions, calls/launches, or references",
-                }),
-            ),
-            glob: Type.Optional(
-                Type.String({
-                    description:
-                        "digest/search/usages: keep only files whose path matches this glob, relative to the searched path. `**` crosses directories, `{a,b}` alternates, and a pattern without `/` matches the file name at any depth (like rg --glob).",
-                }),
-            ),
-            declarationKind: Type.Optional(
-                Type.Unsafe<DeclarationKind>({
-                    type: "string",
-                    enum: [
-                        "namespace",
-                        "class",
-                        "struct",
-                        "union",
-                        "interface",
-                        "trait",
-                        "enum",
-                        "enumMember",
-                        "function",
-                        "method",
-                        "constructor",
-                        "destructor",
-                        "operator",
-                        "field",
-                        "variable",
-                        "typeAlias",
-                        "macro",
-                        "heading",
-                        "frontmatter",
-                    ],
-                    description:
-                        "digest/search only: keep only declarations of this kind, e.g. function or heading",
-                }),
-            ),
-            body: Type.Optional(
-                Type.Unsafe<BodyMode>({
-                    type: "string",
-                    enum: ["auto", "all", "off"],
-                    description:
-                        "search only: literal body-text rows. auto caps them (3 when a name or doc match already leads, else 20); all raises the cap; off disables the channel",
+                        "usages: def, call, or ref. digest/search: a declaration kind such as function, class, " +
+                        "method, heading, or frontmatter.",
                 }),
             ),
             within: Type.Optional(
                 Type.String({
                     description:
-                        'search/usages only: limit the scan to one file\'s direct imports (`within="src/x.ts"`) or its direct importers (`within="dependents:src/x.ts"`). The anchor is relative to the searched path, like `glob`; it is always included, and `path`/`glob` still bound the tree.',
+                        'search/usages only: limit the scan to one file\'s direct imports (`within="src/x.ts"`) or its direct importers (`within="dependents:src/x.ts"`). The anchor is relative to the literal prefix of `path`; it is always included, and the pattern still bounds the tree.',
                 }),
             ),
             offset: Type.Optional(
@@ -188,14 +146,10 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
                 action: params.action as CodeAction,
                 path: params.path,
                 query: params.query,
-                symbols: params.symbols,
                 detail: params.detail,
                 limit,
                 offset: Math.max(0, Math.floor(params.offset ?? 0)),
                 kind: params.kind,
-                glob: params.glob,
-                declarationKind: params.declarationKind,
-                body: params.body,
                 within: params.within,
             };
             const fallbackPath = params.path ?? ".";
@@ -411,6 +365,12 @@ async function runAction(
         };
     }
 
+    const kindProblem = kindMismatch(params.action, params.kind);
+
+    if (kindProblem !== undefined) {
+        return { text: kindProblem, details: { ...base, files: 0 } };
+    }
+
     switch (params.action) {
         case "digest": {
             const result = await runDigest(source, params, signal, timing);
@@ -482,6 +442,27 @@ async function runAction(
             };
         }
     }
+}
+
+/** A `kind` value must match the action's axis: the two value sets do not overlap. */
+function kindMismatch(action: CodeAction, kind: KindFilter | undefined): string | undefined {
+    if (kind === undefined) {
+        return undefined;
+    }
+
+    if (action === "usages") {
+        return isUsageKind(kind)
+            ? undefined
+            : `# kind=${kind} is a declaration kind; usages takes def, call, or ref`;
+    }
+
+    if (action === "digest" || action === "search") {
+        return isDeclarationKind(kind)
+            ? undefined
+            : `# kind=${kind} is a usage kind; ${action} takes declaration kinds like function or heading`;
+    }
+
+    return `# kind applies to digest, search, and usages, not ${action}`;
 }
 
 /**
@@ -885,7 +866,8 @@ function failureText(params: { action: string; path?: string }, error: unknown):
     const missing = code === "ENOENT" || message.includes("ENOENT");
 
     if (missing) {
-        const requested = params.path ?? ".";
+        // The pattern's literal prefix is what actually failed to resolve, so name that rather than the pattern.
+        const requested = parsePathTarget(params.path).base;
 
         return `# no such path: ${requested} · check the spelling, or outline(action="digest", path=<its parent>)`;
     }

@@ -7,7 +7,13 @@ export type CodeAction = "digest" | "search" | "show" | "usages" | "deps";
 export type CodeDetail = "signatures" | "full";
 
 /** The occurrence classes the usages action can report. */
-export type UsageKind = "def" | "call" | "ref";
+export const USAGE_KINDS = ["def", "call", "ref"] as const;
+
+export type UsageKind = (typeof USAGE_KINDS)[number];
+
+export function isUsageKind(value: string): value is UsageKind {
+    return (USAGE_KINDS as readonly string[]).includes(value);
+}
 
 /**
  * The normalized declaration model shared by every language adapter.
@@ -16,27 +22,40 @@ export type UsageKind = "def" | "call" | "ref";
  * fields the formatter and the matchers need, so adding a language never means teaching the rest of the tool
  * about that language's node types.
  */
-export type DeclarationKind =
-    | "namespace"
-    | "class"
-    | "struct"
-    | "union"
-    | "interface"
-    | "trait"
-    | "enum"
-    | "enumMember"
-    | "function"
-    | "method"
-    | "constructor"
-    | "destructor"
-    | "operator"
-    | "field"
-    | "variable"
-    | "typeAlias"
-    | "macro"
-    | "heading"
+export const DECLARATION_KINDS = [
+    "namespace",
+    "class",
+    "struct",
+    "union",
+    "interface",
+    "trait",
+    "enum",
+    "enumMember",
+    "function",
+    "method",
+    "constructor",
+    "destructor",
+    "operator",
+    "field",
+    "variable",
+    "typeAlias",
+    "macro",
+    "heading",
     /** A Markdown frontmatter block: no name of its own, but the highest-signal prose in a memory tree. */
-    | "frontmatter";
+    "frontmatter",
+] as const;
+
+export type DeclarationKind = (typeof DECLARATION_KINDS)[number];
+
+export function isDeclarationKind(value: string): value is DeclarationKind {
+    return (DECLARATION_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * One `kind` parameter serving two disjoint axes: declaration kinds for `digest`/`search`, occurrence classes for
+ * `usages`. The value sets do not overlap, so the action routes the value without a second parameter.
+ */
+export type KindFilter = UsageKind | DeclarationKind;
 
 export type Access = "public" | "protected" | "private";
 
@@ -97,33 +116,23 @@ export interface ParsedFile {
 /** The parameters the agent passes. Action-specific fields are validated in `index.ts`. */
 export interface CodeToolParams {
     action: CodeAction;
+    /** A literal file or directory, or an rg-style pattern matched against the workspace path. */
     path?: string;
-    /** Declaration-name query for `search`. */
+    /**
+     * `search`: the phrase. `show`/`usages`: one or more selectors, split at top-level commas so a comma in an
+     * overload selector survives.
+     */
     query?: string;
-    symbols?: string[];
     detail?: CodeDetail;
     /** Maximum rendered result size, in characters. */
     limit?: number;
     /** Body-line offset for continuing a result cut by the limit. */
     offset?: number;
-    kind?: UsageKind;
-    /** Only files whose path matches this glob, relative to the searched path. */
-    glob?: string;
-    /** Only declarations of this kind, for `search` and `digest`. */
-    declarationKind?: DeclarationKind;
-    /** `search` only: how literal body-text rows are capped. */
-    body?: BodyMode;
+    /** `digest`/`search`: a declaration kind. `usages`: an occurrence class. Routed by action. */
+    kind?: KindFilter;
     /** `search`/`usages` only: scope to a file's direct imports, or with a `dependents:` prefix, its importers. */
     within?: string;
 }
-
-/**
- * How much of the literal body-text channel a search reports.
- *
- * `auto` returns a wide page when the name and doc channels found little, and a few rows when they already
- * answered the query; `all` and `off` exist so the cap is overridable instead of a rule the caller cannot see.
- */
-export type BodyMode = "auto" | "all" | "off";
 
 /** What an action returns: the model-facing text plus structural details for the caller/TUI. */
 export interface CodeActionResult {
@@ -141,7 +150,7 @@ export interface CodeActionResult {
     };
 }
 
-/** A selector parsed from the `symbols` parameter. */
+/** A selector parsed from the `query` parameter of `show` or `usages`. */
 export interface SymbolSelector {
     /** The raw selector as the agent wrote it. */
     raw: string;

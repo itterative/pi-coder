@@ -1,7 +1,8 @@
 import { yieldToEventLoop } from "../../common/async";
-import { BODY_ROWS, BODY_ROWS_ALL, BODY_ROWS_WHEN_LED, bodyQueryOf, collectBodyHits } from "./body";
-import { applyGlobFilter, discoverFiles } from "./discovery";
+import { BODY_ROWS, BODY_ROWS_WHEN_LED, bodyQueryOf, collectBodyHits } from "./body";
+import { discoverFiles, filterPathTarget, parsePathTarget, patternWithinTarget } from "./discovery";
 import {
+    discoveryCapNote,
     filterNote,
     isContainer,
     isFunctionLike,
@@ -18,7 +19,7 @@ import {
 import { fuzzyLimit, fuzzyNameDistance } from "./fuzzy";
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
-import { withinScope, type WithinScope } from "./scope";
+import { withinResolution, withinScope, type WithinScope } from "./scope";
 import { tokenize } from "./semantic/bm25";
 import { stem } from "./stem";
 import type { CodeChunk } from "./semantic/chunks";
@@ -27,7 +28,7 @@ import type { SemanticSearch } from "./semantic/types";
 import type { CodeSource } from "./source";
 import { declarationDoc, normalizeText } from "./text";
 import { CallTiming } from "./timing";
-import type { CodeToolParams, Declaration, ParsedFile } from "./types";
+import { isDeclarationKind, type CodeToolParams, type Declaration, type ParsedFile } from "./types";
 
 export interface SearchResult {
     text: string;
@@ -128,13 +129,17 @@ export async function runSearch(
         };
     }
 
-    const root = source.resolvePath(params.path ?? ".");
+    const target = parsePathTarget(params.path);
+    const root = source.resolvePath(target.base);
+    const scope = target.pattern ?? source.displayPath(root);
     const limit = params.limit ?? DEFAULT_CHAR_LIMIT;
     const offset = Math.max(0, Math.floor(params.offset ?? 0));
 
     await source.assertReadable(root);
 
-    const discovery = await timing.measure("discover", () => discoverFiles(source, root, signal));
+    const discovery = await timing.measure("discover", () =>
+        discoverFiles(source, root, signal, patternWithinTarget(target)),
+    );
 
     if (discovery.unsupportedRoot) {
         return {
@@ -146,11 +151,9 @@ export async function runSearch(
         };
     }
 
-    const globbed = applyGlobFilter(discovery.files, root, params.glob);
-
     if (discovery.files.length === 0) {
         return {
-            text: `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · no supported source files`,
+            text: `# search ${quotedForMessage(query)} in ${scope} · ${target.pattern === undefined ? "no supported source files" : "no files match"}`,
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -158,9 +161,16 @@ export async function runSearch(
         };
     }
 
-    if (globbed.files.length === 0) {
+    const targeted = filterPathTarget(discovery.files, source, target);
+
+    if (targeted.files.length === 0) {
         return {
-            text: `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · no files match glob=${params.glob ?? ""}`,
+            text: [
+                `# search ${quotedForMessage(query)} in ${scope} · no files match`,
+                discovery.truncated ? discoveryCapNote() : "",
+            ]
+                .filter((line) => line.length > 0)
+                .join("\n"),
             files: 0,
             parseErrors: 0,
             truncated: discovery.truncated,
@@ -169,10 +179,14 @@ export async function runSearch(
     }
 
     const batch = await timing.measure("parse", () =>
-        loadParsedFiles(source, globbed.files, signal),
+        loadParsedFiles(source, targeted.files, signal),
     );
-    timing.recordLoad(batch, globbed.files.length);
+    timing.recordLoad(batch, targeted.files.length);
     const parsedAll = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
+    const resolution =
+        params.within === undefined
+            ? undefined
+            : await withinResolution(source, root, target.pattern, signal, timing);
     const scoped =
         params.within === undefined
             ? undefined
@@ -182,7 +196,7 @@ export async function runSearch(
                       root,
                       raw: params.within ?? "",
                       parsed: parsedAll,
-                      files: discovery.files,
+                      files: resolution ?? discovery.files,
                       signal,
                   }),
               );
@@ -203,7 +217,7 @@ export async function runSearch(
     if (parsed.length === 0) {
         return {
             text: [
-                `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · no readable supported files`,
+                `# search ${quotedForMessage(query)} in ${scope} · no readable supported files`,
                 batch.tooLarge > 0
                     ? `# skipped: ${batch.tooLarge} file(s) above the size limit`
                     : "",
@@ -219,7 +233,8 @@ export async function runSearch(
     }
 
     const languages = languagesOf(parsed);
-    const kind = params.declarationKind;
+    const kind =
+        params.kind !== undefined && isDeclarationKind(params.kind) ? params.kind : undefined;
     const matchesKind = (declaration: Declaration): boolean =>
         kind === undefined || declaration.kind === kind;
     const literalAll = await timing.measure("search", () => collectLiteral(parsed, query, signal));
@@ -235,9 +250,7 @@ export async function runSearch(
     // Literal body text: exact evidence, gated on query shape rather than on the lexical pass, because a strong
     // name match says nothing about whether the error string the caller remembers lives somewhere else.
     const bodyQuery =
-        params.body === "off" || query.qualifier !== undefined
-            ? undefined
-            : bodyQueryOf(query.raw, query.quoted);
+        query.qualifier !== undefined ? undefined : bodyQueryOf(query.raw, query.quoted);
     const bodyAll =
         bodyQuery === undefined
             ? []
@@ -246,8 +259,7 @@ export async function runSearch(
     // The cap is a budget decision, not an evidence one: when a name or doc row already answers the query, a few
     // body rows show the text exists without spending the page on it.
     const ledByNameOrDoc = literal.length >= 3 || docMatches > 0;
-    const bodyCap =
-        params.body === "all" ? BODY_ROWS_ALL : ledByNameOrDoc ? BODY_ROWS_WHEN_LED : BODY_ROWS;
+    const bodyCap = ledByNameOrDoc ? BODY_ROWS_WHEN_LED : BODY_ROWS;
     const bodyHits = bodyKept.slice(0, bodyCap);
     const bodyWithheld = bodyKept.length - bodyHits.length;
     const bodyRows: SearchHit[] = bodyHits.map((hit) => ({
@@ -299,9 +311,9 @@ export async function runSearch(
     const total = hits.length;
     const approximate = fuzzyHits.length > 0;
     const filter = filterNote({
-        glob: params.glob,
-        globHidden: globbed.hidden,
-        declarationKind: kind,
+        path: target.pattern,
+        pathHidden: targeted.hidden,
+        kind,
         kindHidden: hiddenTotal,
     });
     const within = scoped === undefined ? undefined : withinLine(source, scoped.scope);
@@ -314,7 +326,7 @@ export async function runSearch(
 
         return {
             text: [
-                `# ${reason} ${quotedForMessage(query)} in ${source.displayPath(root)} · ${fileCount(parsed.length)} · ${languages}`,
+                `# ${reason} ${quotedForMessage(query)} in ${scope} · ${fileCount(parsed.length)} · ${languages}`,
                 filter ?? "",
                 within ?? "",
             ]
@@ -328,8 +340,7 @@ export async function runSearch(
     }
 
     const header = headerFor(
-        source,
-        root,
+        scope,
         parsed.length,
         languages,
         query,
@@ -787,8 +798,7 @@ function declarationTag(declaration: Declaration): string {
 }
 
 function headerFor(
-    source: CodeSource,
-    root: string,
+    scope: string,
     fileTotal: number,
     languages: string,
     query: ParsedQuery,
@@ -808,7 +818,7 @@ function headerFor(
         relatedMatches,
     );
 
-    return `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · ${fileCount(fileTotal)} · ${languages} · ${summary}`;
+    return `# search ${quotedForMessage(query)} in ${scope} · ${fileCount(fileTotal)} · ${languages} · ${summary}`;
 }
 
 /** Name, doc, body, and relevance channels are counted separately so a reader can tell which one produced a row. */
@@ -879,7 +889,7 @@ function footerFor(options: {
 
     if (options.bodyWithheld > 0) {
         footer.push(
-            `# body: ${counted(options.bodyWithheld, "more declaration")} withheld; a name or doc match already leads — pass body="all" to see them`,
+            `# body: ${counted(options.bodyWithheld, "more declaration")} withheld; a name or doc match already leads, so the page keeps the strongest rows`,
         );
     }
 
@@ -908,7 +918,7 @@ function footerFor(options: {
     }
 
     if (options.discoveryTruncated) {
-        footer.push("# note: file discovery was capped; scan a narrower path");
+        footer.push(discoveryCapNote());
     }
 
     return footer;

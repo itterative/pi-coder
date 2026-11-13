@@ -41,12 +41,12 @@ describe("outline on C++ closures", () => {
         const shown = await runShow(source(), {
             action: "show",
             path: "src/dequant.cpp",
-            symbols: ["dequant::decode::decode_row"],
+            query: "dequant::decode::decode_row",
         });
         const used = await runUsages(source(), {
             action: "usages",
             path: "src/dequant.cpp",
-            symbols: ["dequant::decode"],
+            query: "dequant::decode",
         });
 
         expect(shown.text).toContain("function dequant::decode::decode_row · definition");

@@ -174,7 +174,7 @@ describe("outline show", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src/net",
-            symbols: ["Socket::connect"],
+            query: "Socket::connect",
         });
 
         expect(result.text).toContain("src/net/socket.h");
@@ -191,7 +191,7 @@ describe("outline show", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src/net",
-            symbols: ["Socket::connect(const Endpoint&)"],
+            query: "Socket::connect(const Endpoint&)",
         });
 
         expect(result.text).toContain("const Endpoint&");
@@ -203,7 +203,7 @@ describe("outline show", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src/net",
-            symbols: ["Socket::fd, Socket::connect(const Endpoint&)"],
+            query: "Socket::fd, Socket::connect(const Endpoint&)",
         });
 
         expect(result.text).toContain("int fd() const");
@@ -215,7 +215,7 @@ describe("outline show", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src/net",
-            symbols: ["Socket"],
+            query: "Socket",
         });
 
         expect(result.text).toContain("class net::Socket");
@@ -227,7 +227,7 @@ describe("outline show", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src/net",
-            symbols: ["Socket"],
+            query: "Socket",
             detail: "full",
         });
 
@@ -247,7 +247,7 @@ public:
         const result = await runShow(forward, {
             action: "show",
             path: "src",
-            symbols: ["Forward"],
+            query: "Forward",
         });
 
         expect(result.text).toContain("class Forward");
@@ -263,7 +263,7 @@ public:
         const result = await runShow(duplicate, {
             action: "show",
             path: "src",
-            symbols: ["main"],
+            query: "main",
         });
 
         expect(result.text).toContain("# ambiguous: 2 matches for main");
@@ -290,7 +290,7 @@ public:
         const result = await runShow(indented, {
             action: "show",
             path: "src/indent.hpp",
-            symbols: ["Outer::method"],
+            query: "Outer::method",
         });
 
         expect(result.text).toContain("\n/// first line\n/// second line\nvoid method() {");
@@ -309,7 +309,7 @@ public:
         const result = await runShow(long, {
             action: "show",
             path: "src/long.h",
-            symbols: ["very_long"],
+            query: "very_long",
             detail: "signatures",
         });
 
@@ -321,7 +321,7 @@ public:
         const result = await runShow(source(), {
             action: "show",
             path: "src/net",
-            symbols: ["Socket::connect"],
+            query: "Socket::connect",
             detail: "signatures",
         });
 
@@ -334,7 +334,7 @@ public:
         const result = await runShow(source(), {
             action: "show",
             path: "src/net",
-            symbols: ["NoSuchSymbol"],
+            query: "NoSuchSymbol",
         });
 
         expect(result.text).toContain("# not found");
@@ -345,12 +345,12 @@ public:
         const destructor = await runShow(source(), {
             action: "show",
             path: "src/net",
-            symbols: ["Socket::~Socket"],
+            query: "Socket::~Socket",
         });
         const conversion = await runShow(source(), {
             action: "show",
             path: "src/net",
-            symbols: ["Socket::operator bool"],
+            query: "Socket::operator bool",
         });
 
         expect(destructor.text).toContain("~Socket");
@@ -362,7 +362,7 @@ public:
         const result = await runShow(source(), {
             action: "show",
             path: "src/hip",
-            symbols: ["saxpy"],
+            query: "saxpy",
         });
 
         expect(result.text).toContain("__global__ void saxpy");
@@ -490,7 +490,7 @@ describe("outline usages", () => {
         const result = await runUsages(source(), {
             action: "usages",
             path: "src/net",
-            symbols: ["Socket::connect"],
+            query: "Socket::connect",
         });
 
         expect(result.text).toContain("syntactic (name-based)");
@@ -504,13 +504,13 @@ describe("outline usages", () => {
         const joined = await runUsages(source(), {
             action: "usages",
             path: "src/net",
-            symbols: ["Socket::connect, Socket::fd"],
+            query: "Socket::connect, Socket::fd",
             kind: "call",
         });
         const separate = await runUsages(source(), {
             action: "usages",
             path: "src/net",
-            symbols: ["Socket::connect", "Socket::fd"],
+            query: ["Socket::connect", "Socket::fd"].join(", "),
             kind: "call",
         });
 
@@ -522,7 +522,7 @@ describe("outline usages", () => {
         const result = await runUsages(source(), {
             action: "usages",
             path: "src/net",
-            symbols: ["connect"],
+            query: "connect",
             kind: "call",
         });
 
@@ -535,7 +535,7 @@ describe("outline usages", () => {
         const result = await runUsages(source(), {
             action: "usages",
             path: "src/net",
-            symbols: ["connect"],
+            query: "connect",
         });
 
         expect(result.matches).toBeGreaterThan(1);
@@ -548,7 +548,7 @@ describe("outline usages", () => {
         const result = await runUsages(source(), {
             action: "usages",
             path: "src/hip",
-            symbols: ["saxpy"],
+            query: "saxpy",
         });
 
         expect(result.text).toContain("[def]");

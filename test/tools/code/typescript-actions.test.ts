@@ -56,7 +56,7 @@ describe("outline on TypeScript", () => {
         const shown = await runShow(source(), {
             action: "show",
             path: "src/reminders",
-            symbols: ["buildReminderSignals"],
+            query: "buildReminderSignals",
         });
         const searched = await runSearch(source(), {
             action: "search",
@@ -74,7 +74,7 @@ describe("outline on TypeScript", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src/reminders",
-            symbols: ["ReminderSignals"],
+            query: "ReminderSignals",
         });
 
         expect(result.text).toContain("interface ReminderSignals");
@@ -85,7 +85,7 @@ describe("outline on TypeScript", () => {
         const result = await runUsages(source(), {
             action: "usages",
             path: "src/reminders",
-            symbols: ["buildReminderSignals"],
+            query: "buildReminderSignals",
         });
 
         expect(result.text).toContain("src/reminders/signals.ts");
@@ -120,7 +120,7 @@ describe("outline on nested TypeScript closures", () => {
         const shown = await runShow(nested, {
             action: "show",
             path: "src/closures.ts",
-            symbols: ["outer::inner"],
+            query: "outer::inner",
         });
         const searched = await runSearch(nested, {
             action: "search",
@@ -140,7 +140,7 @@ describe("outline on nested TypeScript closures", () => {
         const result = await runUsages(nested, {
             action: "usages",
             path: "src/closures.ts",
-            symbols: ["inner"],
+            query: "inner",
         });
 
         expect(result.text).toContain("outer");

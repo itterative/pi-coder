@@ -8,8 +8,10 @@ import {
     type ResolvedImport,
 } from "./imports";
 import { withinNote } from "./format";
+import { discoverFiles } from "./discovery";
 import { loadParsedFiles } from "./load";
 import type { CodeSource } from "./source";
+import type { CallTiming } from "./timing";
 import type { ParsedFile } from "./types";
 
 /** Which side of a file's dependency edges `within` scopes to. */
@@ -20,7 +22,7 @@ export interface WithinScope {
     direction: WithinDirection;
     /** The anchor file, absolute. */
     anchor: string;
-    /** The anchor and its direct neighbours, sorted by path. The anchor survives `path` and `glob`. */
+    /** The anchor and its direct neighbours, sorted by path. The anchor survives the `path` pattern. */
     parsed: ParsedFile[];
     /** Neighbours that are not among the searched files, so a caller can see why they are absent. */
     outside: number;
@@ -72,16 +74,16 @@ export function parseWithin(
  */
 export async function withinScope(options: {
     source: CodeSource;
-    /** The searched root: a relative `within` is resolved against it, exactly like `glob`. */
+    /** The searched root (the literal prefix of `path`): a relative anchor is resolved against it. */
     root: string;
     raw: string;
     parsed: readonly ParsedFile[];
     /**
-     * The discovered files of the whole searched root, before `glob` narrowed them.
+     * The discovered files of the whole searched root, before the `path` pattern narrowed them.
      *
-     * Resolution has to see them for the same reason `deps` does: a neighbour hidden by `glob` (or living beside a
-     * glob-narrowed subtree) still counts as a real edge, and the footer reports it as outside the searched path
-     * instead of pretending the anchor imports nothing.
+     * Resolution has to see them for the same reason `deps` does: a neighbour hidden by the pattern (or living
+     * beside a pattern-narrowed subtree) still counts as a real edge, and the footer reports it as outside the
+     * searched path instead of pretending the anchor imports nothing.
      */
     files?: readonly string[];
     signal?: AbortSignal;
@@ -165,6 +167,28 @@ export async function withinScope(options: {
             outside: outside.size,
         },
     };
+}
+
+/**
+ * The unfiltered discovery a `within` scope resolves against when a `path` pattern narrowed the parse set.
+ *
+ * Discovery applies the pattern, so the main file list is only the matches. A neighbour outside the pattern still
+ * counts as a real edge, so a second walk (only for within-plus-pattern) supplies the resolution index.
+ */
+export async function withinResolution(
+    source: CodeSource,
+    root: string,
+    pattern: string | undefined,
+    signal: AbortSignal | undefined,
+    timing: CallTiming,
+): Promise<readonly string[] | undefined> {
+    if (pattern === undefined) {
+        return undefined;
+    }
+
+    const discovery = await timing.measure("discover", () => discoverFiles(source, root, signal));
+
+    return discovery.files;
 }
 
 /** The root as a directory: a search can name a single file, and a relative anchor is then its sibling. */

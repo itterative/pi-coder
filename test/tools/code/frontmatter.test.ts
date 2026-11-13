@@ -96,7 +96,7 @@ describe("markdown frontmatter indexing", () => {
         const shown = await runShow(source(), {
             action: "show",
             path: "mem/decode.md",
-            symbols: ["frontmatter"],
+            query: "frontmatter",
         });
         const digest = await runDigest(source(), { action: "digest", path: "mem/decode.md" });
 
@@ -110,7 +110,7 @@ describe("markdown frontmatter indexing", () => {
         const shown = await runShow(source(), {
             action: "show",
             path: "mem",
-            symbols: ["frontmatter"],
+            query: "frontmatter",
         });
 
         expect(shown.text).toContain("ambiguous: 2 matches");

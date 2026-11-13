@@ -1,7 +1,7 @@
 import path from "node:path";
 
-import { applyGlobFilter, discoverFiles, type Discovery } from "./discovery";
-import { filterNote, nextOffsetNote, renderWithinBudget } from "./format";
+import { discoverFiles, parsePathTarget, type Discovery } from "./discovery";
+import { discoveryCapNote, nextOffsetNote, renderWithinBudget } from "./format";
 import {
     createResolveIndex,
     dependentsOf,
@@ -37,7 +37,6 @@ export async function runDeps(
     signal?: AbortSignal,
     timing: CallTiming = new CallTiming(),
 ): Promise<DepsResult> {
-    const target = source.resolvePath(params.path ?? ".");
     const limit = params.limit ?? DEFAULT_CHAR_LIMIT;
     const offset = Math.max(0, Math.floor(params.offset ?? 0));
 
@@ -47,6 +46,13 @@ export async function runDeps(
         );
     }
 
+    const requested = parsePathTarget(params.path);
+
+    if (requested.pattern !== undefined) {
+        return empty(`# deps takes a file, not a pattern: ${requested.pattern}`);
+    }
+
+    const target = source.resolvePath(requested.base);
     const stat = await source.stat(target);
 
     if (!stat.isFile) {
@@ -66,11 +72,10 @@ export async function runDeps(
     const discovery =
         scanned.discovery ??
         (await timing.measure("discover", () => discoverFiles(source, root, signal)));
-    const globbed = applyGlobFilter(discovery.files, root, params.glob);
-    // The subject is the question, so a glob never removes it from the parse set.
-    const files = globbed.files.includes(target)
-        ? globbed.files
-        : [...globbed.files, target].toSorted();
+    // The subject is the question, so the discovery never removes it from the parse set.
+    const files = discovery.files.includes(target)
+        ? discovery.files
+        : [...discovery.files, target].toSorted();
 
     const batch = await timing.measure("parse", () => loadParsedFiles(source, files, signal));
 
@@ -98,9 +103,9 @@ export async function runDeps(
         };
     }
 
-    // Resolution sees the whole scan root; `glob` narrows the dependents scan (and the parse set), never what the
-    // subject's own imports may point at. Filtering the resolve index instead flipped every `include/` target to
-    // `external` as soon as a caller asked only for dependents under one subtree.
+    // Resolution sees the whole scan root, so a dependent or import target outside the subject's own directory is
+    // still classified from the project's files. Filtering the resolve index instead flipped every `include/` target
+    // to `external` as soon as the scan root narrowed.
     const index = createResolveIndex({
         root,
         files: discovery.files.includes(target) ? discovery.files : [...discovery.files, target],
@@ -126,7 +131,7 @@ export async function runDeps(
     const footer = footerFor({
         discoveryTruncated: discovery.truncated,
         parseErrors,
-        filter: filterNote({ glob: params.glob, globHidden: globbed.hidden }),
+        filter: undefined,
     });
 
     return {
@@ -287,7 +292,7 @@ function footerFor(options: {
     }
 
     if (options.discoveryTruncated) {
-        footer.push("# note: file discovery was capped; scan a narrower path");
+        footer.push(discoveryCapNote());
     }
 
     return footer;

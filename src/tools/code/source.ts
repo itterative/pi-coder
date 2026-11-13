@@ -8,7 +8,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resolveHomeDirectory } from "../../common/home-directory";
 import type { ContainerSession } from "../../modules/sandbox/container/client";
 import type { ContainerState } from "../../modules/sandbox/container/state";
-import { DEFAULT_IGNORE_GLOBS, shouldIgnorePath } from "./languages";
+import { DEFAULT_IGNORE_GLOBS, matchesGlob, shouldIgnorePath } from "./languages";
 
 const execFileAsync = promisify(execFile);
 
@@ -29,7 +29,15 @@ export interface CodeFileStat {
 export interface CodeSource {
     readonly kind: "container" | "local";
     readonly cwd: string;
-    glob(root: string, options: { limit: number; signal?: AbortSignal }): Promise<string[]>;
+    glob(
+        root: string,
+        options: {
+            limit: number;
+            signal?: AbortSignal;
+            /** An rg-style pattern relative to `root`, applied by the walker so the limit counts matches. */
+            pattern?: string;
+        },
+    ): Promise<string[]>;
     stat(target: string): Promise<CodeFileStat>;
     readFile(target: string): Promise<string>;
     /**
@@ -94,16 +102,23 @@ export class LocalCodeSource implements CodeSource {
         private readonly readRoots?: CodeReadRoots,
     ) {}
 
-    async glob(root: string, options: { limit: number; signal?: AbortSignal }): Promise<string[]> {
+    async glob(
+        root: string,
+        options: { limit: number; signal?: AbortSignal; pattern?: string },
+    ): Promise<string[]> {
         // Prefer ripgrep when it exists: it is the same walker the container's glob uses. The stdlib walker
         // is the portable fallback.
         try {
             const noIgnore = scanLiterally(root, this.cwd);
-            const result = await execFileAsync("rg", buildRipgrepFileArgs(root, noIgnore), {
-                cwd: this.cwd,
-                maxBuffer: 16 * 1024 * 1024,
-                signal: options.signal,
-            });
+            const result = await execFileAsync(
+                "rg",
+                buildRipgrepFileArgs(root, noIgnore, options.pattern),
+                {
+                    cwd: this.cwd,
+                    maxBuffer: 16 * 1024 * 1024,
+                    signal: options.signal,
+                },
+            );
 
             return parseRipgrepPaths(result.stdout, root, options.limit);
         } catch (error) {
@@ -119,7 +134,7 @@ export class LocalCodeSource implements CodeSource {
 
     private async globWithNode(
         root: string,
-        options: { limit: number; signal?: AbortSignal },
+        options: { limit: number; signal?: AbortSignal; pattern?: string },
     ): Promise<string[]> {
         const found: string[] = [];
         const entries = fs.promises.glob("**/*", {
@@ -148,6 +163,14 @@ export class LocalCodeSource implements CodeSource {
             const absolute = path.resolve(entry.parentPath, entry.name);
 
             if (shouldIgnorePath(path.relative(root, absolute))) {
+                continue;
+            }
+
+            if (
+                options.pattern !== undefined &&
+                options.pattern.length > 0 &&
+                !matchesGlob(path.relative(root, absolute), options.pattern)
+            ) {
                 continue;
             }
 
@@ -247,13 +270,16 @@ export class ContainerCodeSource implements CodeSource {
         readonly cwd: string,
     ) {}
 
-    async glob(root: string, options: { limit: number; signal?: AbortSignal }): Promise<string[]> {
+    async glob(
+        root: string,
+        options: { limit: number; signal?: AbortSignal; pattern?: string },
+    ): Promise<string[]> {
         options.signal?.throwIfAborted();
 
         const result = await this.session.fs({
             op: "glob",
             path: root,
-            pattern: "",
+            pattern: options.pattern ?? "",
             ignore: DEFAULT_IGNORE_GLOBS,
             noIgnore: scanLiterally(root, this.cwd),
             limit: options.limit,
@@ -345,11 +371,15 @@ function scanLiterally(root: string, cwd: string): boolean {
     return path.resolve(root) !== path.resolve(cwd);
 }
 
-function buildRipgrepFileArgs(root: string, noIgnore: boolean): string[] {
+function buildRipgrepFileArgs(root: string, noIgnore: boolean, pattern?: string): string[] {
     const args = ["--files", "--hidden", "--color=never", "--no-messages"];
 
     if (noIgnore) {
         args.push("--no-ignore");
+    }
+
+    if (pattern !== undefined && pattern.length > 0) {
+        args.push("--glob", pattern);
     }
 
     for (const glob of DEFAULT_IGNORE_GLOBS) {
@@ -393,11 +423,15 @@ function parseRipgrepPaths(stdout: string, root: string, limit: number): string[
         .map((entry) => (path.isAbsolute(entry) ? entry : path.resolve(root, entry)));
 }
 
-function resolveInputPath(cwd: string, input: string): string {
-    const expanded =
-        input === "~" || input.startsWith("~/") ? resolveHomeDirectory() + input.slice(1) : input;
+/** Expand a leading `~` without resolving against a working directory. */
+export function expandHomePath(input: string): string {
+    return input === "~" || input.startsWith("~/")
+        ? resolveHomeDirectory() + input.slice(1)
+        : input;
+}
 
-    return path.resolve(cwd, expanded);
+function resolveInputPath(cwd: string, input: string): string {
+    return path.resolve(cwd, expandHomePath(input));
 }
 
 function displayPathFrom(cwd: string, target: string): string {

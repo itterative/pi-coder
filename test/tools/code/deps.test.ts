@@ -89,20 +89,23 @@ describe("outline deps", () => {
         expect(result.text).toContain("local");
     });
 
-    it("narrows the dependents scan with glob and says what it hid", async () => {
+    it("reports dependents from the whole tree, with no filter to hide them", async () => {
         const result = await runDeps(source(), {
             action: "deps",
-            path: "src/core/util.ts",
-            glob: "src/**",
+            path: "src/core/user.ts",
         });
 
-        expect(result.text).toContain("src/app.ts");
-        expect(result.text).toContain("src/core/user.ts");
-        expect(result.text).not.toContain("test/user.test.ts");
-        expect(result.text).toContain("# filter: glob=src/** (1 file hidden)");
+        expect(result.text).toContain("test/user.test.ts");
+        expect(result.text).not.toContain("# filter:");
     });
 
-    it("keeps the subject's imports resolvable when glob narrows the dependents scan", async () => {
+    it("takes a file, not a pattern", async () => {
+        const result = await runDeps(source(), { action: "deps", path: "src/**" });
+
+        expect(result.text).toBe("# deps takes a file, not a pattern: src/**");
+    });
+
+    it("keeps an include target outside the subject's directory resolvable", async () => {
         const result = await runDeps(
             source({
                 "proj/CMakeLists.txt": "",
@@ -110,10 +113,9 @@ describe("outline deps", () => {
                 "proj/src/main.cpp": "#include <app/util.hpp>\n",
                 "proj/src/other.cpp": "#include <app/util.hpp>\n",
             }),
-            { action: "deps", path: "proj/src/main.cpp", glob: "proj/src/**" },
+            { action: "deps", path: "proj/src/main.cpp" },
         );
 
-        // `include/` is outside the glob, but it is still a real target of the subject's own import.
         expect(result.text).toMatch(
             importRow("local", "app/util.hpp", 1, "proj/include/app/util.hpp"),
         );

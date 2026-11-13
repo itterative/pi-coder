@@ -38,7 +38,7 @@ describe("outline usages with a qualified symbol", () => {
         const result = await runUsages(source(), {
             action: "usages",
             path: "src",
-            symbols: ["CallList::attention_paged"],
+            query: "CallList::attention_paged",
             kind: "call",
         });
         const rows = result.text.split("\n").filter((line) => line.trimStart().startsWith(":"));
@@ -52,7 +52,7 @@ describe("outline usages with a qualified symbol", () => {
         const result = await runUsages(source(), {
             action: "usages",
             path: "src",
-            symbols: ["CallList::attention_paged"],
+            query: "CallList::attention_paged",
             kind: "call",
         });
         const groups = result.text.split("\n").filter((line) => /^ {2}\S/.test(line));
@@ -86,7 +86,7 @@ int CallList::run_one(const Ops& ops) {
         const result = await runUsages(source, {
             action: "usages",
             path: "src",
-            symbols: ["CallList::attention_paged"],
+            query: "CallList::attention_paged",
             kind: "call",
         });
         const groups = result.text.split("\n").filter((line) => /^ {2}\S/.test(line));
@@ -100,7 +100,7 @@ int CallList::run_one(const Ops& ops) {
         const result = await runUsages(source(), {
             action: "usages",
             path: "src",
-            symbols: ["attention_paged"],
+            query: "attention_paged",
             kind: "call",
         });
 

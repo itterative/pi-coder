@@ -57,6 +57,20 @@ describe("outline TUI rendering", () => {
         expect(snapshotText(text)).toMatchFileSnapshot("__snapshots__/outline-render.call.txt");
     });
 
+    it("renders a selector list without quotes for show", () => {
+        const text = renderText(
+            renderOutlineCall(
+                { action: "show", path: "src", query: "Auth::login, Auth::logout" },
+                mockTheme,
+            ),
+            120,
+        );
+
+        expect(text).toContain("Auth::login, Auth::logout");
+        expect(text).not.toContain('"Auth::login');
+        expect(snapshotText(text)).toMatchFileSnapshot("__snapshots__/outline-render.show.txt");
+    });
+
     it("sets the timing caption apart with a blank line", () => {
         const text = renderText(
             renderOutlineResult(

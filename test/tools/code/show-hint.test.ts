@@ -37,7 +37,7 @@ describe("outline show parameter hints", () => {
             const result = await runShow(source(), {
                 action: "show",
                 path: "src",
-                symbols: [hint],
+                query: hint,
             });
 
             expect(result.matches, hint).toBeGreaterThan(0);
@@ -59,7 +59,7 @@ bool connect(const Address& target, int port) {
         const result = await runShow(source, {
             action: "show",
             path: "src",
-            symbols: ["connect(Address, int)"],
+            query: "connect(Address, int)",
         });
 
         expect(result.matches).toBeGreaterThan(0);
@@ -70,7 +70,7 @@ bool connect(const Address& target, int port) {
         const result = await runShow(source(), {
             action: "show",
             path: "src",
-            symbols: ["vibes::hip::choose_splits(const Plan&)"],
+            query: "vibes::hip::choose_splits(const Plan&)",
         });
 
         expect(result.matches).toBe(0);
@@ -84,7 +84,9 @@ bool connect(const Address& target, int port) {
         const result = await runShow(source(), {
             action: "show",
             path: "src",
-            symbols: ["vibes::hip::choose_splits(int64_t, int)", "vibes::hip::split_ceiling"],
+            query: ["vibes::hip::choose_splits(int64_t, int)", "vibes::hip::split_ceiling"].join(
+                ", ",
+            ),
         });
 
         expect(result.matches).toBeGreaterThan(1);
@@ -106,7 +108,7 @@ void Holder::run(const Plan& plan) {}
         const result = await runShow(source, {
             action: "show",
             path: "src",
-            symbols: ["Holder::run"],
+            query: "Holder::run",
         });
 
         expect(result.text).toContain("# note: 2 overloads match");
@@ -116,7 +118,7 @@ void Holder::run(const Plan& plan) {}
         const result = await runShow(source(), {
             action: "show",
             path: "src",
-            symbols: ["split_ceiling", "does_not_exist"],
+            query: ["split_ceiling", "does_not_exist"].join(", "),
         });
 
         expect(result.matches).toBeGreaterThan(0);

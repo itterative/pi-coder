@@ -1,8 +1,15 @@
 import type { Node as SyntaxNode } from "@vscode/tree-sitter-wasm";
 
 import { yieldToEventLoop } from "../../common/async";
-import { applyGlobFilter, candidateFiles, lastComponent } from "./discovery";
 import {
+    candidateFiles,
+    filterPathTarget,
+    lastComponent,
+    parsePathTarget,
+    patternWithinTarget,
+} from "./discovery";
+import {
+    discoveryCapNote,
     filterNote,
     nextOffsetNote,
     renderWithinBudget,
@@ -13,11 +20,17 @@ import {
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
 import { adapterForLanguage, type CallSiteSpec } from "./adapters";
-import { withinScope, type WithinScope } from "./scope";
+import { withinResolution, withinScope, type WithinScope } from "./scope";
 import type { CodeSource } from "./source";
 import { CallTiming } from "./timing";
 import { parseSyntax } from "./tree-sitter";
-import type { CodeToolParams, Declaration, ParsedFile, UsageKind } from "./types";
+import {
+    isUsageKind,
+    type CodeToolParams,
+    type Declaration,
+    type ParsedFile,
+    type UsageKind,
+} from "./types";
 import { WORKER_PARSE_THRESHOLD_BYTES, buildUsageIndexInWorker } from "./worker";
 
 export interface UsagesResult {
@@ -96,11 +109,11 @@ export async function runUsages(
     signal?: AbortSignal,
     timing: CallTiming = new CallTiming(),
 ): Promise<UsagesResult> {
-    const requested = splitSymbolList(params.symbols ?? []);
+    const requested = splitSymbolList(params.query === undefined ? [] : [params.query]);
 
     if (requested.length === 0) {
         return {
-            text: '# usages needs at least one symbol, e.g. outline(action="usages", symbols=["Socket::connect"])',
+            text: '# usages needs at least one symbol, e.g. outline(action="usages", query="Socket::connect")',
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -108,24 +121,27 @@ export async function runUsages(
         };
     }
 
-    const root = source.resolvePath(params.path ?? ".");
+    const target = parsePathTarget(params.path);
+    const root = source.resolvePath(target.base);
+    const scope = target.pattern ?? source.displayPath(root);
     const limit = params.limit ?? DEFAULT_CHAR_LIMIT;
     const offset = Math.max(0, Math.floor(params.offset ?? 0));
 
     await source.assertReadable(root);
 
-    const phase = await timing.measure("discover", () =>
-        candidateFiles(source, root, requested, signal),
+    const candidates = await timing.measure("discover", () =>
+        candidateFiles(source, root, requested, signal, patternWithinTarget(target)),
     );
-    const globbed = applyGlobFilter(phase.files, root, params.glob);
-    const discovery = { ...phase, files: globbed.files };
-    const filter = filterNote({ glob: params.glob, globHidden: globbed.hidden });
+    const targeted = filterPathTarget(candidates.files, source, target);
+    const discovery = { ...candidates, files: targeted.files };
+    const filter = filterNote({ path: target.pattern, pathHidden: targeted.hidden });
 
     if (discovery.files.length === 0) {
         return {
             text: [
-                `# no usages found for ${requested.join(", ")} in ${source.displayPath(root)} · ${params.glob === undefined ? "no supported files" : `no files match glob=${params.glob}`}`,
+                `# no usages found for ${requested.join(", ")} in ${scope} · ${target.pattern === undefined ? "no supported files" : "no files match"}`,
                 filter ?? "",
+                discovery.truncated ? discoveryCapNote() : "",
             ]
                 .filter((line) => line.length > 0)
                 .join("\n"),
@@ -141,6 +157,10 @@ export async function runUsages(
     );
     timing.recordLoad(batch, discovery.files.length);
     const parsedAll = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
+    const resolution =
+        params.within === undefined
+            ? undefined
+            : await withinResolution(source, root, target.pattern, signal, timing);
     const scoped =
         params.within === undefined
             ? undefined
@@ -150,7 +170,7 @@ export async function runUsages(
                       root,
                       raw: params.within ?? "",
                       parsed: parsedAll,
-                      files: phase.files,
+                      files: resolution ?? candidates.files,
                       signal,
                   }),
               );
@@ -167,6 +187,7 @@ export async function runUsages(
 
     const files = scoped?.scope.parsed ?? parsedAll;
     const parseErrors = sumParseErrors(files);
+    const kind = params.kind !== undefined && isUsageKind(params.kind) ? params.kind : undefined;
     const languages = Array.from(new Set(files.map((file) => file.language)))
         .toSorted()
         .join(",");
@@ -180,13 +201,11 @@ export async function runUsages(
             name: lastComponent(raw),
             typeName: qualifierTypeOf(raw),
         };
-        const collected = await collectForFiles(files, target, params.kind, signal);
+        const collected = await collectForFiles(files, target, kind, signal);
 
         totalMatches += collected.total;
 
-        sections.push(
-            renderSection(source, raw, collected, languages, parseErrors, source.displayPath(root)),
-        );
+        sections.push(renderSection(source, raw, collected, languages, parseErrors, scope));
     }
 
     if (sections.length === 1) {
@@ -196,7 +215,7 @@ export async function runUsages(
         const next = nextOffsetNote(fitted);
 
         return {
-            text: [fitted.text, next, filter, within]
+            text: [fitted.text, next, filter, within, truncated ? discoveryCapNote() : undefined]
                 .filter((part): part is string => part !== undefined && part.length > 0)
                 .join("\n"),
             files: files.length,
@@ -211,7 +230,7 @@ export async function runUsages(
     const next = nextOffsetNote(fitted);
 
     return {
-        text: [fitted.text, next, filter, within]
+        text: [fitted.text, next, filter, within, truncated ? discoveryCapNote() : undefined]
             .filter((part): part is string => part !== undefined && part.length > 0)
             .join("\n"),
         files: files.length,

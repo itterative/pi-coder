@@ -107,7 +107,7 @@ describe("outline on the extended language set", () => {
         const result = await runShow(source(), {
             action: "show",
             path: file,
-            symbols: [symbol],
+            query: symbol,
         });
 
         expect(result.text).toContain(`# ${file}`);
@@ -126,7 +126,7 @@ describe("outline on the extended language set", () => {
         const result = await runUsages(source(), {
             action: "usages",
             path: file,
-            symbols: [symbol],
+            query: symbol,
         });
 
         expect(result.text).toContain("[def]");

@@ -10,18 +10,20 @@ One agent-facing tool, `outline`, with five actions:
   HIP/CUDA kernel launches.
 - `deps` — one file's imports and the files that import it, file-level and syntactic.
 
-Two optional parameters narrow a call rather than adding an action: `glob` keeps only files whose path matches
-(rg-style: `**` crosses directories, `{a,b}` alternates, a slash-free pattern matches the basename at any depth),
-and `declarationKind` keeps only declarations of one kind for `search` and `digest`. Both are filters over the
-discovered set, so confinement and ignore rules are unchanged, and both name the active filter in a `# filter:`
-line, with a hidden count when it removed anything
-— a smaller result must not read as "nothing matched". A `kind` filter in `digest` lists the matching declarations
-flat, with no ancestor lines: the qualified name carries the container, and an indented child under a hidden parent
-would draw a tree that does not exist.
+Narrowing is a parameter, not an action. `path` takes a literal file or directory, or an rg-style pattern: one
+containing `/` is anchored (`*` is one level, `**` crosses directories), and one without `/` matches the basename
+at any depth. The literal prefix bounds discovery, and the walker applies the pattern, so a scoped pattern does not
+walk the whole cwd and the 2000-file discovery cap counts *matches* rather than every file under the prefix. The
+post-filter still trims the rare pattern the walker over-collects (a `*` remainder such as `src/*`). `kind` keeps
+one declaration kind for `search`/`digest`, and one occurrence class for `usages`. Both name the active filter in a
+`# filter:` line, with a hidden count when the post-filter removed anything — a smaller result must not read as
+"nothing matched". A `kind` filter in `digest` lists the matching declarations flat, with no ancestor lines: the
+qualified name carries the container, and an indented child under a hidden parent would draw a tree that does not
+exist.
 
-`show` and `usages` take a `symbols` array, and an entry may itself be a comma-joined list
-(`"A::b, C::d"`): `format.ts`'s `splitSymbolList` splits on **top-level** commas only, so an overload
-selector's parameter list (`Socket::connect(const Address&, int)`) survives intact. Empty entries are
+`search` takes a phrase in `query`; `show` and `usages` take selectors there, and one string may hold a
+comma-joined list (`"A::b, C::d"`): `format.ts`'s `splitSymbolList` splits on **top-level** commas only, so an
+overload selector's parameter list (`Socket::connect(const Address&, int)`) survives intact. Empty entries are
 dropped; repeated ones are kept, because `usages` counts them separately.
 
 A `show` selector's parameter hint may be a **leading** subset: `Type::method(const X&)` selects the overload
@@ -202,9 +204,9 @@ Three rules keep it from becoming a second grep:
 - **Markdown is excluded.** A memory's prose *is* its doc channel; a body row would restate the section the doc
   tier just found.
 
-The cap is a budget decision, not an evidence one: `auto` returns up to 20 rows when the name and doc channels found
-little and 3 when they already lead, with a footer naming what it withheld; `body="all"` and `body="off"`
-override it. Body evidence counts as literal evidence for the related tail, so `[related]` rows cannot lead above it.
+The cap is a budget decision, not an evidence one: up to 20 rows when the name and doc channels found little and 3
+when they already lead, with a footer naming what it withheld. Body evidence counts as literal evidence for the
+related tail, so `[related]` rows cannot lead above it.
 Everything still line-level — regex, `-C` context, counts, text in files `outline` does not parse — remains `rg`'s
 job.
 
@@ -213,16 +215,17 @@ job.
 `within` narrows `search` and `usages` to one file's direct dependency neighbourhood:
 
     outline(action="search", query="backoff", within="src/store/artifact.ts")
-    outline(action="usages", symbols=["retry"], within="dependents:src/store/retry.ts")
+    outline(action="usages", query="retry", within="dependents:src/store/retry.ts")
 
 The bare form is `imports`; `dependents:` flips to the files that import the anchor. The anchor is resolved
-against the searched path, exactly like `glob`. There is no depth knob: the
-scope is the anchor and its direct neighbours, because the useful question is "what can this file actually reach"
-rather than a transitive closure nobody can read. The anchor stays in scope even when `path` or `glob` would
-exclude it, and a neighbour that exists but fell outside them is counted in the `# within:` footer rather than
-silently dropped — the same honesty rule as `# filter:`. Edges are the resolved imports `deps` reports, so a
-neighbour is real only when the scan can see its target; the resolution index uses the whole discovered root, not
-the glob-narrowed parse set, exactly as in `deps`.
+against the literal prefix of `path`. There is no depth knob: the scope is the anchor and its direct neighbours,
+because the useful question is "what can this file actually reach" rather than a transitive closure nobody can
+read. The anchor stays in scope even when the `path` pattern would exclude it, and a neighbour that exists but
+fell outside is counted in the `# within:` footer rather than silently dropped — the same honesty rule as
+`# filter:`. Edges are the resolved imports `deps` reports, so a neighbour is real only when the scan can see its
+target; the resolution index uses the whole discovered root, not the pattern-narrowed parse set, exactly as in
+`deps`. When a pattern is active, a second unfiltered discovery supplies that root: the pattern bounds what is
+searched, not which imports are real.
 
 The scope changes what is searched, ranked, and reported, not the discovery walk: a scoped call still discovers and
 parses the searched tree the way an unscoped one does, and the semantic tail draws its candidates from the scoped
@@ -233,9 +236,9 @@ files.
 `deps` takes one file and answers both directions: what it imports, and who imports it. The scan root is the working
 directory when the subject lives inside it, otherwise the subject's own directory — a file's imports are local to it,
 but "who imports it" is a question about the tree, so scanning only the subject's directory would answer "nobody"
-for every file whose dependents live elsewhere. `glob` narrows the dependents scan (and the parse set), never the
-subject and never its own imports: resolution still sees the whole scan root, so an `include/` target stays `local`
-even when the glob hides it.
+for every file whose dependents live elsewhere. The subject must be a literal file: a pattern is rejected, and the
+dependents scan covers the whole root with no filter. Resolution still sees that whole root, so an `include/` target
+stays `local` even when it lives outside the subject's directory.
 
 When the working-directory walk skips the subject — a gitignored test tree, `.pi/local/…` — the cwd scan would resolve
 nothing and report no dependents, so the nearest enclosing project root (`CMakeLists.txt`, `Makefile`, `package.json`,
@@ -487,7 +490,7 @@ processes; ~90 ms per declaration natively with four threads).
   directories ignored, and a 2Q parsed-file cache (2,000 entries / 64 MiB) keyed by path + mtime + size.
 - Cut output is resumable. Every action accepts `limit` in characters and `offset` in rendered body lines
   (the header is repeated, not counted). A cut result ends with `# next: offset=N`; pass that offset with the
-  same action, path, query/symbols, and `limit` to continue. Pages prefer whole declaration/match/section
+  same action, path, query, and `limit` to continue. Pages prefer whole declaration/match/section
   blocks, but can resume inside one oversized block when necessary. An offset beyond the end says so. A single
   source line longer than `limit` cannot be split by a line offset; that page reports the approximate `limit`
   needed.
@@ -510,15 +513,16 @@ processes; ~90 ms per declaration natively with four threads).
 - `test/tools/code/offset.test.ts` — whole-block pages, inside-block continuation, beyond-end offsets, and
   end-to-end offset paging for digest/show/search/usages.
 - `test/tools/code/search-body.test.ts` — literal `[body]` rows: evidence lines, occurrence counts, innermost
-  attribution, the adaptive cap and `body="all"`/`"off"`, the identifier shape gate, and Markdown exclusion.
+  attribution, the adaptive cap, the identifier shape gate, and Markdown exclusion.
 - `test/tools/code/comments.test.ts` — comment extraction (strings skipped, per-language markers) and the head text
   that embeds inline comments.
 - `test/tools/code/chunk-plan.test.ts` — body-chunk planning: structural splits, collapsed children, overlap, cap,
   determinism, and per-chunk content keys.
-- `test/tools/code/deps.test.ts` — import states across all ten languages, dependents, glob narrowing, comment and
+- `test/tools/code/deps.test.ts` — import states across all ten languages, dependents, the pattern rejection, comment and
   string-literal exclusion, and dedupe.
-- `test/tools/code/filters.test.ts` — `glob` path matching (deep patterns, basenames, braces, no match) and
-  `declarationKind` narrowing in search and digest, including the hidden-count notes.
+- `test/tools/code/discovery.test.ts` — path-target parsing, prefix stripping, and the pattern-aware discovery cap.
+- `test/tools/code/filters.test.ts` — `path` pattern matching (anchored, basenames, braces, no match) and
+  `kind` narrowing in search and digest, including the hidden-count notes.
 - `test/tools/code/actions.test.ts` — digest/search/show/usages against C++/HIP `MemoryCodeSource` fixtures.
 - `test/tools/code/typescript-parser.test.ts` — TypeScript and TSX extraction, access modifiers, parameters,
   interfaces, arrow-function constants, and nested closures.

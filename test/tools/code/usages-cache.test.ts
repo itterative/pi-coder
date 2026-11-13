@@ -33,7 +33,7 @@ describe("outline usages cache", () => {
         const first = await runUsages(source, {
             action: "usages",
             path: "src",
-            symbols: ["connect"],
+            query: "connect",
         });
 
         expect(first.matches).toBeGreaterThan(0);
@@ -42,7 +42,7 @@ describe("outline usages cache", () => {
         const second = await runUsages(source, {
             action: "usages",
             path: "src",
-            symbols: ["connect", "connect"],
+            query: ["connect", "connect"].join(", "),
         });
 
         expect(second.matches).toBe(first.matches * 2);

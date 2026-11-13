@@ -18,9 +18,6 @@ export const BODY_ROWS = 20;
 /** Rows returned when a name or doc match already answers the query: enough to show the text exists. */
 export const BODY_ROWS_WHEN_LED = 3;
 
-/** Rows for an explicit `body="all"`, which is the caller overriding the cap rather than accepting it. */
-export const BODY_ROWS_ALL = 40;
-
 /** Scan this many files between event-loop turns. The per-file scan is microseconds, so yielding by file count was
  * spending more time in `setImmediate` than in the scan itself: 361 files every 8 turns cost ~45 ms of the channel's
  * ~50 ms. A file is capped at `MAX_FILE_BYTES`, so one turn is still short. */

@@ -41,7 +41,7 @@ describe("outline show targeting", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src/models/step.cpp",
-            symbols: ["qwen35::Model::attention_block"],
+            query: "qwen35::Model::attention_block",
         });
 
         expect(result.matches).toBe(0);
@@ -54,7 +54,7 @@ describe("outline show targeting", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src/models/step.cpp",
-            symbols: ["qwen35::step, qwen35::Model::attention_block"],
+            query: "qwen35::step, qwen35::Model::attention_block",
         });
 
         expect(result.matches).toBeGreaterThan(0);
@@ -67,7 +67,7 @@ describe("outline show targeting", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src/models",
-            symbols: ["qwen35::Model::attention_block(CallList&, const LayerPlan&)"],
+            query: "qwen35::Model::attention_block(CallList&, const LayerPlan&)",
         });
 
         expect(result.matches).toBeGreaterThan(0);
@@ -79,7 +79,7 @@ describe("outline show targeting", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src/models",
-            symbols: ["qwen35::Model::attention_block(const LayerPlan&)"],
+            query: "qwen35::Model::attention_block(const LayerPlan&)",
         });
 
         expect(result.matches).toBe(0);

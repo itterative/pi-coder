@@ -85,7 +85,7 @@ describe("Markdown adapter", () => {
         const shown = await runShow(source(), {
             action: "show",
             path: "docs/guide.md",
-            symbols: ["Guide::Install"],
+            query: "Guide::Install",
         });
 
         expect(digest.text).toContain("markdown");
@@ -130,7 +130,7 @@ describe("Markdown adapter", () => {
         const shown = await runShow(source(), {
             action: "show",
             path: "docs/guide.md",
-            symbols: ["Guide::Install"],
+            query: "Guide::Install",
         });
 
         expect(searched.text).toContain("Guide::Install");
@@ -143,7 +143,7 @@ describe("Markdown adapter", () => {
         const result = await runUsages(source(), {
             action: "usages",
             path: "docs/guide.md",
-            symbols: ["Install"],
+            query: "Install",
         });
 
         expect(result.matches).toBe(0);

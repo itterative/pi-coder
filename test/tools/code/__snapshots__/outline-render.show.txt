@@ -1,0 +1,1 @@
+outline show src Auth::login, Auth::logout

@@ -61,7 +61,7 @@ describe("outline on JavaScript", () => {
         const result = await runShow(source(), {
             action: "show",
             path: "src/js/closure.js",
-            symbols: ["outer::inner"],
+            query: "outer::inner",
         });
 
         expect(result.text).toContain("function outer::inner · definition");
@@ -72,7 +72,7 @@ describe("outline on JavaScript", () => {
         const result = await runUsages(source(), {
             action: "usages",
             path: "src/js",
-            symbols: ["Runner"],
+            query: "Runner",
         });
 
         expect(result.text).toContain("src/js/runner.js");

@@ -1,8 +1,14 @@
 import path from "node:path";
 
-import { candidateFiles } from "./discovery";
+import {
+    candidateFiles,
+    filterPathTarget,
+    parsePathTarget,
+    patternWithinTarget,
+} from "./discovery";
 import {
     declarationLine,
+    filterNote,
     isContainer,
     isFunctionLike,
     kindLabel,
@@ -46,11 +52,11 @@ export async function runShow(
     signal?: AbortSignal,
     timing: CallTiming = new CallTiming(),
 ): Promise<ShowResult> {
-    const requested = splitSymbolList(params.symbols ?? []);
+    const requested = splitSymbolList(params.query === undefined ? [] : [params.query]);
 
     if (requested.length === 0) {
         return {
-            text: '# show needs at least one symbol, e.g. outline(action="show", symbols=["Socket::connect"])',
+            text: '# show needs at least one symbol, e.g. outline(action="show", query="Socket::connect")',
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -59,23 +65,36 @@ export async function runShow(
     }
 
     const selectors = requested.map(parseSelector);
-    const root = source.resolvePath(params.path ?? ".");
+    const target = parsePathTarget(params.path);
+    const root = source.resolvePath(target.base);
+    const scope = target.pattern ?? source.displayPath(root);
     const matchedSelectors = new Set<number>();
 
     await source.assertReadable(root);
 
-    const discovery = await timing.measure("discover", () =>
-        candidateFiles(source, root, requested, signal),
+    const candidates = await timing.measure("discover", () =>
+        candidateFiles(source, root, requested, signal, patternWithinTarget(target)),
     );
+    const targeted = filterPathTarget(candidates.files, source, target);
+    const discovery = { ...candidates, files: targeted.files };
 
     if (discovery.files.length === 0) {
+        const filter = filterNote({ path: target.pattern, pathHidden: targeted.hidden });
+
         return {
-            text: notFound(
-                source,
-                root,
-                requested,
-                await elsewhereNote(source, root, requested, signal, timing),
-            ),
+            text:
+                target.pattern === undefined
+                    ? notFound(
+                          scope,
+                          requested,
+                          await elsewhereNote(source, root, requested, signal, timing),
+                      )
+                    : [
+                          `# not found: ${requested.join(", ")} in ${scope} · no files match`,
+                          filter ?? "",
+                      ]
+                          .filter((line) => line.length > 0)
+                          .join("\n"),
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -118,7 +137,7 @@ export async function runShow(
         const elsewhere = await elsewhereNote(source, root, missing, signal, timing);
 
         return {
-            text: notFound(source, root, requested, elsewhere, hintNotes),
+            text: notFound(scope, requested, elsewhere, hintNotes),
             files: files.length,
             parseErrors: sumParseErrors(files),
             truncated: discovery.truncated,
@@ -130,7 +149,7 @@ export async function runShow(
     const parseErrors = sumParseErrors(files);
     const legend = legendFor(source, groups, fileOf);
     const header = [
-        `# show ${source.displayPath(root)} ${requested.join(", ")}`,
+        `# show ${scope} ${requested.join(", ")}`,
         parseErrors > 0 ? `parse: ${parseErrors} error(s)` : "",
         discovery.truncated ? "file list truncated" : "",
     ]
@@ -139,12 +158,13 @@ export async function runShow(
         .concat(legend.length === 0 ? "" : `\n${legend.join("\n")}`);
     const limit = params.limit ?? DEFAULT_CHAR_LIMIT;
     const offset = Math.max(0, Math.floor(params.offset ?? 0));
+    const filter = filterNote({ path: target.pattern, pathHidden: targeted.hidden });
     const ambiguous = groups.length > AMBIGUITY_LIMIT || hasMultipleDefinitionFiles(groups, fileOf);
 
     if (ambiguous) {
         const text = renderAmbiguous(
             source,
-            root,
+            scope,
             requested,
             groups,
             header,
@@ -155,7 +175,7 @@ export async function runShow(
         const next = nextOffsetNote(text);
 
         return {
-            text: [text.text, next].filter((part) => part !== undefined).join("\n"),
+            text: [text.text, next, filter].filter((part) => part !== undefined).join("\n"),
             files: files.length,
             parseErrors,
             truncated: text.truncated,
@@ -174,11 +194,9 @@ export async function runShow(
     // Every requested symbol reports its outcome. A missing one used to vanish entirely as soon as another one
     // resolved, and the caller cannot tell that from "not reached".
     const absent =
-        missing.length === 0
-            ? undefined
-            : `# not found: ${missing.join(", ")} in ${source.displayPath(root)}`;
+        missing.length === 0 ? undefined : `# not found: ${missing.join(", ")} in ${scope}`;
     const next = nextOffsetNote(fitted);
-    const text = [fitted.text, note, partial, ...hintNotes, absent, ...elsewhere, next]
+    const text = [fitted.text, note, partial, ...hintNotes, absent, ...elsewhere, next, filter]
         .filter((part) => part !== undefined)
         .join("\n");
 
@@ -418,7 +436,7 @@ function renderLeaf(
 
 function renderAmbiguous(
     source: CodeSource,
-    root: string,
+    scope: string,
     requested: readonly string[],
     groups: readonly MatchGroup[],
     header: string,
@@ -442,9 +460,7 @@ function renderAmbiguous(
                 leftFile.localeCompare(rightFile) || left.range.startLine - right.range.startLine
             );
         });
-    const lines = [
-        `# ambiguous: ${shown.length} matches for ${requested.join(", ")} in ${source.displayPath(root)}`,
-    ];
+    const lines = [`# ambiguous: ${shown.length} matches for ${requested.join(", ")} in ${scope}`];
 
     for (const declaration of shown) {
         const file = fileOf.get(declaration);
@@ -591,8 +607,7 @@ function sumParseErrors(parsed: readonly ParsedFile[]): number {
 }
 
 function notFound(
-    source: CodeSource,
-    root: string,
+    scope: string,
     requested: readonly string[],
     elsewhere: readonly string[],
     hintNotes: readonly string[] = [],
@@ -601,7 +616,7 @@ function notFound(
         '# next: outline(action="digest", path=...) to see the available declarations, or outline(action="usages", ...) for references';
 
     return [
-        `# not found: ${requested.join(", ")} in ${source.displayPath(root)}`,
+        `# not found: ${requested.join(", ")} in ${scope}`,
         ...hintNotes,
         ...elsewhere,
         ...(elsewhere.length === 0 ? [next] : []),

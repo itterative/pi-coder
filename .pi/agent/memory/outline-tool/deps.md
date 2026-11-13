@@ -49,7 +49,7 @@ graph honest; `unresolved` is the only state that means "this looks broken".
 `dependentsOf` resolves every parsed file's imports and keeps those whose target is the subject — a whole-tree scan,
 so it costs what `usages` costs, and the parse cache is what makes it cheap. Two rules matter:
 
-- the subject is always parsed even when `glob` excludes it (the file is the question);
+- the subject is always parsed (the file is the question); a pattern is rejected rather than guessed at;
 - the scan root is the cwd when the subject is inside it, otherwise the subject's own directory. A file's imports are
   local to it, but "who imports it" is a question about the tree, and scanning only the subject's directory would
   answer "nobody" for every file whose dependents live elsewhere.
@@ -63,7 +63,9 @@ Imports are cached per `ParsedFile` in a `WeakMap`, so an edited parse drops the
 ## Surfacing
 
 `deps` prints `imports` (state, specifier, line, resolved target — a Go target is a directory) and `dependents`
-(path, line), with `glob` narrowing plus the shared `# filter:` line. `glob` narrows the dependents scan and the parse
-set but **not the resolve index**: filtering that too made every `include/` target `external` the moment a caller asked
-only for dependents under one subtree (live-tested on `vibes`). The footer says imports only, not a call graph
-(`usages`), and names the three states. `matches` is imports + dependents; `files` is the parsed scan set.
+(path, line). There is no narrowing filter: the subject must be a literal file (a `path` pattern is rejected) and the
+dependents scan covers the whole scan root. The resolve index must see that whole root, never a narrowed parse set:
+filtering it made every `include/` target `external` the moment a caller asked only for dependents under one subtree
+(live-tested on `vibes`; no live filter remains, but the invariant is why resolution is built from discovery). The
+footer says imports only, not a call graph (`usages`), and names the three states. `matches` is imports + dependents;
+`files` is the parsed scan set.

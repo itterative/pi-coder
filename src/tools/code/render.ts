@@ -17,7 +17,6 @@ interface OutlineCallArgs {
     action?: string;
     path?: string;
     query?: string;
-    symbols?: readonly string[];
     within?: string;
     offset?: number;
 }
@@ -29,11 +28,11 @@ export function renderOutlineCall(args: OutlineCallArgs, theme: Theme): Text {
     text += theme.fg("accent", target);
 
     if (args.query !== undefined && args.query.length > 0) {
-        text += theme.fg("accent", ` "${args.query}"`);
-    }
-
-    if (args.symbols !== undefined && args.symbols.length > 0) {
-        text += theme.fg("muted", ` ${args.symbols.join(", ")}`);
+        // A search phrase is quoted; a selector list for show/usages is shown as written.
+        text +=
+            action === "search"
+                ? theme.fg("accent", ` "${args.query}"`)
+                : theme.fg("muted", ` ${args.query}`);
     }
 
     if (args.within !== undefined && args.within.length > 0) {

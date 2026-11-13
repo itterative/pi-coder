@@ -170,7 +170,7 @@ describe("outline search within a dependency neighbourhood", () => {
         expect(result.text).toContain("# within: imports of lib/helper.ts · 2 files");
     });
 
-    it("resolves a relative anchor against path, like glob", async () => {
+    it("resolves a relative anchor against path", async () => {
         const result = await runSearch(source(), {
             action: "search",
             path: "src",
@@ -183,31 +183,32 @@ describe("outline search within a dependency neighbourhood", () => {
         expect(result.text).toContain("# within: imports of src/store/artifact.ts · 2 files");
     });
 
-    it("counts a neighbour hidden by glob as outside the searched path", async () => {
+    it("counts a neighbour hidden by the path pattern as outside the searched path", async () => {
         const result = await runSearch(source(), {
             action: "search",
+            path: "**/src/**",
             query: "download",
-            glob: "src/**",
             within: "lib/helper.ts",
         });
 
-        // `retry` matches the glob, `sibling` does not: the anchor's edge to it is still real.
+        // `retry` matches the pattern, `sibling` does not: the anchor's edge to it is still real.
         expect(result.files).toBe(2);
+        expect(result.text).toContain("# filter: path=**/src/**");
         expect(result.text).toContain(
             "# within: imports of lib/helper.ts · 2 files (1 file outside the searched path)",
         );
     });
 
-    it("intersects with glob and still names both narrowings", async () => {
+    it("intersects with a path pattern and still names both narrowings", async () => {
         const result = await runSearch(source(), {
             action: "search",
+            path: "**/artifact.ts",
             query: "download",
             within: "src/app.ts",
-            glob: "**/artifact.ts",
         });
 
         expect(result.files).toBe(2);
-        expect(result.text).toContain("# filter: glob=**/artifact.ts (5 files hidden)");
+        expect(result.text).toContain("# filter: path=**/artifact.ts");
         expect(result.text).toContain("# within: imports of src/app.ts · 2 files");
     });
 
@@ -226,7 +227,7 @@ describe("outline usages within a dependency neighbourhood", () => {
     it("scans the anchor and its direct imports only", async () => {
         const result = await runUsages(source(), {
             action: "usages",
-            symbols: ["retry"],
+            query: "retry",
             within: "src/app.ts",
         });
 
