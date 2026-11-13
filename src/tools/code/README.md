@@ -1,12 +1,23 @@
 # outline tool
 
-One agent-facing tool, `outline`, with four actions:
+One agent-facing tool, `outline`, with five actions:
 
 - `digest` — map a file or directory: namespaces/types, public signatures, line ranges, `[def]` tags.
-- `search` — declarations whose names or doc comments match a query, with a conservative typo fallback.
+- `search` — declarations whose name, doc comment, frontmatter, or literal body text matches a query, with a
+  conservative typo fallback.
 - `show` — exact source for named symbols; a directory target pairs header declarations with source definitions.
 - `usages` — syntactic occurrences with `[def]` / `[decl]` / `[call]` / `[ref]` tags, plus `[launch]` for
   HIP/CUDA kernel launches.
+- `deps` — one file's imports and the files that import it, file-level and syntactic.
+
+Two optional parameters narrow a call rather than adding an action: `glob` keeps only files whose path matches
+(rg-style: `**` crosses directories, `{a,b}` alternates, a slash-free pattern matches the basename at any depth),
+and `declarationKind` keeps only declarations of one kind for `search` and `digest`. Both are filters over the
+discovered set, so confinement and ignore rules are unchanged, and both name the active filter in a `# filter:`
+line, with a hidden count when it removed anything
+— a smaller result must not read as "nothing matched". A `kind` filter in `digest` lists the matching declarations
+flat, with no ancestor lines: the qualified name carries the container, and an indented child under a hidden parent
+would draw a tree that does not exist.
 
 `show` and `usages` take a `symbols` array, and an entry may itself be a comma-joined list
 (`"A::b, C::d"`): `format.ts`'s `splitSymbolList` splits on **top-level** commas only, so an overload
@@ -173,6 +184,94 @@ output.
   separately (`sourceForDeclaration`).
 - `usages` has no identifier index for Markdown and reports zero matches. There is no code to resolve.
 
+## Literal body text
+
+`search` also reads the text *inside* a declaration body — log messages, thrown errors, inline comments, SQL
+fragments — and reports **the declaration that contains it**, not the line. Those rows carry `[body]`, rank below
+`[doc]` and above `[related]`, and print one evidence line, with `×N` when the text occurs more than once:
+
+    src/store/artifact.ts:1-8  function  download  ...  [def] [body]
+      :6  throw new Error(`${spec} failed its checksum`);
+
+Three rules keep it from becoming a second grep:
+
+- **Text-shaped queries only.** At least two whitespace-separated words. A single word is an identifier question,
+  and every body that mentions `connect` would otherwise flood a result `usages` already answers properly.
+- **Declaration granularity.** A match inside a method body belongs to the method, not to its class
+  (`innermostOnly`), and repeated hits collapse into one row with a count. The follow-up is one `show`.
+- **Markdown is excluded.** A memory's prose *is* its doc channel; a body row would restate the section the doc
+  tier just found.
+
+The cap is a budget decision, not an evidence one: `auto` returns up to 20 rows when the name and doc channels found
+little and 3 when they already lead, with a footer naming what it withheld; `body="all"` and `body="off"`
+override it. Body evidence counts as literal evidence for the related tail, so `[related]` rows cannot lead above it.
+Everything still line-level — regex, `-C` context, counts, text in files `outline` does not parse — remains `rg`'s
+job.
+
+## Dependency scope
+
+`within` narrows `search` and `usages` to one file's direct dependency neighbourhood:
+
+    outline(action="search", query="backoff", within="src/store/artifact.ts")
+    outline(action="usages", symbols=["retry"], within="dependents:src/store/retry.ts")
+
+The bare form is `imports`; `dependents:` flips to the files that import the anchor. The anchor is resolved
+against the searched path, exactly like `glob`. There is no depth knob: the
+scope is the anchor and its direct neighbours, because the useful question is "what can this file actually reach"
+rather than a transitive closure nobody can read. The anchor stays in scope even when `path` or `glob` would
+exclude it, and a neighbour that exists but fell outside them is counted in the `# within:` footer rather than
+silently dropped — the same honesty rule as `# filter:`. Edges are the resolved imports `deps` reports, so a
+neighbour is real only when the scan can see its target; the resolution index uses the whole discovered root, not
+the glob-narrowed parse set, exactly as in `deps`.
+
+The scope changes what is searched, ranked, and reported, not the discovery walk: a scoped call still discovers and
+parses the searched tree the way an unscoped one does, and the semantic tail draws its candidates from the scoped
+files.
+
+## File dependencies
+
+`deps` takes one file and answers both directions: what it imports, and who imports it. The scan root is the working
+directory when the subject lives inside it, otherwise the subject's own directory — a file's imports are local to it,
+but "who imports it" is a question about the tree, so scanning only the subject's directory would answer "nobody"
+for every file whose dependents live elsewhere. `glob` narrows the dependents scan (and the parse set), never the
+subject and never its own imports: resolution still sees the whole scan root, so an `include/` target stays `local`
+even when the glob hides it.
+
+When the working-directory walk skips the subject — a gitignored test tree, `.pi/local/…` — the cwd scan would resolve
+nothing and report no dependents, so the nearest enclosing project root (`CMakeLists.txt`, `Makefile`, `package.json`,
+`Cargo.toml`, `go.mod`, `pyproject.toml`, `pom.xml`, `build.gradle`, `.git`) is scanned literally instead. That keeps
+the subject's siblings and its dependents in play without widening the walk to the whole checkout.
+
+Extraction is text-based on comment-masked source (`imports.ts`): imports are a small, regular surface in every
+supported language, and the parse tree is gone by the time a dependents scan asks. A match whose **start offset** is
+inside a string literal is dropped, so a fake import inside a template cannot become an edge; commented-out imports
+are blanked first, with offsets preserved so lines stay original. Supported: JS/TS `import`/`export … from`/
+`require()`, C/C++ `#include`, Python `import`/`from`, Rust `use`, Java `import`, C# `using`, Go single and block
+imports, PHP `use`, Ruby `require`/`require_relative`.
+
+Resolution has three states and never guesses:
+
+- `local` — a file in the scanned tree: relative paths (JS/TS extension and `index.*` probing, C/C++ directory then
+  scan root and the `include/` directory of every ancestor — which is how `<vibes/core/x.hpp>` resolves — Python dot
+  counts, Ruby `x`/`x.rb`, Rust `crate`/`self`/`super` with the longest module prefix first),
+  Java FQCN → `a/b/C.java`, C#/PHP namespace or declaration match, Go package path → the longest discovered directory
+  suffix, Python absolute modules from the file's directory and the root.
+- `external` — a module or namespace outside the tree (`node:path`, `<vector>`, `serde::…`, `System.Text`).
+- `unresolved` — a relative path that matched no parsed file. The only state that means "this looks broken".
+
+```
+# deps src/tools/code/deps.ts · 8 imports · (6 local, 2 external, 0 unresolved) · 1 dependent · typescript
+imports
+  local       ./discovery  :3  → src/tools/code/discovery.ts
+  external    node:path  :1
+dependents
+  src/tools/code/index.ts  :29
+# note: imports only — a call graph is `usages`; resolution is syntactic (relative paths, crate and module names)
+```
+
+Dynamic `import()`, re-export chasing, type-only imports, and PHP trait `use` are out of scope; a dependents scan
+costs what `usages` costs, and imports are cached per `ParsedFile` so an edited parse drops them with the file.
+
 ## Output and limits
 
 - `digest` degrades to a directory map when the result exceeds the character limit, and large files (`[huge]`) render
@@ -202,9 +301,9 @@ output.
   still a real use — only the claim that they are the same symbol is dropped. A per-file
   identifier index is built on first use and reused for every requested symbol and later calls; the WASM tree is
   released after indexing. Files at or above 256 KiB build that index in the parser worker.
-- `search` is declaration-name and doc-text search, not text search. A plain query is a case-insensitive
-  substring of the simple name; a query containing `::` or `.` is matched against the qualified name, so
-  `CallList::` finds the members. Exact names sort before prefixes, prefixes before later substrings, and a
+- `search` is declaration-name, doc-text, and literal body-text search, not a text scan. A plain query is a
+  case-insensitive substring of the simple name; a query containing `::` or `.` is matched against the qualified
+  name, so `CallList::` finds the members. Exact names sort before prefixes, prefixes before later substrings, and a
   doc-comment match sorts after every name match and above every approximate one; its word tokens are matched
   in any order, all required, and the row carries `[doc]`. Qualified queries skip the doc channel, because the
   qualifier already chose the scope. It reports the qualified name and signature, so the follow-up is `show`
@@ -222,9 +321,11 @@ output.
   first, and a footer reports how many were withheld. Approximate rows carry `~N`, and the output says how many
   edits were allowed. A doc match outranking a near-miss name is the point: prose is where a concept lives when
   no identifier spells it out, and a plausible identifier guess is the weaker evidence.
-  Strings, config, and arbitrary source text remain the job of `bash` + `rg` — and so do comments **inside** a
-  function body: the index holds declarations and their adjacent doc blocks, so a note between two statements is
-  not in it, and no amount of semantic ranking can retrieve text that was never embedded. Search hits are cached per parsed file and normalized query (a few recent queries per
+  Strings, config, and arbitrary source text remain the job of `bash` + `rg`, as do line-level output, regex, and
+  counts: the body channel is literal and declaration-granular, so it cannot say *where in the function* the text
+  is or how many files match. A comment between two statements is reachable as a `[body]` row on the enclosing
+  declaration, but only for a text-shaped query. Search hits are cached per parsed file and normalized query (a
+  few recent queries per
   file); a changed path + mtime + size creates a new `ParsedFile` and drops the old hits with it.
 
 ### Roots, and the index a root owns
@@ -297,6 +398,27 @@ memory tree, `knob registry tune table` went from five spans in `tuning.md` to o
 answers. The right file still comes first, and the workaround is a second call — `search path=<that file>` returns
 its sections — which is why the trade stands: a section list costs a query embedding, and it is not worth spending
 on an answer that already points at the right file.
+
+### Body chunks
+
+A declaration's head vector embeds its doc comment, its **inline body comments**, and its signature — never its code.
+A declaration whose body is at least `CHUNK_MIN_CHARS` (800 characters) also gets body chunks (`semantic/chunks.ts`):
+the body is split at its direct child declarations first (a child that gets its own chunks is collapsed to its
+signature line there, so a class chunk does not duplicate its methods' bodies), packed to a 1,600-character target, and
+a single block above 2,400 characters is cut at line boundaries with 8 lines of overlap. Every chunk's text is
+`title: <path> | text: <kind> <qualifiedName> (§i/n) <signature>. <body>`, so a fragment still names what it belongs
+to. At most 12 chunks per declaration: adjacent chunks merge to reach the cap, and only an already-maximal set loses
+its tail.
+
+Chunks are content-addressed like heads, so editing one region of a long body invalidates that chunk alone. The live
+set — what a prune keeps and what a refresh fills — is heads *plus* chunks, and an idle scan counts chunk keys too:
+a body-only edit changes no head text, so scanning heads alone would call that index warm. Ranking scores a
+declaration as its best vector and reports which one won, so a `§i/n :start-line-end` line under a `[related]` row is
+the chunk to `read`.
+
+Cost on this repository: ≈8.7k declarations under `src` become ≈1.2k chunks across ≈850 declarations (+14% vectors,
+≈1.8 MB of chunk text), with planning at ~22 ms once per parse and cached per `ParsedFile`. A memory or `docs` tree
+produces none — its declarations are small, and Markdown prose is already the doc channel.
 
 Vectors are content-addressed (`embeddingKey` hashes the embedded text), so an edited declaration cannot match its
 old vector — the lookup would need the old text. Staleness is therefore *absence*, never a wrong answer, and the
@@ -387,6 +509,16 @@ processes; ~90 ms per declaration natively with four threads).
   the empty `usages` result.
 - `test/tools/code/offset.test.ts` — whole-block pages, inside-block continuation, beyond-end offsets, and
   end-to-end offset paging for digest/show/search/usages.
+- `test/tools/code/search-body.test.ts` — literal `[body]` rows: evidence lines, occurrence counts, innermost
+  attribution, the adaptive cap and `body="all"`/`"off"`, the identifier shape gate, and Markdown exclusion.
+- `test/tools/code/comments.test.ts` — comment extraction (strings skipped, per-language markers) and the head text
+  that embeds inline comments.
+- `test/tools/code/chunk-plan.test.ts` — body-chunk planning: structural splits, collapsed children, overlap, cap,
+  determinism, and per-chunk content keys.
+- `test/tools/code/deps.test.ts` — import states across all ten languages, dependents, glob narrowing, comment and
+  string-literal exclusion, and dedupe.
+- `test/tools/code/filters.test.ts` — `glob` path matching (deep patterns, basenames, braces, no match) and
+  `declarationKind` narrowing in search and digest, including the hidden-count notes.
 - `test/tools/code/actions.test.ts` — digest/search/show/usages against C++/HIP `MemoryCodeSource` fixtures.
 - `test/tools/code/typescript-parser.test.ts` — TypeScript and TSX extraction, access modifiers, parameters,
   interfaces, arrow-function constants, and nested closures.

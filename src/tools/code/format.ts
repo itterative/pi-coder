@@ -1,4 +1,4 @@
-import type { Declaration, DeclarationRange, SymbolSelector } from "./types";
+import type { Declaration, DeclarationKind, DeclarationRange, SymbolSelector } from "./types";
 
 /** Parse `ns::Type::member(const X&)` into a name selector plus an optional parameter-type hint. */
 export function parseSelector(raw: string): SymbolSelector {
@@ -168,6 +168,64 @@ export function pathRange(filePath: string, range: DeclarationRange): string {
 
 export function indent(depth: number): string {
     return "  ".repeat(depth);
+}
+
+/**
+ * One footer line naming what a narrowing parameter removed.
+ *
+ * A filtered result that only shrinks leaves the caller unable to distinguish "nothing matched" from "the filter
+ * hid it", and the total is the number they will reason about — so it is stated rather than implied. The line names
+ * an active filter even when it hid nothing, because a scoped result must not read as the whole tree.
+ */
+export function filterNote(options: {
+    glob?: string;
+    globHidden: number;
+    declarationKind?: DeclarationKind;
+    kindHidden?: number;
+}): string | undefined {
+    const parts: string[] = [];
+    const glob = options.glob?.trim() ?? "";
+
+    if (glob.length > 0) {
+        parts.push(`glob=${glob}${hiddenSuffix(options.globHidden, "file")}`);
+    }
+
+    if (options.declarationKind !== undefined) {
+        parts.push(
+            `declarationKind=${options.declarationKind}${hiddenSuffix(options.kindHidden ?? 0, "declaration")}`,
+        );
+    }
+
+    return parts.length === 0 ? undefined : `# filter: ${parts.join(" · ")}`;
+}
+
+/**
+ * The footer line for a dependency-scoped search or usages call.
+ *
+ * It names the anchor even when the scope changed nothing, because a scoped result must not read as the whole tree,
+ * and it counts neighbours that fell outside the searched path rather than letting the file total imply otherwise.
+ */
+export function withinNote(options: {
+    direction: "imports" | "dependents";
+    anchor: string;
+    files: number;
+    outside: number;
+}): string {
+    const direction = options.direction === "dependents" ? "dependents of" : "imports of";
+    const outside =
+        options.outside > 0
+            ? ` (${counted(options.outside, "file")} outside the searched path)`
+            : "";
+
+    return `# within: ${direction} ${options.anchor} · ${counted(options.files, "file")}${outside}`;
+}
+
+function hiddenSuffix(count: number, noun: string): string {
+    return count > 0 ? ` (${counted(count, noun)} hidden)` : "";
+}
+
+function counted(count: number, noun: string): string {
+    return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 export function declarationLine(

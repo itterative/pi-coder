@@ -1,3 +1,4 @@
+import type { CodeChunk } from "./chunks";
 import type { Declaration, ParsedFile } from "../types";
 
 /** Below this many name/doc matches, a lexical-led answer may still want a related tail. */
@@ -39,6 +40,8 @@ export const RRF_K = 60;
 export interface RankedDeclaration {
     file: ParsedFile;
     declaration: Declaration;
+    /** Set when a body chunk, not the declaration's head vector, produced the winning score. */
+    chunk?: CodeChunk;
 }
 
 /** Stable identity for a declaration across rankings: its file and byte start. */

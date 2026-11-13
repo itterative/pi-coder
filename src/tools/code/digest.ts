@@ -1,12 +1,18 @@
 import path from "node:path";
 
-import { discoverFiles } from "./discovery";
-import { declarationLine, isFunctionLike, nextOffsetNote, renderWithinBudget } from "./format";
+import { applyGlobFilter, discoverFiles } from "./discovery";
+import {
+    declarationLine,
+    filterNote,
+    isFunctionLike,
+    nextOffsetNote,
+    renderWithinBudget,
+} from "./format";
 import { DEFAULT_CHAR_LIMIT, MAX_FILES, languageForPath, sizeLabel } from "./languages";
 import { loadParsedFiles } from "./load";
 import type { CodeSource } from "./source";
 import { CallTiming } from "./timing";
-import type { CodeDetail, CodeToolParams, Declaration, ParsedFile } from "./types";
+import type { CodeDetail, CodeToolParams, Declaration, DeclarationKind, ParsedFile } from "./types";
 
 export interface DigestResult {
     text: string;
@@ -48,10 +54,21 @@ export async function runDigest(
         };
     }
 
+    const globbed = applyGlobFilter(discovery.files, root, params.glob);
+
+    if (globbed.files.length === 0) {
+        return {
+            text: `# digest ${source.displayPath(root)} · no files match glob=${params.glob ?? ""}`,
+            files: 0,
+            parseErrors: 0,
+            truncated: discovery.truncated,
+        };
+    }
+
     const batch = await timing.measure("parse", () =>
-        loadParsedFiles(source, discovery.files, signal),
+        loadParsedFiles(source, globbed.files, signal),
     );
-    timing.recordLoad(batch, discovery.files.length);
+    timing.recordLoad(batch, globbed.files.length);
     const parsed = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
     const parseErrors = parsed.reduce((total, file) => total + file.parseErrors, 0);
 
@@ -73,7 +90,31 @@ export async function runDigest(
     }
 
     const languages = languagesOf(parsed);
-    const fileBlocks = parsed.map((file) => renderFile(source, file, detail));
+    const kind = params.declarationKind;
+    const rendered = parsed.map((file) => renderFile(source, file, detail, kind));
+    const kindHidden = rendered.reduce((total, entry) => total + entry.hidden, 0);
+    const filter = filterNote({
+        glob: params.glob,
+        globHidden: globbed.hidden,
+        declarationKind: kind,
+        kindHidden,
+    });
+
+    if (kind !== undefined && rendered.every((entry) => entry.hidden === entry.total)) {
+        return {
+            text: [
+                `# digest ${source.displayPath(root)} · filter declarationKind=${kind} · no matching declarations`,
+                filter ?? "",
+            ]
+                .filter((line) => line.length > 0)
+                .join("\n"),
+            files: parsed.length,
+            parseErrors,
+            truncated: discovery.truncated,
+        };
+    }
+
+    const fileBlocks = rendered.map((entry) => entry.text).filter((text) => text.length > 0);
 
     const fullBody = fileBlocks.join("\n");
     const header = digestHeader(source, root, parsed, languages, fullBody);
@@ -82,6 +123,7 @@ export async function runDigest(
         discovery.unsupportedFiles,
         discovery.truncated,
         parseErrors,
+        filter,
     );
     const fullText = [header, fullBody, footer].filter((part) => part.length > 0).join("\n");
     const fits = fullText.length <= limit;
@@ -95,8 +137,10 @@ export async function runDigest(
         };
     }
 
-    if (!fits && !discovery.rootIsFile) {
-        const map = renderDirectoryMap(source, root, discovery.files, limit);
+    // A kind filter must not degrade to the directory map: the caller asked for declarations of one kind, and a map of
+    // directory names answers a different question. Page the flat list instead, so `# next: offset=N` continues it.
+    if (!fits && !discovery.rootIsFile && kind === undefined) {
+        const map = renderDirectoryMap(source, root, globbed.files, limit);
 
         if (map !== undefined) {
             if (offset === 0) {
@@ -141,7 +185,19 @@ export async function runDigest(
     };
 }
 
-function renderFile(source: CodeSource, file: ParsedFile, detail: CodeDetail): string {
+function renderFile(
+    source: CodeSource,
+    file: ParsedFile,
+    detail: CodeDetail,
+    kind: DeclarationKind | undefined,
+): RenderedFile {
+    const header = `${source.displayPath(file.path)} [${sizeLabel(file.lineCount)}]`;
+    const total = file.all.length;
+
+    if (kind !== undefined) {
+        return renderKind(file, header, kind, total);
+    }
+
     const lines: string[] = [];
     const huge = sizeLabel(file.lineCount) === "huge" && detail !== "full";
 
@@ -159,17 +215,51 @@ function renderFile(source: CodeSource, file: ParsedFile, detail: CodeDetail): s
         lines.push(...renderDeclaration(declaration, 0, detail));
     }
 
-    const header = `${source.displayPath(file.path)} [${sizeLabel(file.lineCount)}]`;
-
     if (lines.length === 0) {
-        return `${header}\n  # no declarations`;
+        return { text: `${header}\n  # no declarations`, hidden: 0, total };
     }
 
     if (huge) {
         lines.push("  # huge file: member detail omitted; use outline show for a symbol");
     }
 
-    return `${header}\n${lines.join("\n")}`;
+    return { text: `${header}\n${lines.join("\n")}`, hidden: 0, total };
+}
+
+interface RenderedFile {
+    /** Empty when the kind filter removed every declaration in the file. */
+    text: string;
+    hidden: number;
+    total: number;
+}
+
+/**
+ * A kind filter lists the matching declarations flat.
+ *
+ * No ancestor lines: the qualified name already carries the container, and an indented child whose parent was
+ * filtered out would read as a tree that does not exist.
+ */
+function renderKind(
+    file: ParsedFile,
+    header: string,
+    kind: DeclarationKind,
+    total: number,
+): RenderedFile {
+    const matched = file.all.filter((declaration) => declaration.kind === kind);
+
+    if (matched.length === 0) {
+        return { text: "", hidden: total, total };
+    }
+
+    const lines = matched.map((declaration) =>
+        declarationLine(declaration, 0, { includeDefTag: isFunctionLike(declaration.kind) }),
+    );
+
+    return {
+        text: `${header}\n${lines.join("\n")}`,
+        hidden: total - matched.length,
+        total,
+    };
 }
 
 function visibleRoots(file: ParsedFile, detail: CodeDetail): Declaration[] {
@@ -249,6 +339,7 @@ function digestFooter(
     unsupported: number,
     truncated: boolean,
     parseErrors: number,
+    filter: string | undefined,
 ): string {
     const notes: string[] = [];
 
@@ -258,6 +349,10 @@ function digestFooter(
 
     if (unsupported > 0) {
         notes.push(`# skipped: ${unsupported} unsupported file(s)`);
+    }
+
+    if (filter !== undefined) {
+        notes.push(filter);
     }
 
     if (truncated) {

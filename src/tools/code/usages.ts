@@ -1,11 +1,19 @@
 import type { Node as SyntaxNode } from "@vscode/tree-sitter-wasm";
 
 import { yieldToEventLoop } from "../../common/async";
-import { candidateFiles, lastComponent } from "./discovery";
-import { nextOffsetNote, renderWithinBudget, shortLine, splitSymbolList } from "./format";
+import { applyGlobFilter, candidateFiles, lastComponent } from "./discovery";
+import {
+    filterNote,
+    nextOffsetNote,
+    renderWithinBudget,
+    shortLine,
+    splitSymbolList,
+    withinNote,
+} from "./format";
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
 import { adapterForLanguage, type CallSiteSpec } from "./adapters";
+import { withinScope, type WithinScope } from "./scope";
 import type { CodeSource } from "./source";
 import { CallTiming } from "./timing";
 import { parseSyntax } from "./tree-sitter";
@@ -106,13 +114,21 @@ export async function runUsages(
 
     await source.assertReadable(root);
 
-    const discovery = await timing.measure("discover", () =>
+    const phase = await timing.measure("discover", () =>
         candidateFiles(source, root, requested, signal),
     );
+    const globbed = applyGlobFilter(phase.files, root, params.glob);
+    const discovery = { ...phase, files: globbed.files };
+    const filter = filterNote({ glob: params.glob, globHidden: globbed.hidden });
 
     if (discovery.files.length === 0) {
         return {
-            text: `# no usages found for ${requested.join(", ")} in ${source.displayPath(root)} · no supported files`,
+            text: [
+                `# no usages found for ${requested.join(", ")} in ${source.displayPath(root)} · ${params.glob === undefined ? "no supported files" : `no files match glob=${params.glob}`}`,
+                filter ?? "",
+            ]
+                .filter((line) => line.length > 0)
+                .join("\n"),
             files: 0,
             parseErrors: 0,
             truncated: false,
@@ -124,11 +140,37 @@ export async function runUsages(
         loadParsedFiles(source, discovery.files, signal),
     );
     timing.recordLoad(batch, discovery.files.length);
-    const files = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
+    const parsedAll = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
+    const scoped =
+        params.within === undefined
+            ? undefined
+            : await timing.measure("search", () =>
+                  withinScope({
+                      source,
+                      root,
+                      raw: params.within ?? "",
+                      parsed: parsedAll,
+                      files: phase.files,
+                      signal,
+                  }),
+              );
+
+    if (scoped !== undefined && "error" in scoped) {
+        return {
+            text: scoped.error,
+            files: 0,
+            parseErrors: sumParseErrors(parsedAll),
+            truncated: discovery.truncated,
+            matches: 0,
+        };
+    }
+
+    const files = scoped?.scope.parsed ?? parsedAll;
     const parseErrors = sumParseErrors(files);
     const languages = Array.from(new Set(files.map((file) => file.language)))
         .toSorted()
         .join(",");
+    const within = scoped === undefined ? undefined : withinLine(source, scoped.scope);
     const sections: string[] = [];
     let totalMatches = 0;
     const truncated = discovery.truncated;
@@ -154,7 +196,9 @@ export async function runUsages(
         const next = nextOffsetNote(fitted);
 
         return {
-            text: [fitted.text, next].filter((part) => part !== undefined).join("\n"),
+            text: [fitted.text, next, filter, within]
+                .filter((part): part is string => part !== undefined && part.length > 0)
+                .join("\n"),
             files: files.length,
             parseErrors,
             truncated: truncated || fitted.truncated,
@@ -167,7 +211,9 @@ export async function runUsages(
     const next = nextOffsetNote(fitted);
 
     return {
-        text: [fitted.text, next].filter((part) => part !== undefined).join("\n"),
+        text: [fitted.text, next, filter, within]
+            .filter((part): part is string => part !== undefined && part.length > 0)
+            .join("\n"),
         files: files.length,
         parseErrors,
         truncated: truncated || fitted.truncated,
@@ -666,6 +712,15 @@ function matchesFilter(tag: UsageTag, filter: UsageKind): boolean {
 
 function normalizeText(text: string): string {
     return text.replace(/\s+/g, " ").trim();
+}
+
+function withinLine(source: CodeSource, scope: WithinScope): string {
+    return withinNote({
+        direction: scope.direction,
+        anchor: source.displayPath(scope.anchor),
+        files: scope.parsed.length,
+        outside: scope.outside,
+    });
 }
 
 function sumParseErrors(parsed: readonly ParsedFile[]): number {

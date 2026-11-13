@@ -1,6 +1,8 @@
 import { yieldToEventLoop } from "../../common/async";
-import { discoverFiles } from "./discovery";
+import { BODY_ROWS, BODY_ROWS_ALL, BODY_ROWS_WHEN_LED, bodyQueryOf, collectBodyHits } from "./body";
+import { applyGlobFilter, discoverFiles } from "./discovery";
 import {
+    filterNote,
     isContainer,
     isFunctionLike,
     kindLabel,
@@ -8,18 +10,22 @@ import {
     lineRange,
     nextOffsetNote,
     renderWithinBudget,
+    shortLine,
     shortSignature,
+    withinNote,
     type BudgetedText,
 } from "./format";
 import { fuzzyLimit, fuzzyNameDistance } from "./fuzzy";
 import { DEFAULT_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
+import { withinScope, type WithinScope } from "./scope";
 import { tokenize } from "./semantic/bm25";
 import { stem } from "./stem";
+import type { CodeChunk } from "./semantic/chunks";
 import { TAIL_ROWS, declarationKey, leadsWithRelated, wantsTail } from "./semantic/rank";
 import type { SemanticSearch } from "./semantic/types";
 import type { CodeSource } from "./source";
-import { declarationDoc } from "./text";
+import { declarationDoc, normalizeText } from "./text";
 import { CallTiming } from "./timing";
 import type { CodeToolParams, Declaration, ParsedFile } from "./types";
 
@@ -58,9 +64,11 @@ const TIER_DOC_PHRASE = 3;
 const TIER_FRONTMATTER_PHRASE = 4;
 const TIER_FRONTMATTER = 5;
 const TIER_DOC = 6;
-const TIER_FUZZY = 7;
+/** Literal text found in a declaration body: exact evidence, weaker than prose, stronger than a guess. */
+const TIER_BODY = 7;
+const TIER_FUZZY = 8;
 /** Relevance-tail rows: real declarations, but ranked by meaning rather than by name. */
-const TIER_RELATED = 8;
+const TIER_RELATED = 9;
 
 /** Keep near-miss names from flooding the output when a concept word fuzzily matches many identifiers. */
 const FUZZY_ROW_LIMIT = 8;
@@ -91,10 +99,14 @@ interface ParsedQuery {
 interface SearchHit {
     file: ParsedFile;
     declaration: Declaration;
-    /** 0 exact, 1 prefix, 2 substring. */
+    /** 0 exact, 1 prefix, 2 substring, 3-6 doc text, 7 body text, 8 approximate, 9 related. */
     tier: number;
     /** Present only for approximate results. */
     distance?: number;
+    /** Present only for body-text rows: where the text sits, and how often it occurs. */
+    body?: { line: number; text: string; count: number };
+    /** Present when a body chunk produced the similarity score, so the row can name the span that matched. */
+    chunk?: CodeChunk;
 }
 
 export async function runSearch(
@@ -134,6 +146,8 @@ export async function runSearch(
         };
     }
 
+    const globbed = applyGlobFilter(discovery.files, root, params.glob);
+
     if (discovery.files.length === 0) {
         return {
             text: `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · no supported source files`,
@@ -144,11 +158,46 @@ export async function runSearch(
         };
     }
 
+    if (globbed.files.length === 0) {
+        return {
+            text: `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · no files match glob=${params.glob ?? ""}`,
+            files: 0,
+            parseErrors: 0,
+            truncated: discovery.truncated,
+            matches: 0,
+        };
+    }
+
     const batch = await timing.measure("parse", () =>
-        loadParsedFiles(source, discovery.files, signal),
+        loadParsedFiles(source, globbed.files, signal),
     );
-    timing.recordLoad(batch, discovery.files.length);
-    const parsed = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
+    timing.recordLoad(batch, globbed.files.length);
+    const parsedAll = batch.parsed.toSorted((left, right) => left.path.localeCompare(right.path));
+    const scoped =
+        params.within === undefined
+            ? undefined
+            : await timing.measure("search", () =>
+                  withinScope({
+                      source,
+                      root,
+                      raw: params.within ?? "",
+                      parsed: parsedAll,
+                      files: discovery.files,
+                      signal,
+                  }),
+              );
+
+    if (scoped !== undefined && "error" in scoped) {
+        return {
+            text: scoped.error,
+            files: 0,
+            parseErrors: parsedAll.reduce((total, file) => total + file.parseErrors, 0),
+            truncated: discovery.truncated,
+            matches: 0,
+        };
+    }
+
+    const parsed = scoped?.scope.parsed ?? parsedAll;
     const parseErrors = parsed.reduce((total, file) => total + file.parseErrors, 0);
 
     if (parsed.length === 0) {
@@ -170,7 +219,11 @@ export async function runSearch(
     }
 
     const languages = languagesOf(parsed);
-    const literal = await timing.measure("search", () => collectLiteral(parsed, query, signal));
+    const kind = params.declarationKind;
+    const matchesKind = (declaration: Declaration): boolean =>
+        kind === undefined || declaration.kind === kind;
+    const literalAll = await timing.measure("search", () => collectLiteral(parsed, query, signal));
+    const literal = literalAll.filter((hit) => matchesKind(hit.declaration));
     const docMatches = literal.reduce((count, hit) => count + (isDocTier(hit.tier) ? 1 : 0), 0);
     // Counted apart from body doc text because the rows are labelled apart: a summary that calls a `[frontmatter]`
     // row "by doc text" describes the same rows with two names.
@@ -179,49 +232,94 @@ export async function runSearch(
             count + (hit.declaration.kind === "frontmatter" && isDocTier(hit.tier) ? 1 : 0),
         0,
     );
+    // Literal body text: exact evidence, gated on query shape rather than on the lexical pass, because a strong
+    // name match says nothing about whether the error string the caller remembers lives somewhere else.
+    const bodyQuery =
+        params.body === "off" || query.qualifier !== undefined
+            ? undefined
+            : bodyQueryOf(query.raw, query.quoted);
+    const bodyAll =
+        bodyQuery === undefined
+            ? []
+            : await timing.measure("search", () => collectBodyHits(parsed, bodyQuery, signal));
+    const bodyKept = bodyAll.filter((hit) => matchesKind(hit.declaration));
+    // The cap is a budget decision, not an evidence one: when a name or doc row already answers the query, a few
+    // body rows show the text exists without spending the page on it.
+    const ledByNameOrDoc = literal.length >= 3 || docMatches > 0;
+    const bodyCap =
+        params.body === "all" ? BODY_ROWS_ALL : ledByNameOrDoc ? BODY_ROWS_WHEN_LED : BODY_ROWS;
+    const bodyHits = bodyKept.slice(0, bodyCap);
+    const bodyWithheld = bodyKept.length - bodyHits.length;
+    const bodyRows: SearchHit[] = bodyHits.map((hit) => ({
+        file: hit.file,
+        declaration: hit.declaration,
+        tier: TIER_BODY,
+        body: { ...hit.evidence, count: hit.count },
+    }));
+    const kindHidden = literalAll.length - literal.length + (bodyAll.length - bodyKept.length);
     const fuzzy =
         literal.length === 0
             ? await timing.measure("search", () => collectFuzzy(parsed, query, signal))
             : undefined;
-    const fuzzyHits = fuzzy?.hits ?? [];
+    const fuzzyHits = (fuzzy?.hits ?? []).filter((hit) => matchesKind(hit.declaration));
+    const hiddenTotal = kindHidden + ((fuzzy?.hits.length ?? 0) - fuzzyHits.length);
     // A name or doc-phrase hit is the precise answer and stays first. Anything weaker is prose, which the embedding
-    // channel answers better than a doc tier that merely saw every word somewhere, so there its rows lead.
-    const strongMatch = literal.some((hit) => hit.tier <= TIER_FRONTMATTER_PHRASE);
+    // channel answers better than a doc tier that merely saw every word somewhere, so there its rows lead. Body
+    // evidence is literal and keeps its place ahead of the related rows for the same reason.
+    const strongMatch =
+        literal.some((hit) => hit.tier <= TIER_FRONTMATTER_PHRASE) || bodyRows.length > 0;
     const leads = leadsWithRelated(strongMatch);
     // A typo of an identifier is precise evidence too, so a fuzzy result keeps priority over related rows; a
     // lexical-led answer still takes a related tail when it is thin, exactly as before.
-    const wantsRelated = fuzzyHits.length === 0 && (leads || wantsTail(literal.length, docMatches));
+    const wantsRelated =
+        fuzzyHits.length === 0 &&
+        (leads || wantsTail(literal.length + bodyRows.length, docMatches));
     const related = wantsRelated
-        ? await timing.measure("tail", () =>
-              collectRelated(
-                  semantic,
-                  leads,
-                  parsed,
-                  source,
-                  root,
-                  query,
-                  discovery.truncated,
-                  [...literal, ...fuzzyHits],
-                  signal,
-              ),
-          )
+        ? (
+              await timing.measure("tail", () =>
+                  collectRelated(
+                      semantic,
+                      leads,
+                      parsed,
+                      source,
+                      root,
+                      query,
+                      discovery.truncated,
+                      [...literal, ...bodyRows, ...fuzzyHits],
+                      signal,
+                  ),
+              )
+          ).filter((hit) => matchesKind(hit.declaration))
         : [];
     const relatedKeys = new Set(related.map((hit) => declarationKey(hit.file, hit.declaration)));
-    const lexicalRest = [...literal, ...fuzzyHits].filter(
+    const lexicalRest = [...literal, ...bodyRows, ...fuzzyHits].filter(
         (hit) => !relatedKeys.has(declarationKey(hit.file, hit.declaration)),
     );
     const hits = leads ? [...related, ...lexicalRest] : [...lexicalRest, ...related];
     const total = hits.length;
     const approximate = fuzzyHits.length > 0;
+    const filter = filterNote({
+        glob: params.glob,
+        globHidden: globbed.hidden,
+        declarationKind: kind,
+        kindHidden: hiddenTotal,
+    });
+    const within = scoped === undefined ? undefined : withinLine(source, scoped.scope);
 
     if (total === 0) {
-        const kind =
+        const reason =
             fuzzy !== undefined
                 ? "no declarations or approximate matches"
                 : "no declarations match";
 
         return {
-            text: `# ${kind} ${quotedForMessage(query)} in ${source.displayPath(root)} · ${fileCount(parsed.length)} · ${languages}`,
+            text: [
+                `# ${reason} ${quotedForMessage(query)} in ${source.displayPath(root)} · ${fileCount(parsed.length)} · ${languages}`,
+                filter ?? "",
+                within ?? "",
+            ]
+                .filter((line) => line.length > 0)
+                .join("\n"),
             files: parsed.length,
             parseErrors,
             truncated: discovery.truncated,
@@ -239,20 +337,25 @@ export async function runSearch(
         approximate,
         docMatches - frontmatterMatches,
         frontmatterMatches,
+        bodyRows.length,
         related.length,
     );
     const rows = hits.map((hit) => renderHit(source, hit));
     const body = rows.join("\n");
     const fitted = renderWithinBudget(header, [body], limit, offset);
-    const footer = footerFor(
+    const footer = footerFor({
         approximate,
         query,
-        discovery.truncated,
-        total,
-        fuzzy?.total ?? 0,
-        related.length,
-        moreNote(source, hits, rows, fitted),
-    );
+        discoveryTruncated: discovery.truncated,
+        shown: total,
+        approximateTotal: fuzzy?.total ?? 0,
+        relatedMatches: related.length,
+        bodyMatches: bodyRows.length,
+        bodyWithheld,
+        filter,
+        within,
+        more: moreNote(source, hits, rows, fitted),
+    });
     const hint = related.length > 0 && semantic?.hint !== undefined ? [semantic.hint] : [];
     const next = nextOffsetNote(fitted);
     const text = [fitted.text, next, ...footer, ...hint]
@@ -452,14 +555,6 @@ function docTextOf(file: ParsedFile, declaration: Declaration): DocText {
     return doc;
 }
 
-/** Lowercase and collapse punctuation so a word query matches hyphenated and spaced prose alike. */
-function normalizeText(text: string): string {
-    return text
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, " ")
-        .trim();
-}
-
 /**
  * The doc tiers' query tokens.
  *
@@ -512,7 +607,12 @@ async function collectRelated(
         }
 
         shownKeys.add(key);
-        tail.push({ file: entry.file, declaration: entry.declaration, tier: TIER_RELATED });
+        tail.push({
+            file: entry.file,
+            declaration: entry.declaration,
+            tier: TIER_RELATED,
+            chunk: entry.chunk,
+        });
 
         if (tail.length >= TAIL_ROWS) {
             break;
@@ -646,8 +746,20 @@ function renderHit(source: CodeSource, hit: SearchHit): string {
         declaration.qualifiedName,
         signature,
     ].filter((column) => column.length > 0);
+    const row = `${columns.join("  ")}${tag}${channel}${approximate}`;
 
-    return `${columns.join("  ")}${tag}${channel}${approximate}`;
+    if (hit.body !== undefined) {
+        const count = hit.body.count > 1 ? `  ×${hit.body.count}` : "";
+
+        return `${row}\n  :${hit.body.line}  ${shortLine(hit.body.text)}${count}`;
+    }
+
+    if (hit.chunk !== undefined) {
+        // The declaration range says nothing about which part matched; the chunk span is what `read` should fetch.
+        return `${row}\n  §${hit.chunk.index}/${hit.chunk.total}  :${hit.chunk.startLine}-${hit.chunk.endLine}`;
+    }
+
+    return row;
 }
 
 function channelTag(hit: SearchHit): string {
@@ -657,6 +769,10 @@ function channelTag(hit: SearchHit): string {
 
     if (isDocTier(hit.tier)) {
         return " [doc]";
+    }
+
+    if (hit.tier === TIER_BODY) {
+        return " [body]";
     }
 
     return hit.tier === TIER_RELATED ? " [related]" : "";
@@ -680,12 +796,14 @@ function headerFor(
     approximate: boolean,
     docMatches: number,
     frontmatterMatches: number,
+    bodyMatches: number,
     relatedMatches: number,
 ): string {
     const summary = matchSummary(
         total,
         docMatches,
         frontmatterMatches,
+        bodyMatches,
         approximate,
         relatedMatches,
     );
@@ -693,18 +811,15 @@ function headerFor(
     return `# search ${quotedForMessage(query)} in ${source.displayPath(root)} · ${fileCount(fileTotal)} · ${languages} · ${summary}`;
 }
 
-/** Name, doc, and relevance channels are counted separately so a reader can tell which one produced a row. */
+/** Name, doc, body, and relevance channels are counted separately so a reader can tell which one produced a row. */
 function matchSummary(
     total: number,
     docMatches: number,
     frontmatterMatches: number,
+    bodyMatches: number,
     approximate: boolean,
     relatedMatches: number,
 ): string {
-    if (approximate) {
-        return `no name or doc matches · ${total} approximate`;
-    }
-
     const matches = `${total} ${total === 1 ? "match" : "matches"}`;
     const channels: string[] = [];
 
@@ -716,49 +831,91 @@ function matchSummary(
         channels.push(`${frontmatterMatches} by frontmatter`);
     }
 
+    if (bodyMatches > 0) {
+        channels.push(`${bodyMatches} by body text`);
+    }
+
     if (relatedMatches > 0) {
         channels.push(`${relatedMatches} related`);
+    }
+
+    if (approximate) {
+        if (channels.length === 0) {
+            return `no name or doc matches · ${total} approximate`;
+        }
+
+        channels.push("approximate");
     }
 
     return channels.length === 0 ? matches : `${matches} · ${channels.join(" · ")}`;
 }
 
-function footerFor(
-    approximate: boolean,
-    query: ParsedQuery,
-    discoveryTruncated: boolean,
-    shown: number,
-    approximateTotal: number,
-    relatedMatches: number,
-    more: string | undefined,
-): string[] {
+function footerFor(options: {
+    approximate: boolean;
+    query: ParsedQuery;
+    discoveryTruncated: boolean;
+    shown: number;
+    approximateTotal: number;
+    relatedMatches: number;
+    bodyMatches: number;
+    bodyWithheld: number;
+    filter: string | undefined;
+    within: string | undefined;
+    more: string | undefined;
+}): string[] {
     const footer: string[] = [];
 
-    if (relatedMatches > 0) {
+    if (options.relatedMatches > 0) {
         footer.push(
-            "# related: ranked by term overlap and, when the embedding index is warm, similarity — not by name or doc comment · outline show to confirm",
+            "# related: ranked by term overlap and, when the embedding index is warm, similarity — not by name or doc comment; a §i/n :start-end line names the body chunk that matched · outline show to confirm",
         );
     }
 
-    if (more !== undefined) {
-        footer.push(more);
+    if (options.bodyMatches > 0) {
+        footer.push(
+            "# body: the declaration that contains the text, not the line · outline show returns it whole · line-level hits, regex, and counts stay with rg",
+        );
     }
 
-    if (approximate) {
-        const maxDistance = fuzzyLimit(query.name) ?? 0;
+    if (options.bodyWithheld > 0) {
+        footer.push(
+            `# body: ${counted(options.bodyWithheld, "more declaration")} withheld; a name or doc match already leads — pass body="all" to see them`,
+        );
+    }
+
+    if (options.more !== undefined) {
+        footer.push(options.more);
+    }
+
+    if (options.filter !== undefined) {
+        footer.push(options.filter);
+    }
+
+    if (options.within !== undefined) {
+        footer.push(options.within);
+    }
+
+    if (options.approximate) {
+        const maxDistance = fuzzyLimit(options.query.name) ?? 0;
         const clipped =
-            approximateTotal > shown ? ` · nearest ${shown} of ${approximateTotal}` : "";
+            options.approximateTotal > options.shown
+                ? ` · nearest ${options.shown} of ${options.approximateTotal}`
+                : "";
 
         footer.push(
             `# approximate: edit distance ≤ ${maxDistance}${clipped}; use outline show for the exact source`,
         );
     }
 
-    if (discoveryTruncated) {
+    if (options.discoveryTruncated) {
         footer.push("# note: file discovery was capped; scan a narrower path");
     }
 
     return footer;
+}
+
+function counted(count: number, noun: string): string {
+    return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 /**
@@ -775,13 +932,15 @@ function moreNote(
     fitted: BudgetedText,
 ): string | undefined {
     const onPage = new Set(fitted.text.split("\n"));
-    const firstUnseen = rows.findIndex((row) => !onPage.has(row));
+    // A body row carries an evidence line under the match, so only its first line is the row's identity.
+    const firstLine = (row: string): string => row.split("\n")[0] ?? row;
+    const firstUnseen = rows.findIndex((row) => !onPage.has(firstLine(row)));
 
     if (firstUnseen < 0) {
         return undefined;
     }
 
-    const unseen = rows.filter((row) => !onPage.has(row)).length;
+    const unseen = rows.filter((row) => !onPage.has(firstLine(row))).length;
     const next = hits[firstUnseen];
     const where = next === undefined ? "" : `, next in ${source.displayPath(next.file.path)}`;
 
@@ -792,6 +951,15 @@ function languagesOf(files: readonly ParsedFile[]): string {
     return Array.from(new Set(files.map((file) => file.language)))
         .toSorted()
         .join(",");
+}
+
+function withinLine(source: CodeSource, scope: WithinScope): string {
+    return withinNote({
+        direction: scope.direction,
+        anchor: source.displayPath(scope.anchor),
+        files: scope.parsed.length,
+        outside: scope.outside,
+    });
 }
 
 function fileCount(count: number): string {

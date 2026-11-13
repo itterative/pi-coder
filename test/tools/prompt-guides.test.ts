@@ -73,9 +73,10 @@ describe("tool guides contributed by the tools themselves", () => {
 
         const sections = event.systemPromptOptions.sections;
         expect(sections.outline_tool_guide).toContain("## Outline");
-        // The index boundary has to be stated: prose comments inside a body are not in it, and a caller who has
-        // just read that search does semantic retrieval will otherwise expect them to be.
-        expect(sections.outline_tool_guide).toContain("comment *inside* a function body");
+        // The body channel has to be stated, including its granularity and its shape gate: a caller who has just
+        // read that search does semantic retrieval will otherwise expect line-level hits or a single-word scan.
+        expect(sections.outline_tool_guide).toContain("literal body text");
+        expect(sections.outline_tool_guide).toContain("two or more words");
         expect(sections.outline_tool_guide).toContain("path=<file>");
         expect(sections.ask_user_tool_guide).toContain("You decide");
         expect(sections.memory_audit_tool_guide).toContain("Weigh warnings");

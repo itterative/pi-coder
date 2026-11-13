@@ -3,20 +3,50 @@
 `outline search` answers "where is this in the code" in layers. Each layer is cheaper and more trustworthy than
 the one below it, and a lower layer never displaces a higher one.
 
-| tier | channel                                  | needs                   | trust                               |
-| ---- | ---------------------------------------- | ----------------------- | ----------------------------------- |
-| 0    | exact name                               | nothing                 | a declaration with that name        |
-| 1    | name prefix                              | nothing                 | a declaration                       |
-| 2    | name substring                           | nothing                 | a declaration                       |
-| 3    | doc comment (all tokens, any order)      | nothing                 | a declaration whose comment says it |
-| 4    | BM25 over name + doc + signature         | nothing                 | _related_: ranked by relevance      |
-| 5    | embedding cosine, fused with BM25 by RRF | opt-in download + index | _related_                           |
+| tier | channel                                  | needs                   | trust                                  |
+| ---- | ---------------------------------------- | ----------------------- | -------------------------------------- |
+| 0    | exact name                               | nothing                 | a declaration with that name           |
+| 1    | name prefix                              | nothing                 | a declaration                          |
+| 2    | name substring                           | nothing                 | a declaration                          |
+| 3    | doc comment (all tokens, any order)      | nothing                 | a declaration whose comment says it    |
+| 4    | literal body text                        | nothing                 | the declaration that contains the text |
+| 5    | BM25 over name + doc + signature         | nothing                 | _related_: ranked by relevance         |
+| 6    | embedding cosine, fused with BM25 by RRF | opt-in download + index | _related_                              |
 
-Tiers 0–3 are the literal pass and are unchanged. Tier 4–5 is the **relevance tail**; it runs only when the
-literal pass produced fewer than `TAIL_MIN_LITERAL` (3) rows. A fuzzy identifier match (Damerau, ≤2 edits)
-pre-empts the tail: a typo of an identifier is precise evidence, a relevance guess is not, so when one exists
-the tail does not run at all. Tail rows carry `[related]` and a footer saying they were ranked rather than
-matched.
+Tiers 0–4 are the literal pass. Tier 5–6 is the **relevance tail**; it runs only when the literal pass produced
+fewer than `TAIL_MIN_LITERAL` (3) rows. A fuzzy identifier match (Damerau, ≤2 edits) pre-empts the tail: a typo of
+an identifier is precise evidence, a relevance guess is not, so when one exists the tail does not run at all. Tail
+rows carry `[related]` and a footer saying they were ranked rather than matched.
+
+## Literal body text
+
+`search` reads declaration bodies (`bodyRange`) for text-shaped queries — at least two whitespace-separated words —
+and reports the innermost declaration that contains the match, one row per declaration with an evidence line and an
+occurrence count. The shape gate is what keeps it from being a second grep: a single word is an identifier question,
+and every body that mentions `connect` would otherwise flood a result `usages` answers properly. Markdown files are
+skipped because their prose is the doc channel already.
+
+The cap is a budget decision rather than an evidence one (`semantic/rank.ts`'s tail gate is about spending a query
+embedding; a body hit is a literal scan that has already run): `BODY_ROWS` (20) when the name and doc channels found
+less than three rows and no doc match, `BODY_ROWS_WHEN_LED` (3) when they already lead, and a footer naming what was
+withheld so the count never reads as complete. `body="all"` raises the cap to `BODY_ROWS_ALL`, `body="off"`
+disables the channel. Body rows count as literal evidence for the related gate, so a text-shaped query with body
+hits keeps the lexical rows first.
+
+Cost: one lowercased pass over each parsed file rejects the files that cannot match, then each candidate declaration
+body is scanned for the query tokens. Per-file body hits are cached in a `WeakMap<ParsedFile, …>` keyed by query,
+exactly like the lexical hits, so a cached parse pays once and pagination is free.
+
+## Dependency scope
+
+`within` on `search`/`usages` intersects the candidate files with one file's direct imports
+(`within="src/x.ts"`) or direct importers (`within="dependents:src/x.ts"`); the anchor is relative to the searched
+path, like `glob`. The anchor is always kept, `path` and
+`glob` still bound the tree, and the `# within:` footer names the direction, the anchor, the file count, and any
+neighbour that fell outside the searched path. Edges come from `imports.ts` (`scope.ts` builds the index), so the
+scope is exactly the `deps` graph, one hop deep; a neighbour whose target the scan cannot see does not exist.
+Unlike `deps`, the scope does not change discovery: the searched root is parsed as usual, and the neighbourhood is
+an intersection over those parses plus the anchor.
 
 ## BM25 (always on)
 
@@ -98,9 +128,19 @@ Only the wasm fallback has them; all three were verified against the real model 
   `docs/` (166 declarations, 132 queries, sections to 1976 tokens) 1024 roughly tripled top-1 against 512 for
   head/mid/tail windows while unbounded bought nothing further at ~2.5× the per-text cost. Only 1.7% of
   declarations exceed 512 tokens, so the build barely notices.
-- Entry key = `sha256(embed-text-version \0 modelId \0 embedText)`, where
-  `embedText = "title: <path> | text: <kind> <qualifiedName>. <doc ?? signature>"`. Vectors are L2-normalized at
-  write time, so cosine is a dot product.
+- Entry key = `sha256(embed-text-version \0 modelId \0 embedText)`. A declaration contributes a **head**,
+  `"title: <path> | text: <kind> <qualifiedName>. <doc> <inline comments> <signature>"` (v4 added the inline
+  comments), and, when its body is at least 800 characters, one entry per **body chunk**,
+  `"title: <path> | text: <kind> <qualifiedName> (§i/n) <signature>. <body>"`. Chunks are planned by
+  `semantic/chunks.ts`: split at direct child declarations (a chunked child collapses to its signature line), pack to
+  a 1,600-character target, cut an oversized
+  block at line boundaries with 8 lines of overlap, and merge adjacent chunks past the 12-chunk cap. The plan is
+  deterministic and cached per parsed file, and the policy is part of `embed-text-version`. Vectors are
+  L2-normalized at write time, so cosine is a dot product.
+- The live set is heads _plus_ chunks: a prune keeps them, a refresh fills them, and an idle scan counts chunk keys
+  (a body-only edit moves chunk keys without changing the head text). Ranking takes a declaration's best vector and
+  reports the chunk that won, which is what the `§i/n :start-end` row line names. On this repository, ≈8.7k
+  declarations become ≈9.9k entries (+14%) with ≈1.8 MB of chunk text.
 - A build writes one shard per source file, named with a build timestamp, so a rebuild never rewrites an
   existing shard; pruning deletes shards whose keys disappeared. Each finished shard is appended to
   `manifest.jsonl` itself: a header line, then one line per finished shard (name + keys). `readManifest`

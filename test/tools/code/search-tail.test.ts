@@ -53,6 +53,41 @@ function semanticRanking(name: string): SemanticSearch {
 }
 
 describe("outline search relevance tail", () => {
+    it("names the chunk span when a body chunk produced the similarity score", async () => {
+        const semantic: SemanticSearch = {
+            hint: undefined,
+            dispose: () => undefined,
+            async rank(request) {
+                const file = request.files[0]!;
+                const declaration = file.all.find((candidate) => candidate.name === "promote")!;
+
+                return [
+                    {
+                        file,
+                        declaration,
+                        chunk: {
+                            index: 2,
+                            total: 5,
+                            startLine: 10,
+                            endLine: 20,
+                            key: "chunk-key",
+                            text: "chunk text",
+                        },
+                    },
+                ];
+            },
+        };
+        const result = await runSearch(
+            source(),
+            { action: "search", path: "src", query: "lifetime policy" },
+            undefined,
+            semantic,
+        );
+
+        expect(result.text).toContain("promote");
+        expect(result.text).toContain("§2/5  :10-20");
+    });
+
     it("renders a related row when no name or doc comment matches", async () => {
         const result = await runSearch(
             source(),

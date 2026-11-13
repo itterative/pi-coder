@@ -225,7 +225,7 @@ describe("outline tool registration", () => {
 
         const schema = JSON.stringify(tool.definition.parameters);
 
-        expect(schema).toContain('"enum":["digest","search","show","usages"]');
+        expect(schema).toContain('"enum":["digest","search","show","usages","deps"]');
         // A confirmation call should be able to buy one signature without paying for a whole page.
         expect(schema).toContain('"minimum":200');
         expect(tool.definition.description).toContain("path:start-end");

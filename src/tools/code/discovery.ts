@@ -1,7 +1,40 @@
 import path from "node:path";
 
-import { MAX_FILES, isSupportedPath, languageForPath } from "./languages";
+import { MAX_FILES, isSupportedPath, languageForPath, matchesGlob } from "./languages";
 import type { CodeSource } from "./source";
+
+export interface GlobFilter {
+    files: string[];
+    /** Files the glob removed, so a result never looks smaller than it is without saying why. */
+    hidden: number;
+}
+
+/**
+ * Keep only the discovered files a `glob` selects, counted against the searched path.
+ *
+ * A pattern without a slash matches the basename at any depth, which is what `rg --glob '*.ts'` does; a pattern
+ * with one is matched against the path relative to the searched root, exactly as `rg --glob` does.
+ */
+export function applyGlobFilter(
+    files: readonly string[],
+    root: string,
+    glob: string | undefined,
+): GlobFilter {
+    if (glob === undefined || glob.trim().length === 0) {
+        return { files: [...files], hidden: 0 };
+    }
+
+    const kept = files.filter((file) => matchesGlob(relativeToRoot(root, file), glob));
+
+    return { files: kept, hidden: files.length - kept.length };
+}
+
+function relativeToRoot(root: string, file: string): string {
+    const relative = path.relative(root, file);
+
+    // A file target is its own root: `path.relative` says "" and the glob then sees the basename.
+    return relative.length === 0 || relative.startsWith("..") ? file : relative;
+}
 
 export interface Discovery {
     files: string[];

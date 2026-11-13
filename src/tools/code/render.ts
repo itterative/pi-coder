@@ -18,6 +18,7 @@ interface OutlineCallArgs {
     path?: string;
     query?: string;
     symbols?: readonly string[];
+    within?: string;
     offset?: number;
 }
 
@@ -33,6 +34,10 @@ export function renderOutlineCall(args: OutlineCallArgs, theme: Theme): Text {
 
     if (args.symbols !== undefined && args.symbols.length > 0) {
         text += theme.fg("muted", ` ${args.symbols.join(", ")}`);
+    }
+
+    if (args.within !== undefined && args.within.length > 0) {
+        text += theme.fg("muted", ` within=${args.within}`);
     }
 
     if ((args.offset ?? 0) > 0) {
@@ -69,7 +74,9 @@ export function renderOutlineResult(
     const timing = result.details?.timing;
 
     if (timing !== undefined) {
-        out += `\n${theme.fg("muted", describeTiming(timing))}`;
+        // The timing is a caption on the result, not another row of it: a blank line sets it apart, and italic
+        // reads as an annotation rather than a result line the caller might quote.
+        out = `${out.replace(/\n+$/, "")}\n\n${theme.fg("muted", theme.italic(describeTiming(timing)))}`;
     }
 
     return new Text(out, 0, 0);

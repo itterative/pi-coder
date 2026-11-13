@@ -9,16 +9,54 @@ keep_updated: true
 # Search ranking
 
 `search` is layered, and a lower layer never displaces a higher one: exact name, name prefix, name substring,
-doc comment (all query tokens, any order), then the **relevance tail** — BM25 always, embeddings when enabled —
-then fuzzy identifier matching. Tail rows carry `[related]` and a footer saying they were ranked, not matched.
+doc comment (all query tokens, any order), literal **body text**, then the **relevance tail** — BM25 always,
+embeddings when enabled — then fuzzy identifier matching. Tail rows carry `[related]` and a footer saying they were
+ranked, not matched; body rows carry `[body]` and are exact evidence.
 
-Strings, comments outside a declaration's adjacent doc block, config, and arbitrary source text stay with
-`bash` + `rg`; this is a declaration index, not a text index.
+The tool is still declaration-granular, so line-level work stays with `bash` + `rg`: regex, counts, `-C` context,
+config, logs, prose outside a parsed language, and any file `outline` does not parse.
+
+Three optional parameters narrow a call instead of adding an action: `glob` keeps only files whose path matches
+(rg-style `**`/`{a,b}`, basename matching when the pattern has no slash, matched relative to the searched path),
+`declarationKind` keeps one kind for `search`/`digest`, and `within` keeps one file's direct imports — or, with a
+`dependents:` prefix in the same string, its direct importers (`scope.ts`). A relative anchor is resolved against
+the searched path, like `glob`, not against the cwd. `within` has no depth knob, always keeps the anchor in scope
+(even when `path`/`glob` exclude it), and intersects rather than replacing the tree filters; its
+resolution index covers the whole discovered root so a neighbour hidden by `glob` still counts as an edge and is
+reported as outside the searched path in the `# within:` footer. Edges are the `deps` graph one hop deep, and the
+scope narrows what is searched/ranked, not the discovery-and-parse work. Both run after discovery, so confinement and ignore rules
+are unchanged, and both add a `# filter:` line that names the filter and appends a hidden count when it removed
+rows — a shrunken total that reads as "nothing matched" is the failure they exist to prevent. The line appears even
+when nothing was hidden, because a scoped result must not read as the whole tree. A filtered query also feeds the filtered rows to the tail gates, so the related
+channel searches inside the filter rather than around it; a kind filter in `digest` renders matches flat, without
+ancestor lines.
 
 The tail runs only when the literal pass produced fewer than `TAIL_MIN_LITERAL` (3) rows, and never when a fuzzy
 match exists: an identifier typo is precise evidence, a relevance guess is not. BM25 and embedding lists are
 fused with reciprocal rank fusion (`k = 60`), which is where the measured gain came from — the channels' score
 scales never have to agree.
+
+## Literal body text
+
+`body.ts` scans `declaration.bodyRange` for the query's content tokens and reports the **innermost** declaration that
+contains them (`innermostOnly` drops an outer match whose range holds a kept one), one row per declaration with an
+evidence line and an occurrence count. It is literal, so it ranks above `[related]` and below `[doc]`.
+
+- **Shape gate.** Two or more whitespace-separated words. One word is an identifier question and would flood on
+every body that mentions it; `usages` answers that case.
+- **Markdown excluded.** A memory's prose is already its doc text; a body row would restate the section the doc
+  tier found.
+- **Caps.** `BODY_ROWS` (20) when the name/doc pass found fewer than three rows and no doc match, else
+  `BODY_ROWS_WHEN_LED` (3), with a footer naming the withheld count; `body="all"` uses `BODY_ROWS_ALL` (40) and
+  `body="off"` disables the channel. The cap is a token budget, not an evidence gate — the `wantsTail` rule exists
+  to avoid a query embedding, and a body scan has already run by then.
+- **Cost is dominated by yields, not by the scan.** Measured on this repo (361 files, 3.4 MB under `src`): ~10–12 ms
+  per fresh query, adding ~12 ms to a warm text search. Yielding every 8 files made the channel ~50 ms, because the
+  per-file scan is microseconds and `setImmediate` was most of the time; the interval is 64 files, safe because a
+  file is capped at `MAX_FILE_BYTES`. The other half was lowercasing every declaration body again — the file's
+  lowercased text is sliced instead, with a length check that falls back when a case mapping would shift offsets.
+- **Cache.** Per-file hits sit in a `WeakMap<ParsedFile, Map<query, BodyHit[]>>` like the lexical hits, so a cached
+parse tokenizes once and pagination is free.
 
 ## BM25
 
@@ -27,6 +65,28 @@ signature`, `k1 = 1.2`, `b = 0.75`, length normalization over doc tokens only. H
 to the definition via `pairKey`. Per-file token counts live in a `WeakMap<ParsedFile, …>`; document frequencies
 are recomputed per call. Ordering is deterministic (score, path, line, name), which is what the snapshot tests
 rely on.
+
+## Body chunks
+
+`semantic/chunks.ts`. A head vector embeds `doc + inline body comments + signature` (`text.ts`, text version v4); the
+code itself is only reachable through chunks. A body of at least `CHUNK_MIN_CHARS` (800) is split at its **direct child
+declarations** first, packed to a 1,600-character target, and a single block above 2,400 is cut at line boundaries with
+8 lines of overlap. Each chunk text is `title: <path> | text: <kind> <qname> (§i/n) <signature>. <body>`, keyed by
+its own content hash, so editing one region invalidates one chunk. At most 12 chunks per declaration: adjacent chunks
+merge to get there, and only an already-maximal set loses its tail.
+
+- **The live set is heads + chunks.** `planEmbeddings` and `liveEntryKeys` both enumerate `entriesOf`; `refresh.ts`
+  scans `liveEntryKeys`. A head-only live set makes a prune delete every chunk vector, and a head-only scan calls a
+  body-only edit "current" (the head text does not change when a statement does).
+- **Determinism is a version property.** Search recomputes keys from the current parse, so the plan policy (thresholds,
+  header format, overlap) belongs to `EMBED_TEXT_VERSION`. Change either without a bump and stored vectors silently
+  stop matching.
+- **Ranking is best-vector.** A declaration scores as the max of its head and chunk cosines; the winning chunk travels
+  on `RankedDeclaration.chunk` and renders as `§i/n :start-end` under the `[related]` row, which is the span to `read`.
+- **Cost.** On this repo `src` (≈8.7k declarations) chunks add ≈1.2k entries (+14%) and ≈1.8 MB of chunk text; planning
+  is ~22 ms once per parse, cached per `ParsedFile` like the BM25 entries; a chunked child collapses to its signature
+  line in the parent, so a class chunk never re-embeds its methods. Memory and `docs` trees produce none.
+  Chunk text is capped at `CHUNK_MAX_CHARS` plus its header, well inside the embedder's 1024-token truncation.
 
 ## Embedding channel (opt-in)
 

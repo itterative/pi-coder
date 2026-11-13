@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { artifactsPresent } from "./artifacts";
 import { rankBm25 } from "./bm25";
+import { chunksOf, type CodeChunk } from "./chunks";
 import { MODEL_DIMS, MODEL_ID, type SemanticMode } from "./config";
 import { TAIL_ROWS, fuseRankings, type RankedDeclaration } from "./rank";
 import {
@@ -32,11 +33,51 @@ import {
 import { acquireIndexLock, indexLockHeld } from "./lock";
 import type { SemanticQuery, SemanticSearch } from "./types";
 import { EMBED_TEXT_VERSION, embedTextOf } from "../text";
-import type { ParsedFile } from "../types";
+import type { Declaration, ParsedFile } from "../types";
 
 /** The content key of one declaration's vector; version and model are part of it, so they cannot collide. */
 export function embeddingKey(file: ParsedFile, declaration: ParsedFile["all"][number]): string {
     return hashKey(`${EMBED_TEXT_VERSION}\u0000${MODEL_ID}\u0000${embedTextOf(file, declaration)}`);
+}
+
+/**
+ * One vector a declaration owns: its head (doc, inline comments, signature), or a chunk of its body.
+ *
+ * The head is always present, even when the declaration is chunked: it is what makes "which function is this"
+ * reachable, while a chunk answers "where inside it". Chunks are keyed by their own text, so editing one chunk of a
+ * long body invalidates that chunk alone.
+ */
+interface DeclarationEntry {
+    key: string;
+    text: string;
+    chunk?: CodeChunk;
+}
+
+function entriesOf(file: ParsedFile, declaration: Declaration): DeclarationEntry[] {
+    const entries: DeclarationEntry[] = [
+        { key: embeddingKey(file, declaration), text: embedTextOf(file, declaration) },
+    ];
+
+    for (const chunk of chunksOf(file, declaration)) {
+        entries.push({ key: chunk.key, text: chunk.text, chunk });
+    }
+
+    return entries;
+}
+
+/** Every vector the current parse claims: the live set a prune must keep and a refresh must fill. */
+export function liveEntryKeys(files: readonly ParsedFile[]): Set<string> {
+    const keys = new Set<string>();
+
+    for (const file of files) {
+        for (const declaration of file.all) {
+            for (const entry of entriesOf(file, declaration)) {
+                keys.add(entry.key);
+            }
+        }
+    }
+
+    return keys;
 }
 
 export interface SemanticDeps {
@@ -60,7 +101,7 @@ export interface SemanticDeps {
 
 /** What a search found stale in the index for the files it just parsed. */
 export interface SemanticStaleness {
-    /** Declarations whose content key has no vector yet. */
+    /** Vectors (declaration heads plus body chunks) whose content key has no vector yet. */
     missing: number;
     /** Whether background work was scheduled for them. */
     refreshing: boolean;
@@ -264,9 +305,9 @@ function scheduleBuild(
 
 interface DenseResult {
     hits: RankedDeclaration[];
-    /** Declarations in this search whose content key has no stored vector. */
+    /** Vectors in this search whose content key has no stored vector. */
     missing: number;
-    /** Declarations this search asked about: the complete live set when it covered the namespace root. */
+    /** Vectors this search asked about: the complete live set when it covered the namespace root. */
     live: number;
     /** Namespace entries none of those declarations claim. Dead vectors, not stale answers: they cannot match. */
     dead: number;
@@ -373,9 +414,17 @@ function resolveIndex(modelDir: string, request: SemanticQuery): ResolvedIndex |
     return best ?? legacy;
 }
 
-/** Declarations a request covers, which is what a first build would embed. */
-function declarationCount(request: SemanticQuery): number {
-    return request.files.reduce((total, file) => total + file.all.length, 0);
+/** Vectors a request covers (heads plus body chunks), which is what a first build would embed. */
+function entryCount(request: SemanticQuery): number {
+    let total = 0;
+
+    for (const file of request.files) {
+        for (const declaration of file.all) {
+            total += entriesOf(file, declaration).length;
+        }
+    }
+
+    return total;
 }
 
 /** Whether this exact namespace exists but was written by a model of another width. */
@@ -391,7 +440,7 @@ function hasIncompatibleIndex(modelDir: string, request: SemanticQuery): boolean
 }
 
 /**
- * The result for a root that has no index of its own: every candidate is missing, and the build target is the root.
+ * The result for a root that has no index of its own: every vector is missing, and the build target is the root.
  *
  * `refreshRoot` is the searched root rather than an ancestor because a namespace is keyed by its root; building it
  * here is what gives a declared tree (`.pi/agent/memory`, a package outside the checkout) its own refresh lane
@@ -429,43 +478,56 @@ async function denseRanking(
         // remedy (`/outline build`) that rewrites it, and silently rebuilding under it would mix two vector spaces.
         return hasIncompatibleIndex(modelDir, request)
             ? empty
-            : initialBuild(request, declarationCount(request));
+            : initialBuild(request, entryCount(request));
     }
 
     const { dir, manifest } = resolved;
 
     const candidates: Array<{
         file: ParsedFile;
-        declaration: ParsedFile["all"][number];
-        key: string;
+        declaration: Declaration;
+        entries: DeclarationEntry[];
     }> = [];
     const seen = new Set<string>();
 
     for (const file of request.files) {
         for (const declaration of file.all) {
-            const key = embeddingKey(file, declaration);
+            // A chunk shared by two declarations (identical text) is one vector, so the second owner skips it.
+            const entries = entriesOf(file, declaration).filter((entry) => {
+                if (seen.has(entry.key)) {
+                    return false;
+                }
 
-            if (seen.has(key)) {
+                seen.add(entry.key);
+
+                return true;
+            });
+
+            if (entries.length === 0) {
                 continue;
             }
 
-            seen.add(key);
-            candidates.push({ file, declaration, key });
+            candidates.push({ file, declaration, entries });
         }
     }
 
-    const vectors = readVectors(
-        dir,
-        manifest,
-        candidates.map((candidate) => candidate.key),
+    const liveKeys = new Set(
+        candidates.flatMap((candidate) => candidate.entries.map((entry) => entry.key)),
     );
+    const vectors = readVectors(dir, manifest, Array.from(liveKeys));
     // Without a recorded root the namespace is a guess; never advertise staleness or refresh it.
-    let missing = resolved.root === undefined ? 0 : candidates.length - vectors.size;
+    let missing =
+        resolved.root === undefined
+            ? 0
+            : candidates.reduce(
+                  (total, candidate) =>
+                      total + candidate.entries.filter((entry) => !vectors.has(entry.key)).length,
+                  0,
+              );
     // A dead entry is one the namespace holds that no candidate claims. That is only the *complete* dead set when
     // the search covered the whole root; a subdirectory search would count every other file's vectors as dead.
     const coversRoot =
         resolved.root !== undefined && resolved.root === request.root && request.truncated !== true;
-    const liveKeys = new Set(candidates.map((candidate) => candidate.key));
     let dead = 0;
 
     if (coversRoot) {
@@ -475,7 +537,7 @@ async function denseRanking(
             }
         }
     }
-    const live = candidates.length;
+    const live = liveKeys.size;
 
     if (vectors.size === 0) {
         // An ancestor index that holds none of these declarations never covered this tree — a gitignored memory
@@ -529,11 +591,27 @@ async function denseRanking(
 
     const hits = candidates
         .flatMap((candidate) => {
-            const vector = vectors.get(candidate.key);
+            // A declaration scores as its best vector. The head usually wins for "what is this"; a body chunk wins
+            // when the query is about something only the implementation says, and then the chunk is the evidence.
+            let best: { score: number; chunk?: CodeChunk } | undefined;
 
-            return vector === undefined
+            for (const entry of candidate.entries) {
+                const vector = vectors.get(entry.key);
+
+                if (vector === undefined) {
+                    continue;
+                }
+
+                const score = cosine(vector, queryVector);
+
+                if (best === undefined || score > best.score) {
+                    best = { score, chunk: entry.chunk };
+                }
+            }
+
+            return best === undefined
                 ? []
-                : [{ ...candidate, score: cosine(vector, queryVector) }];
+                : [{ ...candidate, score: best.score, chunk: best.chunk }];
         })
         .toSorted(
             (left, right) =>
@@ -545,6 +623,7 @@ async function denseRanking(
         .map((candidate) => ({
             file: candidate.file,
             declaration: candidate.declaration,
+            chunk: candidate.chunk,
         }));
 
     return { hits, missing, live, dead, refreshRoot: resolved.root, refreshCoversRoot: coversRoot };
@@ -652,15 +731,15 @@ function planEmbeddings(files: readonly ParsedFile[], manifest: IndexManifest): 
         const entries: BuildFile["entries"] = [];
 
         for (const declaration of file.all) {
-            const key = embeddingKey(file, declaration);
+            for (const entry of entriesOf(file, declaration)) {
+                liveKeys.add(entry.key);
 
-            liveKeys.add(key);
+                if (manifest.entries[entry.key] !== undefined) {
+                    continue;
+                }
 
-            if (manifest.entries[key] !== undefined) {
-                continue;
+                entries.push({ key: entry.key, text: entry.text });
             }
-
-            entries.push({ key, text: embedTextOf(file, declaration) });
         }
 
         missing += entries.length;
@@ -685,8 +764,9 @@ function planEmbeddings(files: readonly ParsedFile[], manifest: IndexManifest): 
 /**
  * How much an index build would embed, without embedding anything.
  *
- * The command uses it to price the build (declarations × seconds-per-declaration ÷ workers) and ask for
- * confirmation before spending minutes of CPU or a 200 MB download on an accidental `.` target.
+ * The command uses it to price the build (vectors × seconds-per-vector ÷ workers) and ask for confirmation before
+ * spending minutes of CPU or a 200 MB download on an accidental `.` target. A vector is one declaration head or one
+ * body chunk, so the count is the actual embedding work rather than the declaration count.
  */
 export function countEmbeddings(options: {
     sourceKind: string;

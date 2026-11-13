@@ -11,7 +11,9 @@ import {
     countEmbeddings,
     createSemanticSearch,
     embeddingKey,
+    liveEntryKeys,
 } from "../../../src/tools/code/semantic";
+import { chunksOf } from "../../../src/tools/code/semantic/chunks";
 import { MODEL_DIMS, MODEL_ID } from "../../../src/tools/code/semantic/config";
 import { acquireIndexLock } from "../../../src/tools/code/semantic/lock";
 import {
@@ -148,6 +150,27 @@ async function parseFiles(): Promise<ParsedFile[]> {
     }
 
     return parsed;
+}
+
+/** A function long enough for the chunk policy, so a build has to plan body vectors as well as a head. */
+function longSource(lines: number, name = "long"): string {
+    const filler = Array.from(
+        { length: lines },
+        (_, index) => `    const value${index} = compute(${index});`,
+    ).join("\n");
+
+    return `export function ${name}(): number {\n${filler}\n    return 0;\n}\n`;
+}
+
+async function parseOne(relative: string, source: string, mtime = 1): Promise<ParsedFile> {
+    const memory = new MemoryCodeSource("/project", { [relative]: source }, { [relative]: mtime });
+    const loaded = await loadParsedFile(memory, `/project/${relative}`);
+
+    if (loaded.kind !== "parsed") {
+        throw new Error("expected a parsed file");
+    }
+
+    return loaded.parsed;
 }
 
 describe("outline semantic worker budget", () => {
@@ -807,5 +830,115 @@ describe("outline semantic root ownership", () => {
         });
 
         expect(stale).toEqual([{ missing: 4, refreshing: false, initial: true }]);
+    });
+});
+
+describe("body chunks in the index", () => {
+    it("plans and embeds a head plus one vector per chunk, and counts them as live", async () => {
+        const root = tempDir();
+        const file = await parseOne("src/long.ts", longSource(200));
+        const declaration = file.all.find((candidate) => candidate.name === "long")!;
+        const chunks = chunksOf(file, declaration);
+        const texts: string[] = [];
+        const runtime: EmbedRuntime = {
+            ...fakeRuntime(vectorFor("query")),
+            build: async (dir, jobs, onProgress, signal, onShard) => {
+                texts.push(...jobs.flatMap((job) => job.entries.map((entry) => entry.text)));
+
+                return await fakeRuntime(vectorFor("query")).build(
+                    dir,
+                    jobs,
+                    onProgress,
+                    signal,
+                    onShard,
+                );
+            },
+        };
+
+        expect(chunks.length).toBeGreaterThan(1);
+
+        const options = { sourceKind: "local", root: "/project/src", modelDir: root };
+        const result = await buildIndex({ ...options, files: [file], runtime });
+
+        expect(result.live).toBe(1 + chunks.length);
+        expect(result.embedded).toBe(1 + chunks.length);
+        expect(texts.some((text) => text.includes("(§1/"))).toBe(true);
+        expect(liveEntryKeys([file]).size).toBe(result.live);
+        expect(countEmbeddings({ ...options, files: [file] }).live).toBe(result.live);
+    });
+
+    it("re-embeds only the chunk an edit touches, and prunes the old vector", async () => {
+        const root = tempDir();
+        const source = longSource(200);
+        const before = await parseOne("src/long.ts", source, 1);
+        const beforeChunks = chunksOf(
+            before,
+            before.all.find((entry) => entry.name === "long")!,
+        );
+        const options = { sourceKind: "local", root: "/project/src", modelDir: root };
+
+        const first = await buildIndex({
+            ...options,
+            files: [before],
+            runtime: fakeRuntime(vectorFor("query")),
+        });
+
+        expect(first.live).toBe(1 + beforeChunks.length);
+
+        const edited = source.replace("compute(150)", "compute(151)");
+        const after = await parseOne("src/long.ts", edited, 2);
+        const afterChunks = chunksOf(
+            after,
+            after.all.find((entry) => entry.name === "long")!,
+        );
+        const beforeKeys = new Set(beforeChunks.map((chunk) => chunk.key));
+        const changed = afterChunks.filter((chunk) => !beforeKeys.has(chunk.key));
+
+        expect(changed).toHaveLength(1);
+
+        const second = await buildIndex({
+            ...options,
+            files: [after],
+            runtime: fakeRuntime(vectorFor("query")),
+        });
+
+        expect(second.embedded).toBe(changed.length);
+        expect(second.live).toBe(1 + afterChunks.length);
+        expect(second.dead).toBe(changed.length);
+        expect(second.pruned).toBe(true);
+        expect(manifestSize(options)).toBe(second.live);
+    });
+
+    it("ranks a body chunk as its declaration and reports which chunk matched", async () => {
+        const root = tempDir();
+        const file = await parseOne("src/long.ts", longSource(200));
+        const declaration = file.all.find((candidate) => candidate.name === "long")!;
+        const chunks = chunksOf(file, declaration);
+        const options = { sourceKind: "local", root: "/project/src", modelDir: root };
+
+        await buildIndex({
+            ...options,
+            files: [file],
+            runtime: fakeRuntime(vectorFor("query")),
+        });
+
+        const target = chunks[1]!;
+        const semantic = createSemanticSearch({
+            mode: "hybrid",
+            modelDir: root,
+            runtime: fakeRuntime(vectorFor(target.text)),
+            artifactsReady: () => true,
+            autoRefresh: false,
+        });
+        const ranked = await semantic.rank({
+            query: "lifetime policy",
+            root: "/project/src",
+            sourceKind: "local",
+            files: [file],
+        });
+
+        expect(ranked[0]?.declaration.name).toBe("long");
+        expect(ranked[0]?.chunk?.index).toBe(target.index);
+        expect(ranked[0]?.chunk?.startLine).toBe(target.startLine);
     });
 });

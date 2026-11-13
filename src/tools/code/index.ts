@@ -11,6 +11,7 @@ import { getUserMemoryDirectory } from "../../common/constants";
 import { fileRootsForOperation } from "../../modules/sandbox/file-roots";
 import { outlineGuidePrompt } from "./prompt";
 import { discoverFiles } from "./discovery";
+import { runDeps } from "./deps";
 import { runDigest } from "./digest";
 import { DEFAULT_CHAR_LIMIT, MIN_CHAR_LIMIT } from "./languages";
 import { loadParsedFiles } from "./load";
@@ -35,16 +36,24 @@ import type { SemanticSearch } from "./semantic/types";
 import { runShow } from "./show";
 import { createCodeSource, type CodeReadRoots } from "./source";
 import { CallTiming } from "./timing";
-import type { CodeAction, CodeActionResult, CodeDetail, CodeToolParams, UsageKind } from "./types";
+import type {
+    BodyMode,
+    CodeAction,
+    CodeActionResult,
+    CodeDetail,
+    CodeToolParams,
+    DeclarationKind,
+    UsageKind,
+} from "./types";
 import { runUsages } from "./usages";
 
 /**
  * `outline` — structural navigation without reading whole files.
  *
- * The model-facing surface is deliberately one tool with four questions: `digest` to orient in a module,
- * `search` to find declarations by partial name, `show` to extract a named declaration, and `usages` to find
- * syntactic occurrences. Every filesystem read goes through `CodeSource`, so a container session answers from
- * the same view as `bash` and `read`.
+ * The model-facing surface is deliberately one tool with five questions: `digest` to orient in a module,
+ * `search` to find declarations by partial name, doc comment, or literal body text, `show` to extract a named
+ * declaration, `usages` to find syntactic occurrences, and `deps` for one file's imports and dependents. Every
+ * filesystem read goes through `CodeSource`, so a container session answers from the same view as `bash` and `read`.
  */
 export default function registerCodeTool(pi: ExtensionAPI, container?: ContainerState): void {
     pi.registerTool({
@@ -55,16 +64,18 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
             "(JSX/TSX), Java, C#, Go, Rust, Python, PHP, Ruby, and Markdown headings; other file types are " +
             "skipped. Output is character-limited, and a cut result ends with # next: offset=N and the lines it " +
             "left. For a body over ~40 lines the span is cheaper: every header carries path:start-end, so digest " +
-            "or show locates it and one read offset=start limit=n fetches it.",
+            "or show locates it and one read offset=start limit=n fetches it. `search` also matches literal text " +
+            "inside declaration bodies ([body] rows, one row per containing declaration); line-level hits, " +
+            "regex, and counts stay with rg. `deps` reports one file's imports and the files that import it.",
         promptSnippet:
-            "Read code by declaration: digest a file, search names/docs, show a body, find usages. " +
+            "Read code by declaration: digest a file, search names/docs/body text, show a body, find usages. " +
             "Prefer over rg/read.",
         parameters: Type.Object({
             action: Type.Unsafe<CodeAction>({
                 type: "string",
-                enum: ["digest", "search", "show", "usages"],
+                enum: ["digest", "search", "show", "usages", "deps"],
                 description:
-                    "digest maps a file or directory; search finds declarations by name, with a typo fallback; show extracts named symbols and pairs headers with definitions; usages lists syntactic occurrences",
+                    "digest maps a file or directory; search finds declarations by name, doc text, or literal body text, with a typo fallback; show extracts named symbols and pairs headers with definitions; usages lists syntactic occurrences; deps lists one file's imports and the files that import it",
             }),
             path: Type.Optional(
                 Type.String({
@@ -112,6 +123,54 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
                         "usages only: narrow to definitions, calls/launches, or references",
                 }),
             ),
+            glob: Type.Optional(
+                Type.String({
+                    description:
+                        "digest/search/usages: keep only files whose path matches this glob, relative to the searched path. `**` crosses directories, `{a,b}` alternates, and a pattern without `/` matches the file name at any depth (like rg --glob).",
+                }),
+            ),
+            declarationKind: Type.Optional(
+                Type.Unsafe<DeclarationKind>({
+                    type: "string",
+                    enum: [
+                        "namespace",
+                        "class",
+                        "struct",
+                        "union",
+                        "interface",
+                        "trait",
+                        "enum",
+                        "enumMember",
+                        "function",
+                        "method",
+                        "constructor",
+                        "destructor",
+                        "operator",
+                        "field",
+                        "variable",
+                        "typeAlias",
+                        "macro",
+                        "heading",
+                        "frontmatter",
+                    ],
+                    description:
+                        "digest/search only: keep only declarations of this kind, e.g. function or heading",
+                }),
+            ),
+            body: Type.Optional(
+                Type.Unsafe<BodyMode>({
+                    type: "string",
+                    enum: ["auto", "all", "off"],
+                    description:
+                        "search only: literal body-text rows. auto caps them (3 when a name or doc match already leads, else 20); all raises the cap; off disables the channel",
+                }),
+            ),
+            within: Type.Optional(
+                Type.String({
+                    description:
+                        'search/usages only: limit the scan to one file\'s direct imports (`within="src/x.ts"`) or its direct importers (`within="dependents:src/x.ts"`). The anchor is relative to the searched path, like `glob`; it is always included, and `path`/`glob` still bound the tree.',
+                }),
+            ),
             offset: Type.Optional(
                 Type.Number({
                     description:
@@ -134,6 +193,10 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
                 limit,
                 offset: Math.max(0, Math.floor(params.offset ?? 0)),
                 kind: params.kind,
+                glob: params.glob,
+                declarationKind: params.declarationKind,
+                body: params.body,
+                within: params.within,
             };
             const fallbackPath = params.path ?? ".";
 
@@ -279,7 +342,7 @@ function idleRefresh(
 
             if (outcome.overBudget) {
                 ctx.ui.notify(
-                    `outline semantic: ${outcome.missing} declaration${outcome.missing === 1 ? "" : "s"} are not indexed; /outline build <path>`,
+                    `outline semantic: ${outcome.missing} vector${outcome.missing === 1 ? "" : "s"} not indexed; /outline build <path>`,
                     "info",
                 );
 
@@ -288,7 +351,7 @@ function idleRefresh(
 
             if (outcome.rebuilt > 0) {
                 ctx.ui.notify(
-                    `outline semantic: refreshed ${outcome.embedded} declaration${outcome.embedded === 1 ? "" : "s"} in the background`,
+                    `outline semantic: refreshed ${outcome.embedded} vector${outcome.embedded === 1 ? "" : "s"} in the background`,
                     "info",
                 );
             }
@@ -341,6 +404,13 @@ async function runAction(
         source: source.kind,
     };
 
+    if (params.within !== undefined && params.action !== "search" && params.action !== "usages") {
+        return {
+            text: `# within applies to search and usages, not ${params.action}`,
+            details: { ...base, files: 0 },
+        };
+    }
+
     switch (params.action) {
         case "digest": {
             const result = await runDigest(source, params, signal, timing);
@@ -385,6 +455,20 @@ async function runAction(
         }
         case "usages": {
             const result = await runUsages(source, params, signal, timing);
+
+            return {
+                text: result.text,
+                details: {
+                    ...base,
+                    files: result.files,
+                    matches: result.matches,
+                    parseErrors: result.parseErrors,
+                    truncated: result.truncated,
+                },
+            };
+        }
+        case "deps": {
+            const result = await runDeps(source, params, signal, timing);
 
             return {
                 text: result.text,
@@ -445,7 +529,7 @@ async function prepareSemantic(ctx: ExtensionContext): Promise<SemanticSearch | 
         modelDir: root,
         hint: mode === "hybrid" || state.consent === "never" ? undefined : SEMANTIC_HINT,
         onStale: ({ missing, refreshing, initial }) => {
-            const count = `${missing} declaration${missing === 1 ? "" : "s"}`;
+            const count = `${missing} vector${missing === 1 ? "" : "s"}`;
 
             if (refreshing) {
                 ctx.ui.setStatus(
@@ -811,12 +895,12 @@ function failureText(params: { action: string; path?: string }, error: unknown):
 
 /** Above this many missing vectors, the build asks before spending minutes of CPU. */
 const BUILD_CONFIRM_THRESHOLD = 200;
-/** Measured on the container CPU: single-threaded wasm embeds one declaration in ≈1.1 s. */
-const SECONDS_PER_DECLARATION = 1.1;
+/** Measured on the container CPU: single-threaded wasm embeds one vector (head or chunk) in ≈1.1 s. */
+const SECONDS_PER_EMBEDDING = 1.1;
 
-/** Rough wall clock for `declarations` left at the measured rate, split across `workers`. */
-function formatEstimate(declarations: number, workers: number): string {
-    const seconds = (declarations * SECONDS_PER_DECLARATION) / workers;
+/** Rough wall clock for `vectors` left at the measured rate, split across `workers`. */
+function formatEstimate(vectors: number, workers: number): string {
+    const seconds = (vectors * SECONDS_PER_EMBEDDING) / workers;
 
     if (seconds < 3600) {
         return `~${Math.max(1, Math.ceil(seconds / 60))} min`;
@@ -836,7 +920,7 @@ function plural(value: number, noun: string): string {
 /**
  * Price the build before starting it, then embed whatever the index is missing.
  *
- * Parsing is cheap and needs no model, so the plan is computed first: it tells the user how many declarations
+ * Parsing is cheap and needs no model, so the plan is computed first: it tells the user how many vectors
  * would be embedded, how long that takes, and whether a download is still needed. A build that would take
  * minutes, or that has to fetch 211 MB, is confirmed explicitly; only a small incremental build against a warm
  * index proceeds without a dialog.
@@ -870,7 +954,7 @@ async function buildSemanticIndex(
             // An index from before the header recorded its root works via the legacy fallback, but only a
             // stamped root enables staleness reporting and subdirectory refreshes. No embedding happens here.
             ensureIndexMetadata({ sourceKind: source.kind, root: resolved, modelDir: root });
-            ctx.ui.notify(`outline semantic: index is current (${plan.live} declarations)`, "info");
+            ctx.ui.notify(`outline semantic: index is current (${plan.live} vectors)`, "info");
 
             return;
         }
@@ -886,9 +970,9 @@ async function buildSemanticIndex(
         );
         let loader: CancellableLoader | undefined;
         let filesLeft = plan.files;
-        let declarationsLeft = plan.missing;
+        let vectorsLeft = plan.missing;
         const compose = (): string =>
-            `Building embeddings for ${plural(plan.files, "file")} (${plural(filesLeft, "file")} left; estimate ${formatEstimate(declarationsLeft, workers)})`;
+            `Building embeddings for ${plural(plan.files, "file")} (${plural(filesLeft, "file")} left; estimate ${formatEstimate(vectorsLeft, workers)})`;
         let message = compose();
 
         // Track the latest message even before the loader exists: a download starts synchronously.
@@ -922,7 +1006,7 @@ async function buildSemanticIndex(
                 files: batch.parsed,
                 signal: controller.signal,
                 onProgress: (done, total) => {
-                    declarationsLeft = Math.max(0, total - done);
+                    vectorsLeft = Math.max(0, total - done);
 
                     if (done === total) {
                         progress(
@@ -994,7 +1078,7 @@ async function buildSemanticIndex(
         }
 
         ctx.ui.notify(
-            `outline semantic: ${result.embedded} embedded, ${result.live} declarations indexed`,
+            `outline semantic: ${result.embedded} embedded, ${result.live} vectors indexed`,
             "info",
         );
     } catch (error) {
@@ -1021,13 +1105,13 @@ async function confirmBuild(
     }
 
     const workers = buildWorkerCount();
-    const minutes = Math.max(1, Math.ceil((missing * SECONDS_PER_DECLARATION) / workers / 60));
+    const minutes = Math.max(1, Math.ceil((missing * SECONDS_PER_EMBEDDING) / workers / 60));
     const megabytes = cached ? 0 : Math.round(artifactBytes() / 1_048_576);
     const download = megabytes > 0 ? `, ≈${megabytes} MB download` : "";
     let choice: string | undefined;
 
     try {
-        choice = await ctx.ui.select(`Embed ${missing} declarations`, [
+        choice = await ctx.ui.select(`Embed ${missing} vectors`, [
             `Build now (~${minutes} min on ${workers} worker${workers === 1 ? "" : "s"}${download})`,
             "Cancel",
         ]);

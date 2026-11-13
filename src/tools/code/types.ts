@@ -1,7 +1,7 @@
 import type { CodeTiming } from "./timing";
 
 /** The questions the outline tool answers. */
-export type CodeAction = "digest" | "search" | "show" | "usages";
+export type CodeAction = "digest" | "search" | "show" | "usages" | "deps";
 
 /** How much of a declaration the caller wants. */
 export type CodeDetail = "signatures" | "full";
@@ -107,7 +107,23 @@ export interface CodeToolParams {
     /** Body-line offset for continuing a result cut by the limit. */
     offset?: number;
     kind?: UsageKind;
+    /** Only files whose path matches this glob, relative to the searched path. */
+    glob?: string;
+    /** Only declarations of this kind, for `search` and `digest`. */
+    declarationKind?: DeclarationKind;
+    /** `search` only: how literal body-text rows are capped. */
+    body?: BodyMode;
+    /** `search`/`usages` only: scope to a file's direct imports, or with a `dependents:` prefix, its importers. */
+    within?: string;
 }
+
+/**
+ * How much of the literal body-text channel a search reports.
+ *
+ * `auto` returns a wide page when the name and doc channels found little, and a few rows when they already
+ * answered the query; `all` and `off` exist so the cap is overridable instead of a rule the caller cannot see.
+ */
+export type BodyMode = "auto" | "all" | "off";
 
 /** What an action returns: the model-facing text plus structural details for the caller/TUI. */
 export interface CodeActionResult {

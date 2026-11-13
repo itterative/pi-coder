@@ -202,6 +202,101 @@ export function shouldIgnorePath(relativePath: string): boolean {
     );
 }
 
+/**
+ * Match a path relative to the searched root against one glob.
+ *
+ * The subset ripgrep's `--glob` teaches: `**` crosses directories, `*` and `?` do not, `{a,b}` alternates, and a
+ * pattern without a slash matches the basename at any depth. Case-sensitive, like `rg`.
+ */
+export function matchesGlob(relativePath: string, pattern: string): boolean {
+    const normalizedPath = relativePath.replace(/\\/g, "/");
+    const trimmed = pattern.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+
+    if (trimmed.length === 0) {
+        return false;
+    }
+
+    const target = trimmed.includes("/")
+        ? normalizedPath
+        : normalizedPath.slice(normalizedPath.lastIndexOf("/") + 1);
+
+    return globRegExp(trimmed).test(target);
+}
+
+/** Compiling a glob is pure, and a long walk tests the same handful of patterns against every file. */
+const globCache = new Map<string, RegExp>();
+
+function globRegExp(pattern: string): RegExp {
+    const cached = globCache.get(pattern);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    let source = "";
+
+    for (let index = 0; index < pattern.length; index += 1) {
+        const char = pattern[index];
+
+        if (char === "*") {
+            if (pattern[index + 1] !== "*") {
+                source += "[^/]*";
+
+                continue;
+            }
+
+            // `**/` may also match no directory at all, so `src/**/*.ts` still matches `src/a.ts`.
+            if (pattern[index + 2] === "/") {
+                source += "(?:.*/)?";
+                index += 2;
+            } else {
+                source += ".*";
+                index += 1;
+            }
+
+            continue;
+        }
+
+        if (char === "?") {
+            source += "[^/]";
+
+            continue;
+        }
+
+        if (char === "{") {
+            const close = pattern.indexOf("}", index);
+
+            if (close < 0) {
+                source += "\\{";
+
+                continue;
+            }
+
+            const options = pattern
+                .slice(index + 1, close)
+                .split(",")
+                .map(escapeRegExp);
+
+            source += `(?:${options.join("|")})`;
+            index = close;
+
+            continue;
+        }
+
+        source += escapeRegExp(char);
+    }
+
+    const compiled = new RegExp(`^${source}$`);
+
+    globCache.set(pattern, compiled);
+
+    return compiled;
+}
+
+function escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /** A compact size label for one file in a digest. */
 export function sizeLabel(lineCount: number): "tiny" | "medium" | "large" | "huge" {
     if (lineCount <= 120) {

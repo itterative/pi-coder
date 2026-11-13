@@ -1,6 +1,6 @@
 ---
 name: outline-tool
-description: The `outline` tool in src/tools/code - digest/search/show/usages for C/C++/HIP, JS/TS, Java, C#, Go, Rust, Python, PHP, Ruby, and Markdown headings.
+description: The `outline` tool in src/tools/code - digest/search/show/usages/deps across ten languages, with body-text search and glob/kind narrowing.
 category: architecture
 priority: 7
 keep_updated: true
@@ -9,23 +9,21 @@ keep_updated: true
 # `outline` tool
 
 `digest` maps a file or directory, `search` finds declarations by partial name, `show` returns exact source for
-named declarations, and `usages` lists syntactic occurrences. Registered from `src/index.ts` beside the file-tool
-hooks; full design notes are in `src/tools/code/README.md`.
+named declarations, `usages` lists syntactic occurrences, and `deps` reports one file's imports and dependents.
+Registered from `src/index.ts`; design notes: `src/tools/code/README.md`.
 
 ## Invariants
 
 - **One filesystem view.** All I/O goes through `CodeSource` (`source.ts`). With a container active,
   `ContainerCodeSource` uses the session's `fs`/`spawn` and never host `fs`; the source is chosen per call from
   `ContainerState.sessionFor`, because a session can move onto a container after an image build.
-- **Local confinement is per file.** `LocalCodeSource.assertReadable` realpaths every file before
-  `loadParsedFile` reads it, so a symlink below the root cannot escape the cwd.
-- **The parse buffer is not the output buffer.** `adapters.ts` is the one language registry: each entry owns its
-  grammar, preprocessor, parser, and `usages` call sites. Only C++/HIP preprocesses (`preprocess.ts`), blanking
-  HIP/CUDA qualifiers, `<<<>>>` launches, declaration macros, attributes, and `= {}` defaults with **same-length**
-  replacements; directives are copied verbatim. `cpp.ts` parses that buffer but slices signatures and source from
-  the original, so offsets and `__global__` survive, and `declarationStart()` recovers blanked prefix macros.
-  Every other language uses an identity preprocessor; Markdown is line-scanned and a heading's doc text is its
-section prose, so sections are searchable by content (`outline-tool/search.md`).
+- **Local confinement is per file.** `assertReadable` realpaths every file before parsing, so a symlink below the
+  root cannot escape the cwd.
+- **The parse buffer is not the output buffer.** `adapters.ts` is the one language registry (grammar, preprocessor,
+  parser, `usages` call sites). Only C++/HIP preprocesses (`preprocess.ts`), blanking qualifiers, launches, macros,
+  attributes, and `= {}` defaults with **same-length** replacements; directives are copied verbatim, and `cpp.ts`
+  parses that buffer but slices from the original, so offsets and `__global__` survive. Markdown is line-scanned,
+  and a heading's doc text is its own prose (`outline-tool/search.md`).
 - **The declaration IR is not an AST.** Adapters emit `Declaration` (kind, qualified name, ranges, signature,
   parameter types, access, children) through `visitor.ts`; parser node types never reach an action or the
   formatter. Body walkers also extract inner functions and arrow/function constants (JS/TS), named lambdas (C++),
@@ -38,25 +36,28 @@ section prose, so sections are searchable by content (`outline-tool/search.md`).
 - **Large files leave the main thread.** `worker.ts` lazily starts one `parse-worker.mjs` for files ≥256 KiB,
   loading parsers through jiti; abort terminates it rather than waiting for a synchronous parse. A missing loader
   or worker error falls back to inline parsing, and small files never pay the startup cost.
-- **Loops yield.** `common/async.ts`'s referenced `yieldToEventLoop` sits between parsed files and at index/search
-  boundaries with `AbortSignal` checks, so a long scan does not starve the TUI.
+- **Loops yield.** `common/async.ts`'s `yieldToEventLoop` sits between parsed files and at index/search boundaries
+  with `AbortSignal` checks, so a long scan does not starve the TUI.
 - **Routing lives in an `outline_tool_guide` section, not in the description.** Triggers name the agent's next
   action (about to `read` a long file, about to `rg` for a declaration, have a symbol name) and three literal
   invocations carry the `digest → show → usages` workflow; cheapness is stated, tidiness is not. **Intent-level
-  triggers are the failure mode**: asked whether a question is "about code structure", an agent already heading
-  for `rg` answers no. State the boundary as a real limitation, since a wasted turn teaches preference for `rg`.
+  triggers fail**: an agent already heading for `rg` answers "no, not structure". State the boundary as a real
+  limitation, since a wasted turn teaches preference for `rg`.
   **The limitation must be the literal one.** `search` still appends relevance-ranked `[related]` rows when
   names and doc comments are thin, and `SEMANTIC_HINT` is suppressed once hybrid is active, so a guide saying
   `search` reads "names and doc comments and nothing else" leaves the agent no in-band signal that a conceptual
   query can land. The honest boundary is "no identifier or doc comment spells it out", not "no such code".
-  `promptSnippet` is that per-turn surface, `description` the call contract; action glosses belong to the enum.
 - **`usages` is syntactic.** It matches the selector's last component on purpose (call sites say
   `socket.connect`, not `Socket::connect`). Overloads, generics, templates, macros, and dynamic dispatch are not
   resolved; clangd is the eventual provider for C++ references.
-- **`search` ranks in tiers.** Exact name, name prefix, name substring, doc *phrase*, then frontmatter and
-  doc-comment tokens (all required, any order, lightly stemmed); below those a relevance tail (BM25 always,
-  opt-in embeddings fused by RRF) and a capped fuzzy pass. Rows carry `[doc]`, `[frontmatter]`, or `[related]`;
-  a cut page ends with `# more: … next in <path>`. Details: `outline-tool/search.md`.
+- **`deps` is a file graph, not a call graph.** Text extraction on comment-masked source, three resolution states,
+  dependents as a whole-tree scan (`outline-tool/deps.md`).
+- **`search` ranks in tiers.** Exact name, prefix, substring, doc phrase, frontmatter/doc tokens, literal body
+  text (`[body]`), then the relevance tail and a capped fuzzy pass. Rows carry `[doc]`, `[frontmatter]`,
+  `[body]`, `[related]`; body chunks (`semantic/chunks.ts`) make code inside a long declaration reachable from the
+  vector channel. Tiers, caps, chunks: `outline-tool/search.md`.
+- **Narrowing is a parameter.** `glob` and `declarationKind` filter the discovered set; `# filter:` names the filter
+  and any hidden count (`outline-tool/search.md`).
 
 ## Defaults
 
@@ -95,9 +96,10 @@ PowerShell are deferred; resolved references would be a future provider.
   extraction and scope/access rules.
 - `src/tools/code/markdown.ts` — heading extraction without a grammar.
 - `src/tools/code/preprocess.ts` — the byte-preserving HIP/CUDA and macro neutralizer.
-- `src/tools/code/search.ts`, `fuzzy.ts` — declaration-name search and its zero-hit approximate fallback.
+- `src/tools/code/search.ts`, `body.ts`, `fuzzy.ts` — name/doc search, literal body text, and the typo fallback.
 - `src/tools/code/source.ts` — container/local filesystem seam and confinement.
 - `src/tools/code/cache.ts` — the 2Q parsed-file cache and its entry/byte eviction policy.
 - `src/tools/code/usages.ts` — syntactic identifier indexing and scope/tag classification.
+- `src/tools/code/imports.ts`, `deps.ts` — import extraction, resolution states, and the dependents scan.
 - `src/tools/code/worker.ts`, `parse-worker.mjs` — the lazy large-file worker and its jiti bootstrap.
 - `test/tools/code/`, `test/helpers/code-source.ts` — parser/action, source, cache, worker, registration coverage.

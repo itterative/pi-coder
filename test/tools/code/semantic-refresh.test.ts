@@ -89,6 +89,16 @@ async function parsedFile(files: Record<string, string>, relative: string): Prom
     return loaded.parsed;
 }
 
+/** Long enough for the chunk policy, so a build plans body vectors as well as a head. */
+function longSource(lines: number): string {
+    const filler = Array.from(
+        { length: lines },
+        (_, index) => `    const value${index} = compute(${index});`,
+    ).join("\n");
+
+    return `export function long(): number {\n${filler}\n    return 0;\n}\n`;
+}
+
 const ORIGINAL = {
     "src/one.ts": `export function one(): number {\n    return 1;\n}\n`,
     "src/two.ts": `export function two(): number {\n    return 2;\n}\n`,
@@ -168,6 +178,33 @@ describe("idle refresh decision", () => {
 });
 
 describe("idle refresh scan", () => {
+    it("counts body-chunk drift, which a head-only scan cannot see", async () => {
+        const modelDir = tempDir();
+        const source = longSource(200);
+        const file = await parsedFile({ "src/long.ts": source }, "src/long.ts");
+
+        await buildIndex({
+            sourceKind: "local",
+            root: ROOT,
+            modelDir,
+            files: [file],
+            runtime: fakeRuntime(),
+        });
+
+        // Equal-length edit inside the body: the declaration's head text (doc, comments, signature) is unchanged, so
+        // only a chunk key moves. Scanning heads alone would call this index warm.
+        const edited = source.replace("compute(150)", "compute(151)");
+        const touched = new MemoryCodeSource(
+            ROOT,
+            { "src/long.ts": edited },
+            { "src/long.ts": Date.now() + 1_000 },
+        );
+        const finding = await scanRoot({ source: touched, root: ROOT, modelDir });
+
+        expect(finding?.files).toHaveLength(1);
+        expect(finding?.missing).toBe(1);
+    });
+
     it("skips roots of another source kind, text version, or outside the project", async () => {
         const modelDir = tempDir();
         const builtAt = await seededIndex(modelDir);

@@ -6,7 +6,7 @@ import { loadParsedFiles } from "../load";
 import type { CodeSource } from "../source";
 import type { ParsedFile } from "../types";
 import { MODEL_ID } from "./config";
-import { embeddingKey } from "./index";
+import { liveEntryKeys } from "./index";
 import { indexDir, namespaceFor, readManifest, readManifestHeader } from "./store";
 import { EMBED_TEXT_VERSION } from "../text";
 
@@ -184,14 +184,9 @@ export async function scanRoot(options: {
     }
 
     const batch = await loadParsedFiles(options.source, changed, options.signal);
-    const keys = new Set<string>();
-
-    for (const file of batch.parsed) {
-        for (const declaration of file.all) {
-            keys.add(embeddingKey(file, declaration));
-        }
-    }
-
+    // Heads plus body chunks: a body-only edit changes chunk keys without changing a declaration's head text, so
+    // scanning heads alone would report a warm index for a file whose chunks are stale.
+    const keys = liveEntryKeys(batch.parsed);
     const missing = Array.from(keys).filter((key) => manifest.entries[key] === undefined).length;
 
     return { root: options.root, changed: changed.length, files: batch.parsed, missing };

@@ -15,27 +15,30 @@
  * this is a tool call: the earlier "run `outline digest`" phrasing read as a command line, and models tried
  * it in bash.
  *
- * Every claim here tracks the implementation: `search` reads names *and* doc comments and can append a
- * relevance-ranked tail, `show` locates a symbol that lives in another file, and both `show` and `usages` take
- * comma-joined symbol lists. A guide that keeps a capability the tool no longer has, or drops one it gained,
- * teaches the wrong tool.
+ * Every claim here tracks the implementation: `search` reads names *and* doc comments *and* literal body text and
+ * can append a relevance-ranked tail, `show` locates a symbol that lives in another file, and both `show` and
+ * `usages` take comma-joined symbol lists. A guide that keeps a capability the tool no longer has, or drops one it
+ * gained, teaches the wrong tool.
  */
 export function outlineGuidePrompt(): string {
     return [
         "## Outline",
         "",
-        "Three triggers, all checkable before you act. `outline` is cheaper than the alternative, not just tidier:",
+        "Four triggers, all checkable before you act. `outline` is cheaper than the alternative, not just tidier:",
         "",
         "- About to `read` a long file, or `read` any file just to find one declaration. Call `outline` with",
         '  `action="digest"` first. It returns the declaration map with line ranges, so you go straight to the',
         "  30 lines you need instead of pulling 900 into the conversation.",
         "- About to `rg`/`grep` for a declaration, or for the code that does something. Call `outline` with",
-        '  `action="search"` instead: it matches declaration names and their doc comments and returns kinds,',
-        "  signatures, and line ranges rather than matching lines, so a half-remembered name or a remembered",
-        "  description both land.",
+        '  `action="search"` instead: it matches declaration names, doc comments, and literal text inside bodies,',
+        "  and returns kinds, signatures, and line ranges rather than matching lines, so a half-remembered name, a",
+        "  remembered description, or a remembered error string all land.",
         '- Need one symbol\'s body. `action="show"` returns that block with its doc comment, not the file. The',
         "  file does not have to be the right one: a symbol that lives elsewhere is reported with its real",
         "  location.",
+        '- Need what a file imports, or who imports it. `action="deps"` takes one file and lists its imports plus the',
+        "  files that import it, with unresolved paths separated from external modules. It is file-level and",
+        "  syntactic: a call graph is `usages`, and re-exports or dynamic `import()` are not followed.",
         "",
         "`outline` is a tool call, not a shell command: it takes structured arguments, and",
         "`outline digest src/auth` typed into a terminal is not a command. Unfamiliar code is",
@@ -45,19 +48,26 @@ export function outlineGuidePrompt(): string {
         '    outline(action="digest", path="src/auth")',
         '    outline(action="show", symbols=["Auth::login"])',
         '    outline(action="usages", symbols=["Auth::login"], kind="call")',
+        '    outline(action="deps", path="src/auth/socket.ts")',
         "",
         'One call can carry several symbols (`symbols=["Auth::login", "Auth::logout"]`); a single',
         "comma-joined entry is accepted too, and a leading parameter list (`Auth::login(string)`) is enough to",
         "pick an overload.",
         "",
-        "Stay with `rg`/`grep` while the target is not a declaration: strings, config, logs, prose, an error",
-        "message, a language `outline` does not parse, or a comment *inside* a function body — the index holds",
-        "declarations and their adjacent doc blocks, not the comments between statements. `search` matches",
-        "declaration names, doc comments, and document frontmatter, and when those are thin it appends ranked",
-        "`[related]` rows, so a conceptual query can land without a literal match; a literal zero-hit still means",
-        "no identifier or doc comment spells it out. A multi-word query matches those words in any order: quote",
-        'it (`"page table"`) to require them adjacent. One doc or frontmatter row means those rows are skipped,',
-        "so for a file's section map search that file itself (`path=<file>`).",
+        "Stay with `rg`/`grep` for line-level work: regex, counts, context lines, config, logs, prose outside a",
+        "parsed language, and any file `outline` does not parse. `search` does read literal body text — a thrown",
+        "error, a log message, an inline comment — but it answers with the declaration that contains it, one row per",
+        "declaration, and only for a query of two or more words; a single word is an identifier question, not a text",
+        "scan. `search` also matches declaration names, doc comments, and document frontmatter, and when those are",
+        "thin it appends ranked `[related]` rows, so a conceptual query can land without a literal match; a literal",
+        "zero-hit still means no identifier or doc comment spells it out. A multi-word query matches those words in",
+        'any order: quote it (`"page table"`) to require them adjacent. One doc or frontmatter row means those rows',
+        "are skipped, so for a file's section map search that file itself (`path=<file>`). `glob` and",
+        "`declarationKind` narrow a call to part of the tree or one declaration kind, and the footer says what the",
+        "filter hid. The `# filter:` line names the filter even when it removed nothing. `within` limits",
+        '`search`/`usages` to one file\'s direct imports (`within="src/x.ts"`, relative to the searched path), or with a',
+        "`dependents:` prefix to the files that import it; the anchor is always included, `path`/`glob` still bound the",
+        "tree, and the `# within:` line names the scope.",
         "",
         "`path` may name any tree, not just the checkout: a memory directory (`.pi/agent/memory`,",
         "`~/.pi/agent/memory`) or a directory this session declares readable. An explicitly named tree is scanned",

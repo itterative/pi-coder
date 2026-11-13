@@ -1,0 +1,4 @@
+# search connect
+src/a.ts:1  function  connect
+
+timing: 14 ms · parse 9 · work 2 · discover 1 · search 1 · files 3 · parsed 3
