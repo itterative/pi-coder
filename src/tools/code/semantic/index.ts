@@ -4,11 +4,13 @@ import path from "node:path";
 import { artifactsPresent } from "./artifacts";
 import { rankBm25 } from "./bm25";
 import { chunksOf, type CodeChunk } from "./chunks";
-import { MODEL_DIMS, MODEL_ID, type SemanticMode } from "./config";
+import { type SemanticMode } from "./config";
+import type { DevicePreference } from "./llamacpp";
+import { modelProfile } from "./profiles";
 import { TAIL_ROWS, fuseRankings, type RankedDeclaration } from "./rank";
 import {
     createEmbedRuntime,
-    refreshWorkerCount,
+    refreshConcurrency,
     splitJobs,
     type BuildFile,
     type EmbedRuntime,
@@ -37,7 +39,9 @@ import type { Declaration, ParsedFile } from "../types";
 
 /** The content key of one declaration's vector; version and model are part of it, so they cannot collide. */
 export function embeddingKey(file: ParsedFile, declaration: ParsedFile["all"][number]): string {
-    return hashKey(`${EMBED_TEXT_VERSION}\u0000${MODEL_ID}\u0000${embedTextOf(file, declaration)}`);
+    return hashKey(
+        `${EMBED_TEXT_VERSION}\u0000${modelProfile().id}\u0000${embedTextOf(file, declaration)}`,
+    );
 }
 
 /**
@@ -266,7 +270,7 @@ function scheduleBuild(
     root: string,
     prune: boolean,
 ): boolean {
-    const namespace = namespaceFor(request.sourceKind, root, MODEL_ID, EMBED_TEXT_VERSION);
+    const namespace = namespaceFor(request.sourceKind, root, modelProfile().id, EMBED_TEXT_VERSION);
     const key = `${deps.modelDir}\u0000${namespace}`;
 
     if (refreshing.has(key)) {
@@ -287,7 +291,8 @@ function scheduleBuild(
         runtime: deps.runtime,
         prune: false,
         coversRoot: prune,
-        maxWorkers: refreshWorkerCount(),
+        maxConcurrency: refreshConcurrency(),
+        device: "cpu",
     })
         .then(
             () => undefined,
@@ -343,13 +348,19 @@ function isAncestor(root: string, target: string): boolean {
  * simply contributes no matching vectors, and the caller suppresses refresh and staleness for them.
  */
 function resolveIndex(modelDir: string, request: SemanticQuery): ResolvedIndex | undefined {
-    const namespace = namespaceFor(request.sourceKind, request.root, MODEL_ID, EMBED_TEXT_VERSION);
+    const profile = modelProfile();
+    const namespace = namespaceFor(
+        request.sourceKind,
+        request.root,
+        profile.id,
+        EMBED_TEXT_VERSION,
+    );
     const exactDir = indexDir(modelDir, namespace);
     const exact = readManifest(exactDir);
 
     // The namespace hash does not include the vector width, so the exact path has to check it too: an index
     // written by a model of another width is unusable, and `cosine` would truncate rather than complain.
-    if (exact !== undefined && exact.dims === MODEL_DIMS) {
+    if (exact !== undefined && exact.dims === profile.dims) {
         return { dir: exactDir, manifest: exact, root: exact.root ?? request.root };
     }
 
@@ -373,9 +384,9 @@ function resolveIndex(modelDir: string, request: SemanticQuery): ResolvedIndex |
         }
 
         if (
-            header.modelId !== MODEL_ID ||
+            header.modelId !== profile.id ||
             header.textVersion !== EMBED_TEXT_VERSION ||
-            header.dims !== MODEL_DIMS
+            header.dims !== profile.dims
         ) {
             continue;
         }
@@ -429,14 +440,15 @@ function entryCount(request: SemanticQuery): number {
 
 /** Whether this exact namespace exists but was written by a model of another width. */
 function hasIncompatibleIndex(modelDir: string, request: SemanticQuery): boolean {
+    const profile = modelProfile();
     const manifest = readManifest(
         indexDir(
             modelDir,
-            namespaceFor(request.sourceKind, request.root, MODEL_ID, EMBED_TEXT_VERSION),
+            namespaceFor(request.sourceKind, request.root, profile.id, EMBED_TEXT_VERSION),
         ),
     );
 
-    return manifest !== undefined && manifest.dims !== MODEL_DIMS;
+    return manifest !== undefined && manifest.dims !== profile.dims;
 }
 
 /**
@@ -682,10 +694,17 @@ export interface BuildIndexOptions {
     /** Defaults to true. An incremental refresh passes false so it cannot prune the rest of the index. */
     prune?: boolean;
     /**
-     * Upper bound on build children. A background refresh passes `refreshWorkerCount()` so a query embedding keeps
+     * Upper bound on requests in flight. A background refresh passes `refreshConcurrency()` so a query embedding keeps
      * most of the machine; an explicit build leaves it unset and scales with cores and memory.
      */
-    maxWorkers?: number;
+    maxConcurrency?: number;
+    /**
+     * Device for this build.
+     *
+     * Left undefined, the configured build preference decides (`auto`: the GPU when there is a real one). A background
+     * refresh passes `cpu` explicitly, because it runs unattended and must not occupy the user's VRAM.
+     */
+    device?: DevicePreference;
     /**
      * Whether `files` is the whole namespace root rather than one searched subdirectory.
      *
@@ -702,7 +721,12 @@ interface EmbeddingPlan {
 }
 
 function indexDirFor(options: { sourceKind: string; root: string; modelDir: string }): string {
-    const namespace = namespaceFor(options.sourceKind, options.root, MODEL_ID, EMBED_TEXT_VERSION);
+    const namespace = namespaceFor(
+        options.sourceKind,
+        options.root,
+        modelProfile().id,
+        EMBED_TEXT_VERSION,
+    );
 
     return indexDir(options.modelDir, namespace);
 }
@@ -712,7 +736,9 @@ function manifestFor(
     options: { sourceKind: string; root: string; modelDir: string },
     dir: string,
 ): IndexManifest {
-    const manifest = readManifest(dir) ?? emptyManifest(MODEL_ID, MODEL_DIMS, EMBED_TEXT_VERSION);
+    const profile = modelProfile();
+    const manifest =
+        readManifest(dir) ?? emptyManifest(profile.id, profile.dims, EMBED_TEXT_VERSION);
 
     return { ...manifest, sourceKind: options.sourceKind, root: options.root };
 }
@@ -866,7 +892,7 @@ async function buildLocked(
             options.onFile?.(filesDone, jobs.length);
             appendManifestShard(dir, manifest, shard.shard, shard.keys);
         },
-        options.maxWorkers,
+        { maxConcurrency: options.maxConcurrency, device: options.device },
     );
 
     // A runtime that reports shards only on completion (test doubles, older workers) still merges here;

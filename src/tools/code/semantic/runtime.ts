@@ -1,63 +1,28 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import readline from "node:readline";
 
-import { PI_CODER_EXTENSION_DIR } from "../../../common/constants";
-import { MODEL_DIMS } from "./config";
+import { modelFile } from "./artifacts";
+import { modelProfile } from "./profiles";
 import {
-    nativeBuildPlan,
-    nativeRuntimeDir,
-    nativeRuntimePresent,
-    nativeThreadCount,
-} from "./native";
+    devicePreference,
+    resolveDevice,
+    type DeviceChoice,
+    type DevicePreference,
+} from "./llamacpp";
+import { startEmbedServer, type EmbedServer } from "./server";
 
-const WORKER_SCRIPT = path.join(PI_CODER_EXTENSION_DIR, "src/tools/code/semantic/embed-worker.mjs");
-const READY_TIMEOUT_MS = 60_000;
-const REQUEST_TIMEOUT_MS = 120_000;
 const IDLE_TIMEOUT_MS = 5 * 60_000;
-const MAX_BUILD_WORKERS = 32;
-/** Conservative resident estimate per child: model weights, tokenizer, wasm heap, and Node itself. */
-const BYTES_PER_WORKER = 1_073_741_824;
-
-/** MemAvailable when Linux exposes it; plain free memory is the conservative fallback elsewhere. */
-function availableMemoryBytes(): number {
-    try {
-        const meminfo = fs.readFileSync("/proc/meminfo", "utf8");
-        const match = /^MemAvailable:\s+(\d+)\s+kB$/m.exec(meminfo);
-
-        if (match !== null) {
-            return Number.parseInt(match[1] ?? "0", 10) * 1024;
-        }
-    } catch {
-        // Not Linux, or /proc is unavailable.
-    }
-
-    return os.freemem();
-}
+const MAX_BUILD_CONCURRENCY = 8;
 
 /**
- * Build processes to run at once.
+ * Most characters one text may send.
  *
- * The wasm session is single-threaded, so the only way to use more than one core is more processes; each
- * holds its own copy of the model, which is why this is capped by both cores and available memory rather
- * than by a flat constant. A 16-core machine with enough free RAM gets 16 workers.
+ * The old runtime cut at 1,024 *tokens*; without a tokenizer in the parent, the honest knob is characters. 12,000
+ * characters is roughly 3,000 tokens of prose (less of dense code), which sits inside the server's 8k context and its
+ * 4k physical batch, and is three times the old cut. Only a handful of memory sections in this repo ever reach it.
  */
-export function buildWorkerCount(env: NodeJS.ProcessEnv = process.env): number {
-    const configured = Number.parseInt((env.PI_CODER_OUTLINE_WORKERS ?? "").trim(), 10);
-
-    if (Number.isFinite(configured) && configured > 0) {
-        return Math.min(configured, MAX_BUILD_WORKERS);
-    }
-
-    const cores = Math.max(1, os.availableParallelism());
-    const memoryLimited = Math.floor(
-        Math.max(0, availableMemoryBytes() - BYTES_PER_WORKER) / BYTES_PER_WORKER,
-    );
-
-    return Math.max(1, Math.min(cores, memoryLimited, MAX_BUILD_WORKERS));
-}
+export const MAX_TEXT_CHARS = 12_000;
 
 export interface BuildFile {
     shard: string;
@@ -70,22 +35,14 @@ export interface BuildShard {
 }
 
 /**
- * Most declarations one build job line may carry.
+ * Most declarations one shard may carry.
  *
- * A job line is the unit a build child takes: it embeds its lines in order, so one line is as serial as its entry
- * count. A source file used to be one indivisible line, and the largest file in the vibes tree
- * (`third_party/nlohmann/.../json.hpp`) has 1587 declarations — that child kept grinding for minutes after the others
- * finished, which is the tail the build showed. Shards are named per line rather than per file, so a split is
- * invisible to the manifest and to pruning.
+ * Shards used to be build-job lines, and this split kept one huge file from being a serial bottleneck for a child.
+ * Serialisation is the server's job now, but the cap still earns its place: a 1,587-declaration header stays 25
+ * shards, so pruning and re-reading stay proportional to the edit rather than to the file.
  */
 export const MAX_JOB_ENTRIES = 64;
 
-/**
- * Split entry lists too big to balance into parts, so no source file is a serial bottleneck.
- *
- * Splitting does not change what is embedded, only how evenly it divides: [keys] keep their order within each part,
- * and every part gets its own shard name because two lines may touch the same file's directory in the shard store.
- */
 export function splitJobs(files: BuildFile[]): BuildFile[] {
     return files.flatMap((file) => {
         if (file.entries.length <= MAX_JOB_ENTRIES) {
@@ -106,28 +63,50 @@ export function splitJobs(files: BuildFile[]): BuildFile[] {
 }
 
 /**
- * Most build workers a background refresh may use.
+ * Embedding requests in flight during a build.
  *
- * A refresh runs unattended while the user keeps querying, and a query embedding competes with it for cores. Measured
- * on a 16-core machine with 64 declarations: 4 workers cost a concurrent query 9% of its latency, 8 workers 20%, and 16
- * workers (512 declarations) 124% — while the extra workers buy little, because each child loads ~1.85 s of model
- * before it embeds its first item. Explicit builds keep the full scaling: the user asked for them and is waiting.
+ * The server serialises them, so this is a queue depth rather than a worker count: it costs nothing on CPU and bought
+ * 1.38x on a Vulkan device at 257 tokens, where the GPU is idle between short requests. Capped low because the point
+ * is to keep the device busy, not to queue minutes of work the user wants to cancel.
  */
-export const REFRESH_WORKERS_MAX = 4;
+export function buildConcurrency(env: NodeJS.ProcessEnv = process.env): number {
+    const configured = Number.parseInt((env.PI_CODER_OUTLINE_WORKERS ?? "").trim(), 10);
 
-/** Worker ceiling for a background refresh: half the cores, never more than `REFRESH_WORKERS_MAX`. */
-export function refreshWorkerCount(cores: number = os.availableParallelism()): number {
-    return Math.max(1, Math.min(REFRESH_WORKERS_MAX, Math.floor(Math.max(1, cores) / 2)));
+    if (Number.isFinite(configured) && configured > 0) {
+        return Math.min(configured, MAX_BUILD_CONCURRENCY);
+    }
+
+    return Math.max(1, Math.min(4, os.availableParallelism()));
+}
+
+/** How deep a background refresh may queue, so an unattended build leaves the device to the user's queries. */
+export const REFRESH_CONCURRENCY_MAX = 4;
+
+export function refreshConcurrency(cores: number = os.availableParallelism()): number {
+    return Math.max(1, Math.min(REFRESH_CONCURRENCY_MAX, Math.floor(Math.max(1, cores) / 2)));
+}
+
+export interface BuildOptions {
+    /** Upper bound on requests in flight; defaults to `buildConcurrency()`. */
+    maxConcurrency?: number;
+    /**
+     * Device for this build.
+     *
+     * The default is the configured build preference (`auto`: the GPU when there is a real one), and a background
+     * refresh passes `cpu` — it runs unattended while the user is doing something else, which is the one time
+     * borrowing VRAM is not defensible.
+     */
+    device?: DevicePreference;
 }
 
 export interface EmbedRuntime {
-    /** Embed one query through the warm child, or reject when the runtime is unavailable. */
+    /** Embed one query, with the model's instruction prefix, or reject when the runtime is unavailable. */
     embedQuery(text: string, signal?: AbortSignal): Promise<Float32Array>;
     /**
-     * Batch-embed a build job; the child writes shards and reports progress.
+     * Batch-embed a build job and write one shard file per job.
      *
-     * `onShard` fires as each shard is durably written, so the caller can publish it in the manifest before
-     * the build finishes. That is what makes a killed build resumable instead of leaving orphaned shard files.
+     * `onShard` fires as each shard is durably written, so the caller can publish it in the manifest before the build
+     * finishes. That is what makes a killed build resumable instead of leaving orphaned shard files.
      */
     build(
         indexDir: string,
@@ -135,53 +114,72 @@ export interface EmbedRuntime {
         onProgress: (done: number, total: number) => void,
         signal?: AbortSignal,
         onShard?: (shard: BuildShard) => void,
-        /** Upper bound on child processes; defaults to `buildWorkerCount()`. */
-        maxWorkers?: number,
+        options?: BuildOptions,
     ): Promise<BuildShard[]>;
     dispose(): void;
 }
 
-interface PendingRequest {
-    resolve: (vector: Float32Array) => void;
-    reject: (error: unknown) => void;
-    timer: NodeJS.Timeout;
+/** Write one shard: float32 little-endian vectors in key order, which is what `store.ts` reads back. */
+function writeShard(
+    indexDir: string,
+    shard: string,
+    vectors: readonly Float32Array[],
+    dims: number,
+): void {
+    const file = path.join(indexDir, "shards", `${shard}.bin`);
+    const temporary = `${file}.tmp.${process.pid}`;
+    const buffer = Buffer.alloc(vectors.length * dims * 4);
+    let cursor = 0;
+
+    for (const vector of vectors) {
+        for (const value of vector) {
+            buffer.writeFloatLE(value, cursor);
+            cursor += 4;
+        }
+    }
+
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(temporary, buffer);
+    fs.renameSync(temporary, file);
+}
+
+/** One live server, with the device it runs on. */
+interface Slot {
+    choice: DeviceChoice;
+    server: EmbedServer;
 }
 
 /**
- * Environment for a worker child.
+ * A client for the embedding servers.
  *
- * `PI_OUTLINE_NATIVE_DIR` is only set when this platform's native runtime is actually on disk, so the worker takes
- * the native path when it can and the wasm one otherwise — the choice is made by what exists, not by a preference
- * file that could disagree with it.
- */
-function workerEnv(modelDir: string, threads: number): NodeJS.ProcessEnv {
-    const nativeDir = nativeRuntimeDir(modelDir);
-    const present = nativeDir !== undefined && nativeRuntimePresent(modelDir);
-
-    return {
-        ...process.env,
-        PI_OUTLINE_MODEL_DIR: modelDir,
-        PI_OUTLINE_THREADS: String(threads),
-        ...(present ? { PI_OUTLINE_NATIVE_DIR: nativeDir } : {}),
-    };
-}
-
-/**
- * A client for the embedding child process.
+ * **Two roles, one server each, and the GPU one is transient.** Queries run on the configured query device (CPU by
+ * default) through a warm server that stays in RAM; builds run on the configured build device (a GPU when there is one)
+ * through a server that is started for the build and killed when it finishes. That asymmetry is the point: a search
+ * tool must not sit on the user's VRAM between imports, and the numbers say it does not need to — a warm CPU query is
+ * ~56 ms against ~13 ms on a GPU, while a build is 20x faster there (4.8 vs 96.6 vectors/s here).
  *
- * The child holds the wasm session, because loading it takes seconds and 166 MB of weights; spawning it per
- * query would make every semantic search pay model startup. It is spawned on first use, kept warm for a few
- * minutes of idleness, and killed on dispose. Any failure marks the runtime broken for the rest of the
- * session: a second attempt would fail the same way, and lexical search must keep working.
+ * Mixing backends is safe because it is the same weights: CPU and Vulkan vectors for the same text score cosine
+ * 0.9994–0.9998, so an index built on the GPU is queried on the CPU with no ranking penalty, and entry keys are text
+ * hashes rather than vector values.
+ *
+ * When both roles land on the same device (the common CPU-only machine), there is one server, not two.
  */
 export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime {
-    let child: ChildProcess | undefined;
-    let ready: Promise<void> | undefined;
+    const slots = new Map<string, Slot>();
+    const starting = new Map<string, Promise<Slot>>();
     let broken = false;
-    let nextId = 0;
     let idle: NodeJS.Timeout | undefined;
-    let stderr = "";
-    const pending = new Map<number, PendingRequest>();
+
+    const closeSlot = (device: "cpu" | "vulkan"): void => {
+        const slot = slots.get(device);
+
+        if (slot !== undefined) {
+            slot.server.dispose();
+            slots.delete(device);
+        }
+
+        starting.delete(device);
+    };
 
     const close = (): void => {
         if (idle !== undefined) {
@@ -189,15 +187,9 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
             idle = undefined;
         }
 
-        for (const request of pending.values()) {
-            clearTimeout(request.timer);
-            request.reject(new Error("semantic: runtime stopped"));
+        for (const device of [...slots.keys()]) {
+            closeSlot(device as "cpu" | "vulkan");
         }
-
-        pending.clear();
-        child?.kill();
-        child = undefined;
-        ready = undefined;
     };
 
     const touch = (): void => {
@@ -209,223 +201,108 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
         idle.unref?.();
     };
 
-    const start = (): Promise<void> => {
+    const ensure = async (preference: DevicePreference): Promise<Slot> => {
         if (broken) {
-            return Promise.reject(new Error("semantic: runtime unavailable"));
+            throw new Error("semantic: runtime unavailable");
         }
 
-        if (ready !== undefined) {
-            return ready;
+        const choice = await resolveDevice(options.modelDir, preference);
+        const existing = slots.get(choice.device);
+
+        if (existing !== undefined) {
+            return existing;
         }
 
-        const spawned = spawn(process.execPath, [WORKER_SCRIPT, "--serve"], {
-            env: workerEnv(options.modelDir, nativeThreadCount("query", os.availableParallelism())),
-            stdio: ["pipe", "pipe", "pipe"],
-        });
+        const pending = starting.get(choice.device);
 
-        child = spawned;
-        stderr = "";
+        if (pending !== undefined) {
+            return pending;
+        }
 
-        spawned.stderr?.on("data", (chunk: Buffer) => {
-            stderr = `${stderr}${chunk.toString()}`.slice(-2_000);
-        });
-
-        ready = new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                broken = true;
-                close();
-                reject(new Error("semantic: runtime did not start"));
-            }, READY_TIMEOUT_MS);
-
-            const lines = readline.createInterface({ input: spawned.stdout });
-
-            lines.on("line", (line) => {
-                let message: Record<string, unknown>;
-
-                try {
-                    message = JSON.parse(line) as Record<string, unknown>;
-                } catch {
-                    return;
-                }
-
-                if (message.type === "ready") {
-                    clearTimeout(timeout);
-                    resolve();
-
-                    return;
-                }
-
-                if (message.type === "vector" && typeof message.id === "number") {
-                    const request = pending.get(message.id);
-
-                    if (request === undefined) {
-                        return;
-                    }
-
-                    pending.delete(message.id);
-                    clearTimeout(request.timer);
-
-                    const buffer = Buffer.from(String(message.vector), "base64");
-                    const copy = buffer.buffer.slice(
-                        buffer.byteOffset,
-                        buffer.byteOffset + buffer.byteLength,
-                    );
-
-                    request.resolve(new Float32Array(copy));
-
-                    return;
-                }
-
-                if (message.type === "error") {
-                    clearTimeout(timeout);
-                    broken = true;
-                    close();
-                    reject(new Error(`semantic: ${String(message.message)}`));
-                }
+        const started = (async (): Promise<Slot> => {
+            const server = await startEmbedServer({
+                binary: choice.binary,
+                modelFile: modelFile(options.modelDir),
+                gpuLayers: choice.device === "vulkan" ? 999 : 0,
             });
+            const slot = { choice, server };
 
-            spawned.on("error", (error) => {
-                clearTimeout(timeout);
-                broken = true;
-                close();
-                reject(error);
-            });
+            slots.set(choice.device, slot);
 
-            spawned.on("exit", (code) => {
-                clearTimeout(timeout);
+            return slot;
+        })();
 
-                if (pending.size > 0) {
-                    broken = true;
-                    close();
-                    reject(
-                        new Error(
-                            `semantic: runtime exited (${code ?? "signal"})${stderr.length > 0 ? `: ${stderr.trim().split("\n").at(-1)}` : ""}`,
-                        ),
-                    );
-                }
-            });
-        });
+        starting.set(choice.device, started);
 
-        return ready;
-    };
+        try {
+            const slot = await started;
 
-    const embedQuery = async (text: string, signal?: AbortSignal): Promise<Float32Array> => {
-        await start();
-        signal?.throwIfAborted();
-        touch();
+            touch();
 
-        const id = (nextId += 1);
+            return slot;
+        } catch (error) {
+            starting.delete(choice.device);
 
-        return await new Promise<Float32Array>((resolve, reject) => {
-            const timer = setTimeout(() => {
-                pending.delete(id);
-                reject(new Error("semantic: embedding timed out"));
-            }, REQUEST_TIMEOUT_MS);
-
-            pending.set(id, { resolve, reject, timer });
-            child?.stdin?.write(`${JSON.stringify({ id, type: "embed", text })}\n`);
-        });
-    };
-
-    /** One `--build` child for one job file; the child writes its shards and reports progress. */
-    const spawnBuild = (
-        jobFile: string,
-        threads: number,
-        onProgress: (done: number, total: number) => void,
-        signal?: AbortSignal,
-        onShard?: (shard: BuildShard) => void,
-    ): Promise<BuildShard[]> => {
-        const spawned = spawn(process.execPath, [WORKER_SCRIPT, "--build", jobFile], {
-            env: workerEnv(options.modelDir, threads),
-            stdio: ["ignore", "pipe", "pipe"],
-        });
-        let jobStderr = "";
-
-        spawned.stderr?.on("data", (chunk: Buffer) => {
-            jobStderr = `${jobStderr}${chunk.toString()}`.slice(-2_000);
-        });
-
-        const onAbort = (): void => {
-            spawned.kill();
-        };
-
-        signal?.addEventListener("abort", onAbort, { once: true });
-
-        return new Promise<BuildShard[]>((resolve, reject) => {
-            const settle = (): void => {
-                signal?.removeEventListener("abort", onAbort);
-            };
-            const lines = readline.createInterface({ input: spawned.stdout });
-
-            lines.on("line", (line) => {
-                let message: Record<string, unknown>;
-
-                try {
-                    message = JSON.parse(line) as Record<string, unknown>;
-                } catch {
-                    return;
-                }
-
-                if (message.type === "shard") {
-                    onShard?.({
-                        shard: String(message.shard),
-                        keys: message.keys as string[],
-                    });
-
-                    return;
-                }
-
-                if (message.type === "progress") {
-                    onProgress(Number(message.done), Number(message.total));
-
-                    return;
-                }
-
-                if (message.type === "done") {
-                    settle();
-                    resolve(message.shards as BuildShard[]);
-
-                    return;
-                }
-
-                if (message.type === "error") {
-                    settle();
-                    reject(new Error(`semantic: ${String(message.message)}`));
-                }
-            });
-
-            spawned.on("error", (error) => {
-                settle();
-                reject(error);
-            });
-            spawned.on("exit", (code) => {
-                settle();
-
-                if (code !== 0) {
-                    reject(
-                        new Error(
-                            `semantic: build exited (${code ?? "signal"})${jobStderr.length > 0 ? `: ${jobStderr.trim().split("\n").at(-1)}` : ""}`,
-                        ),
-                    );
-                }
-            });
-        });
+            throw error;
+        }
     };
 
     /**
-     * Embed the jobs across `buildWorkerCount()` children, or fewer when `maxWorkers` caps them.
+     * A server for one role, with the GPU fallback.
      *
-     * A job line is the unit a worker takes, and lines are assigned to the least-loaded worker, so no line can make
-     * a worker finish long after the others. Shard names already carry the file hash and a part suffix, so parallel
-     * children never collide; the manifest is written once by the caller after every child finished.
+     * A Vulkan start can fail for reasons that are not defects: the user's own model already holds the VRAM, a driver
+     * was upgraded under a running session, or the device hangs. None of those should fail a build that the CPU can do,
+     * so the failure is retried on the CPU bundle and the build continues at CPU speed.
+     */
+    const ensureForRole = async (role: "query" | "build"): Promise<Slot> => {
+        const preference = devicePreference(role);
+
+        try {
+            const slot = await ensure(preference);
+
+            return slot;
+        } catch (error) {
+            if (preference === "cpu") {
+                broken = true;
+
+                throw error;
+            }
+
+            process.stderr.write(
+                `semantic: ${preference} device unavailable (${error instanceof Error ? error.message : String(error)}); using cpu\n`,
+            );
+
+            return ensure("cpu");
+        }
+    };
+
+    const embedWith = async (
+        slot: Slot,
+        prefix: string,
+        text: string,
+        signal?: AbortSignal,
+    ): Promise<Float32Array> => {
+        const capped = text.length > MAX_TEXT_CHARS ? text.slice(0, MAX_TEXT_CHARS) : text;
+
+        touch();
+
+        return slot.server.embed(`${prefix}${capped}`, signal);
+    };
+
+    /**
+     * Embed `files` with `concurrency` requests in flight, writing each shard as it completes.
+     *
+     * Files are the unit of work and of sharding. The queue is fed in order, so a cancelled build keeps exactly the
+     * shards whose files finished, and progress counts entries rather than files because entries are what the caller's
+     * estimate is made of.
      */
     const build = async (
         indexDir: string,
-        sourceFiles: BuildFile[],
+        files: BuildFile[],
         onProgress: (done: number, total: number) => void,
         signal?: AbortSignal,
         onShard?: (shard: BuildShard) => void,
-        maxWorkers?: number,
+        buildOptions: BuildOptions = {},
     ): Promise<BuildShard[]> => {
         if (broken) {
             throw new Error("semantic: runtime unavailable");
@@ -434,89 +311,76 @@ export function createEmbedRuntime(options: { modelDir: string }): EmbedRuntime 
         signal?.throwIfAborted();
         fs.mkdirSync(indexDir, { recursive: true });
 
-        const files = sourceFiles;
-        const total = files.reduce((sum, file) => sum + file.entries.length, 0);
-        const native = nativeRuntimePresent(options.modelDir);
-        // Native threads live inside the process, so the split is few processes × several threads. The wasm runtime is
-        // single-threaded, so there it stays one process per ~8 declarations: a refresh of three edited functions must
-        // not load four model copies.
-        const plan = native
-            ? nativeBuildPlan({
-                  declarations: total,
-                  // A refresh passes maxWorkers, and its budget is a share of the machine: four threads in the one
-                  // process, so an unattended build leaves the rest of the machine to the user's queries.
-                  maxThreads: maxWorkers,
-              })
-            : {
-                  processes: Math.max(
-                      1,
-                      Math.min(
-                          maxWorkers ?? buildWorkerCount(),
-                          files.length,
-                          Math.ceil(total / 8),
-                      ),
-                  ),
-                  threads: 1,
-              };
-        const workers = plan.processes;
-        const batches: BuildFile[][] = Array.from({ length: workers }, () => []);
-        const loads = new Array<number>(workers).fill(0);
+        const profile = modelProfile();
+        const slot = await ensureForRole("build");
+        const jobs = splitJobs(files);
+        const total = jobs.reduce((sum, job) => sum + job.entries.length, 0);
+        // The GPU is borrowed only when queries are not on it: sharing a device means sharing the process, and closing
+        // it would pull the server out from under the next search.
+        const queryPreference = devicePreference("query");
+        const transient = queryPreference !== "auto" && slot.choice.device !== queryPreference;
+        // A CPU server is strictly serial and extra requests only queue, so a query behind an unattended build waits
+        // for all of them instead of one. A device that overlaps work (Vulkan) keeps the extra depth.
+        const requested =
+            buildOptions.maxConcurrency ?? (slot.choice.device === "cpu" ? 1 : buildConcurrency());
+        const concurrency = Math.max(1, Math.min(requested, jobs.length || 1));
+        const shards: BuildShard[] = [];
+        let done = 0;
+        let next = 0;
 
-        for (const file of files) {
-            let target = 0;
+        const runOne = async (job: BuildFile): Promise<void> => {
+            const vectors: Float32Array[] = [];
+            const keys: string[] = [];
 
-            for (let index = 1; index < workers; index += 1) {
-                if (loads[index] < loads[target]) {
-                    target = index;
-                }
+            for (const entry of job.entries) {
+                signal?.throwIfAborted();
+
+                vectors.push(await embedWith(slot, profile.docPrefix, entry.text, signal));
+                keys.push(entry.key);
+                done += 1;
+                onProgress(done, total);
             }
 
-            batches[target].push(file);
-            loads[target] += file.entries.length;
-        }
+            writeShard(indexDir, job.shard, vectors, profile.dims);
 
-        const done = new Array<number>(workers).fill(0);
-        const shards: BuildShard[] = [];
+            const shard = { shard: job.shard, keys };
 
-        await Promise.all(
-            batches.map(async (batchFiles, index) => {
-                if (batchFiles.length === 0) {
-                    return;
+            shards.push(shard);
+            onShard?.(shard);
+        };
+
+        const drain = async (): Promise<void> => {
+            while (next < jobs.length) {
+                const job = jobs[next];
+
+                next += 1;
+
+                if (job !== undefined) {
+                    await runOne(job);
                 }
+            }
+        };
 
-                const jobFile = path.join(indexDir, `job-${index}.jsonl`);
-                const lines = [
-                    JSON.stringify({ indexDir, dims: MODEL_DIMS }),
-                    ...batchFiles.map((file) => JSON.stringify(file)),
-                ];
-
-                fs.writeFileSync(jobFile, `${lines.join("\n")}\n`);
-
-                shards.push(
-                    ...(await spawnBuild(
-                        jobFile,
-                        plan.threads,
-                        (value) => {
-                            done[index] = value;
-                            onProgress(
-                                done.reduce((sum, count) => sum + count, 0),
-                                total,
-                            );
-                        },
-                        signal,
-                        onShard,
-                    )),
-                );
-            }),
-        );
+        try {
+            await Promise.all(Array.from({ length: concurrency }, () => drain()));
+        } finally {
+            // Release the GPU the moment the import is done: this is the whole reason a build may use it at all.
+            if (transient) {
+                closeSlot(slot.choice.device);
+            }
+        }
 
         return shards;
     };
 
     return {
-        embedQuery,
+        async embedQuery(text: string, signal?: AbortSignal): Promise<Float32Array> {
+            const slot = await ensureForRole("query");
+
+            return embedWith(slot, modelProfile().queryPrefix, text, signal);
+        },
         build,
-        dispose() {
+        dispose(): void {
             broken = true;
             close();
         },

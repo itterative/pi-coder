@@ -66,50 +66,56 @@ scope, and an incremental build against a warm index is the only case that runs 
 
 ### Artifacts are downloaded, never installed
 
-No npm dependency: the wasm runtime, the tokenizer, and the model are fetched into
+No npm dependency: the llama.cpp release archives and the model are fetched into
 `<agent-dir>/pi-coder/outline/semantic/` (`$PI_CODER_STATE_DIR` relocates it). The default matters — pi wipes a
 git-installed package with `git clean -fdx`, so anything under `node_modules` would be re-downloaded on update.
 
 `semantic/artifacts.ts` pins every file's URL, size, and SHA-256. Downloads stream to `.part` while hashing and
-rename only after both match. A `verified.json` records size+mtime+digest so a warm start skips the 200 MB hash
-pass. Total is ~211 MB, of which ~197 MB is the model and tokenizer.
+rename only after both match. A `verified.json` records size+mtime+digest so a warm start skips hashing the weights.
+Total is ~700 MB for the default profile: one model file and two small runtime archives.
 
-| file                                                     | size     |
-| -------------------------------------------------------- | -------- |
-| `ort.wasm.bundle.min.mjs` + `ort-wasm-simd-threaded.mjs` | 0.1 MB   |
-| `ort-wasm-simd-threaded.wasm`                            | 13.6 MB  |
-| `onnxruntime_binding.node` + `libonnxruntime.so.1`       | 48.1 MB  |
-| `tokenizers.mjs` (zero-dependency JS tokenizer)          | 0.1 MB   |
-| `model_q4.onnx` + `_data`                                | 166.5 MB |
-| `tokenizer.json`                                         | 30.7 MB  |
-| config/tokenizer_config                                  | 7 KB     |
+| file                                    | size     | why                                                |
+| --------------------------------------- | -------- | -------------------------------------------------- |
+| `qwen3-embedding-0.6b-q8.gguf`          | 639.2 MB | the model, tokenizer included                      |
+| `llama/b12360/ubuntu-x64.tar.gz`        | 23.3 MB  | llama.cpp release, CPU backend (61 files unpacked) |
+| `llama/b12360/ubuntu-vulkan-x64.tar.gz` | 36.2 MB  | the same release built for Vulkan devices          |
 
-The native pair comes from the pinned `onnxruntime-node` tarball by way of unpkg (`semantic/native.ts`), into
-`native/<platform>-<arch>/`. It is optional: `artifactsPresent` only requires the wasm set, the download loop at the
-end of `ensureArtifacts` swallows a native failure, and the worker falls back to wasm whenever
-`PI_OUTLINE_NATIVE_DIR` is unset or the two files are not the pinned sizes. Only linux-x64 is measured; adding a
-platform means measuring its library name and hashes, not just listing it.
+One file carries the tokenizer, so the 30.7 MB `tokenizer.json`, its 100 KB of JavaScript, the ONNX graph and its
+external-data sidecar, and 24 MB of ort-web are all gone. The release tarballs unpack into
+`llama/<tag>/<flavour>/`, where the executables find their ~60 libraries through `RUNPATH=$ORIGIN` — no environment
+to set up. Extraction is a ~60-line tar reader plus node's own gunzip (`semantic/llamacpp.ts`), because neither a
+`tar` binary nor a dependency is available inside a pi session; entries that escape the destination are dropped.
 
-### Two runtimes, one vector space
+### One runtime: llama.cpp
 
-Native (`onnxruntime-node`'s CPU binding, driven directly — `initOrtOnce`, `InferenceSession.loadModel`, `run`) is
-used when present. It cannot use `onnxruntime-web`'s JS layer, and does not need it: the binding's whole surface is
-those three calls plus a `Tensor` class it wraps outputs in, which is ~30 lines in `embed-worker.mjs`. Measured on 16
-cores, same artifacts: query 673 ms → 27 ms (4 threads), 93-token document 1589 ms → 90 ms, session start 2.5 s →
-0.2 s, resident 767 MB → 486 MB. Vectors are identical (cosine 1.000000).
+`llama.cpp` has no in-process binding we could ship without a compiler or a third-party dependency, and its server
+already speaks OpenAI's `/v1/embeddings` shape, so the runtime is a **child process**: `semantic/server.ts` spawns
+`llama-server --embeddings`, polls `/health`, and posts one text at a time. The model loads once per model directory
+instead of once per worker, which is the memory story as well as the simplicity story: a 16-worker build used to hold
+sixteen copies of the weights.
 
-### Three constraints of running ort-web wasm in Node
+**One server, shared by queries and builds.** A query and a build draw on the same loaded model and the same queue, so
+a build request in flight delays a query by at most one text — which is why a background refresh is capped at
+`refreshConcurrency()` (half the cores, never more than four) and a CPU build keeps exactly one request in flight.
 
-Only the wasm fallback has them; all three were verified against the real model and each is load-bearing in
-`embed-worker.mjs`:
+**Device selection is per role, and the GPU server is transient.** Queries run on the CPU by default; builds run on a
+GPU when there is one. A query is one short text, where a GPU saves ~40 ms; a batch import is thousands of them, where
+it is 20x. The asymmetry is what lets the build server be _killed when the build ends_, so the GPU is borrowed only for
+the import the user asked for and never held at query time — a user doing their own GPU work does not have to reserve
+VRAM for a search tool. Measured: 1.76 GB of VRAM appears for an import and is gone when it finishes; the query server
+stays in RAM.
 
-1. **`file:` fetch shim.** ort-web is a browser build: it resolves the wasm and the model through `fetch`, and
-   Node's fetch rejects `file:` URLs.
-2. **`numThreads = 1`.** Multithreading bootstraps a worker through a `blob:` module import, which Node's ESM
-   loader refuses — verified again against `numThreads = 2`, which fails session creation outright.
-3. **`externalData` mount.** The q4 graph keeps its weights in `model_q4.onnx_data`; the wasm backend needs them
-   mounted explicitly, and the modality inputs (`image/video/audio_features`) still need `[0, 512]` dummies. The
-   native side reads the external data next to the graph and takes the same dummies.
+- `PI_CODER_OUTLINE_QUERY_DEVICE` / `PI_CODER_OUTLINE_BUILD_DEVICE` = `cpu|vulkan|auto` per role, default `cpu` and
+  `auto`; `PI_CODER_OUTLINE_DEVICE` pins both, and a role variable wins over it.
+- The Vulkan bundle is asked `--list-devices`, and a software-only answer (`llvmpipe`, `swiftshader`, …) falls back to
+  the CPU bundle, because a software Vulkan device is strictly slower than the CPU backend.
+- A Vulkan server that cannot start — VRAM already taken, a driver upgraded mid-session — is retried on the CPU bundle
+  for that build, with one stderr line saying so. A machine whose VRAM is in use is a normal state, not a failure.
+- Mixing backends is safe: CPU and Vulkan vectors for the same text score cosine 0.9994–0.9998 (same weights, different
+  accumulation order), and entry keys are text hashes, so an index built on the GPU ranks identically when queried on
+  the CPU.
+- Only linux-x64 has a measured bundle; any other platform falls back to BM25 only, where the ONNX path used to offer
+  wasm everywhere. `PI_CODER_OUTLINE_LLAMA_SERVER` replaces the binary outright (tests use it).
 
 ### Index
 
@@ -122,12 +128,12 @@ Only the wasm fallback has them; all three were verified against the real model 
 
 - `namespace = sha256(source.kind \0 root \0 modelId \0 embed-text-version)` — a container view and the host
   view never share vectors.
-- Text is truncated at **1024 tokens** before embedding. The graph allows far more (`max_position_embeddings`
-  is 262144; only the sliding layers cap at 512), so this is a retrieval-and-cost choice: cost is superlinear
-  because every sixth layer attends fully (512 tokens ~0.6 s, 1024 ~1.4 s, 2048 ~3.8 s per declaration), and on
-  `docs/` (166 declarations, 132 queries, sections to 1976 tokens) 1024 roughly tripled top-1 against 512 for
-  head/mid/tail windows while unbounded bought nothing further at ~2.5× the per-text cost. Only 1.7% of
-  declarations exceed 512 tokens, so the build barely notices.
+- Text is capped at **12,000 characters** before embedding (`MAX_TEXT_CHARS`), which is roughly 3,000 tokens of
+  prose and inside the server's 8k context and 4k physical batch. The old runtime cut at 1,024 tokens because
+  attention cost was superlinear and every sixth layer attended fully; with llama.cpp the server tolerates far more
+  and a long section only costs its own build time, so the cap exists to keep one pathological section from
+  monopolising the queue. A text that still exceeds the physical batch halves itself and retries rather than losing
+  the vector.
 - Entry key = `sha256(embed-text-version \0 modelId \0 embedText)`. A declaration contributes a **head**,
   `"title: <path> | text: <kind> <qualifiedName>. <doc> <inline comments> <signature>"` (v4 added the inline
   comments), and, when its body is at least 800 characters, one entry per **body chunk**,
@@ -157,7 +163,7 @@ Only the wasm fallback has them; all three were verified against the real model 
 - A manifest records its `sourceKind`, build `root`, and vector `dims`. A search resolves the exact namespace
   first, then the longest **ancestor** build root, so `outline search src/tools/code` ranks against an index built
   at `.`. The namespace hash carries the model id and text version but not the width, so both lookups also require
-  `header.dims === MODEL_DIMS`; a vector whose length differs from the query vector is treated as missing rather
+  `header.dims === profile.dims`; a vector whose length differs from the query vector is treated as missing rather
   than scored, because `cosine` truncates with `Math.min` instead of failing. Indexes written before `root` was
   recorded still rank (keys embed absolute paths) but never trigger a refresh or a staleness notice.
 - **Pruning is root-scoped.** Building a root prunes keys outside the parsed set. Always build a whole root
@@ -166,23 +172,39 @@ Only the wasm fallback has them; all three were verified against the real model 
 ### Build
 
 `/outline build <path>` parses the target first, counts what the index is missing (no model needed), and prices
-it before spending anything: declarations ÷ workers × ~1.1 s. A build over `BUILD_CONFIRM_THRESHOLD` (200)
-declarations, or one that still needs the 211 MB download, asks for confirmation with that estimate; only a small
-incremental build proceeds silently. The consent dialog covers a build that has to download, so the first `/outline
-build .` cannot spend bandwidth behind the user's back.
+it before spending anything: declarations ÷ concurrency × ~0.45 s, a deliberate underestimate of a Vulkan device and
+a fair estimate for a CPU one. A build over `BUILD_CONFIRM_THRESHOLD` (200) declarations, or one that still needs the
+download, asks for confirmation with that estimate; only a small incremental build proceeds silently. The consent
+dialog covers a build that has to download, so the first `/outline build .` cannot spend bandwidth behind the user's
+back.
 
 While it runs, a `CancellableLoader` component (from `@earendil-works/pi-tui`) owns the interactive area and shows
-`Building embeddings for 12 files (42 left; estimate ~1 min)`; Escape aborts through the `AbortSignal` that `buildIndex` passes to its children,
-so the `--build` processes die immediately and every shard already published stays in the index. Non-TUI modes
-keep the build running and report through notifications, and a closed custom area never cancels it.
+`Building embeddings for 12 files (42 left; estimate ~1 min)`; Escape aborts through the `AbortSignal` that
+`buildIndex` passes down, so in-flight requests are abandoned and every shard already written stays in the index.
+Non-TUI modes keep the build running and report through notifications, and a closed custom area never cancels it.
 
-Embedding runs in child processes (`embed-worker.mjs --build`, one JSONL job file per worker: a header line,
-then one line per source file). **Native** splits work as one or two processes of up to eight intra-op threads each
-(`nativeBuildPlan`); a process costs 0.2 s to start and shares a single copy of the weights, so threads are cheaper
-than processes. The **wasm** fallback is single-threaded, so there the only way to use more than one core is more
-processes: `buildWorkerCount()` defaults to cores capped by available memory (≈1 GiB per child, `MemAvailable` when
-Linux exposes it) and `PI_CODER_OUTLINE_WORKERS` overrides it. Files are assigned whole to the least-loaded worker,
-and the parent merges the shards into the manifest once every child finished.
+Embedding is now **requests, not processes** (`semantic/runtime.ts`). The server serialises them, so
+`buildConcurrency()` — four by default, `PI_CODER_OUTLINE_WORKERS` to override, eight at most — is a queue depth,
+not a worker count: on a GPU it keeps the device busy between short requests (1.38× over sequential at 257 tokens)
+and on a CPU it collapses to one, because extra requests would only queue in front of the user's next query. The
+parent writes the shard files itself (`indexDir/shards/<shard>.bin`, float32 in key order), which is why query and
+build now share one code path.
+
+**Cost, measured end to end on this repo** (`src/tools/code`, 1,502 declarations → 1,754 vectors, Qwen3-Embedding at
+Q8_0):
+
+| device         | build                 | warm query                    | first query                  |
+| -------------- | --------------------- | ----------------------------- | ---------------------------- |
+| Vulkan (RDNA4) | 18 s — 96.6 vectors/s | 13 ms (if queried on the GPU) | 0.76 s (model load included) |
+| CPU, 8 threads | 363 s — 4.8 vectors/s | 56 ms (the default)           | 1.2 s                        |
+
+With the default role split a build uses the first row and a query the second: an 11.3k-declaration tree is ~2 minutes
+of GPU time (VRAM held only while it runs) and a search costs 56 ms on a warm CPU server. Incremental edits cost one
+text each.
+
+**A background refresh is capped at `refreshConcurrency()`** — half the cores, never more than four — because it runs
+while the user keeps querying and shares the one model with that query. The cap matters more than it used to: the
+requests are now a single queue, so the only reason a refresh cannot stall a search is that its queue stays short.
 
 **Builds are exclusive per namespace** (`semantic/lock.ts`). Every writer — a search refresh, a foreground
 `/outline build`, another pi session on the same root — reads the manifest once and publishes its whole in-memory
@@ -196,16 +218,6 @@ rename, and journal replay skips a truncated final line, so a killed build loses
 Cold cost measured on this machine: **~1.1 s per declaration per worker**, so 200 declarations are ~4 minutes on
 one worker and ~15 seconds on sixteen. Incremental edits cost ~1 s each. An interrupted build keeps every shard it
 already wrote.
-
-**A background refresh is capped at `refreshWorkerCount()`** — half the cores, never more than four — because it
-runs while the user keeps querying and each extra child competes with the warm serve child for cores. Measured on 16
-cores, reference query 677 ms idle: 4 workers cost it 9%, 8 workers 20%, 16 workers (512 declarations) 124%, while
-the extra workers buy little because every child loads ~1.85 s of model before embedding anything. Explicit
-`/outline build` keeps the full scaling: it is user-initiated and blocking.
-
-Batch size stays at one: feeding 16 or 32 declarations through a single `session.run` measured _slower_ (1.34 and
-1.36 s/declaration versus 1.10) — the vectors were identical, but padding each row to the longest text in the
-batch costs more than the per-call overhead it saves. The session itself is already reused across declarations.
 
 ### Freshness and invalidation
 
@@ -232,13 +244,16 @@ search's declarations: the searched root gets its own namespace instead of appen
 11k-entry repo index. A namespace written by a model of another width is _not_ rebuilt this way — it is ignored, and
 `/outline build` is the explicit remedy, because rebuilding under it would mix two vector spaces.
 
-Query embedding costs ~0.65 s once a `--serve` child is warm; that is why the tail only runs on near-empty
-literal results. The query child is separate from the build children and exits after five idle minutes.
+A query costs 13 ms against a warm server on a GPU and 56 ms on a CPU, after a one-off model load of ~0.8 s (again:
+one server, so a build in flight and a search share the load). It exits after five idle minutes, and `dispose()` kills
+it — a leaked server holds hundreds of MB of VRAM, which is why the child is also killed on `process.exit`.
 
 ### Measured: what the dense channel actually adds
 
-Run on 2026-11-11 with the real artifacts (native runtime), on an 8-declaration C++ fixture, to answer the one claim
-the guide could not back: _does hybrid find a doc comment whose words differ from the query?_
+Run on 2026-11-11 with the artifacts of the time (ORT + embeddinggemma), on an 8-declaration C++ fixture, to answer
+the one claim the guide could not back: _does hybrid find a doc comment whose words differ from the query?_ The
+fixture and the conclusions below are about a fused tail, not about a specific model, but the absolute cosines are
+that model's and do not transfer to the current profile.
 
 | query                                                                        | best declaration                                                                        | cosine | lexical (BM25 tail) | hybrid             |
 | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------ | ------------------- | ------------------ |

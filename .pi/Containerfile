@@ -16,11 +16,20 @@ FROM node:24-trixie-slim
 # ripgrep    searching; faster and less noisy than grep for this codebase
 # procps     `ps`/`pgrep` — an image without them makes its own process behaviour look broken
 # python3    scripted edits and one-off data work
+# libgomp1   OpenMP at load time: the onnxruntime Python wheel links libgomp.so.1, and the slim base omits it
 # time       /usr/bin/time for elapsed/RSS measurements; the shell builtin lacks `-f`
 # jq, curl   JSON on the command line, and network checks over https
 # bubblewrap only so this repository's *tests* can exercise the real sandbox path in here. pi-coder never
 #            wraps commands in bwrap when the container backend is the sandbox; without the binary those
 #            suites skip (test/helpers/host-tools.ts), which is the portable default everywhere else.
+# libvulkan1 +
+# mesa-vulkan-drivers
+#            GPU compute inside the sandbox: ggml's Vulkan backend reaches the host amdgpu through Mesa's
+#            RADV ICD, which needs neither a ROCm userspace nor an `/opt/rocm` mount. The device nodes
+#            (/dev/dri, /dev/kfd) are the container runtime's job, not this file's — this only makes the
+#            driver side present, so a GPU is not silently narrowed to the CPU fallback.
+# vulkan-tools
+#            `vulkaninfo` answers "which device did ggml actually see", which is otherwise guesswork.
 # ca-certificates is not optional: without it every https clone and fetch fails verification.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -28,10 +37,14 @@ RUN apt-get update \
       ripgrep \
       procps \
       python3 \
+      libgomp1 \
       time \
       jq \
       curl \
       bubblewrap \
+      libvulkan1 \
+      mesa-vulkan-drivers \
+      vulkan-tools \
       ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
@@ -46,6 +59,28 @@ RUN update-alternatives --install /usr/bin/awk awk /usr/bin/mawk 10 \
       --slave /usr/bin/nawk nawk /usr/bin/mawk \
  && update-alternatives --install /usr/bin/which which /usr/bin/which.debianutils 10 \
  && update-alternatives --install /usr/bin/pager pager /bin/more 10
+
+# uv: Python environment and package manager, for throwaway analysis venvs (ONNX export, model evaluation).
+#
+# A pinned download rather than a package-manager install, for two reasons: trixie has no `uv` package — Debian
+# ships it in sid only — and `curl | sh` runs an installer nobody reviews. The release tarball plus its sha256 is
+# the reviewable form; bump the version and both digests together. amd64 and arm64 only, which is the same
+# measured-platforms posture as the outline native runtime: an unmeasured platform is a missing hash, not a guess.
+# The venv it builds lives in the user's `~/.cache`, so torch and onnxruntime never enter this image.
+ARG UV_VERSION=0.13.8
+RUN case "$(uname -m)" in \
+      x86_64)  UV_ARCH=x86_64-unknown-linux-gnu;  UV_SHA256=5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91 ;; \
+      aarch64) UV_ARCH=aarch64-unknown-linux-gnu; UV_SHA256=74f2f5c6024d397481db228db8fc25eed420db192243f88438c118e7e013e585 ;; \
+      *) echo "unsupported arch $(uname -m) for uv ${UV_VERSION}" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_ARCH}.tar.gz" \
+      -o /tmp/uv.tar.gz \
+ && echo "${UV_SHA256}  /tmp/uv.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/uv.tar.gz -C /usr/local/bin --strip-components=1 \
+      "uv-${UV_ARCH}/uv" \
+      "uv-${UV_ARCH}/uvx" \
+ && rm -f /tmp/uv.tar.gz \
+ && uv --version
 
 # Nothing from the repository is copied in: the checkout and its `node_modules` arrive as a bind mount at
 # their real paths. That is also why no compiler toolchain is installed — add `build-essential` to the list

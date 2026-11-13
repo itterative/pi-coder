@@ -5,8 +5,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { effectiveSemanticMode } from "../../../src/tools/code/semantic/config";
-import { MODEL_DIMS, MODEL_ID } from "../../../src/tools/code/semantic/config";
-import { NATIVE_CPUS, nativeRuntimeDir } from "../../../src/tools/code/semantic/native";
+import { llamaArtifacts } from "../../../src/tools/code/semantic/llamacpp";
+import { modelProfile } from "../../../src/tools/code/semantic/profiles";
 import {
     emptyManifest,
     indexDir,
@@ -18,6 +18,7 @@ import registerCodeTool from "../../../src/tools/code";
 import { createPiStub, stubContext } from "../../helpers/pi-stub";
 
 const dirs: string[] = [];
+const profile = modelProfile();
 const previousModelDir = process.env.PI_CODER_OUTLINE_MODEL_DIR;
 const previousMode = process.env.PI_CODER_OUTLINE_SEMANTIC;
 
@@ -63,14 +64,14 @@ function stateDir(options: {
 
     fs.writeFileSync(
         path.join(dir, "state.json"),
-        JSON.stringify({ consent: options.consent, modelId: MODEL_ID }),
+        JSON.stringify({ consent: options.consent, modelId: profile.id }),
     );
 
     if (options.sourceKind !== undefined) {
         const root = options.root ?? "/project";
-        const namespace = namespaceFor(options.sourceKind, root, MODEL_ID, EMBED_TEXT_VERSION);
+        const namespace = namespaceFor(options.sourceKind, root, profile.id, EMBED_TEXT_VERSION);
         const manifest = {
-            ...emptyManifest(MODEL_ID, MODEL_DIMS, EMBED_TEXT_VERSION),
+            ...emptyManifest(profile.id, profile.dims, EMBED_TEXT_VERSION),
             sourceKind: options.sourceKind,
             root,
             builtAt: "2026-11-11T11:00:00.000Z",
@@ -160,29 +161,37 @@ describe("/outline status", () => {
         expect(text).toContain("container . · 5 vectors");
     });
 
-    it("says when the native runtime is missing, since the wasm fallback is silent and slow", async () => {
+    it("names the live model and the profiles that can replace it", async () => {
         const state = stateDir({ consent: "enabled", sourceKind: "local", root: cwd, vectors: 3 });
         const text = (await statusLines({ cwd, state })).join("\n");
 
-        expect(text).toContain("native runtime: not installed");
-        expect(text).toContain("/outline on installs it");
+        expect(text).toContain(`model: ${profile.label} · ${profile.dims} dims`);
+        expect(text).toContain("profiles: qwen3 | gemma | lfm2");
     });
 
-    it("reports the native runtime once both pinned files are there", async () => {
+    it("says when no llama.cpp bundle is on disk, because then the channel is BM25-only", async () => {
         const state = stateDir({ consent: "enabled", sourceKind: "local", root: cwd, vectors: 3 });
-        const cpu = NATIVE_CPUS[0]!;
-        const dir = nativeRuntimeDir(state)!;
+        const text = (await statusLines({ cwd, state })).join("\n");
 
-        fs.mkdirSync(dir, { recursive: true });
-        // Sparse files: `nativeRuntimePresent` checks the pinned sizes, not the bytes.
-        fs.writeFileSync(path.join(dir, "onnxruntime_binding.node"), "");
-        fs.truncateSync(path.join(dir, "onnxruntime_binding.node"), cpu.binding.bytes);
-        fs.writeFileSync(path.join(dir, cpu.library), "");
-        fs.truncateSync(path.join(dir, cpu.library), cpu.libraryFile.bytes);
+        expect(text).toContain("0/2 bundles on disk");
+        // Queries are on the CPU by default and builds take the GPU only when the probe finds one.
+        expect(text).toContain("device: queries=cpu, builds=gpu-if-present");
+        expect(text).toContain("gpu not probed yet");
+    });
 
-        expect((await statusLines({ cwd, state })).join("\n")).toContain(
-            "native runtime: installed",
-        );
+    it("counts the bundles that are there, by pinned size", async () => {
+        const state = stateDir({ consent: "enabled", sourceKind: "local", root: cwd, vectors: 3 });
+
+        for (const spec of llamaArtifacts()) {
+            const file = path.join(state, spec.path);
+
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            // Sparse files: the status check reads sizes, not contents.
+            fs.writeFileSync(file, "");
+            fs.truncateSync(file, spec.bytes);
+        }
+
+        expect((await statusLines({ cwd, state })).join("\n")).toContain("2/2 bundles on disk");
     });
 
     it("names the vectors this session's own root has", async () => {

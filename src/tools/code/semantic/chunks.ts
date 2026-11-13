@@ -1,7 +1,7 @@
 import { shortSignature } from "../format";
 import { EMBED_TEXT_VERSION } from "../text";
 import type { Declaration, ParsedFile } from "../types";
-import { MODEL_ID } from "./config";
+import { modelProfile } from "./profiles";
 import { hashKey } from "./store";
 
 /**
@@ -52,7 +52,7 @@ export interface CodeChunk {
 }
 
 export function chunkKeyOf(text: string): string {
-    return hashKey(`${EMBED_TEXT_VERSION}\u0000${MODEL_ID}\u0000${text}`);
+    return hashKey(`${EMBED_TEXT_VERSION}\u0000${modelProfile().id}\u0000${text}`);
 }
 
 /** The chunks of one declaration. Empty when the body is small, absent, or the language has no body. */

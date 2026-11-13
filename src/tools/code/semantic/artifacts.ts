@@ -3,7 +3,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-import { nativeArtifacts } from "./native";
+import { llamaArtifacts } from "./llamacpp";
+import { modelProfile } from "./profiles";
 
 /** One downloaded file: where it goes, where it comes from, and the bytes it must hash to. */
 export interface ArtifactSpec {
@@ -13,104 +14,60 @@ export interface ArtifactSpec {
     bytes: number;
 }
 
-const RUNTIME_VERSION = "1.31.0-dev.20260914-8d85527a0";
-const TOKENIZERS_VERSION = "0.2.0";
-const MODEL_REVISION = "daa72c51243991dfcaf9f9137d2c573d8f7790c0";
-const CDN = "https://cdn.jsdelivr.net/npm";
-const HUB = "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve";
-
 /**
- * The pinned download set for the fully dynamic embedding runtime.
+ * The model file as an artifact spec: the profile's weights, which are the only per-model download.
  *
- * Every URL is version-locked and every file carries the hash it was measured at, because these bytes are
- * executed (the wasm runtime and the tokenizer) or fed to a model. The model's q4 weights live in an
- * external-data file next to the graph, which is why both are listed.
+ * The GGUF carries its own tokenizer, so a profile is one file — where the ONNX runtime needed a graph, an external
+ * data file, a 32 MB `tokenizer.json`, a config, and 24 MB of wasm beside it.
  */
-export const ARTIFACTS: readonly ArtifactSpec[] = [
-    {
-        path: "runtime/ort.wasm.bundle.min.mjs",
-        url: `${CDN}/onnxruntime-web@${RUNTIME_VERSION}/dist/ort.wasm.bundle.min.mjs`,
-        sha256: "17b52c1ac62b421dc508b4c28b9a9675251c6e25dd512ef54b83a5e2c4242869",
-        bytes: 73_123,
-    },
-    {
-        path: "runtime/ort-wasm-simd-threaded.wasm",
-        url: `${CDN}/onnxruntime-web@${RUNTIME_VERSION}/dist/ort-wasm-simd-threaded.wasm`,
-        sha256: "06ba057753da3847e4c24f02d91ab133455b0817c69a44993a9a53a2146df9e3",
-        bytes: 14_264_838,
-    },
-    {
-        // The bundle resolves its loader glue relative to wasmPaths, so the .wasm alone is not enough.
-        path: "runtime/ort-wasm-simd-threaded.mjs",
-        url: `${CDN}/onnxruntime-web@${RUNTIME_VERSION}/dist/ort-wasm-simd-threaded.mjs`,
-        sha256: "c57ca56328877353a575e51bbca6f18450027d6c9bf2307a2cb2c41363b4de9f",
-        bytes: 24_381,
-    },
-    {
-        path: "runtime/tokenizers.mjs",
-        url: `${CDN}/@huggingface/tokenizers@${TOKENIZERS_VERSION}/dist/tokenizers.mjs`,
-        sha256: "1c4a848f86156201c033d6cd08c4cf81ae1088552acec3367f31ef086edf5af0",
-        bytes: 98_937,
-    },
-    {
-        path: "model/config.json",
-        url: `${HUB}/${MODEL_REVISION}/config.json`,
-        sha256: "8d011bfe08b5e345bbe0b81e5c6fd02c381920b345b986047bc2a33ce7b90d1d",
-        bytes: 5_031,
-    },
-    {
-        path: "model/tokenizer.json",
-        url: `${HUB}/${MODEL_REVISION}/tokenizer.json`,
-        sha256: "4d777ef5bdc1aa36227abdfb77c3e49e7b9c892d16e1b6bda41c393504828be4",
-        bytes: 32_170_510,
-    },
-    {
-        path: "model/tokenizer_config.json",
-        url: `${HUB}/${MODEL_REVISION}/tokenizer_config.json`,
-        sha256: "17bd5d6e9364ca49a534e1502076593317c298d4a663623091ed45388f004874",
-        bytes: 1_599,
-    },
-    {
-        path: "model/model_q4.onnx",
-        url: `${HUB}/${MODEL_REVISION}/onnx/model_q4.onnx`,
-        sha256: "f9eeba97acddf139b8ee2ddf04bc30dceafa88de93fadf74d7644e0d61a477a9",
-        bytes: 490_742,
-    },
-    {
-        path: "model/model_q4.onnx_data",
-        url: `${HUB}/${MODEL_REVISION}/onnx/model_q4.onnx_data`,
-        sha256: "c3975f2d1ab7a1878ae31a7d7a9b7804a827aff3800b60dfceafce21cac3df49",
-        bytes: 174_028_800,
-    },
-];
+export function modelArtifact(env: NodeJS.ProcessEnv = process.env): ArtifactSpec {
+    const profile = modelProfile(env);
 
-export const TOTAL_ARTIFACT_BYTES = ARTIFACTS.reduce((sum, spec) => sum + spec.bytes, 0);
+    return {
+        path: profile.file,
+        url: profile.url,
+        sha256: profile.sha256,
+        bytes: profile.bytes,
+    };
+}
+
+/** The model file on disk, with a test/CI override. */
+export function modelFile(modelDir: string, env: NodeJS.ProcessEnv = process.env): string {
+    const override = (env.PI_CODER_OUTLINE_MODEL_FILE ?? "").trim();
+
+    return override.length > 0
+        ? path.resolve(override)
+        : path.join(modelDir, modelArtifact(env).path);
+}
 
 /**
- * Bytes this machine will download: the wasm runtime and model, plus the native runtime when the platform has one.
+ * Bytes this machine will download for the live profile: its model plus whichever runtime archives its platform has.
  *
- * The native payload is optional (the worker falls back to wasm), so it is counted separately rather than folded
- * into `TOTAL_ARTIFACT_BYTES`, which stays the "is the channel usable at all" number.
+ * Only the selected model is fetched, so switching profiles costs a download and a rebuild rather than tripling the
+ * footprint of every install.
  */
 export function artifactBytes(
     platform: NodeJS.Platform = process.platform,
     arch: string = process.arch,
+    env: NodeJS.ProcessEnv = process.env,
 ): number {
-    return nativeArtifacts(platform, arch).reduce(
-        (sum, spec) => sum + spec.bytes,
-        TOTAL_ARTIFACT_BYTES,
-    );
+    return runtimeArtifacts(platform, arch, env).reduce((sum, spec) => sum + spec.bytes, 0);
 }
 
-export function nativeArtifactBytes(
+/** The full download for this platform and profile. */
+export function runtimeArtifacts(
     platform: NodeJS.Platform = process.platform,
     arch: string = process.arch,
-): number {
-    return nativeArtifacts(platform, arch).reduce((sum, spec) => sum + spec.bytes, 0);
+    env: NodeJS.ProcessEnv = process.env,
+): ArtifactSpec[] {
+    return [modelArtifact(env), ...llamaArtifacts(platform, arch)];
 }
 
 /** A cheap "is it all here" check: sizes only, no hashing. */
-export function artifactsPresent(dir: string, specs: readonly ArtifactSpec[] = ARTIFACTS): boolean {
+export function artifactsPresent(
+    dir: string,
+    specs: readonly ArtifactSpec[] = runtimeArtifacts(),
+): boolean {
     return specs.every((spec) => {
         try {
             return fs.statSync(path.join(dir, spec.path)).size === spec.bytes;
@@ -183,7 +140,7 @@ export interface EnsureOptions {
  */
 export async function ensureArtifacts(options: EnsureOptions): Promise<void> {
     const { dir, fetchImpl = fetch, onProgress, signal } = options;
-    const specs = options.specs ?? ARTIFACTS;
+    const specs = options.specs ?? runtimeArtifacts();
     const verified = readVerified(dir);
     let changed = false;
 
@@ -192,20 +149,6 @@ export async function ensureArtifacts(options: EnsureOptions): Promise<void> {
     for (const spec of specs) {
         changed =
             (await ensureOne(spec, { dir, verified, fetchImpl, onProgress, signal })) || changed;
-    }
-
-    // The native runtime is a speed-up, not a requirement: the worker falls back to wasm. A failed download here must
-    // therefore not fail the channel, and the base artifacts above are what "present" means.
-    if (options.specs === undefined) {
-        for (const spec of nativeArtifacts()) {
-            try {
-                changed =
-                    (await ensureOne(spec, { dir, verified, fetchImpl, onProgress, signal })) ||
-                    changed;
-            } catch {
-                continue;
-            }
-        }
     }
 
     if (changed) {

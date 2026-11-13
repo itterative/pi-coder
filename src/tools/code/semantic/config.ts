@@ -13,10 +13,6 @@ export interface EffectiveSemanticMode {
     source: SemanticModeSource;
 }
 
-/** The model the artifact manifest is pinned to; part of every index namespace. */
-export const MODEL_ID = "embeddinggemma-2-q4";
-export const MODEL_DIMS = 768;
-
 /**
  * How much of the search tail runs.
  *

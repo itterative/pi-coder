@@ -7,12 +7,15 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { clearCodeCache, loadParsedFile } from "../../../src/tools/code/load";
 import { buildIndex } from "../../../src/tools/code/semantic";
-import { MODEL_DIMS, MODEL_ID } from "../../../src/tools/code/semantic/config";
+import { modelProfile } from "../../../src/tools/code/semantic/profiles";
 import { acquireIndexLock, indexLockHeld } from "../../../src/tools/code/semantic/lock";
 import type { EmbedRuntime } from "../../../src/tools/code/semantic/runtime";
 import { indexDir, namespaceFor, writeShard } from "../../../src/tools/code/semantic/store";
 import { EMBED_TEXT_VERSION } from "../../../src/tools/code/text";
 import { MemoryCodeSource } from "../../helpers/code-source";
+
+/** The live model profile: fixtures are sized for whatever model this build ships. */
+const profile = modelProfile();
 
 const dirs: string[] = [];
 
@@ -31,7 +34,7 @@ afterEach(() => {
 });
 
 function namespaceDir(modelDir: string, root: string): string {
-    return indexDir(modelDir, namespaceFor("local", root, MODEL_ID, EMBED_TEXT_VERSION));
+    return indexDir(modelDir, namespaceFor("local", root, profile.id, EMBED_TEXT_VERSION));
 }
 
 /** A pid that certainly belongs to no live process: spawn one, let it exit, then reuse its number. */
@@ -162,15 +165,15 @@ describe("outline index build lock", () => {
 
 function fakeRuntime(): EmbedRuntime {
     return {
-        embedQuery: async () => new Float32Array(MODEL_DIMS),
+        embedQuery: async () => new Float32Array(profile.dims),
         build: async (indexDirPath, jobs, onProgress, _signal, onShard) => {
             const shards = [];
 
             for (const [index, file] of jobs.entries()) {
-                const vectors = file.entries.map(() => new Float32Array(MODEL_DIMS));
+                const vectors = file.entries.map(() => new Float32Array(profile.dims));
                 const keys = file.entries.map((entry) => entry.key);
 
-                writeShard(indexDirPath, file.shard, vectors, MODEL_DIMS);
+                writeShard(indexDirPath, file.shard, vectors, profile.dims);
                 shards.push({ shard: file.shard, keys });
                 onShard?.({ shard: file.shard, keys });
                 onProgress((index + 1) * file.entries.length, jobs.length);

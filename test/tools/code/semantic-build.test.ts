@@ -14,12 +14,12 @@ import {
     liveEntryKeys,
 } from "../../../src/tools/code/semantic";
 import { chunksOf } from "../../../src/tools/code/semantic/chunks";
-import { MODEL_DIMS, MODEL_ID } from "../../../src/tools/code/semantic/config";
+import { modelProfile } from "../../../src/tools/code/semantic/profiles";
 import { acquireIndexLock } from "../../../src/tools/code/semantic/lock";
 import {
     MAX_JOB_ENTRIES,
-    buildWorkerCount,
-    refreshWorkerCount,
+    buildConcurrency,
+    refreshConcurrency,
     splitJobs,
     type BuildFile,
     type EmbedRuntime,
@@ -35,6 +35,9 @@ import {
 import { EMBED_TEXT_VERSION, embedTextOf } from "../../../src/tools/code/text";
 import type { ParsedFile } from "../../../src/tools/code/types";
 import { MemoryCodeSource } from "../../helpers/code-source";
+
+/** The live model profile: fixtures are sized for whatever model this build ships. */
+const profile = modelProfile();
 
 const dirs: string[] = [];
 
@@ -59,9 +62,9 @@ beforeEach(() => {
 /** Deterministic stand-in for the model, so store and fusion logic are testable without the runtime. */
 function vectorFor(text: string): Float32Array {
     const digest = createHash("sha256").update(text).digest();
-    const vector = new Float32Array(MODEL_DIMS);
+    const vector = new Float32Array(profile.dims);
 
-    for (let index = 0; index < MODEL_DIMS; index += 1) {
+    for (let index = 0; index < profile.dims; index += 1) {
         vector[index] = (digest[index % digest.length] ?? 0) / 255 - 0.5;
     }
 
@@ -79,7 +82,7 @@ function fakeRuntime(queryVector: Float32Array): EmbedRuntime {
                 const vectors = file.entries.map((entry) => vectorFor(entry.text));
                 const keys = file.entries.map((entry) => entry.key);
 
-                writeShard(indexDirPath, file.shard, vectors, MODEL_DIMS);
+                writeShard(indexDirPath, file.shard, vectors, profile.dims);
                 shards.push({ shard: file.shard, keys });
                 onShard?.({ shard: file.shard, keys });
                 done += file.entries.length;
@@ -129,7 +132,12 @@ async function parseBulk(
 }
 
 function manifestSize(options: { sourceKind: string; root: string; modelDir: string }): number {
-    const namespace = namespaceFor(options.sourceKind, options.root, MODEL_ID, EMBED_TEXT_VERSION);
+    const namespace = namespaceFor(
+        options.sourceKind,
+        options.root,
+        profile.id,
+        EMBED_TEXT_VERSION,
+    );
     const manifest = readManifest(indexDir(options.modelDir, namespace));
 
     return Object.keys(manifest?.entries ?? {}).length;
@@ -176,18 +184,18 @@ async function parseOne(relative: string, source: string, mtime = 1): Promise<Pa
 describe("outline semantic worker budget", () => {
     it("caps a refresh at half the cores, and never above four", () => {
         // Half the cores leaves the warm serve child a core of its own on a small machine.
-        expect(refreshWorkerCount(16)).toBe(4);
-        expect(refreshWorkerCount(8)).toBe(4);
-        expect(refreshWorkerCount(4)).toBe(2);
-        expect(refreshWorkerCount(2)).toBe(1);
-        expect(refreshWorkerCount(1)).toBe(1);
-        expect(refreshWorkerCount()).toBeGreaterThanOrEqual(1);
-        expect(refreshWorkerCount()).toBeLessThanOrEqual(4);
+        expect(refreshConcurrency(16)).toBe(4);
+        expect(refreshConcurrency(8)).toBe(4);
+        expect(refreshConcurrency(4)).toBe(2);
+        expect(refreshConcurrency(2)).toBe(1);
+        expect(refreshConcurrency(1)).toBe(1);
+        expect(refreshConcurrency()).toBeGreaterThanOrEqual(1);
+        expect(refreshConcurrency()).toBeLessThanOrEqual(4);
     });
 
     it("still honours the explicit worker override for full builds", () => {
-        expect(buildWorkerCount({ PI_CODER_OUTLINE_WORKERS: "3" } as NodeJS.ProcessEnv)).toBe(3);
-        expect(buildWorkerCount({ PI_CODER_OUTLINE_WORKERS: "999" } as NodeJS.ProcessEnv)).toBe(32);
+        expect(buildConcurrency({ PI_CODER_OUTLINE_WORKERS: "3" } as NodeJS.ProcessEnv)).toBe(3);
+        expect(buildConcurrency({ PI_CODER_OUTLINE_WORKERS: "999" } as NodeJS.ProcessEnv)).toBe(8);
     });
 
     it("passes the refresh budget to the build a search starts", async () => {
@@ -205,8 +213,8 @@ describe("outline semantic worker budget", () => {
         let recorded: number | undefined;
         const recording: EmbedRuntime = {
             ...fakeRuntime(vectorFor("query")),
-            async build(dir, jobs, onProgress, signal, onShard, maxWorkers) {
-                recorded = maxWorkers;
+            async build(dir, jobs, onProgress, signal, onShard, maxConcurrency) {
+                recorded = maxConcurrency?.maxConcurrency;
 
                 return fakeRuntime(vectorFor("query")).build(
                     dir,
@@ -232,7 +240,7 @@ describe("outline semantic worker budget", () => {
         });
 
         await vi.waitFor(() => {
-            expect(recorded).toBe(refreshWorkerCount());
+            expect(recorded).toBe(refreshConcurrency());
         });
     });
 });
@@ -358,7 +366,7 @@ describe("outline semantic build", () => {
             runtime: fakeRuntime(vectorFor("query")),
         });
 
-        const namespace = namespaceFor("local", "/project/src", MODEL_ID, EMBED_TEXT_VERSION);
+        const namespace = namespaceFor("local", "/project/src", profile.id, EMBED_TEXT_VERSION);
         const manifest = readManifest(indexDir(root, namespace))!;
 
         expect(manifest.entries[key]).toBeDefined();
@@ -408,9 +416,9 @@ describe("outline semantic build", () => {
 
         // The namespace hash carries the model id and text version, never the width, so a wrong-dims index lands in
         // the same directory and would otherwise be accepted and read with the wrong stride.
-        const namespace = namespaceFor("local", "/project/src", MODEL_ID, EMBED_TEXT_VERSION);
+        const namespace = namespaceFor("local", "/project/src", profile.id, EMBED_TEXT_VERSION);
         const dir = indexDir(root, namespace);
-        writeManifest(dir, { ...readManifest(dir)!, dims: MODEL_DIMS - 1 });
+        writeManifest(dir, { ...readManifest(dir)!, dims: profile.dims - 1 });
 
         const stale: Array<{ missing: number; refreshing: boolean }> = [];
         const semantic = createSemanticSearch({
@@ -502,7 +510,7 @@ describe("outline semantic build", () => {
                     indexDirPath,
                     first.shard,
                     first.entries.map((entry) => vectorFor(entry.text)),
-                    MODEL_DIMS,
+                    profile.dims,
                 );
                 onShard?.({ shard: first.shard, keys });
                 published = keys.length;
@@ -564,7 +572,7 @@ describe("outline semantic build", () => {
             runtime: fakeRuntime(vectorFor("query")),
         });
 
-        const namespace = namespaceFor("local", "/project/src", MODEL_ID, EMBED_TEXT_VERSION);
+        const namespace = namespaceFor("local", "/project/src", profile.id, EMBED_TEXT_VERSION);
         const lock = acquireIndexLock(indexDir(root, namespace))!;
         const stale: Array<{ missing: number; refreshing: boolean }> = [];
         const semantic = createSemanticSearch({
@@ -750,7 +758,7 @@ describe("outline semantic root ownership", () => {
             const namespace = namespaceFor(
                 "local",
                 "/project/memory",
-                MODEL_ID,
+                profile.id,
                 EMBED_TEXT_VERSION,
             );
 
@@ -795,7 +803,7 @@ describe("outline semantic root ownership", () => {
             const namespace = namespaceFor(
                 "local",
                 "/project/memory",
-                MODEL_ID,
+                profile.id,
                 EMBED_TEXT_VERSION,
             );
 

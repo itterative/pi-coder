@@ -464,7 +464,7 @@ produces none — its declarations are small, and Markdown prose is already the 
 Vectors are content-addressed (`embeddingKey` hashes the embedded text), so an edited declaration cannot match its
 old vector — the lookup would need the old text. Staleness is therefore *absence*, never a wrong answer, and the
 dead entries an edit leaves behind are bytes only. Width is the one property not covered by that key: a namespace is
-rejected unless `header.dims === MODEL_DIMS` (the namespace hash carries model id and text version, not dims), and a
+rejected unless `header.dims === profile.dims` (the namespace hash carries model id and text version, not dims), and a
 vector whose length differs from the query vector is treated as missing rather than scored — `cosine` truncates to
 the shorter length with `Math.min`, which would turn a width mismatch into plausible-looking noise. A search counts
 dead entries when its file set covers the whole namespace root and schedules a compaction once they clear both
@@ -483,26 +483,37 @@ Status also names the namespaces and whether this session's own root is among th
 session, so "2 namespaces" can mean "none that this search may use". `this session: no local index for .` is the
 line that says so, and the fix is a first search there (which schedules the build) or `/outline build .`.
 
-**Native runtime first, wasm fallback.** On a platform with a verified native ONNX Runtime (`semantic/native.ts`,
-currently linux-x64) the child loads onnxruntime-node's CPU binding directly — two downloaded files, no npm
-dependency, no vendored JS wrapper. That matters because the wasm build cannot use threads in Node: it bootstraps
-them through a `blob:` module import, which Node's ESM loader rejects, so it runs single-threaded and needed one
-process per core. Native takes real intra-op threads. Measured on 16 cores, same artifacts: query embedding 673 ms
-(wasm) → 27 ms, a 93-token document 1589 ms → 90 ms, session start 2.5 s → 0.2 s, resident 767 MB → 486 MB. Vectors
-are identical (cosine 1.000000), so switching runtimes never invalidates an index. The worker picks native whenever
-`PI_OUTLINE_NATIVE_DIR` points at a payload of the pinned sizes, and otherwise takes the wasm path unchanged.
+**One runtime: llama.cpp, one server per model directory.** The channel spawns `llama-server --embeddings` from a
+pinned llama.cpp release (`semantic/llamacpp.ts`, `semantic/server.ts`) and posts texts to its `/v1/embeddings`, so
+the model loads once and every search and build shares it — the ONNX path used to hold one copy of the weights per
+worker, and needed two runtimes (a native binding plus an ort-web fallback with three Node workarounds) to do it. The
+release publishes a `RUNPATH=$ORIGIN` bundle, so the ~60 shared libraries need no environment; it is unpacked from a
+hash-pinned tarball into the state directory.
 
-One embedding child per model directory is shared by every search (`sharedEmbedRuntime`), because the tool builds a
-fresh `SemanticSearch` per call for its config and consent and never disposes it. A per-call runtime would reload
-the ~197 MB model on every tail search — measured as 2.5 s per search instead of 0.64 s — and leave one resident
-copy of the weights per search until the child's idle timeout. With native, an idle tail search costs 27 ms of
-embedding on top of ~10 ms of lexical work.
+The model is a **profile** (`semantic/profiles.ts`): Qwen3-Embedding-0.6B by default, with embeddinggemma-2 and
+LFM2.5-Embedding-350M selectable by `PI_CODER_OUTLINE_MODEL`. A profile owns the GGUF download, the vector width, and
+the asymmetric prefixes (`Instruct: …\nQuery:` for Qwen3, `query: `/`document: ` for LFM2.5, none for documents
+otherwise) — and because its id is part of the namespace and of every entry key, switching builds a new index rather
+than mixing widths, and switching back finds the old one.
 
-Background refreshes are capped at `refreshWorkerCount()` (half the cores, at most four), because refresh builds run
-in **separate** children and compete for cores. That cap was measured against the wasm runtime, where 4 build workers
-cost a concurrent query 9% of its latency, 8 workers 20%, 16 workers 124% — each child paying ~1.85 s to load the
-model. Under native the cap still applies, but it caps *threads* inside one or two processes, because a native build
-process is cheap to start and shares its weights across threads.
+**Backend selection is per role.** Queries keep a warm CPU server; builds take a GPU when one is present, through a
+server that is started for the import and killed when it ends — so VRAM is borrowed only while a build the user asked
+for is running, never at query time (measured: 1.76 GB appears and disappears around an import). The Vulkan bundle is
+asked `--list-devices` and a software-only answer falls back to the CPU bundle; a Vulkan start that fails on allocation
+is retried on the CPU for that build. `PI_CODER_OUTLINE_QUERY_DEVICE` / `PI_CODER_OUTLINE_BUILD_DEVICE` set a role
+(`cpu|vulkan|auto`, defaults `cpu` and `auto`) and `PI_CODER_OUTLINE_DEVICE` pins both. CPU and Vulkan vectors score
+cosine 0.9994–0.9998 for the same text, so an index built on one is queried on the other without a penalty. Only
+linux-x64 has a measured bundle, so other platforms are BM25-only — where the ONNX path still had wasm.
+
+**Builds are requests, not children.** The server serialises them, so `buildConcurrency()` is a queue depth (four,
+`PI_CODER_OUTLINE_WORKERS` to override, eight at most) that keeps a GPU busy between short requests, and drops to one
+on a CPU where extra requests would only queue in front of the user's next search. The parent writes the shards, so a
+query and a build share one code path. Measured on 1,502 declarations (1,754 vectors, Q8_0): **18 s / 96.6 vectors per
+second on a Vulkan device, 363 s / 4.8 on 8 CPU threads**; a warm query is 13 ms and 56 ms respectively, after a ~0.8 s
+model load.
+
+Background refreshes stay capped at `refreshConcurrency()` (half the cores, at most four), and the cap matters more
+than it did: with one shared queue, the only thing keeping a refresh from stalling a search is that its queue is short.
 
 **One writer per namespace.** A refresh, a foreground build, and another pi session on the same root all publish to
 the same manifest, and each build reads it once and writes its whole in-memory view at the end — so two overlapping
@@ -514,11 +525,10 @@ instead of scheduling a refresh that would bounce. Readers never take the lock: 
 randomly named temp file and a rename, and the journal replay tolerates a truncated final line, so a killed build
 loses at most its unfinished shard.
 
-The semantic half is downloaded, not installed: no npm dependency, ~211 MB of pinned and hash-verified artifacts
-under the pi-coder state directory (plus ~48 MB for the native runtime where the platform has one), and a
-content-hash shard index. `docs/outline-search.md` records the artifact manifest, the ort-in-Node constraints, the
-index layout, and the measured cold-build cost (~1.1 s per declaration on single-threaded wasm, parallelized across
-processes; ~90 ms per declaration natively with four threads).
+The semantic half is downloaded, not installed: no npm dependency, ~700 MB of pinned and hash-verified artifacts for
+the default profile (one GGUF that carries its own tokenizer, plus two small runtime archives) under the pi-coder state
+directory, and a content-hash shard index. `docs/outline-search.md` records the artifact manifest, the device
+selection, the index layout, and the measured build cost (~10 ms per vector on a GPU, ~210 ms on a CPU core).
 - Files at or above 256 KiB are parsed in a lazy worker so a large source file cannot freeze the TUI. The
   worker loads the existing parser modules through jiti, keeps its tree-sitter parser warm, and terminates on
   cancellation; it falls back to inline parsing if the worker or loader is unavailable. Smaller files parse

@@ -1,6 +1,6 @@
 ---
 name: search
-description: Search ranking tiers, the BM25 relevance tail, and the opt-in wasm embedding channel for src/tools/code.
+description: Search ranking tiers, the BM25 relevance tail, and the opt-in llama.cpp embedding channel for src/tools/code.
 category: architecture
 priority: 7
 keep_updated: true
@@ -95,36 +95,55 @@ merge to get there, and only an already-maximal set loses its tail.
 - **Cost.** On this repo `src` (≈8.7k declarations) chunks add ≈1.2k entries (+14%) and ≈1.8 MB of chunk text; planning
   is ~22 ms once per parse, cached per `ParsedFile` like the BM25 entries; a chunked child collapses to its signature
   line in the parent, so a class chunk never re-embeds its methods. Memory and `docs` trees produce none.
-  Chunk text is capped at `CHUNK_MAX_CHARS` plus its header, well inside the embedder's 1024-token truncation.
+  Chunk text is capped at `CHUNK_MAX_CHARS` plus its header, well inside the embedder's `MAX_TEXT_CHARS` cap.
 
 ## Embedding channel (opt-in)
 
-Invisible when it works: `SEMANTIC_HINT` ("`/outline on` downloads a ~211 MB model…") rides on tail rows only
+Model alternatives, their export recipes and their measured cost and quality are in `models.md`; the incumbent
+survived on "good enough", not on a measured lead over the alternatives.
+
+Invisible when it works: `SEMANTIC_HINT` ("`/outline on` downloads a ~700 MB model…") rides on tail rows only
 while the channel is off or declined, and `prepareSemantic` passes `hint: undefined` in hybrid. So a hybrid search
 shows nothing but the ordinary `[related]` footer, and an agent cannot tell from output whether embeddings ran —
 which is why the tool guide names the tail and does not claim literal-only matching.
 
-Fully dynamic: **no npm dependency**. Pinned, SHA-256-verified artifacts are downloaded from a pinned CDN/HF
-revision into `<agent-dir>/pi-coder/outline/semantic/`, never into `node_modules` (pi's `git clean -fdx` would
-delete them). ~211 MB total, ~197 MB of it model + tokenizer. `PI_CODER_OUTLINE_SEMANTIC=off|bm25|hybrid`
-(default `bm25`), `/outline on|off|status|build|purge`, and a one-time consent dialog at the first
-search of a session. `/outline build <path>` counts what is missing before spending anything, asks for
-confirmation above 200 declarations or when the 211 MB download is still needed, then embeds across
-cores-capped-by-memory child processes (`PI_CODER_OUTLINE_WORKERS` overrides): 177 declarations took 59.6 s on 4
-workers, and an incremental build against a warm index runs without a dialog. The
-build UI is a `CancellableLoader` (`Building embeddings for 12 files (42 left; estimate ~1 min)`, with `esc cancels`) wired to an `AbortSignal`; Escape kills the
-children and keeps published shards. Background downloads and refreshes use the footer status entry instead.
+Fully dynamic: **no npm dependency**. Pinned, SHA-256-verified artifacts are downloaded into
+`<agent-dir>/pi-coder/outline/semantic/`, never into `node_modules` (pi's `git clean -fdx` would delete them).
+**Since 2026-11-13 the runtime is llama.cpp, not ONNX Runtime** (see `models.md` for why): one GGUF that carries its
+own tokenizer plus a pinned release tarball, ~700 MB total for the default profile. `PI_CODER_OUTLINE_SEMANTIC=off|bm25|hybrid`
+(default `bm25`), `PI_CODER_OUTLINE_MODEL=gemma|qwen3|lfm2` picks the profile, `/outline on|off|status|build|purge`,
+and a one-time consent dialog at the first search of a session. `/outline build <path>` counts what is missing
+before spending anything, asks for confirmation above 200 declarations or when the download is still needed, then
+embeds with `buildConcurrency()` requests in flight (`PI_CODER_OUTLINE_WORKERS` overrides, four by default, one on a
+CPU device). The build UI is a `CancellableLoader` (`Building embeddings for 12 files (42 left; estimate ~1 min)`,
+with `esc cancels`) wired to an `AbortSignal`; Escape abandons in-flight requests and keeps published shards.
+Background downloads and refreshes use the footer status entry instead.
 
-Three ort-web-in-Node constraints in `embed-worker.mjs`, each verified: a `file:` fetch shim (Node's fetch
-rejects `file:`), `numThreads = 1` (threading bootstraps a `blob:` import that Node refuses), and an explicit
-`externalData` mount for the q4 weights plus `[0, 512]` dummy modality inputs. Because the session is
-single-threaded, a build runs one child per core (memory-capped, each with its own model copy); the parent
-merges their shards into the manifest once all children finish. Job files are JSONL.
+**`llama-server` children, one per role** (`semantic/server.ts`). That is the whole engine: spawn with
+`--embeddings -c 8192 -b/-ub 4096`, poll `/health`, POST `/v1/embeddings`, kill on idle (5 min) and on `process.exit` —
+an orphan holds hundreds of MB of VRAM, which happened once when driven by hand. **Queries keep a warm CPU server; the
+build server is transient** — started for an import, killed when it ends, so VRAM is borrowed only while a build runs
+(measured: 1.76 GB appears and disappears around an import; free VRAM 2.43 → 0.67 → 2.43 GiB). Defaults are
+`query=cpu`, `build=auto`; `PI_CODER_OUTLINE_QUERY_DEVICE`/`PI_CODER_OUTLINE_BUILD_DEVICE` set a role, the blunt
+`PI_CODER_OUTLINE_DEVICE` pins both. A Vulkan start that fails on allocation retries on the CPU for that build, and a
+background refresh is pinned to the CPU in `semantic/index.ts`. Mixing backends is safe: same weights, CPU-vs-Vulkan
+cosine 0.9994–0.9998 for the same text, and entry keys are text hashes.
+llama.cpp has no in-process binding worth shipping and its server speaks OpenAI's shape, so the child is the
+supported interface, not a workaround. **Device selection is a probe**: the Vulkan bundle is unpacked and asked
+`--list-devices`; llvmpipe/swiftshader-only falls back to the CPU bundle
+(`PI_CODER_OUTLINE_LLAMA_SERVER` replaces the binary for tests, keeping the requested device). Only linux-x64 has a measured bundle, so other
+platforms are BM25-only — the ONNX path's wasm fallback is gone and cannot come back (llama.cpp has no wasm build).
+
+Consequences that shaped the rest: the model loads **once** instead of once per worker, so a build no longer
+multiplies resident memory; the server **serialises** requests, so concurrency is queue depth, and a CPU build keeps
+exactly one in flight so a background refresh cannot park itself in front of a query; and the **parent writes the
+shards** (`indexDir/shards/<shard>.bin`, float32 in key order), which is why query and build share one code path.
+Text is capped at `MAX_TEXT_CHARS` (12,000 characters ≈ 3,000 tokens) rather than 1,024 token ids.
 
 Index (`semantic/store.ts`): namespace = `sha256(source.kind \0 root \0 modelId \0 textVersion)`, so container
 and host views never share vectors; entry key = hash of the embedded text, never path or mtime; one shard per
 source file per build, so a rebuild appends and pruning deletes orphans. Width is outside that key chain: the
-namespace hash has no `dims`, so the exact and the ancestor lookups both verify `header.dims === MODEL_DIMS`, and a
+namespace hash has no `dims`, so the exact and the ancestor lookups both verify `header.dims === profile.dims`, and a
 vector whose length differs from the query vector is counted as missing instead of scored, because `cosine`
 truncates with `Math.min` rather than failing — a width mismatch would otherwise look like a plausible ranking.
 Finished shards are appended to
@@ -161,9 +180,11 @@ and orphans every key; that bug shipped into the first draft and a test caught i
 change costs a full new namespace and the old one needs manual deletion. **Pruning is root-scoped** — build a whole
 root, never a hand-picked subset of its files. Embedding failures always degrade to BM25.
 
-Measured on the container CPU: ~1.1 s per declaration cold (single-threaded wasm), ~0.65 s per query once the
-child is warm, 6.6 ms to scan 8k×768 vectors in pure JS. The evaluation that chose this design is in the session
-scratchpad's `embedding-experiment.md`: BM25 R@1 0.68, embeddings 0.73, RRF 0.68/R@3 0.91, tiers+RRF 0.77/0.91.
+Measured end to end on this repo (1,502 declarations → 1,754 vectors, Qwen3 Q8_0): **18 s / 96.6 vectors per second on
+a Vulkan device, 363 s / 4.8 on 8 CPU threads**; a warm query is **13 ms** on the GPU and 56 ms on the CPU after a
+~0.8 s model load. An 11.3k-declaration tree is ~2 min on a GPU, ~40 on a CPU. The evaluation that chose the design is
+in the session scratchpad's `embedding-experiment.md`: BM25 R@1 0.68, embeddings 0.73, RRF 0.68/R@3 0.91,
+tiers+RRF 0.77/0.91.
 
 ## Markdown and memory trees
 
@@ -455,7 +476,10 @@ search until the child's idle timeout. The runtime is now module-level, shared p
 2.5 s → 0.64 s, cold 2.5 s only on the first tail search of a process (observed 704 ms warm in-session). The
 timing line is what made this visible — `tail 2525` twice in a row.
 
-**Native ORT replaced wasm as the primary runtime** (2026-11-11). `onnxruntime-web` cannot use threads in Node — its
+**Superseded 2026-11-13 by llama.cpp** (`semantic/llamacpp.ts`, `server.ts`): everything from here to the end of this
+section describes the ONNX Runtime that is no longer shipped, kept because its measurements are why each replacement
+step happened and because a regression there would look the same. **Native ORT replaced wasm as the primary runtime**
+(2026-11-11). `onnxruntime-web` cannot use threads in Node — its
 thread pool bootstraps a `blob:` module import, which Node's ESM loader refuses (re-verified: `numThreads = 2` fails
 session creation with `ERR_UNSUPPORTED_ESM_URL_SCHEME`), so it ran single-threaded and needed one process per core.
 `onnxruntime-node`'s CPU binding takes real intra-op threads and is drivable *without* its JS layer: `initOrtOnce(3,
@@ -469,7 +493,8 @@ holds the platform table (linux-x64 only; everything else falls back to wasm) pl
 `ensureArtifacts` downloads the pair best-effort after the wasm set so a failed native download cannot cost the
 channel.
 
-**A refresh must not starve a query.** Separate children mean a refresh never *blocks* a query, but it competes for
+**A refresh must not starve a query.** (Under llama.cpp this is one shared queue, so the cap is stronger, not
+weaker.) Separate children mean a refresh never *blocks* a query, but it competes for
 cores: measured 2026-11-11 on 16 cores (`measure-contention.ts`), reference query 677 ms idle — 64 declarations at
 1 worker 59 s, query +1%; 2 → 31 s, +3%; 4 → 17 s, +9%; 8 → 13 s, +20%. 512 declarations: 4 → 127 s, +9%; 8 → 71 s,
 +71%; 16 → 65 s, +124%. Extra workers stop paying because each child loads ~1.85 s of model first (cold

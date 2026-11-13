@@ -18,7 +18,7 @@ export function todoPrompt(pathname: string): string {
         "version: 1",
         "todos:",
         "  - id: inspect",
-        "    title: \"Inspect the implementation\"",
+        '    title: "Inspect the implementation"',
         "    status: in_progress",
         "---",
         "```",

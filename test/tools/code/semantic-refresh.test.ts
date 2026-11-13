@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { clearCodeCache, loadParsedFile } from "../../../src/tools/code/load";
 import { buildIndex } from "../../../src/tools/code/semantic";
-import { MODEL_DIMS, MODEL_ID } from "../../../src/tools/code/semantic/config";
+import { modelProfile } from "../../../src/tools/code/semantic/profiles";
 import { projectRoots, refreshOnce, scanRoot } from "../../../src/tools/code/semantic/refresh";
 import type { EmbedRuntime } from "../../../src/tools/code/semantic/runtime";
 import {
@@ -21,6 +21,9 @@ import {
 import { EMBED_TEXT_VERSION } from "../../../src/tools/code/text";
 import type { ParsedFile } from "../../../src/tools/code/types";
 import { MemoryCodeSource } from "../../helpers/code-source";
+
+/** The live model profile: fixtures are sized for whatever model this build ships. */
+const profile = modelProfile();
 
 const dirs: string[] = [];
 const ROOT = "/project";
@@ -45,9 +48,9 @@ beforeEach(() => {
 
 function vectorFor(text: string): Float32Array {
     const digest = createHash("sha256").update(text).digest();
-    const vector = new Float32Array(MODEL_DIMS);
+    const vector = new Float32Array(profile.dims);
 
-    for (let index = 0; index < MODEL_DIMS; index += 1) {
+    for (let index = 0; index < profile.dims; index += 1) {
         vector[index] = (digest[index % digest.length] ?? 0) / 255 - 0.5;
     }
 
@@ -66,7 +69,7 @@ function fakeRuntime(): EmbedRuntime {
                 const vectors = file.entries.map((entry) => vectorFor(entry.text));
                 const keys = file.entries.map((entry) => entry.key);
 
-                writeShard(indexDirPath, file.shard, vectors, MODEL_DIMS);
+                writeShard(indexDirPath, file.shard, vectors, profile.dims);
                 shards.push({ shard: file.shard, keys });
                 onShard?.({ shard: file.shard, keys });
                 done += file.entries.length;
@@ -212,11 +215,11 @@ describe("idle refresh scan", () => {
 
         // A namespace of another embed-text version, and one rooted outside the project: both are visible as
         // directories, and neither is this session's business.
-        const stale = namespaceFor("local", ROOT, MODEL_ID, "code-retrieval-v0");
+        const stale = namespaceFor("local", ROOT, profile.id, "code-retrieval-v0");
         const staleDir = indexDir(modelDir, stale);
         fs.mkdirSync(staleDir, { recursive: true });
         const manifest = readManifest(
-            indexDir(modelDir, namespaceFor("local", ROOT, MODEL_ID, EMBED_TEXT_VERSION)),
+            indexDir(modelDir, namespaceFor("local", ROOT, profile.id, EMBED_TEXT_VERSION)),
         )!;
         const staleManifest: IndexManifest = { ...manifest, textVersion: "code-retrieval-v0" };
         writeManifest(staleDir, staleManifest);
@@ -224,7 +227,7 @@ describe("idle refresh scan", () => {
         const elsewhere = path.join(path.dirname(modelDir), "somewhere-else");
         const outside = indexDir(
             modelDir,
-            namespaceFor("local", elsewhere, MODEL_ID, EMBED_TEXT_VERSION),
+            namespaceFor("local", elsewhere, profile.id, EMBED_TEXT_VERSION),
         );
         fs.mkdirSync(outside, { recursive: true });
         writeManifest(outside, { ...manifest, root: elsewhere });
@@ -233,7 +236,10 @@ describe("idle refresh scan", () => {
 
         expect(roots).toEqual([
             {
-                dir: indexDir(modelDir, namespaceFor("local", ROOT, MODEL_ID, EMBED_TEXT_VERSION)),
+                dir: indexDir(
+                    modelDir,
+                    namespaceFor("local", ROOT, profile.id, EMBED_TEXT_VERSION),
+                ),
                 root: ROOT,
             },
         ]);
@@ -247,7 +253,7 @@ describe("idle refresh scan", () => {
         const manifest = emptyManifestFor(nested);
 
         writeManifest(
-            indexDir(modelDir, namespaceFor("local", nested, MODEL_ID, EMBED_TEXT_VERSION)),
+            indexDir(modelDir, namespaceFor("local", nested, profile.id, EMBED_TEXT_VERSION)),
             manifest,
         );
 
@@ -305,7 +311,7 @@ describe("idle refresh scan", () => {
     it("treats every file as changed when the manifest records no build time", async () => {
         const modelDir = tempDir();
         await seededIndex(modelDir);
-        const namespace = namespaceFor("local", ROOT, MODEL_ID, EMBED_TEXT_VERSION);
+        const namespace = namespaceFor("local", ROOT, profile.id, EMBED_TEXT_VERSION);
         const dir = indexDir(modelDir, namespace);
         const manifest = readManifest(dir)!;
         const { builtAt: _dropped, ...withoutBuiltAt } = manifest;
@@ -329,8 +335,8 @@ describe("idle refresh scan", () => {
 function emptyManifestFor(root: string): IndexManifest {
     return {
         version: 1,
-        modelId: MODEL_ID,
-        dims: MODEL_DIMS,
+        modelId: profile.id,
+        dims: profile.dims,
         textVersion: EMBED_TEXT_VERSION,
         sourceKind: "local",
         root,

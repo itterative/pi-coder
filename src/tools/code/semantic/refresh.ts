@@ -5,7 +5,7 @@ import { discoverFiles } from "../discovery";
 import { loadParsedFiles } from "../load";
 import type { CodeSource } from "../source";
 import type { ParsedFile } from "../types";
-import { MODEL_ID } from "./config";
+import { modelProfile } from "./profiles";
 import { liveEntryKeys } from "./index";
 import { indexDir, namespaceFor, readManifest, readManifestHeader } from "./store";
 import { EMBED_TEXT_VERSION } from "../text";
@@ -58,7 +58,7 @@ export function projectRoots(options: {
 
         if (
             header === undefined ||
-            header.modelId !== MODEL_ID ||
+            header.modelId !== modelProfile().id ||
             header.textVersion !== EMBED_TEXT_VERSION ||
             header.sourceKind !== options.sourceKind ||
             header.root === undefined
@@ -155,7 +155,7 @@ export async function scanRoot(options: {
 }): Promise<ScanFinding | undefined> {
     const dir = indexDir(
         options.modelDir,
-        namespaceFor(options.source.kind, options.root, MODEL_ID, EMBED_TEXT_VERSION),
+        namespaceFor(options.source.kind, options.root, modelProfile().id, EMBED_TEXT_VERSION),
     );
     const header = readManifestHeader(dir);
     const manifest = header === undefined ? undefined : readManifest(dir);

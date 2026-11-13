@@ -20,7 +20,6 @@ import { runSearch } from "./search";
 import { artifactBytes, ensureArtifacts, artifactsPresent } from "./semantic/artifacts";
 import {
     effectiveSemanticMode,
-    MODEL_ID,
     readConsent,
     semanticMode,
     semanticRoot,
@@ -28,9 +27,15 @@ import {
 } from "./semantic/config";
 import { buildIndex, countEmbeddings, createSemanticSearch, ensureIndexMetadata } from "./semantic";
 import { projectRoots, refreshOnce, scanRoot } from "./semantic/refresh";
-import { buildWorkerCount, refreshWorkerCount } from "./semantic/runtime";
-import { nativeArtifactBytes } from "./semantic/artifacts";
-import { nativeRuntimePresent } from "./semantic/native";
+import { buildConcurrency, refreshConcurrency } from "./semantic/runtime";
+import {
+    devicePreference,
+    llamaArtifacts,
+    llamaSupported,
+    vulkanStatus,
+    LLAMA_TAG,
+} from "./semantic/llamacpp";
+import { modelProfile, PROFILES } from "./semantic/profiles";
 import { readManifest } from "./semantic/store";
 import type { SemanticSearch } from "./semantic/types";
 import { runShow } from "./show";
@@ -287,7 +292,7 @@ function idleRefresh(
                         files,
                         // Only the changed files were parsed: pruning against them would delete the rest of the index.
                         prune: false,
-                        maxWorkers: refreshWorkerCount(),
+                        maxConcurrency: refreshConcurrency(),
                     }).catch(() => ({ embedded: 0 }));
 
                     return built.embedded;
@@ -479,7 +484,9 @@ const codeReadRoots: CodeReadRoots = () => [
     ...fileRootsForOperation(sandboxConfig.current, "read"),
 ];
 
-const SEMANTIC_HINT = "# semantic: /outline on downloads a ~211 MB model once and ranks by meaning";
+/** Download size, computed rather than written down: it changes with the model and with the runtime archives. */
+const SEMANTIC_MEGABYTES = Math.round(artifactBytes() / 1_048_576);
+const SEMANTIC_HINT = `# semantic: /outline on downloads a ~${SEMANTIC_MEGABYTES} MB model once and ranks by meaning`;
 /** Footer status entry shared by background downloads and refreshes; one line, cleared when idle. */
 const OUTLINE_STATUS_KEY = "outline";
 
@@ -544,7 +551,7 @@ async function prepareSemantic(ctx: ExtensionContext): Promise<SemanticSearch | 
 /**
  * Offer the embedding channel once, at the first search of a session.
  *
- * It is a real dialog rather than a line in the tool output because enabling it spends ~211 MB of the user's
+ * It is a real dialog rather than a line in the tool output because enabling it spends hundreds of MB of the user's
  * bandwidth and disk; a silent offer would make that decision for them. A "not now" answer is session-local
  * and asked again next session, while "don't ask again" is written to the state file.
  */
@@ -577,14 +584,14 @@ async function maybeAskSemantics(ctx: ExtensionContext, root: string): Promise<v
     }
 
     if (choice?.startsWith("Enable")) {
-        writeConsent({ consent: "enabled", modelId: MODEL_ID }, root);
+        writeConsent({ consent: "enabled", modelId: modelProfile().id }, root);
         startArtifactDownload(ctx, root);
 
         return;
     }
 
     if (choice === "Don't ask again") {
-        writeConsent({ consent: "never", modelId: MODEL_ID }, root);
+        writeConsent({ consent: "never", modelId: modelProfile().id }, root);
     }
 }
 
@@ -625,14 +632,14 @@ async function handleOutlineCommand(
     const root = semanticRoot();
 
     if (sub === "on" || sub === "enable") {
-        writeConsent({ consent: "enabled", modelId: MODEL_ID }, root);
+        writeConsent({ consent: "enabled", modelId: modelProfile().id }, root);
         startArtifactDownload(ctx, root);
 
         return;
     }
 
     if (sub === "off" || sub === "disable") {
-        writeConsent({ consent: "never", modelId: MODEL_ID }, root);
+        writeConsent({ consent: "never", modelId: modelProfile().id }, root);
         ctx.ui.notify("outline semantic: disabled", "info");
 
         return;
@@ -665,13 +672,17 @@ async function handleOutlineCommand(
     const megabytes = Math.round(artifactBytes() / 1_048_576);
     const sourceKind = container?.active === true ? "container" : "local";
 
+    const profile = modelProfile();
+
     ctx.ui.notify(
         [
             `outline semantic: mode=${mode} (${source}) · consent=${state.consent}`,
+            `model: ${profile.label} · ${profile.dims} dims · PI_CODER_OUTLINE_MODEL=${profile.name}`,
+            `profiles: ${PROFILES.map((entry) => entry.name).join(" | ")}`,
             `artifacts: ${artifactsPresent(root) ? "ready" : `not downloaded (≈${megabytes} MB)`}`,
-            nativeStatusLine(root),
+            runtimeStatusLine(root),
             ...indexStatusLines(root, ctx.cwd, sourceKind),
-            `build workers: ${buildWorkerCount()}`,
+            `build queue: ${buildConcurrency()} request(s) in flight`,
             `state: ${root}`,
         ].join("\n"),
         "info",
@@ -679,21 +690,40 @@ async function handleOutlineCommand(
 }
 
 /**
- * Whether the native runtime is installed, because its absence is invisible and expensive.
+ * Which backend is on disk, and which one it will use.
  *
- * The worker falls back to wasm without a word, and wasm's session start alone measured ~2.6 s per cold search here
- * against ~0.2 s native (query embedding 670 ms warm against 27 ms). An install that predates the native artifacts
- * never downloads them — `ensureArtifacts` tops up the native pair only when it runs, which `/outline on` does and an
- * ordinary build does not — so the only way to notice was to read a timing footer.
+ * The old line existed because a missing native runtime was invisible and expensive: the worker fell back to wasm
+ * without a word, at ~25x the query cost. The same trap exists here — a Vulkan bundle that cannot see a hardware
+ * device turns into a CPU build — so the line reports the bundles found and the device chosen (or that it will be
+ * chosen at first use).
  */
-function nativeStatusLine(root: string): string {
-    if (nativeRuntimePresent(root)) {
-        return "native runtime: installed";
+function runtimeStatusLine(root: string): string {
+    if (!llamaSupported()) {
+        return `runtime: no llama.cpp bundle for ${process.platform}/${process.arch} — BM25 only, no embeddings`;
     }
 
-    const megabytes = Math.round(nativeArtifactBytes() / 1_048_576);
+    const archives = llamaArtifacts();
+    const present = archives.filter((spec) => {
+        try {
+            return fs.statSync(path.join(root, spec.path)).size === spec.bytes;
+        } catch {
+            return false;
+        }
+    });
+    const probe = vulkanStatus();
+    const build = devicePreference("build");
+    const query = devicePreference("query");
+    const resolved =
+        probe === undefined
+            ? "gpu not probed yet"
+            : probe
+              ? "hardware Vulkan device available"
+              : "no hardware Vulkan device (software rasteriser only)";
 
-    return `native runtime: not installed — wasm fallback (slower queries); /outline on installs it (≈${megabytes} MB)`;
+    return (
+        `runtime: llama.cpp ${LLAMA_TAG} · ${present.length}/${archives.length} bundles on disk\n` +
+        `device: queries=${query === "auto" ? "cpu" : query}, builds=${build === "auto" ? "gpu-if-present" : build} · ${resolved}`
+    );
 }
 
 interface IndexedNamespace {
@@ -787,7 +817,7 @@ const OUTLINE_SUBCOMMANDS: ReadonlyArray<{
     { name: "status", description: "Mode, consent, artifacts, and index state", takesPath: false },
     {
         name: "on",
-        description: "Enable semantic search and download the model (~211 MB)",
+        description: `Enable semantic search and download the model (~${SEMANTIC_MEGABYTES} MB)`,
         takesPath: false,
     },
     { name: "off", description: "Disable semantic search", takesPath: false },
@@ -875,14 +905,17 @@ function failureText(params: { action: string; path?: string }, error: unknown):
     return `# outline ${params.action} failed\n${message}`;
 }
 
-/** Above this many missing vectors, the build asks before spending minutes of CPU. */
+/** Above this many missing vectors, the build asks before spending minutes of compute. */
 const BUILD_CONFIRM_THRESHOLD = 200;
-/** Measured on the container CPU: single-threaded wasm embeds one vector (head or chunk) in ≈1.1 s. */
-const SECONDS_PER_EMBEDDING = 1.1;
+/**
+ * Measured cost of one vector (head or chunk, ~257 tokens) through llama.cpp on the CPU core count these estimates
+ * assume: 0.45 s. A Vulkan device is ~10x faster, so the dialog errs towards a slower promise than it keeps.
+ */
+const SECONDS_PER_EMBEDDING = 0.45;
 
-/** Rough wall clock for `vectors` left at the measured rate, split across `workers`. */
-function formatEstimate(vectors: number, workers: number): string {
-    const seconds = (vectors * SECONDS_PER_EMBEDDING) / workers;
+/** Rough wall clock for `vectors` left, divided over the requests a CPU build keeps in flight. */
+function formatEstimate(vectors: number, concurrency: number): string {
+    const seconds = (vectors * SECONDS_PER_EMBEDDING) / Math.max(1, concurrency);
 
     if (seconds < 3600) {
         return `~${Math.max(1, Math.ceil(seconds / 60))} min`;
@@ -904,7 +937,7 @@ function plural(value: number, noun: string): string {
  *
  * Parsing is cheap and needs no model, so the plan is computed first: it tells the user how many vectors
  * would be embedded, how long that takes, and whether a download is still needed. A build that would take
- * minutes, or that has to fetch 211 MB, is confirmed explicitly; only a small incremental build against a warm
+ * minutes, or that has to fetch the model, is confirmed explicitly; only a small incremental build against a warm
  * index proceeds without a dialog.
  */
 async function buildSemanticIndex(
@@ -946,15 +979,12 @@ async function buildSemanticIndex(
         }
 
         const controller = new AbortController();
-        const workers = Math.max(
-            1,
-            Math.min(buildWorkerCount(), batch.parsed.length, Math.ceil(plan.missing / 8)),
-        );
+        const concurrency = Math.max(1, Math.min(buildConcurrency(), batch.parsed.length));
         let loader: CancellableLoader | undefined;
         let filesLeft = plan.files;
         let vectorsLeft = plan.missing;
         const compose = (): string =>
-            `Building embeddings for ${plural(plan.files, "file")} (${plural(filesLeft, "file")} left; estimate ${formatEstimate(vectorsLeft, workers)})`;
+            `Building embeddings for ${plural(plan.files, "file")} (${plural(filesLeft, "file")} left; estimate ${formatEstimate(vectorsLeft, concurrency)})`;
         let message = compose();
 
         // Track the latest message even before the loader exists: a download starts synchronously.
@@ -976,7 +1006,7 @@ async function buildSemanticIndex(
                 });
             }
 
-            writeConsent({ consent: "enabled", modelId: MODEL_ID }, root);
+            writeConsent({ consent: "enabled", modelId: modelProfile().id }, root);
 
             const step = Math.max(1, Math.ceil(plan.missing / 50));
             let reported = 0;
@@ -1086,15 +1116,15 @@ async function confirmBuild(
         return false;
     }
 
-    const workers = buildWorkerCount();
-    const minutes = Math.max(1, Math.ceil((missing * SECONDS_PER_EMBEDDING) / workers / 60));
+    const concurrency = buildConcurrency();
+    const minutes = Math.max(1, Math.ceil((missing * SECONDS_PER_EMBEDDING) / concurrency / 60));
     const megabytes = cached ? 0 : Math.round(artifactBytes() / 1_048_576);
     const download = megabytes > 0 ? `, ≈${megabytes} MB download` : "";
     let choice: string | undefined;
 
     try {
         choice = await ctx.ui.select(`Embed ${missing} vectors`, [
-            `Build now (~${minutes} min on ${workers} worker${workers === 1 ? "" : "s"}${download})`,
+            `Build now (~${minutes} min${download})`,
             "Cancel",
         ]);
     } catch {

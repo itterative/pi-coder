@@ -39,6 +39,9 @@ including `[huge]` files, the directory map, and heading matching: `outline-tool
 - `outline-tool/internals.md` — source seam and confinement, the parse-buffer/IR pipeline, the parsed-file cache,
   the large-file worker, yielding, and how to add a language.
 - `outline-tool/search.md` — search tiers, BM25 parameters, the semantic tail, artifact/index layout, build cost.
+- `outline-tool/models.md` — measured model evaluations and the switch they produced: three selectable profiles
+  (Qwen3-Embedding-0.6B default, embeddinggemma-2, LFM2.5), KURE-Sparse-nano rejected, the GPU/Vulkan numbers, and the
+  eval traps that cost a rerun.
 - `outline-tool/deps.md` — import extraction, resolution states, and the dependents scan.
 - `src/tools/code/README.md` — action semantics, per-language behavior, preprocessor rules, limits, tests.
 - `src/tools/code/adapters.ts` — language registry: grammar, preprocessor, parser, call sites.
