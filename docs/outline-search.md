@@ -274,10 +274,14 @@ Two things follow, and both are worth knowing before trusting the label:
   does). What hybrid reliably changes is the row _count_: the dense list scores every declaration, so RRF fills the
   tail to `TAIL_ROWS` (8) where BM25 returned one row. That is no longer a cost that a gate has to contain: the
   channel runs every time, and the row cap is the only budget.
-- **A score floor is not available.** Cosines are compressed into 0.6–0.75 for this model and corpus: the best row
-  for a query with _no_ answer (0.680) outscores the seventh row of a query that has one (0.622). Absolute thresholds
-  therefore cannot separate relevance here, and a relative margin is one fixture's guess. The honest signals stay the
-  ones already in the output: the `[related]` tag, the footer naming the channels, and the row cap.
+- **Both floors exist, and they answer different questions.** A ratio to each channel's _own_ top score is the part
+  that works across scales: BM25 on this repo's `src` puts a one-answer identifier at ~0.98 of its top and the rows
+  that share a single token at ~0.5-0.6, so `RELATED_FLOOR_RATIO` (0.65, `semantic/rank.ts`) drops the latter. The
+  dense channel has a calibrated band of its own, so it also takes an absolute `DENSE_FLOOR` (0.5): measured on the
+  shipped Qwen3 GGUF through llama.cpp at Q8_0 over 9,188 head vectors of this repo's `src`, six queries whose answer
+  is absent top out at 0.420-0.540, six whose answer is present at 0.690-0.851, and no absent-answer query had a row
+  at 0.55. Above the old ORT-era table's overlap, this band does separate — but the value is one number for every
+  profile, because the other two have no measured band of their own on the current runtime.
 
 A comment **inside** a function body is invisible to all of it: promoting that comment to the adjacent doc block is
 what changes the outcome, which is the boundary the guide now states.

@@ -362,9 +362,12 @@ target; the resolution index uses the whole discovered root, not the pattern-nar
 `deps`. When a pattern is active, a second unfiltered discovery supplies that root: the pattern bounds what is
 searched, not which imports are real.
 
-The scope changes what is searched, ranked, and reported, not the discovery walk: a scoped call still discovers and
-parses the searched tree the way an unscoped one does, and the semantic tail draws its candidates from the scoped
-files.
+The scope changes what is searched, ranked, and reported, and it does change the discovery walk in one direction:
+when `within` is present `usages` discovers and parses the searched root instead of the symbol-narrowed candidate set.
+A dependent that imports the anchor without naming the queried symbol is exactly the file a grep for that symbol never
+returns, so a candidate-narrowed scope answered "2 files" where `deps` answered twelve (`search` always parsed the
+searched root, which is why only `usages` was wrong). `imports` and `dependents` share the branch because the anchor's
+neighbourhood is the question either way; the semantic tail draws its candidates from the scoped files.
 
 ## File dependencies
 
@@ -557,6 +560,19 @@ answer in the corpus scored 0.680, above the seventh row of a query that had one
 floor; the `[related]` tag, the footer, and the row cap are the honest signals. Details and the table:
 `docs/outline-search.md`.
 
+**A sorted list is not a ranking.** The tail used to print positions 1-8 whatever the eighth score was, so a query
+with one real answer still carried seven rows that shared a single token. Each channel now keeps only the rows within
+`RELATED_FLOOR_RATIO` (0.65) of its own best score, applied before fusion (`aboveFloor` in `semantic/rank.ts`). The
+ratio rather than a cut is what the two scales share: BM25 moves with the corpus and the query length, so a one-answer
+identifier drops from ~0.98 of its top score to ~0.5-0.6 for rows sharing one token, while a flat, genuinely related
+query keeps every row above ~0.9 (measured on this repo's `src`).
+
+**The dense channel has an absolute floor too.** `DENSE_FLOOR` (0.5) drops cosine rows below it before fusion — a
+similarity guess about unrelated text is not a tail. It is one number for every profile (the bands are not comparable,
+so a per-model value would be a guess dressed as a measurement). The measured distribution behind the 0.5 is in
+`docs/outline-search.md`. Rows either floor removes are not counted or labelled — the summary already counts literal
+rows only.
+
 **A related-led page keeps one slot for the strongest literal row.** When the lexical pass has no precise evidence
 the related rows lead, because a doc tier that merely saw every content word somewhere is not an answer. A full
 `TAIL_ROWS` of guesses could then fill the leading page and push the query's *only* literal match onto the next one,
@@ -736,8 +752,8 @@ selection, the index layout, and the measured build cost (~10 ms per vector on a
 - `test/tools/code/search-cache.test.ts` — reusing per-file search hits across offset pages.
 - `test/tools/code/worker.test.ts` — large C++, TypeScript, and Java parse/usage-index requests through the
   worker, plus pre-start cancellation.
-- `test/tools/code/source.test.ts` — local/container adapters, container selection, symlink confinement, tool
-  registration.
+- `test/tools/code/source.test.ts` — local/container adapters, container selection, symlink confinement, the
+  root-relative-to-ripgrep glob rewrite (a wildcard after the literal prefix), and tool registration.
 - `test/helpers/code-source.ts` — the in-memory source used by action tests.
 
 Run `npx vitest run test/tools/code` and `npm run typecheck:tests` after changes.

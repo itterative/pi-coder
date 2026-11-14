@@ -191,6 +191,22 @@ and R@10 (4 vs 16, p=0.012), and beats LFM2 at R@10 (16 vs 3, p=0.004)**. Gemma 
 - Report **R@10 alongside R@3**: R@3 is the tool's real budget (`TAIL_ROWS`), but two models tied at R@3 can
   differ hugely at depth, and only R@10 exposed the LFM2/Qwen3 split above.
 
+## Dense cosine band and the tail floor (2026-11-14)
+
+Measured on the shipped Qwen3 GGUF through **llama.cpp Q8_0**, against the repo's built index (9,188 head vectors of
+`src`), to calibrate `DENSE_FLOOR` in `semantic/rank.ts`:
+
+| query class | rows | top cosine | rows ≥ 0.55 |
+| --- | --- | --- | --- |
+| answer present in the corpus | six queries | 0.690–0.851 | 17–216 |
+| answer absent | six queries | 0.420–0.540 | 0 |
+
+So the band *does* separate on this model and runtime — 0.5 was shipped as the loose end of the gap. The old
+"no absolute floor is possible" conclusion came from the ORT-era gemma fixture (absent-answer top 0.680, above an
+answered query's seventh row) and does not transfer: it is not a measurement of the shipped GGUF profiles. Head
+vectors only; body chunks were not in this table, and the single-token case whose answer lives in a body (top cosine
+0.502) is found by BM25 regardless.
+
 LFM2.5-Embedding-350M: 350M params, **1024 dims**, 11 languages, hybrid LFM2 backbone, GGUF-only artifacts
 (Q4_K_M 229 MB, Q8_0 379 MB, F16 711 MB). Fastest of the three on CPU — **0.90–1.07 ms/token** at 8 threads from
 300 to 2,320 tokens, load 0.42 s — but that is its only advantage. Both asymmetric prefixes are required (the

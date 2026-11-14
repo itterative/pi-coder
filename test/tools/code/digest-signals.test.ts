@@ -114,6 +114,24 @@ describe("outline digest directory map", () => {
         expect(result.text).toContain("declarations exceed the 400-char limit");
         expect(result.text).not.toContain("# visibility:");
     });
+
+    it("names every file when a pattern matches a few files at depth", async () => {
+        const source = new MemoryCodeSource("/project", {
+            "src/modules/sandbox/permissions.ts": manyFunctions("permission"),
+            "test/modules/sandbox/permissions.test.ts": manyFunctions("testPermission"),
+        });
+        const result = await runDigest(source, {
+            action: "digest",
+            path: "**/permissions*.ts",
+            limit: 120,
+        });
+
+        // The map grouped these as `src/ 1 file · modules/ 1` and named neither, which is not an answer to
+        // "which files matched?".
+        expect(result.text).toContain("src/modules/sandbox/permissions.ts");
+        expect(result.text).toContain("test/modules/sandbox/permissions.test.ts");
+        expect(result.text).not.toContain("modules/ 1");
+    });
 });
 
 describe("outline digest kind-filtered rows", () => {

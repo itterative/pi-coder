@@ -23,6 +23,57 @@ export function leadsWithRelated(strongMatch: boolean): boolean {
 /** Rows the related channel may add, which is also the page it leads with. */
 export const TAIL_ROWS = 8;
 
+/**
+ * Share of a channel's best score a row must reach to stay in the related list.
+ *
+ * A sorted list has no floor of its own: the tail used to print positions 1-8 whatever the 8th score was, so a query
+ * with one real answer still carried seven rows that shared only a token. 0.65 was calibrated on this repo's `src`
+ * (BM25): a query whose answer is one identifier drops from ~0.98 of its top score to ~0.5-0.6 for the rows that
+ * share just one of its tokens, while a flat, genuinely related query keeps every row above ~0.9. The measured
+ * distributions are recorded in the `outline-tool/search.md` memory rather than here, because a doc comment is
+ * searchable and naming those queries would put this constant in their search results.
+ *
+ * It is a ratio, not an absolute cut, because each channel's scale is its own: BM25 scores move with the corpus and
+ * the query length, cosine with the model. Rows are compared only inside the list that produced them.
+ */
+export const RELATED_FLOOR_RATIO = 0.65;
+
+/** Cosine a dense row needs to enter the related tail. */
+export const DENSE_FLOOR = 0.5;
+
+/**
+ * A ranked row carrying the score that placed it.
+ *
+ * Internal to the tail: the floor is applied where the scores exist, and the score itself never reaches a row's
+ * renderer, so `RankedDeclaration` stays the identity a caller passes around.
+ */
+export interface ScoredDeclaration extends RankedDeclaration {
+    score: number;
+}
+
+/**
+ * Drop the rows that trail their channel's best score by more than `RELATED_FLOOR_RATIO`, or below an absolute
+ * floor the channel's profile supplies.
+ *
+ * The list must already be sorted best-first, which both channels produce. A channel with no positive score keeps
+ * nothing: an all-zero list is not a ranking. `absoluteFloor` is for a channel whose scale is calibrated — the dense
+ * channel passes `DENSE_FLOOR`; BM25 has no comparable calibration and passes none.
+ */
+export function aboveFloor<T extends { score: number }>(
+    ranked: readonly T[],
+    absoluteFloor = 0,
+): T[] {
+    const top = ranked[0]?.score ?? 0;
+
+    if (top <= 0) {
+        return [];
+    }
+
+    const floor = Math.max(top * RELATED_FLOOR_RATIO, absoluteFloor);
+
+    return ranked.filter((entry) => entry.score >= floor);
+}
+
 /** Reciprocal-rank-fusion constant; 60 is the value the retrieval literature settles on. */
 export const RRF_K = 60;
 

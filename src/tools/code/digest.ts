@@ -587,6 +587,16 @@ const NAME_NOTE_RESERVE = 24;
 /** Files a flat map names before summarising the rest; one name per line, as it always was. */
 const FLAT_MAP_NAMES = 80;
 
+/**
+ * Files a map names individually when its directory rows would hide some of them.
+ *
+ * A map groups by directory so a 370-file tree stays scannable, but the same grouping is a puzzle when the pattern
+ * matched two files at depth: `permissions*.ts` answered `src/ 1 file · modules/ 1` twice and named neither file.
+ * Below this size, when some matches sit in a child-directory count and would never be named, every match is named
+ * with its path instead. A small tree whose files all appear in a block keeps its map: the names are already there.
+ */
+const SMALL_MAP_FILES = 8;
+
 function renderDirectoryMap(
     source: CodeSource,
     root: string,
@@ -645,6 +655,19 @@ function renderDirectoryMap(
 
     const displayRoot = source.displayPath(root);
     const header = `# digest ${scopeLabel(scope)} · ${counted(parsed.length, "file")} · declarations exceed the ${limit}-char limit; showing the map with declaration counts`;
+    const namedDirect =
+        rootFiles.length +
+        Array.from(directories.values()).reduce((total, dir) => total + dir.direct.length, 0);
+
+    if (parsed.length <= SMALL_MAP_FILES && namedDirect < parsed.length) {
+        return renderFlatMap(
+            header,
+            parsed.map((file) => ({
+                label: mapRelativeLabel(root, file.path),
+                declarations: file.all.length,
+            })),
+        );
+    }
 
     if (directories.size === 0) {
         return renderFlatMap(header, rootFiles);
@@ -826,6 +849,14 @@ function compareMapFiles(left: MapFile, right: MapFile): number {
 /** `(0)` is omitted: a file with no declarations is still a file, not a failed parse. */
 function mapFileLabel(file: MapFile): string {
     return file.declarations > 0 ? `${file.label} (${file.declarations})` : file.label;
+}
+
+/** A small map's label: the path from the searched root, so a nested match says where it is. */
+function mapRelativeLabel(root: string, target: string): string {
+    const relative = path.relative(root, target);
+    const label = relative.length === 0 ? path.basename(target) : relative;
+
+    return label.split(path.sep).join("/");
 }
 
 interface NameLine {

@@ -3,6 +3,7 @@ import type { Node as SyntaxNode } from "@vscode/tree-sitter-wasm";
 import { yieldToEventLoop } from "../../common/async";
 import {
     candidateFiles,
+    discoverFiles,
     filterPathTarget,
     lastComponent,
     parsePathTarget,
@@ -139,14 +140,22 @@ export async function runUsages(
 
     await source.assertReadable(root);
 
+    // `within` is a question about a file's edges, and the dependents side of that question cannot be answered from
+    // a symbol-narrowed candidate set: a file that imports the anchor without naming the symbol is a real dependent
+    // that `candidateFiles` never parses, which is why this scope used to report 2 files where `deps` reported 12.
+    // The searched root is parsed instead, exactly as `search` (and `deps`) already do.
     const candidates = await timing.measure("discover", () =>
-        candidateFiles(source, root, requested, signal, patternWithinTarget(target)),
+        params.within === undefined
+            ? candidateFiles(source, root, requested, signal, patternWithinTarget(target))
+            : discoverFiles(source, root, signal, patternWithinTarget(target)),
     );
     const targeted = filterPathTarget(candidates.files, source, target);
     const discovery = { ...candidates, files: targeted.files };
     const filter = filterNote({ path: target.pattern, pathHidden: targeted.hidden });
 
-    if (discovery.files.length === 0) {
+    // A scope keeps its anchor even when the pattern excludes every file, so an empty discovery is only an answer
+    // when nothing is scoped.
+    if (discovery.files.length === 0 && params.within === undefined) {
         return {
             text: bodyThenFooter(
                 [

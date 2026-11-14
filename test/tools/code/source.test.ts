@@ -9,7 +9,9 @@ import {
     ContainerCodeSource,
     LocalCodeSource,
     createCodeSource,
+    ripgrepGlob,
 } from "../../../src/tools/code/source";
+import { runDigest } from "../../../src/tools/code/digest";
 import { clearCodeCache } from "../../../src/tools/code/load";
 import { createPiStub, stubContext } from "../../helpers/pi-stub";
 import registerCodeTool from "../../../src/tools/code";
@@ -128,6 +130,67 @@ describe("local code source", () => {
         expect(stat.size).toBeGreaterThan(0);
         expect(stat.mtimeMs).toBeGreaterThan(0);
     });
+
+    it("applies a root-relative pattern with a wildcard in a middle segment", async () => {
+        const root = tempProject();
+
+        write(root, "src/modules/a/index.ts", "export const a = 1;\n");
+        write(root, "src/modules/b/index.ts", "export const b = 2;\n");
+        write(root, "src/modules/a/deep/index.ts", "export const deep = 3;\n");
+        write(root, "src/modules/a/other.ts", "export const other = 4;\n");
+
+        const source = new LocalCodeSource(root);
+        const modules = path.join(root, "src", "modules");
+        const paths = (await source.glob(modules, { limit: 100, pattern: "*/index.ts" }))
+            .map((entry) => path.relative(modules, entry))
+            .toSorted();
+
+        // ripgrep matches `--glob` against the path it prints, so the root-relative pattern has to be rewritten
+        // before it is handed over; passing it through matched nothing at all.
+        expect(paths).toEqual([path.join("a", "index.ts"), path.join("b", "index.ts")]);
+    });
+
+    it("digests a pattern whose wildcard follows the literal prefix", async () => {
+        const root = tempProject();
+
+        write(root, "src/modules/a/index.ts", "export function alpha(): number { return 1; }\n");
+        write(root, "src/modules/b/index.ts", "export function beta(): number { return 2; }\n");
+        write(root, "src/modules/b/other.ts", "export function other(): number { return 3; }\n");
+
+        const result = await runDigest(new LocalCodeSource(root), {
+            action: "digest",
+            path: "src/modules/*/index.ts",
+        });
+
+        expect(result.text).not.toContain("no files match");
+        expect(result.text).toContain("src/modules/a/index.ts");
+        expect(result.text).toContain("src/modules/b/index.ts");
+        expect(result.text).not.toContain("src/modules/b/other.ts");
+    });
+});
+
+describe("ripgrep glob rewriting", () => {
+    it("rewrites a root-relative pattern to the path ripgrep matches against", () => {
+        expect(ripgrepGlob("/project/src/modules", "*/index.ts", "/project")).toBe(
+            "src/modules/*/index.ts",
+        );
+        expect(ripgrepGlob("/project/src", "*.ts", "/project")).toBe("src/*.ts");
+        expect(ripgrepGlob("/project/src", "/project/src/*.ts", "/project")).toBe("src/*.ts");
+    });
+
+    it("keeps only what a root outside the cwd can express", () => {
+        // A basename pattern matches at any depth, and `**/` absorbs a leading absolute prefix.
+        expect(ripgrepGlob("/elsewhere/src", "*.ts", "/project")).toBe("*.ts");
+        expect(ripgrepGlob("/elsewhere/src", "**/index.ts", "/project")).toBe("**/index.ts");
+        // Anything else would be read literally and match nothing, so the post-filter owns it instead.
+        expect(ripgrepGlob("/elsewhere/src", "*/index.ts", "/project")).toBeUndefined();
+        expect(ripgrepGlob("/elsewhere/src", "/elsewhere/src/*.ts", "/project")).toBeUndefined();
+    });
+
+    it("asks for no pattern when the caller gave none", () => {
+        expect(ripgrepGlob("/project/src", undefined, "/project")).toBeUndefined();
+        expect(ripgrepGlob("/project/src", "", "/project")).toBeUndefined();
+    });
 });
 
 describe("container code source", () => {
@@ -161,6 +224,7 @@ describe("container code source", () => {
 
         expect(await source.glob("/project", { limit: 50 })).toEqual(["/project/src/a.cpp"]);
         expect(await source.glob("/project/src", { limit: 5 })).toEqual(["/project/src/a.cpp"]);
+        await source.glob("/project/src/modules", { limit: 5, pattern: "*/index.ts" });
         expect(await source.readFile("/project/src/a.cpp")).toBe("int main() {}\n");
         expect((await source.stat("/project/src/a.cpp")).mtimeMs).toBe(1234);
 
@@ -172,6 +236,8 @@ describe("container code source", () => {
         expect(globCalls[0]?.limit).toBe(50);
         expect(globCalls[0]?.noIgnore).toBe(false);
         expect(globCalls[1]?.noIgnore).toBe(true);
+        // The container's rg matches globs the same way the local one does, so the same rewrite applies.
+        expect(globCalls[2]?.pattern).toBe("src/modules/*/index.ts");
     });
 
     it("uses a grep result to narrow a symbol search", async () => {

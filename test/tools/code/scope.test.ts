@@ -283,6 +283,18 @@ describe("outline usages within a dependency neighbourhood", () => {
         expect(result.text).not.toContain("lib/helper.ts");
         expect(result.text).toContain("# within: imports of src/app.ts · 2 files");
     });
+
+    it("counts a dependent that does not mention the symbol", async () => {
+        // `src/app.ts` imports the artifact without naming `retry`. A candidate set grepped for the symbol never
+        // parses it, so the scope used to report only the anchor where `deps` reports two dependents.
+        const result = await runUsages(source(), {
+            action: "usages",
+            query: "retry",
+            within: "dependents:src/store/artifact.ts",
+        });
+
+        expect(result.text).toContain("# within: dependents of src/store/artifact.ts · 2 files");
+    });
 });
 
 describe("outline within on other actions", () => {

@@ -96,7 +96,9 @@ whose split parts all miss but whose text names a heading is used whole (announc
   `# deeper:` (not `# next:`) for its descend hint, so a complete map never reads as a truncated one. The map is a
   tree with a fair budget: each directory shows its immediate child directories as rows instead of flattening their
   files into longer paths, its direct files sorted by declaration count (zero omitted), and names are spent one packed
-  line per directory per sweep — greedy size order left every later directory anonymous. `# deeper:` names the three
+  line per directory per sweep — greedy size order left every later directory anonymous. A small match set whose names
+the tree would hide (≤8 files with some sitting in a child-directory count) renders flat with root-relative paths
+instead: `permissions*.ts` used to answer `src/ 1 file · modules/ 1` twice and name neither file. `# deeper:` names the three
   largest directories, and the footer legend separates `file (declarations)` from `dir/ files`.
 
 ## Cuts

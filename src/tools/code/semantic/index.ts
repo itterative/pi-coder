@@ -13,7 +13,14 @@ import { chunkKeyOf, chunksOf, type CodeChunk } from "./chunks";
 import { type SemanticMode } from "./config";
 import type { DevicePreference } from "./llamacpp";
 import { modelProfile } from "./profiles";
-import { TAIL_ROWS, fuseRankings, type RankedDeclaration } from "./rank";
+import {
+    DENSE_FLOOR,
+    TAIL_ROWS,
+    aboveFloor,
+    fuseRankings,
+    type RankedDeclaration,
+    type ScoredDeclaration,
+} from "./rank";
 import {
     createEmbedRuntime,
     refreshConcurrency,
@@ -295,17 +302,23 @@ export function createSemanticSearch(deps: SemanticDeps): SemanticSearch {
             runtime = undefined;
         },
         async rank(request: SemanticQuery, signal?: AbortSignal): Promise<RankedDeclaration[]> {
-            const lexical = rankBm25(request.files, request.query, TAIL_ROWS * 4).map((hit) => ({
-                file: hit.file,
-                declaration: hit.declaration,
-                comment: hit.comment,
-            }));
+            // Each channel keeps only the rows near its own best score, so a query with one real answer does not
+            // carry seven token-sharing guesses. The floor runs before fusion because the channels' scales never
+            // have to agree there either.
+            const lexical = aboveFloor(
+                rankBm25(request.files, request.query, TAIL_ROWS * 4).map((hit) => ({
+                    file: hit.file,
+                    declaration: hit.declaration,
+                    comment: hit.comment,
+                    score: hit.score,
+                })),
+            );
 
             if (deps.mode !== "hybrid") {
                 return lexical;
             }
 
-            let dense: RankedDeclaration[];
+            let dense: ScoredDeclaration[];
 
             try {
                 const ranked = await denseRanking(
@@ -316,7 +329,7 @@ export function createSemanticSearch(deps: SemanticDeps): SemanticSearch {
                     deps.artifactsReady,
                 );
 
-                dense = ranked.hits;
+                dense = aboveFloor(ranked.hits, DENSE_FLOOR);
 
                 const coversRoot = ranked.refreshCoversRoot === true;
                 const compact = coversRoot && shouldCompact(ranked.dead, ranked.live);
@@ -405,7 +418,7 @@ function scheduleBuild(
 }
 
 interface DenseResult {
-    hits: RankedDeclaration[];
+    hits: ScoredDeclaration[];
     /** Vectors in this search whose content key has no stored vector. */
     missing: number;
     /** Vectors this search asked about: the complete live set when it covered the namespace root. */
@@ -759,6 +772,7 @@ async function denseRanking(
             declaration: candidate.declaration,
             comment: candidate.comment,
             chunk: candidate.chunk,
+            score: candidate.score,
         }));
 
     return { hits, missing, live, dead, refreshRoot: resolved.root, refreshCoversRoot: coversRoot };

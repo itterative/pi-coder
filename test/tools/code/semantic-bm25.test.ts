@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { clearCodeCache, loadParsedFile } from "../../../src/tools/code/load";
+import { createSemanticSearch } from "../../../src/tools/code/semantic";
 import { rankBm25, tokenize } from "../../../src/tools/code/semantic/bm25";
+import { aboveFloor, RELATED_FLOOR_RATIO } from "../../../src/tools/code/semantic/rank";
 import { declarationDoc, embedTextOf } from "../../../src/tools/code/text";
 import type { ParsedFile } from "../../../src/tools/code/types";
 import { MemoryCodeSource } from "../../helpers/code-source";
@@ -162,5 +164,26 @@ describe("outline semantic bm25", () => {
         expect(first).toEqual(
             rankBm25(files.toReversed(), "function", 8).map((hit) => hit.declaration?.name),
         );
+    });
+});
+
+describe("outline related floor", () => {
+    it("drops a tail row that shares only one token with the query", async () => {
+        // The class that answers the query outscores `TwoQueueCache` on the `permission` token, which is the rare
+        // one; the cache class shares only `queue`, so it sits below the floor instead of padding the tail.
+        const files = await parseFiles({
+            "src/queue.ts": "export class PermissionQueue {\n    tail(): void {}\n}\n",
+            "src/cache.ts": "export class TwoQueueCache {\n    size(): number { return 0; }\n}\n",
+        });
+        const semantic = createSemanticSearch({ mode: "bm25", modelDir: "/missing" });
+        const ranked = await semantic.rank({
+            query: "permissionQueue",
+            root: "/project",
+            sourceKind: "local",
+            files,
+        });
+
+        expect(ranked.map((entry) => entry.declaration?.name)).toContain("PermissionQueue");
+        expect(ranked.map((entry) => entry.declaration?.name)).not.toContain("TwoQueueCache");
     });
 });

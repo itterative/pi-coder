@@ -112,7 +112,7 @@ export class LocalCodeSource implements CodeSource {
             const noIgnore = scanLiterally(root, this.cwd);
             const result = await execFileAsync(
                 "rg",
-                buildRipgrepFileArgs(root, noIgnore, options.pattern),
+                buildRipgrepFileArgs(root, noIgnore, ripgrepGlob(root, options.pattern, this.cwd)),
                 {
                     cwd: this.cwd,
                     maxBuffer: 16 * 1024 * 1024,
@@ -279,7 +279,7 @@ export class ContainerCodeSource implements CodeSource {
         const result = await this.session.fs({
             op: "glob",
             path: root,
-            pattern: options.pattern ?? "",
+            pattern: ripgrepGlob(root, options.pattern, this.cwd) ?? "",
             ignore: DEFAULT_IGNORE_GLOBS,
             noIgnore: scanLiterally(root, this.cwd),
             limit: options.limit,
@@ -369,6 +369,41 @@ export class ContainerCodeSource implements CodeSource {
  */
 function scanLiterally(root: string, cwd: string): boolean {
     return path.resolve(root) !== path.resolve(cwd);
+}
+
+/**
+ * The `--glob` ripgrep needs for a pattern the caller wrote relative to `root`.
+ *
+ * `CodeSource.glob` takes a root-relative pattern, and the stdlib walker matches it that way, but ripgrep matches
+ * `--glob` against the path it prints: cwd-relative for a root inside the cwd, absolute for one outside it. Passing
+ * the root-relative pattern straight through matched nothing whenever its first segment was a wildcard (a `path`
+ * that selects `index.ts` one level below a literal directory walked a pattern that could not match the printed
+ * `src/modules/…` paths), so the pattern is rewritten here first.
+ *
+ * A root outside the cwd cannot express a slashed pattern at all: ripgrep only accepts a basename glob or a
+ * `**`-prefixed one there. Those return `undefined`, and `filterPathTarget` narrows the walk afterwards — exactly
+ * the post-filter that already covers any pattern the walker over-collects.
+ */
+export function ripgrepGlob(
+    root: string,
+    pattern: string | undefined,
+    cwd: string,
+): string | undefined {
+    if (pattern === undefined || pattern.length === 0) {
+        return undefined;
+    }
+
+    const absolute = path.isAbsolute(pattern) ? pattern : path.resolve(cwd, root, pattern);
+    const relative = path.relative(cwd, absolute).split(path.sep).join("/");
+    const outsideCwd = relative.startsWith("..") || path.isAbsolute(relative);
+
+    if (!outsideCwd) {
+        return relative;
+    }
+
+    // Slash-free patterns match the basename at any depth, and `**/` matches a leading absolute prefix, so both
+    // survive a root the cwd cannot express. Anything else would be read literally and match nothing.
+    return pattern.includes("/") && !pattern.startsWith("**/") ? undefined : pattern;
 }
 
 function buildRipgrepFileArgs(root: string, noIgnore: boolean, pattern?: string): string[] {

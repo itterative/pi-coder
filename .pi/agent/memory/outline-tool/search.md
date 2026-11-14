@@ -37,7 +37,11 @@ always keeps the anchor in scope (even when the pattern excludes it), and inters
 filters; its resolution index covers the whole discovered root, so with an active pattern it performs a second
 unfiltered walk and a neighbour hidden by the pattern still counts as an edge and is reported as outside the
 searched path in the `# within:` footer. Edges are the `deps` graph one hop deep, and the
-scope narrows what is searched/ranked, not the discovery-and-parse work. Both run after discovery, so confinement and ignore rules
+scope narrows what is searched/ranked, not the discovery-and-parse work — except in one direction: a `within` call
+makes `usages` parse the whole searched root instead of the symbol-narrowed candidate set, because a dependent that
+imports the anchor without naming the queried symbol is exactly the file the candidate grep never returns (that bug
+reported `2 files` where `deps` reported twelve; `search` always parsed the root). Both run after discovery, so
+confinement and ignore rules
 are unchanged, and both add a `# filter:` line that names the filter and appends a hidden count when it removed
 rows — a shrunken total that reads as "nothing matched" is the failure they exist to prevent. The line appears even
 when nothing was hidden, because a scoped result must not read as the whole tree. A filtered query also feeds the filtered rows to the tail gates, so the related
@@ -51,6 +55,15 @@ skip it, and the literal pass cannot see what it missed. A strong lexical hit st
 decorate rather than displace it. `leadsWithRelated` decides placement; every related row is fused with BM25 by
 reciprocal rank fusion (`k = 60`), which is where the measured gain came from — the channels' score scales never
 have to agree.
+
+**The tail is floored per channel.** A sorted list is not a ranking: taking positions 1–8 printed seven token-sharing
+rows under a query with one real answer. `aboveFloor` (`semantic/rank.ts`) keeps rows within `RELATED_FLOOR_RATIO`
+(0.65) of the list's **own** top score, applied before fusion — a ratio, because BM25 and cosine scales are
+incomparable. The dense channel additionally takes an absolute `DENSE_FLOOR` (0.5), one number for every profile.
+Measured on the shipped Qwen3 GGUF through llama.cpp at Q8_0 over 9,188 head vectors of this repo's `src`: six
+queries whose answer is absent top out at 0.420–0.540, six whose answer is present at 0.690–0.851, so 0.5 sits in the
+gap; the old ORT-era gemma table (0.680 for an absent answer) is *not* evidence about the shipped GGUF and is why the
+value is not inherited per runtime. Rows either floor removes are not counted or labelled.
 
 ## Literal body text
 

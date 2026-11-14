@@ -113,7 +113,9 @@ export default function registerCodeTool(pi: ExtensionAPI, container?: Container
                     type: "string",
                     enum: ["signatures", "full"],
                     description:
-                        "digest/show only: signatures returns declarations only; full returns bodies / all members. Defaults: signatures for digest, full for functions and signatures for containers in show.",
+                        "digest/show only: digest signatures lists top-level declarations and full also lists members " +
+                        "(digest never renders bodies); show full returns bodies and signatures returns declaration lines. " +
+                        "Defaults: signatures for digest, full for functions and signatures for containers in show.",
                 }),
             ),
             limit: Type.Optional(
