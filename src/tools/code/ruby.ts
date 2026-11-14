@@ -63,9 +63,43 @@ class RubyVisitor extends DeclarationVisitor {
                 this.visitMethod(node, context);
 
                 return;
+            case "assignment":
+                this.visitAssignment(node, context);
+
+                return;
             default:
                 return;
         }
+    }
+
+    /**
+     * A module or class constant.
+     *
+     * Ruby itself decides what a constant is: a capitalised target. A lowercase assignment is a local, and a method
+     * body is never walked into, so everything reached here is a declaration the file's map should show.
+     */
+    private visitAssignment(node: SyntaxNode, context: ScopeContext): void {
+        const left = node.childForFieldName("left");
+
+        if (left === null || left.type !== "constant") {
+            return;
+        }
+
+        this.addDeclaration(
+            {
+                kind: "variable",
+                name: cleanName(this.textOf(left)),
+                scope: context.scope,
+                startIndex: node.startIndex,
+                endIndex: node.endIndex,
+                signatureEnd: node.endIndex,
+                body: null,
+                nameNode: left,
+                docAnchor: node,
+                isDefinition: true,
+            },
+            context.parent,
+        );
     }
 
     private visitModule(node: SyntaxNode, context: ScopeContext): void {

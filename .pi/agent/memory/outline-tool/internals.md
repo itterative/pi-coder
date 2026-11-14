@@ -23,7 +23,9 @@ keep_updated: true
 - **The declaration IR is not an AST.** Adapters emit `Declaration` (kind, qualified name, ranges, signature,
   parameter types, access, children) through `visitor.ts`; parser node types never reach an action or the
   formatter. Body walkers also extract inner functions and arrow/function constants (JS/TS), named lambdas (C++),
-  and Python nested `def`s. Nested names are `outer::inner`.
+  and Python nested `def`s. Module-level bindings are declarations too: JS/TS `const`/`let`, Go/Rust/Java/C#/PHP
+  constants, Python module assignments, and Ruby capitalised constants (a lowercase Ruby assignment is a local).
+  Nested names are `outer::inner`.
 - **No persistent index.** Parsed files live in a disposable 2Q cache (2,000 entries / 64 MiB, keyed by path +
   mtime + size); eviction only costs a reparse. Search hits and the usage index hang off `ParsedFile` in
   `WeakMap`s, so a changed file drops them with the object.

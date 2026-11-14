@@ -79,6 +79,10 @@ class PythonVisitor extends DeclarationVisitor {
                 this.visitFunction(node, context);
 
                 return;
+            case "expression_statement":
+                this.visitAssignment(node, context);
+
+                return;
             default:
                 if (context.local === true && LOCAL_BLOCK_NODES.has(node.type)) {
                     this.visitContents(node, context);
@@ -181,6 +185,41 @@ class PythonVisitor extends DeclarationVisitor {
                 local: true,
             });
         }
+    }
+
+    /**
+     * A module-level binding, which is the Python equivalent of `const X = ...`.
+     *
+     * A local inside a function body is not a declaration any more than a local in TypeScript is, so the `local` flag
+     * skips it; an attribute or subscript target is a mutation of something else, not a new name to map.
+     */
+    private visitAssignment(node: SyntaxNode, context: ScopeContext): void {
+        if (context.local === true) {
+            return;
+        }
+
+        const assignment = namedChildren(node).find((child) => child.type === "assignment");
+        const left = assignment?.childForFieldName("left") ?? null;
+
+        if (assignment === undefined || left === null || left.type !== "identifier") {
+            return;
+        }
+
+        this.addDeclaration(
+            {
+                kind: "variable",
+                name: cleanName(this.textOf(left)),
+                scope: context.scope,
+                startIndex: context.signatureStart ?? node.startIndex,
+                endIndex: node.endIndex,
+                signatureEnd: node.endIndex,
+                body: null,
+                nameNode: left,
+                docAnchor: context.docAnchor ?? node,
+                isDefinition: true,
+            },
+            context.parent,
+        );
     }
 
     private parametersOf(node: SyntaxNode): { types: string[]; texts: string[] } {

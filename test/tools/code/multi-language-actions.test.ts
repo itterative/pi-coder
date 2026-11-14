@@ -46,7 +46,9 @@ pub fn helper(value: i32) -> i32 { value + 1 }
 
 pub fn main() { Service::new(); helper(1); }
 `,
-    "src/python/service.py": `class Service:
+    "src/python/service.py": `TIMEOUT = 30
+
+class Service:
     def run(self, value):
         return helper(value)
 
@@ -62,7 +64,11 @@ class Service {
 }
 function helper(int $value): int { return $value + 1; }
 `,
-    "src/ruby/service.rb": `class Service
+    "src/ruby/service.rb": `LIMIT = 10
+
+class Service
+  ANSWER = 42
+
   def self.build
     new
   end
@@ -93,6 +99,23 @@ describe("outline on the extended language set", () => {
         expect(result.text).toContain("class Service");
         expect(result.text).toContain("struct Service");
         expect(result.parseErrors).toBe(0);
+    });
+
+    it("lists Python and Ruby module constants in a digest", async () => {
+        const python = await runDigest(source(), {
+            action: "digest",
+            path: "src/python/service.py",
+        });
+        const ruby = await runDigest(source(), {
+            action: "digest",
+            path: "src/ruby/service.rb",
+            detail: "full",
+        });
+
+        expect(python.text).toContain("TIMEOUT = 30");
+        // A constant inside a class body is a member, so it arrives with detail=full.
+        expect(ruby.text).toContain("ANSWER = 42");
+        expect(ruby.text).toContain("LIMIT = 10");
     });
 
     it.each([

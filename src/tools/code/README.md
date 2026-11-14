@@ -158,11 +158,15 @@ output.
 ### Python, PHP, and Ruby
 
 - Python classes, methods, decorated definitions, nested functions, and typed parameters are extracted;
-  decorators are included in the declaration signature.
+  decorators are included in the declaration signature. A module-level binding (`TIMEOUT = 30`) is a `variable`
+  declaration, the Python equivalent of a TypeScript `const`; a binding inside a function body is a local and stays
+  out of the map, exactly as a TypeScript local does. An attribute or subscript target is a mutation, not a name.
 - PHP namespaces may be file-scoped or braced, and classes, interfaces, traits, enum cases, methods, properties,
   functions, and constants are extracted. A leading `$` is removed from property names but kept in signatures.
-- Ruby modules, classes, instance methods, and singleton methods (`def self.build`) are extracted. Local lambda
-  variables remain part of the enclosing method source because their syntax has no stable declaration name.
+- Ruby modules, classes, instance methods, and singleton methods (`def self.build`) are extracted, plus constants
+  (`LIMIT = 10`): Ruby already defines them as a capitalised target, so the adapter uses that rule and ignores
+  lowercase assignments, which are locals. Local lambda variables remain part of the enclosing method source because
+  their syntax has no stable declaration name.
 - `usages` call shapes: Python `call`; PHP function/member/scoped calls and object creation; Ruby `call`.
 
 ### Markdown behavior

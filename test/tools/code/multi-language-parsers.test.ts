@@ -52,7 +52,10 @@ const RUST = `pub mod service {
 }
 `;
 
-const PYTHON = `class Service(Base):
+const PYTHON = `TIMEOUT = 30
+NAMES = ["a", "b"]
+
+class Service(Base):
     """docs"""
     count: int = 0
 
@@ -69,7 +72,8 @@ const PYTHON = `class Service(Base):
         return self.count
 
 def helper(value: int = 1) -> int:
-    return value + 1
+    scratch = value * 2
+    return scratch + 1
 `;
 
 const PHP = `<?php
@@ -87,7 +91,9 @@ function helper(int $value = 1): int { return $value + 1; }
 const ANSWER = 42;
 `;
 
-const RUBY = `module Acme
+const RUBY = `LIMIT = 10
+
+module Acme
   class Service < Base
     def initialize(count)
       @count = count
@@ -211,8 +217,12 @@ describe("multi-language adapters", () => {
                 "Service::run::helper",
                 "Service::size",
                 "helper",
+                "TIMEOUT",
+                "NAMES",
             ]),
         );
+        // A binding inside a function body is a local, not a declaration in the file's map.
+        expect(names).not.toContain("helper::scratch");
         expect(
             parsed.all.find((item) => item.qualifiedName === "Service::run")?.paramTypes,
         ).toEqual(["int"]);
@@ -252,6 +262,7 @@ describe("multi-language adapters", () => {
                 "Acme::Service::run",
                 "Acme::Service::build",
                 "Acme::helper",
+                "LIMIT",
             ]),
         );
     });
